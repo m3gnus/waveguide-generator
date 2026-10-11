@@ -39,6 +39,7 @@ from .driver_limits import MemberLimits, member_limits_from_channel
 from .driver_lem import (
     hornlab_driver,
     one_way_peak_excursion_mm,
+    radiation_mass_warning,
 )
 from .base import (
     ArtifactCallback,
@@ -1411,6 +1412,9 @@ def _coupled_cardioid_result(
     if hasattr(mf_result, "radiated_power_sphere_coverage_sr"):
         mf_result.radiated_power_sphere_coverage_sr = None
 
+    mass_warning = radiation_mass_warning(
+        coupled.mmd_correction_kg, coupled.diagnostics["mmd_correction_fraction"]
+    )
     payload = {
         "mf_source_id": mf_source_id,
         "mf_channel_id": mf_channel.id,
@@ -1430,6 +1434,7 @@ def _coupled_cardioid_result(
         "port_to_cone_ratio": coupled.port_to_cone_ratio,
         "acoustic_load": coupled.acoustic_load,
         "mmd_correction_g": float(coupled.mmd_correction_kg) * 1.0e3,
+        "warnings": [mass_warning] if mass_warning is not None else [],
     }
     return mf_result, payload, mf_channel
 
@@ -1959,6 +1964,8 @@ def solve_imported_metal_from_msh_text(
                     coupled_payload["mf_channel_id"],
                     coupled_payload["port_channel_id"],
                 ],
+                "warnings": list(coupled_payload["warnings"]),
+                "warning_count": len(coupled_payload["warnings"]),
                 "engine": "hornlab-metal-bem",
                 "phase_time_convention": "exp(+ikr)",
                 # The MF channel's driver owns the derived cardioid response.

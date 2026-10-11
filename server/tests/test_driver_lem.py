@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from pydantic import ValidationError
 
 from server.jobs.models import DriveChannel, DriverSpec
 from server.solver.driver_lem import (
+    DriverMassLimitError,
     channel_drive_scaling,
     source_area_warning,
     hornlab_driver,
@@ -203,15 +206,63 @@ def test_radiation_mass_warning_uses_the_coupling_threshold(fraction) -> None:
     )
     assert payload["mmd_correction_g"] == pytest.approx(correction * 1000)
     warnings = [message for message in payload["warnings"] if "radiation mass" in message]
-    assert bool(warnings) == (fraction >= driver_coupling.MMD_CORRECTION_WARN)
+    assert bool(warnings) == (fraction > driver_coupling.MMD_CORRECTION_WARN)
+
+
+def test_exact_radiation_mass_warning_boundary_is_accepted_without_warning(monkeypatch) -> None:
+    from hornlab_sim.methods import driver_coupling
+
+    solve = driver_coupling.coupled_direct_radiator_response
+
+    def at_boundary(*args, **kwargs):
+        result = solve(*args, **kwargs)
+        return replace(result, diagnostics={
+            **result.diagnostics,
+            "mmd_correction_fraction": driver_coupling.MMD_CORRECTION_WARN,
+        })
+
+    monkeypatch.setattr(driver_coupling, "coupled_direct_radiator_response", at_boundary)
+    _, payload = channel_drive_scaling(
+        np.array([100.0]), np.array([0j]), 0.021,
+        _spec(mmd_g=None, mms_g=10.0), drive_voltage_v=2.83, rg_ohm=0.0,
+    )
+    assert not any("radiation mass" in warning for warning in payload["warnings"])
+
+
+def test_mass_preflight_logs_and_skips_a_missing_private_helper(monkeypatch, caplog) -> None:
+    from hornlab_sim.methods import driver_coupling
+
+    monkeypatch.delattr(driver_coupling, "_effective_mmd")
+    validate_driver_mass(_spec(mmd_g=None, mms_g=1.0))
+    assert "Driver mass preflight unavailable" in caplog.text
+    assert "solve-time mass check still applies" in caplog.text
+
+
+@pytest.mark.parametrize("origin", ["derive", "helper"])
+def test_mass_preflight_preserves_unrelated_validation_errors(monkeypatch, origin) -> None:
+    from hornlab_sim.methods import bandpass, driver_coupling
+
+    error = ValueError("driver.Sd must be positive finite")
+
+    def fail(*args, **kwargs):
+        raise error
+
+    if origin == "derive":
+        monkeypatch.setattr(bandpass.Driver, "derive", fail)
+    else:
+        monkeypatch.setattr(driver_coupling, "_effective_mmd", fail)
+    with pytest.raises(ValueError) as caught:
+        validate_driver_mass(_spec())
+    assert caught.value is error
+    assert not isinstance(caught.value, DriverMassLimitError)
 
 
 @pytest.mark.parametrize("count", [1, 2])
 def test_mass_refusal_is_load_independent_and_actionable(count) -> None:
     spec = _spec(mmd_g=None, mms_g=1.0, count=count)
-    with pytest.raises(ValueError, match="exceeds 50%.*Verify Sd in cm2.*Mmd"):
+    with pytest.raises(DriverMassLimitError, match="exceeds 50%.*Verify Sd in cm2.*Mmd"):
         validate_driver_mass(spec)
-    with pytest.raises(ValueError, match="exceeds 50%.*Verify Sd in cm2.*Mmd"):
+    with pytest.raises(DriverMassLimitError, match="exceeds 50%.*Verify Sd in cm2.*Mmd"):
         channel_drive_scaling(
             np.array([100.0]), np.array([0j]), 0.021,
             spec, drive_voltage_v=2.83, rg_ohm=0.0,

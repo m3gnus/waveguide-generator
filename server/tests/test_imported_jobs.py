@@ -19,6 +19,7 @@ from server.cadlink.store import CadLinkStore
 from server.engines.registry import EngineInfo
 from server.jobs.models import (
     ChannelCombineSpec,
+    DriverSpec,
     ImportedGeometrySource,
     JobStatusResponse,
     SolveRequest,
@@ -2362,8 +2363,9 @@ def test_cardioid_campaign_degradation_does_not_swallow_cancellation(
         )
 
 
+@pytest.mark.parametrize("mass_fraction", [None, 0.2, 0.3, 0.3 + 1e-6, 0.49])
 def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mass_fraction: float | None
 ) -> None:
     driver = {
         "sd_cm2": 210.0,
@@ -2375,6 +2377,27 @@ def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
         "rms_kg_per_s": 1.2,
         "xmax_mm": 5.0,
     }
+    if mass_fraction is not None:
+        from server.solver.driver_lem import hornlab_driver
+
+        model = hornlab_driver(DriverSpec.model_validate({**driver, "mmd_g": None, "mms_g": 100.0}))
+        _, correction, _ = metal.driver_coupling._effective_mmd(
+            model, model.derive(), metal.radiation_impedance.RHO_AIR
+        )
+        driver.pop("mmd_g")
+        driver["mms_g"] = correction * 1000 / mass_fraction
+    if mass_fraction == metal.driver_coupling.MMD_CORRECTION_WARN:
+        from dataclasses import replace
+
+        solve = metal.driver_coupling.coupled_cardioid_response
+
+        def at_boundary(*args, **kwargs):
+            result = solve(*args, **kwargs)
+            return replace(result, diagnostics={
+                **result.diagnostics, "mmd_correction_fraction": mass_fraction,
+            })
+
+        monkeypatch.setattr(metal.driver_coupling, "coupled_cardioid_response", at_boundary)
     request = _request(
         "wgi_" + "0" * 26,
         drive_channels=[
@@ -2476,6 +2499,17 @@ def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
     )
     assert derived["metadata"]["passive_cardioid"]["port_area_source"] == "user"
     assert derived["metadata"]["driver"]["spec"]["xmax_mm"] == 5.0
+    mass_warnings = [
+        warning for warning in derived["metadata"]["warnings"]
+        if "radiation mass" in warning
+    ]
+    should_warn = mass_fraction is not None and mass_fraction > metal.driver_coupling.MMD_CORRECTION_WARN
+    assert bool(mass_warnings) == should_warn
+    assert derived["metadata"]["passive_cardioid"]["warnings"] == mass_warnings
+    assert derived["metadata"]["warning_count"] == len(derived["metadata"]["warnings"])
+    assert derived["metadata"]["passive_cardioid"]["mmd_correction_g"] == pytest.approx(
+        correction * 1000 if mass_fraction is not None else 0.0
+    )
     assert len(derived["impedance"]["real"]) == 3
     assert response["metadata"]["passive_cardioid"]["coupled"] is True
     assert isinstance(response["_radiation_impedance_npz"], bytes)
@@ -3770,7 +3804,17 @@ def _verdicts(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {entry["name"]: entry for entry in plan["engines"]}
 
 
-def test_driver_mass_refused_in_plan_and_submission_without_a_job(tmp_path: Path) -> None:
+@pytest.mark.parametrize("unrelated_error", [None, "driver.Sd must be positive finite"])
+def test_driver_mass_refused_in_plan_and_submission_without_a_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unrelated_error: str | None
+) -> None:
+    if unrelated_error is not None:
+        from hornlab_sim.methods import driver_coupling
+
+        def fail(*args, **kwargs):
+            raise ValueError(unrelated_error)
+
+        monkeypatch.setattr(driver_coupling, "_effective_mmd", fail)
     registry = _DeclaredRegistry(_metal(), _beat_cpu())
     sources = [
         {"id": source, "required": source != "source-c",
@@ -3793,10 +3837,13 @@ def test_driver_mass_refused_in_plan_and_submission_without_a_job(tmp_path: Path
         try:
             plan = await runtime.plan_imported(request)
             assert plan["engine"] is None
-            assert plan["code"] == "driver_mass_invalid"
+            assert plan["code"] == ("driver_invalid" if unrelated_error else "driver_mass_invalid")
             assert "Channel 'right'" in plan["reason"]
-            assert "exceeds 50%" in plan["reason"]
-            assert "Verify Sd in cm2 and Mms in grams" in plan["reason"]
+            if unrelated_error is None:
+                assert "exceeds 50%" in plan["reason"]
+                assert "Verify Sd in cm2 and Mms in grams" in plan["reason"]
+            else:
+                assert plan["reason"] == f"driver_invalid: Channel 'right': {unrelated_error}"
             assert all(entry["stage"] == "request" for entry in plan["engines"])
             with pytest.raises(ImportedSolveRefusal) as refused:
                 await runtime.submit(request)
@@ -3806,6 +3853,40 @@ def test_driver_mass_refused_in_plan_and_submission_without_a_job(tmp_path: Path
             await runtime.shutdown()
 
     asyncio.run(check())
+
+
+def test_missing_mass_helper_allows_plan_and_submission(tmp_path, monkeypatch, caplog) -> None:
+    from hornlab_sim.methods import driver_coupling
+
+    monkeypatch.delattr(driver_coupling, "_effective_mmd")
+
+    async def check() -> None:
+        sources = [
+            {"id": source, "required": source != "source-c",
+             "observed": {"total_area_mm2": 21000.0}}
+            for source in ("source-a", "source-b", "source-c")
+        ]
+        runtime, ingest_id, _ = await _runtime_fixture(
+            tmp_path, {"sources": sources}, mesh_text=_POSITIVE_MESH
+        )
+        runtime.engine_registry = _AlwaysRegistry(SimpleNamespace(name="metal"))
+        request = _request(ingest_id, drive_channels=[
+            {"id": "left", "source_ids": ["source-a", "source-b"]},
+            {"id": "right", "source_ids": ["source-c"], "driver": {
+                "sd_cm2": 210.0, "bl_t_m": 10.5, "re_ohm": 5.3,
+                "mms_g": 1.0, "cms_m_per_n": 4e-4, "rms_kg_per_s": 1.2,
+            }},
+        ])
+        try:
+            plan = await runtime.plan_imported(request)
+            assert plan["engine"] == "metal"
+            job_id = await runtime.submit(request)
+            assert runtime.store.get_job_row(job_id) is not None
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(check())
+    assert "Driver mass preflight unavailable" in caplog.text
 
 
 def _open_half_observations(*, negative: bool, rigid_cut: bool = True, wg_cut: bool = False) -> dict[str, Any]:

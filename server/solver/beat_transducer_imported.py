@@ -211,8 +211,8 @@ def package_sweep(
                     "peak_mm": max(excursion, default=0.0),
                     "quantity": "one_way_peak_displacement",
                 },
-                # Native v3 reports neither warnings nor a mass correction.
-                # Keep unavailable diagnostics absent rather than inventing zero.
+                # Explicit Mmd needs no correction, so zero would be valid.
+                # Native v3 does not report these diagnostics; leave them absent.
             },
             beat_transducer={
                 "version": 1,

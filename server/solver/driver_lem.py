@@ -21,6 +21,7 @@ raw fields as complex conjugates — the same single-boundary rule as
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any
 
@@ -33,6 +34,11 @@ from server.contracts.conventions import engineering_to_solver, solver_to_engine
 from server.contracts import DriverSpec
 
 _TWO_PI = 2.0 * np.pi
+logger = logging.getLogger(__name__)
+
+
+class DriverMassLimitError(ValueError):
+    """The pinned coupling model refused the free-air mass correction."""
 
 
 def hornlab_driver(spec: DriverSpec) -> bandpass.Driver:
@@ -75,16 +81,38 @@ def validate_driver_mass(spec: DriverSpec) -> None:
     hornlab-sim currently exposes this check only through its private helper.
     """
 
+    effective_mmd = getattr(driver_coupling, "_effective_mmd", None)
+    if not callable(effective_mmd):
+        logger.warning(
+            "Driver mass preflight unavailable: hornlab-sim _effective_mmd is missing; "
+            "the solve-time mass check still applies"
+        )
+        return
     driver = hornlab_driver(spec)
     try:
-        driver_coupling._effective_mmd(
+        effective_mmd(
             driver, driver.derive(), radiation_impedance.RHO_AIR
         )
     except ValueError as exc:
-        raise ValueError(
+        # The pinned helper has no typed exception for its mass-limit guard.
+        if not str(exc).startswith("Mms free-air radiation-mass correction exceeds "):
+            raise
+        raise DriverMassLimitError(
             f"{exc}. Verify Sd in cm2 and Mms in grams against the driver "
             "datasheet, or supply the manufacturer's Mmd instead of Mms."
         ) from exc
+
+
+def radiation_mass_warning(correction_kg: float, fraction: float) -> str | None:
+    """Warn above hornlab-sim's accepted radiation-mass correction share."""
+
+    if fraction > MMD_CORRECTION_WARN:
+        return (
+            f"Mms was converted to Mmd by subtracting {correction_kg * 1.0e3:.3f} g "
+            f"of free-air radiation mass ({fraction:.1%} of Mms); "
+            "verify Sd/Mms against the driver datasheet"
+        )
+    return None
 
 
 def one_way_peak_excursion_mm(cone_excursion_m: np.ndarray) -> np.ndarray:
@@ -194,13 +222,11 @@ def channel_drive_scaling(
             f"{spec.xmax_mm:g} mm at {drive_voltage_v:g} V"
         )
     mmd_correction_g = coupled.mmd_correction_kg * 1.0e3
-    if coupled.diagnostics["mmd_correction_fraction"] >= MMD_CORRECTION_WARN:
-        warnings.append(
-            f"Mms was converted to Mmd by subtracting {mmd_correction_g:.3f} g "
-            "of free-air radiation mass "
-            f"({coupled.diagnostics['mmd_correction_fraction']:.1%} of Mms); "
-            "verify Sd/Mms against the driver datasheet"
-        )
+    mass_warning = radiation_mass_warning(
+        coupled.mmd_correction_kg, coupled.diagnostics["mmd_correction_fraction"]
+    )
+    if mass_warning is not None:
+        warnings.append(mass_warning)
     payload: dict[str, Any] = {
         "drive_voltage_v": float(drive_voltage_v),
         "rg_ohm": float(rg_ohm),

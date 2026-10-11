@@ -320,14 +320,16 @@ def _imported_request_refusal(
     axial = _imported_axial_refusal(request, record, msh_text)
     if axial is not None:
         return axial
-    from server.solver.driver_lem import validate_driver_mass
+    from server.solver.driver_lem import DriverMassLimitError, validate_driver_mass
 
     for channel in request.geometry.drive_channels:
         if channel.driver is not None:
             try:
                 validate_driver_mass(channel.driver)
-            except ValueError as exc:
+            except DriverMassLimitError as exc:
                 return "driver_mass_invalid", f"Channel {channel.id!r}: {exc}"
+            except ValueError as exc:
+                return "driver_invalid", f"Channel {channel.id!r}: {exc}"
     if request.options.ground_plane.enabled:
         return (
             "imported_ground_plane_unsupported",

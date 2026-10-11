@@ -598,7 +598,7 @@ differ by impedance become one driver with an impedance-variant list. The folder
 rescanned automatically whenever its files change, or on request through the API.
 
 For driver-coupled CAD solves, WG converts Mms to Mmd using hornlab-sim's free-air
-radiation mass. Corrections reaching 30% of Mms produce a result warning;
+radiation mass. Corrections above 30% of Mms produce a result warning;
 corrections above 50% are refused in the solve plan before a job is submitted.
 Check Sd in cm² and Mms in grams against the datasheet, or enter the manufacturer's
 Mmd instead. Exterior transducers use their explicit Mmd model and native BEAT
