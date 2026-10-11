@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -12,6 +13,7 @@ import pytest
 
 from server.solver import bempp_opencl as probe
 from server.platform import process_tree, temp_session
+from server.platform.job_start import ContainedStartError
 
 
 _RESULT_PREFIX = "TEST_RESULT "
@@ -276,6 +278,26 @@ def test_total_budget_excludes_imports_in_both_children(monkeypatch):
 def test_crashed_or_malformed_probe_is_rejected(monkeypatch, output):
     fake_children(monkeypatch, [[(0, probe._READY_MARKER), (0, output)]])
     assert probe._run_probe("smoke", CPU, 1)["opencl_unavailable_reason"] == "probe_error"
+
+
+def test_a_containment_refusal_is_probe_error_and_removes_the_channel(monkeypatch):
+    channels = []
+
+    def refuse(command, *, subject, **kwargs):
+        channel = Path(command[-1]).parent
+        assert channel.is_dir()
+        assert not probe._active_probes
+        channels.append(channel)
+        raise ContainedStartError(f"could not confine {subject} in a Windows job")
+
+    monkeypatch.setattr(process_tree, "popen_in_windows_job", refuse)
+    began = time.monotonic()
+    verdict = probe._run_probe("inventory", None, 10)
+    assert time.monotonic() - began < 1
+    assert verdict["opencl_unavailable_reason"] == "probe_error"
+    assert "ContainedStartError: could not confine the OpenCL check" in verdict["reason"]
+    assert len(channels) == 1 and not channels[0].exists()
+    assert not probe._active_probes and not probe._active_channels
 
 
 @pytest.mark.parametrize("damage", ["zero", "nan", "partial", "wrong", "shape"])

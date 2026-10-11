@@ -41,6 +41,9 @@ from pathlib import Path
 
 import pytest
 
+from server.platform import process_tree
+from server.platform.job_start import ContainedStartError
+
 
 pytestmark = pytest.mark.skipif(
     os.name != "nt", reason="Windows job objects; the POSIX path has its own file"
@@ -145,7 +148,11 @@ def _is_running(pid: int) -> bool:
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     kernel32.OpenProcess.restype = wintypes.HANDLE
-    handle = kernel32.OpenProcess(0x0400, False, int(pid))  # QUERY_INFORMATION
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    handle = kernel32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
     if not handle:
         return False
     try:
@@ -155,6 +162,139 @@ def _is_running(pid: int) -> bool:
         return code.value == _STILL_ACTIVE
     finally:
         kernel32.CloseHandle(handle)
+
+
+def _process_api():
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
+
+
+def _terminate_and_close(kernel32, handle):
+    try:
+        state = kernel32.WaitForSingleObject(handle, 0)
+        assert state in (0, 258), "could not query the retained process handle"
+        if state == 258:  # WAIT_TIMEOUT: the process is still running.
+            assert kernel32.TerminateProcess(handle, 1)
+            assert kernel32.WaitForSingleObject(handle, 5000) == 0
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def test_popen_refuses_an_uncontained_child_and_closes_its_pipes(monkeypatch):
+    kernel32 = _process_api()
+    handle = None
+    instances = []
+    original = subprocess.Popen
+
+    class ObservedPopen(original):
+        def __init__(self, *args, **kwargs):
+            try:
+                super().__init__(*args, **kwargs)
+            finally:
+                instances.append(self)
+
+    def refuse(pid, *, subject):
+        nonlocal handle
+        # Retain the identity while the child is ours and still suspended.
+        handle = kernel32.OpenProcess(0x00100000 | 0x1000 | 0x0001, False, pid)
+        assert handle, "could not open the refused child's process handle"
+        assert subject == "the refusal test"
+        return None
+
+    monkeypatch.setattr(process_tree.subprocess, "Popen", ObservedPopen)
+    monkeypatch.setattr(process_tree, "confine_to_windows_job", refuse)
+    try:
+        with pytest.raises(ContainedStartError, match="could not confine the refusal test"):
+            process_tree.popen_in_windows_job(
+                [sys._base_executable, "-c", f"import time; time.sleep({SELF_EXIT_SECONDS})"],
+                subject="the refusal test",
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+        assert handle is not None and len(instances) == 1
+        assert kernel32.WaitForSingleObject(handle, 5000) == 0, "the refused child survived"
+        inst = instances[0]
+        assert inst.stdin.closed and inst.stdout.closed and inst.stderr.closed
+    finally:
+        try:
+            if handle:
+                _terminate_and_close(kernel32, handle)
+        finally:
+            for inst in instances:
+                for stream in (inst.stdin, inst.stdout, inst.stderr):
+                    if stream is not None:
+                        stream.close()
+
+
+def test_popen_job_termination_kills_a_real_grandchild(tmp_path):
+    kernel32 = _process_api()
+    grandchild_handle = None
+    pid_file = tmp_path / "grandchild.pid"
+    script = (
+        "import subprocess, sys\n"
+        "from pathlib import Path\n"
+        "child = subprocess.Popen([sys._base_executable, '-c', "
+        f"'import time; time.sleep({SELF_EXIT_SECONDS})'])\n"
+        "try:\n"
+        "    print(child.pid, flush=True)\n"
+        "    Path(sys.argv[1]).write_text(str(child.pid), encoding='utf-8')\n"
+        f"    child.wait(timeout={SELF_EXIT_SECONDS})\n"
+        "finally:\n"
+        "    child.kill()\n"
+        "    child.wait()\n"
+    )
+    child = job = grandchild = None
+    try:
+        child, job = process_tree.popen_in_windows_job(
+            [sys._base_executable, "-c", script, str(pid_file)],
+            subject="the grandchild test",
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        assert job is not None
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                grandchild = int(pid_file.read_text(encoding="utf-8"))
+                grandchild_handle = kernel32.OpenProcess(
+                    0x00100000 | 0x1000 | 0x0001, False, grandchild
+                )
+                assert grandchild_handle, "could not open the grandchild's process handle"
+                break
+            except (OSError, ValueError):
+                time.sleep(0.05)
+        assert grandchild is not None, "the child never reported its grandchild"
+        # The file is written after the flushed line, so this read cannot wait
+        # for the sleeping grandchild to finish.
+        assert int(child.stdout.readline()) == grandchild
+        code = wintypes.DWORD()
+        assert kernel32.GetExitCodeProcess(grandchild_handle, ctypes.byref(code))
+        assert code.value == _STILL_ACTIVE, "the grandchild never became alive"
+        job.terminate()
+        assert kernel32.WaitForSingleObject(grandchild_handle, 5000) == 0, (
+            "the grandchild survived job termination"
+        )
+    finally:
+        try:
+            if grandchild_handle:
+                _terminate_and_close(kernel32, grandchild_handle)
+        finally:
+            if job is not None:
+                job.terminate()
+                job.close()
+            if child is not None:
+                child.kill()
+                child.wait(timeout=5)
+                child.stdout.close()
+                child.stderr.close()
 
 
 def _counters(scratch: Path) -> list[int]:

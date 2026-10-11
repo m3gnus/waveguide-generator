@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 
 from server.engines import registry as reg
+from server.platform import process_tree
+from server.platform.job_start import ContainedStartError
 from server.solver import bempp_opencl as probe
 from server.tests._symlinks import requires_symlinks
 from server.tests.test_bempp_opencl import probe_session as probe_session
@@ -233,6 +235,31 @@ def test_a_one_off_probe_error_ends_on_the_device_answer(monkeypatch, mode):
     verdict = probe.qualified_opencl()
     assert verdict["ok"], verdict
     assert len(children) == 2
+
+
+def test_a_containment_refusal_is_transient_and_retried(monkeypatch):
+    calls = []
+
+    def refuse(command, *, subject, **kwargs):
+        calls.append(Path(command[-1]).parent)
+        raise ContainedStartError(f"could not confine {subject} in a Windows job")
+
+    monkeypatch.setattr(process_tree, "popen_in_windows_job", refuse)
+    began = time.monotonic()
+    first = probe.qualified_opencl()
+    assert time.monotonic() - began < 1
+    assert first["opencl_unavailable_reason"] == "probe_error"
+    assert "ContainedStartError: could not confine the OpenCL check" in first["reason"]
+    assert probe._cached_verdict is None and not probe._device_verdict_cache
+    assert probe.retry_pending()
+    assert len(calls) == 2  # One immediate retry before reporting probe_error.
+    assert probe.qualified_opencl() == first
+    assert len(calls) == 2
+    monkeypatch.setattr(probe, "_retry_after", 0)
+    assert probe.qualified_opencl()["opencl_unavailable_reason"] == "probe_error"
+    assert len(calls) == 4
+    assert all(not channel.exists() for channel in calls)
+    assert not probe._active_probes and not probe._active_channels
 
 
 def test_a_probe_error_names_what_failed(monkeypatch):
@@ -942,7 +969,7 @@ def _grandchild(pid_file):
 def test_without_the_job_the_grandchild_survives_the_kill(monkeypatch, tmp_path, caplog):
     """The instrument check for the test below: a bare kill of the stub must
     leave the grandchild running here, or a pass there would prove nothing.
-    It also exercises the no-job fallback with a real orphaned pipe: the
+    It also exercises an intentionally uncontained check with an orphaned pipe: the
     blocked reads are cancelled, so the readers end and the pipes close."""
     from server.platform import process_tree
     monkeypatch.setattr(process_tree, 'popen_in_windows_job',

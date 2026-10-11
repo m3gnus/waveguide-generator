@@ -24,9 +24,8 @@ the job API is unavailable. What a caller does with that ``None`` is the
 caller's policy. The mesher child and the BEMPP worker start through
 ``server/platform/job_start.py``, which refuses: a child outside every job also
 holds no ``WaveguideGeneratorRunning`` mutex, so it can outlive a dead server
-unseen by the installer. :func:`popen_in_windows_job` (the OpenCL check) still
-runs its child without a job when none can be made. ``server.cadlink.isolation``
-refuses as well.
+unseen by the installer. :func:`popen_in_windows_job` (the OpenCL check) and
+``server.cadlink.isolation`` also refuse when no job can hold the child.
 """
 
 from __future__ import annotations
@@ -37,7 +36,6 @@ import multiprocessing
 import os
 import signal
 import subprocess
-import time
 from typing import Any
 
 
@@ -208,83 +206,50 @@ def confine_to_windows_job(
         return None
 
 
-#: ``CREATE_SUSPENDED``: the child's first thread does not run until resumed.
-_CREATE_SUSPENDED = 0x00000004
-
-
 def popen_in_windows_job(
     command: list[str], *, subject: str, **popen_kwargs: Any
 ) -> tuple[subprocess.Popen[Any], WindowsJob | None]:
     """Start ``command`` with every process it will ever start in one job.
 
-    In the Windows bundle ``sys.executable`` is the native entry stub, and the
-    stub starts the real interpreter as *its* child, handing it the same pipes
-    (``launchers/windows/startup_hook.py``, ``launcher.c`` ``start()``). Killing
-    the stub alone leaves that interpreter running and holding the pipes. A
-    job assigned after ``Popen`` returns can lose that race, because the stub
-    may already have started its child, so the child is created suspended,
-    assigned, then resumed: nothing it starts can predate the job. The stub
-    does not ask for ``CREATE_BREAKAWAY_FROM_JOB``, so its child inherits it.
+    On Windows, ``job_start`` creates it suspended, assigns its job, then
+    resumes it so a launcher stub's interpreter inherits the job. Refuses
+    with ``ContainedStartError`` when no job can hold it or it cannot resume;
+    never returns without a job. The OpenCL caller maps refusal to
+    ``probe_error``. An unfired start is confined after the fact or stopped.
 
-    Elsewhere, and whenever the job cannot be made, this is a plain ``Popen``
-    and the job is ``None``; containment is best-effort, as for the worker.
-    A child that cannot be resumed is killed before it ran and started again
-    the plain way: a host that blocks the thread snapshot loses containment,
-    never the child.
+    Elsewhere this is a plain ``Popen`` and the job is ``None``.
     """
 
     if os.name != "nt":
         return subprocess.Popen(command, **popen_kwargs), None  # noqa: S603
-    flags = int(popen_kwargs.pop("creationflags", 0))
-    child = subprocess.Popen(command, creationflags=flags | _CREATE_SUSPENDED, **popen_kwargs)  # noqa: S603
-    job = None
-    resumed = False
+    from server.platform.job_start import ContainedStartError, windows_job_start
+
+    with windows_job_start(
+        lambda pid, _handle: confine_to_windows_job(pid, subject=subject),
+        required=True,
+        subject=subject,
+    ) as started:
+        child = subprocess.Popen(command, **popen_kwargs)  # noqa: S603
     try:
-        job = confine_to_windows_job(child.pid, subject=subject)
-    finally:
-        resumed = _resume_with_retries(child.pid)
-        if not resumed:
-            # It never ran, so it started nothing; a suspended child would
-            # hold its pipes and our wait forever.
-            if job is not None:
-                job.terminate()
-                job.close()
-            with contextlib.suppress(Exception):
-                child.kill()
-            with contextlib.suppress(Exception):
-                child.wait(timeout=5)
-            for stream in (child.stdin, child.stdout, child.stderr):
-                if stream is not None:
-                    with contextlib.suppress(Exception):
-                        stream.close()
-    if resumed:
-        if job is None:
-            logger.warning(
-                "Running %s without a Windows job object; processes it starts "
-                "may outlive it.",
-                subject,
-            )
-        return child, job
-    logger.warning(
-        "Could not resume %s after starting it suspended; starting it again "
-        "without a Windows job object, so processes it starts may outlive it.",
-        subject,
-    )
-    return subprocess.Popen(command, creationflags=flags, **popen_kwargs), None  # noqa: S603
-
-
-#: A transient snapshot or thread-open failure is retried this often.
-_RESUME_ATTEMPTS = 5
-_RESUME_RETRY_SECONDS = 0.02
-
-
-def _resume_with_retries(pid: int) -> bool:
-    for attempt in range(_RESUME_ATTEMPTS):
-        if _resume_windows_process(pid):
-            return True
-        if attempt + 1 < _RESUME_ATTEMPTS:
-            time.sleep(_RESUME_RETRY_SECONDS)
-    return False
+        if not started.fired:
+            started.job = confine_to_windows_job(child.pid, subject=subject)
+        if started.job is None:
+            raise ContainedStartError(f"could not confine {subject} in a Windows job")
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            child.kill()
+        with contextlib.suppress(Exception):
+            child.wait(timeout=5)
+        for stream in (child.stdin, child.stdout, child.stderr):
+            if stream is not None:
+                with contextlib.suppress(Exception):
+                    stream.close()
+        if isinstance(exc, ContainedStartError):
+            raise
+        raise ContainedStartError(
+            f"could not confine {subject} in a Windows job: {exc}"
+        ) from exc
+    return child, started.job
 
 
 def cancel_blocked_reads(
@@ -335,72 +300,6 @@ def cancel_blocked_reads(
         if not alive:
             break
     return alive
-
-
-def _resume_windows_process(pid: int) -> bool:
-    """Resume the threads of a process created with ``CREATE_SUSPENDED``.
-
-    ``Popen`` closes the thread handle ``CreateProcess`` returned, so the
-    thread is found again through a ToolHelp snapshot. A suspended new process
-    has exactly its initial thread; every thread found is resumed once.
-    """
-
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-
-        class _ThreadEntry(ctypes.Structure):
-            _fields_ = [
-                ("dwSize", wintypes.DWORD),
-                ("cntUsage", wintypes.DWORD),
-                ("th32ThreadID", wintypes.DWORD),
-                ("th32OwnerProcessID", wintypes.DWORD),
-                ("tpBasePri", wintypes.LONG),
-                ("tpDeltaPri", wintypes.LONG),
-                ("dwFlags", wintypes.DWORD),
-            ]
-
-        invalid = ctypes.c_void_p(-1).value
-        kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-        kernel32.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)]
-        kernel32.Thread32First.restype = wintypes.BOOL
-        kernel32.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)]
-        kernel32.Thread32Next.restype = wintypes.BOOL
-        kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel32.OpenThread.restype = wintypes.HANDLE
-        kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
-        kernel32.ResumeThread.restype = wintypes.DWORD
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel32.CloseHandle.restype = wintypes.BOOL
-
-        snapshot = kernel32.CreateToolhelp32Snapshot(0x00000004, 0)  # TH32CS_SNAPTHREAD
-        if not snapshot or snapshot == invalid:
-            raise OSError(ctypes.get_last_error(), "CreateToolhelp32Snapshot failed")
-        resumed = 0
-        try:
-            entry = _ThreadEntry()
-            entry.dwSize = ctypes.sizeof(entry)
-            more = kernel32.Thread32First(snapshot, ctypes.byref(entry))
-            while more:
-                if entry.th32OwnerProcessID == int(pid):
-                    # THREAD_SUSPEND_RESUME
-                    thread = kernel32.OpenThread(0x0002, False, entry.th32ThreadID)
-                    if thread:
-                        try:
-                            if kernel32.ResumeThread(thread) != 0xFFFFFFFF:
-                                resumed += 1
-                        finally:
-                            kernel32.CloseHandle(thread)
-                more = kernel32.Thread32Next(snapshot, ctypes.byref(entry))
-        finally:
-            kernel32.CloseHandle(snapshot)
-        return resumed > 0
-    except Exception as exc:  # pragma: no cover - Windows-only failure paths
-        logger.warning("Could not resume suspended child process %s (%s)", pid, exc)
-        return False
 
 
 def _declare_job_api(kernel32: Any, ctypes: Any, wintypes: Any) -> None:

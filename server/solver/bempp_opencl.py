@@ -370,7 +370,8 @@ class _ProbeHandle:
                 if self.job is not None:
                     # The whole tree: in the Windows bundle the child is the
                     # native stub and the interpreter holding the pipes is its
-                    # own child (server.platform.process_tree.popen_in_windows_job).
+                    # own child, confined before the stub runs by
+                    # server.platform.process_tree.popen_in_windows_job.
                     self.job.terminate()
                 if self.child.poll() is None:
                     if graceful:
@@ -387,9 +388,10 @@ class _ProbeHandle:
                     reader.join(timeout=1.0)
                 stuck = [reader for reader in self.readers if reader.is_alive()]
                 if stuck:
-                    # A process the child started still holds the pipes (no job
-                    # could be made). That is no verdict on the device, and
-                    # raising here replaced the caller's verdict and wedged the
+                    # A process the child started still holds the pipes: off
+                    # Windows there is no job, and on Windows the job's
+                    # terminate did not take it in time. That is no verdict
+                    # on the device, and raising here replaced the caller's verdict and wedged the
                     # registry on "Checking OpenCL…". Cancel the blocked reads
                     # so the readers end and the pipes can be closed; bounded,
                     # it never waits on the other process.
