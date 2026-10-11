@@ -93,7 +93,7 @@ def canonical_json(value: Any, profile: str) -> str:
 
 
 # Add-in writer structural profile.
-_addin_SUPPORTED_RETURN_FEATURES = frozenset({'checksummed-files-v1', 'assembly-frame-v1', 'instance-records-v1', 'fem-air-volume-v1', 'reduced-domain-v1', 'source-identity-v1', 'document-up-v1', 'domain-automatic-v1'})
+_addin_SUPPORTED_RETURN_FEATURES = frozenset({'checksummed-files-v1', 'assembly-frame-v1', 'instance-records-v1', 'fem-air-volume-v1', 'reduced-domain-v1', 'source-identity-v1', 'document-up-v1', 'domain-automatic-v1', 'fem-regions-v1'})
 _addin_SOURCE_IDENTITY_FEATURE = 'source-identity-v1'
 _addin_DOCUMENT_UP_FEATURE = 'document-up-v1'
 _addin_DOCUMENT_UP_AXES = ('+y', '+z')
@@ -511,7 +511,7 @@ def _addin_validate_return_manifest(manifest: Mapping[str, Any]) -> None:
             raise ProtocolValidationError(f'files[{name!r}].sha256 must use sha256:<hex>')
         _addin__integer(record['size_bytes'], label=f'files[{name!r}].size_bytes')
         _addin__string(record['media_type'], label=f'files[{name!r}].media_type')
-        if record['purpose'] not in {'exterior-assembly', 'fem-air-volume', 'cad-document'}:
+        if record['purpose'] not in {'exterior-assembly', 'fem-air-volume', 'fem-region', 'cad-document'}:
             raise ProtocolValidationError(f'files[{name!r}].purpose is invalid')
     if assembly_file not in files:
         raise ProtocolValidationError('assembly.file is not present in files')
@@ -588,7 +588,8 @@ def _addin_validate_return_manifest(manifest: Mapping[str, Any]) -> None:
     if anchor is not None and anchor not in instance_ids:
         raise ProtocolValidationError('coordinate_system.solver_anchor_instance_id does not name an instance')
     sources = _addin__list(root['sources'], label='sources')
-    if not sources:
+    fem_drives = validate_fem_regions(scope, files, features)
+    if not sources and not fem_drives:
         raise ProtocolValidationError('sources must contain at least one drivable patch')
     source_keys = [_addin__validate_source(source, index=index, instance_ids=set(instance_ids)) for index, source in enumerate(sources)]
     source_ids = [source_id for source_id, _channel in source_keys]
@@ -615,7 +616,7 @@ def _addin_validate_return_manifest(manifest: Mapping[str, Any]) -> None:
 # WG ingress structural profile.
 _wg_SUPPORTED_MAJOR = 1
 _wg_SUPPORTED_VERSION = '1.1'
-_wg_SUPPORTED_FEATURES = frozenset({'checksummed-files-v1', 'assembly-frame-v1', 'instance-records-v1', 'fem-air-volume-v1', 'reduced-domain-v1', 'source-identity-v1', 'document-up-v1', 'domain-automatic-v1'})
+_wg_SUPPORTED_FEATURES = frozenset({'checksummed-files-v1', 'assembly-frame-v1', 'instance-records-v1', 'fem-air-volume-v1', 'reduced-domain-v1', 'source-identity-v1', 'document-up-v1', 'domain-automatic-v1', 'fem-regions-v1'})
 _wg_EXPORT_FRAMES = ('root-component', 'selected-occurrence-component')
 _wg_DOCUMENT_UP_FEATURE = 'document-up-v1'
 _wg_DOCUMENT_UP_AXES = ('+y', '+z')
@@ -1122,7 +1123,8 @@ def _wg_validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     elif anchor is not None:
         _wg__fail('$.coordinate_system.solver_anchor_instance_id', 'must be null or absent when instances is empty')
     sources = _wg__list(_wg__required(manifest, 'sources', '$'), '$.sources')
-    if not sources:
+    fem_drives = validate_fem_regions(scope, manifest.get('files') if isinstance(manifest.get('files'), dict) else {}, feature_names)
+    if not sources and not fem_drives:
         _wg__fail('$.sources', 'must contain at least one source')
     source_identity = _wg_SOURCE_IDENTITY_FEATURE in feature_names
     source_ids = [_wg__validate_source(item, f'$.sources[{index}]', set(instance_ids), source_identity=source_identity) for index, item in enumerate(sources)]
@@ -1144,6 +1146,172 @@ def _wg_validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     if _wg__required(manifest, 'acoustics', '$') is not None:
         _wg__fail('$.acoustics', 'must be null in Phase 2')
     return manifest
+
+# FEM regions (fem-regions-v1): CAD declares bounded air volumes and named
+# surface groups on them; WG meshes, tags and solves. Faces are described by
+# geometry (area, centroid, normal, bounding box) in the export frame, because a
+# STEP member carries no stable face identity. Group kinds name boundary
+# conditions, never mesh tags, so WG keeps ownership of physical tags.
+FEM_REGIONS_FEATURE = 'fem-regions-v1'
+FEM_REGION_PURPOSE = 'fem-region'
+FEM_SURFACE_KINDS = ('moving', 'interface', 'plane-wave-termination', 'rigid')
+FEM_ID_MAX_BYTES = 32
+_FEM_ID = re.compile('^[a-z0-9][a-z0-9-]*$')
+
+
+def _fem_fail(path: str, message: str) -> None:
+    raise ProtocolValidationError(f'{path}: {message}')
+
+
+def _fem_number(value: Any, path: str, *, minimum: float | None = None,
+                maximum: float | None = None, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        _fem_fail(path, 'must be a finite number')
+    number = float(value)
+    if positive and number <= 0:
+        _fem_fail(path, 'must be greater than zero')
+    if minimum is not None and number < minimum:
+        _fem_fail(path, f'must be at least {minimum}')
+    if maximum is not None and number > maximum:
+        _fem_fail(path, f'must be at most {maximum}')
+    return number
+
+
+def _fem_vector(value: Any, path: str) -> list[float]:
+    if not isinstance(value, list) or len(value) != 3:
+        _fem_fail(path, 'must be a list of three numbers')
+    return [_fem_number(item, f'{path}[{index}]') for index, item in enumerate(value)]
+
+
+def _fem_text(record: Mapping[str, Any], key: str, path: str) -> str:
+    value = record.get(key)
+    if not isinstance(value, str) or not value.strip():
+        _fem_fail(f'{path}.{key}', 'must be a non-empty string')
+    return value
+
+
+def _fem_identifier(record: Mapping[str, Any], key: str, path: str) -> str:
+    value = _fem_text(record, key, path)
+    if not _FEM_ID.fullmatch(value) or len(value.encode('utf-8')) > FEM_ID_MAX_BYTES:
+        _fem_fail(f'{path}.{key}', f'must be lower-case letters, digits and hyphens, at most {FEM_ID_MAX_BYTES} bytes')
+    return value
+
+
+def _fem_face(value: Any, path: str) -> None:
+    if not isinstance(value, Mapping):
+        _fem_fail(path, 'must be an object')
+    _fem_number(value.get('area_mm2'), f'{path}.area_mm2', positive=True)
+    _fem_vector(value.get('centroid_mm'), f'{path}.centroid_mm')
+    normal = value.get('normal')
+    if normal is not None:
+        vector = _fem_vector(normal, f'{path}.normal')
+        if abs(math.sqrt(sum(item * item for item in vector)) - 1.0) > 1e-3:
+            _fem_fail(f'{path}.normal', 'must be a unit vector or null')
+    bbox = value.get('bbox_mm')
+    if not isinstance(bbox, list) or len(bbox) != 2:
+        _fem_fail(f'{path}.bbox_mm', 'must be [[min x, y, z], [max x, y, z]]')
+    low = _fem_vector(bbox[0], f'{path}.bbox_mm[0]')
+    high = _fem_vector(bbox[1], f'{path}.bbox_mm[1]')
+    if any(a > b for a, b in zip(low, high)):
+        _fem_fail(f'{path}.bbox_mm', 'minimum must not exceed maximum')
+
+
+def validate_fem_regions(scope: Mapping[str, Any], files: Mapping[str, Any],
+                         features: Iterable[str]) -> list[str]:
+    """Validate scope.fem_regions and return the drive channels it declares.
+
+    Both endpoint profiles call this one function, so the add-in and WG share
+    one verdict for the new feature. A return without the feature must not
+    carry the key, and a return with the feature must carry at least one region.
+    """
+    has_feature = FEM_REGIONS_FEATURE in set(features)
+    if 'fem_regions' not in scope:
+        if has_feature:
+            _fem_fail('$.scope.fem_regions', f'is required with {FEM_REGIONS_FEATURE}')
+        member_names = [name for name, record in files.items()
+                        if isinstance(record, Mapping) and record.get('purpose') == FEM_REGION_PURPOSE]
+        if member_names:
+            _fem_fail('$.files', f'{FEM_REGION_PURPOSE} members need scope.fem_regions')
+        return []
+    if not has_feature:
+        _fem_fail('$.required_features', f'{FEM_REGIONS_FEATURE} is required when scope.fem_regions is present')
+    regions = scope['fem_regions']
+    if not isinstance(regions, list) or not regions:
+        _fem_fail('$.scope.fem_regions', 'must be a non-empty list')
+    region_ids: set[str] = set()
+    region_files: set[str] = set()
+    region_objects: set[str] = set()
+    drive_channels: list[str] = []
+    for index, raw_region in enumerate(regions):
+        path = f'$.scope.fem_regions[{index}]'
+        if not isinstance(raw_region, Mapping):
+            _fem_fail(path, 'must be an object')
+        region = raw_region
+        region_id = _fem_identifier(region, 'region_id', path)
+        if region_id in region_ids:
+            _fem_fail(f'{path}.region_id', 'must be unique')
+        region_ids.add(region_id)
+        _fem_text(region, 'name', path)
+        object_id = _fem_text(region, 'object_id', path)
+        if object_id in region_objects:
+            _fem_fail(f'{path}.object_id', 'one body can be declared as only one FEM region')
+        region_objects.add(object_id)
+        file_name = _fem_text(region, 'file', path)
+        record = files.get(file_name)
+        if not isinstance(record, Mapping) or record.get('purpose') != FEM_REGION_PURPOSE:
+            _fem_fail(f'{path}.file', f'must name a files entry with purpose {FEM_REGION_PURPOSE!r}')
+        if file_name in region_files:
+            _fem_fail(f'{path}.file', 'must be unique')
+        region_files.add(file_name)
+        if region.get('n_bodies_expected') != 1:
+            _fem_fail(f'{path}.n_bodies_expected', 'must be exactly 1')
+        _fem_number(region.get('mesh_size_mm'), f'{path}.mesh_size_mm', positive=True)
+        medium = region.get('medium')
+        if not isinstance(medium, Mapping):
+            _fem_fail(f'{path}.medium', 'must be an object')
+        _fem_number(medium.get('sound_speed_m_per_s'), f'{path}.medium.sound_speed_m_per_s', positive=True)
+        _fem_number(medium.get('density_kg_per_m3'), f'{path}.medium.density_kg_per_m3', positive=True)
+        _fem_number(medium.get('bulk_loss_factor'), f'{path}.medium.bulk_loss_factor', minimum=0.0, maximum=1.0)
+        groups = region.get('surface_groups')
+        if not isinstance(groups, list):
+            _fem_fail(f'{path}.surface_groups', 'must be a list')
+        group_ids: set[str] = set()
+        group_names: set[str] = set()
+        for group_index, raw_group in enumerate(groups):
+            group_path = f'{path}.surface_groups[{group_index}]'
+            if not isinstance(raw_group, Mapping):
+                _fem_fail(group_path, 'must be an object')
+            group = raw_group
+            group_id = _fem_identifier(group, 'group_id', group_path)
+            if group_id in group_ids:
+                _fem_fail(f'{group_path}.group_id', 'must be unique within its region')
+            group_ids.add(group_id)
+            name = _fem_text(group, 'name', group_path).strip().casefold()
+            if name in group_names:
+                _fem_fail(f'{group_path}.name', 'must be unique within its region')
+            group_names.add(name)
+            kind = group.get('kind')
+            if kind not in FEM_SURFACE_KINDS:
+                _fem_fail(f'{group_path}.kind', 'must be one of ' + ', '.join(FEM_SURFACE_KINDS))
+            channel = group.get('drive_channel_id')
+            if kind == 'moving':
+                if not isinstance(channel, str) or not channel.strip():
+                    _fem_fail(f'{group_path}.drive_channel_id', 'is required for a moving group')
+                drive_channels.append(channel)
+            elif channel is not None:
+                _fem_fail(f'{group_path}.drive_channel_id', 'is accepted only on a moving group')
+            _fem_number(group.get('mesh_size_mm'), f'{group_path}.mesh_size_mm', positive=True)
+            faces = group.get('faces')
+            if not isinstance(faces, list) or not faces:
+                _fem_fail(f'{group_path}.faces', 'must list at least one face')
+            for face_index, face in enumerate(faces):
+                _fem_face(face, f'{group_path}.faces[{face_index}]')
+    inventoried = {name for name, record in files.items()
+                   if isinstance(record, Mapping) and record.get('purpose') == FEM_REGION_PURPOSE}
+    if inventoried != region_files:
+        _fem_fail('$.scope.fem_regions', 'regions and the files inventory must agree exactly')
+    return drive_channels
+
 
 def validate_structure(manifest: Mapping[str, Any], profile: str) -> Mapping[str, Any] | None:
     """Validate using one endpoint's exact structural verdict and error order."""

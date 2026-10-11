@@ -8,6 +8,7 @@
     "server/tests/test_onshape*.py",
     "server/tests/test_wglink*.py",
     "server/tests/test_imported*.py",
+    "server/tests/test_fem*.py",
     "scripts/tests/test_cadlink_evidence.py",
     "server/tests/test_addin_update.py",
     "server/tests/test_addins_sandbox.py",
@@ -90,6 +91,7 @@
 ]
 "server/mesh/" = [
     "server/tests/test_mesh*.py",
+    "server/tests/test_fem*.py",
     "server/tests/test_gmsh*.py",
     "server/tests/test_imported*.py",
     "server/tests/test_cad*.py",

@@ -35,6 +35,7 @@ from server.mesh.imported import (
 #: Names the mesh child may stage. Anything else in its staging directory is a
 #: refusal, so this tuple is the whole of what the boundary will carry out.
 MESH_ARTIFACTS = ("mesh.msh", "viewport.msh")
+FEM_REGION_ARTIFACTS = ("fem.msh",)
 VIEWPORT_ARTIFACTS = ("viewport.msh",)
 
 INSPECT_STAGE = "stage 3 STEP inspection"
@@ -87,6 +88,10 @@ def _reraise_typed(exc: ChildRefusal) -> None:
         ) from exc
     if exc.error_type in {"ImportedMeshError", "StepTextError", "StepBudgetExceeded"}:
         raise ImportedMeshError(exc.detail) from exc
+    if exc.error_type == "FemRegionMeshError":
+        from server.mesh.fem_regions import FemRegionMeshError
+
+        raise FemRegionMeshError(exc.detail) from exc
 
 
 def inspect_returned_step(
@@ -229,7 +234,44 @@ def build_imported_viewport_mesh_isolated(
         raise
 
 
+def build_fem_region_mesh_isolated(
+    step_path: str | Path,
+    region: Mapping[str, Any],
+    *,
+    expected_sha256: str | None = None,
+    expected_size_bytes: int | None = None,
+) -> dict[str, Any]:
+    """Mesh one declared FEM region's STEP member in a fresh child.
+
+    The same isolation as the exterior: the region STEP is CAD-authored bytes,
+    so OCC opens it only in a disposable process, under the mesh budget.
+    """
+
+    try:
+        with isolated_step_task(
+            "fem_region",
+            {"region": dict(region)},
+            step_path=step_path,
+            budget=MESH_BUDGET,
+            allowed_artifacts=FEM_REGION_ARTIFACTS,
+            stage=MESH_STAGE,
+            expected_sha256=expected_sha256,
+            expected_size_bytes=expected_size_bytes,
+        ) as outcome:
+            result = outcome.result.get("built")
+            artifact = outcome.artifacts.get("fem.msh")
+            if not isinstance(result, dict) or artifact is None:
+                raise ChildRefusal(MESH_STAGE, "the FEM region child staged no mesh")
+            result["msh_text"] = artifact.read_text(encoding="utf-8")
+            return result
+    except ChildRefusal as exc:
+        _reraise_typed(exc)
+        raise
+
+
 __all__ = [
+    "FEM_REGION_ARTIFACTS",
+    "build_fem_region_mesh_isolated",
     "INSPECT_STAGE",
     "MESH_ARTIFACTS",
     "MESH_STAGE",

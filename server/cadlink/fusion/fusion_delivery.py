@@ -67,6 +67,17 @@ DOCUMENT_UP = 1
 # ``domain_interpretation.py``). The add-in writes them only when WG advertises
 # this; an older WG refuses the unknown required feature, visibly.
 AUTOMATIC_DOMAIN = 1
+# fem-regions-v1 (declared FEM air regions for a coupled FEM/BEM solve). WG
+# ingests and meshes them, but no engine is routed to solve them yet, so the
+# capability is advertised only to a development build that opts in; a
+# released WG must not invite a return it would then solve without its air.
+FEM_REGIONS = 1
+FEM_REGIONS_ENV = "WG2_FEM_REGIONS"
+
+
+def fem_regions_enabled() -> bool:
+    return os.environ.get(FEM_REGIONS_ENV, "").strip() == "1"
+
 # WG publishes the outcome of every request in its inbox as
 # ``.wg-solve-acks/<commandId>.json`` before it deletes the request
 # (``solve_command.write_acknowledgement``). The add-in reads it only when WG
@@ -125,6 +136,8 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
         "documentUp": DOCUMENT_UP,
         "automaticDomain": AUTOMATIC_DOMAIN,
     }
+    if fem_regions_enabled():
+        advertised["femRegions"] = FEM_REGIONS
     from launchers.backend_start import installed_launcher_argv
 
     launcher = installed_launcher_argv()

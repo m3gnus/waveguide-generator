@@ -365,7 +365,7 @@ def read_wgreturn(
         is_step = (
             (
                 record.get("media_type") == "model/step"
-                or record.get("purpose") in {"exterior-assembly", "fem-air-volume"}
+                or record.get("purpose") in {"exterior-assembly", "fem-air-volume", "fem-region"}
             )
         )
         if is_step and size > MAX_STEP_INPUT_BYTES:
@@ -415,6 +415,11 @@ def read_wgreturn(
         if missing:
             detail.append(f"FEM records without matching purpose {missing}")
         _fail("$.files", "; ".join(detail))
+    # fem-regions-v1: the shared validator already matched regions to the
+    # files table; a region's member must also be present on disk.
+    for index, region in enumerate(manifest["scope"].get("fem_regions") or ()):
+        if str(region["file"]) not in members:
+            _fail(f"$.scope.fem_regions[{index}].file", f"does not name a present member: {region['file']!r}")
 
     return WgReturnBundle(
         path=bundle_path.resolve(),

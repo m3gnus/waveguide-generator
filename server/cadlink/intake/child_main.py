@@ -344,7 +344,32 @@ def _task_viewport(
     )
 
 
-_TASKS = {"inspect": _task_inspect, "mesh": _task_mesh, "viewport": _task_viewport}
+def _task_fem_region(
+    envelope: dict[str, Any], source: Path, out_dir: Path
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Tetrahedralise one declared FEM region (``fem-regions-v1``)."""
+
+    from server.cadlink.step_text import scan_step_text
+    from server.mesh.fem_regions import build_fem_region_mesh
+
+    payload = envelope.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    region = payload.get("region")
+    if not isinstance(region, dict):
+        raise ChildTaskError("the FEM region task received no region record")
+    text_evidence = scan_step_text(source)
+    built = build_fem_region_mesh(source, region)
+    msh_text = built.pop("msh_text")
+    built["step_text"] = text_evidence.as_dict()
+    return {"built": built}, {"fem.msh": _stage(out_dir, "fem.msh", msh_text)}
+
+
+_TASKS = {
+    "inspect": _task_inspect,
+    "mesh": _task_mesh,
+    "viewport": _task_viewport,
+    "fem_region": _task_fem_region,
+}
 
 #: Tasks that need a gmsh session opened around them. In the server this was
 #: the persistent worker thread's job; here each child owns exactly one session

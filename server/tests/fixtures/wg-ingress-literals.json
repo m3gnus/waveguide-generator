@@ -93,6 +93,7 @@
    "document-up-v1",
    "domain-automatic-v1",
    "fem-air-volume-v1",
+   "fem-regions-v1",
    "instance-records-v1",
    "reduced-domain-v1",
    "source-identity-v1"
@@ -702,6 +703,8 @@
    "$.sources",
    "sources",
    "$",
+   "files",
+   "files",
    "$.sources",
    "must contain at least one source",
    "$.sources[",
