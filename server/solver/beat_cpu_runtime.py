@@ -976,8 +976,12 @@ def start_runtime_preparation(backend: str) -> threading.Thread:
         raise ValueError("The installed BEAT package cannot prepare runtimes. Update Waveguide Generator.")
     if not records_state_per_backend(provision):
         raise ValueError("Update Waveguide Generator before preparing runtimes with shared CPU/GPU records.")
+    if _hbb_preparation_active(provision):
+        raise RuntimePreparationConflict("Another process is preparing a BEAT runtime.")
     if backend != CPU_BACKEND and not _gpu_preparation_wanted(provision, os.environ):
         raise ValueError("The installed BEAT package cannot prepare GPU runtimes.")
+    if backend in GPU_BACKENDS and provision.backend_ready(backend):
+        raise ValueError(f"The BEAT {backend} runtime is already ready.")
     if backend == CPU_BACKEND:
         verdict = cpu_runtime_readiness(package)
         if verdict.state == "provisioning":
@@ -996,6 +1000,26 @@ def start_runtime_preparation(backend: str) -> threading.Thread:
         started = _provision_thread
     _notify_readiness_listeners()
     return started
+
+
+def _hbb_preparation_active(provision: Any) -> bool:
+    """Read HBB's kernel lock without creating files or trusting holder records."""
+    from .beat_runtime import locks
+
+    if not hasattr(provision, "default_runtime_dir"):
+        return False
+    target = Path(provision.default_runtime_dir()).expanduser() / "provision.lock"
+    try:
+        descriptor = os.open(target, os.O_RDWR)
+    except FileNotFoundError:
+        return False
+    try:
+        if not locks._try_lock(descriptor):
+            return True
+        locks._unlock(descriptor)
+        return False
+    finally:
+        os.close(descriptor)
 
 
 def start_cpu_provisioning(

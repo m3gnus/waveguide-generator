@@ -159,8 +159,9 @@ This requires an internet connection and can take several minutes. Offline
 users need connectivity once to complete preparation; later launches reuse the
 prepared runtime without downloading it again. If preparation fails (for
 example because you were offline), WG does not retry it automatically on later
-launches. In **Solve options**, beside **Advanced backend**, each unavailable
-BEAT runtime shows its state and a readable reason. Click **Prepare** for an
+launches. In **Solve options**, beside **Advanced backend**, the selected BEAT
+runtime and runtimes that can prepare, are preparing or have failed show their
+state and a readable reason. Click **Prepare** for an
 unprepared or stale runtime, or **Retry** after a failure, once you are online.
 Preparation runs in the background; its current step appears there, and the
 backend becomes selectable when its verification finishes. Only one runtime
@@ -171,8 +172,12 @@ preparation requires matching hardware, and installation opt-out settings are
 honoured; runtimes with missing hardware or an unusable package explain why
 they cannot be prepared. CUDA and ROCm are enabled but not hardware-qualified,
 and download their own GPU stack into the official runtime. For manual
-preparation and diagnostics, the runtime CLI accepts `--backend cpu`, `metal`,
-`cuda` or `rocm`, and `--force` for a fresh attempt.
+preparation from a source checkout, run
+`python -m server.solver.beat_runtime.cli provision --backend cpu` with the
+checkout's Python environment. Replace `cpu` with `metal`, `cuda` or `rocm` as
+needed, and add `--force` for a fresh attempt. Use `status` in place of
+`provision` to inspect readiness. Packaged installations use the in-app
+**Prepare** / **Retry** controls.
 
 As a rollback (hornlab-beat-bem, "HBB"), set `WG2_BEAT_PROVIDER=hbb` (or `legacy`) before starting WG
 to roll back BEAT solves, runtime preparation, readiness, warm-up and Quit to

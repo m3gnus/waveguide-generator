@@ -223,6 +223,45 @@ def test_finished_preparation_refreshes_the_gpu_rows_too(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("reprobe", [None, {"metal": {"available": False, "reason": "Runtime still unavailable"}}])
+@pytest.mark.parametrize("failed", [False, True])
+def test_hbb_gpu_refresh_ends_cached_preparing_when_probe_is_unavailable(monkeypatch, reprobe, failed):
+    from server.solver import beat, beat_cpu_runtime
+
+    monkeypatch.setattr(beat, "_load_api", lambda: object())
+    monkeypatch.setattr(beat, "_cpu_backend_status", lambda package: (True, "CPU ready"))
+    monkeypatch.setattr(beat, "_package_retains_surface_traces", lambda package: False)
+    monkeypatch.setattr(beat, "reprobe_package_backend_statuses", lambda: reprobe)
+    monkeypatch.setattr(beat_cpu_runtime, "runtimes_prepared_this_process", lambda: True)
+    monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: False)
+    monkeypatch.setattr(beat_cpu_runtime, "_preparation_in_flight", False)
+    monkeypatch.setattr(beat_cpu_runtime, "_preparation_errors", {"metal": "Download failed"} if failed else {})
+    monkeypatch.setattr(beat_cpu_runtime, "_import", lambda name: SimpleNamespace(read_backend_states=lambda: {}))
+    monkeypatch.setattr(beat_cpu_runtime, "preparation_enabled", lambda backend: True)
+    engine_registry = registry.EngineRegistry(detector=lambda: [
+        registry.EngineInfo("beat-metal", False, "Preparing Metal", "1", runtime_state="preparing"),
+    ], cpu_refresh=True)
+
+    async def scenario():
+        try:
+            await engine_registry.capabilities()
+            engine_registry._cpu_readiness_changed()
+            await asyncio.sleep(0)
+            assert engine_registry._refresh_task is not None
+            await engine_registry._refresh_task
+            row = (await engine_registry.capabilities())[0]
+            assert not row.available
+            assert row.runtime_state == ("failed" if failed else "unprepared")
+            assert row.runtime_preparable
+            assert "Preparing Metal" not in row.reason
+            if failed:
+                assert "Download failed" in row.reason
+        finally:
+            await engine_registry.shutdown_prewarm()
+
+    asyncio.run(scenario())
+
+
 def test_a_reprobe_waits_for_a_running_probe_and_discards_its_answer(monkeypatch) -> None:
     """A probe begun before provisioning finished must not answer after it."""
 

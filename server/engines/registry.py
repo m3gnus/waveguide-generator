@@ -1136,6 +1136,7 @@ class EngineRegistry:
         self._schedule_cpu_refresh()
 
     async def _refresh_cpu_backend(self) -> None:
+        from server.solver import beat_cpu_runtime
         from server.solver.beat import (
             _cpu_backend_status,
             _load_api,
@@ -1162,6 +1163,14 @@ class EngineRegistry:
                                await asyncio.to_thread(_beat_row_updates, package, _cpu_backend_status))
                     async with self._lock:
                         if self._cache is not None and not self._listener_removed:
+                            preparing = beat_cpu_runtime.cpu_preparation_in_flight()
+                            if not selected and not preparing:
+                                # A missing or unavailable reprobe must end the
+                                # cached progress row too, so Retry stays reachable.
+                                for item in self._cache:
+                                    if item.name in {"beat-metal", "beat-cuda", "beat-rocm"} and item.runtime_state == "preparing":
+                                        updates.setdefault(item.name, (False,
+                                            f"{item.label or item.name} runtime is not ready after preparation. Prepare the runtime again."))
                             self._cache = tuple(
                                 _beat_engine_info(beat_engine_backend(item.name), {
                                     "available": updates[item.name][0],
@@ -1170,7 +1179,9 @@ class EngineRegistry:
                                     if selected else getattr(package, "__version__", item.version),
                                     "surface_traces": True if selected else _package_retains_surface_traces(package),
                                     "state": self.official_runtime_statuses[beat_engine_backend(item.name)].get("state") if selected else
-                                    None if item.name == "beat-cpu" else item.runtime_state,
+                                    None if item.name == "beat-cpu" else
+                                    "unprepared" if item.runtime_state == "preparing"
+                                    and not preparing else item.runtime_state,
                                 })
                                 if item.name in updates
                                 else item

@@ -448,7 +448,7 @@ describe('solve and directivity control help', () => {
     expect(options.filter((option) => option.disabled).map((option) => option.value))
       .toEqual(['beat-cuda']);
     expect(options[2].textContent).toContain('unavailable');
-    expect(host.querySelector('.beat-runtime-preparation')?.textContent).toContain('Needs an NVIDIA GPU');
+    expect(host.querySelector('.beat-runtime-preparation')?.textContent ?? '').not.toContain('Needs an NVIDIA GPU');
   });
 
   // CAD Link is a geometry source, not a solve mode: imported geometry is

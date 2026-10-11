@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { prepareBeatRuntime, type EngineCapability } from '../jobs/actions';
 
 /** Runtime reasons stay readable and actionable beside the backend picker. */
@@ -8,18 +8,27 @@ export function BeatRuntimePreparation({ engines, selected, refreshCapabilities 
   refreshCapabilities: () => void | Promise<void>;
 }) {
   const [starting, setStarting] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; engine: EngineCapability } | null>(null);
   const running = starting !== null || engines.some((engine) => engine.runtime_state === 'preparing');
   const runtimes = engines.filter((engine) => engine.name.startsWith('beat-')
-    && (engine.name === selected || !engine.available));
+    && (engine.name === selected || engine.runtime_preparable
+      || engine.runtime_state === 'preparing' || engine.runtime_state === 'failed'));
 
-  async function prepare(engine: string) {
+  useEffect(() => {
+    if (!error) return;
+    const current = engines.find((engine) => engine.name === error.engine.name);
+    if (!current || current.runtime_state !== error.engine.runtime_state
+      || current.reason !== error.engine.reason || current.available !== error.engine.available
+      || current.runtime_preparable !== error.engine.runtime_preparable) setError(null);
+  }, [engines, error]);
+
+  async function prepare(engine: EngineCapability) {
     setError(null);
-    setStarting(engine);
+    setStarting(engine.name);
     try {
-      await prepareBeatRuntime(engine);
+      await prepareBeatRuntime(engine.name);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      setError({ message: failure instanceof Error ? failure.message : String(failure), engine });
       setStarting(null);
     } finally {
       // A 409 can mean preparation started in another window. Refresh also
@@ -40,11 +49,11 @@ export function BeatRuntimePreparation({ engines, selected, refreshCapabilities 
         {state === 'preparing'
           ? <p>Preparation can take several minutes. This runtime becomes selectable when ready.</p>
           : engine.runtime_preparable && <button type="button" disabled={running}
-              onClick={() => { void prepare(engine.name); }}>
+              onClick={() => { void prepare(engine); }}>
               {state === 'failed' ? 'Retry' : 'Prepare'} {engine.label || engine.name}
             </button>}
       </div>;
     })}
-    {error && <p className="field-error" role="alert">{error}</p>}
+    {error && <p className="field-error" role="alert">{error.message}</p>}
   </div>;
 }

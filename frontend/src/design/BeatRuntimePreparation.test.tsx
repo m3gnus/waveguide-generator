@@ -55,12 +55,28 @@ it('disables other preparation buttons while a runtime is preparing', () => {
   expect(host.textContent).toContain('several minutes');
 });
 
-it('explains unavailable hardware and disabled preparation without offering a button', () => {
-  render([engine('unavailable', { reason: 'No supported CUDA device.' }),
-    engine('unprepared', { name: 'beat-cpu', runtime_preparable: false, reason: 'Preparation disabled.' })]);
+it('explains the selected unavailable hardware without offering a button', () => {
+  render([engine('unavailable', { reason: 'No supported CUDA device.' })], 'beat-cuda');
   expect(host.textContent).toContain('No supported CUDA device.');
+  expect(host.querySelector('button')).toBeNull();
+});
+
+it('explains disabled preparation for the selected runtime without offering a button', () => {
+  render([engine('unprepared', { name: 'beat-cpu', runtime_preparable: false, reason: 'Preparation disabled.' })], 'beat-cpu');
   expect(host.textContent).toContain('Preparation disabled.');
   expect(host.querySelector('button')).toBeNull();
+});
+
+it('hides unrelated hardware-unavailable and ready runtimes while showing actionable rows', () => {
+  render([engine('unavailable', { reason: 'No supported CUDA device.' }),
+    engine('unavailable', { name: 'beat-rocm', reason: 'No supported ROCm device.' }),
+    engine('ready', { name: 'beat-metal', label: 'BEAT · Metal' }),
+    engine('unprepared', { name: 'beat-cpu', label: 'BEAT · CPU' })]);
+  expect(host.textContent).not.toContain('No supported');
+  expect(host.textContent).not.toContain('BEAT · Metal');
+  expect(host.querySelector('button')!.textContent).toContain('BEAT · CPU');
+  render([engine('unavailable'), engine('ready', { name: 'beat-metal' })]);
+  expect(host.querySelector('.beat-runtime-preparation')).toBeNull();
 });
 
 it.each([400, 409, 500])('surfaces a %s rejection and refreshes the shared lifecycle', async (status) => {
@@ -70,6 +86,17 @@ it.each([400, 409, 500])('surfaces a %s rejection and refreshes the shared lifec
   expect(host.querySelector('[role="alert"]')!.textContent).toBe('Preparation already running.');
   expect(refresh).toHaveBeenCalledOnce();
   expect(host.querySelector('button')!.disabled).toBe(false);
+});
+
+it.each(['preparing', 'ready', 'failed'] as const)('clears a conflict after capabilities change to %s', async (state) => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ detail: 'Preparation already running.' }), { status: 409 })));
+  render([engine('unprepared')]);
+  await act(async () => { host.querySelector('button')!.click(); });
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
+  render([engine('unprepared')]);
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
+  render([engine(state)], 'beat-cuda');
+  expect(host.querySelector('[role="alert"]')).toBeNull();
 });
 
 
