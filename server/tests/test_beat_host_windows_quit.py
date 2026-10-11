@@ -285,7 +285,7 @@ def test_without_the_launchers_job_the_detached_host_survives() -> None:
 _OFFICIAL_SERVER = r"""
 import json, os, subprocess, sys
 from pathlib import Path
-from server.cadlink import isolation
+from server.cadlink.intake import isolation
 from server.platform.job_start import windows_job_start
 from server.solver.beat_runtime import spawn
 spawn.HOST_MODULE = "server.tests.beat_runtime.fake_host_main"
