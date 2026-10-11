@@ -323,12 +323,11 @@ def test_windows_launch_closes_server_job_copy_after_both_armed_attempts(contain
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows launch containment")
-@pytest.mark.parametrize("fired,job_present", [(False, True), (True, False)])
-def test_windows_launch_refuses_an_unfired_or_jobless_start(contained_launch, fired, job_present):
+def test_windows_launch_refuses_an_unfired_start(contained_launch):
     from server.platform.job_start import ContainedStartError
 
     key, directory, observed, state, _ = contained_launch
-    state.fired, state.job_present = fired, job_present
+    state.fired = False
     with pytest.raises(ContainedStartError, match="could not confine the BEAT host in a Windows job"):
         spawn._launch(key, directory, 1800, 10)
     assert observed[-3:] == [("disarm",), ("kill",), ("wait", 5)]

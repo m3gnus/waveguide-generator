@@ -410,7 +410,8 @@ class WorkerHost:
                 if not job.done.wait(max(0, deadline - time.monotonic())):
                     raise TimeoutError("BEAT cancelled startup did not retire")
             except BaseException as exc:
-                self._retirement_failed = True
+                if isinstance(exc, TimeoutError):
+                    self._retirement_failed = True
                 self._log(f"startup retirement failed: {exc}")
                 self._fail_stop()
             return
@@ -424,7 +425,8 @@ class WorkerHost:
             if not job.done.wait(RETIREMENT_TIMEOUT):
                 raise TimeoutError("BEAT submission did not retire")
         except BaseException as exc:
-            self._retirement_failed = True
+            if isinstance(exc, TimeoutError):
+                self._retirement_failed = True
             self._log(f"cancellation retirement failed: {exc}")
             self._fail_stop()
 
@@ -660,13 +662,15 @@ class WorkerHost:
                 try:
                     bounded_call(self._ownership.shutdown)
                 except BaseException as exc:
-                    self._retirement_failed = True
+                    if isinstance(exc, TimeoutError):
+                        self._retirement_failed = True
                     self._log(f"ownership retirement failed: {exc}")
             if engine is not None:
                 try:
                     bounded_call(engine.terminate)
                 except BaseException as exc:
-                    self._retirement_failed = True
+                    if isinstance(exc, TimeoutError):
+                        self._retirement_failed = True
                     self._log(f"engine retirement failed: {exc}")
         finally:
             self._remove_own_record()
@@ -764,7 +768,8 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         try:
             host.close()
-        except BaseException:
+        except BaseException as exc:
+            host._log(f"host close failed: {exc}")
             status = 1
             raise
         finally:

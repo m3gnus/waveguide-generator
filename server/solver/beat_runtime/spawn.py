@@ -106,7 +106,11 @@ def _launch(key: dict[str, Any], directory: Path, idle_timeout: float, timeout: 
                         raise
                     process = popen("refused")
             try:
-                if not started.fired or started.job is None:
+                if not started.fired:
+                    # Unreachable with CPython's 9-argument _winapi.CreateProcess.
+                    # An unsuspended stub may already have started an interpreter
+                    # this kill cannot reach; it exits at its startup timeout
+                    # because no record was published.
                     with contextlib.suppress(Exception):
                         process.kill()
                     with contextlib.suppress(Exception):

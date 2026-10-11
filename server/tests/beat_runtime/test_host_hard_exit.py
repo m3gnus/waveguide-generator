@@ -36,25 +36,31 @@ def test_close_records_failed_bounded_engine_retirement(launch, monkeypatch, blo
         assert finished.wait(1)
 
 
-def test_close_records_failed_ownership_retirement(launch):
-    key, directory, _ = launch
-    owner = host.WorkerHost(key, directory)
-
-    def shutdown():
-        raise RuntimeError("fixture retirement failure")
-
-    owner._ownership = NS(shutdown=shutdown)
-    owner.close()
-    assert owner._retirement_failed
-
-
-@pytest.mark.parametrize("startup", [False, True])
-def test_cancel_records_failed_retirement(launch, monkeypatch, startup):
+@pytest.mark.parametrize("failure", [TimeoutError, RuntimeError])
+@pytest.mark.parametrize("target", ["ownership", "engine"])
+def test_close_records_only_timed_out_retirement(launch, failure, target):
     key, directory, _ = launch
     owner = host.WorkerHost(key, directory)
 
     def fail():
-        raise RuntimeError("fixture retirement failure")
+        raise failure("fixture retirement failure")
+
+    if target == "ownership":
+        owner._ownership = NS(shutdown=fail)
+    else:
+        owner._engine = NS(terminate=fail)
+    owner.close()
+    assert owner._retirement_failed is (failure is TimeoutError)
+
+
+@pytest.mark.parametrize("startup", [False, True])
+@pytest.mark.parametrize("failure", [TimeoutError, RuntimeError])
+def test_cancel_records_only_timed_out_retirement(launch, startup, failure):
+    key, directory, _ = launch
+    owner = host.WorkerHost(key, directory)
+
+    def fail():
+        raise failure("fixture retirement failure")
 
     job = host._Job({}, lambda _: None, 1)
     job.running = True
@@ -62,7 +68,8 @@ def test_cancel_records_failed_retirement(launch, monkeypatch, startup):
     if not startup:
         job.stream = NS(cancel=fail)
     owner._cancel_job(job, retire_startup=startup)
-    assert owner._retirement_failed and owner._stopping.is_set()
+    assert owner._retirement_failed is (failure is TimeoutError)
+    assert owner._stopping.is_set()
 
 
 @pytest.mark.parametrize("failed", [False, True])
@@ -106,5 +113,8 @@ def test_main_hard_exits_only_after_failed_retirement(launch, monkeypatch, faile
         assert host.main(arguments) == 0
     assert observed[:2] == ["serve", "close"]
     # The hard exit keeps the status the host would have exited with.
-    assert observed[2:] == (["retirement failed; exiting without interpreter shutdown",
-                             ("exit", 1 if close_raises else 0)] if failed else [])
+    expected = ["host close failed: fixture close failure"] if close_raises else []
+    if failed:
+        expected.extend(["retirement failed; exiting without interpreter shutdown",
+                         ("exit", 1 if close_raises else 0)])
+    assert observed[2:] == expected

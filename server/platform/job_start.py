@@ -48,8 +48,9 @@ replacing ``app/`` under it.
 ``required`` chooses only what happens to a child that was confined but
 cannot be resumed:
 
-* ``required=True`` (the CAD child, the desktop's server, the OpenCL check):
-  it is stopped before it ran and :class:`ContainedStartError` is raised.
+* ``required=True`` (the CAD child, the desktop's server, the OpenCL check,
+  the BEAT host): it is stopped before it ran and
+  :class:`ContainedStartError` is raised.
 * ``required=False`` (the mesher child, the BEMPP worker): it is stopped
   before it ran, started again the plain way and assigned after the fact.
   An assignment that then fails stops that child too and raises. That

@@ -283,12 +283,17 @@ def test_without_the_launchers_job_the_detached_host_survives() -> None:
 #: isolated child (no breakaway, its own kill-on-close job nested in the
 #: server's). Reports the pids, then waits for its stdin to close.
 _OFFICIAL_SERVER = r"""
-import json, subprocess, sys
+import json, os, subprocess, sys
 from pathlib import Path
 from server.cadlink import isolation
 from server.platform.job_start import windows_job_start
 from server.solver.beat_runtime import spawn
 spawn.HOST_MODULE = "server.tests.beat_runtime.fake_host_main"
+stub_children = []
+if os.environ.get("BEAT_STUB_SCRIPT"):
+    from server.tests.test_beat_host_windows_quit import _stub_launch_hooks
+    spawn._host_command, spawn.subprocess.Popen = _stub_launch_hooks(
+        spawn._host_command, spawn.subprocess.Popen, stub_children)
 key = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 record = spawn.start_host(key, Path(sys.argv[2]), timeout=60.0)
 sleeper = [sys.executable, "-c", "import time; time.sleep(%s)" % sys.argv[3]]
@@ -299,7 +304,10 @@ with windows_job_start(lambda _pid, handle: isolation._assign_windows_job(handle
     cad = isolation.start_child_process(
         sleeper, {"creationflags": isolation._windows_creation_flags(breakaway=False), "close_fds": True, **quiet}, stage="test")
 cad_job = started.job
-print(json.dumps({"host_pid": record.pid, "gmsh_pid": gmsh.pid, "cad_pid": cad.pid}), flush=True)
+pids = {"host_pid": record.pid, "gmsh_pid": gmsh.pid, "cad_pid": cad.pid}
+if stub_children:
+    pids["stub_pid"] = stub_children[0].pid
+print(json.dumps(pids), flush=True)
 sys.stdin.read()
 """
 
@@ -671,6 +679,7 @@ _STUB_EMULATOR = """
 import os, subprocess, sys
 from pathlib import Path
 Path(os.environ["BEAT_STUB_PID_FILE"]).write_text(str(os.getpid()), encoding="utf-8")
+Path(os.environ["BEAT_STUB_CWD_FILE"]).write_text(os.getcwd(), encoding="utf-8")
 child = subprocess.Popen(sys.argv[1:], close_fds=True)
 raise SystemExit(child.wait(timeout=60))
 """
@@ -686,45 +695,17 @@ assert mutex
 """
 
 
-@pytest.fixture
-def stub_host(official, tmp_path, monkeypatch):
-    if os.name != "nt":
-        pytest.skip("native Windows stub-owned job")
-    import site
-    import uuid
-
-    from server.solver.beat_runtime import spawn
-
-    key, _, directory, pids = official
+def _stub_launch_hooks(command, popen, children):
+    """Use the same stub and import shim in the fixture and stand-in server."""
     base = sys._base_executable
-    support = tmp_path / "python-support"
-    support.mkdir()
-    # addsitedir processes .pth files, which a plain PYTHONPATH entry skips.
-    (support / "sitecustomize.py").write_text(
-        "import site\n" + "".join(f"site.addsitedir({path!r})\n" for path in site.getsitepackages()),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(
-        filter(None, (str(support), os.environ.get("PYTHONPATH")))))
-    stub = tmp_path / "stub.py"
-    stub.write_text(_STUB_EMULATOR, encoding="utf-8")
-    stub_pid = tmp_path / "stub.pid"
-    interpreter_pid = tmp_path / "interpreter.pid"
-    grandchild_pid = tmp_path / "grandchild.pid"
-    mutex = f"WaveguideGeneratorTestRunning-{uuid.uuid4().hex}"
-    monkeypatch.setenv("BEAT_STUB_PID_FILE", str(stub_pid))
-    monkeypatch.setenv("BEAT_STUB_MUTEX", mutex)
-    monkeypatch.setattr(spawn, "HOST_MODULE", "server.tests.beat_runtime.fake_host_main")
-    children = []
-    command = spawn._host_command
-    launch = spawn._launch
-    popen = spawn.subprocess.Popen
+    stub = os.environ["BEAT_STUB_SCRIPT"]
+    support = os.environ["BEAT_STUB_SHIM"]
     grandchild = (_TEST_MUTEX + "\nimport time\nfrom pathlib import Path\n"
-                  f"Path({str(grandchild_pid)!r}).write_text(str(os.getpid()), encoding='utf-8')\n"
+                  "Path(os.environ['BEAT_STUB_GRANDCHILD_PID_FILE']).write_text(str(os.getpid()), encoding='utf-8')\n"
                   "time.sleep(60)\n")
     bootstrap = (
         "import os\nfrom pathlib import Path\n"
-        f"Path({str(interpreter_pid)!r}).write_text(str(os.getpid()), encoding='utf-8')\n"
+        "Path(os.environ['BEAT_STUB_INTERPRETER_PID_FILE']).write_text(str(os.getpid()), encoding='utf-8')\n"
         "if os.environ.get('BEAT_STUB_TEST_TREE'):\n"
         + "".join("    " + line + "\n" for line in _TEST_MUTEX.splitlines())
         + "    import subprocess\n"
@@ -734,43 +715,85 @@ def stub_host(official, tmp_path, monkeypatch):
     def host_command(root, *arguments):
         argv = command(root, *arguments)
         argv[0], argv[2] = base, bootstrap + argv[2]
-        return [base, str(stub), *argv]
-
-    def launching(*args, **kwargs):
-        child = launch(*args, **kwargs)
-        children.append(child)
-        pids.append(child.pid)
-        return child
+        return [base, stub, *argv]
 
     def starting(argv, **kwargs):
-        if argv[:2] == [base, str(stub)]:
-            # _launch prepends the app root. Keep our sitecustomize first for
-            # both base interpreters, including any .pth-managed dependencies.
+        is_stub = argv[:2] == [base, stub]
+        if is_stub:
+            # _launch prepends app; the shim must process dependencies first.
             environment = dict(kwargs["env"])
             entries = environment["PYTHONPATH"].split(os.pathsep)
             environment["PYTHONPATH"] = os.pathsep.join(
-                [str(support), *(entry for entry in entries if entry != str(support))])
+                [support, *(entry for entry in entries if entry != support)])
             kwargs["env"] = environment
-        return popen(argv, **kwargs)
+        child = popen(argv, **kwargs)
+        if is_stub:
+            children.append(child)
+        return child
+
+    return host_command, starting
+
+
+@pytest.fixture
+def stub_host(official, tmp_path, monkeypatch):
+    if os.name != "nt":
+        pytest.skip("native Windows stub-owned job")
+    import site
+    import uuid
+
+    from server.solver.beat_runtime import registry as r, spawn
+
+    key, key_file, directory, _ = official
+    support = tmp_path / "python-support"
+    support.mkdir()
+    # addsitedir processes .pth files, which a plain PYTHONPATH entry skips.
+    (support / "sitecustomize.py").write_text(
+        "import site\n" + "".join(f"site.addsitedir({path!r})\n" for path in site.getsitepackages()),
+        encoding="utf-8", newline="\n",
+    )
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(
+        filter(None, (str(support), os.environ.get("PYTHONPATH")))))
+    stub = tmp_path / "stub.py"
+    stub.write_text(_STUB_EMULATOR, encoding="utf-8", newline="\n")
+    stub_pid = tmp_path / "stub.pid"
+    interpreter_pid = tmp_path / "interpreter.pid"
+    grandchild_pid = tmp_path / "grandchild.pid"
+    cwd_file = tmp_path / "stub.cwd"
+    mutex = f"WaveguideGeneratorTestRunning-{uuid.uuid4().hex}"
+    monkeypatch.setenv("BEAT_STUB_SCRIPT", str(stub))
+    monkeypatch.setenv("BEAT_STUB_SHIM", str(support))
+    monkeypatch.setenv("BEAT_STUB_PID_FILE", str(stub_pid))
+    monkeypatch.setenv("BEAT_STUB_INTERPRETER_PID_FILE", str(interpreter_pid))
+    monkeypatch.setenv("BEAT_STUB_GRANDCHILD_PID_FILE", str(grandchild_pid))
+    monkeypatch.setenv("BEAT_STUB_CWD_FILE", str(cwd_file))
+    monkeypatch.setenv("BEAT_STUB_MUTEX", mutex)
+    monkeypatch.setattr(spawn, "HOST_MODULE", "server.tests.beat_runtime.fake_host_main")
+    children = []
+    owned = {}
+
+    def own(pid):
+        identity = r.process_start_identity(pid)
+        assert identity is not None and _alive(pid), "cannot record a live process identity"
+        owned[pid] = identity
+        return pid
+
+    host_command, starting = _stub_launch_hooks(spawn._host_command, spawn.subprocess.Popen, children)
 
     monkeypatch.setattr(spawn, "_host_command", host_command)
-    monkeypatch.setattr(spawn, "_launch", launching)
     monkeypatch.setattr(spawn.subprocess, "Popen", starting)
     try:
-        yield NS(key=key, directory=directory, children=children, stub_pid=stub_pid,
-                 interpreter_pid=interpreter_pid, grandchild_pid=grandchild_pid, mutex=mutex, pids=pids)
+        yield NS(key=key, key_file=key_file, directory=directory, children=children, stub_pid=stub_pid,
+                 interpreter_pid=interpreter_pid, grandchild_pid=grandchild_pid, cwd_file=cwd_file,
+                 mutex=mutex, own=own)
     finally:
-        # Marker pids are written only by this fixture's own processes.
-        for path in (stub_pid, interpreter_pid, grandchild_pid):
-            if path.exists():
-                value = path.read_text(encoding="utf-8")
-                if value.strip():
-                    pids.append(int(value))
-        for pid in pids:
-            if _alive(pid):
-                _terminate(pid)
+        # Popen keeps the stub handle valid even if its pid is reused.
         for child in children:
-            child.wait(timeout=5)
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=10)
+        for pid, identity in owned.items():
+            if _alive(pid) and r.process_start_identity(pid) == identity:
+                _terminate(pid)
 
 
 def _marker_pid(path: Path, seconds: float = 5) -> int:
@@ -803,18 +826,22 @@ def _test_mutex_gone(name: str) -> bool:
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows stub-owned job")
 def test_killing_the_stub_ends_interpreter_grandchild_and_running_mutex(stub_host, monkeypatch):
-    from server.solver.beat_runtime import spawn
+    from server.solver.beat_runtime import registry as r, spawn
 
     monkeypatch.setenv("BEAT_STUB_TEST_TREE", "1")
     record = spawn.start_host(stub_host.key, stub_host.directory, timeout=10)
+    stub_host.own(record.pid)
     stub = stub_host.children[0]
     assert _marker_pid(stub_host.stub_pid) == stub.pid
     assert _marker_pid(stub_host.interpreter_pid) == record.pid != stub.pid
-    grandchild = _marker_pid(stub_host.grandchild_pid)
-    stub_host.pids.extend([record.pid, grandchild])
+    grandchild = stub_host.own(_marker_pid(stub_host.grandchild_pid))
+    cwd = os.path.normcase(os.path.realpath(stub_host.cwd_file.read_text(encoding="utf-8")))
+    assert cwd == os.path.normcase(os.path.realpath(r.private_directory(stub_host.directory)))
+    app = os.path.normcase(os.path.realpath(Path(__file__).resolve().parents[2]))
+    assert not Path(cwd).is_relative_to(Path(app))
     assert _alive(record.pid) and _alive(grandchild)
     assert not _test_mutex_gone(stub_host.mutex)
-    _terminate(stub.pid)
+    stub.kill()
     deadline = time.monotonic() + 5
     assert _wait_dead(record.pid, max(0, deadline - time.monotonic()))
     assert _wait_dead(grandchild, max(0, deadline - time.monotonic()))
@@ -831,7 +858,7 @@ def test_failed_bootstrap_ends_the_stubs_interpreter_before_publication(stub_hos
 
     def refuse(raw, *args):
         interpreters.append(raw["record"]["pid"])
-        stub_host.pids.append(interpreters[-1])
+        stub_host.own(interpreters[-1])
         raise r.RecordRefused("fixture refused before publication")
 
     monkeypatch.setattr(spawn, "_bootstrap_record", refuse)
@@ -861,7 +888,6 @@ def test_job_failure_never_resumes_the_stub_or_starts_an_interpreter(stub_host, 
         pid = kernel.GetProcessId(handle)
         assert pid
         refused.append(pid)
-        stub_host.pids.append(pid)
         if raises:
             raise OSError("fixture job failure")
         return None
@@ -878,29 +904,84 @@ def test_job_failure_never_resumes_the_stub_or_starts_an_interpreter(stub_host, 
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows stub-owned job")
-def test_idle_expiry_ends_both_the_interpreter_and_its_stub(stub_host, tmp_path, monkeypatch):
+def test_idle_expiry_ends_interpreter_stub_grandchild_and_running_mutex(stub_host, tmp_path, monkeypatch):
     from server.solver.beat_runtime import spawn
 
-    try:
-        probe = subprocess.Popen([sys._base_executable, "-c", "pass"], creationflags=0x01000208)
-    except OSError as exc:
-        if getattr(exc, "winerror", None) == 5:
-            pytest.skip("this runner's own job forbids breakaway")
-        raise
-    try:
-        probe.wait(timeout=5)
-    finally:
-        if probe.poll() is None:
-            probe.kill()
-            probe.wait(timeout=5)
     marker = tmp_path / "resumed"
     monkeypatch.setenv("BEAT_FAKE_HOST_SUSPEND_FILE", str(marker))
+    monkeypatch.setenv("BEAT_STUB_TEST_TREE", "1")
     record = spawn.start_host(stub_host.key, stub_host.directory, timeout=10)
+    stub_host.own(record.pid)
     stub = stub_host.children[0]
-    stub_host.pids.append(record.pid)
-    assert _alive(record.pid) and _alive(stub.pid)
+    grandchild = stub_host.own(_marker_pid(stub_host.grandchild_pid))
+    assert _alive(record.pid) and _alive(stub.pid) and _alive(grandchild)
+    assert not _test_mutex_gone(stub_host.mutex)
     marker.touch()
     deadline = time.monotonic() + 5
     assert _wait_dead(record.pid, max(0, deadline - time.monotonic()))
     assert _wait_dead(stub.pid, max(0, deadline - time.monotonic()))
+    assert _wait_dead(grandchild, max(0, deadline - time.monotonic()))
+    while not _test_mutex_gone(stub_host.mutex) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert _test_mutex_gone(stub_host.mutex)
     assert "idle exit" in _host_log(stub_host.key, stub_host.directory)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows stub-owned job")
+@pytest.mark.parametrize("breakaway", ["granted", "refused"])
+def test_stub_host_quit_survival_and_idle_installer_retirement(stub_host, monkeypatch, retire_event, breakaway):
+    from launchers.statusapp import controller
+    from server.solver.beat_runtime import spawn
+
+    if breakaway == "granted" and not _breakaway_permitted_here():
+        pytest.skip("this runner's own job forbids breakaway; the refused test covers it")
+    if breakaway == "refused":
+        monkeypatch.setattr(controller, "WINDOWS_JOB_LIMIT_FLAGS", JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+    monkeypatch.setenv("BEAT_STUB_TEST_TREE", "1")
+    server, job = _start_server_in_launcher_job(stub_host.key_file, stub_host.directory)
+    try:
+        assert server.stdout is not None
+        started = json.loads(server.stdout.readline())
+        for pid in started.values():
+            stub_host.own(pid)
+        grandchild = stub_host.own(_marker_pid(stub_host.grandchild_pid))
+        host_pid, stub_pid = started["host_pid"], started["stub_pid"]
+        assert _marker_pid(stub_host.interpreter_pid) == host_pid
+        assert _marker_pid(stub_host.stub_pid) == stub_pid != host_pid
+        tree = (host_pid, stub_pid, grandchild)
+        assert all(_alive(pid) for pid in tree)
+        assert not _test_mutex_gone(stub_host.mutex)
+        assert f"job breakaway: {breakaway}" in _host_log(stub_host.key, stub_host.directory)
+
+        _quit(server, job, crash=False)
+
+        assert _wait_dead(started["gmsh_pid"])
+        assert _wait_dead(started["cad_pid"])
+        if breakaway == "granted":
+            time.sleep(0.5)
+            assert all(_alive(pid) for pid in tree), "the stub-owned host tree did not survive Quit"
+            assert not _test_mutex_gone(stub_host.mutex)
+
+            def no_spawn(*_args, **_kwargs):
+                raise AssertionError("a relaunch spawned a second host instead of adopting")
+
+            monkeypatch.setattr(spawn, "_launch", no_spawn)
+            assert spawn.start_host(stub_host.key, stub_host.directory).pid == host_pid
+            assert _signal_retire(retire_event), "the host did not create the test retire event"
+
+        deadline = time.monotonic() + 10
+        for pid in tree:
+            assert _wait_dead(pid, max(0, deadline - time.monotonic()))
+        while not _test_mutex_gone(stub_host.mutex) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert _test_mutex_gone(stub_host.mutex)
+        if breakaway == "granted":
+            assert "idle exit: the installer asked idle hosts to retire" in _host_log(
+                stub_host.key, stub_host.directory)
+    finally:
+        if breakaway == "granted":
+            _signal_retire(retire_event, reset=True)
+        if server.poll() is None:
+            server.kill()
+            server.wait(timeout=30)
+        job.close()
