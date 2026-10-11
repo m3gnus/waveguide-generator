@@ -1,0 +1,560 @@
+{
+  "OSSE-ADAPTER": {
+    "scale": 1,
+    "throat_ext_angle": 0,
+    "throat_ext_length": 0,
+    "slot_length": 0,
+    "length_mode": "profile",
+    "coverage_mode": "auto",
+    "morph": {
+      "target_shape": 0,
+      "target_width": 0,
+      "target_height": 0,
+      "corner_radius": 0,
+      "rate": 3,
+      "fixed_part": 0,
+      "allow_shrinkage": 0
+    },
+    "source": {
+      "shape": 2,
+      "radius": -1,
+      "curvature": 0,
+      "velocity": 1,
+      "contours": "",
+      "velocity_convention": "normal"
+    },
+    "simulation": {
+      "f1": 50,
+      "f2": 16000,
+      "num_frequencies": 32,
+      "sim_type": "freestanding"
+    },
+    "output": {
+      "stl": 0,
+      "msh": 0
+    },
+    "extra_keys": {},
+    "extra_blocks": {},
+    "formula": "OSSE-ADAPTER",
+    "L": 120,
+    "r0": 12.7,
+    "a": 40,
+    "a0": 15.5,
+    "k": 1,
+    "s": 0,
+    "throat_adapter": {
+      "mode": "authored",
+      "contract_revision": 1,
+      "driver_exit_diameter_mm": 25.4,
+      "exit_half_angle_deg": 10,
+      "length_mm": 40,
+      "join_t": 0.137,
+      "driver_handle_mm": 10,
+      "body_handle_mm": 15
+    },
+    "mesh": {
+      "angular_segments": 40,
+      "corner_segments": 4,
+      "throat_segments": 0,
+      "length_segments": 20,
+      "throat_resolution": 6,
+      "mouth_resolution": 15,
+      "throat_slice_density": 0.5,
+      "sampling_mode": "uniform",
+      "z_map_points": "",
+      "vertical_offset": 0,
+      "quadrants": 1234,
+      "wall_thickness": 0,
+      "rear_resolution": 40,
+      "aperture_resolution_scale": 1,
+      "max_triangles": 50000,
+      "allow_large_mesh": 0
+    },
+    "enclosure": {
+      "depth": 0,
+      "edge_radius": 18,
+      "edge_type": 1,
+      "space_l": 25,
+      "space_t": 25,
+      "space_r": 25,
+      "space_b": 25,
+      "front_resolution": 25,
+      "back_resolution": 40
+    }
+  },
+  "OSSE-ADAPTER-CONTROLS": {
+    "scale": 1,
+    "throat_ext_angle": 0,
+    "throat_ext_length": 0,
+    "slot_length": 0,
+    "length_mode": "profile",
+    "coverage_mode": "auto",
+    "morph": {
+      "target_shape": 0,
+      "target_width": 0,
+      "target_height": 0,
+      "corner_radius": 0,
+      "rate": 3,
+      "fixed_part": 0,
+      "allow_shrinkage": 0
+    },
+    "source": {
+      "shape": 2,
+      "radius": -1,
+      "curvature": 0,
+      "velocity": 1,
+      "contours": "",
+      "velocity_convention": "normal"
+    },
+    "simulation": {
+      "f1": 50,
+      "f2": 16000,
+      "num_frequencies": 32,
+      "sim_type": "freestanding"
+    },
+    "output": {
+      "stl": 0,
+      "msh": 0
+    },
+    "extra_keys": {},
+    "extra_blocks": {},
+    "formula": "OSSE-ADAPTER-CONTROLS",
+    "L": 137,
+    "r0": 17,
+    "a": 37,
+    "a0": 6,
+    "k": 1.25,
+    "s": 0,
+    "throat_adapter": {
+      "mode": "controls",
+      "contract_revision": 1,
+      "join_t": 0,
+      "control_points_mm": [
+        [
+          -31.7,
+          16.2
+        ],
+        [
+          -22.1,
+          16.9
+        ],
+        [
+          -9.3,
+          20.4
+        ]
+      ]
+    },
+    "mesh": {
+      "angular_segments": 40,
+      "corner_segments": 4,
+      "throat_segments": 0,
+      "length_segments": 20,
+      "throat_resolution": 6,
+      "mouth_resolution": 15,
+      "throat_slice_density": 0.5,
+      "sampling_mode": "uniform",
+      "z_map_points": "",
+      "vertical_offset": 0,
+      "quadrants": 1234,
+      "wall_thickness": 0,
+      "rear_resolution": 40,
+      "aperture_resolution_scale": 1,
+      "max_triangles": 50000,
+      "allow_large_mesh": 0
+    },
+    "enclosure": {
+      "depth": 0,
+      "edge_radius": 18,
+      "edge_type": 1,
+      "space_l": 25,
+      "space_t": 25,
+      "space_r": 25,
+      "space_b": 25,
+      "front_resolution": 25,
+      "back_resolution": 40
+    }
+  },
+  "OSSE-ADAPTER-AXIAL": {
+    "scale": 1,
+    "throat_ext_angle": 0,
+    "throat_ext_length": 0,
+    "slot_length": 0,
+    "length_mode": "profile",
+    "coverage_mode": "auto",
+    "morph": {
+      "target_shape": 0,
+      "target_width": 0,
+      "target_height": 0,
+      "corner_radius": 0,
+      "rate": 3,
+      "fixed_part": 0,
+      "allow_shrinkage": 0
+    },
+    "source": {
+      "shape": 2,
+      "radius": -1,
+      "curvature": 0,
+      "velocity": 1,
+      "contours": "",
+      "velocity_convention": "normal"
+    },
+    "simulation": {
+      "f1": 50,
+      "f2": 16000,
+      "num_frequencies": 32,
+      "sim_type": "freestanding"
+    },
+    "output": {
+      "stl": 0,
+      "msh": 0
+    },
+    "extra_keys": {},
+    "extra_blocks": {},
+    "formula": "OSSE-ADAPTER-AXIAL",
+    "L": 120,
+    "r0": 12.7,
+    "a": 40,
+    "a0": 15.5,
+    "k": 1,
+    "s": 0,
+    "throat_adapter": {
+      "mode": "authored",
+      "contract_revision": 1,
+      "driver_exit_diameter_mm": 25.4,
+      "exit_half_angle_deg": 10,
+      "length_mm": 40,
+      "join_t": 0.137,
+      "driver_handle_mm": 10,
+      "body_handle_mm": 15
+    },
+    "axial_scale": 1,
+    "mesh": {
+      "angular_segments": 40,
+      "corner_segments": 4,
+      "throat_segments": 0,
+      "length_segments": 20,
+      "throat_resolution": 6,
+      "mouth_resolution": 15,
+      "throat_slice_density": 0.5,
+      "sampling_mode": "uniform",
+      "z_map_points": "",
+      "vertical_offset": 0,
+      "quadrants": 1234,
+      "wall_thickness": 0,
+      "rear_resolution": 40,
+      "aperture_resolution_scale": 1,
+      "max_triangles": 50000,
+      "allow_large_mesh": 0
+    },
+    "enclosure": {
+      "depth": 0,
+      "edge_radius": 18,
+      "edge_type": 1,
+      "space_l": 25,
+      "space_t": 25,
+      "space_r": 25,
+      "space_b": 25,
+      "front_resolution": 25,
+      "back_resolution": 40
+    }
+  },
+  "OSSE-ROUNDOVER": {
+    "scale": 1,
+    "throat_ext_angle": 0,
+    "throat_ext_length": 0,
+    "slot_length": 0,
+    "length_mode": "profile",
+    "coverage_mode": "auto",
+    "morph": {
+      "target_shape": 0,
+      "target_width": 0,
+      "target_height": 0,
+      "corner_radius": 0,
+      "rate": 3,
+      "fixed_part": 0,
+      "allow_shrinkage": 0
+    },
+    "source": {
+      "shape": 2,
+      "radius": -1,
+      "curvature": 0,
+      "velocity": 1,
+      "contours": "",
+      "velocity_convention": "normal"
+    },
+    "simulation": {
+      "f1": 50,
+      "f2": 16000,
+      "num_frequencies": 32,
+      "sim_type": "freestanding"
+    },
+    "output": {
+      "stl": 0,
+      "msh": 0
+    },
+    "extra_keys": {},
+    "extra_blocks": {},
+    "formula": "OSSE-ROUNDOVER",
+    "L": 120,
+    "r0": 12.7,
+    "a": 40,
+    "a0": 15.5,
+    "k": 1,
+    "s": 0,
+    "mesh": {
+      "angular_segments": 40,
+      "corner_segments": 4,
+      "throat_segments": 0,
+      "length_segments": 20,
+      "throat_resolution": 6,
+      "mouth_resolution": 15,
+      "throat_slice_density": 0.5,
+      "sampling_mode": "uniform",
+      "z_map_points": "",
+      "vertical_offset": 0,
+      "quadrants": 1234,
+      "wall_thickness": 5,
+      "rear_resolution": 40,
+      "aperture_resolution_scale": 1,
+      "max_triangles": 50000,
+      "allow_large_mesh": 0,
+      "mouth_roundover_radius_mm": 25
+    },
+    "enclosure": {
+      "depth": 0,
+      "edge_radius": 18,
+      "edge_type": 1,
+      "space_l": 25,
+      "space_t": 25,
+      "space_r": 25,
+      "space_b": 25,
+      "front_resolution": 25,
+      "back_resolution": 40
+    }
+  },
+  "OSSE-AXIAL": {
+    "scale": 1,
+    "throat_ext_angle": 0,
+    "throat_ext_length": 0,
+    "slot_length": 0,
+    "length_mode": "profile",
+    "coverage_mode": "auto",
+    "morph": {
+      "target_shape": 0,
+      "target_width": 0,
+      "target_height": 0,
+      "corner_radius": 0,
+      "rate": 3,
+      "fixed_part": 0,
+      "allow_shrinkage": 0
+    },
+    "source": {
+      "shape": 2,
+      "radius": -1,
+      "curvature": 0,
+      "velocity": 1,
+      "contours": "",
+      "velocity_convention": "normal"
+    },
+    "simulation": {
+      "f1": 50,
+      "f2": 16000,
+      "num_frequencies": 32,
+      "sim_type": "freestanding"
+    },
+    "output": {
+      "stl": 0,
+      "msh": 0
+    },
+    "extra_keys": {},
+    "extra_blocks": {},
+    "formula": "OSSE-AXIAL",
+    "L": 120,
+    "r0": 12.7,
+    "a": 40,
+    "a0": 15.5,
+    "k": 1,
+    "s": 0,
+    "axial_scale": 1,
+    "mesh": {
+      "angular_segments": 40,
+      "corner_segments": 4,
+      "throat_segments": 0,
+      "length_segments": 20,
+      "throat_resolution": 6,
+      "mouth_resolution": 15,
+      "throat_slice_density": 0.5,
+      "sampling_mode": "uniform",
+      "z_map_points": "",
+      "vertical_offset": 0,
+      "quadrants": 1234,
+      "wall_thickness": 0,
+      "rear_resolution": 40,
+      "aperture_resolution_scale": 1,
+      "max_triangles": 50000,
+      "allow_large_mesh": 0
+    },
+    "enclosure": {
+      "depth": 0,
+      "edge_radius": 18,
+      "edge_type": 1,
+      "space_l": 25,
+      "space_t": 25,
+      "space_r": 25,
+      "space_b": 25,
+      "front_resolution": 25,
+      "back_resolution": 40
+    }
+  },
+  "OSSE-ARC": {
+    "scale": 1,
+    "throat_ext_angle": 0,
+    "throat_ext_length": 0,
+    "slot_length": 0,
+    "length_mode": "profile",
+    "coverage_mode": "auto",
+    "morph": {
+      "target_shape": 0,
+      "target_width": 0,
+      "target_height": 0,
+      "corner_radius": 0,
+      "rate": 3,
+      "fixed_part": 0,
+      "allow_shrinkage": 0
+    },
+    "source": {
+      "shape": 2,
+      "radius": -1,
+      "curvature": 0,
+      "velocity": 1,
+      "contours": "",
+      "velocity_convention": "normal"
+    },
+    "simulation": {
+      "f1": 50,
+      "f2": 16000,
+      "num_frequencies": 32,
+      "sim_type": "freestanding"
+    },
+    "output": {
+      "stl": 0,
+      "msh": 0
+    },
+    "extra_keys": {},
+    "extra_blocks": {},
+    "formula": "OSSE-ARC",
+    "L": 120,
+    "r0": 12.7,
+    "a": 40,
+    "a0": 15.5,
+    "k": 1,
+    "s": 0,
+    "terminating_arc": {
+      "contract_revision": 1,
+      "join_t": 0.05,
+      "end_tangent_deg": 100
+    },
+    "mesh": {
+      "angular_segments": 40,
+      "corner_segments": 4,
+      "throat_segments": 0,
+      "length_segments": 20,
+      "throat_resolution": 6,
+      "mouth_resolution": 15,
+      "throat_slice_density": 0.5,
+      "sampling_mode": "uniform",
+      "z_map_points": "",
+      "vertical_offset": 0,
+      "quadrants": 1234,
+      "wall_thickness": 0,
+      "rear_resolution": 40,
+      "aperture_resolution_scale": 1,
+      "max_triangles": 50000,
+      "allow_large_mesh": 0
+    },
+    "enclosure": {
+      "depth": 0,
+      "edge_radius": 18,
+      "edge_type": 1,
+      "space_l": 25,
+      "space_t": 25,
+      "space_r": 25,
+      "space_b": 25,
+      "front_resolution": 25,
+      "back_resolution": 40
+    }
+  },
+  "SOURCE-DISK": {
+    "scale": 1,
+    "throat_ext_angle": 0,
+    "throat_ext_length": 0,
+    "slot_length": 0,
+    "length_mode": "profile",
+    "coverage_mode": "auto",
+    "morph": {
+      "target_shape": 0,
+      "target_width": 0,
+      "target_height": 0,
+      "corner_radius": 0,
+      "rate": 3,
+      "fixed_part": 0,
+      "allow_shrinkage": 0
+    },
+    "source": {
+      "shape": 2,
+      "radius": -1,
+      "curvature": 0,
+      "velocity": 1,
+      "contours": "",
+      "velocity_convention": "normal"
+    },
+    "simulation": {
+      "f1": 50,
+      "f2": 16000,
+      "num_frequencies": 32,
+      "sim_type": "freestanding"
+    },
+    "output": {
+      "stl": 0,
+      "msh": 0
+    },
+    "extra_keys": {},
+    "extra_blocks": {},
+    "formula": "SOURCE-DISK",
+    "source_body": {
+      "radius_mm": 18,
+      "outer_radius_mm": 22,
+      "depth_mm": 8
+    },
+    "mesh": {
+      "angular_segments": 40,
+      "corner_segments": 4,
+      "throat_segments": 0,
+      "length_segments": 20,
+      "throat_resolution": 6,
+      "mouth_resolution": 15,
+      "throat_slice_density": 0.5,
+      "sampling_mode": "uniform",
+      "z_map_points": "",
+      "vertical_offset": 0,
+      "quadrants": 1234,
+      "wall_thickness": 0,
+      "rear_resolution": 40,
+      "aperture_resolution_scale": 1,
+      "max_triangles": 50000,
+      "allow_large_mesh": 0,
+      "size_mm": 3
+    },
+    "enclosure": {
+      "depth": 0,
+      "edge_radius": 18,
+      "edge_type": 1,
+      "space_l": 25,
+      "space_t": 25,
+      "space_r": 25,
+      "space_b": 25,
+      "front_resolution": 25,
+      "back_resolution": 40
+    }
+  }
+}

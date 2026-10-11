@@ -112,6 +112,9 @@ class MeshLadderPlan:
 def scalable_resolution_fields(design: DesignConfig) -> tuple[str, ...]:
     """Name the mm resolution fields this design actually sets."""
 
+    # SOURCE-DISK uses size_mm; hidden horn resolutions do not affect its mesh.
+    if design.formula == "SOURCE-DISK":
+        return ()
     names: list[str] = []
     mesh = design.root.mesh
     for field in _MESH_RESOLUTION_FIELDS:

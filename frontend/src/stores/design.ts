@@ -548,6 +548,20 @@ export function mergeDesignForFamily(current: DesignDocument, family: DesignFami
   if (isNativeFamily(family) || isNativeFamily(current.formula)) {
     // Native domains cannot inherit active legacy morphs, prefixes or shells.
     const next = designForFamily(family);
+    if (isNativeFamily(current.formula) && isNativeFamily(family)
+      && current.formula !== 'SOURCE-DISK' && family !== 'SOURCE-DISK') {
+      // Native horns share the same intrinsic OSSE body and finished-mm sizing.
+      for (const key of ['L', 'r0', 'a', 'a0', 'k', 's', 'scale'] as const) {
+        if (current[key] !== undefined) next[key] = current[key];
+      }
+      for (const key of ['throat_resolution', 'mouth_resolution', 'rear_resolution',
+        'angular_segments', 'length_segments', 'max_triangles', 'allow_large_mesh', 'vertical_offset'] as const) {
+        next.mesh[key] = current.mesh[key];
+      }
+      const authored = (value: DesignFamily) => value === 'OSSE-ADAPTER' || value === 'OSSE-ADAPTER-AXIAL';
+      if (authored(current.formula) && authored(family)) next.throat_adapter = structuredClone(current.throat_adapter);
+      if (current.axial_scale !== undefined && next.axial_scale !== undefined) next.axial_scale = current.axial_scale;
+    }
     next.simulation = { ...current.simulation, sim_type: 'freestanding' };
     next.output = structuredClone(current.output);
     next.extra_keys = structuredClone(current.extra_keys);

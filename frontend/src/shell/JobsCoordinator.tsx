@@ -1,3 +1,4 @@
+import { nativeSymmetryLimitation } from '../design/nativeFamilies';
 import type { ExportFormat } from '../prefs/preferences';
 import { ownedAutoExport } from '../jobs/autoExportOwner';
 import { exportRunAutomatically } from '../jobs/autoExportRun';
@@ -342,6 +343,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   let solveOptionsError: string | null = null;
   try {
     currentOptions = solveOptions.options();
+    if (workspaceMode === 'parametric') {
+      solveOptionsError = nativeSymmetryLimitation(design.formula, currentOptions.symmetry);
+      if (solveOptionsError) currentOptions = null;
+    }
   } catch (error) {
     solveOptionsError = error instanceof Error ? error.message : String(error);
   }
@@ -411,6 +416,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // discarded any expression bound to the field, bumped the revision, and
       // marked the file unsaved -- for a correction the run had already made.
       const options = useSolveOptionsStore.getState().options();
+      const symmetryError = nativeSymmetryLimitation(nextDesign.formula, options.symmetry);
+      if (symmetryError) throw new Error(symmetryError);
       await planSolveDesign(nextDesign, options);
       const designName = useDocumentStore.getState().designName;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());

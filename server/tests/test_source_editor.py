@@ -12,6 +12,7 @@ import meshio
 import numpy as np
 import pytest
 
+from server.design.native import NATIVE_FORMULAS
 from server.cadlink.intake.native_source import read_native_source
 from server.source_editor import PresetStore, create_router
 from server.tests.native_geometry_oracle import certificate, segment
@@ -307,3 +308,15 @@ def test_real_bundle_reopens_exact_recipe_and_closed_mesh(client, kind, attachme
             assert np.all(normals[tags == patch["mesh_tag"], 2] > 0)
         certificate(faces, segment(contour, i), n=128)
     assert not list((tmp_path / "tmp").iterdir())
+
+
+@pytest.mark.parametrize("formula", sorted(NATIVE_FORMULAS))
+def test_assembly_horn_profile_refuses_native_formulas_explicitly(client, formula):
+    from server.tests.test_native_formulas import design_payload
+
+    response = client.post("/api/source-editor/assembly/horn-profile", json=design_payload(formula))
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        f"{formula} cannot be attached to a source assembly as a general horn profile. "
+        "Use a legacy horn formula."
+    )

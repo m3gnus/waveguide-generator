@@ -156,6 +156,18 @@ describe('useSolvePlan', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['OSSE-ADAPTER', 'OSSE-ADAPTER-CONTROLS', 'OSSE-ADAPTER-AXIAL', 'OSSE-AXIAL', 'OSSE-ARC'] as const)('shows the BEMPP closed-body refusal for %s before submission', async (formula) => {
+    design = designForFamily(formula);
+    const message = `BEMPP requires a closed body, but ${formula} only supports a bare horn with zero wall thickness.`;
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ detail: message }), {
+      status: 422, headers: { 'Content-Type': 'application/json' },
+    }));
+    await mount();
+    expect(text()).toContain(message);
+    expect(text()).not.toBe('ready');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('takes a refusal as the answer: no retry, no polling, message shown', async () => {
     // 422 is the server considering the submission and declining it. Asking
     // again cannot change it, and polling would replace the reason the user

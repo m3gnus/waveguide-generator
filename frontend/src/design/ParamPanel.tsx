@@ -1,3 +1,4 @@
+import { nativeCadLimitation, nativeSymmetryLimitation } from './nativeFamilies';
 import { EXTERIOR_FIELDS } from '../stores/exteriorTransducer';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -599,6 +600,7 @@ function SolveDomainControl({ design }: { design: DesignDocument }) {
       </select>
     </div>
     {(Object.keys(symmetryModeLabels) as SymmetryMode[]).filter((mode) => limitation(mode)).map((mode) => <small key={mode}>{limitation(mode)}</small>)}
+    {nativeSymmetryLimitation(design.formula, symmetry) && <small className="field-error" role="alert">{nativeSymmetryLimitation(design.formula, symmetry)}</small>}
     {symmetry === 'auto' && <AutoSymmetryReadout design={design} />}
     {isNativeFamily(design.formula) && <small>This native formula requires the full circular mesh domain.</small>}
   </div>;
@@ -666,6 +668,8 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
     cadWorkspace.getSnapshot,
   );
   const error = useCadFeedbackError(cadWorkspaceView.error);
+  const formula = useDesignStore((state) => state.design.formula);
+  const cadLimitation = nativeCadLimitation(formula);
   const onshape = preferences.cadApplication === 'onshape';
   const workflow = onshape
     ? onshapeWorkflowView(cadWorkspaceView.onshapeStatus)
@@ -730,7 +734,8 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
       parameterDriftCount={driftCount}
       driftedParameters={cadWorkspaceView.fusionStatus?.link?.driftedParameters}
     />
-    {workflow.action && <button className="primary linked-design-action" disabled={cadWorkspaceView.sendingToFusion} onClick={send}>{cadWorkspaceView.sendingToFusion ? 'Sending…' : actionLabel}</button>}
+    {workflow.action && <button className="primary linked-design-action" disabled={cadWorkspaceView.sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={send}>{cadWorkspaceView.sendingToFusion ? 'Sending…' : actionLabel}</button>}
+    {cadLimitation && <p className="section-note">{cadLimitation}</p>}
     {error && <div className="field-error" role="alert">{error}</div>}
     {cadWorkspaceView.status && <p className="section-note" role="status">{cadWorkspaceView.status}</p>}
   </Section>;

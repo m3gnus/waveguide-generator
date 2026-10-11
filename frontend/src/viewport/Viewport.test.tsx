@@ -7,7 +7,7 @@ import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { PreviewSnapshot } from '../api/previewSocket';
 import { compareSelection } from '../api/results';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
+import { currentDocumentLoad, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from './importedMesh';
@@ -169,6 +169,37 @@ describe('Viewport preview errors', () => {
 
     act(() => alert?.querySelector<HTMLButtonElement>('[aria-label="Dismiss preview error"]')?.click());
     expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('shows native opening dimensions only for the current document and revision', () => {
+    const original = { ...previewSnapshot };
+    try {
+      act(() => useDesignStore.getState().setFamily('OSSE-ARC'));
+      const revision = useDesignStore.getState().designRevision;
+      const dimensionsFrame = { ...frame, documentLoad: currentDocumentLoad(), header: {
+        ...frame.header, designRevision: revision,
+        previewMetadata: { dimensions_mm: { mouth_opening: [280, 280] as [number, number] } },
+      } };
+      const render = () => act(() => root.render(<Viewport />));
+      Object.assign(previewSnapshot, { dimensionsFrame, displayedRevision: revision, stale: false, error: null });
+      render();
+      expect(host.querySelector('.viewport-title span')?.textContent).toBe('OSSE-ARC · Ø 280 mm · full');
+      previewSnapshot.awaitingDocumentFrame = true;
+      render();
+      expect(host.querySelector('.viewport-title span')?.textContent).toBe('OSSE-ARC · full');
+      previewSnapshot.awaitingDocumentFrame = false;
+      dimensionsFrame.documentLoad -= 1;
+      render();
+      expect(host.querySelector('.viewport-title span')?.textContent).toBe('OSSE-ARC · full');
+      dimensionsFrame.documentLoad = currentDocumentLoad();
+      dimensionsFrame.header.designRevision -= 1;
+      render();
+      expect(host.querySelector('.viewport-title span')?.textContent).toBe('OSSE-ARC · full');
+    } finally {
+      delete previewSnapshot.dimensionsFrame;
+      delete previewSnapshot.awaitingDocumentFrame;
+      Object.assign(previewSnapshot, original);
+    }
   });
 
   it('offers a retry that re-requests the current design', () => {

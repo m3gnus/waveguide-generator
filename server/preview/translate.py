@@ -39,7 +39,7 @@ def _structural_number(value: Expr | None, field: str, fallback: float = 0.0) ->
 def effective_wall_thickness(root: Any) -> float:
     """Resolve ``mesh.wall_thickness`` the way the geometry is actually built.
 
-    An omitted wall thickness is not the same document state as an explicit
+    For legacy formulas, an omitted wall is not the same document state as an explicit
     zero, and only one of them means "bare shell". ATH treats an omitted value
     as 5 mm for a normal simulation and 0 mm for an infinite baffle; an explicit
     0 always means no outer body at all. The document field stays nullable so a
@@ -48,9 +48,12 @@ def effective_wall_thickness(root: Any) -> float:
     reading ``root.mesh.wall_thickness or 0`` silently turns an unset field into
     a bare shell and disagrees with the mesh that was generated.
 
-    The returned value is unscaled millimetres; ``design_to_mesher_config``
-    applies the waveguide ``scale`` for native and saved v1 designs. Current
-    v2 imports keep the wall in unscaled millimetres, matching ATH output.
+    The returned value is unscaled millimetres for legacy formulas;
+    ``design_to_mesher_config`` applies the waveguide ``scale`` for saved v1
+    designs, and current v2 imports keep the wall in unscaled millimetres,
+    matching ATH output. Native formulas return finished millimetres:
+    OSSE-ROUNDOVER defaults to 5 mm, other native horns to zero, and
+    SOURCE-DISK is closed independently of a wall.
     """
 
     from server.design.native import NATIVE_FORMULAS
@@ -330,6 +333,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
     from server.design.native import NATIVE_FORMULAS, native_mesher_config
 
     if root.formula in NATIVE_FORMULAS:
+        # Native mesh lengths are finished mm, independent of intrinsic body scale.
         return native_mesher_config(root)
     if root.mesh.size_mm is not None or root.mesh.mouth_roundover_radius_mm is not None:
         raise ValueError("Native mesh controls require their native formula marker")

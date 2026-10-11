@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from copy import deepcopy
 from pathlib import Path
 
@@ -232,3 +233,23 @@ def test_native_file_refuses_legacy_controls_instead_of_dropping_them() -> None:
     text = serialize(small_design("SOURCE-DISK"))
     with pytest.raises(TextConfigError, match="cannot mix"):
         parse(text + "Length = 120\n")
+
+
+@pytest.mark.parametrize("formula", FAMILIES)
+def test_frontend_family_defaults_validate_and_round_trip(formula: str) -> None:
+    fixtures = json.loads((Path(__file__).parent / "fixtures/native-family-defaults.json").read_text())
+    design = DesignConfig.model_validate(fixtures[formula])
+    assert parse(serialize(design)).design == design
+    assert resolve_geometry(design_to_mesher_config(design)) is not None
+
+
+@pytest.mark.parametrize("formula", ["OSSE", "R-OSSE", "ICW", "FREEFORM"])
+@pytest.mark.parametrize("field", ["size_mm", "mouth_roundover_radius_mm"])
+def test_legacy_designs_refuse_native_mesh_controls(formula: str, field: str) -> None:
+    payload = {"formula": formula, "mesh": {field: 3}}
+    if formula == "FREEFORM":
+        payload.update(length=100, profile_h={"points": [{"t": 0, "r": 10}, {"t": 1, "r": 50}]},
+                       profile_v={"points": [{"t": 0, "r": 10}, {"t": 1, "r": 50}]},
+                       cross_sections=[{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}])
+    with pytest.raises(ValidationError, match=f"mesh.{field} requires its native formula marker"):
+        DesignConfig.model_validate(payload)

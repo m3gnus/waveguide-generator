@@ -38,3 +38,10 @@ surface STEP bodies; roundovers and standalone source bodies produce their docum
 closed bodies. CAD Link / Send to CAD and profile CSV exports refuse these formulas
 because their current transport cannot preserve the complete recipe. Export STEP for
 manual CAD import; acoustic source tags must be assigned in the receiving CAD workflow.
+
+BEMPP requires a closed body: native bare horns are refused during solve planning.
+OSSE-ROUNDOVER and SOURCE-DISK retain their closed geometry without a wall adjustment.
+A saved half/quarter solve domain must be changed to Auto or Full before solving a
+native formula. SOURCE-DISK uses a single mesh; horn-resolution mesh ladders are skipped.
+Switching between native horns preserves shared body dimensions and mesh resolutions;
+switching to or from SOURCE-DISK or a legacy formula resets incompatible geometry.

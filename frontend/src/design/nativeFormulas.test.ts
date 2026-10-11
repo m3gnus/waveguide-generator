@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
 import { restoreAutosave, writeAutosave } from '../stores/autosave';
 import { NATIVE_FAMILIES, designForFamily, mergeDesignForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { PARAMETER_REGISTRY, fieldAcceptsExpression, fieldIsVisible } from './parameterRegistry';
 import { buildParameterCatalog } from './parameterCatalogWire';
+import { nativeCadLimitation, nativeSymmetryLimitation } from './nativeFamilies';
 
 afterEach(resetDesignStore);
 
@@ -76,4 +78,32 @@ describe('native formula editing and persistence', () => {
     const axial = catalog.parameters.find((field) => field.id === 'native.axial_scale');
     expect(axial?.default_by_family).toEqual({ 'OSSE-AXIAL': 1, 'OSSE-ADAPTER-AXIAL': 1 });
   });
+});
+
+
+it('keeps the server defaults fixture fresh', () => {
+  const fixture = JSON.parse(new TextDecoder().decode(readFileSync('../server/tests/fixtures/native-family-defaults.json')));
+  expect(Object.fromEntries(NATIVE_FAMILIES.map((family) => [family, serializeDesign(designForFamily(family))]))).toEqual(fixture);
+});
+
+it.each([
+  ['OSSE-ADAPTER', 'OSSE-ADAPTER-AXIAL'], ['OSSE-ADAPTER-AXIAL', 'OSSE-ADAPTER'],
+  ['OSSE-AXIAL', 'OSSE-ARC'], ['OSSE-ARC', 'OSSE-AXIAL'],
+] as const)('preserves shared native body and mesh edits from %s to %s', (from, to) => {
+  const current = designForFamily(from);
+  Object.assign(current, { L: 140, r0: 14, a: 42, a0: 14, k: 1.1, scale: 1.2 });
+  Object.assign(current.mesh, { throat_resolution: 2, mouth_resolution: 4, rear_resolution: 3, angular_segments: 64, length_segments: 30 });
+  if (current.throat_adapter) current.throat_adapter.driver_handle_mm = 11;
+  const switched = mergeDesignForFamily(current, to);
+  for (const key of ['L', 'r0', 'a', 'a0', 'k', 'scale'] as const) expect(switched[key]).toBe(current[key]);
+  for (const key of ['throat_resolution', 'mouth_resolution', 'rear_resolution', 'angular_segments', 'length_segments'] as const) expect(switched.mesh[key]).toBe(current.mesh[key]);
+  if (current.throat_adapter) expect(switched.throat_adapter).toEqual(current.throat_adapter);
+  expect(switched.axial_scale).toBe(to.endsWith('AXIAL') ? 1 : undefined);
+  expect(switched.terminating_arc).toEqual(to === 'OSSE-ARC' ? designForFamily(to).terminating_arc : undefined);
+});
+
+it.each(NATIVE_FAMILIES)('explains native domain and CAD limits for %s', (formula) => {
+  for (const symmetry of ['half_xz', 'half_yz', 'quarter']) expect(nativeSymmetryLimitation(formula, symmetry)).toContain('Select Auto or Full');
+  for (const symmetry of ['auto', 'full']) expect(nativeSymmetryLimitation(formula, symmetry)).toBeNull();
+  expect(nativeCadLimitation(formula)).toContain('Export STEP or STL');
 });

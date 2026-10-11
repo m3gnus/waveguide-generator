@@ -1,3 +1,4 @@
+import { nativeCadLimitation } from '../design/nativeFamilies';
 import type { JobItem } from '../api/jobsSocket';
 import { jobsSocket } from '../api/jobsSocket';
 import { fetchJobResults } from '../api/results';
@@ -140,6 +141,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const execute = useRunExportStore((state) => state.execute);
   const designState = jobRerunState(job);
   const designExportable = canLoadJobDesign(job);
+  const cadLimitation = nativeCadLimitation(hydrateJobDesign(job)?.formula ?? '');
   const designAvailability = jobDesignAvailability(job);
   const designUnavailableReason = designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.';
 
@@ -235,8 +237,8 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
       label: 'Send to CAD',
       trailing: '.wglink',
       group: 'CAD',
-      disabled: operation.busy || !designExportable,
-      disabledReason: designExportable ? undefined : designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.',
+      disabled: operation.busy || !designExportable || Boolean(cadLimitation),
+      disabledReason: cadLimitation ?? (designExportable ? undefined : designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.'),
       busy: operation.busy && operation.busyFormats.length === 0,
       busyLabel: 'Sending to CAD…',
       error: operation.lastErrorFormats.length === 0 ? operation.lastError ?? undefined : undefined,

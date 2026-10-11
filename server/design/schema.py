@@ -726,6 +726,16 @@ class DesignCommon(StrictModel):
             raise ValueError("Mesh.RearShape.FrontOffset/Step require Mesh.RearShape = 3")
         return self
 
+    @model_validator(mode="after")
+    def _native_mesh_controls(self) -> "DesignCommon":
+        from .native import NATIVE_FORMULAS
+
+        if self.formula not in NATIVE_FORMULAS:
+            for field in ("size_mm", "mouth_roundover_radius_mm"):
+                if getattr(self.mesh, field) is not None:
+                    raise ValueError(f"mesh.{field} requires its native formula marker")
+        return self
+
 
 class StretchDesign(DesignCommon):
     s1: float | None = Field(default=None, ge=0, le=10, exclude_if=lambda value: value is None)

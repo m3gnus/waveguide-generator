@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { designForFamily } from '../stores/design';
+import { NATIVE_FAMILIES, designForFamily } from '../stores/design';
 import { previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
 
 describe('preview presentation', () => {
@@ -35,6 +35,13 @@ describe('preview presentation', () => {
 });
 
 describe('viewport subtitle', () => {
+  it.each(NATIVE_FAMILIES)('uses resolved opening dimensions for %s', (family) => {
+    const design = designForFamily(family);
+    expect(viewportSubtitle(design, [280, 280])).toBe(`${family} · Ø 280 mm · full`);
+    expect(viewportSubtitle(design)).toBe(`${family} · full`);
+    expect(viewportSubtitle(design, [NaN, 280])).toBe(`${family} · full`);
+  });
+
   it('uses the family mouth field and actual quadrant count', () => {
     const design = designForFamily('R-OSSE');
     design.R = 140;

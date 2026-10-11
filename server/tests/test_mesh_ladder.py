@@ -785,3 +785,11 @@ def test_the_projected_work_ratio_reports_what_the_ladder_expected_to_save(
     assert all(
         band["solve_wall_time_seconds"] >= 0.0 for band in ladder["bands"]
     )
+
+
+def test_source_disk_skips_ladder_even_with_hidden_horn_resolutions() -> None:
+    design = DesignConfig.model_validate({"formula": "SOURCE-DISK", "mesh": {
+        "size_mm": 3, "throat_resolution": 1, "mouth_resolution": 2, "rear_resolution": 4,
+    }})
+    assert scalable_resolution_fields(design) == ()
+    assert plan_mesh_ladder(design, _log_sweep(400, 16000, 40), reference_max_edge_mm=1) is None

@@ -6,7 +6,7 @@ import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { EXPORT_FORMATS, preferencesStore } from '../prefs/preferences';
 import { hydrateJobDesign } from './jobDesign';
-import { designForFamily, serializeDesign } from '../stores/design';
+import { NATIVE_FAMILIES, designForFamily, serializeDesign } from '../stores/design';
 import { useRunExportStore } from '../stores/runExports';
 import { provideExportDestinationPrompt } from '../shell/exportDestinationPrompt';
 import { ExportCancelledError } from '../api/exportDestination';
@@ -147,6 +147,15 @@ describe('RunExportControl', () => {
     const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((element) => element.textContent?.includes('Complex pressure basis'))!;
     expect(document.querySelector('[role="menu"]')?.textContent).toContain('Pressure-basis artifact could not be saved: disk full');
     expect(item.getAttribute('aria-disabled')).toBe('true');
+  });
+
+  it.each(NATIVE_FAMILIES)('disables native %s CAD handoff on a historical run', (family) => {
+    render(completeJob({ script_snapshot: { version: 1, design: serializeDesign(designForFamily(family)) } }));
+    openMenu();
+    const item = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((button) => button.textContent?.includes('Send to CAD'))!;
+    expect(item.getAttribute('aria-disabled')).toBe('true');
+    expect(document.body.textContent).toContain('Export STEP or STL');
+    expect(mocks.sendDesignToCad).not.toHaveBeenCalled();
   });
 
   it('does no network work or result fetch on hover', () => {

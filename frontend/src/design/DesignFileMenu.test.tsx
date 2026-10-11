@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobsSnapshot } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
 import { toSolveDesign } from '../jobs/actions';
-import { resetDesignStore, useDesignStore, type DesignDocument } from '../stores/design';
+import { NATIVE_FAMILIES, resetDesignStore, useDesignStore, type DesignDocument } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { wgSolveSettingsFromStore } from '../stores/designWire';
@@ -1372,4 +1372,11 @@ it('keeps an outbound supersession silent instead of reporting an export failure
   expect(send).toHaveBeenCalledOnce();
   expect(container.textContent).not.toContain('newer design');
   expect(container.textContent).not.toContain('choose a direction');
+});
+
+it.each(NATIVE_FAMILIES)('disables Send to CAD with the reason for %s', (family) => {
+  act(() => useDesignStore.getState().setFamily(family));
+  const item = itemNamed('Send to CAD');
+  expect(item.disabled).toBe(true);
+  expect(item.title).toContain('Export STEP or STL');
 });

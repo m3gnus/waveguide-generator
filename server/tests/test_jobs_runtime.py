@@ -14,6 +14,7 @@ import pytest
 from server.design.schema import Expr
 from server.engines.dryrun import DryRunEngine
 from server.engines.registry import EngineInfo, EngineRegistry
+from server.design.native import NATIVE_FORMULAS
 from server.jobs.models import ChannelCombineSpec, SolveRequest
 from server.jobs.runtime import (
     CANCELLED_MESSAGE,
@@ -25,6 +26,7 @@ from server.jobs.runtime import (
     QUIT_INTERRUPTED_MESSAGE,
     QUIT_INTERRUPTED_STAGE_MESSAGE,
     RESTART_RECOVERY_MESSAGE,
+    SymmetryValidationError,
     _apply_bempp_wall_default,
     _bempp_wall_adjustment_message,
     _replay_request,
@@ -2064,3 +2066,32 @@ def test_a_failure_without_text_still_gets_an_error_message(tmp_path: Path) -> N
         await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("formula", sorted(NATIVE_FORMULAS))
+@pytest.mark.parametrize("engine", ["auto", "bempp"])
+def test_native_bempp_submission_keeps_closed_bodies_and_refuses_bare_horns(formula, engine):
+    from server.tests.test_native_formulas import design_payload
+
+    payload = design_payload(formula)
+    if formula == "OSSE-ROUNDOVER":
+        payload["mesh"].pop("wall_thickness")
+    request = SolveRequest.model_validate({"design": payload, "options": {"engine": engine}})
+    before = request.model_dump(mode="json")
+    if formula in {"OSSE-ROUNDOVER", "SOURCE-DISK"}:
+        resolution = asyncio.run(resolve_submission(request, _bempp_registry()))
+        assert resolution.request.design == request.design
+        assert resolution.request.design_snapshot == request.design_snapshot
+        assert "adjustments" not in resolution.symmetry_metadata["solver_plan"]
+    else:
+        with pytest.raises(SymmetryValidationError, match=f"BEMPP requires a closed body, but {formula}"):
+            asyncio.run(resolve_submission(request, _bempp_registry()))
+    assert request.model_dump(mode="json") == before
+
+
+@pytest.mark.parametrize("formula", sorted(NATIVE_FORMULAS))
+def test_native_non_bempp_does_not_apply_wall_default(formula):
+    from server.tests.test_native_formulas import design_payload
+
+    request = SolveRequest.model_validate({"design": design_payload(formula)})
+    assert _apply_bempp_wall_default(request, "metal") == (request, None)

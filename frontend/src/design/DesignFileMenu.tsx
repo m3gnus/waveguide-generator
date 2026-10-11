@@ -1,3 +1,4 @@
+import { nativeCadLimitation } from './nativeFamilies';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   buildGeometryExport,
@@ -427,7 +428,7 @@ export function DesignFileMenu() {
       {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">
         {/* The .wglink bundle and its handoff are Fusion's transport; Onshape
             sends live in the CAD Link panel and go through its own adapter. */}
-        {cadApplication === 'fusion360' && <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void sendToCad()} title="Write an identity-bearing .wglink bundle to the selected workspace"><span>Send to CAD</span><span>.wglink</span></button>}
+        {cadApplication === 'fusion360' && <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(nativeCadLimitation(design.formula))} onClick={() => void sendToCad()} title={nativeCadLimitation(design.formula) ?? 'Write an identity-bearing .wglink bundle to the selected workspace'}><span>Send to CAD</span><span>.wglink</span></button>}
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step')} title="Closed solid with walls and enclosure — imports straight into Fusion 360 or Onshape"><span>STEP solid</span><span>.step</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step', 'surface')} title="Inner acoustic surface only, for thickening or lofting yourself"><span>STEP inner surface</span><span>.step</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('stl')}><span>STL</span><span>.stl</span></button>

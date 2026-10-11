@@ -11,7 +11,7 @@ import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { cadCameraAxes } from './cadCamera';
-import { subscribeRevision, useDesignStore } from '../stores/design';
+import { currentDocumentLoad, subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -642,6 +642,15 @@ export function Viewport() {
   // stopped responding. An imported mesh is not ours to diagnose.
   const geometryWarnings = workspaceMode === 'cad' || importedMesh ? [] : selected?.header.previewMetadata?.warnings ?? [];
   const behindDesign = preview.stale || preview.displayedRevision !== designRevision;
+  const dimensionsFrame = preview.dimensionsFrame ?? preview.frame;
+  const dimensionsMetadata = dimensionsFrame?.header.previewMetadata;
+  const currentDimensions = !behindDesign && !preview.error && !preview.awaitingDocumentFrame
+    && !preview.dimensionsUnavailable && dimensionsFrame?.header.designRevision === designRevision
+    && (dimensionsFrame.documentLoad === undefined || dimensionsFrame.documentLoad === currentDocumentLoad())
+    && dimensionsMetadata?.dimensions_status !== 'pending' && dimensionsMetadata?.dimensions_status !== 'unavailable'
+    ? dimensionsMetadata?.dimensions_mm : null;
+  const nativeOpening = design.formula === 'SOURCE-DISK'
+    ? currentDimensions?.source_diameter : currentDimensions?.mouth_opening;
   const refresh = () => {
     setDismissedPreviewError(null);
     setRefreshRequestedAt(performance.now());
@@ -979,7 +988,7 @@ export function Viewport() {
         : importedMesh?.name ?? (workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
       <span>{importedMesh
         ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
-        : workspaceMode === 'cad' ? (cadWorkspaceView.ingesting && cadBundleReadable ? `Preparing ${cadName}…` : cadWorkspaceView.ingestError && cadBundleReadable ? 'CAD preparation failed' : 'No ingested CAD viewport mesh') : viewportSubtitle(design)}</span>
+        : workspaceMode === 'cad' ? (cadWorkspaceView.ingesting && cadBundleReadable ? `Preparing ${cadName}…` : cadWorkspaceView.ingestError && cadBundleReadable ? 'CAD preparation failed' : 'No ingested CAD viewport mesh') : viewportSubtitle(design, nativeOpening)}</span>
     </div>
     <div className="viewport-live">
       {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}

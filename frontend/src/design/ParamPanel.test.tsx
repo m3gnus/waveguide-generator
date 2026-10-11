@@ -236,6 +236,17 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector<HTMLOptionElement>('#solve-symmetry option[value="full"]')!.disabled).toBe(false);
   });
 
+  it.each(['half_xz', 'half_yz', 'quarter'] as const)('explains a persisted %s domain before native submission', (symmetry) => {
+    act(() => {
+      useSolveOptionsStore.getState().setSymmetry(symmetry);
+      useDesignStore.getState().setFamily('OSSE-ARC');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    expect(host.textContent).toContain('Select Auto or Full in Solve domain.');
+    act(() => useSolveOptionsStore.getState().setSymmetry('full'));
+    expect(host.textContent).not.toContain('Select Auto or Full in Solve domain.');
+  });
+
   it('shows plain stretch controls for OSSE families and announces preview revisions on edits', () => {
     const stretchRow = () => host.querySelector<HTMLElement>('[data-parameter-id="common.s1"]');
     expect(stretchRow()).not.toBeNull();

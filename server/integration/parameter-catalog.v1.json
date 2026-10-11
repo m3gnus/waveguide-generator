@@ -56,7 +56,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Intrinsic length of the original circular OSSE body before scale, adapter trimming or arc attachment. Physical dimensions must satisfy the selected native construction."
+      "description": "Intrinsic length of the original circular OSSE body before scale, adapter trimming or arc attachment. Axial, arc and roundover formulas require finished length 1–2000 mm; use axial_scale for Z on axial bodies and scale otherwise. Adapter-axial instead bounds total finished adapter plus retained-body depth to 1–2000 mm."
     },
     {
       "id": "native.r0",
@@ -93,7 +93,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Intrinsic radius of the original OSSE body. Adapter driver radius is controlled separately."
+      "description": "Intrinsic radius of the original OSSE body. Axial, arc and roundover formulas require r0 × scale in 1–200 mm. Adapter-axial instead requires finished driver radius in 1–200 mm; driver diameter is controlled separately."
     },
     {
       "id": "native.a",
@@ -241,7 +241,7 @@
       "step": 0.001,
       "precision": 3,
       "options": [],
-      "description": "Scales intrinsic body and adapter dimensions uniformly, or X/Y only when Absolute axial scale is present. Mesh sizes, lip radius, wall and final placement stay in finished mm. Most native formulas require 0.01 through 10."
+      "description": "Scales intrinsic body and adapter dimensions uniformly, or X/Y only when Absolute axial scale is present. Mesh sizes, lip radius, wall and final placement stay in finished mm. OSSE-ADAPTER and OSSE-ADAPTER-CONTROLS allow 0.001–100; other native horns require 0.01–10. Axial formulas also require axial_scale / scale in 0.1–10."
     },
     {
       "id": "native.axial_scale",

@@ -390,6 +390,13 @@ def create_router(data_dir: Path) -> APIRouter:
         enclosure, independently of the old design's source, shell and mesh
         symmetry. Profile/morph/guide/scale/axis changes remain authoritative.
         """
+        from server.design.native import NATIVE_FORMULAS
+
+        if design.formula in NATIVE_FORMULAS:
+            raise HTTPException(
+                422, f"{design.formula} cannot be attached to a source assembly "
+                "as a general horn profile. Use a legacy horn formula."
+            )
         try:
             from server.preview.translate import design_to_mesher_config
             from hornlab_mesher.general_horn import GeneralHornWall  # noqa: F401 - availability probe: an older mesher answers 503

@@ -590,6 +590,13 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitDesign.mock.calls[0][3].designRevision).toBe(revision);
   });
 
+  it.each(['half_xz', 'half_yz', 'quarter'] as const)('blocks native submission with persisted %s symmetry', async (symmetry) => {
+    act(() => useSolveOptionsStore.getState().setSymmetry(symmetry));
+    await expect(jobsCoordinatorBridge.getSnapshot().run(designForFamily('OSSE-ARC')))
+      .rejects.toThrow('Select Auto or Full in Solve domain.');
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+  });
+
   it('numbers each run of the design in sequence and never renames the design', async () => {
     mocks.submitDesign.mockResolvedValue('job');
     const design = designForFamily('OSSE');

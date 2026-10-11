@@ -1,6 +1,6 @@
 import type { ConnectionState } from '../api/previewSocket';
 import type { DecodedFrame } from '../api/frame';
-import type { DesignDocument } from '../stores/design';
+import { isNativeFamily, type DesignDocument } from '../stores/design';
 
 export interface PreviewBadge {
   label: string;
@@ -53,7 +53,11 @@ function millimetres(value: number): string {
   return Number(value.toFixed(1)).toLocaleString(undefined, { maximumFractionDigits: 1 });
 }
 
-function mouthClause(design: DesignDocument): string | null {
+function mouthClause(design: DesignDocument, opening?: [number, number]): string | null {
+  if (isNativeFamily(design.formula) && opening?.length === 2 && opening.every(finitePositive)) {
+    const [width, height] = opening.map(millimetres);
+    return width === height ? `Ø ${width} mm` : `${width} × ${height} mm`;
+  }
   if ((design.formula === 'R-OSSE' || design.formula === 'ICW') && finitePositive(design.R)) {
     return `Ø ${millimetres(design.R * 2)} mm`;
   }
@@ -76,8 +80,8 @@ function symmetryClause(quadrants: number[]): string {
   return `${quadrants.length}/4`;
 }
 
-export function viewportSubtitle(design: DesignDocument): string {
-  return [design.formula, mouthClause(design), symmetryClause(design.quadrants)]
+export function viewportSubtitle(design: DesignDocument, opening?: [number, number]): string {
+  return [design.formula, mouthClause(design, opening), symmetryClause(design.quadrants)]
     .filter((clause): clause is string => clause !== null)
     .join(' · ');
 }

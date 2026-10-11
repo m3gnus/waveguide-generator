@@ -181,7 +181,9 @@ def _apply_bempp_wall_default(
     degrees of freedom differently from the closed-body formulation. Keep an
     inactive enclosure plus a missing/zero wall from silently entering that
     backend-specific topology. Revalidating the copied wire also keeps the
-    authoritative design and its atomic snapshot identical.
+    authoritative design and its atomic snapshot identical. Native closed bodies
+    keep their geometry; bare native horns refuse BEMPP because their contracts
+    prohibit adding a wall.
 
     Returns the request to solve and, when the wall was changed, the adjustment
     that reports it (``None`` when the request is returned unchanged). The
@@ -195,6 +197,16 @@ def _apply_bempp_wall_default(
     ):
         return request, None
     root = request.design.root
+    from server.design.native import NATIVE_FORMULAS
+
+    if root.formula in NATIVE_FORMULAS:
+        if root.formula not in {"OSSE-ROUNDOVER", "SOURCE-DISK"}:
+            raise SymmetryValidationError(
+                f"BEMPP requires a closed body, but {root.formula} only supports "
+                "a bare horn with zero wall thickness. Choose another engine "
+                "or a closed-body formula (OSSE-ROUNDOVER or SOURCE-DISK)."
+            )
+        return request, None
     if root.simulation.sim_type == "infinite-baffle":
         return request, None
 
