@@ -17,7 +17,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cadJobFixture } from '../jobs/cadSolve.fixtures';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { CadOperationSummary, CadSolveSetup } from '../api/cadOperations';
-import { resetCadOperationsStore } from '../stores/cadOperations';
 import { compareSelection, provisionalResults, resultsCache } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { type CadReturnIngestRecord } from '../api/cadlink';
@@ -233,7 +232,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     useDocumentStore.getState().setDesignName('horn');
     resetDesignStore();
     resetCadReturnStore();
-    resetCadOperationsStore();
+
     resetSolveOptionsStore();
     resetSolveAttentionForTests();
     resetSolvedCadModelsForTests();
@@ -407,7 +406,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
         ? new Response(JSON.stringify(prepared), { status: 200, headers: { 'Content-Type': 'application/json' } })
         : resultResponse()
     )));
-    // What CadLinkCoordinator does with a claimed run: its viewport load, stood in for.
+    // What CadWorkspaceOwners does with a claimed run: its viewport load, stood in for.
     const settle = () => solvedCadModels.settle(jobsSocket.getSnapshot().jobs, {
       showIngestedMesh: async (record, name, _notice, _fetcher, generation) => {
         importedMeshStore.setCad({ name, source: 'cad', ingestId: record.ingest_id } as ImportedMeshScene, generation, true);

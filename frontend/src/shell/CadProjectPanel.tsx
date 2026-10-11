@@ -15,7 +15,7 @@ import {
 } from '../api/cadProjects';
 import { listReturns } from '../api/cadlink';
 import { compareSelection } from '../api/results';
-import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import { cadWorkspace } from '../stores/cadWorkspace';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import {
   assertDesignOpenCurrent,
@@ -125,7 +125,7 @@ async function openCadOnlyProject(project: CadProject, ticket: DesignOpenTicket)
   // Naming the project is what files this session's settings -- the drivers
   // above all -- under the project being opened rather than under whichever
   // one the workspace was on.
-  cadLinkCoordinatorBridge.getSnapshot().selectBundle(bundle, project.lineageId);
+  cadWorkspace.getSnapshot().selectBundle(bundle, project.lineageId);
   return projectName(project);
 }
 

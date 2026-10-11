@@ -12810,6 +12810,50 @@
         ]
       }
     },
+    "/api/cadlink/return-requests/{request_id}": {
+      "get": {
+        "operationId": "get_return_request_api_cadlink_return_requests__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Return Request Api Cadlink Return Requests  Request Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Return Request",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
     "/api/cadlink/returns": {
       "get": {
         "operationId": "list_returns_api_cadlink_returns_get",

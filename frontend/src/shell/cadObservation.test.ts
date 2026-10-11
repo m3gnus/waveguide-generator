@@ -303,4 +303,25 @@ describe('CAD observation scheduler without the coordinator', () => {
     const stopped = reads(); window.dispatchEvent(new Event('focus')); await vi.advanceTimersByTimeAsync(600_000);
     expect(reads()).toEqual(stopped); expect(connection.getState().fusionStatus).toBeNull(); expect(vi.getTimerCount()).toBe(0);
   });
+  it('on: moving jobs and coarse notifications do not hold the base rate or reset the quiet clock', async () => {
+    activity.coordination = 'on'; activity.workspaceMode = 'parametric';
+    readStatus.mockResolvedValue(status({ state: 'closed', processRunning: false, running: false }));
+    snapshot.jobs = [cadJob()];
+    await mount();
+    for (let tick = 0; tick < 16; tick += 1) {
+      activityChanged(); jobsChanged();
+      await vi.advanceTimersByTimeAsync(2_500);
+    }
+    const quiet = reads();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(reads()).toEqual(quiet);
+    change({ awaitingReturn: true });
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(reads()[0]).toBe(quiet[0] + 1);
+    change({ awaitingReturn: false });
+    const settled = reads();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(reads()).toEqual(settled);
+  });
+
 });

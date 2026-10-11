@@ -6,7 +6,6 @@ import { cadJobFixture, publishCadSummary } from '../jobs/cadSolve.fixtures';
 import { pendingCadSolve } from '../jobs/cadSolve';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { CadOperationSummary, CadSolveSetup } from '../api/cadOperations';
-import { resetCadOperationsStore } from '../stores/cadOperations';
 import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
@@ -20,7 +19,7 @@ import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOpt
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
-import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import { cadWorkspace } from '../stores/cadWorkspace';
 import {
   JobsCoordinator,
   jobsCoordinatorBridge,
@@ -243,7 +242,7 @@ describe('solve invocation mutex', () => {
     useDocumentStore.getState().setDesignName('horn');
     resetDesignStore();
     resetCadReturnStore();
-    resetCadOperationsStore();
+
     resetSolveOptionsStore();
     sessionStorage.clear();
     importedMeshStore.clear();
@@ -1260,8 +1259,8 @@ describe('solve invocation mutex', () => {
   ])('keeps Solve as the one primary action that solves the displayed model when %s', async (_name, fusionChangesAvailable) => {
     const pullAndSolve = vi.fn(async () => 'solving' as const);
     const pullFromFusion = vi.fn(async () => { throw new Error('not in this test'); });
-    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...cadLinkCoordinatorBridge.getSnapshot(),
+    vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
+      ...cadWorkspace.getSnapshot(),
       pullAndSolve,
       pullFromFusion,
       fusionStatus: {
@@ -1289,8 +1288,8 @@ describe('solve invocation mutex', () => {
 
   it('gives the keyboard shortcut the same meaning as the button while Fusion reports newer geometry', async () => {
     const pullAndSolve = vi.fn(async () => 'solving' as const);
-    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...cadLinkCoordinatorBridge.getSnapshot(),
+    vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
+      ...cadWorkspace.getSnapshot(),
       pullAndSolve,
       fusionStatus: { running: true, state: 'stale', fusionChangesAvailable: true, observationFreshness: 'current', documentChangeDetectable: true } as never,
     });
@@ -1309,8 +1308,8 @@ describe('solve invocation mutex', () => {
 
   it('offers the Fusion refresh as its own action on the source line, which never solves', async () => {
     const pullFromFusion = vi.fn(async () => ({}) as never);
-    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...cadLinkCoordinatorBridge.getSnapshot(),
+    vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
+      ...cadWorkspace.getSnapshot(),
       pullFromFusion,
       fusionStatus: { running: true, state: 'stale', fusionChangesAvailable: true, observationFreshness: 'current', documentChangeDetectable: true } as never,
     });

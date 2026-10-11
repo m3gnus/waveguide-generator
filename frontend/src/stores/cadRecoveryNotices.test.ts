@@ -3,7 +3,6 @@ import { createCadRecoveryNoticesStore, connectCadRecoveryNotices, type CadRecov
 import { useCadDeliveryHealthStore } from './cadDeliveryHealth';
 import type { JobsSocketManager } from '../api/jobsSocket';
 import { createCadConnectionStore, type CadConnectionStatus } from './cadConnection';
-import { useCadOperationsStore } from './cadOperations';
 
 const notice = (overrides: Partial<CadRecoveryNotice> = {}): CadRecoveryNotice => ({
   id: 'mutation', kind: 'update_link', document_id: 'fusion:active', document_name: 'Document',
@@ -133,24 +132,23 @@ describe('recovery notices without the coordinator', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(fetcher).toHaveBeenCalledTimes(5);
   });
-  it('alone owns health recovery feedback while mounted despite legacy success and failure', async () => {
-    const manager = { subscribeCadOperations: vi.fn(() => vi.fn()) } as Pick<JobsSocketManager, 'subscribeCadOperations'>;
+  it('owns health recovery feedback and clears it after a successful notice read', async () => {
     const store = createCadRecoveryNoticesStore();
-    const stop = connectCadRecoveryNotices(manager, store, async () => json({ notices: [] }));
-    try {
-      await vi.waitFor(() => expect(store.getState().notices).toEqual({}));
-      await expect(store.getState().load(async () => { throw new Error('notice read failed'); })).rejects.toThrow();
-      const error = store.getState().recoveryError;
-      useCadOperationsStore.getState().setRecoveryError(null);
-      expect(useCadDeliveryHealthStore.getState().recoveryError).toBe(error);
-      useCadOperationsStore.getState().setRecoveryError('legacy failure');
-      expect(useCadDeliveryHealthStore.getState().recoveryError).toBe(error);
-      await store.getState().load(async () => json({ notices: [] }));
-      useCadOperationsStore.getState().setRecoveryError('late legacy failure');
-      expect(useCadDeliveryHealthStore.getState().recoveryError).toBeNull();
-    } finally { stop(); }
-    useCadOperationsStore.getState().setRecoveryError('legacy owner restored');
-    expect(useCadDeliveryHealthStore.getState().recoveryError).toBe('legacy owner restored');
-    useCadOperationsStore.getState().setRecoveryError(null);
+    await expect(store.getState().load(async () => { throw new Error('notice read failed'); })).rejects.toThrow();
+    expect(useCadDeliveryHealthStore.getState().recoveryError).toBe(store.getState().recoveryError);
+    await store.getState().load(async () => json({ notices: [] }));
+    expect(useCadDeliveryHealthStore.getState().recoveryError).toBeNull();
   });
+});
+
+it('fences a delayed notice failure after unmount so it cannot overwrite the next health owner', async () => {
+  const request = deferred<Response>();
+  const store = createCadRecoveryNoticesStore();
+  const manager = { subscribeCadOperations: () => () => undefined };
+  const stop = connectCadRecoveryNotices(manager, store, () => request.promise);
+  stop();
+  useCadDeliveryHealthStore.setState({ recoveryError: 'new owner' });
+  request.reject(new Error('old read failed'));
+  await Promise.resolve(); await Promise.resolve();
+  expect(useCadDeliveryHealthStore.getState().recoveryError).toBe('new owner');
 });

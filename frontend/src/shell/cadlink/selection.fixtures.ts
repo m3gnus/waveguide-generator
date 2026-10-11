@@ -1,5 +1,4 @@
 import type { CadReturnBundle, CadReturnIngestRecord } from '../../api/cadlink';
-import type { CadOperationSummary } from '../../api/cadOperations';
 import type { JobItem } from '../../api/jobsSocket';
 
 export const bundle: CadReturnBundle = {
@@ -38,14 +37,6 @@ export function deferred<T>() {
 
 export function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
-}
-
-export function send(path = bundle.bundlePath, acceptedSeq = 1): CadOperationSummary {
-  return {
-    operationId: `send-${acceptedSeq}`, kind: 'send', state: 'accepted', stage: 'accepted',
-    acceptedSeq, createdAt: '2026-08-11T00:00:00Z', updatedAt: '2026-08-11T00:00:00Z',
-    snapshot: { bundlePath: path, documentName: 'Speaker' },
-  } as CadOperationSummary;
 }
 
 export function job(ingestId = record.ingest_id): JobItem {

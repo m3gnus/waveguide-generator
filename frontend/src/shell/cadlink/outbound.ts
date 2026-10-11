@@ -14,7 +14,7 @@ import { polarConfigFromUi, useSolveOptionsStore } from '../../stores/solveOptio
 import { runGuardedFusionSend } from './send';
 
 export class OutboundSupersededError extends Error {}
-/** At cut-over, UI callers should return quietly from their catch when true. */
+/** UI callers return quietly from their catch when true. */
 export function isOutboundSupersededError(error: unknown): error is OutboundSupersededError {
   return error instanceof OutboundSupersededError;
 }
@@ -27,7 +27,7 @@ export interface CadOutboundOptions {
   noteCadActivity?: () => void;
 }
 
-/** Built beside useCadSend; S5-7 supplies this command to the existing menu,
+/** Supplies the guarded command to the menu,
  * parameter panel, CAD Link panel and conflict dialog. Historical run exports
  * carry their own immutable design and do not adopt the editable identity. */
 export function createCadOutboundController(options: CadOutboundOptions = {}) {
@@ -54,9 +54,9 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
     const settings = documentSettingsSignature();
     const identity = useDocumentStore.getState().identity;
     const selected = instance();
-    const result = await connection.readCommand(options.readFusionStatus ?? (() => getFusionCadStatus(
+    const result = await connection.readCommand(options.readFusionStatus ?? ((signal) => getFusionCadStatus(
       useDesignStore.getState().design, useDocumentStore.getState().identity,
-      useCadReturnStore.getState().selectedBundle?.bundlePath ?? null, fetcher, selected,
+      useCadReturnStore.getState().selectedBundle?.bundlePath ?? null, (input, init) => fetcher(input, { ...init, signal }), selected,
     )));
     // An answer measured for another editor or instance cannot drive a send.
     return isCurrentDocumentLoad(load) && revision === useDesignStore.getState().designRevision

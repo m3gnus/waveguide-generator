@@ -28,25 +28,22 @@ describe('request selector and named actions with no coordinator', () => {
     expect(active.current.map((item) => item.id)).toEqual(['mutation']);
     expect(active.earlier).toHaveLength(0);
   });
-  it('never fills an authoritative empty notice listing from a stale recovery operation', () => {
-    const stale = { ...operation('mutation'), kind: 'update_link', state: 'recovery_required' };
-    expect(selectCadRequests({ jobs: [], notices: {}, recoveryOperations: { mutation: stale }, record: null }).earlier).toEqual([]);
-    expect(selectCadRequests({ jobs: [], recoveryOperations: { mutation: stale }, record: null }).earlier).toHaveLength(1);
+  it('keeps an authoritative empty notice listing empty while a job still waits', () => {
+    expect(selectCadRequests({ jobs: [cadJobFixture(operation('job'))], notices: {}, record: null })
+      .earlier.map((item) => item.id)).toEqual(['job']);
   });
   it('keeps operations before jobs and each parent input order for equal createdAt', () => {
     const tied = { ...notice, created_at: operation('job').createdAt!, sequence: 90 };
     const requests = selectCadRequests({ jobs: [cadJobFixture(operation('z-job')), cadJobFixture(operation('a-job'))],
       notices: { z: { ...tied, id: 'z-notice' }, a: { ...tied, id: 'a-notice', sequence: 1 } }, record: null });
     expect(requests.earlier.map((item) => item.id)).toEqual(['z-notice', 'a-notice', 'z-job', 'a-job']);
-    const compatibility = selectCadRequests({ jobs: [cadJobFixture(operation('a-job'))],
-      recoveryOperations: { recovery: { ...operation('z-recovery'), kind: 'update_link', state: 'recovery_required' } }, record: null });
-    expect(compatibility.earlier.map((item) => item.id)).toEqual(['z-recovery', 'a-job']);
+
   });
   it('selects the latest child once and excludes completed jobs', () => {
     const parent = cadJobFixture(operation('parent'));
     const child = cadJobFixture(operation('child'), { parent_job_id: parent.id });
     const completed = cadJobFixture({ ...operation('completed'), state: 'accepted' });
-    expect(selectCadRequests({ jobs: [parent, child, completed], record: null }).earlier.map((item) => item.id)).toEqual(['child']);
+    expect(selectCadRequests({ jobs: [parent, child, completed], notices: {}, record: null }).earlier.map((item) => item.id)).toEqual(['child']);
   });
   it('Dismiss and Clear all share named requests once even if job binding changes meanwhile', async () => {
     const recovery = createCadRecoveryNoticesStore();

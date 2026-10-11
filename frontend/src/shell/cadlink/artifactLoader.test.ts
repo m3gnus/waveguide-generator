@@ -182,3 +182,12 @@ describe('ingest-keyed artifact loading without the coordinator', () => {
     expect(importedMeshStore.getSnapshot().cadSolver).toBeNull();
   });
 });
+
+it('drops an earlier model mesh when neither artifact for the current ingest can be loaded (row 12)', async () => {
+  await showIngestedMeshInViewport(record, 'Old', undefined, async () => new Response(mesh));
+  const next = { ...record, ingest_id: 'wgi_new' };
+  const state = useCadReturnStore.getState();
+  state.applyIngest(next, state.beginIngestIntent());
+  await showIngestedMeshInViewport(next, 'New', undefined, async () => new Response('missing', { status: 404 }));
+  expect(importedMeshStore.getSnapshot().cad).toBeNull();
+});

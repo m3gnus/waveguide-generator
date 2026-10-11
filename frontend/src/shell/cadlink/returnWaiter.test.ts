@@ -291,3 +291,17 @@ it.each(['listing', 'outcome'] as const)('aborts stalled %s reads before retryin
   expect(signals.every((signal) => signal.aborted)).toBe(true);
   expect(inFlight).toBe(0); expect(vi.getTimerCount()).toBe(0);
 });
+
+
+it('settling a pull releases its hanging command status read before the client timeout', async () => {
+  const hung = deferred<ReturnType<typeof status>>();
+  const connection = createCadConnectionStore(); connections.push(connection);
+  const waiter = createCadReturnWaiter({ connection, readFusionStatus: () => hung.promise }); waiters.push(waiter);
+  const pull = waiter.pullFromFusion();
+  const result = expect(pull).rejects.toBeInstanceOf(SupersededError);
+  expect(await connection.read(async () => status())).toBeNull();
+  waiter.supersede(); await result;
+  await flush();
+  expect(await connection.read(async () => status())).not.toBeNull();
+  hung.resolve(status()); await flush();
+});

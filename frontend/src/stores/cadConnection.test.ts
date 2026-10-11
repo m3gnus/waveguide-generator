@@ -153,3 +153,38 @@ describe('CAD connection observations without the coordinator', () => {
     expect(connection.getState().linkName).toBeNull();
   });
 });
+
+it('bounds a hanging command read and releases background observations even if abort is ignored', async () => {
+  vi.useFakeTimers();
+  const connection = createCadConnectionStore();
+  const late = deferred<CadConnectionStatus>();
+  let commandSignal: AbortSignal | undefined;
+  try {
+    const command = connection.readCommand((signal) => { commandSignal = signal; return late.promise; });
+    expect(await connection.read(async () => status())).toBeNull();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await command).toBeNull();
+    expect(commandSignal?.aborted).toBe(true);
+    const observed = await connection.read(async () => status({ documentId: 'new-document' }));
+    late.resolve(status({ documentId: 'old-document' }));
+    await Promise.resolve();
+    expect(connection.getState().fusionStatus).toBe(observed);
+  } finally { connection.invalidate(); vi.useRealTimers(); }
+});
+
+it('releases only the cancelled command slot and never the newer command slot', async () => {
+  const connection = createCadConnectionStore();
+  const cancellation = new AbortController();
+  const held = deferred<CadConnectionStatus>();
+  const newer = deferred<CadConnectionStatus>();
+  try {
+    const first = connection.readCommand(() => held.promise, cancellation.signal);
+    const second = connection.readCommand(() => newer.promise);
+    cancellation.abort();
+    expect(await first).toBeNull();
+    expect(await connection.read(async () => status())).toBeNull();
+    newer.resolve(status()); await second;
+    expect(await connection.read(async () => status())).not.toBeNull();
+    held.resolve(status());
+  } finally { connection.invalidate(); }
+});

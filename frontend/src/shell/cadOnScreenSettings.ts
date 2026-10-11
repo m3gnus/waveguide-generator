@@ -1,9 +1,7 @@
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { putProjectSetup, type CadOperationSummary } from '../api/cadOperations';
-import { importedSubmissionBlocker } from '../jobs/importedSubmission';
+import { type CadOperationSummary } from '../api/cadOperations';
 import { bundleIdentity, useCadReturnStore } from '../stores/cadReturn';
-import { pendingCadOperations, useCadOperationsStore } from '../stores/cadOperations';
-import { buildCadProjectSetup } from './cadSetupPublisher';
+import { isPendingCadOperation } from '../api/cadOperations';
 
 /** The project the settings on screen may be recorded under for this
  * operation, or why they may not.
@@ -40,16 +38,6 @@ export function settingsProjectFor(
   return filed;
 }
 
-/** Record the settings on screen as the setup of this operation's project and
- * return that setup revision: what an action that chooses settings sends. */
-export async function recordOnScreenSettings(operationId: string): Promise<string> {
-  const state = useCadReturnStore.getState();
-  const lineageId = settingsProjectFor(useCadOperationsStore.getState().operations[operationId], state);
-  const built = buildCadProjectSetup(state, undefined, undefined, lineageId);
-  if (!built) throw new Error(importedSubmissionBlocker() ?? 'The solve settings on screen are not complete yet.');
-  return (await putProjectSetup(built)).revisionId;
-}
-
 /** States in which the backend is preparing or submitting a request: not yet
  * at a gate, not finished. */
 const IN_FLIGHT: ReadonlySet<string> = new Set(['received', 'processing']);
@@ -69,7 +57,7 @@ export function onScreenRequestInFlight(
   record: CadReturnIngestRecord | null,
 ): CadOperationSummary | null {
   if (!record) return null;
-  return pendingCadOperations(operations).find((operation) => operation.kind === 'prepare_and_solve'
+  return Object.values(operations).filter(isPendingCadOperation).find((operation) => operation.kind === 'prepare_and_solve'
     && IN_FLIGHT.has(operation.state)
     && operation.snapshot?.manifestSha256 === record.manifest_sha256) ?? null;
 }
@@ -99,7 +87,7 @@ export function onScreenRequestToContinue(
   record: CadReturnIngestRecord | null,
 ): CadOperationSummary | null {
   if (!record) return null;
-  return pendingCadOperations(operations).find((operation) => operation.kind === 'prepare_and_solve'
+  return Object.values(operations).filter(isPendingCadOperation).find((operation) => operation.kind === 'prepare_and_solve'
     && operation.state === 'needs_user_input'
     && !NOT_CONTINUED.has(operation.reason ?? '')
     && operation.snapshot?.manifestSha256 === record.manifest_sha256) ?? null;

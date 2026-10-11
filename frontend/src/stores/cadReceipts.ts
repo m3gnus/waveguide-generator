@@ -197,7 +197,7 @@ export function useCadReceiptsStore<T>(selector: (state: CadReceiptsState) => T)
 
 /** Reuse existing jobs-channel operation/refusal pushes as invalidations.
  * HTTP remains authoritative, so pushes never advance this feed's cursor.
- * S5-7 mounts this source from Shell.
+ * Shell mounts this source.
  */
 export function connectCadReceipts(manager: Pick<JobsSocketManager, 'subscribeCadOperations'> = jobsSocket,
   store = cadReceiptsStore, fetcher: typeof fetch = fetch): () => void {

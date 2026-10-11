@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { getIngest, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { listCadProjects } from '../api/cadProjects';
-import { pendingCadOperations, useCadOperationsStore } from '../stores/cadOperations';
-import { selectCadRequests } from '../stores/cadRecoveryNotices';
-import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import { isPendingCadOperation } from '../api/cadOperations';
+import { cadRecoveryNoticesStore, createCadRequestActions, selectCadRequests, useCadRecoveryNotices, type CadRequest } from '../stores/cadRecoveryNotices';
+import { cadWorkspace } from '../stores/cadWorkspace';
 import { openCadProject } from './CadProjectPanel';
 import { approveCadJob, cadJobSummaries, dismissCadJob, useCadJobs } from '../jobs/cadSolve';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
@@ -12,6 +12,14 @@ import { solveAttention } from './solveAttention';
 import { inFlightWords } from './cadOnScreenSettings';
 import { fullTime, relativeTime } from './cadTime';
 import { workspaceNavigation } from './workspaceNavigation';
+
+const makeRequestActions = () => createCadRequestActions({
+  openProject: async (lineage) => {
+    const project = (await listCadProjects()).find((item) => item.lineageId === lineage);
+    if (!project) throw new Error('This copy of WG does not hold that project.');
+    await openCadProject(project);
+  },
+});
 
 /** The hash of a `sha256:` digest, cut to what a person can read and compare. */
 export function shortSha256(digest: string | null | undefined): string {
@@ -355,9 +363,10 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
 
 /** An interrupted Fusion update the active document still reports: the one
  * recovery that is about the model in front of the user. */
-function RecoveryOperationCard({ operation }: { operation: CadOperationSummary }) {
+function RecoveryOperationCard({ request, requestActions }: { request: CadRequest; requestActions: ReturnType<typeof makeRequestActions> }) {
+  const operation = request.operation;
   const coordinator = useSyncExternalStore(
-    cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
+    cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot,
   );
   const [asked, setAsked] = useState<'dismiss' | 'reconcile' | null>(null);
   const documentName = operation.snapshot?.documentName ?? coordinator.fusionStatus?.documentName ?? null;
@@ -376,13 +385,19 @@ function RecoveryOperationCard({ operation }: { operation: CadOperationSummary }
       <button
         disabled={asked !== null}
         aria-label={`Dismiss recovery notice: ${label}`}
-        onClick={() => ask('dismiss', () => coordinator.dismissOperation(operation.operationId))}
+        onClick={() => ask('dismiss', async () => {
+          await requestActions.dismiss(request);
+          coordinator.reportStatus('Dismissed this recovery notice. Fusion still needs Undo or repair before you continue modelling.');
+        })}
       >Dismiss</button>
       <button
         className="primary"
         disabled={asked !== null}
         aria-label={`Check Fusion again: ${label}`}
-        onClick={() => ask('reconcile', () => coordinator.reconcileOperation(operation.operationId))}
+        onClick={() => ask('reconcile', async () => {
+          await cadRecoveryNoticesStore.getState().load();
+          coordinator.reportStatus('Checked Fusion recovery notices. Use Undo in Fusion or repair the link if its warning remains.');
+        })}
       >Check Fusion again</button>
     </div>
   </div>;
@@ -396,11 +411,11 @@ function earlierRequestLabel(operation: CadOperationSummary): string {
 }
 
 /** Requests about a model that is not on screen: a line each, never a card. */
-function EarlierRequests({ operations }: { operations: CadOperationSummary[] }) {
+function EarlierRequests({ requests, requestActions }: { requests: CadRequest[]; requestActions: ReturnType<typeof makeRequestActions> }) {
+  const operations = requests.map((item) => item.operation);
   const coordinator = useSyncExternalStore(
-    cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
+    cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot,
   );
-  const jobs = useCadJobs();
   const [dismissing, setDismissing] = useState<ReadonlySet<string>>(new Set());
   const [opening, setOpening] = useState(false);
   const openingRef = useRef(false);
@@ -408,9 +423,10 @@ function EarlierRequests({ operations }: { operations: CadOperationSummary[] }) 
     setDismissing((held) => new Set([...held, ...ids]));
     void (async () => {
       for (const id of ids) {
-        const operation = operations.find((item) => item.operationId === id);
-        const job = jobs.find((item) => item.id === operation?.jobId);
-        await (job ? dismissCadJob(job) : coordinator.dismissOperation(id)).catch(() => undefined);
+        const request = requests.find((item) => item.id === id);
+        if (request) await requestActions.dismiss(request).then(() => {
+          if (request.source === 'recovery') coordinator.reportStatus('Dismissed this recovery notice. Fusion still needs Undo or repair before you continue modelling.');
+        }).catch(() => undefined);
       }
     })().finally(() => setDismissing((held) => new Set([...held].filter((id) => !ids.includes(id)))));
   };
@@ -490,7 +506,7 @@ export function onScreenSolves(
   operations: Record<string, CadOperationSummary>,
   record: CadReturnIngestRecord | null,
 ): CadOperationSummary[] {
-  return pendingCadOperations(operations)
+  return Object.values(operations).filter(isPendingCadOperation)
     .filter((operation) => operation.kind === 'prepare_and_solve' && aboutWhatIsOnScreen(operation, record, null));
 }
 
@@ -511,21 +527,17 @@ export function OnScreenSolveStatus({ record }: { record: CadReturnIngestRecord 
  * model on screen get a card -- on the Solve card when there is one
  * (`solves={false}` here) -- and the rest are one quiet line each. */
 export function CadOperationsSection({ record, solves = true }: { record: CadReturnIngestRecord | null; solves?: boolean }) {
-  const operations = useCadOperationsStore((state) => state.operations);
+  const requestActions = useMemo(makeRequestActions, []);
+  const notices = useCadRecoveryNotices((state) => state.notices);
   const jobs = useCadJobs();
-  const coordinator = useSyncExternalStore(
-    cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
-  );
-  const selected = selectCadRequests({ jobs, recoveryOperations: operations, record,
-    reportedRecovery: coordinator.fusionStatus?.recoveryRequired?.operationId ?? null });
-  const current = selected.current.map((item) => item.operation)
-    .filter((operation) => solves || operation.kind !== 'prepare_and_solve');
-  const earlier = selected.earlier.map((item) => item.operation);
+  const selected = selectCadRequests({ jobs, notices, record });
+  const current = selected.current.filter((item) => solves || item.operation.kind !== 'prepare_and_solve');
+  const earlier = selected.earlier;
   if (!current.length && !earlier.length) return null;
   return <div className="cad-operations">
-    {current.map((operation) => operation.kind === 'prepare_and_solve'
-      ? <CadOperationCard key={operation.jobId ?? operation.operationId} operation={operation}/>
-      : <RecoveryOperationCard key={operation.operationId} operation={operation}/>)}
-    {earlier.length > 0 && <EarlierRequests operations={earlier}/>}
+    {current.map((request) => request.source === 'job'
+      ? <CadOperationCard key={request.id} operation={request.operation}/>
+      : <RecoveryOperationCard key={request.id} request={request} requestActions={requestActions}/>)}
+    {earlier.length > 0 && <EarlierRequests requests={earlier} requestActions={requestActions}/>}
   </div>;
 }

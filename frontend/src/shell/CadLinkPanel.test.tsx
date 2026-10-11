@@ -12,7 +12,9 @@ import type { OnshapeLink } from '../api/onshape';
 import { preferencesStore } from '../prefs/preferences';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { expandLegacy, toWire, withDelayMode } from '../results/crossoverSpec';
-import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
+import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
+import { useCadConnectionStore } from '../stores/cadConnection';
+import { cadReceiptsStore } from '../stores/cadReceipts';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetDesignStore, useDesignStore } from '../stores/design';
@@ -21,7 +23,8 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
 import { buildImportedSubmission, CadLinkPanel, declaredDomainPhrase, fusionWorkflowView, newestReturnArrival, onshapeWorkflowView, showIngestedMeshInViewport } from './CadLinkPanel';
-import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import { cadWorkspace } from '../stores/cadWorkspace';
+import { CadWorkspaceOwners } from './CadWorkspaceOwners';
 import { JobsCoordinator } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 
@@ -87,12 +90,12 @@ const currentFusion: FusionCadStatus = {
 const capabilityClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
 function CadLinkTestSurface() {
-  return <QueryClientProvider client={capabilityClient}><CadLinkCoordinator/><CadLinkPanel/></QueryClientProvider>;
+  return <QueryClientProvider client={capabilityClient}><CadWorkspaceOwners/><CadLinkPanel/></QueryClientProvider>;
 }
 
 function FullCadLinkTestSurface() {
   return <QueryClientProvider client={capabilityClient}>
-    <JobsCoordinator><CadLinkCoordinator/><CadLinkPanel/></JobsCoordinator>
+    <JobsCoordinator><CadWorkspaceOwners/><CadLinkPanel/></JobsCoordinator>
   </QueryClientProvider>;
 }
 
@@ -109,7 +112,9 @@ describe('CadLinkPanel', () => {
     capabilityClient.clear();
     publishCadJobs([]); sessionStorage.clear();
     reviewDetail = undefined; missingReview = false;
-    resetCadOperationsStore();
+    useCadConnectionStore.setRecoveryError(null); cadReceiptsStore.setState({ recoveryError: null });
+    fixtureOperations = {}; reportedRecovery = null; cadRecoveryNoticesStore.setState({ notices: {}, recoveryError: null });
+
     resetCadCoordinationForTests('on');
     workspaceModeStore.setMode('parametric');
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
@@ -120,10 +125,12 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       return json(record);
     }));
   });
-  afterEach(() => { act(() => root.unmount()); importedMeshStore.clear(); resetCadOperationsStore(); workspaceModeStore.setMode('parametric'); vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); host.remove(); });
+  afterEach(() => { act(() => root.unmount()); importedMeshStore.clear();  workspaceModeStore.setMode('parametric'); vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); host.remove(); });
 
   it('offers install and repair before any signal or selected folder', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
@@ -224,10 +231,19 @@ describe('CadLinkPanel', () => {
     ...overrides,
   });
 
+  let fixtureOperations: Record<string, CadOperationSummary> = {};
+  let reportedRecovery: string | null = null;
+  const noticeFor = (item: CadOperationSummary) => ({ id: item.operationId, kind: item.kind as 'insert_link' | 'update_link', document_id: null, document_name: item.snapshot?.documentName ?? null, created_at: item.createdAt ?? '', sequence: 1, active_document: item.operationId === reportedRecovery });
   let reviewDetail: Record<string, unknown> | undefined;
   let missingReview = false;
   function applyCadRequest(summary: CadOperationSummary): void {
-    if (summary.kind !== 'prepare_and_solve') { useCadOperationsStore.getState().apply(summary); return; }
+    fixtureOperations[summary.operationId] = summary;
+    if (summary.kind !== 'prepare_and_solve') {
+      if (summary.state === 'recovery_required' && ['insert_link', 'update_link'].includes(summary.kind)) {
+        cadRecoveryNoticesStore.setState((state) => ({ notices: { ...state.notices, [summary.operationId]: noticeFor(summary) } }));
+      }
+      return;
+    }
     const item = cadJobFixture(summary);
 
     const preparation = reviewDetail?.preparation as { preparationId: string; blockingFindingIds: string[]; reportSha256: string } | undefined;
@@ -266,6 +282,16 @@ describe('CadLinkPanel', () => {
     const base = vi.mocked(fetch).getMockImplementation()!;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
+      if (path === '/api/cadlink/recovery-notices') {
+        for (const id of options.reconcileAccepted ?? []) delete fixtureOperations[id];
+        posted.push({ path, body: null });
+        return json({ notices: Object.values(fixtureOperations).filter((item) => item.state === 'recovery_required' && ['insert_link', 'update_link'].includes(item.kind)).map(noticeFor) });
+      }
+      if (path.startsWith('/api/cadlink/recovery-notices/') && path.endsWith('/dismiss')) {
+        const id = decodeURIComponent(path.split('/')[4]); delete fixtureOperations[id];
+        posted.push({ path, body: null });
+        return json({ id, dismissed: true, repaired: false });
+      }
       if (path === '/api/cadlink/project-setups') {
         const body = JSON.parse(String(init?.body)) as { lineageId: string };
         posted.push({ path, body });
@@ -294,12 +320,12 @@ describe('CadLinkPanel', () => {
             detailFailures -= 1;
             return json({ detail: 'The CAD operations store is busy.' }, 503);
           }
-          const known = useCadOperationsStore.getState().operations[operationId];
+          const known = fixtureOperations[operationId];
           if (options.detailFromStore && known) return json({ ...known, approvals: [], preparation: null });
           return options.detail ? json(options.detail) : json({}, 404);
         }
         posted.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
-        const held = useCadOperationsStore.getState().operations[operationId] ?? cadOperation({ operationId });
+        const held = fixtureOperations[operationId] ?? cadOperation({ operationId });
         if (path.endsWith('/cancel')) return json({ ...held, state: 'cancelled', updatedAt: '2026-09-14T11:00:00Z' });
         if (path.endsWith('/reconcile') && options.reconcileAccepted?.includes(operationId)) {
           return json({ operation: { ...held, state: 'accepted', updatedAt: '2026-09-14T11:00:00Z' } });
@@ -346,6 +372,7 @@ describe('CadLinkPanel', () => {
   /** The active Fusion document reports the interrupted update `operationId`,
    * which is what makes its recovery card loud. */
   const reportRecovery = async (operationId: string) => {
+    reportedRecovery = operationId;
     const base = vi.mocked(fetch).getMockImplementation()!;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => (
       String(input).endsWith('/fusion-status')
@@ -397,10 +424,10 @@ describe('CadLinkPanel', () => {
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     });
 
-    expect(posted).toContainEqual({ path: '/api/cadlink/operations/op-update/reconcile', body: null });
+    expect(posted).toContainEqual({ path: '/api/cadlink/recovery-notices', body: null });
     expect(operationCard('op-update')).toBeNull();
-    expect(useCadOperationsStore.getState().operations['op-update'].state).toBe('accepted');
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('evidence confirms');
+    expect(cadRecoveryNoticesStore.getState().notices['op-update']).toBeUndefined();
+    expect(cadWorkspace.getSnapshot().status).toContain('Checked Fusion recovery notices');
     expect(fusionWorkflowView({
       ...currentFusion,
       recoveryRequired: {
@@ -423,13 +450,13 @@ describe('CadLinkPanel', () => {
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     });
 
-    expect(posted).toContainEqual({ path: '/api/cadlink/operations/op-update/reconcile', body: null });
+    expect(posted).toContainEqual({ path: '/api/cadlink/recovery-notices', body: null });
     expect(operationCard('op-update')).not.toBeNull();
-    expect(useCadOperationsStore.getState().operations['op-update'].state).toBe('recovery_required');
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe(
-      'WG found no current Fusion evidence that the update completed. Use Undo in Fusion or repair the link before continuing.',
+    expect(fixtureOperations['op-update'].state).toBe('recovery_required');
+    expect(cadWorkspace.getSnapshot().status).toBe(
+      'Checked Fusion recovery notices. Use Undo in Fusion or repair the link if its warning remains.',
     );
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).not.toContain('Fusion still reports');
+    expect(cadWorkspace.getSnapshot().status).not.toContain('Fusion still reports');
   });
 
   it('dismisses the durable card without claiming that Fusion was repaired', async () => {
@@ -445,10 +472,10 @@ describe('CadLinkPanel', () => {
       await Promise.resolve(); await Promise.resolve();
     });
 
-    expect(posted).toContainEqual({ path: '/api/cadlink/operations/op-update/cancel', body: null });
+    expect(posted).toContainEqual({ path: '/api/cadlink/recovery-notices/op-update/dismiss', body: null });
     expect(operationCard('op-update')).toBeNull();
-    expect(useCadOperationsStore.getState().operations['op-update'].state).toBe('cancelled');
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Fusion still needs Undo or repair');
+    expect(cadRecoveryNoticesStore.getState().notices['op-update']).toBeUndefined();
+    expect(cadWorkspace.getSnapshot().status).toContain('Fusion still needs Undo or repair');
   });
 
   it('shows each pending CAD operation with its state, reason, identity and the action it needs', async () => {
@@ -480,8 +507,10 @@ describe('CadLinkPanel', () => {
     });
 
     const cards = [...host.querySelectorAll<HTMLElement>('.cad-operation')];
-    expect(cards.map((card) => card.dataset.operationId)).toEqual(['op-ready', 'op-engine', 'op-setup']);
-    const [ready, engine, setup] = cards;
+    expect(cards.map((card) => card.dataset.operationId)).toEqual(['op-setup', 'op-engine', 'op-ready']);
+    const ready = cards.find((card) => card.dataset.operationId === 'op-ready')!;
+    const engine = cards.find((card) => card.dataset.operationId === 'op-engine')!;
+    const setup = cards.find((card) => card.dataset.operationId === 'op-setup')!;
     // The shared run line is the sole status, outside the action card.
     expect(ready.getAttribute('role')).toBeNull();
     expect(ready.querySelector('[role="status"]')).toBeNull();
@@ -581,6 +610,8 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       return json({ ...record, project: { lineage_id: 'wgl_speaker' } });
     }));
     await renderAndSelect();
@@ -671,10 +702,12 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path === '/api/cadlink/operations/op-other/prepare') {
         prepared.push(JSON.parse(String(init?.body)));
-        return json({ operation: useCadOperationsStore.getState().operations['op-other'] });
+        return json({ operation: fixtureOperations['op-other'] });
       }
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       if (path.startsWith('/api/jobs')) return json({ items: [] });
       if (path === '/api/cadlink/designs') return json({ items: [{
         designId: 'wgd_other', lineageId: 'wgl_other', filename: 'Tritonia.cfg', documentName: 'Tritonia',
@@ -739,6 +772,8 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       return json({ ...record, project: { lineage_id: 'wgl_other' } });
     }));
     await renderAndSelect();
@@ -791,6 +826,8 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       if (path.endsWith('/api/capabilities')) return json({
         engines: [{ name: 'metal', available: true, reason: null, version: null, fast_paths: [], formulations: ['full-3d'] }],
       });
@@ -805,7 +842,7 @@ describe('CadLinkPanel', () => {
     openHistory();
     act(() => host.querySelector<HTMLButtonElement>('.cad-bundle-list button')!.click());
     await clickIngest();
-    await vi.waitFor(() => expect(cadLinkCoordinatorBridge.getSnapshot().fusionStatus?.running).toBe(false));
+    await vi.waitFor(() => expect(cadWorkspace.getSnapshot().fusionStatus?.running).toBe(false));
     const posted = recordOperationRequests({ detailFromStore: true });
     act(() => {
       applyCadRequest(cadOperation({
@@ -837,6 +874,8 @@ describe('CadLinkPanel', () => {
       requests.push(path);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       if (path.endsWith('/solve-command')) return json({ command: {
         commandId: 'cmd-fusion-1', returnId: 'wgr-fusion-1', bundlePath: listing.items[0].bundlePath,
         manifestSha256: `sha256:${'4'.repeat(64)}`, requestedAt: '2026-08-20T12:00:00Z',
@@ -1327,6 +1366,8 @@ describe('CadLinkPanel', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       calls.push(path);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       if (path.startsWith('/api/cadlink/onshape/connection')) return json(connection);
       if (path.endsWith('/onshape/status')) return json(status);
       if (path.endsWith('/onshape/send')) return send();
@@ -1737,6 +1778,8 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       return json({ ...record, findings: [] });
     }));
     await renderAndSelect();
@@ -1942,6 +1985,8 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       if (path.endsWith('/ingest')) return json(stepUnitRecord);
       return json({}, 404);
     }));
@@ -1980,6 +2025,8 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       if (path.endsWith('/api/capabilities')) return json({
         engines: [
           { name: 'metal', available: false, reason: 'No Metal device', version: null, fast_paths: [], geometry_sources: ['parametric'] },
@@ -2000,6 +2047,8 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       if (path.endsWith('/api/capabilities')) return json({
         engines: [
           { name: 'metal', available: false, reason: 'No Metal device', version: null, fast_paths: [], geometry_sources: ['parametric'] },
@@ -2123,8 +2172,8 @@ describe('CadLinkPanel', () => {
 
     await act(async () => {
       pullButtons()[0].click();
-      cadLinkCoordinatorBridge.getSnapshot().pullAndSolve();
-      cadLinkCoordinatorBridge.getSnapshot().pullFromFusion();
+      cadWorkspace.getSnapshot().pullAndSolve();
+      cadWorkspace.getSnapshot().pullFromFusion();
       await Promise.resolve();
     });
     expect(requestCount).toBe(1);
@@ -2139,10 +2188,10 @@ describe('CadLinkPanel', () => {
     expect(pullButtons().every((button) => button.disabled)).toBe(true);
     returns = { items: [{ ...listing.items[0], requestId: 'req_busy' }] };
     await act(async () => {
-      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true });
       await Promise.resolve();
     });
-    expect(cadLinkCoordinatorBridge.getSnapshot().pullingFromFusion).toBe(false);
+    expect(cadWorkspace.getSnapshot().pullingFromFusion).toBe(false);
     expect(requestCount).toBe(1);
   });
 
@@ -2157,6 +2206,7 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/fusion-status')) return json(fusion);
       if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
+      if (path.endsWith('/return-requests/req_refused')) return json({ requestId: 'req_refused', state: fixtureOperations.req_refused?.state ?? 'processing', reason: null, message: fixtureOperations.req_refused?.message ?? null });
       if (path.endsWith('/request-fusion-return')) {
         return json({ status: 'requested', requestId: 'req_refused', documentName: 'Tritonia V' });
       }
@@ -2164,11 +2214,11 @@ describe('CadLinkPanel', () => {
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     await act(async () => {
-      cadLinkCoordinatorBridge.getSnapshot().pullFromFusion().catch(() => undefined);
+      cadWorkspace.getSnapshot().pullFromFusion().catch(() => undefined);
       await Promise.resolve(); await Promise.resolve();
     });
     act(() => {
-      useCadOperationsStore.getState().apply({
+      applyCadRequest({
         operationId: 'req_refused', kind: 'request_return', state: 'rejected', stage: 'executing',
         reason: 'adapter_refused', message: refusal, jobId: null, attemptGeneration: 1,
         setupRevisionId: null, preparationId: null, snapshot: null, legacy: false,
@@ -2176,7 +2226,7 @@ describe('CadLinkPanel', () => {
       } as CadOperationSummary);
     });
     await act(async () => {
-      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true });
       await Promise.resolve();
     });
 
@@ -2210,7 +2260,7 @@ describe('CadLinkPanel', () => {
     // A later, unrelated error takes the alert over. The report belonged to
     // the refusal, so it goes with it rather than standing under a headline it
     // does not explain.
-    await act(async () => { cadLinkCoordinatorBridge.getSnapshot().reportError('The jobs system is not answering.'); });
+    await act(async () => { cadWorkspace.getSnapshot().reportError('The jobs system is not answering.'); });
     const replaced = host.querySelector<HTMLElement>('.cad-alert-error[role="alert"]')!;
     expect(replaced.textContent).toContain('The jobs system is not answering.');
     expect(replaced.querySelector('details.cad-alert-diagnostics')).toBeNull();
@@ -2331,7 +2381,7 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     act(() => useCadReturnStore.getState().setSourceSize('source-hf', 2.5));
-    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().ingest(); });
+    await act(async () => { await cadWorkspace.getSnapshot().ingest(); });
     const submission = buildImportedSubmission(useCadReturnStore.getState());
     expect(submission.geometry).toMatchObject({
       mesh: { source_size_mm: { 'source-hf': 2.5 } },
@@ -2340,11 +2390,10 @@ describe('CadLinkPanel', () => {
   });
 
   it('marks a changed refreshed bundle stale and preserves sizing edits', async () => {
-    let listingCount = 0;
+    let listingChanged = false;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).endsWith('/returns')) {
-        listingCount += 1;
-        const body = listingCount === 1 ? listing : { cadFolderConfigured: true, items: [{
+        const body = !listingChanged ? listing : { cadFolderConfigured: true, items: [{
           ...listing.items[0], modifiedAt: '2026-08-11T01:00:00Z',
           sources: [{ ...listing.items[0].sources[0], suggestedResolutionMm: 2.75 }],
         }] };
@@ -2356,6 +2405,7 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     act(() => useCadReturnStore.getState().setSourceSize('source-hf', 2.5));
+    listingChanged = true;
     const refresh = host.querySelector<HTMLButtonElement>('button[aria-label="Refresh CAD returns"]')!;
     await act(async () => { refresh.click(); await Promise.resolve(); await Promise.resolve(); });
 
@@ -2384,6 +2434,8 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       return json({ ...record, freshness });
     }));
     await renderAndSelect();
@@ -2510,6 +2562,8 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       return json(reviewed);
     }));
     await renderAndSelect();
@@ -2554,6 +2608,8 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       return json(legacy);
     }));
     await renderAndSelect();
@@ -2592,6 +2648,8 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       return json(declared);
     }));
     await renderAndSelect();
@@ -2617,6 +2675,8 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       return json(declared);
     }));
     await renderAndSelect();
@@ -2634,6 +2694,8 @@ describe('CadLinkPanel', () => {
       requested.push(path);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/cad' });
       return json({
         bundlePath: '/cad/wglink/horn.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 4,
@@ -2644,7 +2706,7 @@ describe('CadLinkPanel', () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
     // The outbound entry points (menu, rail) all route through this bridge.
-    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); await Promise.resolve(); });
+    await act(async () => { await cadWorkspace.getSnapshot().sendWgToFusion(); await Promise.resolve(); });
 
     expect(requested).toContain('/api/export/wglink');
     expect(host.textContent).toContain('Opening in Fusion 360 · sequence 4');
@@ -2658,13 +2720,15 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/cad' });
       return json({ detail: 'CAD-link bundle name is already used by another design: horn.wglink' }, 409);
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
     await act(async () => {
-      await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion().catch(() => undefined);
+      await cadWorkspace.getSnapshot().sendWgToFusion().catch(() => undefined);
       await Promise.resolve();
     });
 

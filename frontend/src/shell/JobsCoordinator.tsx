@@ -26,7 +26,7 @@ import { archiveRunToWorkspace, saveMeshArtifactToWorkspace } from '../results/e
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
-import { useCadOperationsStore } from '../stores/cadOperations';
+import { useCadRecoveryNotices } from '../stores/cadRecoveryNotices';
 import { confirmDisplayedFrame, frameSolveBlocker, frameReadInFlight, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -34,7 +34,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { buildCadProjectSetup } from './cadSetupPublisher';
 import { getCrossoverDraftError, useCrossoverDraftError } from '../design/crossoverDrafts';
 import { inFlightWords, onScreenRequestInFlight, onScreenRequestToContinue } from './cadOnScreenSettings';
-import { solveAttention, useJobAttention, useOperationAttention } from './solveAttention';
+import { solveAttention, useJobAttention, useRecoveryNoticeAttention } from './solveAttention';
 import { solvedCadModels } from './cadlink/solvedModel';
 
 /**
@@ -295,7 +295,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const [actionError, setActionError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const submissionInFlight = useRef(false);
-  const cadOperations = useCadOperationsStore((state) => state.operations);
+  const recoveryNotices = useCadRecoveryNotices((state) => state.notices);
   // The frame the Solve card shows for the model on screen: part of what Solve
   // confirms, so part of whether it can.
   useCadSolverFrameStore((state) => state.frames);
@@ -336,8 +336,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [jobs, completeCadSolve]);
 
   useJobAttention(jobs);
-  useOperationAttention(Object.fromEntries(Object.entries(cadOperations)
-    .filter(([, operation]) => operation.kind !== 'prepare_and_solve')));
+  useRecoveryNoticeAttention(recoveryNotices);
 
   let currentOptions: SolveOptions | null = null;
   let solveOptionsError: string | null = null;
@@ -620,9 +619,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   useEffect(() => {
     if (linkedJobId.current === null) clearJobLink();
   }, []);
-  // `openLinkedJob` reaches `showJobModel`, which imports CadLinkCoordinator,
-  // which imports this module's bridge: a cycle that is safe only because
-  // every use is inside a function. It goes with the coordinator (Stage 5).
   useEffect(() => {
     const id = linkedJobId.current;
     if (!id || !jobsLoaded) return;

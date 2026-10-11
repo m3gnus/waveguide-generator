@@ -16,10 +16,8 @@ import { designNameSlug, UNTITLED_SLUG } from '../stores/designName';
 import { useCapabilities } from '../jobs/useCapabilities';
 import { choosableForImportedGeometry } from '../design/backendSupport';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
-import {
-  cadLinkCoordinatorBridge,
-  returnBelongsToProject,
-} from './CadLinkCoordinator';
+import { cadWorkspace } from '../stores/cadWorkspace';
+import { returnBelongsToProject } from './cadlink/arrivals';
 import { fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
 import { Icon } from './icons';
 import { fullTime, pluralized, relativeTime } from './cadTime';
@@ -36,7 +34,8 @@ import './cadLinkPanel.css';
 // to the two solve entry points so the global command can share it.
 import { importedSubmissionNotices } from '../jobs/importedSubmission';
 export { buildImportedSubmission, widenPolarToDerivation } from '../jobs/importedSubmission';
-export { newestReturnArrival, showIngestedMeshInViewport } from './CadLinkCoordinator';
+export { newestReturnArrival } from './cadlink/arrivals';
+export { showIngestedMeshInViewport } from './cadlink/artifactLoader';
 
 const FRESHNESS_COPY: Record<string, string> = {
   current: 'Current — unchanged fingerprint and the saved design still agree with this generator.',
@@ -365,7 +364,7 @@ function CheckRow({ check }: { check: CheckDescriptor }) {
  * run can record its configuration from WG's own self-report. */
 export function CadCoordinationNote() {
   const state = useSyncExternalStore(cadCoordinationStore.subscribe, cadCoordinationStore.getSnapshot, cadCoordinationStore.getSnapshot);
-  const coordinator = useSyncExternalStore(cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot);
+  const coordinator = useSyncExternalStore(cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot);
   // On is the normal configuration: only a departure from it is worth a line.
   if (state === 'unknown' || state === 'on') return null;
   const inbox = coordinator.fusionStatus?.addinInboxTransfer === true;
@@ -525,7 +524,7 @@ export function CadLinkPanel() {
   const documentName = useDocumentStore((current) => current.designName);
   const identity = useDocumentStore((current) => current.identity);
   const setCadLink = useDocumentStore((current) => current.setCadLink);
-  const cadCoordinator = useSyncExternalStore(cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot);
+  const cadWorkspaceView = useSyncExternalStore(cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot);
   const [confirmPublicDocument, setConfirmPublicDocument] = useState<string | null>(null);
   const [sendingToOnshape, setSendingToOnshape] = useState(false);
   const [unlinkingOnshape, setUnlinkingOnshape] = useState(false);
@@ -542,7 +541,7 @@ export function CadLinkPanel() {
     } catch (error) {
       detail = error instanceof Error ? error.message : 'Could not install WGLink. Try again.';
     }
-    setAddinReply({ detail, under: cadLinkCoordinatorBridge.getSnapshot().fusionStatus });
+    setAddinReply({ detail, under: cadWorkspace.getSnapshot().fusionStatus });
     setInstallingAddin(false);
   }
   const jobs = useCadJobs();
@@ -554,15 +553,15 @@ export function CadLinkPanel() {
     ingesting,
     ingestError,
     sendingToFusion,
-    error: coordinatorError,
+    error: actionError,
     errorDiagnostics,
     status,
     viewportNotice,
     fusionStatus,
     onshapeStatus,
     onshapeConnection,
-  } = cadCoordinator;
-  const error = useCadFeedbackError(coordinatorError);
+  } = cadWorkspaceView;
+  const error = useCadFeedbackError(actionError);
   const addinNotice = addinReply === null ? null
     : fusionStatus !== addinReply.under && fusionStatus?.addinRefresh
       ? fusionStatus.addinRefresh.detail
@@ -583,7 +582,7 @@ export function CadLinkPanel() {
     const request = ++onshapeSendGeneration.current;
     const sourceRevision = designRevision;
     const documentLoad = currentDocumentLoad();
-    cadCoordinator.clearFeedback(); setSendingToOnshape(true);
+    cadWorkspaceView.clearFeedback(); setSendingToOnshape(true);
     try {
       const wasLinked = onshapeStatus?.state === 'stale' || onshapeStatus?.state === 'current';
       const polarConfig = polarConfigFromUi(useSolveOptionsStore.getState().polar);
@@ -604,18 +603,18 @@ export function CadLinkPanel() {
       if (request !== onshapeSendGeneration.current) return;
       setConfirmPublicDocument(null);
       if (useDesignStore.getState().designRevision !== sourceRevision) {
-        cadCoordinator.reportStatus('Sent the previous design to Onshape, but the WG design changed while it was uploading. Send again to link the current design.');
+        cadWorkspaceView.reportStatus('Sent the previous design to Onshape, but the WG design changed while it was uploading. Send again to link the current design.');
         return;
       }
       recordCommittedAthPolars(polarConfig);
       const visibility = result.onshape.isPublic ? ' · public document' : '';
-      cadCoordinator.reportStatus(result.onshape.createdDocument
+      cadWorkspaceView.reportStatus(result.onshape.createdDocument
         ? `Created ${result.onshape.documentName} in Onshape · ${result.onshape.variablesPushed} parameters${visibility}`
         : `Updated ${result.onshape.documentName} in Onshape · sequence ${result.sequence}${visibility}`);
       if (!wasLinked && result.identity) setCadLink(result.identity, 'current');
       // A first send can mint this identity. Passing it explicitly avoids the
       // pre-send closure briefly reporting the new document as not linked.
-      await cadCoordinator.refreshOnshapeStatus(result.identity);
+      await cadWorkspaceView.refreshOnshapeStatus(result.identity);
     } catch (reason) {
       // The registry is committed before the upload that can still fail (the
       // public-document refusal among them), so a failed send may have
@@ -627,7 +626,7 @@ export function CadLinkPanel() {
       if (reason instanceof OnshapePublicConsentRequired) {
         setConfirmPublicDocument(reason.message);
       } else {
-        cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason));
+        cadWorkspaceView.reportError(reason instanceof Error ? reason.message : String(reason));
       }
     } finally {
       if (request === onshapeSendGeneration.current) setSendingToOnshape(false);
@@ -637,11 +636,11 @@ export function CadLinkPanel() {
   // The coordinator owns one pending pull shared by every control, so both
   // entry points stay busy until arrival, failure, or the timeout.
   const bringFromFusion = () => {
-    cadCoordinator.clearFeedback();
-    void cadCoordinator.pullFromFusion().catch(() => undefined);
+    cadWorkspaceView.clearFeedback();
+    void cadWorkspaceView.pullFromFusion().catch(() => undefined);
   };
 
-  const sendToFusion = () => { void cadCoordinator.sendWgToFusion().catch(() => undefined); };
+  const sendToFusion = () => { void cadWorkspaceView.sendWgToFusion().catch(() => undefined); };
 
   // Forget this design's link to its Onshape document. The document itself
   // is left exactly as it is; the next send creates a new one.
@@ -649,15 +648,15 @@ export function CadLinkPanel() {
     const link = onshapeStatus?.link;
     const designId = identity?.designId ?? link?.designId;
     if (!link || !designId) return;
-    cadCoordinator.clearFeedback(); setUnlinkingOnshape(true);
+    cadWorkspaceView.clearFeedback(); setUnlinkingOnshape(true);
     try {
       const result = await unlinkOnshape(designId, link.instanceId);
-      cadCoordinator.reportStatus(result.unlinked
+      cadWorkspaceView.reportStatus(result.unlinked
         ? `Unlinked ${link.documentName}. The Onshape document is unchanged; the next send creates a new one.`
         : `${link.documentName} was already unlinked.`);
-      await cadCoordinator.refreshOnshapeStatus();
+      await cadWorkspaceView.refreshOnshapeStatus();
     } catch (reason) {
-      cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason));
+      cadWorkspaceView.reportError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setUnlinkingOnshape(false);
       setConfirmUnlink(false);
@@ -726,13 +725,13 @@ export function CadLinkPanel() {
   const linkActions = onshape
     ? <>
       <button className="link-button" disabled={sendingToOnshape} onClick={() => void sendToOnshape()}>Send to Onshape</button>
-      {linkedDocument && <button className="link-button" disabled={ingesting} title="Export the linked Part Studio to STEP, verify its source evidence, and prepare it for the viewport and solver." onClick={() => { void cadCoordinator.returnFromOnshape().catch(() => undefined); }}>Bring geometry into WG</button>}
+      {linkedDocument && <button className="link-button" disabled={ingesting} title="Export the linked Part Studio to STEP, verify its source evidence, and prepare it for the viewport and solver." onClick={() => { void cadWorkspaceView.returnFromOnshape().catch(() => undefined); }}>Bring geometry into WG</button>}
       {linkedDocument?.documentUrl && <a className="link-button" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open in Onshape</a>}
       {linkedDocument && unlinkButton}
     </>
     : <>
       <button className="link-button" disabled={sendingToFusion} title="Rebuild the linked Fusion waveguide from the current WG design." onClick={sendToFusion}>Send to Fusion</button>
-      <button className="link-button" disabled={!canRequestFusionReturn || cadCoordinator.pullingFromFusion} title="Ask Fusion for the active document's current geometry and source tags." onClick={() => void bringFromFusion()}>{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring geometry into WG'}</button>
+      <button className="link-button" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Ask Fusion for the active document's current geometry and source tags." onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring geometry into WG'}</button>
     </>;
 
   return <div className="cadlink-panel panel-scroll">
@@ -792,7 +791,7 @@ export function CadLinkPanel() {
             <select
               aria-label="Linked Fusion instance"
               value={fusionStatus?.link?.instanceId ?? ''}
-              onChange={(event) => cadCoordinator.selectFusionInstance(event.target.value)}
+              onChange={(event) => cadWorkspaceView.selectFusionInstance(event.target.value)}
             >
               <option value="" disabled>Choose an instance</option>
               {matchingFusionLinks.map((link) => <option value={link.instanceId} key={link.instanceId}>{link.instanceId}</option>)}
@@ -804,7 +803,7 @@ export function CadLinkPanel() {
             <select
               aria-label="Linked Onshape instance"
               value={onshapeStatus?.selectedInstanceId ?? ''}
-              onChange={(event) => cadCoordinator.selectOnshapeInstance(event.target.value)}
+              onChange={(event) => cadWorkspaceView.selectOnshapeInstance(event.target.value)}
             >
               <option value="" disabled>Choose a link</option>
               {matchingOnshapeLinks.map((link) => <option value={link.instanceId} key={link.instanceId}>
@@ -817,16 +816,16 @@ export function CadLinkPanel() {
           {!onshape && workflow.state === 'not-configured' && <button className="primary cad-primary-action" onClick={() => requestSettings('cad')}>Set up Fusion connection</button>}
           {!onshape && !unlinkedOnScreen && workflow.action === 'open' && <button className="primary cad-primary-action" disabled={sendingToFusion} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Open in Fusion 360'}</button>}
           {!onshape && fusionStatus?.fusionChangesAvailable && !fusionStatus.wgChangesAvailable && <div className="cad-confirm-actions">
-            <button disabled={!canRequestFusionReturn || cadCoordinator.pullingFromFusion} onClick={() => void bringFromFusion()}>{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring in'}</button>
-            <button className="primary" disabled={!canRequestFusionReturn || cadCoordinator.pullingFromFusion} title="Bring the current Fusion geometry into WG, prepare it, and start the solve." onClick={() => { void cadCoordinator.pullAndSolve(); }}>{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring in & solve'}</button>
+            <button disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring in'}</button>
+            <button className="primary" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Bring the current Fusion geometry into WG, prepare it, and start the solve." onClick={() => { void cadWorkspaceView.pullAndSolve(); }}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring in & solve'}</button>
           </div>}
           {!onshape && !unlinkedOnScreen && workflow.action === 'update' && <div className={fusionBothChanged ? 'cad-confirm-actions' : undefined}>
-            {fusionBothChanged && <button disabled={!canRequestFusionReturn || cadCoordinator.pullingFromFusion} title="Keep the Fusion edits: bring the Fusion geometry into WG instead of overwriting it." onClick={() => void bringFromFusion()}>{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring Fusion changes in'}</button>}
+            {fusionBothChanged && <button disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Keep the Fusion edits: bring the Fusion geometry into WG instead of overwriting it." onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring Fusion changes in'}</button>}
             <button className="primary cad-primary-action" disabled={sendingToFusion} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Send WG changes to Fusion'}</button>
           </div>}
           {/* Onshape: the same card carries its send/return pair. */}
           {onshape && workflow.state !== 'not-configured' && !confirmPublicDocument && workflow.action && <button className="primary cad-primary-action" disabled={sendingToOnshape} onClick={() => void sendToOnshape()}>{sendingToOnshape ? (workflow.action === 'update' ? 'Updating…' : 'Creating…') : onshapeActionLabel}</button>}
-          {onshape && linkedDocument && workflow.state !== 'not-configured' && <button className="cad-secondary-action" disabled={ingesting} onClick={() => { void cadCoordinator.returnFromOnshape().catch(() => undefined); }}>{ingesting ? 'Returning & preparing…' : 'Bring Onshape geometry into WG'}</button>}
+          {onshape && linkedDocument && workflow.state !== 'not-configured' && <button className="cad-secondary-action" disabled={ingesting} onClick={() => { void cadWorkspaceView.returnFromOnshape().catch(() => undefined); }}>{ingesting ? 'Returning & preparing…' : 'Bring Onshape geometry into WG'}</button>}
           {onshape && linkedDocument?.documentUrl && <a className="link-button cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
           {onshape && linkedDocument && workflow.state !== 'not-configured' && unlinkButton}
         </>}
@@ -846,7 +845,7 @@ export function CadLinkPanel() {
           disabled={loading || ingesting}
           title="Refresh the CAD return listing"
           aria-label="Refresh CAD returns"
-          onClick={() => void cadCoordinator.refresh()}
+          onClick={() => void cadWorkspaceView.refresh()}
         ><Icon name="reset"/></button>
       </header>
       {!bundle && !record && <div className="empty-state">
@@ -885,7 +884,7 @@ export function CadLinkPanel() {
         className="primary cad-primary-action"
         disabled={ingesting}
         title="Mesh the returned geometry, verify its evidence, and make it the solve truth."
-        onClick={() => { void cadCoordinator.ingest(); }}
+        onClick={() => { void cadWorkspaceView.ingest(); }}
       >{ingesting ? 'Preparing…' : record ? 'Prepare again' : 'Prepare simulation'}</button>}
       {record && <ChecksSection record={record}/>}
       {/* The one Solve card: what Solve uses -- the model, which way it
@@ -915,7 +914,7 @@ export function CadLinkPanel() {
         unlinkedReturns={unlinkedReturns}
         otherProjectReturns={otherProjectReturns}
         selectedPath={bundle?.bundlePath ?? null}
-        select={cadCoordinator.selectBundle}
+        select={cadWorkspaceView.selectBundle}
       />
     </section>
 

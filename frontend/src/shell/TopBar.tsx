@@ -11,7 +11,7 @@ import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences }
 import { useCadReturnStore } from '../stores/cadReturn';
 import { waveguideDefinitionAppliesNow } from '../stores/waveguideLink';
 import { cadJobSummaries } from '../jobs/cadSolve';
-import { useCadOperationsStore } from '../stores/cadOperations';
+import { useCadRecoveryNotices } from '../stores/cadRecoveryNotices';
 import type { FusionCadStatus } from '../api/cadlink';
 import { operationNeedsUser, solveAttention, useReadyRun } from './solveAttention';
 import { noteExplicitNavigation } from './workspaceNavigation';
@@ -21,7 +21,7 @@ import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode'
 import { requestParameterReveal } from '../design/ParamPanel';
 import { BrandMark, Icon } from './icons';
 import { useSolveControl } from './JobsCoordinator';
-import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import { cadWorkspace } from '../stores/cadWorkspace';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
 import { ExportDestinationDialog } from './ExportDestinationDialog';
 import { ReportDialog } from './ReportDialog';
@@ -213,15 +213,15 @@ export function cadSourceLine(status: FusionCadStatus | null | undefined, modelS
 export function SolveActions() {
   const solve = useSolveControl();
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
-  const cadCoordinator = useSyncExternalStore(
-    cadLinkCoordinatorBridge.subscribe,
-    cadLinkCoordinatorBridge.getSnapshot,
-    cadLinkCoordinatorBridge.getSnapshot,
+  const cadWorkspaceView = useSyncExternalStore(
+    cadWorkspace.subscribe,
+    cadWorkspace.getSnapshot,
+    cadWorkspace.getSnapshot,
   );
   const modelShown = useCadReturnStore((state) => Boolean(state.ingestRecord));
   const fusion = usePreferences().cadApplication === 'fusion360';
   const source = mode === 'cad' && fusion
-    ? cadSourceLine(cadCoordinator.fusionStatus, modelShown)
+    ? cadSourceLine(cadWorkspaceView.fusionStatus, modelShown)
     : null;
 
   return <>
@@ -248,11 +248,11 @@ export function SolveActions() {
       <span>{source.text}</span>
       {source.refresh && <button
         type="button"
-        disabled={cadCoordinator.pullingFromFusion}
-        aria-busy={cadCoordinator.pullingFromFusion}
+        disabled={cadWorkspaceView.pullingFromFusion}
+        aria-busy={cadWorkspaceView.pullingFromFusion}
         title="Bring Fusion's current geometry into WG without solving it"
-        onClick={() => { void cadCoordinator.pullFromFusion().catch(() => undefined); }}
-      >{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Refresh'}</button>}
+        onClick={() => { void cadWorkspaceView.pullFromFusion().catch(() => undefined); }}
+      >{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Refresh'}</button>}
     </span>}
     <AttentionNotices/>
   </>;
@@ -270,25 +270,25 @@ export function SolveActions() {
 export function AttentionNotices() {
   useSyncExternalStore(workspaceNavigation.subscribe, workspaceNavigation.getSnapshot, workspaceNavigation.getSnapshot);
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
-  const operations = useCadOperationsStore((state) => state.operations);
+  const notices = useCadRecoveryNotices((state) => state.notices);
   const unseenRefusals = useCadDeliveryHealthStore((state) => state.unseenRefusals);
   const readyRun = useReadyRun();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const waiting = [
-    ...Object.values(operations).filter((operation) => operation.kind !== 'prepare_and_solve'),
     ...Object.values(cadJobSummaries(jobs)),
   ].filter(operationNeedsUser);
-  const showWaiting = waiting.length > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('cadlink'));
+  const waitingCount = waiting.length + Object.keys(notices).length;
+  const showWaiting = waitingCount > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('cadlink'));
   const showReady = readyRun !== null && !workspaceNavigation.isVisible('results');
   // A request WG took and refused has no row to wait in; this is its route.
   const showRefused = unseenRefusals > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('cadlink'));
   const readyJob = readyRun ? jobs.find((job) => job.id === readyRun) ?? null : null;
   const first = waiting[0];
-  const waitingLabel = !first
+  const waitingLabel = !first && !Object.keys(notices).length
     ? ''
-    : waiting.length > 1
-      ? `${waiting.length} CAD requests need you`
-      : first.kind === 'prepare_and_solve' ? 'A solve is waiting for you' : 'A CAD update needs recovery';
+    : waitingCount > 1
+      ? `${waitingCount} CAD requests need you`
+      : first?.kind === 'prepare_and_solve' ? 'A solve is waiting for you' : 'A CAD update needs recovery';
   return <>
     {showWaiting && <button
       type="button"
@@ -354,10 +354,10 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const family = design.formula;
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const cadReturnReady = useCadReturnStore((state) => Boolean(state.ingestRecord));
-  const cadCoordinator = useSyncExternalStore(
-    cadLinkCoordinatorBridge.subscribe,
-    cadLinkCoordinatorBridge.getSnapshot,
-    cadLinkCoordinatorBridge.getSnapshot,
+  const cadWorkspaceView = useSyncExternalStore(
+    cadWorkspace.subscribe,
+    cadWorkspace.getSnapshot,
+    cadWorkspace.getSnapshot,
   );
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -416,16 +416,16 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
         kind: 'Commands',
         label: 'Pull from Fusion & Solve',
         detail: 'Request the current Fusion geometry, prepare it, and solve',
-        disabled: workspaceMode !== 'cad' || !cadCoordinator.fusionStatus?.running,
-        run: () => { void cadLinkCoordinatorBridge.getSnapshot().pullAndSolve().catch(() => undefined); },
+        disabled: workspaceMode !== 'cad' || !cadWorkspaceView.fusionStatus?.running,
+        run: () => { void cadWorkspace.getSnapshot().pullAndSolve().catch(() => undefined); },
       },
       {
         id: 'cad-pull',
         kind: 'Commands',
         label: 'Refresh geometry from Fusion',
         detail: 'Request the current Fusion geometry without solving',
-        disabled: workspaceMode !== 'cad' || !cadCoordinator.fusionStatus?.running,
-        run: () => { void cadLinkCoordinatorBridge.getSnapshot().pullFromFusion().catch(() => undefined); },
+        disabled: workspaceMode !== 'cad' || !cadWorkspaceView.fusionStatus?.running,
+        run: () => { void cadWorkspace.getSnapshot().pullFromFusion().catch(() => undefined); },
       },
       { id: 'undo', kind: 'Commands', label: 'Undo', disabled: !canUndo, run: undo },
       { id: 'redo', kind: 'Commands', label: 'Redo', disabled: !canRedo, run: redo },
@@ -442,7 +442,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       ...RESULT_PANEL_COUNTS.map((count) => ({ id: `results-${count}`, kind: 'Commands' as const, label: `Results: ${count} chart${count === 1 ? '' : 's'}`, keywords: `panel count layout`, run: () => preferencesStore.setChartCount(count) })),
     ];
     return [...parameters, ...jobEntries, ...commands];
-  }, [cadCoordinator.fusionStatus?.running, cadReturnReady, canRedo, canUndo, design, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
+  }, [cadWorkspaceView.fusionStatus?.running, cadReturnReady, canRedo, canUndo, design, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
 
   return <header className="topbar">
     <WindowControls side="leading"/>

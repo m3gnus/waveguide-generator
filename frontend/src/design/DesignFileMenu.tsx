@@ -34,7 +34,8 @@ import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
+import { isOutboundSupersededError } from '../shell/cadlink/outbound';
+import { cadWorkspace } from '../stores/cadWorkspace';
 import { listCadLinkedDesigns, type CadLinkedDesignSummary } from '../api/cadlink';
 import { cadProjectReference } from '../api/cadProjects';
 import {
@@ -164,6 +165,7 @@ export function DesignFileMenu() {
     setMessage(null);
     setAdoptionCandidate(null);
     try { await operation(); } catch (error) {
+      if (isOutboundSupersededError(error)) return;
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       busyRef.current = false;
@@ -381,7 +383,7 @@ export function DesignFileMenu() {
     await act(async () => {
       // The coordinator owns the send: it derives open-vs-update, attaches the
       // expected-document guard, and parks on the two-way conflict dialog.
-      const result = await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
+      const result = await cadWorkspace.getSnapshot().sendWgToFusion();
       setMessage(result ? sentToCadMessage(result) : 'Both WG and Fusion changed — choose a direction in the dialog.');
     });
   }

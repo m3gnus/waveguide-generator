@@ -1,5 +1,6 @@
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { showCadJobModel } from '../shell/CadLinkCoordinator';
+import { restoreCadJobModel } from '../shell/cadlink/restores';
+import { cadWorkspace } from '../stores/cadWorkspace';
 import { currentDesignLoadSource } from '../stores/design';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { noteExplicitNavigation } from '../shell/workspaceNavigation';
@@ -12,7 +13,10 @@ export async function showJobModel(
 ): Promise<boolean> {
   // Asked for from a run's own controls: the user is choosing what to look at.
   noteExplicitNavigation();
-  if (job.config_summary.geometry_type === 'imported') return showCadJobModel(job);
+  if (job.config_summary.geometry_type === 'imported') return restoreCadJobModel(job, {
+    reportStatus: cadWorkspace.getSnapshot().reportStatus,
+    reportViewportNotice: cadWorkspace.getSnapshot().reportViewportNotice,
+  });
   if (!replaceWithJobDesign(job, { keepHistory: true })) {
     onError('This result has no readable design snapshot, so its model cannot be shown.');
     return false;

@@ -11,7 +11,7 @@ import { DesignFileMenu } from '../design/DesignFileMenu';
 import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { cadProjectReference } from '../api/cadProjects';
 import { CadProjectHeader, CadProjectHistory, modelStateLabel, newestReturnForProject, projectName } from './CadProjectPanel';
-import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import { cadWorkspace } from '../stores/cadWorkspace';
 import type { CadReturnBundle } from '../api/cadlink';
 
 const LINEAGE = 'wgl_project';
@@ -406,8 +406,8 @@ describe('CAD project history', () => {
     const older = bundle('260627 - PartyMEH v10-4.wgreturn', '2026-08-23T15:09:02Z');
     const newest = bundle('260627 - PartyMEH v10-5.wgreturn', '2026-08-23T19:14:58Z');
     const selectBundle = vi.fn();
-    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...cadLinkCoordinatorBridge.getSnapshot(), bundles: [], selectBundle,
+    vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
+      ...cadWorkspace.getSnapshot(), bundles: [], selectBundle,
     });
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).includes('/api/cadlink/returns')) return json({ items: [older, newest], cadFolderConfigured: true });
@@ -641,8 +641,8 @@ describe('CAD project history', () => {
     setJobs([]);
     const returns = deferred<Response>();
     const selectBundle = vi.fn();
-    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...cadLinkCoordinatorBridge.getSnapshot(), bundles: [], selectBundle,
+    vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
+      ...cadWorkspace.getSnapshot(), bundles: [], selectBundle,
     });
     const bundle: CadReturnBundle = {
       name: 'cad-only.wgreturn', bundlePath: 'wgreturn/cad-only.wgreturn', modifiedAt: '2026-08-23T19:14:58Z', readable: true,
@@ -676,8 +676,8 @@ describe('CAD project history', () => {
     setJobs([]);
     const returns = deferred<Response>();
     const selectBundle = vi.fn();
-    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...cadLinkCoordinatorBridge.getSnapshot(), bundles: [], selectBundle,
+    vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
+      ...cadWorkspace.getSnapshot(), bundles: [], selectBundle,
     });
     const bundle: CadReturnBundle = {
       name: 'cad-only.wgreturn', bundlePath: 'wgreturn/cad-only.wgreturn', modifiedAt: '2026-08-23T19:14:58Z', readable: true,

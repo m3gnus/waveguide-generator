@@ -1,7 +1,5 @@
-import { useCallback, useEffect, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import { currentDocumentLoad, isCurrentDocumentLoad } from '../../stores/design';
 import { returnOnshapeToWg } from '../../api/onshape';
-import type { CadOperationSummary } from '../../api/cadOperations';
 import { useCadPreparationStore } from '../../stores/cadPreparation';
 import { rememberCadProject } from '../../stores/cadProjectMemory';
 import { workspaceModeStore } from '../../stores/workspaceMode';
@@ -13,17 +11,12 @@ import {
   ingestReturn,
   type CadReturnIngestRecord,
   listReturns,
-  requestFusionReturn,
   type CadReturnBundle,
-  type FusionCadStatus,
 } from '../../api/cadlink';
 import { preferencesStore } from '../../prefs/preferences';
 import { useDocumentStore } from '../../stores/document';
 import { useCadReturnStore } from '../../stores/cadReturn';
-import { useCadOperationsStore } from '../../stores/cadOperations';
-import { isPendingCadOperation } from '../../api/cadOperations';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
-import { presentCadRefusal, refusalSentence } from './refusals';
 
 export interface RefreshOptions {
   background?: boolean;
@@ -71,14 +64,26 @@ export function newestReturnArrival(
   )) ?? null;
 }
 
-export type CadReturnArrivalReaderIntegration = Pick<UseCadReturnArrivalsOptions,
-  'autoIngestSelected' | 'cadFolderConfigured' | 'enterCadWorkspace' | 'manualSelectionAt'
-  | 'noteCadActivity' | 'projectOpenPending' | 'refreshChannelDriverBases' | 'refusedForeignReturn'
-  | 'returnListRequest' | 'seenReturnRevisions' | 'pendingReturnRequestId' | 'pendingReturnRequestedAt'
-  | 'pendingReturnWaiter' | 'setError' | 'setErrorDiagnostics' | 'setStatus'> & {
-    setBundles(items: CadReturnBundle[]): void;
-    setLoading(value: boolean): void;
-  };
+type Ref<T> = { current: T };
+export interface CadReturnArrivalReaderIntegration {
+  autoIngestSelected(): void;
+  cadFolderConfigured: Ref<boolean | null>;
+  enterCadWorkspace(): void;
+  manualSelectionAt: Ref<number | null>;
+  noteCadActivity(): void;
+  projectOpenPending: Ref<boolean>;
+  refreshChannelDriverBases(): Promise<unknown>;
+  refusedForeignReturn: Ref<boolean>;
+  returnListRequest: Ref<number>;
+  seenReturnRevisions: Ref<Map<string, string> | null>;
+  /** The explicit waiter owns selection, including after its poll settles. */
+  awaitingReturn(): boolean;
+  ownsReturn(bundle: CadReturnBundle): boolean;
+  setError(value: string | null): void;
+  setStatus(value: string | null): void;
+  setBundles(items: CadReturnBundle[]): void;
+  setLoading(value: boolean): void;
+}
 
 /** A single listing read, with fencing even for fetch implementations that ignore abort. */
 export async function refreshCadReturnArrivals(
@@ -89,8 +94,8 @@ export async function refreshCadReturnArrivals(
   const {
     autoIngestSelected, cadFolderConfigured, enterCadWorkspace, manualSelectionAt, noteCadActivity,
     projectOpenPending, refreshChannelDriverBases, refusedForeignReturn, returnListRequest,
-    seenReturnRevisions, pendingReturnRequestId, pendingReturnRequestedAt, pendingReturnWaiter,
-    setError, setErrorDiagnostics, setStatus, setBundles, setLoading,
+    seenReturnRevisions, awaitingReturn, ownsReturn,
+    setError, setStatus, setBundles, setLoading,
   } = integration;
   const background = options.background === true;
   const request = ++returnListRequest.current;
@@ -120,58 +125,13 @@ export async function refreshCadReturnArrivals(
       || previous.size !== next.size
       || [...next].some(([path, modifiedAt]) => previous.get(path) !== modifiedAt);
     if (listingChanged || response.cadFolderConfigured !== wasConfigured) noteCadActivity();
-    const requested = pendingReturnRequestId.current
-      ? response.items.find((item) => (
-          item.readable && item.requestId === pendingReturnRequestId.current
-        )) ?? null
-      : null;
-    // Before the wall clock: Fusion may have answered already, and refused.
-    // A return request's operation id *is* its request id
-    // (server/cadlink/fusion_return.py hands `request_id` to
-    // `accept_operation`), so the refusal WG recorded is in hand under the
-    // id this pull is waiting on. Waiting the full minute and then saying
-    // Fusion did not answer would be stating something WG can see is false.
-    const answered = pendingReturnRequestId.current
-      ? useCadOperationsStore.getState().operations[pendingReturnRequestId.current] ?? null
-      : null;
-    // A bundle that did arrive wins: the arrival path below settles it, and
-    // nothing here overtakes geometry the user can already use.
-    if (!requested && answered && !isPendingCadOperation(answered) && answered.state !== 'accepted') {
-      pendingReturnRequestId.current = null;
-      pendingReturnRequestedAt.current = null;
-      const presented = presentCadRefusal(answered.message);
-      const sentence = presented
-        ? refusalSentence(presented)
-        : `Fusion ${answered.state === 'cancelled' ? 'did not carry out' : 'refused'} the request for this model’s geometry, and reported no detail.`;
-      const waiter = pendingReturnWaiter.current;
-      pendingReturnWaiter.current = null;
-      if (presented) setErrorDiagnostics({ message: sentence, detail: presented.diagnostics });
-      if (waiter) waiter.fail(new Error(sentence));
-      else setError(sentence);
-    } else if (
-      pendingReturnRequestId.current
-      && pendingReturnRequestedAt.current !== null
-      && Date.now() - pendingReturnRequestedAt.current > 60_000
-    ) {
-      pendingReturnRequestId.current = null;
-      pendingReturnRequestedAt.current = null;
-      const timeout = 'Fusion did not return the requested model within 60 seconds. Check Fusion for a WGLink message, then retry.';
-      const waiter = pendingReturnWaiter.current;
-      pendingReturnWaiter.current = null;
-      if (waiter) waiter.fail(new Error(timeout));
-      else setError(timeout);
-    }
-    const arrived = options.autoOpenNew
-      ? requested ?? (
-          pendingReturnRequestId.current
-            ? null
-            : newestReturnArrival(response.items, previous)
-        )
-      : null;
+    const available = response.items.filter((item) => !ownsReturn(item));
+    const arrived = options.autoOpenNew && !awaitingReturn()
+      ? newestReturnArrival(available, previous) : null;
     seenReturnRevisions.current = next;
     const currentDesignId = useDocumentStore.getState().identity?.designId;
-    const initial = previous === null
-      ? response.items.find((item) => (
+    const initial = previous === null && !awaitingReturn()
+      ? available.find((item) => (
           item.readable && (
             currentDesignId
               ? returnBelongsToProject(item, currentDesignId)
@@ -186,12 +146,8 @@ export async function refreshCadReturnArrivals(
     const destination = projectOpenPending.current
       ? useDocumentStore.getState().identity?.lineageId ?? null
       : undefined;
-    const requestedArrival = arrived !== null && arrived === requested
-      && pendingReturnRequestId.current === arrived.requestId;
     const selected = useCadReturnStore.getState().selectedBundle;
-    const arrivalRequestedAt = arrived
-      ? (requestedArrival ? pendingReturnRequestedAt.current : Date.parse(arrived.modifiedAt))
-      : null;
+    const arrivalRequestedAt = arrived ? Date.parse(arrived.modifiedAt) : null;
     const heldForManualPick = Boolean(
       arrived && !projectMismatch && selected && selected.bundlePath !== arrived.bundlePath
       && manualSelectionAt.current !== null
@@ -216,35 +172,12 @@ export async function refreshCadReturnArrivals(
       if (projectMismatch) {
         refusedForeignReturn.current = true;
         const reason = `Received ${arrived.documentName ?? arrived.name}, but it belongs to another CAD-linked project. Open that project from File → CAD-linked designs.`;
-        if (arrived.requestId === pendingReturnRequestId.current) {
-          pendingReturnRequestId.current = null;
-          pendingReturnRequestedAt.current = null;
-        }
-        const waiter = pendingReturnWaiter.current;
-        if (waiter && arrived.requestId === waiter.requestId) {
-          pendingReturnWaiter.current = null;
-          waiter.fail(new Error(reason));
-        } else {
-          setError(reason);
-        }
+        setError(reason);
         enterCadWorkspace();
         return;
       }
-      if (arrived.requestId === pendingReturnRequestId.current) {
-        pendingReturnRequestId.current = null;
-        pendingReturnRequestedAt.current = null;
-      }
       const arrivedName = arrived.documentName ?? arrived.name;
       const keptName = selected ? selected.documentName ?? selected.name : null;
-      const waiter = pendingReturnWaiter.current;
-      if (waiter && arrived.requestId === waiter.requestId) {
-        pendingReturnWaiter.current = null;
-        if (heldForManualPick) {
-          waiter.fail(new SupersededError(`Received ${arrivedName} from Fusion 360, but you selected ${keptName} after asking for it.`));
-        } else {
-          waiter.settle(arrived);
-        }
-      }
       setStatus(heldForManualPick
         ? `Received ${arrivedName} from Fusion 360. You selected ${keptName} after it was sent, so ${keptName} stays selected; select ${arrivedName} from the return list to use it.`
         : `Received ${arrivedName} from Fusion 360.${
@@ -275,179 +208,18 @@ export async function refreshCadReturnArrivals(
   }
 }
 
-interface UseCadReturnArrivalsOptions {
-  autoIngestSelected(): void;
-  cadFolderConfigured: MutableRefObject<boolean | null>;
-  enterCadWorkspace(): void;
-  fusionStatus: FusionCadStatus | null;
-  identityDesignId: string | null | undefined;
-  manualSelectionAt: MutableRefObject<number | null>;
-  mounted: MutableRefObject<boolean>;
-  noteCadActivity(): void;
-  onshape: boolean;
-  pageIsVisible(): boolean;
-  pollDelayMs(baseMs: number, idleMs: number, unconfiguredMs: number | null, listing?: boolean): number | null;
-  pollRestarts: MutableRefObject<Set<() => void>>;
-  projectOpenPending: MutableRefObject<boolean>;
-  refreshChannelDriverBases(): Promise<unknown>;
-  refusedForeignReturn: MutableRefObject<boolean>;
-  refreshRef: MutableRefObject<(options?: RefreshOptions) => Promise<void>>;
-  returnListRequest: MutableRefObject<number>;
-  seenReturnRevisions: MutableRefObject<Map<string, string> | null>;
-  pendingReturnRequestId: MutableRefObject<string | null>;
-  pendingReturnRequestedAt: MutableRefObject<number | null>;
-  pendingReturnWaiter: MutableRefObject<{
-    requestId: string;
-    settle: (bundle: CadReturnBundle) => void;
-    fail: (reason: Error) => void;
-  } | null>;
-  fusionPullPromise: MutableRefObject<Promise<CadReturnBundle> | null>;
-  returnsIdleMs: number;
-  returnsMs: number;
-  setError: Dispatch<SetStateAction<string | null>>;
-  setErrorDiagnostics: Dispatch<SetStateAction<{ message: string; detail: string } | null>>;
-  setStatus: Dispatch<SetStateAction<string | null>>;
-  startAdaptivePoll(
-    restarts: Set<() => void>,
-    tick: () => void,
-    period: () => number | null,
-  ): () => void;
-}
-
-export function useCadReturnArrivals({
-  autoIngestSelected,
-  cadFolderConfigured,
-  enterCadWorkspace,
-  fusionStatus,
-  identityDesignId,
-  manualSelectionAt,
-  mounted,
-  noteCadActivity,
-  onshape,
-  pageIsVisible,
-  pollDelayMs,
-  pollRestarts,
-  projectOpenPending,
-  refreshChannelDriverBases,
-  refusedForeignReturn,
-  refreshRef,
-  returnListRequest,
-  seenReturnRevisions,
-  pendingReturnRequestId,
-  pendingReturnRequestedAt,
-  pendingReturnWaiter,
-  fusionPullPromise,
-  returnsIdleMs,
-  returnsMs,
-  setError,
-  setErrorDiagnostics,
-  setStatus,
-  startAdaptivePoll,
-}: UseCadReturnArrivalsOptions) {
-  const [bundles, setBundles] = useState<CadReturnBundle[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [pullingFromFusion, setPullingFromFusion] = useState(false);
-
-  const refresh = useCallback((options: RefreshOptions = {}) => refreshCadReturnArrivals({
-    autoIngestSelected, cadFolderConfigured, enterCadWorkspace, manualSelectionAt, noteCadActivity,
-    projectOpenPending, refreshChannelDriverBases, refusedForeignReturn, returnListRequest,
-    seenReturnRevisions, pendingReturnRequestId, pendingReturnRequestedAt, pendingReturnWaiter,
-    setError, setErrorDiagnostics, setStatus, setBundles, setLoading,
-  }, options), [autoIngestSelected, cadFolderConfigured, enterCadWorkspace, manualSelectionAt, noteCadActivity,
-    projectOpenPending, refreshChannelDriverBases, refusedForeignReturn, setError,
-    setErrorDiagnostics, setStatus]);
-  refreshRef.current = refresh;
-
-  // Returns arrive in the workspace's wgreturn folder, which only the Fusion
-  // add-in writes. Onshape bundles use WG's data directory and never enter this
-  // lifecycle, so there is deliberately no returns poll in Onshape mode.
-  useEffect(() => {
-    if (onshape) { setLoading(false); return undefined; }
-    if (pageIsVisible()) void refresh({ autoOpenNew: true });
-    else setLoading(false);
-    // This listing is the one poll that never suspends. When CAD Link has no
-    // configured folder, it remains the signal that Settings has since gained
-    // one, but widens to the idle cadence.
-    const stop = startAdaptivePoll(
-      pollRestarts.current,
-      () => { if (pageIsVisible()) void refresh({ background: true, autoOpenNew: true }); },
-      () => pollDelayMs(returnsMs, returnsIdleMs, returnsIdleMs, true),
-    );
-    return () => {
-      stop();
-      returnListRequest.current += 1;
-    };
-  }, [onshape, pageIsVisible, pollDelayMs, pollRestarts, refresh, returnListRequest,
-    returnsIdleMs, returnsMs, startAdaptivePoll]);
-
-  const expectFusionReturn = useCallback((requestId: string, requestedAt = Date.now()) => {
-    pendingReturnRequestId.current = requestId;
-    pendingReturnRequestedAt.current = requestedAt;
-    noteCadActivity();
-  }, [noteCadActivity]);
-
-  const pullFromFusion = useCallback((): Promise<CadReturnBundle> => {
-    if (fusionPullPromise.current) return fusionPullPromise.current;
-    setPullingFromFusion(true);
-    const fail = (reason: unknown): never => {
-      const error = reason instanceof Error ? reason : new Error(String(reason));
-      if (!(error instanceof SupersededError) && mounted.current) setError(error.message);
-      throw error;
-    };
-    const operation = (async () => {
-      if (!identityDesignId || !fusionStatus?.documentId || !fusionStatus.link) {
-        return fail(new Error('Fusion changed documents. Refresh CAD Link and try again.'));
-      }
-      setError(null);
-      const askedAt = Date.now();
-      const result = await requestFusionReturn({
-        designId: identityDesignId,
-        documentId: fusionStatus.documentId,
-        instanceId: fusionStatus.link.instanceId,
-        expectedReturnStateHash: fusionStatus.link.documentSignatureHash,
-      }).catch(fail);
-      expectFusionReturn(result.requestId, askedAt);
-      setStatus(`Requested current geometry from ${result.documentName}. Waiting for Fusion…`);
-      const arrival = new Promise<CadReturnBundle>((settle, reject) => {
-        pendingReturnWaiter.current = { requestId: result.requestId, settle, fail: reject };
-      });
-      void refresh({ background: true, autoOpenNew: true });
-      return arrival.catch(fail);
-    })();
-    const tracked = operation.finally(() => {
-      if (fusionPullPromise.current !== tracked) return;
-      fusionPullPromise.current = null;
-      if (mounted.current) setPullingFromFusion(false);
-    });
-    fusionPullPromise.current = tracked;
-    return tracked;
-  }, [expectFusionReturn, fusionStatus, identityDesignId, mounted, refresh, setError, setStatus]);
-
-  return {
-    bundles,
-    setBundles,
-    loading,
-    pullingFromFusion,
-    refresh,
-    pullFromFusion,
-  };
-}
-
 export function enterCadWorkspace(): void {
   workspaceModeStore.setMode('cad');
   workspaceNavigation.activate('cadlink');
 }
 
-type Ref<T> = { current: T };
 export interface CadArrivalActionsIntegration {
   ingestRequest: Ref<number>;
   ingestAbortController: Ref<AbortController | null>;
   mounted: Ref<boolean>;
   manualSelectionAt: Ref<number | null>;
-  manualSelections: Ref<number>;
   refusedForeignReturn: Ref<boolean>;
   restoringCadProject: Ref<boolean>;
-  sendIntent: Ref<{ acceptedSeq: number | null; sentAt: number; picks: number } | null>;
   setIngesting(value: boolean): void;
   setIngestError(value: string | null): void;
   setError(value: string | null): void;
@@ -458,9 +230,6 @@ export interface CadArrivalActionsIntegration {
   enterCadWorkspace(): void;
   autoIngestSelected(): void;
   rereadDrivers(): void;
-  noteCadActivity(): void;
-  refresh(options?: RefreshOptions): Promise<void>;
-  autoSelectBundleRef: Ref<(bundle: CadReturnBundle, project: string | null | undefined, automatic: boolean) => void>;
   fusionInstanceId(): string | null;
   onshapeInstanceId(): string | null;
   showIngestedMesh: typeof showIngestedMeshInViewport;
@@ -475,21 +244,19 @@ export function createCadArrivalActions(
   const noop = () => undefined;
   const defaults: CadArrivalActionsIntegration = {
     ingestRequest: { current: 0 }, ingestAbortController: { current: null }, mounted: { current: true },
-    manualSelectionAt: { current: null }, manualSelections: { current: 0 },
-    refusedForeignReturn: { current: false }, restoringCadProject: { current: false }, sendIntent: { current: null },
+    manualSelectionAt: { current: null },
+    refusedForeignReturn: { current: false }, restoringCadProject: { current: false },
     setIngesting: noop, setIngestError: noop, setError: noop, setStatus: noop,
     setViewportNotice: noop, setBundles: noop, reportViewportNotice: noop,
-    enterCadWorkspace, autoIngestSelected: noop, rereadDrivers: noop, noteCadActivity: noop,
-    refresh: async () => undefined,
-    autoSelectBundleRef: { current: (bundle, project) => { selectBundleAs(bundle, project, true); } },
+    enterCadWorkspace, autoIngestSelected: noop, rereadDrivers: noop,
     fusionInstanceId: () => null, onshapeInstanceId: () => null,
     showIngestedMesh: showIngestedMeshInViewport,
   };
   const adapter = { ...defaults, ...integration };
-  const { ingestRequest, ingestAbortController, mounted, manualSelectionAt, manualSelections,
+  const { ingestRequest, ingestAbortController, mounted, manualSelectionAt,
     refusedForeignReturn, restoringCadProject, setIngesting, setIngestError, setError, setStatus,
     setViewportNotice, setBundles, reportViewportNotice, enterCadWorkspace: activateWorkspace,
-    autoIngestSelected, rereadDrivers, noteCadActivity, refresh,
+    autoIngestSelected, rereadDrivers,
     fusionInstanceId, onshapeInstanceId, showIngestedMesh } = adapter;
   const ingestSelected = async (): Promise<CadReturnIngestRecord> => {
     const current = useCadReturnStore.getState();
@@ -614,7 +381,6 @@ export function createCadArrivalActions(
     if (!automatic && !restoringCadProject.current) {
       refusedForeignReturn.current = false;
       manualSelectionAt.current = Date.now();
-      manualSelections.current += 1;
     }
     useCadReturnStore.getState().selectBundle(bundle, projectLineageId, automatic);
     rereadDrivers();
@@ -702,65 +468,7 @@ export function createCadArrivalActions(
     }
   };
 
-  const displaySend = async (operation: CadOperationSummary) => {
-    const bundlePath = operation.snapshot?.bundlePath;
-    if (!bundlePath) return;
-    const sentAt = Date.parse(operation.createdAt ?? operation.updatedAt ?? '');
-    const order = Number.isFinite(sentAt) ? sentAt : 0;
-    const acceptedSeq = Number.isSafeInteger(operation.acceptedSeq) ? Number(operation.acceptedSeq) : null;
-    const heldIntent = adapter.sendIntent.current;
-    if (heldIntent !== null && (
-      (acceptedSeq !== null && heldIntent.acceptedSeq !== null && acceptedSeq < heldIntent.acceptedSeq)
-      || (acceptedSeq === null && heldIntent.acceptedSeq !== null)
-      || (acceptedSeq === null && heldIntent.acceptedSeq === null && order <= heldIntent.sentAt)
-    )) return;
-    const intent = { acceptedSeq, sentAt: order, picks: manualSelections.current };
-    adapter.sendIntent.current = intent;
-    // Capture before refresh: opening an archive is a selection too, even
-    // though it does not increment the panel's manual-pick counter.
-    const selection = useCadReturnStore.getState().captureModelChoice();
-    const documentLoad = currentDocumentLoad();
-    const superseded = () => {
-      if (adapter.sendIntent.current !== intent) return true;
-      if (manualSelections.current === intent.picks
-        && useCadReturnStore.getState().isCurrentModelChoice(selection)
-        && isCurrentDocumentLoad(documentLoad)) return false;
-      const name = operation.snapshot?.documentName ?? 'the model Fusion sent';
-      setStatus(`Received ${name} from Fusion 360. A newer model selection stays on screen; select ${name} from the return list to use it.`);
-      return true;
-    };
-    noteCadActivity();
-    await refresh({ background: true, autoOpenNew: true }).catch(() => undefined);
-    if (superseded()) return;
-    if (useCadReturnStore.getState().selectedBundle?.bundlePath === bundlePath) {
-      activateWorkspace();
-      return;
-    }
-    // A return the user picked by hand after this was sent stays selected,
-    // as the listing's own arrival rule keeps it.
-    if (manualSelectionAt.current !== null && Number.isFinite(sentAt) && manualSelectionAt.current > sentAt) {
-      const name = operation.snapshot?.documentName ?? 'the model Fusion sent';
-      setStatus(`Received ${name} from Fusion 360. You selected another return after it was sent, so that one stays selected; select ${name} from the return list to use it.`);
-      return;
-    }
-    const listed = await listReturns(fetcher).catch(() => null);
-    if (superseded()) return;
-    const bundle = listed?.items.find((item) => item.bundlePath === bundlePath && item.readable);
-    if (bundle) {
-      // Automatic: displaying a Send is not the user's pick.
-      adapter.autoSelectBundleRef.current(bundle, undefined, true);
-      return;
-    }
-    // Accepted, and WG holds its copy, but there is nothing here to open: said,
-    // not left as a Send that silently did nothing.
-    const name = operation.snapshot?.documentName ?? 'the model Fusion sent';
-    setStatus(listed === null
-      ? `Received ${name} from Fusion 360, but WG could not read the WGLink folder to open it. Refresh CAD Link to try again.`
-      : `Received ${name} from Fusion 360, but it is no longer in the WGLink folder, so WG cannot open it here. Send it again from Fusion.`);
-    activateWorkspace();
-  };
-
-  return { ingestSelected, selectBundleAs, returnFromOnshape, displaySend, supersedePreparation };
+  return { ingestSelected, selectBundleAs, returnFromOnshape, supersedePreparation };
 }
 
 /** Create a listing reader with its own revision cursor and request fence.
@@ -775,9 +483,8 @@ export function createCadReturnArrivalReader(
     manualSelectionAt: { current: null }, noteCadActivity: noop,
     projectOpenPending: { current: false }, refreshChannelDriverBases: async () => undefined,
     refusedForeignReturn: { current: false }, returnListRequest: { current: 0 },
-    seenReturnRevisions: { current: null }, pendingReturnRequestId: { current: null },
-    pendingReturnRequestedAt: { current: null }, pendingReturnWaiter: { current: null },
-    setError: noop, setErrorDiagnostics: noop, setStatus: noop, setBundles: noop, setLoading: noop,
+    seenReturnRevisions: { current: null }, awaitingReturn: () => false, ownsReturn: () => false,
+    setError: noop, setStatus: noop, setBundles: noop, setLoading: noop,
     ...overrides,
   };
   return {

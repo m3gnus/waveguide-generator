@@ -12,7 +12,9 @@ import { withWgSolveBlock } from '../stores/wgSolveBlock';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
-import { CadLinkCoordinator } from '../shell/CadLinkCoordinator';
+import { cadWorkspace } from '../stores/cadWorkspace';
+import { OutboundSupersededError } from '../shell/cadlink/outbound';
+import { CadWorkspaceOwners } from '../shell/CadWorkspaceOwners';
 import { provideExportDestinationPrompt } from '../shell/exportDestinationPrompt';
 import { ExportDestinationDialog } from '../shell/ExportDestinationDialog';
 import { DesignFileMenu } from './DesignFileMenu';
@@ -74,7 +76,7 @@ function open(): HTMLButtonElement[] {
   // Send to CAD goes through the coordinator's unified path, so the real
   // coordinator is part of the unit under test. Its background status polls
   // are filtered out of request assertions with sendRequests().
-  act(() => root.render(<><CadLinkCoordinator/><DesignFileMenu/></>));
+  act(() => root.render(<><CadWorkspaceOwners/><DesignFileMenu/></>));
   const chip = container.querySelector<HTMLButtonElement>('button.file-chip');
   act(() => chip?.click());
   const items = [...container.querySelectorAll<HTMLButtonElement>('.design-menu-item')];
@@ -1357,4 +1359,17 @@ describe('a CAD-linked open overtaken while it loads', () => {
     expect(status).toContain('slow.cfg');
     expect(status).not.toMatch(/save/i);
   });
+});
+
+
+it('keeps an outbound supersession silent instead of reporting an export failure or conflict', async () => {
+  open();
+  const send = vi.fn(async () => { throw new OutboundSupersededError('newer design'); });
+  await act(async () => { cadWorkspace.setState({ sendWgToFusion: send }); });
+  const button = [...container.querySelectorAll<HTMLButtonElement>('.design-menu-item')]
+    .find((item) => item.textContent?.includes('Send to CAD'))!;
+  await act(async () => { button.click(); });
+  expect(send).toHaveBeenCalledOnce();
+  expect(container.textContent).not.toContain('newer design');
+  expect(container.textContent).not.toContain('choose a direction');
 });

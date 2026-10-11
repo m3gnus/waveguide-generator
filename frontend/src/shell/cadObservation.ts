@@ -2,7 +2,7 @@ import type { CadCoordination } from '../api/cadCoordination';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { useCadConnectionStore, type CadConnectionStore, type CadConnectionStatus } from '../stores/cadConnection';
 
-// Preserve the coordinator's timing until the S5-7 cut-over.
+// CAD observation and idle backoff cadences.
 export const CAD_OBSERVATION_INTERVALS = {
   returnsMs: 2_500, returnsIdleMs: 30_000,
   fusionStatusMs: 2_500, fusionStatusIdleMs: 30_000, quietMs: 30_000,
@@ -47,10 +47,9 @@ function movingCadJob(job: JobItem): boolean {
 }
 const pendingRequest = (request: CadObservedRequest) => !FINISHED.has(request.state);
 
-/** Built beside the coordinator, deliberately not mounted until S5-7. This
- * service consumes job/request activity; it neither starts the jobs socket nor
+/** This service consumes job/request activity; it neither starts the jobs socket nor
  * imports the operation store. The shell supplies receipt and return readers. */
-export type CadObservationSubscription = (() => void) & { refresh(): void };
+export type CadObservationSubscription = (() => void) & { refresh(options?: { returns?: boolean }): void };
 
 export function connectCadObservation(options: CadObservationOptions): CadObservationSubscription {
   const manager = options.manager ?? jobsSocket;
@@ -76,7 +75,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     const base = listing ? CAD_OBSERVATION_INTERVALS.returnsMs : CAD_OBSERVATION_INTERVALS.fusionStatusMs;
     const idle = listing ? CAD_OBSERVATION_INTERVALS.returnsIdleMs : CAD_OBSERVATION_INTERVALS.fusionStatusIdleMs;
     if (input.coordination !== 'on' && !(listing && !declaredInbox)) return working() ? base : null;
-    if (input.workspaceMode === 'cad' || connection.getState().fusionStatus?.processRunning || working()) return base;
+    if (input.workspaceMode === 'cad' || connection.getState().fusionStatus?.processRunning || input.awaitingReturn) return base;
     if (input.cadFolderConfigured === false) return listing ? idle : null;
     return now() - lastActivityAt >= CAD_OBSERVATION_INTERVALS.quietMs ? idle : base;
   };
@@ -145,7 +144,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       }, wait);
     });
   };
-  const wake = () => { noteActivity(); readReturns(); readStatus(); };
+  const wake = (listing = true) => { noteActivity(); if (listing) readReturns(); readStatus(); };
   const invalidateDeclaration = () => {
     declaredInbox = false;
     // Fence the previous session's read, but let its held report age by its TTL.
@@ -159,7 +158,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
   });
   const unsubscribeJobs = manager.subscribe(() => {
     const next = working();
-    if (next !== wasWorking) { wasWorking = next; noteActivity(); }
+    if (next !== wasWorking) { wasWorking = next; restart(); }
   });
   const unsubscribeActivity = options.subscribeActivity(() => {
     const next = options.getActivity();
@@ -167,8 +166,13 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     const contextChanged = next.observationKey !== activity.observationKey || applicationChanged;
     const folderChanged = next.cadFolderConfigured !== activity.cadFolderConfigured;
     const enteredCad = next.workspaceMode === 'cad' && activity.workspaceMode !== 'cad';
+    const coordinationChanged = next.coordination !== activity.coordination;
+    const pullChanged = next.awaitingReturn !== activity.awaitingReturn;
+    const modeChanged = next.workspaceMode !== activity.workspaceMode;
+    const nextWorking = working();
+    const workChanged = nextWorking !== wasWorking;
     activity = next;
-    wasWorking = working();
+    wasWorking = nextWorking;
     if (contextChanged) {
       // A design/instance change invalidates its status, not the add-in's
       // transport declaration. A stalled read must not restart legacy listing
@@ -178,7 +182,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       if (!(folderChanged || enteredCad || applicationChanged)) readStatus();
     }
     if (folderChanged || enteredCad || applicationChanged) wake();
-    else noteActivity();
+    else if (contextChanged || coordinationChanged || modeChanged || pullChanged || workChanged) restart();
   });
   const unsubscribeConnection = connection.subscribe((state) => {
     const next = state.fusionStatus;
@@ -211,8 +215,8 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
   };
   // The eventual Refresh command can retry a bounded failed recovery without
   // manufacturing a socket reconnect or forgetting its unresolved exact ids.
-  return Object.assign(stop, { refresh() {
+  return Object.assign(stop, { refresh(input?: { returns?: boolean }) {
     if (!active) return;
-    invalidateDeclaration(); recover(); wake();
+    invalidateDeclaration(); recover(); wake(input?.returns !== false);
   } });
 }

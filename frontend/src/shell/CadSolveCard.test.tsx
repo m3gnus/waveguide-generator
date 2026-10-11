@@ -18,7 +18,6 @@ import { jobsSocket, JobsSocketManager, type JobsWebSocketLike, type JobItem, ty
 import type { CadOperationSummary } from '../api/cadOperations';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { RECOVERED_NEGATIVE_HALF } from '../api/domainDecision.fixtures';
-import { resetCadOperationsStore } from '../stores/cadOperations';
 import { resetCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { resetSolveStageClocksForTests } from './solveProgress';
@@ -87,7 +86,7 @@ describe('CAD Solve card run status', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     currentOperation = null;
     publishJobs([]);
-    resetCadOperationsStore();
+
     resetCadReturnStore();
     resetSolveOptionsStore();
     vi.useFakeTimers();

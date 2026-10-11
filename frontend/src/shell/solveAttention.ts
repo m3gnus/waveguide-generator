@@ -167,7 +167,7 @@ export function useOperationAttention(operations: Record<string, CadOperationSum
   useEffect(() => {
     let front = false;
     for (const operation of Object.values(operations)) {
-      if (isPendingCadOperation(operation)) solveAttention.noticeOperation(operation.operationId);
+      if (operation.kind === 'prepare_and_solve' && isPendingCadOperation(operation)) solveAttention.noticeOperation(operation.operationId);
       const key = attentionKey(operation);
       const previous = seen.current.get(operation.operationId);
       seen.current.set(operation.operationId, key);

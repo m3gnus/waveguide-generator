@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadDeliveryStatus, CadOperationSummary } from '../api/cadOperations';
 import { jobsSocket, JobsSocketManager, type CadOperationListener, type JobsWebSocketLike } from '../api/jobsSocket';
 import { resetCadDeliveryHealthStore, useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
+import { cadReceiptsStore } from '../stores/cadReceipts';
 import { Shell } from './Shell';
 import type { FusionCadStatus } from '../api/cadlink';
-import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { CadDeliveryHealth, CadDeliveryHealthDataSource, deliveryHealthLines, HUNG_PASS_MS, WAITING_READ_MS } from './CadDeliveryHealth';
 import { fusionWorkflowView } from './cadWorkflowView';
@@ -15,9 +15,9 @@ import { PanelVisibilityContext, type PanelVisibility } from './panelVisibility'
 import { bindWorkspaceNavigation, publishVisiblePanels, resetWorkspaceNavigationForTests } from './workspaceNavigation';
 
 const app = vi.hoisted(() => ({ coordinatorMounted: false }));
-vi.mock('./CadLinkCoordinator', async (original) => {
-  const actual = await original<typeof import('./CadLinkCoordinator')>();
-  return { ...actual, CadLinkCoordinator: () => app.coordinatorMounted ? createElement(actual.CadLinkCoordinator) : null };
+vi.mock('./CadWorkspaceOwners', async (original) => {
+  const actual = await original<typeof import('./CadWorkspaceOwners')>();
+  return { ...actual, CadWorkspaceOwners: () => app.coordinatorMounted ? createElement(actual.CadWorkspaceOwners) : null };
 });
 vi.mock('./JobsCoordinator', async (original) => ({
   ...await original<typeof import('./JobsCoordinator')>(), JobsCoordinator: () => null,
@@ -89,7 +89,9 @@ describe('the CAD Link panel section', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     vi.useFakeTimers();
-    resetCadOperationsStore();
+    resetCadDeliveryHealthStore();
+    cadReceiptsStore.setState({ receipts: {}, intakeRefusals: [], feedback: {}, displayRetries: {}, fronted: [], cursor: 0, feedId: null });
+
     vi.spyOn(jobsSocket, 'subscribeCadOperations').mockImplementation((next) => { listener = next; return vi.fn(); });
     app.coordinatorMounted = false;
     reads = 0;
@@ -111,7 +113,7 @@ describe('the CAD Link panel section', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
-    resetCadOperationsStore();
+
   });
 
   const mount = async () => {
@@ -125,11 +127,12 @@ describe('the CAD Link panel section', () => {
     ['healthy idle', status(), ''],
   ])('the shell owns %s delivery health without the coordinator or operation store', async (_name, projection, text) => {
     resetCadDeliveryHealthStore();
+    cadReceiptsStore.setState({ receipts: {}, intakeRefusals: [], feedback: {}, displayRetries: {}, fronted: [], cursor: 0, feedId: null });
     answer = projection;
     // No coordinator mounts or subscribes. Only the shell service can deliver this projection.
     await act(async () => { root.render(<><Shell/><CadDeliveryHealth now={() => NOW}/></>); await vi.advanceTimersByTimeAsync(10); });
     expect(host.textContent).toEqual(text ? expect.stringContaining(text) : '');
-    expect(useCadOperationsStore.getState().deliveryStatus).toBeNull();
+
     await act(async () => { await vi.advanceTimersByTimeAsync(10 * WAITING_READ_MS); });
     expect(reads).toBe(2);
     await act(async () => {
@@ -158,7 +161,7 @@ describe('the CAD Link panel section', () => {
     const afterTaken = reads;
     await act(async () => { await vi.advanceTimersByTimeAsync(3 * WAITING_READ_MS); });
     expect(reads).toBe(afterTaken);
-    expect(useCadOperationsStore.getState().operations).toEqual({});
+
   });
 
   it('reads on mount and panel reveal, and not on an idle clock', async () => {
@@ -235,7 +238,7 @@ describe('the CAD Link panel section', () => {
         root.render(<><Shell/><AttentionNotices/></>);
         await vi.advanceTimersByTimeAsync(10);
       });
-      expect(jobsSocket.subscribeCadOperations).toHaveBeenCalledTimes(2);
+      expect(jobsSocket.subscribeCadOperations).toHaveBeenCalledTimes(4);
       const refusal = { operationId: 'refused', file: 'refused.json', reason: 'It does not name its kind.', at: '2026-09-21T12:00:01Z' };
       const message = (value: unknown) => socket.onmessage?.({ data: JSON.stringify(value) });
       await act(async () => {
@@ -243,7 +246,7 @@ describe('the CAD Link panel section', () => {
         message({ v: 1, kind: 'cadInboxRefusal', refusal });
         await vi.advanceTimersByTimeAsync(10);
       });
-      expect(useCadOperationsStore.getState().refusals).toEqual([refusal]);
+
       expect(useCadDeliveryHealthStore.getState().refusals).toEqual([refusal]);
       expect(useCadDeliveryHealthStore.getState().unseenRefusals).toBe(1);
       expect(host.querySelectorAll('.attention-refused')).toHaveLength(1);
@@ -277,7 +280,7 @@ describe('a refused request reaches the user in either mode', () => {
 
   beforeEach(async () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    resetCadOperationsStore();
+
     resetWorkspaceNavigationForTests();
     activations = [];
     bindWorkspaceNavigation((panel) => { activations.push(panel); publishVisiblePanels([panel]); return true; });
@@ -296,7 +299,7 @@ describe('a refused request reaches the user in either mode', () => {
 
   it('shows a notice that opens the CAD Link panel, and none before a refusal', () => {
     expect(host.querySelector('.attention-refused')).toBeNull();
-    act(() => useCadOperationsStore.getState().recordRefusal({ operationId: null, file: 'x.json', reason: 'r', at: '2026-09-21T12:00:00Z' }));
+    act(() => useCadDeliveryHealthStore.getState().mergeRefusals([{ operationId: null, file: 'x.json', reason: 'r', at: '2026-09-21T12:00:00Z' }]));
     const notice = host.querySelector<HTMLButtonElement>('.attention-refused')!;
     expect(notice.textContent).toContain('A CAD request was refused');
     act(() => notice.click());
@@ -366,11 +369,11 @@ describe('the CAD Link panel says why the listing still runs (review F5)', () =>
     [false, true],
   ])('with the add-in declaring the inbox transfer = %s, says the listing is needed = %s', async (declares, needed) => {
     const { CadCoordinationNote } = await import('./CadLinkPanel');
-    const { cadLinkCoordinatorBridge } = await import('./CadLinkCoordinator');
+    const { cadWorkspace } = await import('../stores/cadWorkspace');
     const { resetCadCoordinationForTests } = await import('../api/cadCoordination');
     resetCadCoordinationForTests('off');
-    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...cadLinkCoordinatorBridge.getSnapshot(),
+    vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
+      ...cadWorkspace.getSnapshot(),
       fusionStatus: { running: true, state: 'current', addinInboxTransfer: declares } as unknown as FusionCadStatus,
     });
     const host = document.createElement('div');

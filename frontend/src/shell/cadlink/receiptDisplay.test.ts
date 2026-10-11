@@ -7,6 +7,8 @@ import { resetSolveOptionsStore } from '../../stores/solveOptions';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { resetDesignStore, useDesignStore } from '../../stores/design';
 import { workspaceModeStore } from '../../stores/workspaceMode';
+import { restoreCadJobModel } from './restores';
+import { deferred, job, record as archivedRecord } from './selection.fixtures';
 import { createReceiptDisplay, type ReceiptDisplay } from './receiptDisplay';
 
 const NOW = Date.parse('2026-10-11T12:00:00Z');
@@ -62,12 +64,12 @@ function parametricState() {
     past: history.pastStates, future: history.futureStates };
 }
 
-describe('receipt-keyed Send display without the coordinator', () => {
-  beforeEach(() => {
+beforeEach(() => {
     sessionStorage.clear(); localStorage.clear(); resetSolveOptionsStore(); resetDocumentStore(); resetCadReturnStore(); resetDesignStore();
     importedMeshStore.clear(); workspaceModeStore.setMode('parametric');
-  });
+});
 
+describe('receipt-keyed Send display', () => {
   it('ingests and fronts a receipt with no job once across reload; a new Send fronts the same model again', async () => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
     const display = renderer();
@@ -204,9 +206,12 @@ describe('receipt-keyed Send display without the coordinator', () => {
     expect(useCadReturnStore.getState().selectedBundle).toBeNull();
     expect(display.showIngestedMesh).not.toHaveBeenCalled();
     expect(store.getState().feedback['send:1'].outcome).toBe('superseded');
+    await createReceiptDisplay(display, store, serving())(receipt(2, { sent_at: new Date(NOW + 2).toISOString() }));
+    expect(display.showIngestedMesh).toHaveBeenCalledOnce();
+    expect(store.getState().feedback['send:2'].outcome).toBe('accepted');
   });
 
-  it('fences a late listing behind a manual selection or a newer Send', async () => {
+  it.each(['manual selection', 'newer Send'] as const)('fences a late listing behind a %s', async (change) => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
     const display = renderer();
     let resolve!: (value: Response) => void;
@@ -214,12 +219,19 @@ describe('receipt-keyed Send display without the coordinator', () => {
       .mockImplementation(serving());
     const action = createReceiptDisplay(display, store, fetcher);
     const old = action(receipt(1));
-    await action(receipt(2));
+    const manual = { ...bundle, bundlePath: 'wgreturn/manual.wgreturn' };
+    if (change === 'manual selection') useCadReturnStore.getState().selectBundle(manual);
+    else await action(receipt(2));
     resolve(new Response(JSON.stringify({ items: [bundle], cadFolderConfigured: true })));
     await old;
-    expect(display.showIngestedMesh).toHaveBeenCalledOnce();
     expect(store.getState().feedback['send:1'].outcome).toBe('superseded');
-    expect(store.getState().feedback['send:2'].outcome).toBe('accepted');
+    if (change === 'manual selection') {
+      expect(display.showIngestedMesh).not.toHaveBeenCalled();
+      expect(useCadReturnStore.getState().selectedBundle).toBe(manual);
+    } else {
+      expect(display.showIngestedMesh).toHaveBeenCalledOnce();
+      expect(store.getState().feedback['send:2'].outcome).toBe('accepted');
+    }
   });
 
   it('does not let an earlier Send that settles late replace a newer Send, also across reload', async () => {
@@ -321,4 +333,72 @@ describe('receipt display review regressions', () => {
     expect(store.getState().feedback['send:1'].outcome).toBe('accepted');
     expect(parametricState()).toEqual(parametric);
   });
+});
+
+it.each(['listing revision', 'mesh edit'] as const)('displays a delayed receipt through a background %s (row 5)', async (change) => {
+  useCadReturnStore.getState().selectBundle(bundle);
+  let release!: (response: Response) => void;
+  const listing = new Promise<Response>((resolve) => { release = resolve; });
+  const rest = serving();
+  const fetcher: typeof fetch = (input, init) => String(input).endsWith('/returns') ? listing : rest(input, init);
+  const store = createCadReceiptsStore(null, () => NOW);
+  const item = receipt(); store.getState().merge({ feed_id: 'background', receipts: [item], cursor: 1, has_more: false });
+  const display = renderer(); const pending = createReceiptDisplay(display, store, fetcher)(item);
+  if (change === 'listing revision') useCadReturnStore.getState().refreshSelectedBundle({ ...bundle, modifiedAt: new Date(NOW + 1_000).toISOString() });
+  else useCadReturnStore.getState().setRigidSize(9);
+  release(new Response(JSON.stringify({ items: [bundle], cadFolderConfigured: true })));
+  await pending;
+  expect(display.showIngestedMesh).toHaveBeenCalledOnce();
+  expect(store.getState().feedback[item.receipt_id].outcome).toBe('accepted');
+});
+
+
+it('a delayed receipt yields to an archived run as soon as its restore begins (rows 5, 24)', async () => {
+  resetDocumentStore(); resetDesignStore(); resetCadReturnStore(); importedMeshStore.clear();
+  const folder = deferred<Response>(); const archive = deferred<Response>();
+  const store = createCadReceiptsStore(null, () => NOW);
+  const display = renderer();
+  const sending = createReceiptDisplay(display, store, () => folder.promise)(receipt());
+  const restoring = restoreCadJobModel(job(), renderer(), () => archive.promise);
+  folder.resolve(new Response(JSON.stringify({ items: [bundle], cadFolderConfigured: true })));
+  await sending;
+  expect(display.showIngestedMesh).not.toHaveBeenCalled();
+  expect(store.getState().feedback['send:1'].outcome).toBe('superseded');
+  archive.resolve(new Response(JSON.stringify(archivedRecord))); expect(await restoring).toBe(true);
+  expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(archivedRecord.ingest_id);
+});
+
+
+it('fronts each receipt once when session storage is blocked (row 1)', async () => {
+  const blocked: Storage = { length: 0, clear: () => undefined, key: () => null, removeItem: () => undefined,
+    getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } };
+  const store = createCadReceiptsStore(blocked, () => NOW);
+  const display = renderer();
+  const action = createReceiptDisplay(display, store, serving());
+  await action(receipt()); await action(receipt());
+  expect(display.showIngestedMesh).toHaveBeenCalledOnce();
+  await action(receipt(2)); await action(receipt(2));
+  expect(display.showIngestedMesh).toHaveBeenCalledTimes(2);
+});
+
+
+it('keeps the first Send with a tied timestamp when acceptance sequence is unavailable, also after reload (row 5)', async () => {
+  const store = createCadReceiptsStore(sessionStorage, () => NOW);
+  const display = renderer();
+  await createReceiptDisplay(display, store, serving())(receipt(1, { send_sequence: null }));
+  const reloaded = createCadReceiptsStore(sessionStorage, () => NOW);
+  await createReceiptDisplay(display, reloaded, serving())(receipt(2, { send_sequence: null }));
+  expect(display.showIngestedMesh).toHaveBeenCalledOnce();
+  expect(reloaded.getState().feedback['send:2'].outcome).toBe('superseded');
+});
+
+it('retries its own receipt with no acceptance sequence after a transient listing failure (row 7)', async () => {
+  const store = createCadReceiptsStore(null, () => NOW);
+  const display = renderer();
+  const good = serving();
+  const fetcher = vi.fn<typeof fetch>().mockRejectedValueOnce(new Error('offline')).mockImplementation(good);
+  const action = createReceiptDisplay(display, store, fetcher);
+  expect(await action(receipt(1, { send_sequence: null }))).toBe(false);
+  expect(await action(receipt(1, { send_sequence: null }))).toBe(true);
+  expect(display.showIngestedMesh).toHaveBeenCalledOnce();
 });

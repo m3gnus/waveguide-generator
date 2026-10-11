@@ -2595,6 +2595,9 @@ def mount_cadlink(application: FastAPI) -> None:
     application.include_router(router)
     application.include_router(receipts_api.router)
     application.include_router(recovery_api.router)
+    from .fusion_return import router as return_requests_router
+
+    application.include_router(return_requests_router)
     # An unlinked model's solver frame: preview and confirmation.
     from .solver_frame_api import router as solver_frame_router
 

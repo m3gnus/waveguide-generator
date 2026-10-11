@@ -18,7 +18,6 @@ import { cadJobFixture, publishCadSummary } from '../jobs/cadSolve.fixtures';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { CadOperationSummary, CadSolveSetup } from '../api/cadOperations';
 import type { SolverFrameState } from '../api/solverFrame';
-import { resetCadOperationsStore } from '../stores/cadOperations';
 import { compareSelection, provisionalResults, resultsCache } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
@@ -301,7 +300,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     useDocumentStore.getState().setDesignName('horn');
     resetDesignStore();
     resetCadReturnStore();
-    resetCadOperationsStore();
+
     resetCadSolverFrameStore();
     resetSolveOptionsStore();
     resetSolveAttentionForTests();

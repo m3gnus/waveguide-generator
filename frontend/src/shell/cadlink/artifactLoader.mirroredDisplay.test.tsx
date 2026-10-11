@@ -5,19 +5,19 @@
  * the solve mesh alike. Display only: the solve inputs are the record's.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CadReturnIngestRecord } from '../api/cadlink';
-import type { DomainDecision } from '../api/domainDecision';
+import type { CadReturnIngestRecord } from '../../api/cadlink';
+import type { DomainDecision } from '../../api/domainDecision';
 import {
   RECOVERED_HALF_WG_QUARTER,
   RECOVERED_NEGATIVE_HALF,
   REFUSED_CUT,
   WG_HALF,
-} from '../api/domainDecision.fixtures';
-import { resetCadReturnStore } from '../stores/cadReturn';
-import { workspaceModeStore } from '../stores/workspaceMode';
-import { importedMeshStore } from '../viewport/importedMeshStore';
-import type { FrameScene } from '../viewport/frameScene';
-import { showIngestedMeshInViewport, showIngestedSolverMeshInViewport } from './CadLinkCoordinator';
+} from '../../api/domainDecision.fixtures';
+import { resetCadReturnStore } from '../../stores/cadReturn';
+import { workspaceModeStore } from '../../stores/workspaceMode';
+import { importedMeshStore } from '../../viewport/importedMeshStore';
+import type { FrameScene } from '../../viewport/frameScene';
+import { showIngestedMeshInViewport, showIngestedSolverMeshInViewport } from './artifactLoader';
 
 function msh(nodes: Array<[number, number, number]>): string {
   return [

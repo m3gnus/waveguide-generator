@@ -6,7 +6,7 @@ import type { CadRealizedDimensions, CadReturnBundle, CadReturnIngestRecord } fr
 import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
 import { sharedDelayMode } from '../results/crossoverSpec';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
-import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
+import { cadWorkspace } from '../stores/cadWorkspace';
 import { CadSetupPublisher, useCadSetupPublisherStore } from '../shell/cadSetupPublisher';
 import { buildParameterPaletteEntries } from '../shell/TopBar';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
@@ -576,17 +576,17 @@ describe('ParamPanel inventory UX', () => {
         workspaceModeStore.setMode('cad');
         root.render(withQueryClient(<><CadSetupPublisher/><ParamPanel tab="simulation" /></>));
       });
-      expect(cadLinkCoordinatorBridge.getSnapshot().error).toBeNull();
+      expect(cadWorkspace.getSnapshot().error).toBeNull();
       const alert = () => host.querySelector('[data-section="Mesh detail"] [role="alert"]');
       expect(alert()).toBeNull();
       act(() => useCadReturnStore.getState().setRigidSize(6));
       await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
       expect(save).toHaveBeenCalledTimes(3);
       expect(alert()?.textContent).toBe('Settings not saved. Edit a setting to retry.');
-      expect(cadLinkCoordinatorBridge.getSnapshot().error).toBeNull();
+      expect(cadWorkspace.getSnapshot().error).toBeNull();
       // The shared selector preserves action-error precedence at both settings sites.
-      const snapshot = { ...cadLinkCoordinatorBridge.getSnapshot(), error: 'CAD action failed.' };
-      vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue(snapshot);
+      const snapshot = { ...cadWorkspace.getSnapshot(), error: 'CAD action failed.' };
+      vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue(snapshot);
       act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
       expect(alert()?.textContent).toBe('CAD action failed.');
       act(() => {
@@ -594,7 +594,7 @@ describe('ParamPanel inventory UX', () => {
       });
       const linkedAlert = () => host.querySelector('[data-section="Linked design"] [role="alert"]');
       expect(linkedAlert()?.textContent).toBe('CAD action failed.');
-      vi.mocked(cadLinkCoordinatorBridge.getSnapshot).mockReturnValue({ ...snapshot, error: null });
+      vi.mocked(cadWorkspace.getSnapshot).mockReturnValue({ ...snapshot, error: null });
       act(() => root.render(withQueryClient(<ParamPanel tab="geometry" />)));
       expect(linkedAlert()?.textContent).toBe('Settings not saved. Edit a setting to retry.');
     } finally {
@@ -603,7 +603,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('renders every moved CAD control in the Simulation rail and submits its visible crossover state', () => {
-    const ingest = vi.spyOn(cadLinkCoordinatorBridge.getSnapshot(), 'ingest').mockResolvedValue(undefined);
+    const ingest = vi.spyOn(cadWorkspace.getSnapshot(), 'ingest').mockResolvedValue(undefined);
     act(() => {
       setCadReady();
       workspaceModeStore.setMode('cad');

@@ -2,10 +2,11 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket } from '../api/jobsSocket';
-import { resetCadOperationsStore } from '../stores/cadOperations';
 import { resetCadCoordinationForTests } from '../api/cadCoordination';
 import { Shell } from './Shell';
-import { useCadSetupPublisherStore } from './cadSetupPublisher';
+import { useCadSetupPublisherStore, useCadFeedbackError } from './cadSetupPublisher';
+import { useCadConnectionStore } from '../stores/cadConnection';
+import { cadReceiptsStore } from '../stores/cadReceipts';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
@@ -15,9 +16,9 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { buildCadProjectSetup, startCadSetupPublisher } from './cadSetupPublisher';
 
 const app = vi.hoisted(() => ({ coordinatorMounted: false }));
-vi.mock('./CadLinkCoordinator', async (original) => {
-  const actual = await original<typeof import('./CadLinkCoordinator')>();
-  return { ...actual, CadLinkCoordinator: () => app.coordinatorMounted ? createElement(actual.CadLinkCoordinator) : null };
+vi.mock('./CadWorkspaceOwners', async (original) => {
+  const actual = await original<typeof import('./CadWorkspaceOwners')>();
+  return { ...actual, CadWorkspaceOwners: () => app.coordinatorMounted ? createElement(actual.CadWorkspaceOwners) : null };
 });
 vi.mock('./JobsCoordinator', async (original) => ({
   ...await original<typeof import('./JobsCoordinator')>(), JobsCoordinator: () => null,
@@ -440,9 +441,11 @@ describe('shell-owned CAD setup publisher', () => {
     resetCadPreparationStore();
     resetDocumentStore();
     resetSolveOptionsStore();
-    resetCadOperationsStore();
+
     resetCadCoordinationForTests('off');
     useCadSetupPublisherStore.setState({ error: null });
+    useCadConnectionStore.setRecoveryError(null);
+    cadReceiptsStore.setState({ recoveryError: null });
     workspaceModeStore.setMode('cad');
     app.coordinatorMounted = false;
     calls = [];
@@ -475,6 +478,18 @@ describe('shell-owned CAD setup publisher', () => {
     workspaceModeStore.setMode('parametric');
   });
   const advance = async (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  it('shows reconnect and receipt-feed recovery failures with action feedback taking precedence (rows 6, 7)', () => {
+    const Feedback = ({ error = null }: { error?: string | null }) => createElement('p', null, useCadFeedbackError(error));
+    act(() => { root.render(createElement(Feedback)); useCadConnectionStore.setRecoveryError('Reconnect failed'); });
+    expect(host.textContent).toBe('Reconnect failed');
+    act(() => { root.render(createElement(Feedback, { error: 'Action failed' })); });
+    expect(host.textContent).toBe('Action failed');
+    act(() => { root.render(createElement(Feedback)); useCadConnectionStore.setRecoveryError(null); cadReceiptsStore.setState({ recoveryError: 'offline' }); });
+    expect(host.textContent).toContain('could not check Fusion Sends (offline)');
+    act(() => { cadReceiptsStore.setState({ recoveryError: null }); });
+    expect(host.textContent).toBe('');
+  });
+
   const mount = async () => act(async () => { root.render(createElement(Shell)); await vi.advanceTimersByTimeAsync(10); });
 
   it('mounts without the coordinator and publishes only deliberate edits, retrying and flushing the correct project', async () => {

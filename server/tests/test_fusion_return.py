@@ -263,3 +263,23 @@ def test_return_outcomes_use_the_documented_tighter_future_tolerance(tmp_path, s
     _report(tmp_path, updatedAt=(datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat())
     assert read_return_request(tmp_path, store, request_id)['state'] == state
     store.close()
+
+
+def test_production_cadlink_mount_exposes_exact_file_return_outcome(tmp_path):
+    from fastapi.testclient import TestClient
+    from server.app import create_app
+
+    app = create_app(data_dir=tmp_path)
+    store, _path, request_id = _request(tmp_path)
+    _report(tmp_path)
+    app.state.cadlink_store = store
+    # No lifespan or live session is needed to read this file outcome.
+    client = TestClient(app, base_url="http://127.0.0.1")
+    try:
+        response = client.get(f"/api/cadlink/return-requests/{request_id}")
+        assert response.status_code == 200
+        assert response.json()["state"] == "rejected"
+        assert client.get("/api/cadlink/return-requests/unknown").status_code == 404
+    finally:
+        client.close()
+        store.close()

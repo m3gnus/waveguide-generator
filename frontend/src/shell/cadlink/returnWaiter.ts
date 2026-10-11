@@ -23,7 +23,7 @@ export interface CadReturnWaiterOptions {
   readFusionStatus?: () => Promise<CadConnectionStatus>;
   selectedInstanceId?: () => string | null;
   readOutcome?: (requestId: string, signal: AbortSignal) => Promise<FusionReturnOutcome>;
-  /** Select and display through the S5-4 arrival actions at cut-over. By
+  /** Select and display through the shared arrival actions. By
    * default selection keeps compatible settings and enters the CAD workspace. */
   onArrival?: (bundle: CadReturnBundle) => void;
   noteCadActivity?: () => void;
@@ -31,7 +31,7 @@ export interface CadReturnWaiterOptions {
 export const FUSION_RETURN_TIMEOUT_MS = 60_000;
 const POLL_MS = 2_500;
 
-/** Deliberate file-transport command, built beside the coordinator for S5-7.
+/** Deliberate file-transport command.
  * The returns listing is authoritative geometry evidence: only a readable
  * item carrying this request id completes a pull. Adapter acceptance alone
  * never completes it. No operation store or live-session client is required. */
@@ -41,6 +41,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
   const store = createStore(() => ({
     pullingFromFusion: false, requestId: null as string | null,
     error: null as string | null, status: null as string | null,
+    errorDiagnostics: null as { message: string; detail: string } | null,
   }));
   const selectedInstance = options.selectedInstanceId
     ?? (() => connection.getState().fusionStatus?.selectedInstanceId ?? null);
@@ -48,6 +49,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
     `/api/cadlink/return-requests/${encodeURIComponent(id)}`, { signal }, fetcher,
   ));
   let active = true;
+  const reconciled = new Set<string>();
   let pending: {
     promise: Promise<CadReturnBundle>;
     requestId: string | null;
@@ -87,18 +89,22 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
         if (controller.signal.aborted || pending !== operation || !operation.current()) return;
         returned = page.items.find((item) => item.readable && item.requestId === id);
         if (!returned) return;
+        reconciled.add(id);
         if (returnBelongsToAnotherProject(returned, useDocumentStore.getState().identity?.designId)) {
           operation.finish(null, new Error(`Received ${returned.documentName ?? returned.name}, but it belongs to another CAD-linked project. Open that project from File → CAD-linked designs.`));
         } else operation.finish(returned);
       }).catch(() => undefined);
       const answer = readOutcome(id, controller.signal).then(async (outcome) => {
+        if (outcome.requestId === id && !controller.signal.aborted) reconciled.add(id);
         // Give a listing already in hand precedence over adapter diagnostics.
         await Promise.resolve();
         if (controller.signal.aborted || pending !== operation || !operation.current() || returned) return;
         if (outcome.requestId === id && ['rejected', 'cancelled', 'failed'].includes(outcome.state)) {
           const presented = presentCadRefusal(outcome.message);
-          operation.finish(null, new Error(presented ? refusalSentence(presented)
-            : `Fusion ${outcome.state === 'cancelled' ? 'did not carry out' : 'refused'} the request for this model’s geometry, and reported no detail.`));
+          const sentence = presented ? refusalSentence(presented)
+            : `Fusion ${outcome.state === 'cancelled' ? 'did not carry out' : 'refused'} the request for this model’s geometry, and reported no detail.`;
+          if (presented) store.setState({ errorDiagnostics: { message: sentence, detail: presented.diagnostics } });
+          operation.finish(null, new Error(sentence));
         }
       }).catch(() => undefined);
       await Promise.race([Promise.all([listing, answer]), aborted,
@@ -137,6 +143,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
     let reject!: (error: Error) => void;
     const promise = new Promise<CadReturnBundle>((yes, no) => { resolve = yes; reject = no; });
     const stops: Array<() => void> = [];
+    const commandAbort = new AbortController();
     const operation = {
       promise, requestId: null as string | null,
       current: (): boolean => {
@@ -151,7 +158,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
         if (!contextCurrent()) { returned = null; error = undefined; }
         // Clear before selection, callbacks and promise settlement. Reentrant
         // manual picks and duplicate reads cannot settle this operation twice.
-        pending = null; reading = null; readingAbort?.abort(); readingAbort = null;
+        pending = null; commandAbort.abort(); reading = null; readingAbort?.abort(); readingAbort = null;
         clearTimers(); stops.forEach((stop) => stop());
         store.setState({ pullingFromFusion: false, requestId: null });
         if (returned) {
@@ -179,7 +186,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
       },
     };
     pending = operation;
-    store.setState({ pullingFromFusion: true, requestId: null, error: null, status: null });
+    store.setState({ pullingFromFusion: true, requestId: null, error: null, status: null, errorDiagnostics: null });
     const changed = () => { operation.current(); };
     stops.push(useCadReturnStore.subscribe(changed), useDesignStore.subscribe(changed),
       useDocumentStore.subscribe(changed), connection.subscribe(changed), subscribeRevision(changed));
@@ -189,10 +196,10 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
     options.noteCadActivity?.();
     void (async () => {
       try {
-        const status = await connection.readCommand(options.readFusionStatus ?? (() => getFusionCadStatus(
+        const status = await connection.readCommand(options.readFusionStatus ?? ((signal) => getFusionCadStatus(
           useDesignStore.getState().design, identity,
-          useCadReturnStore.getState().selectedBundle?.bundlePath ?? null, fetcher, instance,
-        )));
+          useCadReturnStore.getState().selectedBundle?.bundlePath ?? null, (input, init) => fetcher(input, { ...init, signal }), instance,
+        )), commandAbort.signal);
         if (!operation.current()) return;
         expectedInstance = selectedInstance(); requesting = true;
         if (!identity?.designId || !status?.documentId || !status.link
@@ -217,6 +224,11 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
   };
   return Object.assign(store, {
     pullFromFusion, refresh,
+    async reconcile(ids: readonly string[]): Promise<ReadonlySet<string>> {
+      ids.forEach((id) => reconciled.delete(id));
+      await refresh();
+      return new Set(ids.filter((id) => reconciled.has(id)));
+    },
     awaitedRequestIds: () => pending?.requestId ? [pending.requestId] : [],
     supersede() { pending?.finish(null); },
     dispose() { pending?.finish(null); active = false; clearTimers(); },

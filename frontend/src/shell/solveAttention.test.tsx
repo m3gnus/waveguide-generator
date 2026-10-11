@@ -5,11 +5,10 @@ import { cadJobFixture, publishCadJobs, publishCadSummary } from '../jobs/cadSol
 import { useCadJobs } from '../jobs/cadSolve';
 import type { CadOperationSummary } from '../api/cadOperations';
 import type { FusionCadStatus } from '../api/cadlink';
-import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
 import { resetCadReturnStore } from '../stores/cadReturn';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { AttentionNotices, cadSourceLine } from './TopBar';
-import { operationNeedsUser, resetSolveAttentionForTests, solveAttention, useJobAttention, useOperationAttention } from './solveAttention';
+import { operationNeedsUser, resetSolveAttentionForTests, solveAttention, useJobAttention } from './solveAttention';
 import {
   bindWorkspaceNavigation,
   navigationGeneration,
@@ -38,7 +37,7 @@ const waiting = (id: string, overrides: Partial<CadOperationSummary> = {}) => op
 
 function Attention() {
   useJobAttention(useCadJobs());
-  useOperationAttention(useCadOperationsStore((state) => state.operations));
+
   return <AttentionNotices/>;
 }
 
@@ -122,7 +121,7 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     resetSolveAttentionForTests();
     resetWorkspaceNavigationForTests();
     publishCadJobs([]);
-    resetCadOperationsStore();
+
     resetCadReturnStore();
     activations = [];
     bindWorkspaceNavigation((panel) => {

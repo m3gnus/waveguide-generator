@@ -12,10 +12,12 @@ import type { SolvedModelDisplay } from './solvedModel';
  */
 export interface ReceiptDisplay extends SolvedModelDisplay {
   enterCadWorkspace(): void;
+  isActive?(): boolean;
+  refuseAutomaticRestore?(): void;
   manualSelectionAt?(): number | null;
 }
 
-/** Receipt-keyed Send display, ready for S5-7 to mount beside the feed.
+/** Receipt-keyed Send display mounted beside the feed.
  * True means displayed or explicitly reported; false keeps a transient failure
  * pending. The receipt store persists this distinction across reloads.
  */
@@ -25,6 +27,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
   let newestSequence = store.getState().newestSequence;
   let newestSentAt = store.getState().newestSentAt;
   let newestCursor = 0;
+  let newestReceiptId: string | null = null;
   const inFlight = new Map<string, Promise<boolean>>();
   const report = (receipt: CadReceipt, outcome: ReceiptFeedback['outcome'], message: string) => {
     store.getState().report(receipt.receipt_id, { outcome, message });
@@ -35,36 +38,42 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       newestSequence = store.getState().newestSequence;
       newestSentAt = store.getState().newestSentAt;
       newestCursor = 0;
+      newestReceiptId = null;
     }
     const receiptFeed = feedId;
     const name = receipt.document_name ?? 'the model Fusion sent';
     if (receipt.outcome === 'refused') {
+      display.refuseAutomaticRestore?.();
       report(receipt, 'refused', `Fusion sent ${name}, but WG could not take it: ${receipt.message ?? receipt.reason ?? 'refused'}`);
       display.enterCadWorkspace();
       return true;
     }
     const sentAt = Date.parse(receipt.sent_at);
     if ((receipt.send_sequence !== null && receipt.send_sequence < newestSequence)
-      || (receipt.send_sequence === null && sentAt < newestSentAt)) {
+      || (receipt.send_sequence === null && (sentAt < newestSentAt
+        || (sentAt === newestSentAt && receipt.receipt_id !== newestReceiptId)))) {
       report(receipt, 'superseded', `Received ${name}; a newer Send stays selected.`);
       return true;
     }
     newestSequence = Math.max(newestSequence, receipt.send_sequence ?? 0);
     newestSentAt = Math.max(newestSentAt, sentAt);
     newestCursor = receipt.cursor;
+    newestReceiptId = receipt.receipt_id;
     const document = useDocumentStore.getState();
+    const choice = useCadReturnStore.getState().captureModelChoice();
+    let phase: 'listing' | 'ingest' | 'display' = 'listing';
     let generation = useCadReturnStore.getState().beginIngestIntent();
-    const baselineViewport = importedMeshStore.beginIntent();
-    const current = () => store.getState().feedId === receiptFeed && receipt.cursor === newestCursor
+    let baselineViewport = importedMeshStore.beginIntent();
+    const current = () => display.isActive?.() !== false && store.getState().feedId === receiptFeed && receipt.cursor === newestCursor
       && useDocumentStore.getState().identity === document.identity
-      && useCadReturnStore.getState().isCurrentIngestIntent(generation)
-      && importedMeshStore.isCurrentGeneration(baselineViewport);
+      && useCadReturnStore.getState().isCurrentModelChoice(choice)
+      && (phase === 'listing' || (useCadReturnStore.getState().isCurrentIngestIntent(generation)
+        && importedMeshStore.isCurrentGeneration(baselineViewport)));
     const superseded = () => {
       if (store.getState().feedId !== receiptFeed) return true;
       report(receipt, 'superseded', `Received ${name}; your newer selection stays on screen.`);
       return true;
     };
-    let phase: 'listing' | 'ingest' | 'display' = 'listing';
     let transportFailed = false;
     const transport: typeof fetch = async (...args) => {
       try { return await fetcher(...args); } catch (error) { transportFailed = true; throw error; }
@@ -77,6 +86,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       if (!current()) return superseded();
       const bundle = listing.items.find((item) => item.bundlePath === receipt.bundle_path);
       if (!bundle || !bundle.readable) {
+        display.refuseAutomaticRestore?.();
         const outcome = !listing.cadFolderConfigured ? 'retained_copy' : bundle ? 'unreadable' : 'missing_source';
         report(receipt, outcome, outcome === 'unreadable'
           ? `Received ${name}, but its WGLink folder entry is unreadable: ${bundle?.reason ?? 'could not read the model'}. Send it again from Fusion.`
@@ -87,6 +97,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
         return true;
       }
       if (returnBelongsToAnotherProject(bundle, document.identity?.designId)) {
+        display.refuseAutomaticRestore?.();
         report(receipt, 'refused', `Received ${name}, but it belongs to another CAD-linked project. Open that project from File → CAD-linked designs.`);
         display.enterCadWorkspace();
         return true;
@@ -97,6 +108,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       useCadReturnStore.getState().selectArrivedBundle(bundle, receipt.project_id);
       const selected = useCadReturnStore.getState();
       generation = selected.beginIngestIntent();
+      baselineViewport = importedMeshStore.beginIntent();
       const skipped = new Set(selected.skippedSourceIds);
       phase = 'ingest';
       const record = await ingestReturn({

@@ -15,7 +15,7 @@ import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { cadJobFixture, publishCadJobs } from '../jobs/cadSolve.fixtures';
 import { jobsSocket } from '../api/jobsSocket';
-import { useCadOperationsStore } from '../stores/cadOperations';
+import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
 
 const coordinator = vi.hoisted(() => ({
   solveOperation: vi.fn(async () => undefined),
@@ -23,13 +23,13 @@ const coordinator = vi.hoisted(() => ({
   dismissOperation: vi.fn(async () => undefined),
   solveOperationWithSettings: vi.fn(async () => undefined),
 }));
-vi.mock('./CadLinkCoordinator', () => {
+vi.mock('../stores/cadWorkspace', () => {
   const snapshot = {
     ...coordinator,
     reconcileOperation: vi.fn(), reportError: vi.fn(),
     fusionStatus: null,
   };
-  return { cadLinkCoordinatorBridge: { getSnapshot: () => snapshot, subscribe: () => () => undefined } };
+  return { cadWorkspace: { getSnapshot: () => snapshot, subscribe: () => () => undefined } };
 });
 vi.mock('./CadSolveInputs', () => ({ CadSolveInputs: () => null }));
 vi.mock('./CadProjectPanel', () => ({ openCadProject: vi.fn() }));
@@ -67,7 +67,7 @@ function stubBackend(approvals: Array<{ preparation_id: string; finding_id: stri
 let reviewIds: string[] = [FINDING];
 let reviewApprovals: Array<{ preparation_id: string; finding_id: string }> = [];
 function setRequests({ operations }: { operations: Record<string, CadOperationSummary> }): void {
-  useCadOperationsStore.setState({ operations: Object.fromEntries(Object.entries(operations).filter(([, item]) => item.kind !== 'prepare_and_solve')) });
+  cadRecoveryNoticesStore.setState({ notices: Object.fromEntries(Object.values(operations).filter((item) => item.state === 'recovery_required').map((item) => [item.operationId, { id: item.operationId, kind: item.kind as 'insert_link' | 'update_link', document_id: null, document_name: item.snapshot?.documentName ?? null, created_at: item.createdAt ?? '', sequence: 1, active_document: false }])) });
   publishCadJobs(Object.values(operations).filter((item) => item.kind === 'prepare_and_solve').map((item) => {
     const job = cadJobFixture(item);
     if (job.cad_state?.preparation) job.cad_state.preparation.blocking_finding_ids = reviewIds;

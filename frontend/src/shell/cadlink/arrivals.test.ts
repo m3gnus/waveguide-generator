@@ -6,8 +6,7 @@ import { resetDocumentStore, useDocumentStore } from '../../stores/document';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { createCadArrivalActions, createCadReturnArrivalReader, SupersededError } from './arrivals';
-import { restoreCadJobModel } from './restores';
-import { bundle, deferred, job, json, mesh, record, send } from './selection.fixtures';
+import { bundle, deferred, json, mesh, record } from './selection.fixtures';
 
 const newer = { ...bundle, name: 'new.wgreturn', bundlePath: 'wgreturn/new.wgreturn' };
 
@@ -86,32 +85,6 @@ describe('selection actions without the coordinator', () => {
     expect(items).not.toHaveBeenCalled();
   });
 
-  it.each(['success', 'error'] as const)('drops a delayed Send listing %s after a manual pick', async (outcome) => {
-    const pending = deferred<Response>();
-    const status = vi.fn();
-    const actions = createCadArrivalActions({ setStatus: status }, (() => pending.promise) as typeof fetch);
-    const first = actions.displaySend(send());
-    await Promise.resolve(); await Promise.resolve();
-    actions.selectBundleAs(newer);
-    const before = status.mock.calls.length;
-    pending.resolve(outcome === 'success' ? json({ cadFolderConfigured: true, items: [bundle] }) : json({}, 500));
-    await first;
-    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(newer.bundlePath);
-    expect(status).toHaveBeenCalledTimes(before + 1);
-    expect(status.mock.calls.at(-1)?.[0]).toContain('newer model selection');
-  });
-
-  it('orders recovered Send displays by acceptance sequence', async () => {
-    const pending = deferred<Response>(); let reads = 0;
-    const actions = createCadArrivalActions({}, (async () => ++reads === 1 ? pending.promise
-      : json({ cadFolderConfigured: true, items: [newer] })) as typeof fetch);
-    const first = actions.displaySend(send(bundle.bundlePath, 1));
-    await Promise.resolve(); await Promise.resolve();
-    await actions.displaySend(send(newer.bundlePath, 2));
-    pending.resolve(json({ cadFolderConfigured: true, items: [bundle] })); await first;
-    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(newer.bundlePath);
-  });
-
   it('keeps settings for a compatible arrival and resets a changed inventory', async () => {
     let listed = bundle;
     const reader = createCadReturnArrivalReader({}, (async () => json({ cadFolderConfigured: true, items: [listed] })) as typeof fetch);
@@ -127,7 +100,7 @@ describe('selection actions without the coordinator', () => {
     expect(useCadReturnStore.getState().rigidSizeMm).toBe(4);
   });
 
-  it('refuses a foreign arrival and recovered Send without replacing design or undo history', async () => {
+  it('refuses a foreign arrival without replacing design or undo history', async () => {
     useDocumentStore.getState().setCadLink({ designId: 'wgd_open', lineageId: 'wgl_open', baseEditVersion: 1 }, 'current');
     useDesignStore.getState().updateField('R', 321);
     const design = useDesignStore.getState(); const identity = useDocumentStore.getState().identity;
@@ -135,7 +108,6 @@ describe('selection actions without the coordinator', () => {
     const fetcher = (async () => json({ cadFolderConfigured: true, items: [foreign] })) as typeof fetch;
     const error = vi.fn();
     await createCadReturnArrivalReader({ setError: error }, fetcher).refresh({ autoOpenNew: true });
-    await createCadArrivalActions({ setError: error }, fetcher).displaySend(send());
     expect(error).toHaveBeenCalled();
     expect(useCadReturnStore.getState().selectedBundle).toBeNull();
     expect(useDesignStore.getState()).toBe(design);
@@ -189,59 +161,6 @@ describe('selection actions without the coordinator', () => {
   });
 });
 
-it.each(['refresh', 'listing'] as const)('keeps an archived run opened during a Send %s', async (wait) => {
-  const pending = deferred<Response>(); const refreshing = deferred<void>(); const listed = vi.fn();
-  const status = vi.fn();
-  const actions = createCadArrivalActions({
-    setStatus: status,
-    refresh: wait === 'refresh' ? () => refreshing.promise : async () => undefined,
-  }, (async () => { listed(); return pending.promise; }) as typeof fetch);
-  const first = actions.displaySend(send());
-  if (wait === 'listing') await vi.waitFor(() => expect(listed).toHaveBeenCalledOnce());
-  expect(await restoreCadJobModel(job(), {}, (async (input: RequestInfo | URL) =>
-    String(input).endsWith('/viewport-mesh') ? new Response(mesh) : json(record)) as typeof fetch)).toBe(true);
-  refreshing.resolve(); pending.resolve(json({ cadFolderConfigured: true, items: [bundle] }));
-  await first;
-  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe('');
-  expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
-  expect(status.mock.calls.at(-1)?.[0]).toContain('newer model selection');
-  if (wait === 'refresh') expect(listed).not.toHaveBeenCalled();
-});
-
-it('displays a Send after its own refresh automatically selects a listing entry', async () => {
-  let reads = 0;
-  const fetcher = (async () => json({ cadFolderConfigured: true, items: ++reads === 1 ? [newer] : [newer, bundle] })) as typeof fetch;
-  const reader = createCadReturnArrivalReader({}, fetcher);
-  await createCadArrivalActions({ refresh: reader.refresh }, fetcher).displaySend(send());
-  expect(reads).toBe(2);
-  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
-});
-
-it('keeps a newer archive choice even while its record is still loading', async () => {
-  const refreshing = deferred<void>(); const archive = deferred<Response>();
-  const listed = vi.fn(async () => json({ cadFolderConfigured: true, items: [bundle] }));
-  const sendDisplay = createCadArrivalActions({ refresh: () => refreshing.promise }, listed).displaySend(send());
-  const archiveDisplay = restoreCadJobModel(job(), {}, (async (input: RequestInfo | URL) =>
-    String(input).endsWith('/viewport-mesh') ? new Response(mesh) : archive.promise) as typeof fetch);
-  refreshing.resolve(); await sendDisplay;
-  expect(listed).not.toHaveBeenCalled();
-  archive.resolve(json(record)); expect(await archiveDisplay).toBe(true);
-  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe('');
-});
-
-it.each(['listing revision', 'mesh edit'] as const)(
-  'displays a delayed Send through a background %s', async (change) => {
-    const state = useCadReturnStore.getState(); state.selectBundle(newer);
-    const pending = deferred<Response>(); const listed = vi.fn();
-    const actions = createCadArrivalActions({}, (async () => { listed(); return pending.promise; }) as typeof fetch);
-    const first = actions.displaySend(send());
-    await vi.waitFor(() => expect(listed).toHaveBeenCalledOnce());
-    if (change === 'listing revision') state.refreshSelectedBundle({ ...newer, modifiedAt: '2026-08-14T00:00:00Z' });
-    else state.setRigidSize(9);
-    pending.resolve(json({ cadFolderConfigured: true, items: [bundle] })); await first;
-    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
-  },
-);
 
 it.each(['listing revision', 'mesh edit'] as const)(
   'accepts a listing through a background %s', async (change) => {
@@ -287,4 +206,34 @@ it.each(['design identity', 'instance'] as const)('fences an Onshape return afte
   expect(useCadReturnStore.getState().selectedBundle).toBeNull();
   expect(useCadReturnStore.getState().ingestRecord).toBeNull();
   expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+});
+
+it('retains prepared native geometry when the Fusion listing has no matching return (row 5)', async () => {
+  const native = { ...bundle, bundleOrigin: 'native' as const };
+  useCadReturnStore.getState().selectBundle(native);
+  const generation = useCadReturnStore.getState().beginIngestIntent();
+  useCadReturnStore.getState().applyIngest(record, generation);
+  const before = useCadReturnStore.getState().ingestRecord;
+  const reader = createCadReturnArrivalReader({}, async () => json({ cadFolderConfigured: true, items: [] }));
+  await reader.refresh({ background: true, autoOpenNew: true });
+  expect(useCadReturnStore.getState().selectedBundle).toBe(native);
+  expect(useCadReturnStore.getState().ingestRecord).toBe(before);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+});
+
+
+it('rebuilds a workspace return explicitly against WGLink rather than the Onshape area (row 26)', async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    if (String(input).endsWith('/ingest')) {
+      requests.push(JSON.parse(String(init?.body)));
+      return json(record);
+    }
+    return new Response(mesh);
+  };
+  const actions = createCadArrivalActions({}, fetcher);
+  actions.selectBundleAs(bundle);
+  await actions.ingestSelected();
+  expect(requests).toHaveLength(1);
+  expect(requests[0].bundleOrigin).toBe('wglink');
 });

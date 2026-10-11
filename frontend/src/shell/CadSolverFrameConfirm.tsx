@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { confirmSolverFrame, type SolverFrameState } from '../api/solverFrame';
-import { useCadOperationsStore } from '../stores/cadOperations';
+import { cadJobSummaries, useCadJobs } from '../jobs/cadSolve';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { parseMSH, type ParsedMSH } from '../viewport/mshParser';
 import {
@@ -163,7 +163,8 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
   const [switchError, setSwitchError] = useState<string | null>(null);
   // Each time a solve of this snapshot stops at the frame gate -- a frame
   // changed elsewhere, say -- the card reads the frame again and shows it.
-  const frameGate = useCadOperationsStore((state) => Object.values(state.operations)
+  const jobs = useCadJobs();
+  const frameGate = Object.values(cadJobSummaries(jobs))
     .filter((operation) => operation.kind === 'prepare_and_solve'
       && operation.state === 'needs_user_input'
       && operation.reason === 'frame_confirmation_required'
@@ -171,7 +172,7 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
       && operation.snapshot?.manifestSha256 === manifestSha256)
     .map((operation) => `${operation.operationId}:${operation.attemptGeneration}:${operation.updatedAt ?? ''}`)
     .sort()
-    .join('|'));
+    .join('|');
   useEffect(() => { void load(ingestId, fetcher); }, [fetcher, frameGate, ingestId, load]);
   // The run line's "Change" (an automatic axis) opens this same chooser.
   // Opened this way, the chooser confirms the axis picked (a Fusion Solve

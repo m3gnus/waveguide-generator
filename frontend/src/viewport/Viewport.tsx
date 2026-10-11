@@ -15,7 +15,8 @@ import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { cadLinkCoordinatorBridge, showIngestedMeshInViewport, showIngestedSolverMeshInViewport } from '../shell/CadLinkCoordinator';
+import { cadWorkspace } from '../stores/cadWorkspace';
+import { showIngestedMeshInViewport, showIngestedSolverMeshInViewport } from '../shell/cadlink/artifactLoader';
 import { Icon } from '../shell/icons';
 import { readChartTokens } from '../results/EChart';
 import { useViewerPreferences, viewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
@@ -368,7 +369,7 @@ export function Viewport() {
   const cadRecord = useCadReturnStore((state) => state.ingestRecord);
   const cadBundleReadable = useCadReturnStore((state) => state.selectedBundle?.readable === true);
   const cadName = useCadReturnStore((state) => state.selectedBundle?.documentName ?? state.selectedBundle?.name ?? 'CAD Link');
-  const cadCoordinator = useSyncExternalStore(cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot);
+  const cadWorkspaceView = useSyncExternalStore(cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot);
   const theme = useViewportTheme();
   const preferences = useViewerPreferences();
   const cadApplication = cadApplicationName(usePreferences().cadApplication);
@@ -377,8 +378,8 @@ export function Viewport() {
   const cadEmpty = cadViewportEmptyCopy({
     bundleName: cadName,
     bundleReadable: cadBundleReadable,
-    ingesting: cadCoordinator.ingesting,
-    ingestError: cadCoordinator.ingestError,
+    ingesting: cadWorkspaceView.ingesting,
+    ingestError: cadWorkspaceView.ingestError,
     cadApplication,
   });
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
@@ -747,7 +748,7 @@ export function Viewport() {
     void showIngestedMeshInViewport(
       cadRecord,
       cadName,
-      (notice) => cadLinkCoordinatorBridge.getSnapshot().reportViewportNotice(notice),
+      (notice) => cadWorkspace.getSnapshot().reportViewportNotice(notice),
       fetch,
       generation,
     );
@@ -978,7 +979,7 @@ export function Viewport() {
         : importedMesh?.name ?? (workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
       <span>{importedMesh
         ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
-        : workspaceMode === 'cad' ? (cadCoordinator.ingesting && cadBundleReadable ? `Preparing ${cadName}…` : cadCoordinator.ingestError && cadBundleReadable ? 'CAD preparation failed' : 'No ingested CAD viewport mesh') : viewportSubtitle(design)}</span>
+        : workspaceMode === 'cad' ? (cadWorkspaceView.ingesting && cadBundleReadable ? `Preparing ${cadName}…` : cadWorkspaceView.ingestError && cadBundleReadable ? 'CAD preparation failed' : 'No ingested CAD viewport mesh') : viewportSubtitle(design)}</span>
     </div>
     <div className="viewport-live">
       {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}

@@ -1,5 +1,5 @@
 import { parseExteriorTransducer } from '../../stores/exteriorTransducer';
-import { useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
+import { useEffect, useRef, type MutableRefObject } from 'react';
 import { CadLinkApiError, getIngest, listReturns, type CadReturnBundle, type CadReturnIngestRecord } from '../../api/cadlink';
 import type { CadSetup, JobItem } from '../../api/jobsSocket';
 import { cadProjectName, listCadProjects, newestReturnForProject } from '../../api/cadProjects';
@@ -320,8 +320,8 @@ export interface UseCadRestoresOptions {
   returnListRequest: MutableRefObject<number>;
   seenReturnRevisions: MutableRefObject<Map<string, string> | null>;
   selectBundleRef: MutableRefObject<(bundle: CadReturnBundle, projectLineageId?: string | null) => void>;
-  setError: Dispatch<SetStateAction<string | null>>;
-  setStatus: Dispatch<SetStateAction<string | null>>;
+  setError(value: string | null): void;
+  setStatus(value: string | null): void;
 }
 
 /** Own project-load reactions and remembered-project reopening. */

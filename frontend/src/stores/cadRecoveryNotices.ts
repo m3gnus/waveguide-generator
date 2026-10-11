@@ -8,7 +8,6 @@ import { jobsSocket, type JobItem, type JobsSocketManager } from '../api/jobsSoc
 import { cadJobSummary, latestCadJobs, dismissCadJob } from '../jobs/cadSolve';
 import { useCadDeliveryHealthStore } from './cadDeliveryHealth';
 import { useCadConnectionStore, type CadConnectionStore } from './cadConnection';
-import { claimCadRecoveryError } from './cadOperations';
 
 export type CadRecoveryNotice = components['schemas']['RecoveryNotice'];
 type NoticePage = components['schemas']['RecoveryNoticesResponse'];
@@ -17,6 +16,7 @@ export interface CadRecoveryNoticesState {
   recoveryError: string | null;
   load(fetcher?: typeof fetch): Promise<void>;
   dismiss(id: string, fetcher?: typeof fetch): Promise<void>;
+  fence(): void;
   setRecoveryError(message: string | null): void;
 }
 export type CadRecoveryNoticesStore = StoreApi<CadRecoveryNoticesState>;
@@ -29,6 +29,7 @@ export function createCadRecoveryNoticesStore(): CadRecoveryNoticesStore {
   const pending = new Map<string, Promise<void>>();
   const store = createStore<CadRecoveryNoticesState>((set, get) => ({
     notices: {}, recoveryError: null,
+    fence() { generation += 1; },
     setRecoveryError(message) {
       set({ recoveryError: message });
       useCadDeliveryHealthStore.setState({ recoveryError: message });
@@ -75,7 +76,7 @@ export function useCadRecoveryNotices<T>(selector: (state: CadRecoveryNoticesSta
   return useStore(cadRecoveryNoticesStore, selector);
 }
 
-/** Built beside the coordinator. S5-7 mounts this on the existing jobs channel;
+/** Mounted on the existing jobs channel;
  * pushes wake an authoritative read, never manufacture a recovery outcome. */
 export function connectCadRecoveryNotices(
   manager: Pick<JobsSocketManager, 'subscribeCadOperations'> = jobsSocket,
@@ -83,7 +84,6 @@ export function connectCadRecoveryNotices(
   fetcher: typeof fetch = fetch,
   connection: Pick<CadConnectionStore, 'subscribe'> = useCadConnectionStore,
 ): () => void {
-  const releaseRecoveryError = claimCadRecoveryError();
   useCadDeliveryHealthStore.setState({ recoveryError: store.getState().recoveryError });
   let active = true;
   let reading = false;
@@ -110,7 +110,7 @@ export function connectCadRecoveryNotices(
   read();
   return () => {
     if (!active) return;
-    active = false; unsubscribe(); stopConnection(); releaseRecoveryError();
+    active = false; store.getState().fence(); unsubscribe(); stopConnection();
   };
 }
 
@@ -132,14 +132,11 @@ function recoverySummary(notice: CadRecoveryNotice): CadOperationSummary {
   };
 }
 
-/** One request view joins jobs and recovery notices; it has no coordinator
- * dependency. Legacy inputs preserve today's section until the S5-7 cut-over. */
-export function selectCadRequests({ jobs, notices, record, recoveryOperations = {}, reportedRecovery = null }: {
+/** One request view joins jobs and authoritative recovery notices. */
+export function selectCadRequests({ jobs, notices, record }: {
   jobs: JobItem[];
-  notices?: Record<string, CadRecoveryNotice>;
+  notices: Record<string, CadRecoveryNotice>;
   record: CadReturnIngestRecord | null;
-  recoveryOperations?: Record<string, CadOperationSummary>;
-  reportedRecovery?: string | null;
 }): { current: CadRequest[]; earlier: CadRequest[] } {
   const requests: CadRequest[] = latestCadJobs(jobs).flatMap((job) => {
     const operation = cadJobSummary(job);
@@ -149,15 +146,7 @@ export function selectCadRequests({ jobs, notices, record, recoveryOperations = 
       openable: operation.state === 'needs_user_input' && operation.reason === 'setup_required' && Boolean(operation.snapshot?.projectLineageId) }];
   });
   const recovery = new Map<string, CadRequest>();
-  // A supplied notice listing is authoritative, including an empty listing.
-  // Never fill its settled/dismissed absences from transitional operations.
-  if (notices === undefined) Object.values(recoveryOperations).forEach((operation) => {
-    if (operation.state === 'recovery_required' && ['insert_link', 'update_link'].includes(operation.kind)) {
-      recovery.set(operation.operationId, { id: operation.operationId, source: 'recovery', operation,
-        onScreen: operation.operationId === reportedRecovery, openable: false });
-    }
-  });
-  Object.values(notices ?? {}).forEach((notice) => recovery.set(notice.id, {
+  Object.values(notices).forEach((notice) => recovery.set(notice.id, {
     id: notice.id, source: 'recovery', notice, operation: recoverySummary(notice), onScreen: notice.active_document, openable: false,
   }));
   // Preserve the parent's stable input order on timestamp ties: operations

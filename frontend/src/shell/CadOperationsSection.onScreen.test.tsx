@@ -12,7 +12,7 @@ import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { cadJobFixture, publishCadJobs } from '../jobs/cadSolve.fixtures';
 import { jobsSocket } from '../api/jobsSocket';
-import { useCadOperationsStore } from '../stores/cadOperations';
+import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
 
 const coordinator = vi.hoisted(() => ({
   solveOperation: vi.fn(async () => undefined),
@@ -23,8 +23,8 @@ const coordinator = vi.hoisted(() => ({
   reportError: vi.fn(),
   fusionStatus: null as null | { documentName: string | null; recoveryRequired: { operationId: string; phase: string } | null },
 }));
-vi.mock('./CadLinkCoordinator', () => ({
-  cadLinkCoordinatorBridge: { getSnapshot: () => coordinator, subscribe: () => () => undefined },
+vi.mock('../stores/cadWorkspace', () => ({
+  cadWorkspace: { getSnapshot: () => coordinator, subscribe: () => () => undefined },
 }));
 vi.mock('./CadSolveInputs', () => ({ CadSolveInputs: () => null }));
 vi.mock('./CadProjectPanel', () => ({ openCadProject: vi.fn() }));
@@ -70,7 +70,7 @@ function stubReview(approvals: Array<{ preparation_id: string; finding_id: strin
 let reviewIds: string[] = [FINDING];
 let reviewApprovals: Array<{ preparation_id: string; finding_id: string }> = [];
 function setRequests({ operations }: { operations: Record<string, CadOperationSummary> }): void {
-  useCadOperationsStore.setState({ operations: Object.fromEntries(Object.entries(operations).filter(([, item]) => item.kind !== 'prepare_and_solve')) });
+  cadRecoveryNoticesStore.setState({ notices: Object.fromEntries(Object.values(operations).filter((item) => item.state === 'recovery_required').map((item) => [item.operationId, { id: item.operationId, kind: item.kind as 'insert_link' | 'update_link', document_id: null, document_name: item.snapshot?.documentName ?? null, created_at: item.createdAt ?? '', sequence: 1, active_document: false }])) });
   publishCadJobs(Object.values(operations).filter((item) => item.kind === 'prepare_and_solve').map((item) => {
     const job = cadJobFixture(item);
     if (job.cad_state?.preparation) job.cad_state.preparation.blocking_finding_ids = reviewIds;
@@ -147,12 +147,12 @@ describe('operation cards for the model on screen', () => {
 
     await act(async () => { lines[1].querySelector<HTMLButtonElement>('button')!.click(); });
     expect(dismissed).toEqual(['/api/jobs/manual-solve%3Aold/dismiss']);
-    coordinator.dismissOperation.mockClear(); dismissed = [];
+    const dismissNotice = vi.spyOn(cadRecoveryNoticesStore.getState(), 'dismiss').mockResolvedValue(undefined); dismissed = [];
     const clear = [...disclosure.querySelectorAll('button')].find((button) => button.textContent === 'Clear all')!;
     await act(async () => { clear.click(); });
-    await vi.waitFor(() => expect(coordinator.dismissOperation).toHaveBeenCalledOnce());
-    expect(coordinator.dismissOperation).toHaveBeenCalledWith(RECOVERY_ID);
-    expect(dismissed).toEqual(['/api/jobs/manual-solve%3Aold/dismiss']);
+    await vi.waitFor(() => expect(dismissNotice).toHaveBeenCalledOnce());
+    expect(dismissNotice).toHaveBeenCalledWith(RECOVERY_ID);
+    expect(dismissed).toEqual([]);
   });
 
   it('shows no Earlier requests at all when every request is about the model on screen', async () => {
@@ -166,6 +166,7 @@ describe('operation cards for the model on screen', () => {
     expect(cards()).toHaveLength(0);
     expect(earlier()?.textContent).toContain('250728solana');
 
+    cadRecoveryNoticesStore.setState({ notices: { [RECOVERY_ID]: { ...cadRecoveryNoticesStore.getState().notices[RECOVERY_ID], active_document: true } } });
     coordinator.fusionStatus = { documentName: '250728solana', recoveryRequired: { operationId: RECOVERY_ID, phase: 'applied' } };
     await act(async () => root.render(<CadOperationsSection record={null}/>));
     const [card] = cards();

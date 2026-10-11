@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
+import { cadWorkspace } from '../stores/cadWorkspace';
 import { preferencesStore } from '../prefs/preferences';
 import { useCadConnectionStore, type CadConnectionStatus } from '../stores/cadConnection';
 import { resetCadReturnStore } from '../stores/cadReturn';
@@ -39,8 +39,8 @@ describe('ParamPanel Fusion link label', () => {
     preferencesStore.update(originalPreferences); vi.restoreAllMocks(); vi.unstubAllGlobals();
   });
   function render(status: CadConnectionStatus | null) {
-    const snapshot = { ...cadLinkCoordinatorBridge.getSnapshot(), fusionStatus: status };
-    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue(snapshot);
+    const snapshot = { ...cadWorkspace.getSnapshot(), fusionStatus: status };
+    vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue(snapshot);
     act(() => root.render(<QueryClientProvider client={client}><ParamPanel tab="geometry"/></QueryClientProvider>));
   }
 

@@ -9,7 +9,7 @@ import { exported, identity, link, status } from './outbound.fixtures';
 import menuSource from '../../design/DesignFileMenu.tsx?raw';
 import paramSource from '../../design/ParamPanel.tsx?raw';
 import panelSource from '../CadLinkPanel.tsx?raw';
-import coordinatorSource from '../CadLinkCoordinator.tsx?raw';
+import coordinatorSource from '../CadWorkspaceOwners.tsx?raw';
 import projectSource from '../CadProjectPanel.tsx?raw';
 import runSource from '../../jobs/RunExportControl.tsx?raw';
 
@@ -197,8 +197,8 @@ it('inventories every editable-design send entry point behind the shared guard b
   for (const source of [menuSource, paramSource, panelSource]) {
     expect(source).toContain('.sendWgToFusion('); expect(source).not.toContain('sendDesignToCad');
   }
-  expect(coordinatorSource).toContain('useCadSend(');
-  expect(coordinatorSource).toContain('sendWgToFusion({ confirmed: true })');
+  expect(coordinatorSource).toContain('createCadOutboundController(');
+  expect(coordinatorSource).toContain('state.sendWgToFusion({ confirmed: true })');
   expect(projectSource).not.toContain('sendWgToFusion'); expect(projectSource).not.toContain('sendDesignToCad');
   // Historical immutable run export is separate and deliberately adopts no identity.
   expect(runSource).toContain('sendDesignToCad('); expect(runSource).toContain('job.design_revision');

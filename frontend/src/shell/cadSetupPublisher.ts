@@ -19,6 +19,8 @@ import {
   useCadReturnStore,
 } from '../stores/cadReturn';
 import { useDocumentStore } from '../stores/document';
+import { useCadConnectionStore } from '../stores/cadConnection';
+import { useCadReceiptsStore } from '../stores/cadReceipts';
 import { polarValidationError, useSolveOptionsStore } from '../stores/solveOptions';
 import { subscribeSolveSettingsEdits } from '../stores/solveSettingsEdits';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -161,8 +163,8 @@ function selectionKey(state: CadReturnSnapshot): string | null {
  * an ingestion or a recalled run changes the same stores without anyone
  * choosing anything -- a first-time model's defaults, or one project's
  * settings carried into the next -- and a solve option edited for the
- * parametric design is not the retained CAD project's. "Use these settings and
- * solve" records the same setup on demand (CadLinkCoordinator).
+ * parametric design is not the retained CAD project's. The job submission records
+ * the same setup on demand when Solve is pressed.
  */
 export function startCadSetupPublisher(
   options: {
@@ -279,12 +281,15 @@ export function startCadSetupPublisher(
   };
 }
 
-/** Save feedback remains available when the CAD coordinator is absent. */
+/** Save feedback remains available when the CAD workspace owners are absent. */
 export const useCadSetupPublisherStore = create<{ error: string | null }>(() => ({ error: null }));
 
 /** All CAD feedback surfaces give action errors precedence over setup-save failures. */
-export function useCadFeedbackError(coordinatorError: string | null): string | null {
-  return useCadSetupPublisherStore((state) => coordinatorError ?? state.error);
+export function useCadFeedbackError(actionError: string | null): string | null {
+  const reconnectError = useCadConnectionStore((state) => state.recoveryError);
+  const receiptError = useCadReceiptsStore((state) => state.recoveryError);
+  return useCadSetupPublisherStore((state) => actionError ?? reconnectError
+    ?? (receiptError ? `WG could not check Fusion Sends (${receiptError}). Refresh CAD Link to try again.` : null) ?? state.error);
 }
 
 export function CadSetupPublisher() {

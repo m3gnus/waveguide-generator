@@ -17,6 +17,8 @@ interface CadConnectionState {
   recoveryError: string | null;
 }
 
+export const CAD_COMMAND_READ_TIMEOUT_MS = 5_000;
+
 const VALID_STATES = new Set(['closed', 'addin_offline', 'addin_outdated', 'no_document',
   'not_linked', 'instance_selection_required', 'current', 'stale']);
 
@@ -51,14 +53,24 @@ export function createCadConnectionStore(now: () => number = Date.now) {
     }
     return held;
   };
-  const read = async (reader: () => Promise<CadConnectionStatus>, command = false): Promise<CadConnectionStatus | null> => {
+  const read = async (reader: (signal: AbortSignal) => Promise<CadConnectionStatus>, command = false, signal?: AbortSignal): Promise<CadConnectionStatus | null> => {
     // Observation polls yield to a pending command. They cannot invalidate its
     // evidence, publish over it, or pile up while its read is stalled.
     if (!command && commandGeneration !== null) return null;
     const started = ++generation;
     if (command) commandGeneration = started;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    const timer = command ? setTimeout(abort, CAD_COMMAND_READ_TIMEOUT_MS) : null;
     try {
-      const status = await reader();
+      const cancelled = new Promise<null>((resolve) => {
+        if (controller.signal.aborted) resolve(null);
+        else controller.signal.addEventListener('abort', () => resolve(null), { once: true });
+      });
+      const status = await Promise.race([reader(controller.signal), cancelled]);
+      if (!status) return null;
       // Newer commands and context fences still supersede both the answer and
       // its publication, even if the newer command's read later fails.
       if (started !== generation || !VALID_STATES.has(status.state)) return null;
@@ -67,13 +79,16 @@ export function createCadConnectionStore(now: () => number = Date.now) {
       // Presence is advisory. Keep the last report and let its own TTL age it.
       return null;
     } finally {
+      if (timer !== null) clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      controller.abort();
       if (commandGeneration === started) commandGeneration = null;
     }
   };
   return Object.assign(store, {
     read,
     /** Fresh action evidence; background reads yield until this read finishes. */
-    readCommand: (reader: () => Promise<CadConnectionStatus>) => read(reader, true),
+    readCommand: (reader: (signal: AbortSignal) => Promise<CadConnectionStatus>, signal?: AbortSignal) => read(reader, true, signal),
     /** Supersede pending reads while retaining the last report and its TTL. */
     fence() { generation += 1; commandGeneration = null; },
     invalidate() {

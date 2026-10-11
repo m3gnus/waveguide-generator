@@ -54,7 +54,7 @@ import {
   type ParameterSectionDefinition,
   type ParameterTab,
 } from './parameterRegistry';
-import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
+import { cadWorkspace } from '../stores/cadWorkspace';
 import { useCadFeedbackError } from '../shell/cadSetupPublisher';
 import { fusionWorkflowView, onshapeWorkflowView } from '../shell/CadLinkPanel';
 import { fusionLinkDisplayName } from '../shell/cadWorkflowView';
@@ -656,17 +656,17 @@ export function requestParameterReveal(detail: RevealRequest): void {
 function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
   const preferences = usePreferences();
   const observedFusionStatus = useCadConnectionStore((state) => state.fusionStatus);
-  const cadCoordinator = useSyncExternalStore(
-    cadLinkCoordinatorBridge.subscribe,
-    cadLinkCoordinatorBridge.getSnapshot,
-    cadLinkCoordinatorBridge.getSnapshot,
+  const cadWorkspaceView = useSyncExternalStore(
+    cadWorkspace.subscribe,
+    cadWorkspace.getSnapshot,
+    cadWorkspace.getSnapshot,
   );
-  const error = useCadFeedbackError(cadCoordinator.error);
+  const error = useCadFeedbackError(cadWorkspaceView.error);
   const onshape = preferences.cadApplication === 'onshape';
   const workflow = onshape
-    ? onshapeWorkflowView(cadCoordinator.onshapeStatus)
-    : fusionWorkflowView(cadCoordinator.fusionStatus);
-  const driftCount = cadCoordinator.fusionStatus?.link?.parameterDriftCount ?? 0;
+    ? onshapeWorkflowView(cadWorkspaceView.onshapeStatus)
+    : fusionWorkflowView(cadWorkspaceView.fusionStatus);
+  const driftCount = cadWorkspaceView.fusionStatus?.link?.parameterDriftCount ?? 0;
   const send = () => {
     // Onshape's public-document consent stays in CAD Link. Fusion sends use
     // the coordinator's unified path; its dialog holds the two-way conflict.
@@ -674,13 +674,13 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
       workspaceNavigation.navigate('cadlink');
       return;
     }
-    void cadCoordinator.sendWgToFusion().catch(() => undefined);
+    void cadWorkspaceView.sendWgToFusion().catch(() => undefined);
   };
   const actionLabel = onshape
     ? workflow.action === 'update' ? 'Send WG changes to Onshape' : 'Create in Onshape'
     : workflow.action === 'update' ? 'Send WG changes to Fusion' : 'Open in Fusion 360';
-  const matchingFusionLinks = cadCoordinator.fusionStatus?.matchingLinks ?? [];
-  const matchingOnshapeLinks = cadCoordinator.onshapeStatus?.matchingLinks ?? [];
+  const matchingFusionLinks = cadWorkspaceView.fusionStatus?.matchingLinks ?? [];
+  const matchingOnshapeLinks = cadWorkspaceView.onshapeStatus?.matchingLinks ?? [];
   return <Section
     title={CAD_CONTROLS.linkedDesign.section}
     description="The CAD document linked to this design, its aggregate freshness, and the outbound rebuild action."
@@ -695,8 +695,8 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
       <span>Managed Fusion instance</span>
       <select
         aria-label="Linked Fusion instance"
-        value={cadCoordinator.fusionStatus?.selectedInstanceId ?? ''}
-        onChange={(event) => cadCoordinator.selectFusionInstance(event.target.value)}
+        value={cadWorkspaceView.fusionStatus?.selectedInstanceId ?? ''}
+        onChange={(event) => cadWorkspaceView.selectFusionInstance(event.target.value)}
       >
         <option value="" disabled>Choose an instance</option>
         {matchingFusionLinks.map((link) => {
@@ -712,8 +712,8 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
       <span>Managed Onshape link</span>
       <select
         aria-label="Linked Onshape instance"
-        value={cadCoordinator.onshapeStatus?.selectedInstanceId ?? ''}
-        onChange={(event) => cadCoordinator.selectOnshapeInstance(event.target.value)}
+        value={cadWorkspaceView.onshapeStatus?.selectedInstanceId ?? ''}
+        onChange={(event) => cadWorkspaceView.selectOnshapeInstance(event.target.value)}
       >
         <option value="" disabled>Choose a link</option>
         {matchingOnshapeLinks.map((link) => <option value={link.instanceId} key={link.instanceId}>
@@ -724,11 +724,11 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
     </label>}
     <FusionParameterDrift
       parameterDriftCount={driftCount}
-      driftedParameters={cadCoordinator.fusionStatus?.link?.driftedParameters}
+      driftedParameters={cadWorkspaceView.fusionStatus?.link?.driftedParameters}
     />
-    {workflow.action && <button className="primary linked-design-action" disabled={cadCoordinator.sendingToFusion} onClick={send}>{cadCoordinator.sendingToFusion ? 'Sending…' : actionLabel}</button>}
+    {workflow.action && <button className="primary linked-design-action" disabled={cadWorkspaceView.sendingToFusion} onClick={send}>{cadWorkspaceView.sendingToFusion ? 'Sending…' : actionLabel}</button>}
     {error && <div className="field-error" role="alert">{error}</div>}
-    {cadCoordinator.status && <p className="section-note" role="status">{cadCoordinator.status}</p>}
+    {cadWorkspaceView.status && <p className="section-note" role="status">{cadWorkspaceView.status}</p>}
   </Section>;
 }
 
@@ -859,14 +859,14 @@ export function RealizedDimensionsSection({ snapshot, driftedParameters = [], fo
 }
 
 function RealizedDimensionsCard({ forceOpen = false }: { forceOpen?: boolean }) {
-  const cadCoordinator = useSyncExternalStore(
-    cadLinkCoordinatorBridge.subscribe,
-    cadLinkCoordinatorBridge.getSnapshot,
-    cadLinkCoordinatorBridge.getSnapshot,
+  const cadWorkspaceView = useSyncExternalStore(
+    cadWorkspace.subscribe,
+    cadWorkspace.getSnapshot,
+    cadWorkspace.getSnapshot,
   );
   return <RealizedDimensionsSection
-    snapshot={cadCoordinator.fusionStatus?.realizedDimensions ?? null}
-    driftedParameters={cadCoordinator.fusionStatus?.link?.driftedParameters}
+    snapshot={cadWorkspaceView.fusionStatus?.realizedDimensions ?? null}
+    driftedParameters={cadWorkspaceView.fusionStatus?.link?.driftedParameters}
     forceOpen={forceOpen}
   />;
 }
@@ -1067,17 +1067,17 @@ function CadMeshDetail() {
   const state = useCadReturnStore();
   const symmetryMode = useCadPreparationStore((current) => current.symmetryMode);
   const setSymmetryMode = useCadPreparationStore((current) => current.setSymmetryMode);
-  const cadCoordinator = useSyncExternalStore(
-    cadLinkCoordinatorBridge.subscribe,
-    cadLinkCoordinatorBridge.getSnapshot,
-    cadLinkCoordinatorBridge.getSnapshot,
+  const cadWorkspaceView = useSyncExternalStore(
+    cadWorkspace.subscribe,
+    cadWorkspace.getSnapshot,
+    cadWorkspace.getSnapshot,
   );
-  const error = useCadFeedbackError(cadCoordinator.error);
+  const error = useCadFeedbackError(cadWorkspaceView.error);
   const driftSources = new Set([...state.areaDriftSourceIds, ...(state.ingestRecord?.role_findings ?? [])
     .filter((finding) => String(finding.kind).includes('area-drift'))
     .map((finding) => String(finding.source_id))]);
   return <>
-    <div className="cad-mesh-intro"><p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p><button className="primary" disabled={cadCoordinator.ingesting || !state.selectedBundle?.readable} onClick={() => void cadCoordinator.ingest()}>{cadCoordinator.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>
+    <div className="cad-mesh-intro"><p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p><button className="primary" disabled={cadWorkspaceView.ingesting || !state.selectedBundle?.readable} onClick={() => void cadWorkspaceView.ingest()}>{cadWorkspaceView.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>
     <ToggleRow id="cad-force-full-domain" label="Force full domain" help="Disable automatic x=0/y=0 cutting for this preparation. Use this when a symmetry verdict is doubtful; it costs more memory and solve time but cannot remove a geometric half. A return the CAD author already cut is refused instead: the other half is not in the file." checked={symmetryMode === 'full'} onChange={(enabled) => {
       setSymmetryMode(enabled ? 'full' : 'auto');
       state.markIngestStale('The CAD symmetry preparation mode changed.');
@@ -1092,7 +1092,7 @@ function CadMeshDetail() {
     </div>)}
     {state.ingestStaleReason && <div className="field-error" role="status">{state.ingestStaleReason} Rebuild the mesh before solving.</div>}
     {error && <div className="field-error" role="alert">{error}</div>}
-    {cadCoordinator.status && <p className="section-note" role="status">{cadCoordinator.status}</p>}
+    {cadWorkspaceView.status && <p className="section-note" role="status">{cadWorkspaceView.status}</p>}
   </>;
 }
 

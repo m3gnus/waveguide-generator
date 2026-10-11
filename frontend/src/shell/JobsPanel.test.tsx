@@ -13,7 +13,7 @@ import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { jobCardPropsEqual, JobsPanel, selectJob, type JobCardProps } from './JobsPanel';
-import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import { cadWorkspace } from '../stores/cadWorkspace';
 import { currentJobLabel } from './JobsCoordinator';
 import { resetSolveStageClocksForTests } from './solveProgress';
 
@@ -398,7 +398,7 @@ describe('jobs panel run list', () => {
       ingest_id: 'wgi_missing', design_id: null, lineage_id: null, archive_stem: null,
       manifest_sha256: null, document_name: 'Missing speaker', return_state_hash: null,
     };
-    const reportStatus = vi.spyOn(cadLinkCoordinatorBridge.getSnapshot(), 'reportStatus');
+    const reportStatus = vi.spyOn(cadWorkspace.getSnapshot(), 'reportStatus');
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
       JSON.stringify({ detail: 'Unknown ingestion record wgi_missing' }),
       { status: 404, headers: { 'Content-Type': 'application/json' } },

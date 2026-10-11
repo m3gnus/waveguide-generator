@@ -1079,3 +1079,17 @@ describe('individual job deletion', () => {
     manager.stop();
   });
 });
+
+it('ignores a malformed intake refusal instead of inventing a notice (row 15)', () => {
+  const socket = new MockSocket();
+  const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+  const refusal = vi.fn();
+  manager.subscribeCadOperations({ operation: () => undefined, resync: () => undefined, refusal });
+  manager.start();
+  try {
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'cadInboxRefusal', refusal: { reason: 'incomplete' } });
+    expect(refusal).not.toHaveBeenCalled();
+    expect(manager.getSnapshot().error).toBe('Invalid jobs cadInboxRefusal message');
+  } finally { manager.stop(); }
+});
