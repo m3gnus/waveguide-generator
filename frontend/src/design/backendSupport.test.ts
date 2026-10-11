@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { designForFamily } from '../stores/design';
 import {
   activeBackendName,
+  symmetryDomainLimitation,
   backendLimitation,
   backendSupports,
   isBeatBackendEngine,
@@ -185,5 +186,19 @@ describe('legacy beat engine migration', () => {
     expect(isBeatBackendEngine('beat-cpu')).toBe(true);
     expect(isBeatBackendEngine('beat')).toBe(false);
     expect(isBeatBackendEngine('bempp')).toBe(false);
+  });
+});
+
+describe('symmetry domain capabilities', () => {
+  it('accepts either half from the general half capability', () => {
+    const backend = { ...engine('bempp', true), symmetry_domains: ['full', 'half', 'quarter'] };
+    expect(symmetryDomainLimitation(backend, 'half_xz')).toBeUndefined();
+    expect(symmetryDomainLimitation(backend, 'half_yz')).toBeUndefined();
+  });
+  it('disables every unadvertised explicit domain while leaving Auto to the planner', () => {
+    const backend = { ...engine('dryrun', true), symmetry_domains: ['full'] };
+    for (const mode of ['half_xz', 'half_yz', 'quarter'] as const) expect(symmetryDomainLimitation(backend, mode)).toContain('does not support');
+    expect(symmetryDomainLimitation(backend, 'auto')).toBeUndefined();
+    expect(symmetryDomainLimitation(backend, 'full')).toBeUndefined();
   });
 });

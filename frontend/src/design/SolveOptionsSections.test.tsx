@@ -6,15 +6,21 @@ import guidance from '../../../shared/opencl-driver-guidance.v1.json';
 import type { OpenClGuidanceReason } from '../shell/OpenClGuidance';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
+import type { SolvePlanSnapshot } from '../jobs/useSolvePlan';
+import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { resetDesignStore } from '../stores/design';
 import type { ImportedSolvePlan } from '../jobs/actions';
 import type { ImportedSolvePlanSnapshot } from '../jobs/useImportedSolvePlan';
 import { defaultPolarUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { useDesignStore } from '../stores/design';
 import { accuracyExplainer, DirectivityMapControls, effectiveGridView, FrequencySweepControls, runPolarFromJob, SolveOptionsControls } from './SolveOptionsSections';
 
-// The server's per-engine verdict on one CAD return (POST
-// /api/solve/imported-plan). A test hands the selector one directly; with no
-// return prepared it is empty, which is what the real hook answers.
+const parametricPlan = vi.hoisted(() => ({
+  current: { plan: null, error: null, isPending: false } as SolvePlanSnapshot,
+}));
+vi.mock('../jobs/useSolvePlan', () => ({ useSolvePlan: () => parametricPlan.current }));
+
+// The server's per-engine verdict for the prepared CAD return.
 const importedPlan = vi.hoisted(() => ({
   current: { plan: null, error: null, isPending: false } as ImportedSolvePlanSnapshot,
 }));
@@ -37,6 +43,9 @@ describe('solve and directivity control help', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     vi.useFakeTimers();
     resetSolveOptionsStore();
+    resetDesignStore();
+    resetCadReturnStore();
+    parametricPlan.current = { plan: { engine: 'beat-cpu', formulation: 'full-3d', reason: 'Automatic routing', eligibility_reasons: [] }, error: null, isPending: false };
     importedPlan.current = { plan: null, error: null, isPending: false };
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     host = document.createElement('div');
@@ -91,6 +100,58 @@ describe('solve and directivity control help', () => {
     expect(help).toContain('gaps no wider than 1/6 octave');
     expect(help).toContain('Narrow resonances can be missed when narrower than the largest solved-frequency gap');
     expect(help).toContain('does not guarantee interpolation accuracy');
+  });
+
+  it.each(['metal', 'bempp', 'beat-cpu', 'beat-cuda'])('gates adaptive sampling by the resolved %s plan', (engine) => {
+    parametricPlan.current.plan!.engine = engine;
+    render(<SolveOptionsControls />);
+    expect(host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!.disabled).toBe(!engine.startsWith('beat-'));
+    if (!engine.startsWith('beat-')) expect(host.querySelector('#adaptive-sampling-reason')?.textContent).toContain('BEAT only');
+  });
+
+  it.each(['range', 'list'] as const)('enables a BEAT sweep at exactly 24 %s frequencies', (mode) => {
+    act(() => {
+      useSolveOptionsStore.getState().setFrequencyMode(mode);
+      useSolveOptionsStore.getState().setFrequencyListText(Array.from({ length: 24 }, (_, i) => (i + 1) * 100).join(' '));
+      useDesignStore.setState({ design: { ...useDesignStore.getState().design, simulation: { ...useDesignStore.getState().design.simulation, num_frequencies: 24 } } });
+    });
+    render(<SolveOptionsControls />);
+    expect(host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!.disabled).toBe(false);
+  });
+
+  it.each(['short-range', 'short-list', 'baffle', 'ground', 'pending', 'refused'] as const)('explains the adaptive %s limitation without dropping a saved preference', (reason) => {
+    act(() => {
+      useSolveOptionsStore.getState().setAdaptiveFrequencySampling(true);
+      if (reason === 'short-range') useDesignStore.setState({ design: { ...useDesignStore.getState().design, simulation: { ...useDesignStore.getState().design.simulation, num_frequencies: 23 } } });
+      if (reason === 'short-list') { useSolveOptionsStore.getState().setFrequencyMode('list'); useSolveOptionsStore.getState().setFrequencyListText('100 200 400'); }
+      if (reason === 'baffle') useDesignStore.setState({ design: { ...useDesignStore.getState().design, simulation: { ...useDesignStore.getState().design.simulation, sim_type: 'infinite-baffle' } } });
+      if (reason === 'ground') useSolveOptionsStore.getState().updateGroundPlane({ enabled: true });
+      if (reason === 'pending' || reason === 'refused') parametricPlan.current = { plan: null, isPending: reason === 'pending', error: reason === 'refused' ? 'No backend supports this geometry.' : null };
+    });
+    render(<SolveOptionsControls />);
+    const checkbox = host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!;
+    expect(checkbox.disabled).toBe(true);
+    expect(checkbox.checked).toBe(true);
+    expect(host.querySelector('#adaptive-sampling-reason')?.textContent).toContain(
+      reason.startsWith('short') ? 'at least 24' : reason === 'baffle' ? 'free-standing' : reason === 'ground' ? 'ground plane' : reason === 'refused' ? 'No backend supports' : 'solve plan');
+  });
+
+  it('uses the CAD plan and CAD frequency count for adaptive sampling', () => {
+    importedPlan.current.plan = { ingest_id: 'wgi_test', requested: 'auto', engine: 'beat-cpu', engines: [], reason: 'Ready' };
+    act(() => useCadReturnStore.setState({ frequencyCount: 23 }));
+    render(<SolveOptionsControls mode="cad" />);
+    expect(host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!.disabled).toBe(true);
+    act(() => useCadReturnStore.setState({ frequencyCount: 24 }));
+    render(<SolveOptionsControls mode="cad" />);
+    expect(host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!.disabled).toBe(false);
+  });
+
+  it.each([false, true])('follows BEAT field_traces=%s without an engine-name restriction', (field_traces) => {
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, { engines: [{ name: 'beat-cpu', label: 'BEAT CPU', available: true, field_traces }] });
+    render(<DirectivityMapControls />);
+    const checkbox = host.querySelector<HTMLInputElement>('#polar-field-plane')!;
+    expect(checkbox.disabled).toBe(!field_traces);
+    if (!field_traces) expect(host.querySelector('#field-plane-support-reason')?.textContent).toContain('BEAT CPU does not advertise');
   });
 
   it.each(['design', 'imported'] as const)('describes explicit output rows and adaptive acquisition for %s', (context) => {
@@ -249,6 +310,7 @@ describe('solve and directivity control help', () => {
     };
 
     resetSolveOptionsStore();
+    parametricPlan.current = { plan: null, error: null, isPending: false };
     importedPlan.current = importedPlanFor(platform.cadFastEngine);
     render(<SolveOptionsControls mode="parametric" />);
     const accuracy = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
@@ -270,6 +332,7 @@ describe('solve and directivity control help', () => {
     }
 
     resetSolveOptionsStore();
+    parametricPlan.current = { plan: null, error: null, isPending: false };
     importedPlan.current = importedPlanFor(platform.cadFastEngine);
     render(<SolveOptionsControls mode="cad" />);
     const cadAccuracy = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
@@ -631,6 +694,7 @@ describe('a corrupt stored rig still renders the rail', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     localStorage.clear();
     resetSolveOptionsStore();
+    parametricPlan.current = { plan: null, error: null, isPending: false };
     localStorage.setItem('waveguide-v2-solve-options', JSON.stringify({
       state: { polar: { enabledAxes: null, distance: 'far', angleStep: 0 }, frequencyListText: null },
       version: 0,
@@ -646,6 +710,7 @@ describe('a corrupt stored rig still renders the rail', () => {
     host.remove();
     queryClient.clear();
     resetSolveOptionsStore();
+    parametricPlan.current = { plan: null, error: null, isPending: false };
   });
 
   it('falls back to the defaults instead of throwing out of render', () => {

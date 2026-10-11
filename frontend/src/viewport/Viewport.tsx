@@ -297,7 +297,7 @@ export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
     case 'trace_output_missing': return 'Field plane unavailable — the solver returned no field traces; re-solve the design';
     case 'unsupported_axisymmetric_formulation': return 'This historical Axisymmetric result has no field-plane traces. Re-solve with a field-plane-capable configuration.';
     case 'unsupported_coupled_infinite_baffle': return 'Field plane unavailable — switch Simulation type to Free-standing and re-solve with Metal or BEMPP';
-    case 'unsupported_per_band_mesh_ladder': return 'Field plane unavailable — turn the per-band mesh ladder off and re-solve';
+    case 'unsupported_per_band_mesh_ladder': return 'Field plane unavailable — this run used multiple per-band meshes. Load its design, enable Keep field plane data, and submit a new solve from the UI';
     case 'unsupported_ground_plane': return 'Field plane unavailable — the field carries no ground image; turn the ground plane off and re-solve. Polar and impedance results do include the ground';
     case 'unsupported_solve_mode': return 'Field plane unavailable — use a supported full-3D solve';
     case 'disabled_by_option': return 'Field plane unavailable — enable Keep field plane data and re-solve';

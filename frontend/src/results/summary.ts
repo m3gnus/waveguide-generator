@@ -1,3 +1,5 @@
+import { engineDisplayName } from '../design/backendSupport';
+import { samplingProvenance } from './sampling';
 import type { JobItem } from '../api/jobsSocket';
 import { decisionSummaryRows, readDomainDecision, type DomainDecisionSummary } from '../api/domainDecision';
 import { runDisplayName } from '../prefs/preferences';
@@ -74,6 +76,13 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   if (frequencySource === 'explicit_list') row(sweep, 'Spacing', 'explicit list');
   else if (frequencySource === 'generated_grid' && frequencySpacing === 'log') row(sweep, 'Spacing', 'logarithmic');
   else if (frequencySource === 'generated_grid' && frequencySpacing === 'linear') row(sweep, 'Spacing', 'linear');
+  const sampling = samplingProvenance({ ...result, metadata: { ...wrapperMetadata, ...resultMetadata } });
+  if (sampling) {
+    row(sweep, 'Sampling', `${integer(sampling.solved_count)} solved, ${integer(sampling.interpolated_count)} interpolated`);
+    row(sweep, 'Adaptive stop reason', sampling.stop_reason ? readableToken(sampling.stop_reason) : undefined);
+    if (sampling.estimate_db !== undefined) row(sweep, 'Disagreement estimate', `${sampling.estimate_db} dB`);
+    if (sampling.native_solved_count !== undefined) row(sweep, 'Native solves', integer(sampling.native_solved_count), 'Includes additional coverage frequencies beyond the requested rows.');
+  }
   group(groups, 'Sweep', sweep);
 
   const validity = resultFrequencyValidity(result, wrapper);
@@ -100,8 +109,19 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   if (decision) group(groups, 'Domain', decisionSummaryRows(decision), decision.refusal ? 'warning' : undefined);
 
   const solve: SummaryRow[] = [];
-  const engine = firstString(metadata('engine'), metadata('solver_backend'), metadata('solver_mode'));
-  if (engine) row(solve, 'Engine', readableToken(engine));
+  const plan = object(resultMetadata.solver_plan) ?? object(object(resultMetadata.symmetry)?.solver_plan)
+    ?? object(wrapperMetadata.solver_plan) ?? object(object(wrapperMetadata.symmetry)?.solver_plan);
+  const substitution = object(plan?.engine_substitution);
+  const execution = context.channelId ? job?.channel_solve_executions?.[context.channelId] : undefined;
+  const engine = firstString(execution?.engine, job?.solve_execution?.engine,
+    object(metadata('solve_execution'))?.engine, plan?.engine, metadata('solver_backend'), metadata('engine'), metadata('solver_mode'));
+  if (engine) row(solve, 'Engine', engineDisplayName(engine));
+  const requested = firstString(substitution?.requested, plan?.requested, job?.solve_options?.engine);
+  if (requested && (!engine || engineDisplayName(requested) !== engineDisplayName(engine))) row(solve, 'Requested engine', requested === 'auto' ? 'Automatic' : engineDisplayName(requested));
+  row(solve, 'Routing', string(plan?.reason));
+  row(solve, 'Fallback reason', firstString(job?.solve_execution?.fallback_reason,
+    object(metadata('solve_execution'))?.fallback_reason, plan?.fallback_reason, substitution?.reason));
+  row(solve, 'BEAT precision', string(object(metadata('beat'))?.precision));
   const solvePath = string(metadata('solve_path'));
   if (solvePath) row(solve, 'Path', readableSolvePath(solvePath), string(metadata('solve_path_reason')));
   const symmetry = object(metadata('symmetry'));
@@ -354,6 +374,9 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
     });
     group(groups, 'Combine', combineRows);
   }
+
+  const persistenceWarnings = [...new Set([...strings(job?.persistence_warnings), ...strings(resultMetadata.persistence_warnings), ...strings(wrapperMetadata.persistence_warnings)])];
+  if (persistenceWarnings.length) group(groups, 'Storage warnings', persistenceWarnings.map((value, index) => ({ label: persistenceWarnings.length > 1 ? `Warning ${index + 1}` : 'Warning', value })), 'warning');
 
   const runWarnings = strings(metadata('warnings'));
   const combineWarnings = resultCombineWarnings(result);

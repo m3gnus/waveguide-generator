@@ -1,3 +1,4 @@
+import { samplingNotes, samplingProvenance } from './sampling';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { preferencesStore, type Preferences } from '../prefs/preferences';
@@ -85,5 +86,15 @@ describe('adaptive numeric export disclosure and base bytes', () => {
         expect(content, format).toContain('Solved requested frequencies (Hz): 100, 400');
       }
     }
+  });
+});
+
+describe('adaptive stop disclosure', () => {
+  it.each(['estimated_convergence', 'full_sweep'])('preserves %s and a zero estimate even when all requested rows were solved', (stop_reason) => {
+    const result: ResultPayload = { ...input, frequency_status: ['solved', 'solved', 'solved'], metadata: { ...input.metadata, adaptive_sampling: { stop_reason, estimate_db: 0, native_solved_count: 5 } } };
+    expect(samplingProvenance(result)).toMatchObject({ stop_reason, estimate_db: 0, solved_count: 3, interpolated_count: 0, native_solved_count: 5 });
+    expect(samplingNotes(result).join(' ')).toContain(`Adaptive stop reason: ${stop_reason.replaceAll('_', ' ')}`);
+    expect(samplingNotes(result).join(' ')).toContain('Adaptive disagreement estimate: 0 dB');
+    expect(buildFullResultsJson(result, preferencesStore.getSnapshot(), now)).toContain(`"stop_reason": "${stop_reason}"`);
   });
 });

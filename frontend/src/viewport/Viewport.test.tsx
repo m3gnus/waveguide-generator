@@ -104,7 +104,7 @@ vi.mock('../api/previewSocket', () => ({
   },
 }));
 
-import { cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
+import { fieldPlaneUnavailableTooltip, cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
 
 describe('CAD viewport empty-state copy', () => {
   it('reports automatic preparation progress with the selected bundle name', () => {
@@ -896,4 +896,11 @@ describe('camera refit', () => {
     // model, so they keep the safe answer rather than pinning a stale framing.
     expect(refitsCamera(scene('cad', null), scene('cad', null))).toBe(true);
   });
+});
+
+it('offers a new UI solve for per-band results without referring to a missing control', () => {
+  const text = fieldPlaneUnavailableTooltip([{ status: 'complete', unavailable_reason: 'unsupported_per_band_mesh_ladder' } as JobItem]);
+  expect(text).toContain('Load its design, enable Keep field plane data');
+  expect(text).toContain('submit a new solve from the UI');
+  expect(text).not.toContain('turn the per-band mesh ladder off');
 });

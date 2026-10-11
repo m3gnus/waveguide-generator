@@ -12,6 +12,8 @@ import {
   engineDisplayName,
   plannedBackendCapabilities,
 } from './backendSupport';
+import { useSolveControlBackend } from '../jobs/useSolveControlBackend';
+import { useCadReturnStore } from '../stores/cadReturn';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { widenPolarToDerivation } from '../jobs/importedSubmission';
@@ -214,6 +216,19 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   const { engines, engineSelection, hostPlatform, error, isLoading: capabilitiesLoading,
     qualificationRefreshNeeded, refreshCapabilities } = useCapabilities();
   const backendEngines = engines;
+  const controlBackend = useSolveControlBackend(mode);
+  const simulation = useDesignStore((state) => state.design.simulation);
+  const importedCount = useCadReturnStore((state) => state.frequencyCount);
+  const count = store.frequencyMode === 'list'
+    ? parseFrequencyList(store.frequencyListText).frequencies?.length ?? 0
+    : mode === 'cad' ? importedCount : simulation.num_frequencies;
+  const adaptiveReason = mode === 'parametric' && simulation.sim_type !== 'freestanding'
+    ? 'Adaptive sampling requires a free-standing solve.'
+    : store.groundPlane.enabled ? 'Adaptive sampling requires the ground plane to be off.'
+    : count < 24 ? 'Adaptive sampling requires at least 24 frequencies.'
+    : !controlBackend.plan ? controlBackend.error ?? 'Resolve a solve plan to use adaptive sampling.'
+    : !controlBackend.plan.engine?.startsWith('beat-') && controlBackend.plan.engine !== 'beat'
+      ? 'Adaptive sampling is BEAT only; choose a BEAT backend or Accurate.' : undefined;
   // For imported geometry the server says, per engine, whether it can take
   // this return, and where the user's choice resolves. Before a return is
   // prepared there is no record to ask about, and the list shows only what
@@ -227,7 +242,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   const parametricAccurateEngine = accurateEngineForParametric(store.engine, engines);
   const helpEngine = mode === 'cad'
     ? importedPlan.plan?.engine ?? null
-    : store.accuracy === 'accurate' ? parametricAccurateEngine : parametricFastEngine;
+    : controlBackend.plan?.engine ?? (store.accuracy === 'accurate' ? parametricAccurateEngine : parametricFastEngine);
   const helpPending = capabilitiesLoading || (mode === 'cad' && importedPlan.isPending);
   // The explainer describes what each choice runs under AUTO, since picking
   // Fast or Accurate clears an engine override. CAD Link only knows the engine
@@ -251,7 +266,8 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   return <>
     <HelpTipRow className="select-row" text={accuracyHelp}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></HelpTipRow>
     <AccuracyExplainer fastEngine={explainerFast} accurateEngine={explainerAccurate} />
-    <HelpTipRow className="toggle-row" text="BEAT exterior sweeps with at least 24 frequencies. Fits unsolved points to a 0.1 dB equivalent disagreement target. Completed native acquisition has gaps no wider than 1/6 octave. Narrow resonances can be missed when narrower than the largest solved-frequency gap; this spacing bound does not guarantee interpolation accuracy."><label htmlFor="adaptive-frequency-sampling">Adaptive frequency sampling (experimental)</label><input id="adaptive-frequency-sampling" type="checkbox" checked={store.adaptiveFrequencySampling} onChange={(event) => store.setAdaptiveFrequencySampling(event.target.checked)} /></HelpTipRow>
+    <HelpTipRow className="toggle-row" text="BEAT exterior sweeps with at least 24 frequencies. Fits unsolved points to a 0.1 dB equivalent disagreement target. Completed native acquisition has gaps no wider than 1/6 octave. Narrow resonances can be missed when narrower than the largest solved-frequency gap; this spacing bound does not guarantee interpolation accuracy."><label htmlFor="adaptive-frequency-sampling">Adaptive frequency sampling (experimental)</label><input id="adaptive-frequency-sampling" type="checkbox" checked={store.adaptiveFrequencySampling} disabled={Boolean(adaptiveReason)} aria-describedby={adaptiveReason ? 'adaptive-sampling-reason' : undefined} onChange={(event) => store.setAdaptiveFrequencySampling(event.target.checked)} /></HelpTipRow>
+    {adaptiveReason && <p id="adaptive-sampling-reason" className="section-note">{adaptiveReason}</p>}
     {store.accuracy === 'accurate' && !beatGpu && beatCpu && <p className="section-note" role="status">No BEAT GPU backend is ready; Accurate will use BEAT CPU.</p>}
     {store.engine !== 'auto' && <p className="section-note">Advanced engine override: {store.engine}. This engine takes precedence. Selecting Fast or Accurate clears the override.</p>}
     {mode === 'parametric' ? <>
@@ -424,13 +440,13 @@ function belowGroundNote(
  * because `.section-body` is a container-query grid whose rules select direct
  * children — an extra div would become the grid item and drop the row's layout.
  */
-export function ToggleRow({ id, label, help, checked, onChange, revealId }: {
-  id: string; label: string; help: string; checked: boolean; onChange: (checked: boolean) => void; revealId?: string;
+export function ToggleRow({ id, label, help, checked, onChange, revealId, disabled, reasonId }: {
+  id: string; label: string; help: string; checked: boolean; onChange: (checked: boolean) => void; revealId?: string; disabled?: boolean; reasonId?: string;
 }) {
   const tip = useHelpTip({ title: label, text: help });
   return <label className="toggle-row" htmlFor={id} data-control-reveal-id={revealId} {...tip.triggerProps}>
     <span>{label}</span>
-    <input id={id} type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+    <input id={id} type="checkbox" disabled={disabled} aria-describedby={reasonId} checked={checked} onChange={(event) => onChange(event.target.checked)} />
     {tip.tip}
   </label>;
 }
@@ -586,6 +602,10 @@ export function SolvedWithReadout() {
 }
 
 export function DirectivityMapControls({ effectiveDerivation }: { effectiveDerivation?: Record<string, unknown> } = {}) {
+  const { capability } = useSolveControlBackend();
+  const fieldReason = capability?.field_traces === true ? undefined
+    : capability ? `${capability.label || engineDisplayName(capability.name)} does not advertise field plane data.`
+    : 'Checking field plane support…';
   const polar = useSolveOptionsStore((state) => state.polar);
   const update = useSolveOptionsStore((state) => state.updatePolar);
   const toggleAxis = useSolveOptionsStore((state) => state.toggleAxis);
@@ -619,7 +639,8 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
     {cardinalDiagonal && <p className="section-note" role="status">A diagonal at {Number(polar.diagonalAngle.toFixed(6))}° is the {Math.abs((polar.diagonalAngle % 180 + 180) % 180 - 90) < 1e-6 ? 'vertical' : 'horizontal'} plane, so it will be measured and plotted twice. Use an angle between the planes, such as 45°.</p>}
     <HelpTipRow className="select-row" text="The point the measurement angles pivot around. Mouth rotates about the mouth centre, which is what a measured polar set matches; Throat pivots at the driver instead."><label htmlFor="polar-observation-origin">Measurement origin</label><select id="polar-observation-origin" value={polar.observationOrigin} onChange={(event) => update({ observationOrigin: event.target.value as ObservationOrigin })}><option value="mouth">Mouth</option><option value="throat">Throat</option></select></HelpTipRow>
     <ToggleRow id="polar-spherical-sampling" label="Keep 3D balloon result" help="WG samples a spherical field for Directivity Index independently of the selected H/V/D display planes. Enable this to retain that grid for the 3D balloon and forward-beam views; availability depends on the backend." checked={polar.sphericalSampling} onChange={(sphericalSampling) => update({ sphericalSampling })} />
-    <ToggleRow id="polar-field-plane" label="Keep field plane data" help="Retains the surface data needed for acoustic field planes. This adds ~0.1–1 MB per typical parametric job, with larger results for CAD-link imports." checked={polar.fieldPlane !== false} onChange={(fieldPlane) => update({ fieldPlane })} />
+    <ToggleRow disabled={Boolean(fieldReason)} reasonId={fieldReason ? 'field-plane-support-reason' : undefined} id="polar-field-plane" label="Keep field plane data" help="Retains the surface data needed for acoustic field planes. This adds ~0.1–1 MB per typical parametric job, with larger results for CAD-link imports." checked={polar.fieldPlane !== false} onChange={(fieldPlane) => update({ fieldPlane })} />
+    {fieldReason && <p id="field-plane-support-reason" className="section-note">{fieldReason}</p>}
     <p className="section-note">Directivity Index always uses the complete spherical field. “Keep 3D balloon result” controls whether WG also stores that field for 3D views.</p>
     {effective && <div className={`effective-grid-readout${effective.widened ? ' widened' : ''}`} role="status"><b>{effective.summary}</b><span>{effective.detail}</span><small>Display planes and angle range only; Directivity Index always uses the complete spherical field.</small></div>}
     <SolvedWithReadout/>

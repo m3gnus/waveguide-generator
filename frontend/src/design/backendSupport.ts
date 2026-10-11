@@ -1,3 +1,4 @@
+import type { SymmetryMode } from '../stores/solveOptions';
 import { plannedEngineNames, type EngineCapability, type EngineSelection } from '../jobs/actions';
 
 export type BackendIdentity = string | EngineCapability | null;
@@ -242,8 +243,12 @@ export function hostLimitation(
 /** The name to show for an engine wire identifier. */
 export function engineDisplayName(name: string): string {
   switch (name.toLowerCase()) {
+    case 'hornlab-metal-bem':
     case 'metal': return 'Metal';
+    case 'hornlab-bempp-bem':
     case 'bempp': return 'BEMPP';
+    case 'hornlab-beat-bem':
+    case 'beat-engine':
     case 'beat': return 'BEAT';
     case 'beat-metal': return 'BEAT Metal';
     case 'beat-cuda': return 'BEAT CUDA';
@@ -283,4 +288,13 @@ export function selectionLimitation(
     ? `${engineDisplayName(selected)} is not available on this host`
     : `${engineDisplayName(selected)} cannot solve ${FEATURE_LABELS[feature]}`;
   return `${problem}. Switch the engine to ${switchTo}.`;
+}
+
+/** Capability vocabulary allows either a general half or a specific mirror plane. */
+export function symmetryDomainLimitation(backend: EngineCapability | null, mode: SymmetryMode): string | undefined {
+  if (!backend || !backend.symmetry_domains || mode === 'auto') return undefined;
+  const domain = mode.replaceAll('_', '-');
+  const supported = backend.symmetry_domains.includes(domain)
+    || (mode.startsWith('half_') && backend.symmetry_domains.includes('half'));
+  return supported ? undefined : `${backend.label || engineDisplayName(backend.name)} does not support ${domain.replaceAll('-', ' ')} domains.`;
 }

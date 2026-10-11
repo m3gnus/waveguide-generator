@@ -8,7 +8,8 @@ import type { CadRealizedDimensions, CadRealizedParameter } from '../api/cadlink
 import { importedSubmissionBlocker, importedSubmissionNotices } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
-import { backendLimitation } from './backendSupport';
+import { useSolveControlBackend } from '../jobs/useSolveControlBackend';
+import { backendLimitation, symmetryDomainLimitation } from './backendSupport';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { CadCrossover } from './CrossoverSection';
 import { useCadPreparationStore } from '../stores/cadPreparation';
@@ -572,15 +573,17 @@ function AutoSymmetryReadout({ design }: { design: DesignDocument }) {
 }
 
 function SolveDomainControl({ design }: { design: DesignDocument }) {
+  const { capability } = useSolveControlBackend('parametric');
   const symmetry = useSolveOptionsStore((state) => state.symmetry);
   const setSymmetry = useSolveOptionsStore((state) => state.setSymmetry);
   return <div className="solve-domain-control" data-control-reveal-id={PARAMETRIC_CONTROLS.solveDomain.reveal.id}>
     <div className="select-row">
       <label htmlFor="solve-symmetry">Solve domain</label>
       <select id="solve-symmetry" value={symmetry} onChange={(event) => setSymmetry(event.target.value as SymmetryMode)}>
-        {(Object.keys(symmetryModeLabels) as SymmetryMode[]).map((mode) => <option key={mode} value={mode}>{symmetryModeLabels[mode]}</option>)}
+        {(Object.keys(symmetryModeLabels) as SymmetryMode[]).map((mode) => <option key={mode} value={mode} disabled={Boolean(symmetryDomainLimitation(capability, mode))}>{symmetryModeLabels[mode]}{symmetryDomainLimitation(capability, mode) ? ' · unsupported by this engine' : ''}</option>)}
       </select>
     </div>
+    {(Object.keys(symmetryModeLabels) as SymmetryMode[]).filter((mode) => symmetryDomainLimitation(capability, mode)).map((mode) => <small key={mode}>{symmetryDomainLimitation(capability, mode)}</small>)}
     {symmetry === 'auto' && <AutoSymmetryReadout design={design} />}
   </div>;
 }

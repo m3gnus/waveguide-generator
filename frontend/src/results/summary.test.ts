@@ -507,3 +507,68 @@ it('keeps a completed run size when the live design changes', () => {
   expect(row(summaryGroups({ result, job: job() }), 'Mesh', 'Size')).toEqual(before);
   resetDesignStore();
 });
+
+describe('execution and storage provenance', () => {
+  it('shows the executed backend, explicit request, fallback, precision and sampling outcome', () => {
+    const result: ResultPayload = {
+      frequencies: [100, 200, 400], frequency_status: ['solved', 'interpolated', 'solved'],
+      metadata: { engine: 'hornlab-beat-bem', beat: { precision: 'double' },
+        symmetry: { solver_plan: { engine: 'beat-cpu', reason: 'Available CPU backend', engine_substitution: { requested: 'beat-cuda', resolved: 'beat-cpu', reason: 'CUDA unavailable' } } },
+        adaptive_sampling: { stop_reason: 'estimated_convergence', estimate_db: 0.08, native_solved_count: 7 },
+      },
+    };
+    const groups = summaryGroups({ result, job: job({
+      solve_execution: { engine: 'beat-cpu', accuracy: 'accurate', formulation: 'Burton–Miller', fallback_reason: 'GPU runtime not ready' },
+      persistence_warnings: ['Pressure-basis artifact could not be saved: disk full', 'Radiation matrix could not be saved'],
+    }) });
+    expect(row(groups, 'Solve', 'Engine')?.value).toBe('BEAT CPU');
+    expect(row(groups, 'Solve', 'Requested engine')?.value).toBe('BEAT CUDA');
+    expect(row(groups, 'Solve', 'Fallback reason')?.value).toBe('GPU runtime not ready');
+    expect(row(groups, 'Solve', 'Routing')?.value).toBe('Available CPU backend');
+    expect(row(groups, 'Solve', 'BEAT precision')?.value).toBe('double');
+    expect(row(groups, 'Sweep', 'Sampling')?.value).toBe('2 solved, 1 interpolated');
+    expect(row(groups, 'Sweep', 'Adaptive stop reason')?.value).toBe('estimated convergence');
+    expect(row(groups, 'Sweep', 'Disagreement estimate')?.value).toBe('0.08 dB');
+    expect(row(groups, 'Sweep', 'Native solves')?.value).toBe('7');
+    const storage = groups.find(({ title }) => title === 'Storage warnings')!;
+    expect(storage.tone).toBe('warning');
+    expect(storage.rows).toHaveLength(2);
+    expect(summaryText(groups)).toContain('disk full');
+  });
+
+  it('reads the wrapper plan and channel execution for CAD results without job-wide ambiguity', () => {
+    const result: ResultPayload = { frequencies: [100] };
+    const wrapper: ResultPayload = { frequencies: [], metadata: { solver_plan: { engine: 'metal', requested: 'auto', fallback_reason: 'No BEAT GPU available' }, beat: { precision: 'single' } } };
+    const groups = summaryGroups({ result, wrapper, channelId: 'hf', job: job({
+      solve_execution: { engine: 'metal', accuracy: 'fast', formulation: null },
+      channel_solve_executions: { hf: { engine: 'beat-cpu', accuracy: 'accurate', formulation: 'Burton–Miller' } },
+    }) });
+    expect(row(groups, 'Solve', 'Engine')?.value).toBe('BEAT CPU');
+    expect(row(groups, 'Solve', 'Requested engine')?.value).toBe('Automatic');
+    expect(row(groups, 'Solve', 'Fallback reason')?.value).toBe('No BEAT GPU available');
+    expect(row(groups, 'Solve', 'BEAT precision')?.value).toBe('single');
+  });
+
+  it('retains standalone plan substitution and deduplicates storage warnings', () => {
+    const result: ResultPayload = { frequencies: [], metadata: { solver_plan: { engine: 'bempp', engine_substitution: { requested: 'metal', reason: 'Metal unavailable' } }, persistence_warnings: ['Storage full'] } };
+    const groups = summaryGroups({ result, job: job({ persistence_warnings: ['Storage full'] }) });
+    expect(row(groups, 'Solve', 'Engine')?.value).toBe('BEMPP');
+    expect(row(groups, 'Solve', 'Requested engine')?.value).toBe('Metal');
+    expect(row(groups, 'Solve', 'Fallback reason')?.value).toBe('Metal unavailable');
+    expect(groups.find(({ title }) => title === 'Storage warnings')?.rows).toHaveLength(1);
+  });
+
+  it('keeps channel routing and both channel and wrapper storage warnings', () => {
+    const result: ResultPayload = { frequencies: [], metadata: { symmetry: { solver_plan: { engine: 'beat-cpu' } }, persistence_warnings: ['Channel storage full'] } };
+    const wrapper: ResultPayload = { frequencies: [], metadata: { solver_plan: { engine: 'metal' }, persistence_warnings: ['Wrapper storage full'] } };
+    const groups = summaryGroups({ result, wrapper });
+    expect(row(groups, 'Solve', 'Engine')?.value).toBe('BEAT CPU');
+    expect(groups.find(({ title }) => title === 'Storage warnings')?.rows.map(({ value }) => value)).toEqual(['Channel storage full', 'Wrapper storage full']);
+  });
+
+  it('omits requested-engine and fallback rows when the engine ran as requested', () => {
+    const groups = summaryGroups({ result: { frequencies: [], metadata: { solver_plan: { engine: 'metal', requested: 'metal' } } } });
+    expect(row(groups, 'Solve', 'Requested engine')).toBeUndefined();
+    expect(row(groups, 'Solve', 'Fallback reason')).toBeUndefined();
+  });
+});

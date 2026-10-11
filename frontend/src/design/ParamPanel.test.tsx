@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadRealizedDimensions, CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
+import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
 import { sharedDelayMode } from '../results/crossoverSpec';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
@@ -148,6 +149,19 @@ describe('ParamPanel inventory UX', () => {
     workspaceModeStore.setMode('parametric');
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it.each(['beat-cpu', 'beat-cuda'])('disables the unsupported XZ half domain for %s', (name) => {
+    act(() => {
+      useSolveOptionsStore.getState().setEngine(name);
+      queryClient.setQueryData(CAPABILITIES_QUERY_KEY, { engines: [{ name, label: name, available: true, symmetry_domains: ['full', 'half-yz', 'quarter'] }] });
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const select = host.querySelector<HTMLSelectElement>('#solve-symmetry')!;
+    expect(select.querySelector<HTMLOptionElement>('option[value="half_xz"]')!.disabled).toBe(true);
+    expect(select.querySelector<HTMLOptionElement>('option[value="half_yz"]')!.disabled).toBe(false);
+    expect(select.querySelector<HTMLOptionElement>('option[value="quarter"]')!.disabled).toBe(false);
+    expect(host.textContent).toContain('does not support half xz domains');
   });
 
   it('shows plain stretch controls for OSSE families and announces preview revisions on edits', () => {

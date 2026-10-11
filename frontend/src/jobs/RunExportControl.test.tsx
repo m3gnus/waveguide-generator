@@ -141,6 +141,14 @@ describe('RunExportControl', () => {
     host.querySelector<HTMLButtonElement>('.action-menu-chevron')!.click();
   });
 
+  it('names the storage cause when the complex pressure basis could not be saved', () => {
+    render(completeJob({ has_pressure_basis_artifact: false, persistence_warnings: ['Pressure-basis artifact could not be saved: disk full'] }));
+    openMenu();
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((element) => element.textContent?.includes('Complex pressure basis'))!;
+    expect(document.querySelector('[role="menu"]')?.textContent).toContain('Pressure-basis artifact could not be saved: disk full');
+    expect(item.getAttribute('aria-disabled')).toBe('true');
+  });
+
   it('does no network work or result fetch on hover', () => {
     vi.useFakeTimers();
     render();
