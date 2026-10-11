@@ -51,6 +51,10 @@ def mount_updates(
     and that one is used.
     """
 
+    # The diagnostics package reads application state; keep it out of the
+    # update service's module-level imports.
+    from server.diagnostics.scrub import scrub_rules, scrub_text, scrub_value
+
     update_service = service or InstallerUpdateService(
         running_version=running_version,
         data_dir=data_dir,
@@ -65,18 +69,26 @@ def mount_updates(
         application.router.add_event_handler("startup", update_service.start_checker)
         application.router.add_event_handler("shutdown", update_service.close)
 
+    def installer_response(payload: dict[str, object]) -> dict[str, object]:
+        # Status and progress can be copied even when the log request fails.
+        # Keep the home folder private at the API boundary, not in install state.
+        # Legacy responses can contain executable commands with absolute paths.
+        if isinstance(update_service, InstallerUpdateService):
+            return scrub_value(payload, scrub_rules())
+        return payload
+
     @application.get("/api/updates/status")
     async def update_status(
         refresh: bool = Query(default=False),
     ) -> dict[str, object]:
-        return await asyncio.to_thread(update_service.get_status, force=refresh)
+        return installer_response(await asyncio.to_thread(update_service.get_status, force=refresh))
 
     @application.get("/api/updates/diagnostics")
     async def update_diagnostics() -> dict[str, object]:
         # The logs "Copy update diagnostics" adds to the update state: each a
         # bounded tail, scrubbed of the home folder. Read from disk, so off the
         # event loop, as the status is.
-        return await asyncio.to_thread(update_service.diagnostic_logs)
+        return scrub_value(await asyncio.to_thread(update_service.diagnostic_logs), scrub_rules())
 
     @application.get("/api/updates/channel")
     async def update_channel() -> dict[str, object]:
@@ -96,16 +108,16 @@ def mount_updates(
             # Both an unrecognised channel and a refused settings write
             # (``SettingsError`` is a ``ValueError``) are the caller's problem.
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                status_code=status.HTTP_400_BAD_REQUEST, detail=scrub_text(str(exc), scrub_rules())
             ) from exc
         except UpdateChannelUnavailable as exc:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+                status_code=status.HTTP_409_CONFLICT, detail=scrub_text(str(exc), scrub_rules())
             ) from exc
         except OSError as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Could not save the update channel: {exc}",
+                detail=scrub_text(f"Could not save the update channel: {exc}", scrub_rules()),
             ) from exc
 
     @application.post("/api/updates/install", status_code=status.HTTP_202_ACCEPTED)
@@ -131,16 +143,16 @@ def mount_updates(
                 content=error_envelope(
                     code=UPDATE_RESTART_PENDING,
                     stage="submission",
-                    message=refusal,
+                    message=scrub_text(refusal, scrub_rules()),
                     retryable=True,
                 ),
             )
         try:
-            return await asyncio.to_thread(update_service.request_install)
+            return installer_response(await asyncio.to_thread(update_service.request_install))
         except UpdateInstallUnavailable as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=str(exc),
+                detail=scrub_text(str(exc), scrub_rules()),
             ) from exc
 
     @application.post("/api/updates/retry")
@@ -159,11 +171,11 @@ def mount_updates(
         try:
             lifted = await asyncio.to_thread(update_service.lift_suppression, build.model_dump())
         except UpdateBuildNotHeldBack as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=scrub_text(str(exc), scrub_rules())) from exc
         except OSError as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Could not retry that build: {exc}",
+                detail=scrub_text(f"Could not retry that build: {exc}", scrub_rules()),
             ) from exc
         return {"lifted": lifted}
 
@@ -176,8 +188,8 @@ def mount_updates(
         if not isinstance(update_service, InstallerUpdateService):
             raise HTTPException(status_code=409, detail="This receiving client uses layer retries.")
         try:
-            return await asyncio.to_thread(update_service.reset_download)
+            return installer_response(await asyncio.to_thread(update_service.reset_download))
         except UpdateInstallUnavailable as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=409, detail=scrub_text(str(exc), scrub_rules())) from exc
 
     return update_service

@@ -70,6 +70,24 @@ export function UpdateButton({ snapshot, open, onOpen, buttonRef }: {
   </>;
 }
 
+async function writePendingText(text: Promise<string>, isCurrent: () => boolean): Promise<void> {
+  const clipboard = navigator.clipboard;
+  if (!clipboard) throw new Error('Clipboard access is unavailable');
+  // WebKit needs the write inside the click gesture, before the fetch resolves.
+  if (typeof ClipboardItem !== 'undefined' && typeof clipboard.write === 'function') {
+    const blob = text.then((value) => new Blob([value], { type: 'text/plain' }));
+    // A refused write may never consume its pending data.
+    void blob.catch(() => undefined);
+    try {
+      await clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+      return;
+    } catch { /* Try writeText where pending clipboard items are unsupported. */ }
+  }
+  if (!clipboard.writeText) throw new Error('Clipboard access is unavailable');
+  const value = await text;
+  if (isCurrent()) await clipboard.writeText(value);
+}
+
 export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 0 }: {
   open: boolean; snapshot: Pick<UpdateSnapshot, 'data' | 'error' | 'isPending'>;
   onRefresh: () => Promise<UpdateStatus>; onClose: () => void; activeJobs?: number;
@@ -78,6 +96,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
   const data = snapshot.data;
   const presentation = updatePresentation(snapshot);
   const generation = useRef(0);
+  const copyGeneration = useRef(0);
   const [busy, setBusy] = useState(false);
   const [copying, setCopying] = useState(false);
   const [feedback, setFeedback] = useState<string>();
@@ -89,6 +108,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
   const state = progress?.installState ?? data?.installState;
   const installing = active(state) || state === 'ready';
   const close = useCallback(() => {
+    copyGeneration.current += 1;
     generation.current += 1; setBusy(false); setCopying(false); setFeedback(undefined); setConfirmRestart(false); setProgress(undefined); setChannelPending(false); setVerifiedChannel(undefined); onClose();
   }, [onClose]);
   const initialFocus = useCallback((node: HTMLDivElement) => node.querySelector<HTMLElement>('[data-autofocus]')
@@ -96,6 +116,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
   const dialog = useModalDialogFocus<HTMLDivElement>({ open, onClose: close, initialFocus });
   useEffect(() => {
     if (open) return;
+    copyGeneration.current += 1;
     generation.current += 1; setBusy(false); setCopying(false); setFeedback(undefined); setConfirmRestart(false); setProgress(undefined); setChoice(undefined); setChannelPending(false); setVerifiedChannel(undefined);
   }, [open]);
   useEffect(() => {
@@ -155,21 +176,25 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
     });
   };
   const copyDiagnostics = () => {
-    const operation = generation.current + 1;
+    const operation = ++copyGeneration.current;
     setCopying(true);
-    void perform(async () => {
-      try {
-        if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable');
-        const diagnostics = await getUpdateDiagnostics();
-        if (operation !== generation.current) return;
-        const copiedStatus = data ? { ...data, checkout: {
-          kind: data.checkout.kind, updateSupported: data.checkout.updateSupported, reason: data.checkout.reason,
-        } } : null;
-        await navigator.clipboard.writeText(JSON.stringify({ frontendVersion: __WG2_VERSION__,
-          status: copiedStatus, statusError: snapshot.error?.message ?? null, progress: progress ?? null, ...diagnostics }, null, 2));
-        if (operation === generation.current) setFeedback('Update diagnostics copied.');
-      } finally { if (operation === generation.current) setCopying(false); }
+    const text = getUpdateDiagnostics().catch((error: unknown) => ({
+      logs: { error: error instanceof Error ? error.message : String(error) },
+    })).then((diagnostics) => {
+      if (operation !== copyGeneration.current) throw new Error('The update dialog was closed');
+      const copiedStatus = data ? { ...data, checkout: {
+        kind: data.checkout.kind, updateSupported: data.checkout.updateSupported, reason: data.checkout.reason,
+      } } : null;
+      return JSON.stringify({ frontendVersion: __WG2_VERSION__, status: copiedStatus,
+        statusError: snapshot.error?.message ?? null, progress: progress ?? null, ...diagnostics }, null, 2);
     });
+    // Unavailable clipboard implementations may never consume the pending text.
+    void text.catch(() => undefined);
+    void writePendingText(text, () => operation === copyGeneration.current).then(() => {
+      if (operation === copyGeneration.current) setFeedback('Update diagnostics copied.');
+    }).catch((error: unknown) => {
+      if (operation === copyGeneration.current) setFeedback(error instanceof Error ? error.message : String(error));
+    }).finally(() => { if (operation === copyGeneration.current) setCopying(false); });
   };
   const choose = (next: UpdateChannel) => {
     const operation = generation.current + 1;
@@ -197,6 +222,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
   };
   const total = progress?.totalBytes || data?.totalBytes || data?.action?.size || 0;
   const downloaded = progress?.downloadedBytes ?? data?.downloadedBytes ?? 0;
+  // A new attempt's null error clears the previous status error; ?? revives it.
   const error = progress ? progress.error : data?.error;
   const mismatch = presentation.state === 'reload';
   const outcome = data?.lastOutcome;
@@ -247,7 +273,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
         {data?.release && <a href={data.release.url} target="_blank" rel="noreferrer">View release</a>}
       </div>
       <footer>{mismatch ? <button data-autofocus onClick={() => window.location.reload()}>Reload WG</button>
-        : installable ? <button data-autofocus disabled={busy || installing} onClick={install}>{busy && !copying ? 'Starting…' : actionLabel}</button>
+        : installable ? <button data-autofocus disabled={busy || installing} onClick={install}>{busy ? 'Starting…' : actionLabel}</button>
           : <button data-autofocus disabled={busy || installing || data?.checking} onClick={() => void perform(async () => {
             const operation = generation.current;
             const refreshed = await onRefresh();
@@ -256,8 +282,8 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
               if (refreshed.channel !== data?.channel) setChannelPending(true);
             }
           })}>
-            {(busy && !copying) || data?.checking ? 'Checking…' : 'Check again'}</button>}
-        <button disabled={busy} onClick={copyDiagnostics}>{copying ? 'Copying…' : 'Copy update diagnostics'}</button>
+            {busy || data?.checking ? 'Checking…' : 'Check again'}</button>}
+        <button disabled={copying} onClick={copyDiagnostics}>{copying ? 'Copying…' : 'Copy update diagnostics'}</button>
         <button onClick={close}>Close</button></footer>
     </div>
   </div>;

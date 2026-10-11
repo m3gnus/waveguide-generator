@@ -556,6 +556,97 @@ def test_the_diagnostics_endpoint_carries_the_updaters_logs_without_the_home_fol
     assert "Removed the update downloads: ~" in text
 
 
+@pytest.mark.parametrize("home,system", [
+    ("/home/test-reporter", "Linux"),
+    (r"C:\Users\test-reporter", "Windows"),
+])
+def test_installer_api_scrubs_status_progress_and_logs_without_changing_install_state(
+    tmp_path: Path, monkeypatch, home: str, system: str,
+) -> None:
+    from copy import deepcopy
+
+    from server.diagnostics.scrub import scrub_rules
+    from server.updates.installer_service import InstallerUpdateService
+
+    rules = scrub_rules(home=home, environ={}, system=system)
+    monkeypatch.setattr("server.diagnostics.scrub.scrub_rules", lambda: rules)
+    message = f"Could not read {home}/update-install/installer.part"
+    snapshot = {
+        "canInstall": True, "installState": "failed", "error": message,
+        "lastError": message, "checkout": {"installRoot": f"{home}/WG"},
+        "lastOutcome": {"log": f"{home}/logs/install.log", "backupPath": f"{home}/saved.previous",
+                        "journalPath": f"{home}/install-journal.json", "error": message},
+    }
+    progress = {"installState": "failed", "error": message}
+
+    class Client:
+        def get_status(self, **_kwargs):
+            return deepcopy(snapshot)
+
+        def request_download(self, _callback):
+            return progress
+
+        def reset_download(self):
+            return progress
+
+    update = InstallerUpdateService(running_version="2.0.0", data_dir=tmp_path,
+        repo_root=tmp_path, update_request_path=tmp_path / "request.json", client=Client())
+    logs = tmp_path / "update-install"
+    logs.mkdir()
+    (logs / "install.log").write_text(message, encoding="utf-8")
+    app = FastAPI()
+    mount_updates(app, running_version="2.0.0", data_dir=tmp_path, repo_root=tmp_path, service=update)
+
+    def call(path, **kwargs):
+        endpoint = next(route.endpoint for route in app.routes if route.path == path)
+        return asyncio.run(endpoint(**kwargs))
+
+    for refresh in (False, True):
+        shown = call("/api/updates/status", refresh=refresh)
+        assert shown["lastOutcome"] == {
+            "log": "~/logs/install.log", "backupPath": "~/saved.previous",
+            "journalPath": "~/install-journal.json", "error": "Could not read ~/update-install/installer.part",
+        }
+        assert shown["checkout"]["installRoot"] == "~/WG"
+        assert shown["lastError"] == shown["error"] == "Could not read ~/update-install/installer.part"
+    for path, confirmation in (("/api/updates/install", "install"), ("/api/updates/reset", "reset")):
+        assert call(path, confirmation=confirmation)["error"] == "Could not read ~/update-install/installer.part"
+    assert call("/api/updates/diagnostics")["logs"]["install.log"] == "Could not read ~/update-install/installer.part"
+    assert update.get_status()["lastOutcome"] == snapshot["lastOutcome"]
+    assert update.get_status()["checkout"]["installRoot"] == f"{home}/WG"
+    assert progress["error"] == message
+    assert (logs / "install.log").read_text(encoding="utf-8") == message
+
+
+def test_legacy_api_keeps_absolute_paths_in_executable_commands(tmp_path: Path) -> None:
+    command = f'install "{Path.home() / "WG"}"'
+
+    class LegacyService:
+        def get_status(self, **_kwargs):
+            return {"action": {"command": command}}
+
+    app = FastAPI()
+    mount_updates(app, running_version="2.0.0", data_dir=tmp_path, repo_root=tmp_path,
+                  service=LegacyService())
+    endpoint = next(route.endpoint for route in app.routes if route.path == "/api/updates/status")
+    assert asyncio.run(endpoint(refresh=False))["action"]["command"] == command
+
+
+def test_install_request_errors_do_not_disclose_the_home_folder(tmp_path: Path) -> None:
+    class ConflictingService:
+        def request_install(self):
+            raise UpdateInstallUnavailable(f"Could not write {Path.home() / 'WG/installer.part'}")
+
+    app = FastAPI()
+    mount_updates(app, running_version="2.0.0", data_dir=tmp_path, repo_root=tmp_path,
+                  service=ConflictingService())
+    endpoint = next(route.endpoint for route in app.routes if route.path == "/api/updates/install")
+    with pytest.raises(HTTPException) as conflict:
+        asyncio.run(endpoint(confirmation="install"))
+    assert conflict.value.status_code == 409
+    assert conflict.value.detail == f"Could not write {Path('~') / 'WG/installer.part'}"
+
+
 def test_the_update_status_reports_a_pending_wglink_activation(tmp_path: Path, monkeypatch):
     """The updater review §3.8: WGLink's partial success is said in the update flow.
 

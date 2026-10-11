@@ -212,8 +212,16 @@ completion record only remembers what the journal decided.
     error, any locally polled install progress, and the returned log tails. It omits
     `checkout.installRoot`. The installer service returns the last 32 KB of
     `update-install/install.log`, with the home folder as `~`; a missing log is `null`.
-    The dialog confirms a successful clipboard write and reports request or clipboard
-    failures without claiming success. Copying remains available during a download.
+    Status, install progress, log tails and update-request errors use the server's
+    diagnostics scrubber to replace the home folder with `~` (including outcome log,
+    backup and journal paths). The underlying installer paths remain unchanged.
+    The dialog starts a pending `ClipboardItem` write within the click gesture for
+    WebKit, falling back to `writeText` where needed. If the log request fails, it
+    still copies the displayed status with `logs: {error: reason}`. It confirms only
+    a successful clipboard write and reports clipboard failures without claiming
+    success. Existing feedback remains visible until the copy finishes, and copying
+    does not disable the install, check or channel controls. Copying remains available
+    during a download.
   - For `installState: failed`, the dialog tells the user to choose "Install and
     restart" to download and verify the installer again, when an installable update
     is available. Otherwise it asks for a new check (or a page reload for a frontend

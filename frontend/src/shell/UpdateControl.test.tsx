@@ -31,6 +31,7 @@ describe('full-installer update control', () => {
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     refresh.mockClear(); close.mockClear(); fetch.mockReset();
     fetch.mockResolvedValue(reply(accepted, 202)); vi.stubGlobal('fetch', fetch);
+    vi.stubGlobal('ClipboardItem', undefined);
   });
   afterEach(() => { act(() => root.unmount()); host.remove(); client.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); });
   function render(value = status(), options: { open?: boolean; activeJobs?: number } = {}) {
@@ -72,25 +73,109 @@ describe('full-installer update control', () => {
     await click('Copy update diagnostics');
     expect(JSON.parse(writeText.mock.calls[0][0])).toMatchObject({ status: null, statusError: 'Status unavailable.', logs: { 'install.log': null } });
   });
-  it.each(['request', 'clipboard', 'unavailable'])('reports a %s failure without confirming a copy', async (failure) => {
+  it('starts a pending ClipboardItem write within the click before the logs arrive', async () => {
+    class PendingItem {
+      constructor(public data: Record<string, Promise<Blob>>) {}
+    }
+    vi.stubGlobal('ClipboardItem', PendingItem);
+    const writeText = clipboard();
+    let inClick = false;
+    const write = vi.fn(async (items: PendingItem[]) => {
+      expect(inClick).toBe(true);
+      const blob = await items[0].data['text/plain'];
+      expect(blob.type).toBe('text/plain');
+      const text = await new Promise<string>((resolve) => {
+        const reader = new FileReader(); reader.onload = () => resolve(reader.result as string); reader.readAsText(blob);
+      });
+      expect(JSON.parse(text).logs).toEqual({ 'install.log': 'Pending logs.' });
+    });
+    Object.assign(navigator.clipboard, { write });
+    const pending = deferred<Response>(); fetch.mockReturnValue(pending.promise); render();
+    act(() => { inClick = true; button('Copy update diagnostics').click(); inClick = false; });
+    expect(write).toHaveBeenCalledTimes(1); expect(writeText).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain('Update diagnostics copied.');
+    await act(async () => {
+      pending.resolve(reply({ tailBytes: 32768, logs: { 'install.log': 'Pending logs.' } }));
+      await write.mock.results[0].value;
+    });
+    expect(host.textContent).toContain('Update diagnostics copied.'); expect(writeText).not.toHaveBeenCalled();
+  });
+  it('uses writeText when ClipboardItem is unavailable', async () => {
+    const writeText = clipboard(); const write = vi.fn(); Object.assign(navigator.clipboard, { write });
+    fetch.mockResolvedValue(reply({ tailBytes: 32768, logs: {} })); render(); await click('Copy update diagnostics');
+    expect(write).not.toHaveBeenCalled(); expect(writeText).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain('Update diagnostics copied.');
+  });
+  it('falls back to writeText when a ClipboardItem write is refused', async () => {
+    vi.stubGlobal('ClipboardItem', class { constructor(public data: Record<string, Promise<Blob>>) {} });
+    const writeText = clipboard(); const write = vi.fn().mockRejectedValue(new Error('Pending items unsupported.'));
+    Object.assign(navigator.clipboard, { write });
+    fetch.mockResolvedValue(reply({ tailBytes: 32768, logs: {} })); render(); await click('Copy update diagnostics');
+    expect(write).toHaveBeenCalledTimes(1); expect(writeText).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain('Update diagnostics copied.');
+  });
+  it.each(['HTTP', 'network'])('copies the displayed status with a %s log-fetch error', async (failure) => {
+    const writeText = clipboard();
+    if (failure === 'HTTP') fetch.mockResolvedValue(reply({ detail: 'Logs unavailable.' }, 503));
+    else fetch.mockRejectedValue(new Error('Logs unavailable.'));
+    render(); await click('Copy update diagnostics');
+    expect(JSON.parse(writeText.mock.calls[0][0])).toMatchObject({ status: { channel: 'stable' }, logs: { error: 'Logs unavailable.' } });
+    expect(host.textContent).toContain('Update diagnostics copied.');
+  });
+  it.each(['clipboard', 'unavailable'])('reports a %s failure without confirming a copy', async (failure) => {
     const writeText = clipboard();
     if (failure === 'unavailable') vi.stubGlobal('navigator', Object.create(navigator, { clipboard: { value: undefined } }));
     else if (failure === 'clipboard') writeText.mockRejectedValue(new Error('Clipboard permission denied.'));
-    fetch.mockResolvedValue(failure === 'request' ? reply({ detail: 'Logs unavailable.' }, 503)
-      : reply({ tailBytes: 32768, logs: { 'install.log': null } }));
+    fetch.mockResolvedValue(reply({ tailBytes: 32768, logs: { 'install.log': null } }));
     render(); await click('Copy update diagnostics');
-    expect(host.textContent).toContain(failure === 'request' ? 'Logs unavailable.'
-      : failure === 'clipboard' ? 'Clipboard permission denied.' : 'Clipboard access is unavailable');
+    expect(host.textContent).toContain(failure === 'clipboard' ? 'Clipboard permission denied.' : 'Clipboard access is unavailable');
     expect(host.textContent).not.toContain('Update diagnostics copied.');
     expect(button('Copy update diagnostics').disabled).toBe(false);
     if (failure !== 'clipboard') expect(writeText).not.toHaveBeenCalled();
   });
-  it('ignores delayed diagnostics after closing and reopening', async () => {
+  it('keeps previous feedback and action controls available while copying', async () => {
+    const writeText = clipboard(); fetch.mockResolvedValueOnce(reply({ detail: 'A download is active.' }, 409));
+    render(); await click('Beta'); expect(host.textContent).toContain('A download is active.');
+    const pending = deferred<Response>(); fetch.mockReturnValue(pending.promise); await click('Copy update diagnostics');
+    expect(host.textContent).toContain('A download is active.');
+    expect(button('Stable').disabled).toBe(false); expect(button('Beta').disabled).toBe(false);
+    expect(button('Install and restart').disabled).toBe(false); expect(button('Copying…').disabled).toBe(true);
+    await act(async () => pending.resolve(reply({ tailBytes: 32768, logs: {} })));
+    expect(writeText).toHaveBeenCalledTimes(1); expect(host.textContent).not.toContain('A download is active.');
+    expect(host.textContent).toContain('Update diagnostics copied.');
+  });
+  it('does not invalidate an installation request when copying starts', async () => {
+    const writeText = clipboard(); const pending = deferred<Response>();
+    fetch.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(reply({ tailBytes: 32768, logs: {} }));
+    render(); await click('Install and restart'); await click('Copy update diagnostics');
+    expect(button('Starting…').disabled).toBe(true); expect(writeText).toHaveBeenCalledTimes(1);
+    await act(async () => pending.resolve(reply(accepted, 202)));
+    expect(button('Downloading…').disabled).toBe(true);
+  });
+  it.each(['writeText', 'ClipboardItem'])('ignores delayed diagnostics after closing and reopening with %s', async (method) => {
     const writeText = clipboard(); const pending = deferred<Response>(); fetch.mockReturnValue(pending.promise);
+    if (method === 'ClipboardItem') {
+      vi.stubGlobal('ClipboardItem', class { constructor(public data: Record<string, Promise<Blob>>) {} });
+      Object.assign(navigator.clipboard, { write: vi.fn(async (items: { data: Record<string, Promise<Blob>> }[]) => {
+        await items[0].data['text/plain'];
+      }) });
+    }
     render(); await click('Copy update diagnostics');
     expect(button('Copying…').disabled).toBe(true);
     await click('Close'); render(status(), { open: false }); render();
     await act(async () => pending.resolve(reply({ tailBytes: 32768, logs: { 'install.log': null } })));
+    expect(writeText).not.toHaveBeenCalled(); expect(host.textContent).not.toContain('Update diagnostics copied.');
+    expect(button('Copy update diagnostics').disabled).toBe(false);
+  });
+  it('does not start a fallback write after closing while ClipboardItem is pending', async () => {
+    vi.stubGlobal('ClipboardItem', class { constructor(public data: Record<string, Promise<Blob>>) {} });
+    const writeText = clipboard(); const pending = deferred<void>();
+    Object.assign(navigator.clipboard, { write: vi.fn(async () => {
+      await pending.promise; throw new Error('Pending write refused.');
+    }) });
+    fetch.mockResolvedValue(reply({ tailBytes: 32768, logs: {} })); render(); await click('Copy update diagnostics');
+    await click('Close'); render(status(), { open: false }); render();
+    await act(async () => pending.resolve());
     expect(writeText).not.toHaveBeenCalled(); expect(host.textContent).not.toContain('Update diagnostics copied.');
     expect(button('Copy update diagnostics').disabled).toBe(false);
   });
