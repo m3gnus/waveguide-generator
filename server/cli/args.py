@@ -12,7 +12,7 @@ from server.engines.registry import EngineInfo, EngineRegistry, detect_engines
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wg",
-        description="Inspect Waveguide Generator designs without starting the server.",
+        description="Validate designs locally and solve through the WG backend.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -54,7 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     solve_parser = subparsers.add_parser(
         "solve",
-        help="solve a design through the persistent job runtime",
+        help="solve a design through the backend owning its data folder",
+        epilog=(
+            "Exit codes: 0 success; 1 solve/input/output/backend failure; "
+            "2 usage error; 3 backend data-folder mismatch; 4 backend start timeout; "
+            "5 backend spawn failure; 130 SIGINT cancellation."
+        ),
     )
     solve_parser.add_argument(
         "design",
@@ -139,6 +144,7 @@ def main(
     *,
     engine_registry: EngineRegistry | None = None,
     engine_detector: Callable[[], list[EngineInfo]] | None = None,
+    _internal_in_process: bool = False,
 ) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -161,7 +167,9 @@ def main(
     if args.command == "solve":
         from .solve import solve_command
 
-        return solve_command(args, engine_registry=registry)
+        return solve_command(
+            args, engine_registry=registry, _internal_in_process=_internal_in_process
+        )
     if args.command == "export-package":
         from .export_package import export_package_command
 

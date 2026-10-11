@@ -190,6 +190,13 @@ class SolvePlanResponse(BaseModel):
     adjustments: list[PlanAdjustment] = []
 
 
+class JobRequestsResponse(BaseModel):
+    """The same request stages used by the CLI's artifact bundle."""
+
+    effective_request: SolveRequest
+    execution_request: SolveRequest
+
+
 class ImportedEngineVerdictResponse(BaseModel):
     """Whether one engine can solve one ingested CAD return here, and why not."""
 
@@ -707,6 +714,23 @@ def create_jobs_router(
             return JobStatusResponse.model_validate(await runtime.get_job(job_id))
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
+
+    @router.get("/api/jobs/{job_id}/requests", response_model=JobRequestsResponse)
+    async def job_requests(job_id: str) -> Response:
+        try:
+            effective = await runtime.get_effective_request(job_id)
+            execution = await runtime.get_execution_request(job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        except JobConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return JSONResponse(
+            content={
+                "effective_request": effective.model_dump(mode="json"),
+                "execution_request": execution.model_dump(mode="json"),
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
     @router.get(
         "/api/results/{job_id}",

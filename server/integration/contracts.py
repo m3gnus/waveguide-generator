@@ -65,6 +65,7 @@ class CliOutcome(IntegrationModel):
         "interrupted",
     ]
     job_id: str | None = None
+    job_url: str | None = None
     client_request_id: str | None = None
     output_directory: str | None = None
     result_sha256: str | None = Field(

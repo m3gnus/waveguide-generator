@@ -13,6 +13,7 @@ def write_outcome(
     *,
     status: str,
     job_id: str | None = None,
+    job_url: str | None = None,
     client_request_id: str | None = None,
     output_directory: str | None = None,
     result_sha256: str | None = None,
@@ -36,6 +37,7 @@ def write_outcome(
     document = CliOutcome(
         status=status,
         job_id=job_id,
+        job_url=job_url,
         client_request_id=client_request_id,
         output_directory=output_directory,
         result_sha256=result_sha256,

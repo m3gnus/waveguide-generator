@@ -124,4 +124,8 @@ retrieval, and digest verification.
 
 CLI clients should always supply `--output` and own the resulting artifact directory;
 HTTP clients should persist the digest-verified response in their own study storage.
-Neither transport automatically adds a run to the GUI-managed Workspace archive.
+Workspace archiving is performed by an open WG frontend when its archive preference
+is enabled; neither client writes those archive files itself.
+CLI solves submit to the one backend for the selected data folder, so their jobs
+and results appear in WG's job history, with or without `--output`. The terminal
+outcome's `job_url` opens that run; see [the CLI contract](CLI.md).

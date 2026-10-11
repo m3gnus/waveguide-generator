@@ -1,4 +1,4 @@
-"""Run one text design through the persistent headless job runtime."""
+"""Run one design through the backend owning the selected WG data folder."""
 
 from __future__ import annotations
 
@@ -42,6 +42,13 @@ from server.platform.signal_rearm import (
 )
 from server.platform.staging import publish_staging_directory
 
+from launch.backend_argv import headless_backend_argv
+from server.platform.backend_owner import (
+    BackendDataDirMismatch, BackendOwnerError, BackendSpawnError, BackendStartTimeout,
+    discover_backend, ensure_backend,
+)
+
+from .backend_client import BackendClient, BackendClientError
 from .request import build_request
 from .outcome import write_outcome
 from .request import load_request_document
@@ -51,8 +58,8 @@ _TERMINAL_STATUSES = {"complete", "error", "cancelled"}
 _TERMINAL_EVENTS = {"completed", "failed", "cancelled"}
 _DATABASE_ONLY_WARNING = (
     "Warning: no --output directory was requested. Results are retained only in "
-    "the WG job database and are subject to its retention policy; this CLI solve "
-    "is not added to the GUI Workspace run archive. Use --output DIR for a "
+    "the WG job database, visible in WG history, and are subject to its retention "
+    "policy. Use --output DIR for a "
     "durable, caller-owned artifact bundle."
 )
 
@@ -64,6 +71,8 @@ class _StreamTransport:
         self._closed = asyncio.Event()
         self._ready = asyncio.Event()
         self._terminal = asyncio.Event()
+        self._job_id: str | None = None
+        self._terminal_jobs: set[str] = set()
 
     async def receive(self) -> None:
         await self._closed.wait()
@@ -79,6 +88,11 @@ class _StreamTransport:
     async def wait_terminal(self) -> None:
         await self._terminal.wait()
 
+    def watch_job(self, job_id: str) -> None:
+        self._job_id = job_id
+        if job_id in self._terminal_jobs:
+            self._terminal.set()
+
     def _observe(self, message: Mapping[str, Any]) -> None:
         if message.get("kind") == "hello":
             self._ready.set()
@@ -86,7 +100,16 @@ class _StreamTransport:
             message.get("kind") == "event"
             and message.get("type") in _TERMINAL_EVENTS
         ):
-            self._terminal.set()
+            job_id = str(message.get("jobId") or "")
+            self._terminal_jobs.add(job_id)
+            if job_id == self._job_id:
+                self._terminal.set()
+        if message.get("kind") == "snapshot":
+            for job in message.get("jobs", []):
+                if job.get("status") in _TERMINAL_STATUSES:
+                    self._terminal_jobs.add(str(job["id"]))
+                    if job["id"] == self._job_id:
+                        self._terminal.set()
 
 
 class NdjsonTransport(_StreamTransport):
@@ -127,7 +150,7 @@ class TextTransport(_StreamTransport):
 
 @contextmanager
 def _capture_sigint(interrupted: asyncio.Event):
-    """Turn the first Ctrl-C into cooperative runtime shutdown."""
+    """Turn the first Ctrl-C into cooperative cancellation of this solve."""
 
     if threading.current_thread() is not threading.main_thread():
         yield
@@ -189,12 +212,12 @@ def _read_request(args: argparse.Namespace):
     return build_request(parsed, overlay=args.overlay, engine=args.engine).request
 
 
-async def _wait_for_terminal(runtime: JobRuntime, job_id: str) -> dict[str, Any]:
+async def _wait_for_terminal(runtime: JobRuntime | BackendClient, job_id: str) -> dict[str, Any]:
     while True:
         job = await runtime.get_job(job_id)
         if job["status"] in _TERMINAL_STATUSES:
             return job
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.2 if isinstance(runtime, BackendClient) else 0.02)
 
 
 async def _wait_for_stream(
@@ -290,7 +313,7 @@ async def _write_output(
     output: Path,
     *,
     results: str,
-    runtime: JobRuntime,
+    runtime: JobRuntime | BackendClient,
     job: Mapping[str, Any],
     submitted_request: Any,
     stderr: TextIO,
@@ -304,8 +327,14 @@ async def _write_output(
         effective_request = await runtime.get_effective_request(job_id)
         execution_request = await runtime.get_execution_request(job_id)
         submitted_wire = submitted_request.model_dump(mode="json")
-        effective_wire = effective_request.model_dump(mode="json")
-        execution_wire = execution_request.model_dump(mode="json")
+        effective_wire = (
+            effective_request if isinstance(effective_request, Mapping)
+            else effective_request.model_dump(mode="json")
+        )
+        execution_wire = (
+            execution_request if isinstance(execution_request, Mapping)
+            else execution_request.model_dump(mode="json")
+        )
         artifacts: dict[str, dict[str, Any]] = {
             "results.json": _write_artifact(
                 staging / "results.json",
@@ -377,6 +406,7 @@ async def solve_path(
     engine_registry: EngineRegistry,
     stdout: TextIO,
     stderr: TextIO,
+    _internal_in_process: bool = False,
 ) -> int:
     ndjson = args.json_events or args.events == "ndjson"
     try:
@@ -426,27 +456,43 @@ async def solve_path(
 
     try:
         data_dir = ensure_data_layout(args.data_dir).root
-        # Imported geometry resolves its ingest through this registry, and a
-        # runtime without one refuses every CAD-Link solve as
-        # ``ingest_registry_unavailable`` -- so headless solves worked for
-        # parametric designs only, and a CAD model could not be swept, laddered
-        # or re-solved outside the GUI at all. It is the same store the app
-        # mounts, opened from the same data directory.
-        cadlink_store = CadLinkStore.for_data_dir(data_dir)
-        cadlink_store.initialize()
-        runtime = JobRuntime(
-            JobStore.for_data_dir(data_dir),
-            engine_registry=engine_registry,
-            cadlink_store=cadlink_store,
-            # The GUI's automatic result cleanup preference, from the same data
-            # directory: a CLI solve against a shared job database must not
-            # prune results the user chose to keep.
-            results_auto_cleanup=settings_auto_cleanup_policy(SettingsStore(data_dir)),
-        )
-        await runtime.start()
+        if _internal_in_process:
+            # Explicit Python-only test hook. Production solves never own a runtime.
+            cadlink_store = CadLinkStore.for_data_dir(data_dir)
+            cadlink_store.initialize()
+            runtime = JobRuntime(
+                JobStore.for_data_dir(data_dir),
+                engine_registry=engine_registry,
+                cadlink_store=cadlink_store,
+                results_auto_cleanup=settings_auto_cleanup_policy(SettingsStore(data_dir)),
+            )
+            await runtime.start()
+        else:
+            handle = await asyncio.to_thread(discover_backend, data_dir)
+            if handle is None:
+                handle = await asyncio.to_thread(
+                    ensure_backend, data_dir, headless_backend_argv(data_dir)
+                )
+            runtime = BackendClient(handle)
+    except BackendOwnerError as exc:
+        code, exit_code = "backend_start_failed", 1
+        if isinstance(exc, BackendDataDirMismatch):
+            code, exit_code = "backend_data_dir_mismatch", 3
+        elif isinstance(exc, BackendStartTimeout):
+            code, exit_code = "backend_start_timeout", 4
+        elif isinstance(exc, BackendSpawnError):
+            code, exit_code = "backend_spawn_failed", 5
+        print(f"Waveguide Generator backend unavailable: {exc}", file=stderr)
+        if ndjson:
+            write_outcome(
+                stdout, status="refused", client_request_id=request.client_request_id,
+                error_code=code, error_stage="startup", error_message=str(exc),
+                retryable=exit_code == 4,
+            )
+        return exit_code
     except JobConflictError as exc:
         print(
-            f"{exc}. Use --data-dir DIR or stop the running GUI server.",
+            f"Internal in-process test runtime refused: {exc}.",
             file=stderr,
         )
         if ndjson:
@@ -461,13 +507,13 @@ async def solve_path(
             )
         return 2
     except (OSError, RuntimeError, ValueError) as exc:
-        print(f"Waveguide Generator could not start the job runtime: {exc}", file=stderr)
+        print(f"Waveguide Generator could not start the solve: {exc}", file=stderr)
         if ndjson:
             write_outcome(
                 stdout,
                 status="failed",
                 client_request_id=request.client_request_id,
-                error_code="runtime_start_failed",
+                error_code="runtime_start_failed" if _internal_in_process else "backend_start_failed",
                 error_stage="startup",
                 error_message=str(exc),
                 retryable=True,
@@ -479,8 +525,12 @@ async def solve_path(
         if ndjson
         else TextTransport(stdout=stdout, stderr=stderr)
     )
-    protocol = JobsProtocol(runtime)
-    protocol_task = asyncio.create_task(protocol.run(transport))
+    protocol_task = asyncio.create_task(
+        runtime.run_events(transport)
+        if isinstance(runtime, BackendClient)
+        else JobsProtocol(runtime).run(transport)
+    )
+    job_id: str | None = None
 
     async def final_outcome(**fields: Any) -> None:
         # The outcome must be stdout's last line. Stop the event stream and let
@@ -488,82 +538,90 @@ async def solve_path(
         # print a jobs-protocol message after the outcome.
         await transport.close(1000)
         await asyncio.gather(protocol_task, return_exceptions=True)
+        if isinstance(runtime, BackendClient) and job_id is not None:
+            fields["job_url"] = runtime.job_url(job_id)
         write_outcome(stdout, **fields)
 
     interrupted = asyncio.Event()
     shutdown_done = False
-    try:
-        await _wait_for_stream(transport.wait_ready(), protocol_task)
+    terminal_task: asyncio.Task[Any] | None = None
+    interrupt_task: asyncio.Task[Any] | None = None
+    with _capture_sigint(interrupted):
         try:
-            job_id = await runtime.submit(request)
-        except EngineUnavailableError as exc:
-            print(f"Solve refused: {exc}", file=stderr)
-            if ndjson:
-                await final_outcome(
-                    status="refused",
-                    client_request_id=request.client_request_id,
-                    error_code="engine_unavailable",
-                    error_stage="submission",
-                    error_message=str(exc),
+            await _wait_for_stream(transport.wait_ready(), protocol_task)
+            try:
+                job_id = await runtime.submit(request)
+            except EngineUnavailableError as exc:
+                print(f"Solve refused: {exc}", file=stderr)
+                if ndjson:
+                    await final_outcome(
+                        status="refused",
+                        client_request_id=request.client_request_id,
+                        error_code="engine_unavailable",
+                        error_stage="submission",
+                        error_message=str(exc),
+                    )
+                return 1
+            except ImportedSolveRefusal as exc:
+                print(f"Solve refused: {exc}", file=stderr)
+                if ndjson:
+                    await final_outcome(
+                        status="refused",
+                        client_request_id=request.client_request_id,
+                        error_code=exc.reason_code,
+                        error_stage="submission",
+                        error_message=str(exc),
+                        error_details=exc.details,
+                    )
+                return 1
+            except SubmissionConflictError as exc:
+                message = (
+                    f"{exc}. The stored job was made by a different request or "
+                    "solver configuration; choose a new clientRequestId to solve again."
                 )
-            return 1
-        except ImportedSolveRefusal as exc:
-            print(f"Solve refused: {exc}", file=stderr)
-            if ndjson:
-                await final_outcome(
-                    status="refused",
-                    client_request_id=request.client_request_id,
-                    error_code=exc.reason_code,
-                    error_stage="submission",
-                    error_message=str(exc),
-                    error_details=exc.details,
-                )
-            return 1
-        except SubmissionConflictError as exc:
-            message = (
-                f"{exc}. The stored job was made by a different request or "
-                "solver configuration; choose a new clientRequestId to solve again."
-            )
-            print(f"Solve refused: {message}", file=stderr)
-            if ndjson:
-                await final_outcome(
-                    status="refused",
-                    client_request_id=request.client_request_id,
-                    error_code="submission_conflict",
-                    error_stage="submission",
-                    error_message=message,
-                )
-            return 1
-        except (SymmetryValidationError, UnknownEngineError, ValueError) as exc:
-            print(f"Solve refused: {exc}", file=stderr)
-            if isinstance(exc, SymmetryValidationError):
-                code = "invalid_symmetry"
-            elif isinstance(exc, UnknownEngineError):
-                code = "unknown_engine"
-            else:
-                code = "invalid_request"
-            if ndjson:
-                await final_outcome(
-                    status="refused",
-                    client_request_id=request.client_request_id,
-                    error_code=code,
-                    error_stage="submission",
-                    error_message=str(exc),
-                )
-            return 1
+                print(f"Solve refused: {message}", file=stderr)
+                if ndjson:
+                    await final_outcome(
+                        status="refused",
+                        client_request_id=request.client_request_id,
+                        error_code="submission_conflict",
+                        error_stage="submission",
+                        error_message=message,
+                    )
+                return 1
+            except (SymmetryValidationError, UnknownEngineError, ValueError) as exc:
+                print(f"Solve refused: {exc}", file=stderr)
+                if isinstance(exc, SymmetryValidationError):
+                    code = "invalid_symmetry"
+                elif isinstance(exc, UnknownEngineError):
+                    code = "unknown_engine"
+                else:
+                    code = "invalid_request"
+                if ndjson:
+                    await final_outcome(
+                        status="refused",
+                        client_request_id=request.client_request_id,
+                        error_code=code,
+                        error_stage="submission",
+                        error_message=str(exc),
+                    )
+                return 1
 
-        terminal_task = asyncio.create_task(_wait_for_terminal(runtime, job_id))
-        interrupt_task = asyncio.create_task(interrupted.wait())
-        with _capture_sigint(interrupted):
+            transport.watch_job(job_id)
+            terminal_task = asyncio.create_task(_wait_for_terminal(runtime, job_id))
+            interrupt_task = asyncio.create_task(interrupted.wait())
             done, _pending = await asyncio.wait(
-                {terminal_task, interrupt_task},
+                {terminal_task, interrupt_task, protocol_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if interrupt_task in done and interrupted.is_set():
                 terminal_task.cancel()
                 await asyncio.gather(terminal_task, return_exceptions=True)
-                await runtime.shutdown()
-                shutdown_done = True
+                if isinstance(runtime, BackendClient):
+                    await runtime.stop(job_id)
+                else:
+                    await runtime.shutdown()
+                    shutdown_done = True
                 if ndjson:
                     await final_outcome(
                         status="interrupted",
@@ -574,116 +632,143 @@ async def solve_path(
                         error_message="Solve interrupted by SIGINT",
                     )
                 return 130
+            if protocol_task in done:
+                protocol_task.result()
+                raise BackendClientError("WG job event stream closed unexpectedly")
             interrupt_task.cancel()
             await asyncio.gather(interrupt_task, return_exceptions=True)
             job = terminal_task.result()
 
-        await _wait_for_stream(transport.wait_terminal(), protocol_task)
-        results: str | None = None
-        output_summary: dict[str, Any] | None = None
-        if job["status"] == "complete":
-            try:
-                results = await runtime.get_results_text(job_id)
-            except (JobConflictError, JobResourceUnavailableError) as exc:
-                print(f"Could not fetch solve results: {exc}", file=stderr)
-                if ndjson:
-                    await final_outcome(
-                        status="failed",
-                        job_id=job_id,
-                        client_request_id=request.client_request_id,
-                        error_code="result_unavailable",
-                        error_stage="result",
-                        error_message=str(exc),
-                        retryable=True,
+            await _wait_for_stream(transport.wait_terminal(), protocol_task)
+            results: str | None = None
+            output_summary: dict[str, Any] | None = None
+            if job["status"] == "complete":
+                try:
+                    results = await runtime.get_results_text(job_id)
+                except (JobConflictError, JobResourceUnavailableError) as exc:
+                    print(f"Could not fetch solve results: {exc}", file=stderr)
+                    if ndjson:
+                        await final_outcome(
+                            status="failed",
+                            job_id=job_id,
+                            client_request_id=request.client_request_id,
+                            error_code="result_unavailable",
+                            error_stage="result",
+                            error_message=str(exc),
+                            retryable=True,
+                        )
+                    return 1
+            if results is not None and args.output is not None:
+                try:
+                    output_summary = await _write_output(
+                        args.output,
+                        results=results,
+                        runtime=runtime,
+                        job=job,
+                        submitted_request=request,
+                        stderr=stderr,
                     )
-                return 1
-        if results is not None and args.output is not None:
-            try:
-                output_summary = await _write_output(
-                    args.output,
-                    results=results,
-                    runtime=runtime,
-                    job=job,
-                    submitted_request=request,
-                    stderr=stderr,
-                )
-            except FileExistsError:
-                print(
-                    f"Solve refused: output directory already exists: {args.output}",
-                    file=stderr,
-                )
-                if ndjson:
-                    await final_outcome(
-                        status="failed",
-                        job_id=job_id,
-                        client_request_id=request.client_request_id,
-                        output_directory=str(args.output),
-                        error_code="output_exists",
-                        error_stage="output",
-                        error_message=f"output directory already exists: {args.output}",
+                except FileExistsError:
+                    print(
+                        f"Solve refused: output directory already exists: {args.output}",
+                        file=stderr,
                     )
-                return 1
-            except (OSError, ValueError) as exc:
-                print(f"Could not write solve output: {exc}", file=stderr)
-                if ndjson:
-                    await final_outcome(
-                        status="failed",
-                        job_id=job_id,
-                        client_request_id=request.client_request_id,
-                        output_directory=str(args.output),
-                        error_code="output_write_failed",
-                        error_stage="output",
-                        error_message=str(exc),
-                        retryable=True,
-                    )
-                return 1
+                    if ndjson:
+                        await final_outcome(
+                            status="failed",
+                            job_id=job_id,
+                            client_request_id=request.client_request_id,
+                            output_directory=str(args.output),
+                            error_code="output_exists",
+                            error_stage="output",
+                            error_message=f"output directory already exists: {args.output}",
+                        )
+                    return 1
+                except (OSError, ValueError) as exc:
+                    print(f"Could not write solve output: {exc}", file=stderr)
+                    if ndjson:
+                        await final_outcome(
+                            status="failed",
+                            job_id=job_id,
+                            client_request_id=request.client_request_id,
+                            output_directory=str(args.output),
+                            error_code="output_write_failed",
+                            error_stage="output",
+                            error_message=str(exc),
+                            retryable=True,
+                        )
+                    return 1
 
-        if not ndjson:
-            _print_summary(job, output=args.output, stream=stdout)
-        if job["status"] != "complete":
-            message = job.get("error_message") or "solve did not complete"
-            print(f"Solve failed: {message}", file=stderr)
+            if not ndjson:
+                _print_summary(job, output=args.output, stream=stdout)
+                if isinstance(runtime, BackendClient):
+                    print(runtime.job_url(job_id), file=stdout, flush=True)
+            if job["status"] != "complete":
+                message = job.get("error_message") or "solve did not complete"
+                print(f"Solve failed: {message}", file=stderr)
+                if ndjson:
+                    cancelled = job["status"] == "cancelled"
+                    await final_outcome(
+                        status="cancelled" if cancelled else "failed",
+                        job_id=job_id,
+                        client_request_id=request.client_request_id,
+                        error_code="cancelled" if cancelled else "solve_failed",
+                        error_stage=str(job.get("stage") or "solve"),
+                        error_message=message,
+                    )
+                return 1
+            if args.output is None:
+                print(_DATABASE_ONLY_WARNING, file=stderr, flush=True)
             if ndjson:
-                cancelled = job["status"] == "cancelled"
                 await final_outcome(
-                    status="cancelled" if cancelled else "failed",
+                    status="complete",
                     job_id=job_id,
                     client_request_id=request.client_request_id,
-                    error_code="cancelled" if cancelled else "solve_failed",
-                    error_stage=str(job.get("stage") or "solve"),
-                    error_message=message,
+                    output_directory=str(args.output) if args.output is not None else None,
+                    # This is always the exact stored/API response body. Output
+                    # formatting and optional artifacts must not change result
+                    # identity.
+                    result_sha256=_sha256_text(results or ""),
+                    artifacts=(
+                        output_summary["artifacts"]
+                        if output_summary is not None
+                        else None
+                    ),
+                )
+            return 0
+        except BackendClientError as exc:
+            print(f"Waveguide Generator backend error: {exc}", file=stderr)
+            if ndjson:
+                error = exc.error
+                await final_outcome(
+                    status="refused" if job_id is None else "failed",
+                    job_id=job_id, client_request_id=request.client_request_id,
+                    error_code=error.get("code", "backend_connection_failed"),
+                    error_stage=error.get("stage", "backend"),
+                    error_message=error.get("message", str(exc)),
+                    retryable=error.get("retryable", False),
+                    error_details=error.get("details", {}),
                 )
             return 1
-        if args.output is None:
-            print(_DATABASE_ONLY_WARNING, file=stderr, flush=True)
-        if ndjson:
-            await final_outcome(
-                status="complete",
-                job_id=job_id,
-                client_request_id=request.client_request_id,
-                output_directory=str(args.output) if args.output is not None else None,
-                # This is always the exact stored/API response body. Output
-                # formatting and optional artifacts must not change result
-                # identity.
-                result_sha256=_sha256_text(results or ""),
-                artifacts=(
-                    output_summary["artifacts"]
-                    if output_summary is not None
-                    else None
-                ),
+        finally:
+            for task in (terminal_task, interrupt_task):
+                if task is not None:
+                    task.cancel()
+            await asyncio.gather(
+                *(task for task in (terminal_task, interrupt_task) if task is not None),
+                return_exceptions=True,
             )
-        return 0
-    finally:
-        await transport.close(1000)
-        await asyncio.gather(protocol_task, return_exceptions=True)
-        if not shutdown_done:
-            await runtime.shutdown()
+            await transport.close(1000)
+            await asyncio.gather(protocol_task, return_exceptions=True)
+            if not shutdown_done and not isinstance(runtime, BackendClient):
+                await runtime.shutdown()
 
 
 def solve_command(
     args: argparse.Namespace,
     *,
     engine_registry: EngineRegistry,
+    _internal_in_process: bool = False,
 ) -> int:
     return asyncio.run(
         solve_path(
@@ -691,6 +776,7 @@ def solve_command(
             engine_registry=engine_registry,
             stdout=sys.stdout,
             stderr=sys.stderr,
+            _internal_in_process=_internal_in_process,
         )
     )
 

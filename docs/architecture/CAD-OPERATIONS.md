@@ -520,7 +520,8 @@ press at all when WG is confident.
   - **One exception: jobs already queued.** A job accepted before an upgrade to this
     contract and still queued is requeued by `JobRuntime.start` as it was submitted; it
     is not submitted again, so it is not re-gated. Every later solve of that model is.
-  - **Headless solves.** `server/cli/solve.py` submits through the same runtime, so a
+  - **Headless solves.** `server/cli/solve.py` submits over HTTP to the backend owning
+    the selected data folder, so a
     headless solve of an unlinked ingestion is refused until its frame is confirmed,
     unless it was meshed along WG's confident automatic axis (a CLI import meshed as
     modelled where WG is confident about another axis is refused, and the refusal says
@@ -1103,6 +1104,18 @@ a different folder produces a typed refusal. An unconfirmed child still running
 at the deadline is terminated and waited for; a healthy backend stays detached.
 Concurrent clients find one backend and never work around a conflict with a
 private data folder.
+
+Stage 6's CLI client uses that owner for `POST /api/solve`, relays `/ws/jobs`, and
+reads terminal status and artifacts over HTTP. If no backend is healthy, it calls
+`ensure_backend` with `launch/backend_argv.py:headless_backend_argv` (the supported
+`launch/serve.py` entry point, exact data folder, `--no-browser`). The CLI never
+owns a production `JobRuntime`. Two concurrent commands submit two jobs to one
+queue, visible in WG history even when no frontend was open. Completed human
+output and terminal NDJSON `job_url` point at `/?job=<id>`. Effective and execution
+requests are available from `GET /api/jobs/{id}/requests`, preserving the existing
+`--output` bundle bytes. SIGINT stops only the submitted job via `/api/stop/{id}`.
+Data-folder mismatch, startup timeout and spawn failure exit 3, 4 and 5 respectively;
+none falls back to a private folder. See [the CLI contract](../reference/CLI.md).
 
 ## Solve-command delivery
 

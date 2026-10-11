@@ -1,7 +1,7 @@
 # Headless command-line contract
 
 Status: canonical integration contract, version 1. Verified against `server/cli/`
-and its contract tests on 2026-08-20.
+and its contract tests on 2026-10-11.
 
 The installer places `wg` inside the repository-local environment. From the checkout:
 
@@ -51,15 +51,25 @@ error shape as the HTTP adapter. On success, `result_sha256` identifies the exac
 stored result bytes returned by the HTTP results endpoint whether or not `--output`
 was requested. When output was written, `artifacts` separately reports each file's
 exact-byte SHA-256 (excluding the self-describing `summary.json`).
+Once a job is accepted, its outcome includes `job_url`,
+`http://127.0.0.1:<port>/?job=<id>`, which opens that run in WG. Human output
+prints the same link on completion.
 
 Process exits are:
 
 | Code | Meaning |
 |---|---|
 | `0` | validation or solve completed successfully |
-| `1` | input refusal, unavailable engine, solve failure, or output failure |
-| `2` | command-line usage error, or the selected application data directory is owned by another WG runtime |
+| `1` | input refusal, unavailable engine, solve/output failure, or other backend failure |
+| `2` | command-line usage error |
+| `3` | backend data-folder mismatch (`backend_data_dir_mismatch`) |
+| `4` | backend startup deadline expired (`backend_start_timeout`) |
+| `5` | backend could not be spawned or exited during startup (`backend_spawn_failed`) |
 | `130` | interrupted by SIGINT after cooperative cancellation began |
+
+Backend errors explain the installation, folder or log to check. The CLI never
+retries into another folder. SIGINT calls `POST /api/stop/{id}` for this job;
+the backend and its other queued jobs stay running.
 
 ## Solve output
 
@@ -82,6 +92,9 @@ platform-independent and hashes exactly the file on disk. The artifact entries f
 the three request documents also carry `canonical_sha256`, which hashes the parsed JSON
 rather than its pretty-printed bytes. `summary.json.requestIdentity` names all three
 stages.
+The effective and execution documents come from
+`GET /api/jobs/{id}/requests`; result, mesh and log bytes use their existing HTTP
+routes. The serializer and bundle contents are unchanged from in-process solves.
 
 Result provenance has `request_identity: "execution"`; its explicit `execution_*`
 hashes match `execution-request.json`, including symmetry-domain resolution. The
@@ -92,15 +105,35 @@ symmetry resolution changed the request.
 
 This bundle is intentionally separate from the GUI's design-grouped Workspace run
 archive. The archive is frontend automation and adds `run.json`, `design.json`, and
-human-facing JSON/CSV exports. A CLI solve is not automatically added to it. If
-`--output` is omitted, results remain only in the WG job database and are subject to
-its retention policy; a successful command warns about that state on stderr. NDJSON
+human-facing JSON/CSV exports. Every CLI solve is visible in the backend's WG job
+history, even if no frontend was open during the solve. An open WG frontend can
+archive eligible CLI runs according to its archive preference; the CLI itself
+writes only its requested bundle. If `--output` is omitted,
+results remain in that shared job database and are subject to its retention policy;
+a successful command warns about that state on stderr. NDJSON
 stdout remains protocol-only.
 
 ## Scheduling boundary
 
-One WG runtime executes a one-worker FIFO queue. Separate `--data-dir` values isolate
+The CLI discovers the backend holding the selected data folder's `InstanceLock`
+and submits the existing request to `POST /api/solve`. With no healthy owner,
+`ensure_backend` serialises startup and launches `launch/serve.py` on that exact
+folder with `--no-browser`. The small argv builder is
+`launch/backend_argv.py:headless_backend_argv`, matching the status launcher's
+server entry point and working outside the checkout directory. Concurrent CLI
+commands reach one backend; its database ownership guard remains in force.
+
+Progress uses the existing `/ws/jobs` stream with pinned `websockets`, preserving
+Jobs Protocol v1 records and partial results. HTTP status checks determine the
+terminal job state. HTTP uses stdlib `urllib`; both transports send no Origin
+header. The CLI closes its relay before printing the last outcome line.
+
+One WG backend executes a one-worker FIFO queue. Separate `--data-dir` values isolate
 job stores; they are not a promise that multiple solver processes are safe or faster on
 one machine. In particular, GPU and dense CPU solves can exhaust shared resources.
-Version 1 supports serial execution. Long-running clients should normally submit work
-to one persistent HTTP runtime rather than restart the CLI process for every request.
+Version 1 supports serial execution. The backend remains running after the CLI exits.
+
+Runtime unit tests may explicitly pass the Python-only keyword
+`_internal_in_process=True` to `server.cli.args.main` or `server.cli.solve.solve_path`.
+It is disabled by default and has no command-line option. Normal solves never
+construct `JobRuntime` in the CLI.

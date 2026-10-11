@@ -501,15 +501,17 @@ building files, so result retention cannot leave a mixed or half-pruned archive.
 **Archive every completed run** is on by default. Results in the app's job database
 are kept until you remove them. If you turn on **Clean up old results automatically**
 (off by default), results are kept for 30 days, or until the run limit of 1,000 is
-passed, and rating a run exempts it. The Workspace archive is kept until you delete it. Archiving is frontend automation,
-so a run solved through the CLI is not automatically added to this design-grouped
-Workspace history.
+passed, and rating a run exempts it. The Workspace archive is kept until you delete it.
+Archiving is frontend automation: an open WG frontend archives eligible completed
+runs according to that preference, including CLI runs in the shared job history.
 
 That is separate from CLI output. `wg solve --output DIR` writes a durable,
 caller-owned artifact bundle containing the submitted, effective, and execution
 requests, versioned results, retained mesh, log, summary, provenance, and digests.
-Without `--output`, a successful CLI solve is retained only in the job database and
-the command prints a retention warning.
+CLI solves use the backend owning the selected data folder, starting it with no
+browser if needed. Every run appears in WG's job history; the printed
+`http://127.0.0.1:<port>/?job=<id>` link opens it. Without `--output`, the result is
+retained in that shared job database and the command prints a retention warning.
 
 ## CAD link
 

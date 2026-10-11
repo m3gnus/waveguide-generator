@@ -6137,6 +6137,23 @@
         "title": "JobMetadataPatch",
         "type": "object"
       },
+      "JobRequestsResponse": {
+        "description": "The same request stages used by the CLI's artifact bundle.",
+        "properties": {
+          "effective_request": {
+            "$ref": "#/components/schemas/SolveRequest"
+          },
+          "execution_request": {
+            "$ref": "#/components/schemas/SolveRequest"
+          }
+        },
+        "required": [
+          "effective_request",
+          "execution_request"
+        ],
+        "title": "JobRequestsResponse",
+        "type": "object"
+      },
       "JobStatusResponse": {
         "additionalProperties": false,
         "properties": {
@@ -14134,6 +14151,45 @@
           }
         },
         "summary": "Patch Job Metadata"
+      }
+    },
+    "/api/jobs/{job_id}/requests": {
+      "get": {
+        "operationId": "job_requests_api_jobs__job_id__requests_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRequestsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Job Requests"
       }
     },
     "/api/jobs/{job_id}/retry": {

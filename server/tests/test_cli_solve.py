@@ -4,21 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from io import StringIO
 import json
 
 import pytest
 from pathlib import Path
 
-from server.cli.args import build_parser, main
+from server.cli.args import main as cli_main
 from server.cli import solve as solve_module
-from server.cli.solve import solve_path
 from server.engines.registry import EngineInfo, EngineRegistry
 from server.integration.provenance import canonical_json_sha256
 from server.jobs.runtime import JobRuntime
-from server.jobs.store import JobStore
 from server.design.textcfg import parse
 from server.solver.base import EngineRunResult
+
+
+def main(argv, **kwargs):
+    """These runtime-unit contracts explicitly opt into the internal test hook."""
+    return cli_main(argv, _internal_in_process=True, **kwargs)
 
 
 VALID_MWG = """; Parameter config
@@ -468,32 +470,6 @@ def test_solve_ndjson_refusal_has_a_stable_error_code(tmp_path: Path, capsys) ->
     assert outcome["error"]["code"] == "invalid_input"
     assert outcome["error"]["stage"] == "input"
     assert "not valid JSON" in captured.err
-
-
-def test_solve_runtime_conflict_exits_two_with_recovery_hint(tmp_path: Path) -> None:
-    data_dir = tmp_path / "data"
-    owner = JobRuntime(JobStore.for_data_dir(data_dir), engine_registry=_registry())
-    args = build_parser().parse_args(
-        ["solve", str(_design(tmp_path)), "--data-dir", str(data_dir)]
-    )
-    stdout = StringIO()
-    stderr = StringIO()
-
-    async def scenario() -> int:
-        await owner.start()
-        try:
-            return await solve_path(
-                args,
-                engine_registry=_registry(),
-                stdout=stdout,
-                stderr=stderr,
-            )
-        finally:
-            await owner.shutdown()
-
-    assert asyncio.run(scenario()) == 2
-    assert "--data-dir" in stderr.getvalue()
-    assert "GUI server" in stderr.getvalue()
 
 
 def test_solve_overlay_typo_is_refused(tmp_path: Path, capsys) -> None:
