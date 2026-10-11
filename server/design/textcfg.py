@@ -1515,6 +1515,21 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         refuse_unsupported=dialect == "ath" and version is None,
         v2=import_version == TEXT_IMPORT_VERSION,
     )
+    geometry_controls = blocks.get("WG.Geometry")
+    if geometry_controls is not None:
+        if version is None or set(geometry_controls.items) != {"Payload"} or geometry_controls.lines:
+            raise TextConfigError("WG.Geometry requires a stamped WG design and exactly one JSON Payload")
+        try:
+            controls = json.loads(geometry_controls.items["Payload"])
+            if not isinstance(controls, dict) or set(controls) - {"cross_section", "depth_margin_mm"}:
+                raise ValueError("unknown WG.Geometry controls")
+            if "cross_section" in controls:
+                payload["cross_section"] = controls["cross_section"]
+            if "depth_margin_mm" in controls:
+                payload.setdefault("enclosure", {})["depth_margin_mm"] = controls["depth_margin_mm"]
+            payload["extra_blocks"].pop("WG.Geometry", None)
+        except (ValueError, TypeError) as exc:
+            raise TextConfigError(f"invalid WG.Geometry controls: {exc}") from exc
     fresh_ath = version is None and dialect == "ath" and payload["formula"] != "FREEFORM"
     if import_version is not None and payload["formula"] != "FREEFORM":
         payload["text_import_version"] = import_version
@@ -1770,6 +1785,14 @@ def _serialize_canonical(
         encoded = json.dumps(payload, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
         _block(lines, "WG.NativeDesign", [("Payload", encoded.replace(";", "\\u003b"))])
         return "\n".join(lines) + "\n"
+    controls: dict[str, Any] = {}
+    if config.cross_section.exponent != 2 or config.cross_section.aspect_ratio != 1:
+        controls["cross_section"] = config.cross_section.model_dump()
+    if config.enclosure is not None and config.enclosure.depth_margin_mm is not None:
+        controls["depth_margin_mm"] = config.enclosure.depth_margin_mm
+    if controls:
+        encoded = json.dumps(controls, allow_nan=False, separators=(",", ":"))
+        _block(lines, "WG.Geometry", [("Payload", encoded)])
     # The design's name leads the file.
     #
     # ``Report`` is ATH's block and stays passthrough, but WG writes its

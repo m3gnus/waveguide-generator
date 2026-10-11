@@ -3721,6 +3721,68 @@
       "description": "Legacy ATH Source.Contours is preserved for round-trip only; a non-empty value stops waveguide preview and solve meshing. For native custom contours, use “Edit source contour…” (Experimental) on the Geometry tab."
     },
     {
+      "id": "cross_section.exponent",
+      "legacy_key": "cross_section.exponent",
+      "path": "cross_section.exponent",
+      "mirror_paths": [],
+      "label": "Cross-section exponent",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE",
+        "R-OSSE",
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE": 2,
+        "R-OSSE": 2,
+        "ICW": 2
+      },
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": null
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Dimensionless superellipse exponent. 2 gives an ellipse; larger values make squarer sections. Sets the base section before morphing. Active guiding curves require exponent 2 and aspect ratio 1. FREEFORM uses its station outlines and native formulas require circular sections."
+    },
+    {
+      "id": "cross_section.aspect_ratio",
+      "legacy_key": "cross_section.aspect_ratio",
+      "path": "cross_section.aspect_ratio",
+      "mirror_paths": [],
+      "label": "Cross-section aspect ratio",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE",
+        "R-OSSE",
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE": 1,
+        "R-OSSE": 1,
+        "ICW": 1
+      },
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": null
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Dimensionless width-to-height scaling of the base section before morphing. 1 keeps equal extents for a scalar profile. Ellipses retain both mirror planes; rotated or azimuth-dependent profiles are checked by the mesher. Active guiding curves require ratio 1."
+    },
+    {
       "id": "enclosure.depth",
       "legacy_key": "encDepth",
       "path": "enclosure.depth",
@@ -3751,7 +3813,40 @@
       "step": 1,
       "precision": 2,
       "options": [],
-      "description": "Depth of the box behind the front baffle. A positive value is raised if needed to clear the horn — at least its axial span plus 1 mm. 0 means no box, leaving a free-standing horn shaped by Wall thickness. Infinite-baffle simulations ignore the enclosure entirely.",
+      "description": "Depth of the box behind the front baffle. A positive value is raised if needed to clear the horn — at least its axial span plus the depth margin. 0 means no box, leaving a free-standing horn shaped by Wall thickness. Infinite-baffle simulations ignore the enclosure entirely.",
+      "visible_when": {
+        "path": "enclosure.depth",
+        "operator": "greater_than",
+        "value": 0
+      }
+    },
+    {
+      "id": "enclosure.depth_margin_mm",
+      "legacy_key": "enclosure.depth_margin_mm",
+      "path": "enclosure.depth_margin_mm",
+      "mirror_paths": [],
+      "label": "Rear clearance",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": null
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Minimum clearance behind the horn. Raises the enclosure depth to at least the horn axial span plus this margin. Defaults to 1 mm.",
       "visible_when": {
         "path": "enclosure.depth",
         "operator": "greater_than",
@@ -4004,9 +4099,9 @@
       "path": "enclosure.front_resolution",
       "mirror_paths": [],
       "label": "Front baffle mesh resolution",
-      "section": "Solve & export mesh",
+      "section": "Wall & Enclosure",
       "symbol": null,
-      "kind": "number",
+      "kind": "text",
       "unit": "mm",
       "families": [
         "R-OSSE",
@@ -4014,7 +4109,7 @@
         "ICW",
         "FREEFORM"
       ],
-      "accepts_expression": true,
+      "accepts_expression": false,
       "writable": true,
       "default_by_family": {
         "R-OSSE": 25,
@@ -4022,14 +4117,11 @@
         "ICW": 25,
         "FREEFORM": 25
       },
-      "editor_bounds": {
-        "minimum": 0.01,
-        "maximum": 1000
-      },
+      "editor_bounds": null,
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Target element size on the enclosure front baffle. A four-value ATH tuple round-trips unchanged, but only its first value is meshed — every quadrant gets that size."
+      "description": "Target element sizes in mm on the enclosure front baffle. Enter one value for every quadrant, or up to four comma-separated values: q1 (+x,+y), q2 (-x,+y), q3 (-x,-y), q4 (+x,-y). Short lists repeat their last value; 8,12 means 8,12,12,12. Non-positive entries use the mouth resolution. Unequal reflected quadrant sizes prevent that symmetry reduction."
     },
     {
       "id": "enclosure.back_resolution",
@@ -4037,9 +4129,9 @@
       "path": "enclosure.back_resolution",
       "mirror_paths": [],
       "label": "Rear baffle mesh resolution",
-      "section": "Solve & export mesh",
+      "section": "Wall & Enclosure",
       "symbol": null,
-      "kind": "number",
+      "kind": "text",
       "unit": "mm",
       "families": [
         "R-OSSE",
@@ -4047,7 +4139,7 @@
         "ICW",
         "FREEFORM"
       ],
-      "accepts_expression": true,
+      "accepts_expression": false,
       "writable": true,
       "default_by_family": {
         "R-OSSE": 40,
@@ -4055,14 +4147,11 @@
         "ICW": 40,
         "FREEFORM": 40
       },
-      "editor_bounds": {
-        "minimum": 0.01,
-        "maximum": 1000
-      },
+      "editor_bounds": null,
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Target element size on the enclosure rear panel. A four-value ATH tuple round-trips unchanged, but only its first value is meshed — every quadrant gets that size."
+      "description": "Target element sizes in mm on the enclosure rear panel. Enter one value for every quadrant, or up to four comma-separated values: q1 (+x,+y), q2 (-x,+y), q3 (-x,-y), q4 (+x,-y). Short lists repeat their last value; 8,12 means 8,12,12,12. Non-positive entries use the mouth resolution. Unequal reflected quadrant sizes prevent that symmetry reduction."
     },
     {
       "id": "mesh.angular_segments",

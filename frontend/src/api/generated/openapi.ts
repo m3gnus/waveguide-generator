@@ -2753,9 +2753,9 @@ export interface components {
         /** CatalogEditorBounds */
         CatalogEditorBounds: {
             /** Maximum */
-            maximum: number;
+            maximum: number | null;
             /** Minimum */
-            minimum: number;
+            minimum: number | null;
         };
         /** CatalogOption */
         CatalogOption: {
@@ -3009,6 +3009,21 @@ export interface components {
             t: components["schemas"]["Expr"];
             /** Values */
             values: components["schemas"]["Expr"][][];
+        };
+        /** CrossSectionConfig */
+        CrossSectionConfig: {
+            /**
+             * Aspect Ratio
+             * @description Dimensionless width-to-height scaling
+             * @default 1
+             */
+            aspect_ratio?: number;
+            /**
+             * Exponent
+             * @description Dimensionless superellipse exponent; 2 is an ellipse
+             * @default 2
+             */
+            exponent?: number;
         };
         /** CrossSectionStation */
         CrossSectionStation: {
@@ -3436,15 +3451,34 @@ export interface components {
             /** Back Resolution */
             back_resolution?: components["schemas"]["Expr"] | [
                 components["schemas"]["Expr"],
+                components["schemas"]["Expr"]
+            ] | [
+                components["schemas"]["Expr"],
+                components["schemas"]["Expr"],
+                components["schemas"]["Expr"]
+            ] | [
+                components["schemas"]["Expr"],
                 components["schemas"]["Expr"],
                 components["schemas"]["Expr"],
                 components["schemas"]["Expr"]
             ] | null;
             depth?: components["schemas"]["Expr"] | null;
+            /**
+             * Depth Margin Mm
+             * @description Minimum clearance behind the horn in mm; defaults to 1 mm
+             */
+            depth_margin_mm?: number | null;
             edge_radius?: components["schemas"]["Expr"] | null;
             edge_type?: components["schemas"]["Expr"] | null;
             /** Front Resolution */
             front_resolution?: components["schemas"]["Expr"] | [
+                components["schemas"]["Expr"],
+                components["schemas"]["Expr"]
+            ] | [
+                components["schemas"]["Expr"],
+                components["schemas"]["Expr"],
+                components["schemas"]["Expr"]
+            ] | [
                 components["schemas"]["Expr"],
                 components["schemas"]["Expr"],
                 components["schemas"]["Expr"],
@@ -3709,6 +3743,7 @@ export interface components {
             corner_grids?: components["schemas"]["CornerGrid"][];
             /** Coverage Mode */
             coverage_mode?: string | null;
+            cross_section?: components["schemas"]["CrossSectionConfig"];
             /** Cross Sections */
             cross_sections: components["schemas"]["CrossSectionStation"][];
             enclosure?: components["schemas"]["EnclosureConfig"] | null;
@@ -3888,6 +3923,7 @@ export interface components {
             coverage_angle?: components["schemas"]["Expr"] | null;
             /** Coverage Mode */
             coverage_mode?: string | null;
+            cross_section?: components["schemas"]["CrossSectionConfig"];
             curl?: components["schemas"]["Expr"] | null;
             depth?: components["schemas"]["Expr"] | null;
             enclosure?: components["schemas"]["EnclosureConfig"] | null;
@@ -4567,6 +4603,7 @@ export interface components {
             axial_scale?: number | null;
             /** Coverage Mode */
             coverage_mode?: string | null;
+            cross_section?: components["schemas"]["CrossSectionConfig"];
             enclosure?: components["schemas"]["EnclosureConfig"] | null;
             /** Extra Blocks */
             extra_blocks?: {
@@ -4630,6 +4667,7 @@ export interface components {
             circ_arc_term_angle?: components["schemas"]["Expr"] | null;
             /** Coverage Mode */
             coverage_mode?: string | null;
+            cross_section?: components["schemas"]["CrossSectionConfig"];
             enclosure?: components["schemas"]["EnclosureConfig"] | null;
             /** Extra Blocks */
             extra_blocks?: {
@@ -5009,6 +5047,7 @@ export interface components {
             b?: components["schemas"]["Expr"] | null;
             /** Coverage Mode */
             coverage_mode?: string | null;
+            cross_section?: components["schemas"]["CrossSectionConfig"];
             enclosure?: components["schemas"]["EnclosureConfig"] | null;
             /** Extra Blocks */
             extra_blocks?: {
@@ -5552,6 +5591,7 @@ export interface components {
             ath_nac_present?: boolean | null;
             /** Coverage Mode */
             coverage_mode?: string | null;
+            cross_section?: components["schemas"]["CrossSectionConfig"];
             enclosure?: components["schemas"]["EnclosureConfig"] | null;
             /** Extra Blocks */
             extra_blocks?: {

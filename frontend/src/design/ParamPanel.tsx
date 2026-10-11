@@ -1,4 +1,5 @@
 import { nativeCadLimitation, nativeSymmetryLimitation } from './nativeFamilies';
+import { EnclosureResolutionField } from './EnclosureResolutionField';
 import { EXTERIOR_FIELDS } from '../stores/exteriorTransducer';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -345,6 +346,7 @@ function validationMessage(field: ParameterDefinition, design: DesignDocument): 
 }
 
 function prospectiveValidation(field: ParameterDefinition, design: DesignDocument, value: number): string | undefined {
+  if (field.id.startsWith('cross_section.') && value <= 0) return 'Must be greater than zero.';
   if (field.id === 'simulation.f1' && value >= design.simulation.f2) return 'Must be below sweep end.';
   if (field.id === 'simulation.f2' && value <= design.simulation.f1) return 'Must exceed sweep start.';
   if (field.id === 'source.velocity' && design.source.velocity_convention === 'legacy' && ![1, 2].includes(value)) return 'Legacy velocity must be 1 (normal) or 2 (axial).';
@@ -458,6 +460,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
       {unsupported && <div className="field-warning" role="status">{backendLimitation(backend, unsupported, backendPlan)}</div>}
     </>;
   }
+  if (field.id === 'enclosure.front_resolution' || field.id === 'enclosure.back_resolution') return <EnclosureResolutionField field={field} design={design} value={value} onCommit={commit} />;
   if (field.kind === 'text') return <TextField field={field} value={String(value ?? '')} disabled={disabled} onCommit={commit} />;
   const error = validationMessage(field, design);
   const optional = field.path === 'mesh.max_edge';
@@ -466,7 +469,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
       label={field.label}
       symbol={field.symbol}
       description={field.description}
-      value={typeof value === 'number' ? value : optional ? undefined : 0}
+      value={typeof value === 'number' ? value : field.path === 'enclosure.depth_margin_mm' ? 1 : optional ? undefined : 0}
       expression={field.path ? design._expressions?.[field.path] : undefined}
       allowExpression={fieldAcceptsExpression(field)}
       unit={field.unit}

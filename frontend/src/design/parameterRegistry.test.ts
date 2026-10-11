@@ -179,11 +179,12 @@ describe('complete parameter registry', () => {
     expect(PARAMETER_REGISTRY.find((field) => field.legacyKey === 'sourceVelocity')?.id).toBe('source.velocity_convention');
   });
 
-  it('marks all 43 daggered rows and the morph exponent expression-capable, with tuple support for both enclosure resolutions', () => {
+  it('marks the daggered rows expression-capable and gives enclosure resolutions a numeric list editor', () => {
     const tupleIds = new Set(['enclosure.front_resolution', 'enclosure.back_resolution']);
     expect([...EXPRESSION_PARAMETER_IDS].filter((id) => !tupleIds.has(id))).toHaveLength(44);
     expect(EXPRESSION_PARAMETER_IDS.has('morph.target_exponent')).toBe(true);
-    expect([...tupleIds].every((id) => EXPRESSION_PARAMETER_IDS.has(id))).toBe(true);
+    expect([...tupleIds].every((id) => !EXPRESSION_PARAMETER_IDS.has(id))).toBe(true);
+    expect(PARAMETER_REGISTRY.filter((field) => tupleIds.has(field.id)).every((field) => field.kind === 'text')).toBe(true);
   });
 
   it('registers the Superellipse morph target and its conditional exponent control', () => {
@@ -227,7 +228,7 @@ describe('complete parameter registry', () => {
     // to carry the letter the formula uses -- which is exactly its legacy key.
     for (const family of ['R-OSSE', 'OSSE'] as const) {
       const scalars = PARAMETER_REGISTRY
-        .filter((item) => item.section === 'Profile Dimensions' && item.families?.includes(family) && item.id !== 'common.scale');
+        .filter((item) => item.section === 'Profile Dimensions' && item.families?.includes(family) && item.id !== 'common.scale' && !item.id.startsWith('cross_section.'));
       expect(scalars.map((item) => item.symbol)).toEqual(['s1', 's2', ...TRACEABILITY_KEYS[family].filter((key) => key !== 'scale')]);
       expect(scalars.every((item) => item.symbol === item.legacyKey), family).toBe(true);
     }

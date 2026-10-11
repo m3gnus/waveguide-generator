@@ -353,7 +353,10 @@ def test_enclosure_resolution_tuples_max_edge_and_text_round_trip() -> None:
     assert reparsed.root.mesh.max_edge is not None
     assert reparsed.root.mesh.max_edge.value == 22
     translated = design_to_mesher_config(design)
-    assert translated["mesh"]["encFrontResolution"] == 11
+    assert translated["mesh"]["encFrontResolution"] == "11,12,13,14"
+    assert translated["mesh"]["encBackResolution"] == "20,21,22,23"
+    assert translated["enclosure"]["frontMeshSize"] == "11,12,13,14"
+    assert translated["enclosure"]["backMeshSize"] == "20,21,22,23"
     assert translated["mesh"]["maxEdge"] == 22
 
 

@@ -51,6 +51,9 @@ def native_mesher_config(root: Any) -> dict[str, Any]:
     if root.source.contours or root.source.velocity_convention not in (None, "normal"):
         raise ValueError("Native formulas require a flat normal-driven source")
 
+    inactive(root.cross_section.exponent, "cross_section.exponent", 2)
+    inactive(root.cross_section.aspect_ratio, "cross_section.aspect_ratio", 1)
+
     mesh = root.mesh
     inactive(mesh.quadrants, "mesh.quadrants", 1234)
     for name, default in (("corner_segments", 4), ("throat_segments", 0), ("throat_slice_density", .5), ("aperture_resolution_scale", 1)):

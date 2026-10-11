@@ -63,6 +63,7 @@ const FIELD_CONDITIONS: Record<string, FieldConditions> = {
   'osse.circ_arc_term_angle': { visible_when: { path: 'throat_profile', operator: 'equals', value: 3 } },
   'osse.circ_arc_radius': { visible_when: { path: 'throat_profile', operator: 'equals', value: 3 } },
   'enclosure.depth': { visible_when: { path: 'enclosure.depth', operator: 'greater_than', value: 0 } },
+  'enclosure.depth_margin_mm': { visible_when: { path: 'enclosure.depth', operator: 'greater_than', value: 0 } },
   'enclosure.edge_radius': { visible_when: { path: 'enclosure.depth', operator: 'greater_than', value: 0 } },
   'enclosure.edge_type': { visible_when: { path: 'enclosure.depth', operator: 'greater_than', value: 0 } },
   'enclosure.space_l': { visible_when: { path: 'enclosure.depth', operator: 'greater_than', value: 0 } },

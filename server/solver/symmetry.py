@@ -217,6 +217,19 @@ def _resolve_symmetry_uncached(design: DesignConfig | Mapping[str, Any]) -> Symm
         from hornlab_mesher.config_builder import build_geometry_params, build_point_grid
 
         params, _formula, mode = build_geometry_params(config)
+        enclosure_resolutions: dict[str, list[float]] = {}
+        if mode == "enclosure":
+            from hornlab_mesher.config_builder import _mesh_density_from_config
+            from hornlab_mesher.density import _parse_quadrant_resolutions
+
+            density = _mesh_density_from_config(config)
+            enclosure_resolutions = {
+                name: _parse_quadrant_resolutions(value, density.mouth_res_mm)
+                for name, value in (
+                    ("front_resolution", density.enc_front_res_mm),
+                    ("back_resolution", density.enc_back_res_mm),
+                )
+            }
         params["quadrants"] = "1234"
         params["angularSegments"] = SYMMETRY_ANGULAR_SEGMENTS
         params["lengthSegments"] = SYMMETRY_LENGTH_SEGMENTS
@@ -267,6 +280,14 @@ def _resolve_symmetry_uncached(design: DesignConfig | Mapping[str, Any]) -> Symm
         reasons["xz"].append("mesh.vertical_offset is not a finite scalar")
 
     if mode == "enclosure":
+        # Compare the same expanded quadrant targets the mesher applies.
+        for name, values in enclosure_resolutions.items():
+            for plane, pairs in (("xz", ((0, 3), (1, 2))), ("yz", ((0, 1), (3, 2)))):
+                if any(
+                    not math.isclose(values[a], values[b], rel_tol=1e-12, abs_tol=1e-12)
+                    for a, b in pairs
+                ):
+                    reasons[plane].append(f"enclosure {name} quadrant sizes differ across the {plane} plane")
         _append_spacing_reason(
             reasons,
             "yz",

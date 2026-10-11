@@ -41,6 +41,9 @@ def test_parameter_catalog_is_versioned_unique_and_declarative() -> None:
     assert "recommended search ranges" in catalog["validation_authority"]["note"]
     assert response.headers["etag"].startswith('"sha256:')
     ParameterCatalog.model_validate(catalog)
+    for field_id in ("cross_section.exponent", "cross_section.aspect_ratio", "enclosure.depth_margin_mm"):
+        descriptor = next(field for field in catalog["parameters"] if field["id"] == field_id)
+        assert descriptor["editor_bounds"] == {"minimum": 0, "maximum": None}
 
 
 def test_design_schema_exposes_the_discriminated_families() -> None:

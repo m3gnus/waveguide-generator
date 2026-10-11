@@ -101,6 +101,7 @@ def normalize_design_snapshot(document: Any) -> dict[str, Any]:
                 key: getattr(design.enclosure, key)
                 for key in design.enclosure.__class__.model_fields
                 if key not in EXCLUDED_ENCLOSURE_KEYS
+                and (key != "depth_margin_mm" or design.enclosure.depth_margin_mm is not None)
             }
         )
         selected = {
@@ -112,6 +113,10 @@ def normalize_design_snapshot(document: Any) -> dict[str, Any]:
             },
             "source": design.source,
         }
+        # Default sections preserve the reviewed historical identity. Stated
+        # non-default sections must participate because they change the surface.
+        if design.cross_section.exponent != 2.0 or design.cross_section.aspect_ratio != 1.0:
+            selected["profile"]["cross_section"] = design.cross_section
     except (KeyError, TypeError, ValueError) as exc:
         raise IdentityError(f"snapshot does not satisfy the design schema: {exc}") from exc
     normalized = _typed(selected)

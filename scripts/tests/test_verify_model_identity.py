@@ -102,3 +102,19 @@ def test_manifest_verification_rejects_payload_tampering() -> None:
 
     with pytest.raises(verify_model_identity.IdentityError, match="SHA-256 mismatch"):
         verify_model_identity.verify_manifest(manifest)
+
+
+@pytest.mark.parametrize("section", [{"exponent": 4}, {"aspect_ratio": 1.5}])
+def test_nondefault_cross_section_changes_physical_identity(section: dict) -> None:
+    snapshot = _snapshot("run-101")
+    baseline = verify_model_identity.normalize_design_snapshot(snapshot)
+    snapshot["design"]["cross_section"] = section
+    assert verify_model_identity.normalize_design_snapshot(snapshot) != baseline
+
+
+def test_stated_depth_margin_changes_physical_identity() -> None:
+    snapshot = _snapshot("run-101")
+    snapshot["design"]["enclosure"]["depth"] = 700
+    baseline = verify_model_identity.normalize_design_snapshot(snapshot)
+    snapshot["design"]["enclosure"]["depth_margin_mm"] = 7
+    assert verify_model_identity.normalize_design_snapshot(snapshot) != baseline

@@ -538,17 +538,22 @@ class Expr(StrictModel):
 
 
 def _resolution_expression(value: Any) -> Any:
-    """Accept ATH's scalar or exactly-four-value enclosure resolution syntax."""
+    """Accept ATH's scalar or one-to-four-value enclosure resolution syntax."""
 
+    if isinstance(value, dict) and isinstance(value.get("raw"), str) and "," in value["raw"]:
+        # Older editor clients stored comma lists in one Expr sidecar.
+        value = value["raw"]
     if isinstance(value, str) and "," in value:
         value = [part.strip() for part in value.split(",")]
+    if isinstance(value, (list, tuple)) and len(value) == 1:
+        return value[0]
     if isinstance(value, list):
         return tuple(value)
     return value
 
 
 ResolutionExpr = Annotated[
-    Expr | tuple[Expr, Expr, Expr, Expr],
+    Expr | tuple[Expr, Expr] | tuple[Expr, Expr, Expr] | tuple[Expr, Expr, Expr, Expr],
     BeforeValidator(_resolution_expression),
 ]
 
@@ -575,8 +580,14 @@ class MorphConfig(StrictModel):
     allow_shrinkage: Expr | None = None
 
 
+class CrossSectionConfig(StrictModel):
+    exponent: Annotated[float, Field(strict=True, allow_inf_nan=False)] = Field(default=2.0, gt=0, description="Dimensionless superellipse exponent; 2 is an ellipse")
+    aspect_ratio: Annotated[float, Field(strict=True, allow_inf_nan=False)] = Field(default=1.0, gt=0, description="Dimensionless width-to-height scaling")
+
+
 class EnclosureConfig(StrictModel):
     depth: Expr | None = None
+    depth_margin_mm: Annotated[float, Field(strict=True, allow_inf_nan=False)] | None = Field(default=None, ge=0, exclude_if=lambda v: v is None, description="Minimum clearance behind the horn in mm; defaults to 1 mm")
     edge_radius: Expr | None = None
     edge_type: Expr | None = None
     space_l: Expr | None = None
@@ -585,6 +596,15 @@ class EnclosureConfig(StrictModel):
     space_b: Expr | None = None
     front_resolution: ResolutionExpr | None = None
     back_resolution: ResolutionExpr | None = None
+
+    @field_validator("front_resolution", "back_resolution")
+    @classmethod
+    def _numeric_resolutions(cls, value: ResolutionExpr | None) -> ResolutionExpr | None:
+        if value is not None:
+            values = value if isinstance(value, tuple) else (value,)
+            if any(item.constant_value() is None for item in values):
+                raise ValueError("enclosure resolutions require finite scalar numbers")
+        return value
 
 
 class AthRoundoverConfig(StrictModel):
@@ -702,6 +722,10 @@ class DesignCommon(StrictModel):
     slot_length: Expr | None = None
     length_mode: Literal["profile", "total"] | None = None
     coverage_mode: str | None = None
+    cross_section: CrossSectionConfig = Field(
+        default_factory=CrossSectionConfig,
+        exclude_if=lambda value: value.exponent == 2.0 and value.aspect_ratio == 1.0,
+    )
     morph: MorphConfig = Field(default_factory=MorphConfig)
     mesh: MeshConfig = Field(default_factory=MeshConfig)
     enclosure: EnclosureConfig | None = None
@@ -734,6 +758,18 @@ class DesignCommon(StrictModel):
             for field in ("size_mm", "mouth_roundover_radius_mm"):
                 if getattr(self.mesh, field) is not None:
                     raise ValueError(f"mesh.{field} requires its native formula marker")
+        return self
+
+    @model_validator(mode="after")
+    def _cross_section_composition(self) -> "DesignCommon":
+        section = self.cross_section
+        circular = math.isclose(section.exponent, 2, rel_tol=0, abs_tol=1e-12) and math.isclose(section.aspect_ratio, 1, rel_tol=0, abs_tol=1e-12)
+        if not circular and self.formula == "FREEFORM":
+            raise ValueError("FREEFORM requires cross_section exponent=2 and aspect_ratio=1; cross_sections stations own the outline")
+        guide = getattr(self, "guiding_curve", None)
+        if not circular and guide is not None and guide.curve_type is not None and guide.width is not None:
+            if guide.curve_type.constant_value() != 0 and guide.width.constant_value() != 0:
+                raise ValueError("Active guiding curves require cross_section exponent=2 and aspect_ratio=1")
         return self
 
 

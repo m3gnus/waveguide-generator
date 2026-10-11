@@ -172,22 +172,13 @@ def _scaled_expr(value: Expr | None, scale: float) -> str | float | None:
     return result
 
 
-def _first_number(value: ResolutionExpr | None) -> float | None:
+def enclosure_resolution(value: ResolutionExpr | None) -> float | str | None:
+    """Keep quadrant values in the mesher's documented comma-list syntax."""
     if value is None:
         return None
-    if isinstance(value, tuple):
-        value = value[0]
-    number = value.constant_value()
-    if number is not None:
-        return float(number)
-    for item in (value.raw or "").split(","):
-        try:
-            number = float(item.strip())
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(number):
-            return number
-    return None
+    values = value if isinstance(value, tuple) else (value,)
+    numbers = [_structural_number(item, "enclosure resolution") for item in values]
+    return numbers[0] if len(numbers) == 1 else ",".join(format(number, ".15g") for number in numbers)
 
 
 def _source_shape(value: Expr | None) -> str | float | None:
@@ -404,12 +395,12 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 "athRearFrontOffset": mesh.ath_rear_front_offset,
                 "athRearStep": mesh.ath_rear_step,
                 "encFrontResolution": (
-                    _first_number(root.enclosure.front_resolution)
+                    enclosure_resolution(root.enclosure.front_resolution)
                     if root.enclosure is not None
                     else None
                 ),
                 "encBackResolution": (
-                    _first_number(root.enclosure.back_resolution)
+                    enclosure_resolution(root.enclosure.back_resolution)
                     if root.enclosure is not None
                     else None
                 ),
@@ -418,7 +409,10 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 "scaleToMetres": True,
             }
         ),
-        "cross_section": {"exponent": 2.0, "aspectRatio": 1.0},
+        "cross_section": {
+            "exponent": root.cross_section.exponent,
+            "aspectRatio": root.cross_section.aspect_ratio,
+        },
         "morph": _clean(
             {
                 "morphTarget": _expr(morph.target_shape),
@@ -498,14 +492,15 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         config["enclosure"] = _clean(
             {
                 "depth": enclosure_depth_of(root),
+                "depth_margin_mm": enclosure.depth_margin_mm,
                 "space_l": _expr(enclosure.space_l),
                 "space_t": _expr(enclosure.space_t),
                 "space_r": _expr(enclosure.space_r),
                 "space_b": _expr(enclosure.space_b),
                 "edge": _expr(enclosure.edge_radius),
                 "edgeType": _expr(enclosure.edge_type),
-                "frontMeshSize": _first_number(enclosure.front_resolution),
-                "backMeshSize": _first_number(enclosure.back_resolution),
+                "frontMeshSize": enclosure_resolution(enclosure.front_resolution),
+                "backMeshSize": enclosure_resolution(enclosure.back_resolution),
             }
         )
     if root.text_import_version is not None:

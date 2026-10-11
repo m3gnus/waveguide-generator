@@ -1,0 +1,59 @@
+{
+  "design": {
+    "formula": "OSSE",
+    "L": 60,
+    "r0": 12.7,
+    "a": 30,
+    "s": 0,
+    "mesh": {
+      "angular_segments": 16,
+      "length_segments": 8,
+      "throat_resolution": 12,
+      "mouth_resolution": 20,
+      "rear_resolution": 20
+    },
+    "enclosure": {
+      "depth": 90,
+      "edge_radius": 0,
+      "front_resolution": 20,
+      "back_resolution": 24
+    }
+  },
+  "mesher_config": {
+    "formula": "OSSE",
+    "mode": "enclosure",
+    "profile": {
+      "formula": "OSSE",
+      "r0": 12.7,
+      "a": 30.0,
+      "L": 60.0,
+      "s": 0.0
+    },
+    "mesh": {
+      "angularSegments": 16.0,
+      "lengthSegments": 8.0,
+      "quadrants": 1234,
+      "wallThickness": 5.0,
+      "throatResolution": 12.0,
+      "mouthResolution": 20.0,
+      "rearResolution": 20.0,
+      "encFrontResolution": 20.0,
+      "encBackResolution": 24.0,
+      "surfaceFit": "interpolate",
+      "scaleToMetres": true
+    },
+    "cross_section": {
+      "exponent": 2.0,
+      "aspectRatio": 1.0
+    },
+    "morph": {},
+    "gcurve": {},
+    "source": {},
+    "enclosure": {
+      "depth": 90.0,
+      "edge": 0.0,
+      "frontMeshSize": 20.0,
+      "backMeshSize": 24.0
+    }
+  }
+}

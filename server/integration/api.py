@@ -39,8 +39,8 @@ class CatalogCondition(_DiscoveryModel):
 
 
 class CatalogEditorBounds(_DiscoveryModel):
-    minimum: float
-    maximum: float
+    minimum: float | None
+    maximum: float | None
 
 
 class CatalogOption(_DiscoveryModel):

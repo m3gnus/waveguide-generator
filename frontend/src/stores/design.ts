@@ -11,7 +11,7 @@ export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM' | NativeFamily
 export const isNativeFamily = (family: DesignFamily): family is NativeFamily => (NATIVE_FAMILIES as readonly string[]).includes(family);
 export type MutationReason = 'edit' | 'drag' | 'undo' | 'redo' | 'load' | 'family';
 export type DesignLoadSource = 'ordinary' | 'cad-project-switch';
-export type DesignValue = number | string | boolean | null | FreeformPoint[] | CrossSectionStation[];
+export type DesignValue = number | string | boolean | null | number[] | FreeformPoint[] | CrossSectionStation[];
 
 export interface ExprNumber {
   value: number | null;
@@ -74,6 +74,8 @@ export interface DesignDocument {
   slot_length: number;
   length_mode: 'profile' | 'total' | null;
   coverage_mode: string | null;
+
+  cross_section: { exponent: number; aspect_ratio: number };
 
   // Family scalar union from OSSEConfig, ROSSEConfig and ICWConfig.
   R?: number;
@@ -156,8 +158,9 @@ export interface DesignDocument {
     space_t: number;
     space_r: number;
     space_b: number;
-    front_resolution: number;
-    back_resolution: number;
+    depth_margin_mm?: number;
+    front_resolution: number | number[];
+    back_resolution: number | number[];
     baffle_margin: number;
   };
   mesh: {
@@ -213,6 +216,7 @@ const common = {
   slot_length: 0,
   length_mode: 'profile' as const,
   coverage_mode: 'auto',
+  cross_section: { exponent: 2, aspect_ratio: 1 },
   guiding_curve: {
     curve_type: 0, distance: .5, width: 0, aspect_ratio: 1, superellipse_n: 3,
     superformula: 0, sf_a: 1, sf_b: 1, sf_m1: 4, sf_m2: 4, sf_n1: 1,
@@ -584,6 +588,7 @@ export function mergeDesignForFamily(current: DesignDocument, family: DesignFami
   else delete shared._absent;
 
   const next = { ...designForFamily(family), ...shared, formula: family } as DesignDocument;
+  if (family === 'FREEFORM') next.cross_section = { exponent: 2, aspect_ratio: 1 };
   applyCompatibleFamilyValues(next, compatible);
   if (['OSSE', 'R-OSSE'].includes(current.formula) && ['OSSE', 'R-OSSE'].includes(family)) {
     for (const key of ['s1', 's2'] as const) {
@@ -924,6 +929,7 @@ export function serializeDesign(design: DesignDocument): Record<string, unknown>
   const { quadrants, enclosure, mesh, _expressions, _absent, ...root } = structuredClone(design);
   const wireEnclosure = {
     depth: enclosure.depth,
+    ...(enclosure.depth_margin_mm !== undefined ? { depth_margin_mm: enclosure.depth_margin_mm } : {}),
     edge_radius: enclosure.edge_radius,
     edge_type: enclosure.edge_type,
     space_l: enclosure.space_l,

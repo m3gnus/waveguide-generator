@@ -1514,12 +1514,26 @@
         "additionalProperties": false,
         "properties": {
           "maximum": {
-            "title": "Maximum",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
           },
           "minimum": {
-            "title": "Minimum",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
           }
         },
         "required": [
@@ -2313,6 +2327,27 @@
           "values"
         ],
         "title": "CornerGrid",
+        "type": "object"
+      },
+      "CrossSectionConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "aspect_ratio": {
+            "default": 1.0,
+            "description": "Dimensionless width-to-height scaling",
+            "exclusiveMinimum": 0.0,
+            "title": "Aspect Ratio",
+            "type": "number"
+          },
+          "exponent": {
+            "default": 2.0,
+            "description": "Dimensionless superellipse exponent; 2 is an ellipse",
+            "exclusiveMinimum": 0.0,
+            "title": "Exponent",
+            "type": "number"
+          }
+        },
+        "title": "CrossSectionConfig",
         "type": "object"
       },
       "CrossSectionStation": {
@@ -3576,6 +3611,35 @@
                 "$ref": "#/components/schemas/Expr"
               },
               {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "maxItems": 3,
+                "minItems": 3,
+                "prefixItems": [
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  }
+                ],
+                "type": "array"
+              },
+              {
                 "maxItems": 4,
                 "minItems": 4,
                 "prefixItems": [
@@ -3610,6 +3674,19 @@
               }
             ]
           },
+          "depth_margin_mm": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Minimum clearance behind the horn in mm; defaults to 1 mm",
+            "title": "Depth Margin Mm"
+          },
           "edge_radius": {
             "anyOf": [
               {
@@ -3634,6 +3711,35 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "maxItems": 3,
+                "minItems": 3,
+                "prefixItems": [
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  }
+                ],
+                "type": "array"
               },
               {
                 "maxItems": 4,
@@ -4284,6 +4390,9 @@
               }
             ],
             "title": "Coverage Mode"
+          },
+          "cross_section": {
+            "$ref": "#/components/schemas/CrossSectionConfig"
           },
           "cross_sections": {
             "items": {
@@ -4945,6 +5054,9 @@
               }
             ],
             "title": "Coverage Mode"
+          },
+          "cross_section": {
+            "$ref": "#/components/schemas/CrossSectionConfig"
           },
           "curl": {
             "anyOf": [
@@ -7382,6 +7494,9 @@
             ],
             "title": "Coverage Mode"
           },
+          "cross_section": {
+            "$ref": "#/components/schemas/CrossSectionConfig"
+          },
           "enclosure": {
             "anyOf": [
               {
@@ -7668,6 +7783,9 @@
               }
             ],
             "title": "Coverage Mode"
+          },
+          "cross_section": {
+            "$ref": "#/components/schemas/CrossSectionConfig"
           },
           "enclosure": {
             "anyOf": [
@@ -8954,6 +9072,9 @@
               }
             ],
             "title": "Coverage Mode"
+          },
+          "cross_section": {
+            "$ref": "#/components/schemas/CrossSectionConfig"
           },
           "enclosure": {
             "anyOf": [
@@ -10557,6 +10678,9 @@
               }
             ],
             "title": "Coverage Mode"
+          },
+          "cross_section": {
+            "$ref": "#/components/schemas/CrossSectionConfig"
           },
           "enclosure": {
             "anyOf": [

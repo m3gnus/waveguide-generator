@@ -357,3 +357,31 @@ keys and blocks. Numeric booleans use `1`/`0`; enclosure/resolution lists use co
 separation. A pristine parsed file may be returned byte-for-byte so comments and raw
 expressions survive; once edited or normalized into canonical output, parsing the
 serialized result must retain the same validated API meaning.
+
+## Cross-section and enclosure geometry controls
+
+WG stores additional geometry controls in a `WG.Geometry` block in stamped
+WG design files, including rewritten ATH imports. The block has exactly one
+JSON `Payload`, with only `cross_section` and `depth_margin_mm` supported:
+
+```cfg
+WG.Geometry = {
+Payload = {"cross_section":{"exponent":4,"aspect_ratio":1.5},"depth_margin_mm":7}
+}
+```
+
+The dimensionless exponent and aspect ratio are positive finite scalars,
+defaulting to 2 and 1. They shape the base section before morphing in OSSE,
+R-OSSE and ICW. Active guiding curves require the defaults. FREEFORM station
+outlines own their shape; FREEFORM and native formulas refuse non-default
+legacy cross-section controls. The nonnegative enclosure margin is in mm,
+defaults to 1, and raises the rounded-rectangle box depth as needed to clear
+the horn. Enclosure plan shapes other than the existing rounded rectangle
+remain unavailable.
+
+Front/back enclosure resolutions retain their scalar or one-to-four-value
+comma-list spelling in `Mesh.Enclosure`. Values run q1 (+x,+y), q2 (-x,+y),
+q3 (-x,-y), q4 (+x,-y). Short lists repeat the last entry. Each non-positive
+entry uses the mouth resolution, matching the mesher. Every quadrant value
+reaches preview, solve and export; unequal reflected sizes disable the
+corresponding symmetry reduction.
