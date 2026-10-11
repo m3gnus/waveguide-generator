@@ -308,6 +308,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Start Waveguide Generator on this machine.",
         allow_abbrev=False,
     )
+    parser.add_argument("--ensure-backend", action="store_true",
+                        help="find or start the backend, print one JSON line, and exit")
     display = parser.add_argument_group("display mode")
     # Which of these is "the default" is a claim about the *installed command*
     # -- ``prog`` above says so, and that command is ``launchers.desktop.main``,
@@ -468,7 +470,13 @@ def _recover_interrupted_bundle_update(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parsed = parse_arguments(list(sys.argv[1:] if argv is None else argv))
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if "--ensure-backend" in arguments:
+        from launchers.ensure_backend import main as ensure_main
+
+        arguments.remove("--ensure-backend")
+        return ensure_main(arguments)
+    parsed = parse_arguments(arguments)
     if isinstance(parsed, int):
         return parsed
     options, arguments = parsed

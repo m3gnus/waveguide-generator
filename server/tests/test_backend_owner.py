@@ -425,11 +425,18 @@ def test_start_lock_filesystem_errors_are_actionable(data_dir: Path, monkeypatch
 
 
 def test_windows_creation_flags(data_dir: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+    from server.platform import process_tree
+
     captured = {}
+    monkeypatch.setattr(process_tree, "confine_to_windows_job", lambda *args, **kwargs:
+                        SimpleNamespace(terminate=lambda: None, close=lambda: None))
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", lambda: 0)
+    monkeypatch.setattr(process_tree, "require_windows_job_detached", lambda handle: None)
 
     def popen(*args, **kwargs):
         captured.update(kwargs)
-        return object()
+        return SimpleNamespace(pid=123, _handle=42)
 
     monkeypatch.setattr(backend_owner.sys, "platform", "win32")
     monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)

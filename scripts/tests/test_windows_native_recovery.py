@@ -871,3 +871,31 @@ def test_actual_entry_termination_after_hook_before_public_image(native: Path, p
         if helper.poll() is None:
             helper.kill()
             helper.wait(timeout=EXIT_TIMEOUT)
+
+
+@pytest.mark.parametrize("prefix", [[], ["--help"], ["--installer-entry", "unused"]])
+def test_native_backend_mode_forwards_quoted_app_argv_and_json_exit(native: Path, tmp_path: Path, prefix) -> None:
+    """Exercise the native argument route; this fixture does not start a backend."""
+    root, _record = _old_root(tmp_path, native)
+    _host_python_old_hook(root)
+    for marker in (root / "app/APP-MANIFEST.json", root / "runtime/RUNTIME-MANIFEST.json"):
+        marker.write_text("{}\n")
+    assert subprocess.run([str(native), "--installer-entry", str(root)], timeout=NATIVE_TIMEOUT).returncode == 0
+    signature = b"WG_NATIVE_ENSURE_BACKEND_V1"
+    assert (root / "Waveguide Generator.ensure-backend-v1").read_bytes() == signature
+    assert signature in (root / "Waveguide Generator.exe").read_bytes()
+    (root / "app/wg_desktop_bootstrap.py").write_text(build_bundle.windows_desktop_bootstrap())
+    (root / "app/launchers/desktop.py").write_text(
+        "import json,sys\ndef main(argv):\n"
+        " assert getattr(sys,'_wg_native_start_admitted',False)\n"
+        " assert getattr(sys,'_wg_native_parent_handle',None)\n"
+        " print(json.dumps({'ok':False,'error':{'type':'BackendSpawnError','message':argv}}))\n"
+        " return 5\n"
+    )
+    data = tmp_path / "data folder with spaces"
+    arguments = [*prefix, "--ensure-backend", "--data-dir", str(data)]
+    result = subprocess.run([str(root / "Waveguide Generator.exe"), *arguments],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=NATIVE_TIMEOUT)
+    assert result.returncode == 5, result.stderr
+    assert len(result.stdout.splitlines()) == 1
+    assert json.loads(result.stdout)["error"]["message"] == arguments

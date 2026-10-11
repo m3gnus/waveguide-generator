@@ -669,6 +669,12 @@ def test_python_app_launch_inventory() -> None:
             ('stop_our_workers', 'subprocess.run'): 1,
             ('qualify_imported_return', 'Server'): 2,
             ('qualify', 'Server'): 1,
+            # Installed --ensure-backend checks: the bundle's own fixed launcher,
+            # the same isolated environment, stdin closed, bounded to 75 s; the
+            # cold start then adopts the owner through the existing Server.
+            ('check_ensure_backend', 'subprocess.run'): 1,
+            ('_check_cold_start', 'subprocess.run'): 1,
+            ('_check_cold_start', 'Server'): 1,
         },
         'scripts/qualify_installed_quit.py': {
             ('start', 'subprocess.Popen'): 1,

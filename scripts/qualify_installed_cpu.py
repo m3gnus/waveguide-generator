@@ -50,6 +50,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -673,6 +674,171 @@ def wait_for(
     raise QualificationError(f"timed out after {seconds:.0f}s waiting for {what} ({last})")
 
 
+def check_ensure_backend(
+    app: Path, data_dir: Path, environment: dict[str, str], base: str, *, cwd: Path
+) -> dict[str, Any]:
+    """Call this installed bundle's OS entry and require the existing owner.
+
+    This runs inside the gate's Server context, so that context remains the
+    sole cleanup owner. It cannot accidentally leave a qualification backend
+    detached on the successful path.
+    """
+    resources = app.parent
+    if resources.name == "Resources" and resources.parent.name == "Contents":
+        launcher = resources.parent / "MacOS" / "Waveguide Generator"
+    elif sys.platform == "win32":
+        launcher = resources / "Waveguide Generator.exe"
+    else:
+        launcher = resources / "waveguide-generator"
+    if not launcher.is_file():
+        raise QualificationError(f"installed backend entry is missing: {launcher}")
+    try:
+        completed = subprocess.run(
+            [str(launcher), "--ensure-backend", "--data-dir", str(data_dir)],
+            cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=75,
+        )
+        lines = completed.stdout.splitlines()
+        answer = json.loads(lines[0]) if len(lines) == 1 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        raise QualificationError(f"installed --ensure-backend failed: {exc}") from exc
+    if completed.returncode != 0 or not isinstance(answer, dict) or answer.get("ok") is not True:
+        raise QualificationError(f"installed --ensure-backend did not return one success JSON line: {completed.stdout!r}; {completed.stderr!r}")
+    health = http(base, "/health")
+    if (answer.get("base_url") != base or answer.get("pid") != health.get("pid")
+            or not _same_path(answer.get("data_dir"), data_dir)
+            or answer.get("version") != health.get("version")
+            or answer.get("commit") != health.get("commit")):
+        raise QualificationError("installed --ensure-backend did not return this data folder's existing backend")
+    try:
+        advertised = json.loads((data_dir / "ipc/wglink/wg-capabilities.json").read_text())
+    except (OSError, ValueError) as exc:
+        raise QualificationError(f"installed launcher capabilities are unreadable: {exc}") from exc
+    if not isinstance(advertised, dict) or advertised.get("launcher") != {"argv": [str(launcher)], "ensureBackend": True}:
+        raise QualificationError("installed capabilities do not name this bundle's own OS launcher")
+    return {"argv": [str(launcher)], "same_owner": True, "json_output": True}
+
+
+def stop_detached_backend(base: str, pid: int, data_dir: Path) -> None:
+    """Stop only the cold-start owner whose identity we just confirmed."""
+    health = http(base, "/health", timeout=POLL_HTTP_TIMEOUT_S)
+    if health.get("pid") != pid or not _same_path(health.get("data_dir"), data_dir):
+        raise QualificationError("refused to stop a cold-start backend whose identity changed")
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
+        kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        process = kernel.OpenProcess(0x00100000 | 0x0001, False, pid)
+        if not process:
+            raise QualificationError("could not open the cold-start backend for termination")
+        try:
+            # Recheck while holding the process object, before signalling it.
+            if http(base, "/health").get("pid") != pid or not kernel.TerminateProcess(process, 0):
+                raise QualificationError("could not terminate the confirmed cold-start backend")
+            if kernel.WaitForSingleObject(process, int(SHUTDOWN_TIMEOUT_S * 1000)) != 0:
+                raise QualificationError("the cold-start backend did not exit after termination")
+        finally:
+            kernel.CloseHandle(process)
+    else:
+        os.kill(pid, signal.SIGTERM)
+
+    def stopped():
+        try:
+            return http(base, "/health", timeout=POLL_HTTP_TIMEOUT_S).get("pid") != pid
+        except (OSError, URLError):
+            return True
+
+    wait_for(stopped, SHUTDOWN_TIMEOUT_S, "the cold-start backend to stop")
+
+
+def check_ensure_backend_cold_start(
+    interpreter: Path, app: Path, work: Path, output: Path, *, beat_provider: str | None = None,
+) -> dict[str, Any]:
+    """A fresh default profile: installed admission, caller exit, then GUI argv.
+
+    Retain the cold-start data as evidence and let the GUI backend start with
+    a fresh default folder too, so saved workspace settings cannot hide a
+    difference in defaults. This phase runs before the solve/adoption phase.
+    """
+    profile = work / "ensure-cold-start"
+    if profile.exists():
+        raise QualificationError("cold-start qualification requires a fresh ensure-cold-start folder")
+    environment = isolated_environment(app, profile, beat_provider=beat_provider)
+    environment.pop("WG2_DATA_DIR", None)
+    environment["XDG_DATA_HOME"] = str(profile / "xdg-data")
+    environment["WG2_PORT"] = str(free_port())
+    failure = None
+    try:
+        return _check_cold_start(interpreter, app, profile, output, environment)
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        # Cold startup can start provider hosts before any solve. Their
+        # registry is distinct from the later solve phase's cleanup registry.
+        try:
+            stop_our_workers(interpreter, environment, output)
+        except Exception as exc:
+            if failure is None:
+                raise
+            failure.add_note(f"then cold-start worker cleanup also failed: {exc}")
+
+
+def _check_cold_start(
+    interpreter: Path, app: Path, profile: Path, output: Path, environment: dict[str, str],
+) -> dict[str, Any]:
+    resources = app.parent
+    launcher = (resources.parent / "MacOS" / "Waveguide Generator"
+                if resources.name == "Resources" and resources.parent.name == "Contents"
+                else resources / ("Waveguide Generator.exe" if sys.platform == "win32" else "waveguide-generator"))
+    if not launcher.is_file():
+        raise QualificationError(f"installed backend entry is missing: {launcher}")
+    completed = subprocess.run(
+        [str(launcher), "--ensure-backend"], cwd=output, env=environment,
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=75,
+    )
+    lines = completed.stdout.splitlines()
+    try:
+        answer = json.loads(lines[0]) if len(lines) == 1 else None
+    except ValueError as exc:
+        raise QualificationError("cold-start entry did not return one JSON line") from exc
+    if completed.returncode != 0 or not isinstance(answer, dict) or answer.get("ok") is not True:
+        raise QualificationError(f"cold-start entry failed: {completed.stdout!r}; {completed.stderr!r}")
+    base, pid = answer.get("base_url"), answer.get("pid")
+    if not isinstance(base, str) or not isinstance(pid, int) or pid <= 0 or not isinstance(answer.get("data_dir"), str):
+        raise QualificationError("cold-start entry returned an invalid backend identity")
+    data_dir = Path(answer["data_dir"]).resolve()
+    if not data_dir.is_relative_to(profile.resolve()):
+        raise QualificationError("cold-start entry escaped its isolated profile")
+    try:
+        # subprocess.run has reaped the public caller already. Two separate
+        # health observations prove the confirmed backend remains available.
+        for _ in range(2):
+            health = http(base, "/health", timeout=POLL_HTTP_TIMEOUT_S)
+            if health.get("pid") != pid or not _same_path(health.get("data_dir"), data_dir):
+                raise QualificationError("cold-start backend did not survive its caller with the same identity")
+        workspace = http(base, "/api/workspace/path").get("path")
+    finally:
+        stop_detached_backend(base, pid, data_dir)
+    data_dir.rename(profile / "retained-cold-data")
+    with Server(interpreter, app, environment, None, profile / "stop-gui", output / "ensure-gui.log") as gui:
+        gui_health = http(gui.base, "/health")
+        gui_workspace = http(gui.base, "/api/workspace/path").get("path")
+        if (not _same_path(gui_health.get("data_dir"), data_dir)
+                or not isinstance(gui_workspace, str)
+                or not _same_path(workspace, Path(gui_workspace))):
+            raise QualificationError("cold-start data folder or workspace default differs from a GUI start")
+    return {"argv": [str(launcher)], "survives_caller": True, "gui_defaults_match": True,
+            "data_dir": str(data_dir), "workspace": workspace, "stopped_by_pid": pid}
+
+
 def free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -692,12 +858,14 @@ class Server:
         interpreter: Path,
         app: Path,
         environment: dict[str, str],
-        data_dir: Path,
+        data_dir: Path | None,
         control: Path,
         log_path: Path,
     ) -> None:
-        data_dir.mkdir(parents=True, exist_ok=True)
-        environment = dict(environment, WG2_DATA_DIR=str(data_dir))
+        environment = dict(environment)
+        if data_dir is not None:
+            data_dir.mkdir(parents=True, exist_ok=True)
+            environment["WG2_DATA_DIR"] = str(data_dir)
         self.port = free_port()
         self.base = f"http://127.0.0.1:{self.port}"
         self.log_path = log_path
@@ -711,8 +879,7 @@ class Server:
                 "--port",
                 str(self.port),
                 "--no-browser",
-                "--data-dir",
-                str(data_dir),
+                *(["--data-dir", str(data_dir)] if data_dir is not None else []),
                 "--status-control",
                 str(control),
             ],
@@ -2131,11 +2298,15 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
     # Recorded before anything can start a worker, so the cleanup in ``main``
     # knows where to look even if the very next call raises.
     arguments.cleanup = (interpreter, environment, output)
+    report["ensure_backend_cold_start"] = check_ensure_backend_cold_start(
+        interpreter, app, work, output, beat_provider=arguments.beat_provider,
+    )
     control = work / "status" / "stop-1"
     # One server for the whole gate: the row the application published and the
     # solve that uses it are then the same process, so "offered" cannot describe
     # one run while the solve describes another.
     with Server(interpreter, app, environment, data_dir, control, output / "server.log") as server:
+        report["ensure_backend"] = check_ensure_backend(app, data_dir, environment, server.base, cwd=output)
         report["cpu_preparation"] = await_cpu_row(server, output)
         capabilities = server.capabilities()
         row = engine_row(capabilities, CPU_ENGINE)

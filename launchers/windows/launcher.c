@@ -884,6 +884,12 @@ static HANDLE native_hook(const wchar_t *root) {
      * prevents a cache appearing in this narrowly owned sidecar directory. */
     return CreateFileW(hook, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
 }
+static int ensure_backend_marker(const wchar_t *root) {
+    static const char signature[] = "WG_NATIVE_ENSURE_BACKEND_V1";
+    wchar_t marker[CAP];
+    return path(marker, root, L"Waveguide Generator.ensure-backend-v1") &&
+        durable_write(marker, signature, sizeof(signature) - 1, 1);
+}
 static int install_entry(const wchar_t *root, const wchar_t *self) {
     wchar_t public_path[CAP], tmp[CAP], hidden[CAP], hook[CAP]; Identity id;
     /* Verify/refresh the sidecar while the old packaged hook still exists.
@@ -891,7 +897,7 @@ static int install_entry(const wchar_t *root, const wchar_t *self) {
     if (!refresh_hook(root, hook)) return 3;
     if (!path(public_path, root, PUBLIC_EXE) || !identity(public_path, &id) || id.directory ||
         !path(hidden, root, PRIVATE_EXE) || !identity(hidden, &id) || id.directory) return 3;
-    if (equal_files(public_path, self)) return 0;
+    if (equal_files(public_path, self)) return ensure_backend_marker(root) ? 0 : 3;
     /* A pre-bridge root pythonw is kept before the public image changes.
      * Candidate runtimes declare both images, so normal bridge starts already
      * have the hidden interpreter and the native public entry. */
@@ -902,7 +908,7 @@ static int install_entry(const wchar_t *root, const wchar_t *self) {
       int ok = h != INVALID_HANDLE_VALUE && FlushFileBuffers(h);
       if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
       if (!ok || !MoveFileExW(tmp, public_path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) { DeleteFileW(tmp); return 3; } }
-    return 0;
+    return ensure_backend_marker(root) ? 0 : 3;
 }
 static HANDLE startup_claim(void) {
     ULONGLONG end = GetTickCount64() + 120000;
@@ -913,7 +919,7 @@ static HANDLE startup_claim(void) {
         CloseHandle(h); if (GetTickCount64() >= end) return NULL; Sleep(100);
     }
 }
-static int start(const wchar_t *root, const wchar_t *arguments) {
+static int start(const wchar_t *root, const wchar_t *arguments, int ensure_backend) {
     wchar_t hidden[CAP], command[32768], protocol[512]; Journal j; HANDLE claim, lock, hook;
     STARTUPINFOEXW si; PROCESS_INFORMATION pi; DWORD code; wchar_t marker[CAP];
     HANDLE ack = NULL, release = NULL, running = NULL, handles[6], waits[2];
@@ -927,17 +933,23 @@ static int start(const wchar_t *root, const wchar_t *arguments) {
     }
     hook = native_hook(root);
     if (hook == NULL || hook == INVALID_HANDLE_VALUE || !path(hidden, root, PRIVATE_EXE)) { CloseHandle(lock); CloseHandle(claim); return 3; }
-    if (!arguments[0]) {
+    if (!arguments[0] || ensure_backend) {
         wchar_t public_path[CAP];
         if (!path(public_path, root, PUBLIC_EXE) || swprintf_s(command, 32768,
             L"\"%s\" -B -c \"import sys,importlib\n"
             L"sys.executable=sys.argv.pop();sys.argv[0]=''\n"
             L"sys.path.insert(0,str(__import__('pathlib').Path(sys.executable).parent/'recovery'))\n"
-            L"try:\n import wg_bundle_recovery\n"
-            L"except ModuleNotFoundError as e:\n if e.name!='wg_bundle_recovery': raise\n"
-            L"else:\n wg_bundle_recovery.windows_boot()\n"
-            L"b=importlib.import_module('wg_desktop_bootstrap');importlib.reload(b)\" \"%s\"",
-            hidden, public_path) <= 0) { CloseHandle(hook); CloseHandle(lock); CloseHandle(claim); return 3; }
+            L"def failure(e):\n"
+            L" if isinstance(e,SystemExit) or '--ensure-backend' not in sys.argv: raise e\n"
+            L" import json;print(json.dumps({'ok':False,'error':{'type':type(e).__name__,'message':str(e)}}),flush=True);sys.exit(5)\n"
+            L"try:\n"
+            L" try:\n  import wg_bundle_recovery\n"
+            L" except ModuleNotFoundError as e:\n  if e.name!='wg_bundle_recovery': raise\n"
+            L" else:\n  wg_bundle_recovery.windows_boot()\n"
+            L"except BaseException as e: failure(e)\n"
+            L"try:\n b=importlib.import_module('wg_desktop_bootstrap');importlib.reload(b)\n"
+            L"except Exception as e: failure(e)\" %s \"%s\"",
+            hidden, arguments, public_path) <= 0) { CloseHandle(hook); CloseHandle(lock); CloseHandle(claim); return 3; }
     } else if (swprintf_s(command, 32768, L"\"%s\" -B %s", hidden, arguments) <= 0) { CloseHandle(hook); CloseHandle(lock); CloseHandle(claim); return 3; }
     ZeroMemory(&si, sizeof(si)); si.StartupInfo.cb = sizeof(si); ZeroMemory(&pi, sizeof(pi));
     ack = CreateEventW(&sa, TRUE, FALSE, NULL); release = CreateEventW(&sa, TRUE, FALSE, NULL);
@@ -962,7 +974,7 @@ static int start(const wchar_t *root, const wchar_t *arguments) {
     if (!UpdateProcThreadAttribute(si.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles, count * sizeof(HANDLE), NULL, NULL)) goto start_done;
     if (swprintf_s(protocol, 512, L"%lu,%lu,%lu,%llu,%llu,%llu,%d", GetCurrentProcessId(), created.dwHighDateTime,
         created.dwLowDateTime, (unsigned long long)(uintptr_t)ack, (unsigned long long)(uintptr_t)release,
-        (unsigned long long)(uintptr_t)running, !arguments[0]) <= 0 || !SetEnvironmentVariableW(L"WG_NATIVE_START", protocol)) goto start_done;
+        (unsigned long long)(uintptr_t)running, !arguments[0] || ensure_backend) <= 0 || !SetEnvironmentVariableW(L"WG_NATIVE_START", protocol)) goto start_done;
     /* The child cannot load any bundled DLL until native exclusion is held.
      * Its hook proves parent identity and inherited object identity before ACK. */
     if (!CreateProcessW(hidden, command, NULL, NULL, TRUE, EXTENDED_STARTUPINFO_PRESENT, NULL, root, &si.StartupInfo, &pi)) goto start_done;
@@ -993,11 +1005,12 @@ start_done:
     return result;
 }
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int show) {
-    wchar_t self[CAP], root[CAP]; wchar_t **argv; int argc, code; Journal j; HANDLE lock = NULL;
+    wchar_t self[CAP], root[CAP]; wchar_t **argv; int argc, code, i, ensure_backend = 0; Journal j; HANDLE lock = NULL;
     (void)instance; (void)previous; (void)show;
     if (!GetModuleFileNameW(NULL, self, CAP) || wcslen(self) >= CAP - 1 || !ordinary_path(self)) return 3;
     argv = CommandLineToArgvW(GetCommandLineW(), &argc); if (!argv) return 3;
-    if (argc >= 2 && !wcsncmp(argv[1], L"--update-log", 12)) {
+    for (i = 1; i < argc; ++i) if (!wcscmp(argv[i], L"--ensure-backend")) ensure_backend = 1;
+    if (!ensure_backend && argc >= 2 && !wcsncmp(argv[1], L"--update-log", 12)) {
         code = 3;
         if (argc == 4 && !wcscmp(argv[1], L"--update-log-init")) code = log_bounded(self, argv[2], argv[3], 1) ? 0 : 3;
         else if (argc == 4 && !wcscmp(argv[1], L"--update-log-append")) code = log_bounded(self, argv[2], argv[3], 0) ? 0 : 3;
@@ -1005,26 +1018,26 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
         else if (argc == 4 && !wcscmp(argv[1], L"--update-log-worker")) code = log_write(argv[2], argv[3], 0) ? 0 : 3;
         LocalFree(argv); return code;
     }
-    if (argc >= 3 && !wcsncmp(argv[1], L"--installer-", 12) && wcscmp(argv[1], L"--installer-watch")) {
+    if (!ensure_backend && argc >= 3 && !wcsncmp(argv[1], L"--installer-", 12) && wcscmp(argv[1], L"--installer-watch")) {
         lock = transaction_lock(argv[2]); if (!lock) { LocalFree(argv); return 3; }
     }
-    if (argc >= 3 && !wcscmp(argv[1], L"--installer-entry")) code = install_entry(argv[2], self);
-    else if (argc == 7 && !wcscmp(argv[1], L"--installer-prepare"))
+    if (!ensure_backend && argc >= 3 && !wcscmp(argv[1], L"--installer-entry")) code = install_entry(argv[2], self);
+    else if (!ensure_backend && argc == 7 && !wcscmp(argv[1], L"--installer-prepare"))
         code = prepare(argv[2], argv[3], argv[4], argv[5], argv[6]);
-    else if (argc == 3 && !wcscmp(argv[1], L"--installer-commit"))
+    else if (!ensure_backend && argc == 3 && !wcscmp(argv[1], L"--installer-commit"))
         code = load(argv[2], &j) ? commit(&j) : 3;
-    else if (argc == 3 && !wcscmp(argv[1], L"--installer-rollback")) {
+    else if (!ensure_backend && argc == 3 && !wcscmp(argv[1], L"--installer-rollback")) {
         code = 3;
         if (load(argv[2], &j) && j.owner == parent_pid() && owner_alive(&j)) {
             j.worker = GetCurrentProcessId();
             if (creation_time(j.worker, &j.worker_created) && save(&j, 1)) code = recover(&j);
         }
     }
-    else if (argc == 3 && !wcscmp(argv[1], L"--installer-watch")) code = watch(argv[2]);
+    else if (!ensure_backend && argc == 3 && !wcscmp(argv[1], L"--installer-watch")) code = watch(argv[2]);
     else {
         wchar_t *separator; wcscpy_s(root, CAP, self); separator = wcsrchr(root, L'\\');
         if (!separator) code = 3;
-        else { *separator = 0; code = start(root, arguments); }
+        else { *separator = 0; code = start(root, arguments, ensure_backend); }
     }
     if (lock) CloseHandle(lock);
     LocalFree(argv); return code;

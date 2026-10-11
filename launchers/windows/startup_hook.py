@@ -62,7 +62,7 @@ def _admit():
         pid, high, low, ack, release, running, direct = fields
         if not pid or pid != os.getppid() or high >= 2**32 or low >= 2**32 or direct not in (0, 1):
             raise RuntimeError("native admission is not from the actual parent")
-        parent = k.OpenProcess(0x1000 | 0x40, False, pid)
+        parent = k.OpenProcess(0x1000 | 0x40 | 0x00100000, False, pid)
         created, exited, kernel, user = (w.FILETIME() for _ in range(4))
         if not parent or not k.GetProcessTimes(parent, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel), ctypes.byref(user)):
             raise RuntimeError("native parent identity unavailable")
@@ -92,6 +92,11 @@ def _admit():
         # Every nested sys.executable worker must re-enter native admission and
         # receive its own running exclusion. Keep Python's argv untouched.
         sys.executable = str(expected)
+        if direct:
+            # Retain the verified parent object for headless admission's
+            # cancellation watcher; reopening by pid later could hit reuse.
+            sys._wg_native_parent_handle = parent
+            parent = None
         admitted = True
         return bool(direct)
     finally:
@@ -107,9 +112,16 @@ def _admit():
 if sys.platform == "win32":
     try:
         _direct_native = _admit()
-    except Exception:
+    except Exception as exc:
         # sitecustomize exceptions are otherwise printed and ignored by site.
         # An invalid capability must terminate, before arbitrary -c/-m code.
+        if "--ensure-backend" in sys.argv[1:]:
+            import json
+
+            print(json.dumps({"ok": False, "error": {
+                "type": type(exc).__name__, "message": str(exc),
+            }}), flush=True)
+            os._exit(5)
         os._exit(4)
     if not _direct_native:
         root = Path(sys.executable).resolve().parent

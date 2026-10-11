@@ -1815,6 +1815,7 @@ def test_windows_layout_writer_copies_launcher_dlls_layers_pth_and_icon(
     (runtime / "Lib").mkdir()
     (runtime / "Lib" / "os.py").write_text("# stdlib\n", encoding="utf-8")
     (app / "APP-MANIFEST.json").write_text("{}\n", encoding="utf-8")
+    _stage_backend_entry(app)
     # The recovery layer is copied out of the checkout, so this stand-in repo
     # root has to carry the two files it copies.
     (tmp_path / "launchers").mkdir()
@@ -1844,6 +1845,7 @@ def test_windows_layout_writer_copies_launcher_dlls_layers_pth_and_icon(
     assert (destination / WINDOWS_ICON_NAME).read_bytes() == b"ico"
     assert (destination / "runtime" / "Lib" / "os.py").is_file()
     assert (destination / "app" / "APP-MANIFEST.json").is_file()
+    _assert_backend_entry(destination / "app", destination / WINDOWS_LAUNCHER_NAME, "win32")
     # Beside the two swappable layers, never inside one, with the site hook the
     # renamed pythonw needs when ``app`` is the directory that is gone.
     recovery = destination / "recovery"
@@ -2550,6 +2552,7 @@ def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path,
     app = tmp_path / "app"
     app.mkdir()
     (app / "APP-MANIFEST.json").write_text("{}", encoding="utf-8")
+    _stage_backend_entry(app)
     written: list[tuple[Path, int]] = []
     bundle = tmp_path / LINUX_BUNDLE_DIRECTORY
 
@@ -2576,6 +2579,7 @@ def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path,
         ]
     )
     assert (bundle / "app" / "APP-MANIFEST.json").is_file()
+    _assert_backend_entry(bundle / "app", bundle / LINUX_LAUNCHER_NAME, "linux")
     assert (bundle / "recovery" / "wg_bundle_recovery.py").is_file()
     assert (bundle / "recovery" / "installer-log").read_bytes() == b"fixture logger"
     # Only Windows launches through an interpreter, so only Windows needs the
@@ -3856,3 +3860,69 @@ def test_build_package_uses_private_state_even_with_installed_ambient_environmen
     assert shipped.read_bytes() == b"pinned-package"
     assert len(states) == 1 and not states[0].exists()
     assert not external.exists()
+
+
+def _stage_backend_entry(app: Path) -> None:
+    root = Path(__file__).resolve().parents[2]
+    for name in ("ensure_backend.py", "backend_start.py"):
+        target = app / "launchers" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / "launchers" / name, target)
+
+
+def _assert_backend_entry(app: Path, launcher: Path, platform: str) -> None:
+    from launchers.backend_start import installed_launcher_argv
+    assert (app / "launchers/ensure_backend.py").is_file()
+    assert (app / "launchers/backend_start.py").is_file()
+    if platform == "win32":
+        # Windows advertises the entry only with the installer's marker and
+        # the capability signature in the native image (see backend_start).
+        assert installed_launcher_argv(environ={"WG2_BUNDLE": "1", "WG2_APP_ROOT": str(app)},
+                                       platform_name=platform) is None
+        signature = b"WG_NATIVE_ENSURE_BACKEND_V1"
+        launcher.write_bytes(launcher.read_bytes() + signature)
+        (launcher.parent / "Waveguide Generator.ensure-backend-v1").write_bytes(signature)
+    assert installed_launcher_argv(environ={"WG2_BUNDLE": "1", "WG2_APP_ROOT": str(app)},
+                                   platform_name=platform) == [str(launcher)]
+    from server.cadlink.fusion_delivery import capabilities
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("WG2_BUNDLE", "1")
+        patch.setenv("WG2_APP_ROOT", str(app))
+        patch.setattr(sys, "platform", platform)
+        assert capabilities()["launcher"] == {"argv": [str(launcher)], "ensureBackend": True}
+
+
+def test_macos_bundle_contains_backend_entry_and_advertises_its_own_launcher(tmp_path, monkeypatch):
+    builder = BundleBuilder(Path(__file__).resolve().parents[2], runner=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0))
+    runtime, app = tmp_path / "runtime", tmp_path / "app"
+    runtime.mkdir()
+    app.mkdir()
+    _stage_backend_entry(app)
+    bundle = tmp_path / "WG.app"
+    monkeypatch.setattr(build_bundle, "write_recovery_layer", lambda *args, **kwargs: None)
+    monkeypatch.setattr(build_bundle, "write_launcher_stub", lambda path, **kwargs: path.write_bytes(b"native entry"))
+    builder.assemble_bundle(bundle, runtime_root=runtime, app_root=app, version="1.2.3")
+    _assert_backend_entry(bundle / "Contents/Resources/app", bundle / "Contents/MacOS/Waveguide Generator", "darwin")
+
+
+def test_backend_entry_is_in_the_committed_app_materialization(tmp_path):
+    # Exercise the release's Git-object copier with this slice's actual bytes.
+    repo, app = tmp_path / "repo", tmp_path / "payload/app"
+    repo.mkdir()
+    _stage_backend_entry(repo)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "launchers"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=Bundle Test", "-c", "user.email=bundle-test@example.invalid",
+                    "commit", "-qm", "fixture"], cwd=repo, check=True)
+    copied = copy_tracked_app_files(repo, app)
+    assert {path.as_posix() for path in copied.paths} == {"launchers/ensure_backend.py", "launchers/backend_start.py"}
+    for name in ("ensure_backend.py", "backend_start.py"):
+        assert (app / "launchers" / name).read_bytes() == (repo / "launchers" / name).read_bytes()
+
+
+def test_windows_native_entry_routes_backend_mode_through_app_bootstrap():
+    source = (Path(__file__).resolve().parents[2] / "launchers/windows/launcher.c").read_text()
+    assert 'for (i = 1; i < argc; ++i) if (!wcscmp(argv[i], L"--ensure-backend")) ensure_backend = 1;' in source
+    assert 'if (!arguments[0] || ensure_backend)' in source
+    assert 'hidden, arguments, public_path' in source
+    assert '(uintptr_t)running, !arguments[0] || ensure_backend)' in source

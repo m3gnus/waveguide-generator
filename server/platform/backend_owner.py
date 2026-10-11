@@ -14,8 +14,8 @@ refusal only at the deadline. Never work around conflicts with a private folder.
 A timeout terminates and reaps our unconfirmed child; success leaves it detached.
 
 ``start_argv`` must start the supported backend on this exact data folder with
-``--no-browser`` (the launcher slice defines that argv later).
-Stdlib plus ``server.platform.instance`` only, without loading the application.
+``--no-browser`` (see ``launchers.backend_start``).
+Stdlib and platform process/locking helpers only, without loading the application.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -166,27 +166,29 @@ class _StartLock:
                 f"Could not open backend start lock {self.path}: {exc}. "
                 "Check that the data folder is writable and its locks directory is accessible."
             ) from exc
-        while True:
-            try:
-                lock_exclusive(descriptor)
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    os.close(descriptor)
-                    raise BackendStartTimeout(
-                        f"Another client is starting the backend (lock {self.path}) and it "
-                        f"did not finish in time. {_owner_description(self.path.parent.parent)} "
-                        "Check the backend log in the data folder's logs directory, then try again."
-                    ) from None
-                time.sleep(POLL_INTERVAL)
-                continue
-            except OSError as exc:
-                os.close(descriptor)
-                raise BackendOwnerError(
-                    f"Could not acquire backend start lock {self.path}: {exc}. "
-                    "Check permissions and filesystem locking support for the data folder."
-                ) from exc
-            self._descriptor = descriptor
-            return
+        try:
+            while True:
+                try:
+                    lock_exclusive(descriptor)
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise BackendStartTimeout(
+                            f"Another client is starting the backend (lock {self.path}) and it "
+                            f"did not finish in time. {_owner_description(self.path.parent.parent)} "
+                            "Check the backend log in the data folder's logs directory, then try again."
+                        ) from None
+                    time.sleep(POLL_INTERVAL)
+                    continue
+                except OSError as exc:
+                    raise BackendOwnerError(
+                        f"Could not acquire backend start lock {self.path}: {exc}. "
+                        "Check permissions and filesystem locking support for the data folder."
+                    ) from exc
+                self._descriptor = descriptor
+                return
+        except BaseException:
+            os.close(descriptor)
+            raise
 
     def release(self) -> None:
         descriptor, self._descriptor = self._descriptor, None
@@ -200,28 +202,71 @@ class _StartLock:
             os.close(descriptor)
 
 
-def _spawn(argv: Sequence[str], data_dir: Path) -> tuple[subprocess.Popen[bytes], Path]:
+def _spawn(argv: Sequence[str], data_dir: Path, env: Mapping[str, str] | None = None) -> tuple[subprocess.Popen[bytes], Path]:
     log_dir = data_dir / "logs"
     log_path = log_dir / LOG_FILENAME
     kwargs: dict[str, object] = {}
-    if sys.platform == "win32":
-        kwargs["creationflags"] = getattr(
-            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
-        ) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    else:
+    if sys.platform != "win32":
         kwargs["start_new_session"] = True
+    job = None
+    process = None
     try:
+        if sys.platform == "win32":
+            from server.platform.process_tree import windows_backend_breakaway_flags
+
+            kwargs["creationflags"] = (
+                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                | windows_backend_breakaway_flags()
+            )
         log_dir.mkdir(parents=True, exist_ok=True)
         with open(log_path, "ab") as log_file:
-            process = subprocess.Popen(  # noqa: S603
-                list(argv),
-                stdin=subprocess.DEVNULL,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                close_fds=True,
-                **kwargs,  # type: ignore[arg-type]
-            )
-    except OSError as exc:
+            # The Windows entry is itself a stub: own its interpreter before
+            # it runs, but allow a confirmed backend to survive this client.
+            from server.platform.job_start import windows_job_start
+            from server.platform.process_tree import confine_to_windows_job
+
+            def admit(pid, process_handle):
+                from server.platform.process_tree import require_windows_job_detached
+
+                require_windows_job_detached(process_handle)
+                return confine_to_windows_job(
+                    pid, subject="the starting backend", kill_on_close=False, allow_breakaway=True
+                )
+
+            with windows_job_start(
+                admit, required=True, subject="the starting backend",
+            ) as started:
+                process = subprocess.Popen(  # noqa: S603
+                    list(argv),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    close_fds=True,
+                    env=env,
+                    **kwargs,  # type: ignore[arg-type]
+                )
+            job = started.job
+            if sys.platform == "win32" and not started.fired:
+                from server.platform.process_tree import require_windows_job_detached
+
+                require_windows_job_detached(process._handle)
+                job = confine_to_windows_job(
+                    process.pid, subject="the starting backend", kill_on_close=False, allow_breakaway=True
+                )
+                if job is None:
+                    _terminate_child(process)
+                    raise OSError("Could not contain the backend process tree")
+            process._wg_start_job = job  # type: ignore[attr-defined]
+    except BaseException as exc:
+        if process is not None:
+            _terminate_child(process)
+        if job is not None:
+            job.terminate()
+            job.close()
+        from server.platform.job_start import ContainedStartError
+        if not isinstance(exc, (OSError, ContainedStartError)):
+            raise
         raise BackendSpawnError(
             f"Could not start the backend ({argv[0]!r}): {exc}. Check the installation, "
             "or start Waveguide Generator manually."
@@ -240,7 +285,11 @@ def _log_tail(path: Path) -> str:
 
 
 def _terminate_child(process: subprocess.Popen[bytes]) -> str:
+    job = getattr(process, "_wg_start_job", None)
+    if job is not None:
+        job.terminate()
     if process.poll() is not None:
+        process.wait()
         return ""
     try:
         process.terminate()
@@ -259,11 +308,15 @@ def ensure_backend(
     start_argv: Sequence[str],
     *,
     timeout: float = 60,
+    start_env: Mapping[str, str] | None = None,
 ) -> BackendHandle:
     """Find or start the owner; start_argv must use this folder and --no-browser.
 
     Exit 2 waits until the overall deadline without respawning. Discovery
     mismatches are transient; a matching-pid folder mismatch refuses at deadline.
+    ``start_env`` is the launcher's prepared child environment. An interrupted
+    wait terminates/reaps only our unconfirmed spawned child, then releases the
+    start lock; a confirmed owner is left detached.
     """
 
     root = Path(data_dir).resolve()
@@ -278,43 +331,61 @@ def ensure_backend(
         found = _discover(root)
         if found is not None:
             return found
-        return _start_and_wait(root, start_argv, deadline)
+        return _start_and_wait(root, start_argv, deadline, start_env)
     finally:
         start_lock.release()
 
 
-def _start_and_wait(root: Path, argv: Sequence[str], deadline: float) -> BackendHandle:
-    process, log_path = _spawn(argv, root)
-    while True:
-        info, health = _observe(root)
-        found = _validate(root, info, health)
-        if found is not None:
-            return found
-        code = process.poll()
-        if code is not None and code not in (0, EXIT_ALREADY_RUNNING):
-            raise BackendSpawnError(
-                f"The backend exited with code {code} before it was ready. "
-                f"See {log_path}. Start log tail:\n{_log_tail(log_path)}"
-            )
-        if time.monotonic() >= deadline:
-            cleanup = _terminate_child(process)
-            # A same-pid backend serving another folder should be impossible for
-            # the supported backend. Refuse only now: preferred-port conflicts
-            # and metadata updates are normal during a legitimate startup.
-            if (
-                info is not None
-                and health is not None
-                and health.get("pid") == info.pid
-                and not _same_path(health.get("data_dir"), root)
-            ):
-                raise BackendDataDirMismatch(
-                    f"The backend pid {info.pid} on port {info.port} reports data folder "
-                    f"{health.get('data_dir')!r}, not {str(root)!r}, at the startup deadline. "
-                    "Stop that backend or correct its data-folder configuration; do not "
-                    f"work around this with a different data folder. See {log_path}.{cleanup}"
+def _start_and_wait(
+    root: Path, argv: Sequence[str], deadline: float, env: Mapping[str, str] | None = None
+) -> BackendHandle:
+    process, log_path = _spawn(argv, root) if env is None else _spawn(argv, root, env)
+    try:
+        while True:
+            info, health = _observe(root)
+            found = _validate(root, info, health)
+            if found is not None:
+                return found
+            code = process.poll()
+            if code is not None and code not in (0, EXIT_ALREADY_RUNNING):
+                raise BackendSpawnError(
+                    f"The backend exited with code {code} before it was ready. "
+                    f"See {log_path}. Start log tail:\n{_log_tail(log_path)}"
                 )
-            raise BackendStartTimeout(
-                "The backend did not become ready within the timeout. "
-                f"{_owner_description(root)} See {log_path}.{cleanup}"
-            )
-        time.sleep(POLL_INTERVAL)
+            if time.monotonic() >= deadline:
+                cleanup = _terminate_child(process)
+                # A same-pid backend serving another folder should be impossible for
+                # the supported backend. Refuse only now: preferred-port conflicts
+                # and metadata updates are normal during a legitimate startup.
+                if (
+                    info is not None
+                    and health is not None
+                    and health.get("pid") == info.pid
+                    and not _same_path(health.get("data_dir"), root)
+                ):
+                    raise BackendDataDirMismatch(
+                        f"The backend pid {info.pid} on port {info.port} reports data folder "
+                        f"{health.get('data_dir')!r}, not {str(root)!r}, at the startup deadline. "
+                        "Stop that backend or correct its data-folder configuration; do not "
+                        f"work around this with a different data folder. See {log_path}.{cleanup}"
+                    )
+                raise BackendStartTimeout(
+                    "The backend did not become ready within the timeout. "
+                    f"{_owner_description(root)} See {log_path}.{cleanup}"
+                )
+            time.sleep(POLL_INTERVAL)
+    except BaseException:
+        # Signals use this same cleanup as timeout. Confirm once more in case
+        # ownership became healthy just as the caller stopped waiting.
+        found = _discover(root)
+        job = getattr(process, "_wg_start_job", None)
+        confirmed_child = found is not None and (
+            found.pid == process.pid or (job is not None and job.contains(found.pid))
+        )
+        if not confirmed_child:
+            _terminate_child(process)
+        raise
+    finally:
+        job = getattr(process, "_wg_start_job", None)
+        if job is not None:
+            job.close()

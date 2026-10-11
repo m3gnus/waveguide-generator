@@ -181,7 +181,7 @@ def test_the_launcher_accepts_exactly_what_the_server_accepts() -> None:
     server = options(server_parser())
 
     assert server <= launcher, "the launcher must not reject an argument the server takes"
-    assert launcher - server == set(entrypoint.DISPLAY_FLAGS)
+    assert launcher - server == set(entrypoint.DISPLAY_FLAGS) | {"--ensure-backend"}
 
 
 def test_the_display_flags_are_the_ones_the_launcher_consumes() -> None:

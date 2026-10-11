@@ -24,6 +24,13 @@ from launchers.full_installer import InstallerStartBlocked, guard_full_installer
 try:
     guard_full_installer_start(Path(__file__).resolve().parents[1])
 except InstallerStartBlocked as exc:
+    if "--ensure-backend" in sys.argv[1:]:
+        import json
+
+        print(json.dumps({"ok": False, "error": {
+            "type": type(exc).__name__, "message": str(exc),
+        }}, separators=(",", ":")), flush=True)
+        raise SystemExit(5) from exc
     print(str(exc), file=sys.stderr)
     raise SystemExit(4) from exc
 
@@ -1646,7 +1653,13 @@ def main(argv: list[str] | None = None) -> int:
     fallback that has always been there.
     """
 
-    parsed = parse_arguments(list(sys.argv[1:] if argv is None else argv))
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if "--ensure-backend" in arguments:
+        from launchers.ensure_backend import main as ensure_main
+
+        arguments.remove("--ensure-backend")
+        return ensure_main(arguments)
+    parsed = parse_arguments(arguments)
     if isinstance(parsed, int):
         return parsed
     options, server_arguments = parsed

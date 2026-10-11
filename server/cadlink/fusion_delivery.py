@@ -151,6 +151,11 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
         "documentUp": DOCUMENT_UP,
         "automaticDomain": AUTOMATIC_DOMAIN,
     }
+    from launchers.backend_start import installed_launcher_argv
+
+    launcher = installed_launcher_argv()
+    if launcher is not None:
+        advertised["launcher"] = {"argv": launcher, "ensureBackend": True}
     if not solve_delivery:
         del advertised["solveCommandDelivery"]
         del advertised["solveAcknowledgement"]

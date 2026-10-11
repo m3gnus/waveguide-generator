@@ -223,6 +223,59 @@ environment installs this Linux backend through the runtime requirements.
 `--help` prints usage and exits without starting a server or window. Unknown
 options are rejected before startup.
 
+Installed clients can find or start WG's backend without opening a window:
+
+```text
+<installed launcher> --ensure-backend [--data-dir <absolute-path>]
+```
+
+Use the bundle's `Contents/MacOS/Waveguide Generator` executable on macOS,
+`Waveguide Generator.exe` on Windows, or `waveguide-generator` (the packaged shell launcher) on Linux.
+Older Linux layouts naming it `launch-wg.sh` are also recognised. Arguments containing spaces must be
+passed as individual argv items. No development checkout or activated shell is
+needed. Without `--data-dir`, the launcher uses the GUI's platform data folder,
+including `WG2_DATA_DIR` when configured.
+Resolving that default does not set an isolation override: the default workspace
+and adoption of legacy exports match a GUI start. The old default data folder is
+migrated before startup locks or logs create the current folder. An explicit
+`--data-dir` must be absolute; relative paths and `--help` in ensure mode return
+a JSON configuration error with exit 5.
+
+The command prints one JSON line: `ok`, `base_url`, `pid`, `data_dir`, `version`,
+`commit` on success; `ok: false` and `error: {type, message}` on failure. It exits
+0 on success, 3 on folder mismatch, 4 on timeout/cancellation, or 5 on startup or
+configuration failure. Backend output is in `<data>/logs/backend-start.log`.
+**An exit code is meaningful only together with a parsed JSON line.** Require
+exactly one line, parse its object, then interpret the exit code and `ok` field.
+Never treat exit 0 alone as backend admission. Python-side argument, installer
+guard, incomplete-app/bootstrap, and unexpected startup failures return JSON.
+Native failures before the Python reporting path can still exit without JSON:
+an older Windows stub that does not route this mode; executable/path resolution;
+an active installer or ambiguous native recovery; a missing/unusable interpreter
+or admission hook; process/handle creation, admission handshake or exec failure;
+and an OS denial, crash or forced termination before Python can report. A missing
+JSON response is a launcher failure regardless of its exit code.
+The backend stays running after a successful response. SIGINT/SIGTERM while
+waiting clean up an unconfirmed child this command started; an existing healthy
+backend is retained. On Windows cancelling the public launcher also cancels its
+waiting interpreter. Concurrent calls use one backend owner, and opening WG
+later uses the same data folder, jobs, and results.
+Windows admission requests job breakaway when permitted and checks the suspended
+child has escaped every caller job before starting it. A job chain that forbids
+breakaway returns a clear startup error; start WG outside that chain or allow
+breakaway in every parent job.
+
+Installed WG advertises its own absolute launcher argv and `ensureBackend: true`
+in `<data>/ipc/wglink/wg-capabilities.json`; clients can store that stable entry
+without knowing where the installation keeps Python. App/runtime updates keep
+the entry in place. On Windows, advertisement requires the full installer's
+`Waveguide Generator.ensure-backend-v1` marker beside the exe and the matching
+`WG_NATIVE_ENSURE_BACKEND_V1` capability signature in the current native image.
+An app-layer update cannot publish this marker or upgrade an old native stub;
+missing, unknown or stale evidence suppresses advertisement. Reinstall with a
+current full installer to enable it. Moving or uninstalling the whole bundle requires refreshing
+that stored path by starting WG from its new installation.
+
 For the original plain-terminal behavior, append `--no-gui`:
 
 ```

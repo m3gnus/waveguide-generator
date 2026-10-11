@@ -1164,6 +1164,64 @@ requests are available from `GET /api/jobs/{id}/requests`, preserving the existi
 Data-folder mismatch, startup timeout and spawn failure exit 3, 4 and 5 respectively;
 none falls back to a private folder. See [the CLI contract](../reference/CLI.md).
 
+Stage 6's installed entry is `--ensure-backend [--data-dir <absolute-path>]` on the
+bundle's own OS launcher. `launchers/desktop.py` routes directly to
+`launchers/ensure_backend.py`, without entering a GUI. It resolves the same
+platform data folder as the status app and uses the shared argv/environment
+helpers in `launchers/backend_start.py`, with an optional `data_dir: Path | None`
+override in the shared argv/environment API.
+Only an explicit argument adds `--data-dir` and `WG2_DATA_DIR`; an inherited
+environment override is preserved. Default discovery migrates the legacy data
+folder using the GUI's migration path before creating a startup lock. This
+preserves the GUI's Documents workspace default and legacy export adoption.
+Its backend has `--no-browser` and no parent lifetime or status-control file:
+it stays available after the caller
+exits, and a later GUI adopts that same owner and sees its durable jobs/results.
+The response is one JSON line with `ok`, `base_url`, `pid`, `data_dir`, `version`
+and `commit`; failures have `ok: false` and `error: {type, message}`. Exit codes
+are 0 for success, 3 for a data-folder mismatch, 4 for timeout or cancellation,
+and 5 for spawn/configuration failure. Backend output goes to the start log.
+All Python-side failures, including invalid/help arguments, installer guards,
+missing-app bootstrap and unexpected exceptions, produce one error JSON line.
+The exit code is meaningful only with a parsed JSON line: missing JSON is always
+a launcher failure. Native failures before Python reporting (old unsupported
+Windows stub, path/installer/recovery refusal, missing runtime/hook, process or
+handle creation, admission handshake, exec failure, OS denial/crash/termination)
+can exit without JSON; see `docs/INSTALL.md` for the client rule.
+SIGINT/SIGTERM release the start lock and terminate/reap only an unconfirmed
+spawned child, checking once more for a healthy owner before doing so. Waiting
+on another starter never terminates that starter. On Windows the unconfirmed
+stub/interpreter tree is held in an explicitly terminated Job Object; cancellation
+of the public stub is observed by its admitted interpreter. Confirmation closes
+the job handle without killing the backend. The suspended child requests
+`CREATE_BREAKAWAY_FROM_JOB` when the caller job permits explicit breakaway
+(silent breakaway needs no flag), and must be outside every caller job before
+assignment to the new job. An outer job retaining it refuses startup, rather
+than handing back a backend that will die when the caller closes its job.
+
+Installed WG adds `launcher: {argv: [<absolute OS entry>], ensureBackend: true}`
+to `<data>/ipc/wglink/wg-capabilities.json`. The path is derived from its own
+app layer and names the macOS `Contents/MacOS/Waveguide Generator`, Windows
+`Waveguide Generator.exe`, or Linux `waveguide-generator`, outside the swappable layers.
+A checkout or incomplete installation advertises no installed launcher. Existing
+WGLink readers select known fields and ignore this additive field.
+Windows advertisement additionally requires an installer-owned
+`Waveguide Generator.ensure-backend-v1` marker and its capability signature in
+the current native exe. Only `--installer-entry` publishes the marker after
+publishing the supported exe (also on an identical-image reinstall). Missing
+or stale evidence advertises no entry: an app-layer update cannot claim support
+for an older stub, and a downgrade cannot retain a positive claim via the marker.
+The CLI argv builder from Stage 6 should delegate to `launchers/backend_start.py` when the
+CLI and installed-launcher slices converge, preserving one start definition.
+The installed CPU qualification gate checks JSON output, owner identity, and the
+capability path through that OS entry. It also cold-starts through the installed
+entry with no data override in a fresh isolated profile, reaps the caller, checks
+the backend's health twice, compares its data folder and workspace default to a
+fresh GUI backend start, and stops the confirmed owner by pid. Cold data is
+retained as evidence and provider workers are cleaned up from this phase's own
+registry. The adoption check remains in the solve phase. Actual installed runs
+and cancellation still require qualification on each supported platform.
+
 ## Solve-command delivery
 
 A WG-bound Fusion request reaches WG as its own file:

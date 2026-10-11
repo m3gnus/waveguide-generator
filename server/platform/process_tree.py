@@ -107,6 +107,23 @@ class WindowsJob:
         self._kernel32 = kernel32
         self._suppress_errors = suppress_errors
 
+    def contains(self, pid: int) -> bool:
+        """Whether a confirmed backend pid is in this spawned stub's tree."""
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = self._kernel32
+        kernel.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
+        kernel.IsProcessInJob.restype = wintypes.BOOL
+        process = kernel.OpenProcess(0x1000, False, pid)
+        if not process:
+            return False
+        try:
+            member = wintypes.BOOL()
+            return bool(kernel.IsProcessInJob(process, self._handle, ctypes.byref(member)) and member.value)
+        finally:
+            kernel.CloseHandle(process)
+
     def terminate(self) -> None:
         if not self._suppress_errors:
             self._kernel32.TerminateJobObject(self._handle, 1)
@@ -122,10 +139,81 @@ class WindowsJob:
             self._kernel32.CloseHandle(self._handle)
 
 
+def windows_backend_breakaway_flags() -> int:
+    """Detach a backend from the caller's job, or refuse before creating it.
+
+    A nested non-killing job does not release the caller's kill-on-close job.
+    Query the immediate job. The owner also checks the suspended child for
+    residual membership, because a non-breakaway outer job can retain it.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
+    kernel.IsProcessInJob.restype = wintypes.BOOL
+    member = wintypes.BOOL()
+    if not kernel.IsProcessInJob(kernel.GetCurrentProcess(), None, ctypes.byref(member)):
+        raise OSError("Could not check the caller's Windows job; cannot detach the backend")
+    if not member.value:
+        return 0
+
+    class BasicLimits(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    kernel.QueryInformationJobObject.argtypes = (
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p,
+    )
+    kernel.QueryInformationJobObject.restype = wintypes.BOOL
+    limits = BasicLimits()
+    if not kernel.QueryInformationJobObject(None, 2, ctypes.byref(limits), ctypes.sizeof(limits), None):
+        raise OSError("Could not query the caller's Windows job; cannot detach the backend")
+    if limits.LimitFlags & 0x00000800:  # JOB_OBJECT_LIMIT_BREAKAWAY_OK
+        return 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
+    if limits.LimitFlags & 0x00001000:  # JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
+        return 0
+    raise OSError(
+        "The caller's Windows job does not allow backend breakaway. "
+        "Start Waveguide Generator outside that job, or enable job breakaway."
+    )
+
+
+def require_windows_job_detached(process_handle: Any) -> None:
+    """Refuse a suspended backend retained by any caller job in the chain."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
+    kernel.IsProcessInJob.restype = wintypes.BOOL
+    member = wintypes.BOOL()
+    if not kernel.IsProcessInJob(process_handle, None, ctypes.byref(member)) or member.value:
+        raise OSError(
+            "The backend could not detach from the caller's Windows job chain. "
+            "Start Waveguide Generator outside that job, or enable breakaway in every parent job."
+        )
+
+
 def confine_to_windows_job(
-    pid: int, *, subject: str = "the BEMPP worker"
+    pid: int, *, subject: str = "the BEMPP worker",
+    kill_on_close: bool = True, allow_breakaway: bool = False
 ) -> WindowsJob | None:
-    """Put ``pid`` and its future descendants in a kill-on-close job object.
+    """Put ``pid`` and its future descendants in a job object.
+
+    Normally kill-on-close. A backend admission client uses explicit termination
+    until confirmation and closes without killing after handing ownership over.
+    ``allow_breakaway`` permits only children explicitly requesting breakaway.
 
     Returns ``None`` on non-Windows hosts and whenever the job API cannot be
     used; see the module docstring for what callers do with that.
@@ -141,6 +229,7 @@ def confine_to_windows_job(
         return create_windows_job(
             pid, by_pid=True, suppress_errors=True, error_before_close=False,
             creation_error_before_close=True, suppress_creation_errors=True,
+            kill_on_close=kill_on_close, allow_breakaway=allow_breakaway,
         )
     except Exception as exc:  # pragma: no cover - Windows-only failure paths
         logger.warning(
@@ -158,13 +247,16 @@ def create_windows_job(
     suppress_errors: bool = False, error_before_close: bool = True,
     creation_error_before_close: bool | None = None,
     suppress_creation_errors: bool = False,
+    kill_on_close: bool = True, allow_breakaway: bool = False,
 ) -> WindowsJob:
-    """Create and assign one kill-on-close job with optional kernel limits.
+    """Create and assign one job with optional kernel limits and lifetime policies.
 
     CAD supplies a process handle and resource caps; reusable workers supply
     a pid and request best-effort cleanup. Creation and assignment have
     separate error policies to preserve each wrapper's Win32 diagnostics.
-    Only a process handle opened here is closed after assignment.
+    Only a process handle opened here is closed after assignment. Jobs kill
+    their tree on close by default; backend admission can disable that and
+    allow descendants to request explicit breakaway.
     """
 
     try:
@@ -180,6 +272,7 @@ def create_windows_job(
     handle = _create_windows_job(
         kernel32, ctypes, wintypes,
         memory_bytes=memory_bytes, active_process_limit=active_process_limit,
+        kill_on_close=kill_on_close, allow_breakaway=allow_breakaway,
         error_before_close=(
             error_before_close if creation_error_before_close is None
             else creation_error_before_close
@@ -212,12 +305,14 @@ def _create_kill_on_close_job(kernel32: Any, ctypes: Any, wintypes: Any) -> Any:
 def _create_windows_job(
     kernel32: Any, ctypes: Any, wintypes: Any, *,
     memory_bytes: int | None = None, active_process_limit: int | None = None,
+    kill_on_close: bool = True, allow_breakaway: bool = False,
     error_before_close: bool = True, suppress_errors: bool = False,
 ) -> Any:
     """Create the job handle using explicit resource and failure policies.
 
-    No resource caps means kill-on-close is the only limit. The caller owns
-    the returned handle and decides how to assign it and transfer ownership.
+    By default, kill-on-close is the only limit. Resource caps and explicit
+    breakaway are optional. The caller owns the returned handle and decides
+    how to assign it and transfer ownership.
     """
 
     class _IoCounters(ctypes.Structure):
@@ -261,7 +356,10 @@ def _create_windows_job(
     if not handle:
         raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
     limits = _ExtendedLimits()
-    limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    limits.BasicLimitInformation.LimitFlags = (
+        (_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE if kill_on_close else 0)
+        | (0x00000800 if allow_breakaway else 0)  # JOB_OBJECT_LIMIT_BREAKAWAY_OK
+    )
     if memory_bytes is not None:
         limits.BasicLimitInformation.LimitFlags |= limit_job_memory | limit_process_memory
         limits.ProcessMemoryLimit = memory_bytes

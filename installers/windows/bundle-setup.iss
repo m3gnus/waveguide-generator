@@ -201,6 +201,8 @@ Type: filesandordirs; Name: "{app}\.wg-install-new"
 ; Root files are moved from staging by the native helper, so Inno's file log
 ; records staging names. Name the owned final boot files explicitly.
 Type: files; Name: "{app}\Waveguide Generator.exe"
+; Native --installer-entry publishes this capability marker alongside the exe.
+Type: files; Name: "{app}\Waveguide Generator.ensure-backend-v1"
 Type: files; Name: "{app}\wg-python.exe"
 Type: files; Name: "{app}\wg-python._pth"
 Type: files; Name: "{app}\Waveguide Generator._pth"
@@ -1140,7 +1142,7 @@ begin
     'waveguide generator.exe|wg-python.exe|wg-python._pth|waveguide generator._pth|' +
     'pyvenv.cfg|python313.dll|python3.dll|vcruntime140.dll|vcruntime140_1.dll|' +
     'msvcp140.dll|waveguidegenerator.ico|read me first.txt|.upgrade-in-progress|' +
-    '.wg-install-lock|.native-start|' +
+    '.wg-install-lock|.native-start|waveguide generator.ensure-backend-v1|' +
     'app.previous|runtime.previous|wg-python.exe.previous|python313.dll.previous|' +
     'python3.dll.previous|vcruntime140.dll.previous|vcruntime140_1.dll.previous|' +
     'msvcp140.dll.previous|waveguide generator.exe.previous|' +

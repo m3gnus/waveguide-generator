@@ -1048,6 +1048,7 @@ def windows_desktop_bootstrap() -> str:
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path, PureWindowsPath
 import sys
 import traceback
@@ -1069,6 +1070,10 @@ def _is_direct_launch() -> bool:
 
 if _is_direct_launch():
     if not _wait_for_setup_mutex():
+        if "--ensure-backend" in sys.argv[1:]:
+            print(json.dumps({"ok": False, "error": {"type": "InstallerStartBlocked",
+                  "message": "Installation is active or startup exclusion could not be checked."}}), flush=True)
+            raise SystemExit(5)
         raise SystemExit(4)
     bundle_root = Path(sys.executable).resolve().parent
     app_root = bundle_root / "app"
@@ -1094,14 +1099,19 @@ if _is_direct_launch():
 
         result = main(sys.argv[1:])
     except Exception as exc:
-        from launchers.statusapp.__main__ import _report_startup_failure
+        if "--ensure-backend" in sys.argv[1:]:
+            print(json.dumps({"ok": False, "error": {"type": type(exc).__name__,
+                  "message": str(exc)}}), flush=True)
+            result = 5
+        else:
+            from launchers.statusapp.__main__ import _report_startup_failure
 
-        _report_startup_failure(
-            "Waveguide Generator could not start: "
-            f"{type(exc).__name__}: {exc}",
-            detail=traceback.format_exc(),
-        )
-        result = 1
+            _report_startup_failure(
+                "Waveguide Generator could not start: "
+                f"{type(exc).__name__}: {exc}",
+                detail=traceback.format_exc(),
+            )
+            result = 1
     raise SystemExit(result)
 '''
 

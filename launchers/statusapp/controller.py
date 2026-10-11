@@ -29,8 +29,9 @@ from scripts.frontend_freshness import (
     installer_hint,
     refresh_hint,
 )
-from launch.serve_options import UPDATE_RELEASED_FILENAME, UPDATE_STAGING_ROOT_ENV
+from launch.serve_options import UPDATE_RELEASED_FILENAME
 from launchers.apply_update import append_update_log, destination_staging_root
+from launchers.backend_start import backend_argv, backend_environment
 from server.platform.instance import requested_port
 from server.platform.job_start import ContainedStartError, JobStart, windows_job_start
 from server.platform.paths import app_root, resolve_data_dir
@@ -742,23 +743,11 @@ class StatusController:
         return resolve_data_dir(override, environ=self.environ)
 
     def _command(self, port: int, control_path: Path) -> list[str]:
-        if self.server_command is None:
-            command = [str(self.python_executable), str(self.repo_root / "launch" / "serve.py")]
-        else:
-            command = list(self.server_command)
-        command.extend(self.server_args)
-        command.extend(
-            (
-                "--no-browser",
-                "--port",
-                str(port),
-                "--status-control",
-                str(control_path),
-                "--parent-pid",
-                str(os.getpid()),
-            )
+        return backend_argv(
+            repo_root=self.repo_root, python_executable=self.python_executable,
+            server_args=self.server_args, server_command=self.server_command,
+            port=port, control_path=control_path,
         )
-        return command
 
     def update_staging_root(self) -> Path | None:
         """The staging folder beside this installation's bundle; ``None`` outside a bundle."""
@@ -780,18 +769,7 @@ class StatusController:
         environment is never passed on.
         """
 
-        environment = dict(self.environ)
-        environment.pop(UPDATE_STAGING_ROOT_ENV, None)
-        environment["WG2_NO_BROWSER"] = "1"
-        # stdout and stderr are merged into one pipe, where stdout is block
-        # buffered and stderr is not, so a dependency's start-up print
-        # otherwise lands after the logging that explains a failure. This
-        # keeps the collected output in the order it was written.
-        environment["PYTHONUNBUFFERED"] = "1"
-        staging_root = self.update_staging_root()
-        if staging_root is not None:
-            environment[UPDATE_STAGING_ROOT_ENV] = str(staging_root)
-        return environment
+        return backend_environment(self.environ, staging_root=self.update_staging_root())
 
     def _collect_output(self, stream: IO[str], output: deque[str]) -> None:
         try:

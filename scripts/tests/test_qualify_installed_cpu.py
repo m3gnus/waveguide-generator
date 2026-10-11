@@ -22,6 +22,7 @@ import io
 import json
 import os
 from pathlib import Path
+import runpy
 import shutil
 import socket
 import subprocess
@@ -972,6 +973,28 @@ exec(compile(open(argv[0]).read(), argv[0], "exec"),
      {{"__name__": "__main__", "__file__": argv[0]}})
 '''
 
+_STUB_LAUNCHER = '''#!{python}
+"""Discover the stub's existing installed owner without starting another one."""
+import argparse
+import json
+from pathlib import Path
+from urllib.request import urlopen
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--ensure-backend", action="store_true", required=True)
+parser.add_argument("--data-dir", type=Path, required=True)
+args = parser.parse_args()
+data = args.data_dir.resolve()
+owner = json.loads((data / "locks/server.pid").read_text(encoding="utf-8"))
+base = "http://127.0.0.1:" + str(owner["port"])
+with urlopen(base + "/health", timeout=5) as response:
+    health = json.load(response)
+assert health["pid"] == owner["pid"]
+assert Path(health["data_dir"]).resolve() == data
+print(json.dumps(dict(ok=True, base_url=base, data_dir=str(data),
+                     pid=health["pid"], version=health["version"], commit=health["commit"])))
+'''
+
 # ---------------------------------------------------------------------------
 # The stub application
 # ---------------------------------------------------------------------------
@@ -996,6 +1019,9 @@ class StubApplication:
         self.capability_polls = 0
         self.data = Path(data_dir)
         self.data.mkdir(parents=True, exist_ok=True)
+        self.health = {"status": "ok", "pid": os.getpid(),
+                       "data_dir": str(self.data.resolve()),
+                       "version": "0.3.1", "commit": "a" * 40}
         self.workspace = {"path": str(self.data / "workspace-default")}
         self.state_path = self.data / "stub-state.json"
         self.state = (
@@ -1014,6 +1040,16 @@ class StubApplication:
 
     def save(self) -> None:
         self.state_path.write_text(json.dumps(self.state), encoding="utf-8")
+
+    def advertise_installed_entry(self, port: int, launcher: Path) -> None:
+        owner = self.data / "locks/server.pid"
+        owner.parent.mkdir(parents=True, exist_ok=True)
+        owner.write_text(json.dumps({"pid": self.health["pid"], "port": port}), encoding="utf-8")
+        capabilities = self.data / "ipc/wglink/wg-capabilities.json"
+        capabilities.parent.mkdir(parents=True, exist_ok=True)
+        capabilities.write_text(json.dumps({"launcher": {
+            "argv": [str(launcher)], "ensureBackend": True,
+        }}), encoding="utf-8")
 
     def exit_code(self) -> int:
         """A server that stops, but reports failure doing so."""
@@ -1101,7 +1137,7 @@ class StubApplication:
         if path == "/health":
             # A slow runner: every /health answer takes this long.
             time.sleep(float(settings.get("health_delay_s", 0.0)))
-            return 200, {"status": "ok"}, {}
+            return 200, self.health, {}
         if path == "/api/capabilities":
             return 200, self.capabilities(), {}
         if path == "/api/workspace/path":
@@ -1247,6 +1283,9 @@ application = StubApplication(
     args.data_dir, json.loads(Path(__file__).with_name("stub-settings.json").read_text())
 )
 server = ThreadingHTTPServer(("127.0.0.1", args.port), _stub_handler(application))
+application.advertise_installed_entry(
+    args.port, Path(__file__).resolve().parents[2] / "waveguide-generator"
+)
 # serve_forever's default 0.5 s poll made every stop wait that long for shutdown().
 threading.Thread(target=lambda: server.serve_forever(poll_interval=0.05), daemon=True).start()
 deadline = time.monotonic() + 120
@@ -1262,7 +1301,7 @@ raise SystemExit(application.exit_code())
 #: process and the in-process tests answer exactly alike.
 _STUB_SERVER = (
     '"""A stand-in for launch/serve.py: the endpoints the qualifier drives."""\n'
-    "import argparse, hashlib, json, threading, time\n"
+    "import argparse, hashlib, json, os, threading, time\n"
     "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
     "from pathlib import Path\n"
     "from urllib.parse import urlsplit\n\n\n"
@@ -1282,6 +1321,9 @@ def _quick_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
     broken test, not a slow application, and waiting the production timeout for
     it would run into the suite's own faulthandler.
     """
+    # This solve-phase stub implements adoption only. Cold-start admission is
+    # exercised separately in test_installed_backend_review.
+    monkeypatch.setattr(gate, "check_ensure_backend_cold_start", lambda *args, **kwargs: {"stubbed": True})
 
     # Not 30 s: the macOS runner takes about 35 s before a freshly written stub
     # answers its first /health. Green runs used to hide that behind the 120 s
@@ -1331,11 +1373,45 @@ def _stub_payload(tmp_path: Path, **settings: object) -> Path:
         encoding="utf-8",
     )
     interpreter.chmod(0o755)
+    launcher = payload / ("Waveguide Generator.exe" if sys.platform == "win32" else "waveguide-generator")
+    launcher.write_text(_STUB_LAUNCHER.format(python=sys.executable), encoding="utf-8")
+    launcher.chmod(0o755)
 
     resolved = {"ready_after_s": 0.0, "ever_ready": True, "result": _result()}
     resolved.update(settings)
     (app / "launch" / "stub-settings.json").write_text(json.dumps(resolved), encoding="utf-8")
     return payload
+
+
+def test_stub_installed_entry_discovers_the_advertised_owner(tmp_path, monkeypatch, capsys):
+    """Exercise the generated entry itself without requiring a listening socket."""
+    from urllib import request
+
+    payload = _stub_payload(tmp_path)
+    launcher = payload / ("Waveguide Generator.exe" if sys.platform == "win32" else "waveguide-generator")
+    data = tmp_path / "data folder"
+    settings = json.loads((payload / "app/launch/stub-settings.json").read_text(encoding="utf-8"))
+    application = StubApplication(data, settings)
+    application.advertise_installed_entry(3199, launcher)
+    calls = []
+
+    def urlopen(url, *, timeout):
+        calls.append((url, timeout))
+        return io.BytesIO(json.dumps(application.health).encode())
+
+    monkeypatch.setattr(request, "urlopen", urlopen)
+    monkeypatch.setattr(sys, "argv", [str(launcher), "--ensure-backend", "--data-dir", str(data)])
+    runpy.run_path(str(launcher), run_name="__main__")
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0]) == {
+        "ok": True, "base_url": "http://127.0.0.1:3199", "data_dir": str(data.resolve()),
+        "pid": os.getpid(), "version": "0.3.1", "commit": "a" * 40,
+    }
+    assert calls == [("http://127.0.0.1:3199/health", 5)]
+    advertised = json.loads((data / "ipc/wglink/wg-capabilities.json").read_text(encoding="utf-8"))
+    assert advertised["launcher"] == {"argv": [str(launcher)], "ensureBackend": True}
+    assert json.loads(application.state_path.read_text(encoding="utf-8"))["starts"] == 1
 
 
 @pytest.mark.skipif(
@@ -1366,6 +1442,11 @@ def test_the_harness_starts_waits_solves_and_stops_against_a_stub(tmp_path: Path
     assert code == 0, (output / "cpu-qualification.json").read_text(encoding="utf-8")
     report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
     assert report["qualified"] is True
+    assert report["ensure_backend"] == {
+        "argv": [str(payload / "waveguide-generator")], "same_owner": True, "json_output": True,
+    }
+    state = json.loads((tmp_path / "work/data/stub-state.json").read_text(encoding="utf-8"))
+    assert state["starts"] == 1
     assert report["cpu_offered"]["available"] is True
     assert report["solve"]["beat_backend"] == "cpu"
     assert report["gpu_independence"]["any_accelerator_available"] is False
@@ -1627,7 +1708,7 @@ def test_workspace_selection_precedes_solving_on_every_platform(
 ) -> None:
     """Drive the entry point over HTTP with POSIX branches forced on Windows.
 
-    Only process launch, the pin probe and worker cleanup are replaced. The
+    Process launch, installed admission, the pin probe and worker cleanup are replaced. The
     original POSIX test above still exercises the real subprocess harness.
     """
     from server.platform.paths import default_runs_dir
@@ -2282,6 +2363,9 @@ def _refuse_to_launch(*_args: object, **_kwargs: object) -> None:
 def _in_process(monkeypatch: pytest.MonkeyPatch, _quick_timeouts: None) -> None:
     monkeypatch.setattr(gate, "Server", _InProcessServer)
     monkeypatch.setattr(subprocess, "Popen", _refuse_to_launch)
+    # Installed admission launches an OS entry; the subprocess harness above
+    # covers it. These phase tests deliberately refuse every process launch.
+    monkeypatch.setattr(gate, "check_ensure_backend", lambda *args, **kwargs: {"same_owner": True})
 
 
 def _imported_phase(
@@ -3221,6 +3305,7 @@ def test_official_runtime_probe_cannot_pass_an_empty_runtime(tmp_path, monkeypat
 
 @pytest.mark.parametrize("damage", [None, "hbb", "missing-pin", "override-pin", "wrong-installed-pin"])
 def test_official_qualification_entrypoint_keeps_identity_and_rejects_hbb(tmp_path, monkeypatch, damage):
+    monkeypatch.setattr(gate, "check_ensure_backend_cold_start", lambda *args, **kwargs: {"stubbed": True})
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
     payload = _payload(tmp_path)
     pins_file = tmp_path / "pins.json"
@@ -3247,6 +3332,7 @@ def test_official_qualification_entrypoint_keeps_identity_and_rejects_hbb(tmp_pa
             return result
 
     monkeypatch.setattr(gate, "Server", Server)
+    monkeypatch.setattr(gate, "check_ensure_backend", lambda *args, **kwargs: {"same_owner": True})
     monkeypatch.setattr(gate, "await_cpu_row", lambda *args: {"settled": "available"})
     monkeypatch.setattr(gate, "workspace_isolation", lambda *args: {})
     inspected = []
@@ -3353,3 +3439,50 @@ def test_preparation_diagnosis_follows_selected_provider(tmp_path, monkeypatch, 
     assert answer["note"].startswith("diagnosis only")
     assert "fresh-state provisioning" in answer["claim"]
     assert (tmp_path / "cpu-provision-diagnosis.log").read_text().endswith("test stderr")
+
+
+@pytest.mark.parametrize("damage", [None, "missing", "exit", "extra-line", "pid", "folder", "base-url", "version", "commit", "launcher"])
+def test_installed_backend_check_requires_one_json_line_and_same_owner(tmp_path, monkeypatch, damage):
+    app, data = tmp_path / "WG/app", tmp_path / "data"
+    app.mkdir(parents=True)
+    launcher = app.parent / ("Waveguide Generator.exe" if sys.platform == "win32" else "waveguide-generator")
+    launcher.touch()
+    if damage == "missing":
+        launcher.unlink()
+    health = {"pid": 123, "version": "1.2", "commit": "abc"}
+    base = "http://127.0.0.1:3199"
+    answer = dict(health, ok=True, base_url=base, data_dir=str(data))
+    if damage == "pid":
+        answer["pid"] = 999
+    if damage == "folder":
+        answer["data_dir"] = str(tmp_path / "other")
+    if damage == "base-url":
+        answer["base_url"] = "http://127.0.0.1:9999"
+    if damage in {"version", "commit"}:
+        answer[damage] = "wrong"
+    advertised = {"launcher": {"argv": [str(launcher)], "ensureBackend": True}}
+    if damage == "launcher":
+        advertised["launcher"]["argv"] = ["embedded-python"]
+    capabilities = data / "ipc/wglink/wg-capabilities.json"
+    capabilities.parent.mkdir(parents=True)
+    capabilities.write_text(json.dumps(advertised))
+    calls = []
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 5 if damage == "exit" else 0,
+            stdout=json.dumps(answer) + ("\nnoise" if damage == "extra-line" else "\n"), stderr="")
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    monkeypatch.setattr(gate, "http", lambda *args: health)
+    if damage == "missing":
+        with pytest.raises(gate.QualificationError, match="installed backend entry is missing"):
+            gate.check_ensure_backend(app, data, {"ISOLATED": "1"}, base, cwd=tmp_path)
+        assert calls == []
+        return
+    if damage:
+        with pytest.raises(gate.QualificationError):
+            gate.check_ensure_backend(app, data, {"ISOLATED": "1"}, base, cwd=tmp_path)
+    else:
+        assert gate.check_ensure_backend(app, data, {"ISOLATED": "1"}, base, cwd=tmp_path)["same_owner"] is True
+    assert calls[0][0] == [str(launcher), "--ensure-backend", "--data-dir", str(data)]
+    assert calls[0][1]["cwd"] == tmp_path
+    assert calls[0][1]["env"] == {"ISOLATED": "1"}
