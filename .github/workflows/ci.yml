@@ -252,8 +252,11 @@ jobs:
     # 2026-09-15 (pytest 19.0m, 3882 tests), took 30.6m on 2026-09-22 (4624
     # tests) and 34.4m on 2026-09-28 (run 36498497078, 4893 tests), i.e. 36.7
     # to 38.8m per job with setup. Run 36500433825 was cut off at the old 40m
-    # cap at 97% with no hang. It is capped at 60m so it has real headroom;
-    # every other job keeps matrix.budget.
+    # cap at 97% with no hang. It was capped at 60m; RC run 38144034409 on
+    # 2026-10-11 was then cut off at 60m at 93% (the previous green RC took
+    # 57.7m), so it is capped at 80m. The heaviest files (test_exports_sizing,
+    # test_general_horn_sources, the real BEMPP/field-plane/pipeline tests) are
+    # the place to win time back; every other job keeps matrix.budget.
     #
     # macOS harness is the other exception. On main (run 36940318262,
     # 2026-10-01) it already took 18m of the 25m budget, about 14m of it
@@ -261,7 +264,7 @@ jobs:
     # 7m more on hosted macOS (run of 770e7e9e, 2026-10-02: their default
     # sample, one case per function there). It is capped at 40m. Bringing
     # test_qualify_installed_cpu.py down is a separate follow-up.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && matrix.suite == 'server' && 60 || (matrix.os == 'macos-latest' && matrix.suite == 'harness' && 40 || matrix.budget) }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && matrix.suite == 'server' && 80 || (matrix.os == 'macos-latest' && matrix.suite == 'harness' && 40 || matrix.budget) }}
     strategy:
       fail-fast: false
       matrix:
