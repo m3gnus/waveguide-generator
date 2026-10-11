@@ -43,6 +43,13 @@ EXTERIOR_MESH_ID = "mesh:exterior"
 # Interface vertices are the same points written twice; anything beyond this
 # (in millimetres) is a mesh that does not conform, not round-off.
 INTERFACE_TOLERANCE_MM = 1e-6
+# BEM normals point out of the radiating body, into the exterior air. Measured
+# against BEAT on a box open on one face (2026-10-11): this winding gives the
+# duct pressure (tens of pascals at 100 Hz) and the monopole far field, while
+# the opposite winding gives kilopascals inside -- and BEAT's own interface
+# flux and continuity diagnostics read clean either way, so only the winding
+# here prevents it.
+EXTERIOR_NORMALS_INTO_BODY = False
 
 _BOUNDARY_KINDS = {
     "rigid": "rigid",
@@ -223,6 +230,64 @@ def interface_topology(
     }
 
 
+def compact_surface(surface: ExteriorSurface) -> ExteriorSurface:
+    """Drop vertices no triangle references, renumbering the rest in order."""
+
+    used = np.unique(np.concatenate([np.asarray(block).ravel() for block in surface.groups.values()]))
+    if len(used) == len(surface.points_mm):
+        return surface
+    remap = -np.ones(len(surface.points_mm), dtype=np.int64)
+    remap[used] = np.arange(len(used))
+    return ExteriorSurface(
+        points_mm=np.asarray(surface.points_mm)[used],
+        groups={name: remap[np.asarray(block)] for name, block in surface.groups.items()},
+        kinds=surface.kinds,
+    )
+
+
+def orient_closed_surface(points: np.ndarray, triangles: np.ndarray, *, into_body: bool) -> np.ndarray:
+    """Return ``triangles`` wound consistently, every normal on one side.
+
+    gmsh winds each surface's triangles by that surface's own OCC
+    parametrisation, so a mesh assembled from several surfaces is not
+    consistently oriented; a boundary-element operator needs it to be. The
+    winding is propagated across shared edges, then the whole surface is
+    flipped if needed so normals point into the enclosed body
+    (``into_body=True``, outward from the exterior air) or out of it.
+    """
+
+    triangles = np.array(triangles, dtype=np.int64, copy=True)
+    edge_faces: dict[tuple[int, int], list[int]] = {}
+    for face, (a, b, c) in enumerate(triangles.tolist()):
+        for u, v in ((a, b), (b, c), (c, a)):
+            edge_faces.setdefault((min(u, v), max(u, v)), []).append(face)
+    visited = np.zeros(len(triangles), dtype=bool)
+    for seed in range(len(triangles)):
+        if visited[seed]:
+            continue
+        visited[seed] = True
+        stack = [seed]
+        while stack:
+            face = stack.pop()
+            a, b, c = triangles[face].tolist()
+            for u, v in ((a, b), (b, c), (c, a)):
+                for other in edge_faces[(min(u, v), max(u, v))]:
+                    if other == face or visited[other]:
+                        continue
+                    x, y, z = triangles[other].tolist()
+                    # A consistent neighbour traverses the shared edge the other way.
+                    if (u, v) in ((x, y), (y, z), (z, x)):
+                        triangles[other] = [x, z, y]
+                    visited[other] = True
+                    stack.append(other)
+    corners = points[triangles]
+    signed_volume = np.einsum("ij,ij->i", corners[:, 0], np.cross(corners[:, 1], corners[:, 2])).sum() / 6
+    outward = signed_volume > 0
+    if outward == into_body:
+        triangles = triangles[:, [0, 2, 1]]
+    return triangles
+
+
 def _rows(surfaces: list[tuple[str, np.ndarray]]) -> dict[str, np.ndarray]:
     rows, start = {}, 0
     for name, block in surfaces:
@@ -258,8 +323,21 @@ def build_coupled_system(
     exterior_triangles = np.zeros((0, 3), dtype=np.int64)
 
     if exterior is not None:
+        # Every exterior vertex is a P1 unknown, so a point no triangle uses
+        # would leave an empty row: keep only the referenced ones.
+        exterior = compact_surface(exterior)
         surfaces = _ordered(exterior.groups)
-        exterior_triangles = np.concatenate([block for _name, block in surfaces]).astype(np.int64)
+        exterior_triangles = orient_closed_surface(
+            exterior.points_mm,
+            np.concatenate([block for _name, block in surfaces]),
+            into_body=EXTERIOR_NORMALS_INTO_BODY,
+        )
+        rows_so_far = 0
+        oriented = []
+        for group_name, block in surfaces:
+            oriented.append((group_name, exterior_triangles[rows_so_far:rows_so_far + len(block)]))
+            rows_so_far += len(block)
+        surfaces = oriented
         edges = open_edges(exterior_triangles)
         if edges:
             raise CoupledSystemError(
