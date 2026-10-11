@@ -46,6 +46,46 @@ def probe_session(tmp_path_factory, monkeypatch):
             session.close(remove=True)
 
 
+def test_frequency_worker_holds_running_exclusion_before_session_and_initializer(monkeypatch):
+    from server.platform import running_exclusion
+
+    calls = []
+    monkeypatch.setattr(running_exclusion, "hold_running_exclusion", lambda: calls.append("hold"))
+    monkeypatch.setattr(temp_session, "adopt_parent_session", lambda root: calls.append(("adopt", root)))
+    monkeypatch.setattr(probe, "_keep_bempp_scratch_in_session", lambda: calls.append("scratch"))
+
+    probe._initialize_frequency_worker(
+        "session-root", lambda *args: calls.append(("initializer", args)), ("first", "second")
+    )
+
+    assert calls == [
+        "hold", ("adopt", "session-root"), ("initializer", ("first", "second")), "scratch"
+    ]
+
+
+def test_frequency_worker_running_exclusion_refusal_stops_initialization(monkeypatch):
+    from server.platform import running_exclusion
+
+    calls = []
+    refusal = running_exclusion.RunningExclusionError(5)
+
+    def hold():
+        calls.append("hold")
+        raise refusal
+
+    monkeypatch.setattr(running_exclusion, "hold_running_exclusion", hold)
+    monkeypatch.setattr(temp_session, "adopt_parent_session", lambda root: calls.append("adopt"))
+    monkeypatch.setattr(probe, "_keep_bempp_scratch_in_session", lambda: calls.append("scratch"))
+
+    with pytest.raises(running_exclusion.RunningExclusionError) as raised:
+        probe._initialize_frequency_worker(
+            "session-root", lambda: calls.append("initializer"), ()
+        )
+
+    assert raised.value is refusal
+    assert calls == ["hold"]
+
+
 @pytest.mark.parametrize("constant,value", [
     ("SPAWN_IMPORT_SECONDS", 80), ("TOTAL_SECONDS", 40),
     ("MAX_TIMEOUT_ATTEMPTS", 4), ("RETRY_INTERVAL_SECONDS", 7),

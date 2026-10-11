@@ -85,6 +85,47 @@ def _context() -> SolverContext:
     )
 
 
+def test_worker_entry_holds_running_exclusion_after_stderr_before_session(monkeypatch) -> None:
+    from server.platform import running_exclusion, temp_session
+
+    calls = []
+    connection = object()
+    monkeypatch.setattr(bempp_process, "_send_stderr_to", lambda path: calls.append(("stderr", path)))
+    monkeypatch.setattr(running_exclusion, "hold_running_exclusion", lambda: calls.append("hold"))
+    monkeypatch.setattr(temp_session, "adopt_parent_session", lambda root: calls.append(("adopt", root)))
+
+    bempp_process._start_in_parent_session(
+        lambda conn: calls.append(("target", conn)), "session-root", connection, "stderr-path"
+    )
+
+    assert calls == [
+        ("stderr", "stderr-path"), "hold", ("adopt", "session-root"), ("target", connection)
+    ]
+
+
+def test_worker_entry_running_exclusion_refusal_prevents_session_and_target(monkeypatch) -> None:
+    from server.platform import running_exclusion, temp_session
+
+    calls = []
+    refusal = running_exclusion.RunningExclusionError(5)
+
+    def hold():
+        calls.append("hold")
+        raise refusal
+
+    monkeypatch.setattr(bempp_process, "_send_stderr_to", lambda path: calls.append(("stderr", path)))
+    monkeypatch.setattr(running_exclusion, "hold_running_exclusion", hold)
+    monkeypatch.setattr(temp_session, "adopt_parent_session", lambda root: calls.append("adopt"))
+
+    with pytest.raises(running_exclusion.RunningExclusionError) as raised:
+        bempp_process._start_in_parent_session(
+            lambda conn: calls.append("target"), "session-root", None, "stderr-path"
+        )
+
+    assert raised.value is refusal
+    assert calls == [("stderr", "stderr-path"), "hold"]
+
+
 def test_worker_stays_warm_and_forwards_ordered_events() -> None:
     async def exercise() -> None:
         host = BemppProcessHost(target=_successful_worker)

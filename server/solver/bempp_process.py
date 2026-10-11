@@ -518,9 +518,11 @@ def _start_in_parent_session(
 ) -> None:
     """The spawned worker's entry: capture stderr, adopt the server's session, then serve."""
 
+    from server.platform.running_exclusion import hold_running_exclusion
     from server.platform.temp_session import adopt_parent_session
 
     _send_stderr_to(stderr_path)
+    hold_running_exclusion()
     adopt_parent_session(session_root)
     target(connection)
 

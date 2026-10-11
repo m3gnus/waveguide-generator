@@ -223,8 +223,10 @@ def _keep_bempp_scratch_in_session() -> None:
 
 def _initialize_frequency_worker(session_root: str | None, initializer: Any, initargs: tuple) -> None:
     """Adopt the solve worker's session before a spawned sweep starts work."""
+    from server.platform.running_exclusion import hold_running_exclusion
     from server.platform.temp_session import adopt_parent_session
 
+    hold_running_exclusion()
     adopt_parent_session(session_root)
     if initializer is not None:
         initializer(*initargs)

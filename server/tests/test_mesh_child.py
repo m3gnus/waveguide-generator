@@ -90,6 +90,49 @@ def shared_child(monkeypatch):
     close_mesher_child()
 
 
+def test_child_holds_running_exclusion_before_adopting_session(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from server.mesh import child
+    from server.platform import running_exclusion, temp_session
+
+    calls = []
+    monkeypatch.setattr(running_exclusion, "hold_running_exclusion", lambda: calls.append("hold"))
+    monkeypatch.setattr(temp_session, "adopt_parent_session", lambda root: calls.append(("adopt", root)))
+    monkeypatch.setattr(child, "_exit_when_parent_does", lambda: calls.append("watch"))
+
+    def recv():
+        calls.append("recv")
+        return None
+
+    connection = SimpleNamespace(recv=recv, close=lambda: calls.append("close"))
+    child._child_main(connection, "session-root")
+
+    assert calls == ["hold", ("adopt", "session-root"), "watch", "recv", "close"]
+
+
+def test_child_running_exclusion_refusal_prevents_session_adoption(monkeypatch) -> None:
+    from server.mesh import child
+    from server.platform import running_exclusion, temp_session
+
+    calls = []
+    refusal = running_exclusion.RunningExclusionError(5)
+
+    def hold():
+        calls.append("hold")
+        raise refusal
+
+    monkeypatch.setattr(running_exclusion, "hold_running_exclusion", hold)
+    monkeypatch.setattr(temp_session, "adopt_parent_session", lambda root: calls.append("adopt"))
+    monkeypatch.setattr(child, "_exit_when_parent_does", lambda: calls.append("watch"))
+
+    with pytest.raises(running_exclusion.RunningExclusionError) as raised:
+        child._child_main(None, "session-root")
+
+    assert raised.value is refusal
+    assert calls == ["hold"]
+
+
 def _alive(pid: int) -> bool:
     """Liveness without signalling. On Windows ``os.kill(pid, 0)`` is
     ``TerminateProcess(pid, 0)``: it kills a live process, and it succeeds on

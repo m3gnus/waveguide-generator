@@ -168,8 +168,10 @@ def _error_payload(request_id: int, exc: BaseException) -> tuple[Any, ...]:
 def _child_main(connection: Connection, session_root: str | None) -> None:
     """Serve builds one at a time. Spawn-safe: module level, picklable arguments."""
 
+    from server.platform.running_exclusion import hold_running_exclusion
     from server.platform.temp_session import adopt_parent_session
 
+    hold_running_exclusion()
     adopt_parent_session(session_root)
     _exit_when_parent_does()
     try:
