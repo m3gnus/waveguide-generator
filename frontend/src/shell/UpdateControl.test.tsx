@@ -32,7 +32,7 @@ describe('full-installer update control', () => {
     refresh.mockClear(); close.mockClear(); fetch.mockReset();
     fetch.mockResolvedValue(reply(accepted, 202)); vi.stubGlobal('fetch', fetch);
   });
-  afterEach(() => { act(() => root.unmount()); host.remove(); client.clear(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+  afterEach(() => { act(() => root.unmount()); host.remove(); client.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); });
   function render(value = status(), options: { open?: boolean; activeJobs?: number } = {}) {
     const snapshot = { data: value, error: null, isPending: false };
     act(() => root.render(<QueryClientProvider client={client}>
@@ -42,6 +42,98 @@ describe('full-installer update control', () => {
   }
   function button(label: string) { return [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === label)!; }
   async function click(label: string) { await act(async () => button(label).click()); }
+
+  function clipboard(writeText = vi.fn().mockResolvedValue(undefined)) {
+    vi.stubGlobal('navigator', Object.create(navigator, { clipboard: { value: { writeText } } }));
+    return writeText;
+  }
+
+  it('copies the displayed update state, recovery outcome and freshly fetched logs, then confirms', async () => {
+    const writeText = clipboard();
+    const lastOutcome = { from: '2.0.0', to: '2.0.1', result: 'rollback_incomplete', when: '', log: 'install.log', backupPath: 'saved.previous' } as const;
+    const value = status({ lastOutcome, installState: 'failed', error: 'Download was truncated.' });
+    const diagnostics = { tailBytes: 32768, logs: { 'install.log': 'Installer recovery failed.' } };
+    fetch.mockResolvedValue(reply(diagnostics)); render(value);
+    await click('Copy update diagnostics');
+    expect(fetch.mock.calls).toEqual([['/api/updates/diagnostics']]);
+    const copied = JSON.parse(writeText.mock.calls[0][0]);
+    expect(copied).toMatchObject({ frontendVersion: __WG2_VERSION__, status: { installState: 'failed', error: value.error, lastOutcome },
+      progress: null, statusError: null, ...diagnostics });
+    expect(copied.status.checkout.installRoot).toBeUndefined();
+    expect(host.textContent).toContain('Update diagnostics copied.');
+    expect(button('Copy update diagnostics').disabled).toBe(false);
+  });
+  it('copies available diagnostics when the update status could not be read', async () => {
+    const writeText = clipboard(); fetch.mockImplementation((url: string) => Promise.resolve(reply(url === '/api/updates/channel'
+      ? { channel: 'stable' } : { tailBytes: 32768, logs: { 'install.log': null } })));
+    await act(async () => root.render(<QueryClientProvider client={client}>
+      <UpdateDialog open snapshot={{ data: undefined, error: new Error('Status unavailable.'), isPending: false }} onRefresh={refresh} onClose={close}/>
+    </QueryClientProvider>));
+    await click('Copy update diagnostics');
+    expect(JSON.parse(writeText.mock.calls[0][0])).toMatchObject({ status: null, statusError: 'Status unavailable.', logs: { 'install.log': null } });
+  });
+  it.each(['request', 'clipboard', 'unavailable'])('reports a %s failure without confirming a copy', async (failure) => {
+    const writeText = clipboard();
+    if (failure === 'unavailable') vi.stubGlobal('navigator', Object.create(navigator, { clipboard: { value: undefined } }));
+    else if (failure === 'clipboard') writeText.mockRejectedValue(new Error('Clipboard permission denied.'));
+    fetch.mockResolvedValue(failure === 'request' ? reply({ detail: 'Logs unavailable.' }, 503)
+      : reply({ tailBytes: 32768, logs: { 'install.log': null } }));
+    render(); await click('Copy update diagnostics');
+    expect(host.textContent).toContain(failure === 'request' ? 'Logs unavailable.'
+      : failure === 'clipboard' ? 'Clipboard permission denied.' : 'Clipboard access is unavailable');
+    expect(host.textContent).not.toContain('Update diagnostics copied.');
+    expect(button('Copy update diagnostics').disabled).toBe(false);
+    if (failure !== 'clipboard') expect(writeText).not.toHaveBeenCalled();
+  });
+  it('ignores delayed diagnostics after closing and reopening', async () => {
+    const writeText = clipboard(); const pending = deferred<Response>(); fetch.mockReturnValue(pending.promise);
+    render(); await click('Copy update diagnostics');
+    expect(button('Copying…').disabled).toBe(true);
+    await click('Close'); render(status(), { open: false }); render();
+    await act(async () => pending.resolve(reply({ tailBytes: 32768, logs: { 'install.log': null } })));
+    expect(writeText).not.toHaveBeenCalled(); expect(host.textContent).not.toContain('Update diagnostics copied.');
+    expect(button('Copy update diagnostics').disabled).toBe(false);
+  });
+  it('does not show a stale confirmation when a clipboard write finishes after closing', async () => {
+    const pending = deferred<void>(); clipboard(vi.fn(() => pending.promise));
+    fetch.mockResolvedValue(reply({ tailBytes: 32768, logs: { 'install.log': null } }));
+    render(); await click('Copy update diagnostics');
+    await click('Close'); render(status(), { open: false }); render();
+    await act(async () => pending.resolve());
+    expect(host.textContent).not.toContain('Update diagnostics copied.');
+    expect(button('Copy update diagnostics').disabled).toBe(false);
+  });
+  it('keeps copying diagnostics available while an installer download is running', async () => {
+    vi.useFakeTimers(); const writeText = clipboard(); render(); await click('Install and restart');
+    fetch.mockResolvedValue(reply({ tailBytes: 32768, logs: { 'install.log': null } }));
+    expect(button('Copy update diagnostics').disabled).toBe(false); await click('Copy update diagnostics');
+    expect(JSON.parse(writeText.mock.calls[0][0]).progress).toEqual(accepted);
+    expect(fetch.mock.calls.filter(([url]) => url === '/api/updates/install')).toHaveLength(1);
+  });
+  it('guides failed downloads to Install and restart, clearing the old error when retry starts', async () => {
+    render(status({ installState: 'failed', activeVersion: '2.0.1', error: 'Download was truncated.' }));
+    expect(host.textContent).toContain('Choose Install and restart to download and verify the installer again.');
+    await click('Install and restart');
+    expect(host.textContent).not.toContain('Download was truncated.');
+    expect(host.textContent).not.toContain('Choose Install and restart');
+    expect(button('Downloading…').disabled).toBe(true);
+    expect(fetch.mock.calls).toEqual([['/api/updates/install', { method: 'POST', headers: { 'X-WG-Update': 'install' } }]]);
+  });
+  it('does not suggest installation when a failed download no longer has an installable update', () => {
+    render(status({ installState: 'failed', error: 'Download failed.', canInstall: false, action: null }));
+    expect(host.textContent).toContain('Check again for an installable update');
+    expect(button('Install and restart')).toBeUndefined();
+    expect(button('Check again')).toBeDefined();
+  });
+  it('offers download recovery when progress polling reports failure', async () => {
+    vi.useFakeTimers(); render(); await click('Install and restart');
+    fetch.mockResolvedValue(reply(status({ installState: 'failed', activeVersion: '2.0.1', error: 'Download interrupted.' })));
+    await act(async () => vi.advanceTimersByTimeAsync(400));
+    expect(host.textContent).toContain('Download interrupted.');
+    expect(host.textContent).toContain('Choose Install and restart to download and verify the installer again.');
+    expect(button('Install and restart').disabled).toBe(false);
+    expect(button('Stable').disabled).toBe(false);
+  });
 
   it('shows download size and notes before any download starts', async () => {
     render();
@@ -168,6 +260,11 @@ describe('full-installer update control', () => {
     [{ from: '2.0.0', to: '2.0.1', result: 'rollback_incomplete', when: '', log: 'install.log', backupPath: 'saved.previous' } as const, 'recovery is incomplete'],
   ])('shows the recorded outcome %# without inventing recovery', (lastOutcome, text) => {
     render(status({ lastOutcome })); expect(host.textContent).toContain(text);
+    if (lastOutcome.result === 'rollback_incomplete') {
+      expect(host.textContent).toContain('Review the installation log before changing the installation.');
+      expect(host.textContent).toContain('Recovery location: saved.previous.');
+      expect(host.textContent).toContain('Log: install.log.');
+    }
     if (lastOutcome.result === 'failed' && !('previousKept' in lastOutcome)) expect(host.textContent).not.toContain('previous version was kept');
   });
   it('keeps unsupported installations notify-only', () => {

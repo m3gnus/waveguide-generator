@@ -867,6 +867,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 
 .update-dialog > footer,
 .export-dialog > footer { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-12) var(--space-16); border-top: 1px solid var(--hair); background: var(--surface-panel); }
+.update-dialog > footer { flex-wrap: wrap; }
 .update-dialog > footer button,
 .export-dialog > footer button,
 .update-install-actions button { display: inline-flex; align-items: center; gap: var(--space-6); min-height: var(--control-h); padding: 0 var(--space-12); border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-base); }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getUpdateChannel, getUpdateStatus, installApplicationUpdate, setUpdateChannel, type UpdateStatus } from './updates';
+import { getUpdateChannel, getUpdateDiagnostics, getUpdateStatus, installApplicationUpdate, setUpdateChannel, type UpdateStatus } from './updates';
 
 export function installerStatus(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
   return {
@@ -19,6 +19,23 @@ const reply = (payload: unknown, status = 200) => new Response(JSON.stringify(pa
 afterEach(() => vi.unstubAllGlobals());
 
 describe('full-installer API', () => {
+  it('reads bounded diagnostics with present and missing logs without mutating the update', async () => {
+    const diagnostics = { tailBytes: 32768, logs: { 'install.log': 'Download failed at ~/WG.', 'missing.log': null } };
+    const fetch = vi.fn(async () => reply(diagnostics)); vi.stubGlobal('fetch', fetch);
+    await expect(getUpdateDiagnostics()).resolves.toEqual(diagnostics);
+    expect(fetch.mock.calls).toEqual([['/api/updates/diagnostics']]);
+  });
+  it.each([null, {}, { tailBytes: -1, logs: {} }, { tailBytes: 1.5, logs: {} },
+    { tailBytes: 32768, logs: [] }, { tailBytes: 32768, logs: { 'install.log': 42 } }])('rejects malformed diagnostics %#', async (value) => {
+    vi.stubGlobal('fetch', vi.fn(async () => reply(value)));
+    await expect(getUpdateDiagnostics()).rejects.toThrow('Update diagnostics response is invalid');
+  });
+  it('reports diagnostics server errors and non-JSON HTTP failures', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(reply({ detail: 'Logs unavailable.' }, 503))
+      .mockResolvedValueOnce(new Response('offline', { status: 502 })));
+    await expect(getUpdateDiagnostics()).rejects.toThrow('Logs unavailable.');
+    await expect(getUpdateDiagnostics()).rejects.toThrow('Update diagnostics request failed (502)');
+  });
   it('reads status, manual refresh and abort signals without requesting installation', async () => {
     const fetch = vi.fn(async () => reply(installerStatus())); vi.stubGlobal('fetch', fetch);
     const controller = new AbortController();

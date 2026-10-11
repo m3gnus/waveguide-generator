@@ -49,12 +49,13 @@ otherwise describe `8bccff0c`.
 The restart latch (§4.2) and launch-mode settling (§4.5) were implemented after that. The
 three rows that describe them name files and functions, not line numbers.
 
-The update service then became the record's reader (§2.2 "Readers", §2.3). It explains
+The legacy update service then became the record's reader (§2.2, §2.3). It explains
 the last outcome, holds back a build that rolled back, and lifts one suppression on an
 explicit retry: `last_outcome`, `held_back_entry` and `UpdateService.lift_suppression` in
 `server/updates/service.py`, `POST /api/updates/retry` in `server/updates/api.py`,
-`lift_suppressed_build` in `launchers/apply_update.py`, and the update dialog in
-`frontend/src/shell/UpdateControl.tsx`.
+`lift_suppressed_build` in `launchers/apply_update.py`, and the original update dialog.
+The current full-installer dialog in `frontend/src/shell/UpdateControl.tsx` follows
+the separate schema-2 status described in §2.2.
 
 The job runtime then took the latch too (§4.3). A job the restart ends reads as ended by
 the update restart, and no queued job starts under an approved restart: `JobRuntime` in
@@ -176,8 +177,9 @@ completion record only remembers what the journal decided.
     record says `retained`, so it runs once, and a later staging into the same folder
     belongs to a later transaction.
   - `suppressedBuilds` (§2.3).
-- **Readers.** The update service reads it to explain the last outcome in the update
-  dialog, and to apply suppression. It is also part of "Copy update diagnostics".
+- **Legacy receiving-service readers.** `UpdateService` reads the completion record
+  to expose the last outcome and apply suppression. The full-installer dialog uses
+  the separate status and outcome described below.
   - It is read on every update status (`UpdateService.get_status`), not cached, so a
     retry takes effect at once. Only a standalone app reads one: the helper never
     installs a source checkout.
@@ -187,20 +189,40 @@ completion record only remembers what the journal decided.
   - The record's `detail` is often an exception's message, which can name a folder. In
     `lastOutcome` the home folder in it reads `~`, as it does in a problem report
     (`server/diagnostics/scrub.py`).
-  - The dialog shows the outcome as a "Last update" fact, and explains one that did not
-    install. "Copy update diagnostics", in the same dialog, copies the update state
-    with both fields. It leaves out the install command, which names a local folder.
-  - "Copy update diagnostics" also carries the updater's own logs, read when it is
-    clicked from `GET /api/updates/diagnostics`: the last 64 KB of `update.log`,
+  - With an injected legacy receiving service, `GET /api/updates/diagnostics` returns
+    the last 64 KB of `update.log`,
     `update-handoff.log` and `rollback-handoff.log`, each from its first whole line, with
     the home folder as `~` (`update_log_tails` in `server/diagnostics/bundle.py`). The
     problem report carries the same tails.
   - A failed rollback writes no record: it leaves this installation's journal in
     `rolling-back`, which every start's recovery would otherwise have finished. The status
     reports it as `repairRequired`, the transaction and the journal's detail with the home
-    folder as `~`, and the dialog says "Rollback failed, repair required"
+    folder as `~`
     (`_repair_required` in `server/updates/service.py`). It reads the journal and changes
     nothing in it.
+
+- **Current full-installer dialog.** `InstallerUpdateService` serves schema-2 status.
+  The dialog explains `lastOutcome`: `installed`, `failed` (including whether the
+  previous version was kept), or `rollback_incomplete`. Incomplete recovery displays
+  a warning to review the installation log before changing the installation, the log
+  path, and any backup recovery location. This status does not carry the legacy
+  `suppressed` or `repairRequired` fields.
+  - "Copy update diagnostics" fetches `GET /api/updates/diagnostics` when clicked and
+    copies JSON containing the frontend version, displayed status, status-request
+    error, any locally polled install progress, and the returned log tails. It omits
+    `checkout.installRoot`. The installer service returns the last 32 KB of
+    `update-install/install.log`, with the home folder as `~`; a missing log is `null`.
+    The dialog confirms a successful clipboard write and reports request or clipboard
+    failures without claiming success. Copying remains available during a download.
+  - For `installState: failed`, the dialog tells the user to choose "Install and
+    restart" to download and verify the installer again, when an installable update
+    is available. Otherwise it asks for a new check (or a page reload for a frontend
+    version mismatch). Install starts a fresh download and clears the previous error
+    and progress, so no reset control is needed. `POST /api/updates/reset` remains
+    available to clear stopped download state without installing anything.
+  - `POST /api/updates/retry` is legacy-only: the installer service always refuses it
+    with 409 because it has no held layer transaction. The dialog offers no held-build
+    retry.
 
 To give the record its build identities, the helper adds `fromVersion`, `fromCommit` and
 `fromRuntimeId`, and the matching `to` keys, to the journal. `begin_update_transaction`
@@ -212,19 +234,22 @@ reclaimed with it. All of these are optional keys under schema `1` (§3.3).
 
 ### 2.3 Failed-build suppression
 
+This section describes the legacy receiving service's layer transactions. The current
+full-installer dialog and its download recovery are described in §2.2 above.
+
 - After an automatic rollback, the failed build's identity is added to
   `suppressedBuilds`. For an update transaction that is its `to` build; for a rollback
   transaction, its `from` build. Every automatic rollback counts, including recovery that
   restores an install cut short before its build ever ran. A journal in `rolling-back`
   does not say whether a failed start or recovery wrote it, and the explicit retry lifts
   the entry either way.
-- The update service never offers or auto-installs a suppressed build. The dialog says
-  why, and offers an explicit retry, which removes that one entry.
+- The legacy update service never offers or auto-installs a suppressed build. Its
+  explicit retry route removes that one entry.
   - A release that matches an entry is reported with `suppressed` set to that entry,
     no `action` and `canInstall: false`, and `POST /api/updates/install` refuses it.
-    Its `availability` stays `available`, because the release exists. The top bar reads
-    "update held back" rather than "update available". Nothing installs an update except
-    through that route.
+    Its `availability` stays `available`, because the release exists. The original
+    legacy dialog showed "update held back"; the current full-installer status carries
+    no suppression. Nothing installs an update except through the install route.
   - The retry is `POST /api/updates/retry`, with the header `X-WG-Update: retry` and the
     entry's identity as its body. It removes the one equal entry and installs nothing.
     It answers 409 when the record holds no such entry. The record is rewritten by

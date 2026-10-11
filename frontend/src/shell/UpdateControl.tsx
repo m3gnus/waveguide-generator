@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getUpdateChannel, getUpdateStatus, installApplicationUpdate, setUpdateChannel,
+import { getUpdateChannel, getUpdateDiagnostics, getUpdateStatus, installApplicationUpdate, setUpdateChannel,
   type UpdateChannel, type UpdateInstallAccepted, type UpdateStatus } from '../api/updates';
 import { Icon } from './icons';
 import { focusableSelector, useModalDialogFocus } from './dialogFocus';
@@ -79,6 +79,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
   const presentation = updatePresentation(snapshot);
   const generation = useRef(0);
   const [busy, setBusy] = useState(false);
+  const [copying, setCopying] = useState(false);
   const [feedback, setFeedback] = useState<string>();
   const [choice, setChoice] = useState<UpdateChannel>();
   const [channelPending, setChannelPending] = useState(false);
@@ -88,14 +89,14 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
   const state = progress?.installState ?? data?.installState;
   const installing = active(state) || state === 'ready';
   const close = useCallback(() => {
-    generation.current += 1; setBusy(false); setFeedback(undefined); setConfirmRestart(false); setProgress(undefined); setChannelPending(false); setVerifiedChannel(undefined); onClose();
+    generation.current += 1; setBusy(false); setCopying(false); setFeedback(undefined); setConfirmRestart(false); setProgress(undefined); setChannelPending(false); setVerifiedChannel(undefined); onClose();
   }, [onClose]);
   const initialFocus = useCallback((node: HTMLDivElement) => node.querySelector<HTMLElement>('[data-autofocus]')
     ?? node.querySelector<HTMLElement>(focusableSelector), []);
   const dialog = useModalDialogFocus<HTMLDivElement>({ open, onClose: close, initialFocus });
   useEffect(() => {
     if (open) return;
-    generation.current += 1; setBusy(false); setFeedback(undefined); setConfirmRestart(false); setProgress(undefined); setChoice(undefined); setChannelPending(false); setVerifiedChannel(undefined);
+    generation.current += 1; setBusy(false); setCopying(false); setFeedback(undefined); setConfirmRestart(false); setProgress(undefined); setChoice(undefined); setChannelPending(false); setVerifiedChannel(undefined);
   }, [open]);
   useEffect(() => {
     if (!open || busy || !data?.channel) return;
@@ -153,6 +154,23 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
       if (operation === generation.current) { setProgress(result); setConfirmRestart(false); }
     });
   };
+  const copyDiagnostics = () => {
+    const operation = generation.current + 1;
+    setCopying(true);
+    void perform(async () => {
+      try {
+        if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable');
+        const diagnostics = await getUpdateDiagnostics();
+        if (operation !== generation.current) return;
+        const copiedStatus = data ? { ...data, checkout: {
+          kind: data.checkout.kind, updateSupported: data.checkout.updateSupported, reason: data.checkout.reason,
+        } } : null;
+        await navigator.clipboard.writeText(JSON.stringify({ frontendVersion: __WG2_VERSION__,
+          status: copiedStatus, statusError: snapshot.error?.message ?? null, progress: progress ?? null, ...diagnostics }, null, 2));
+        if (operation === generation.current) setFeedback('Update diagnostics copied.');
+      } finally { if (operation === generation.current) setCopying(false); }
+    });
+  };
   const choose = (next: UpdateChannel) => {
     const operation = generation.current + 1;
     void perform(async () => {
@@ -179,7 +197,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
   };
   const total = progress?.totalBytes || data?.totalBytes || data?.action?.size || 0;
   const downloaded = progress?.downloadedBytes ?? data?.downloadedBytes ?? 0;
-  const error = progress?.error ?? data?.error;
+  const error = progress ? progress.error : data?.error;
   const mismatch = presentation.state === 'reload';
   const outcome = data?.lastOutcome;
   const installable = !mismatch && !channelPending && choice === data?.channel
@@ -221,12 +239,15 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
             : `${megabytes(downloaded)} of ${megabytes(total)}`}</p>
           {state === 'downloading' && <progress aria-label="Update download" value={downloaded} max={total || 1}/>}</div>}
         {error && <p role="alert" className="update-note error">{error}</p>}
+        {state === 'failed' && <p className="update-note">{mismatch ? 'Reload WG before trying the update again.'
+          : installable ? 'Choose Install and restart to download and verify the installer again.'
+            : 'Check again for an installable update before trying the download again.'}</p>}
         {feedback && <p role="status" className="update-note">{feedback}</p>}
         {data?.release?.notes && <section className="update-release-notes"><h3>Release notes</h3><p style={{ whiteSpace: 'pre-wrap' }}>{data.release.notes}</p></section>}
         {data?.release && <a href={data.release.url} target="_blank" rel="noreferrer">View release</a>}
       </div>
       <footer>{mismatch ? <button data-autofocus onClick={() => window.location.reload()}>Reload WG</button>
-        : installable ? <button data-autofocus disabled={busy || installing} onClick={install}>{busy ? 'Starting…' : actionLabel}</button>
+        : installable ? <button data-autofocus disabled={busy || installing} onClick={install}>{busy && !copying ? 'Starting…' : actionLabel}</button>
           : <button data-autofocus disabled={busy || installing || data?.checking} onClick={() => void perform(async () => {
             const operation = generation.current;
             const refreshed = await onRefresh();
@@ -235,7 +256,8 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
               if (refreshed.channel !== data?.channel) setChannelPending(true);
             }
           })}>
-            {busy || data?.checking ? 'Checking…' : 'Check again'}</button>}
+            {(busy && !copying) || data?.checking ? 'Checking…' : 'Check again'}</button>}
+        <button disabled={busy} onClick={copyDiagnostics}>{copying ? 'Copying…' : 'Copy update diagnostics'}</button>
         <button onClick={close}>Close</button></footer>
     </div>
   </div>;

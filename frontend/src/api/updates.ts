@@ -32,6 +32,10 @@ export interface UpdateInstallAccepted {
   accepted: true; version: string; installState: UpdateInstallState; activeVersion: string;
   downloadedBytes: number; totalBytes: number; error: string | null;
 }
+export interface UpdateDiagnostics {
+  tailBytes: number;
+  logs: Record<string, string | null>;
+}
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -113,6 +117,14 @@ export async function getUpdateChannel(signal?: AbortSignal): Promise<UpdateChan
   const payload: unknown = await response.json();
   if (!record(payload) || !channel(payload.channel)) throw new Error('Update channel response is invalid');
   return payload.channel;
+}
+export async function getUpdateDiagnostics(): Promise<UpdateDiagnostics> {
+  const response = await fetch('/api/updates/diagnostics');
+  if (!response.ok) throw await responseError(response, 'Update diagnostics request failed');
+  const payload: unknown = await response.json();
+  if (!record(payload) || !bytes(payload.tailBytes) || !record(payload.logs)
+    || !Object.values(payload.logs).every(nullableString)) throw new Error('Update diagnostics response is invalid');
+  return payload as unknown as UpdateDiagnostics;
 }
 export async function setUpdateChannel(next: UpdateChannel): Promise<UpdateChannel> {
   const response = await fetch('/api/updates/channel', {

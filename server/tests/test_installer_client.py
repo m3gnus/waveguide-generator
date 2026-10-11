@@ -389,6 +389,27 @@ def test_failed_downloads_never_invoke_handoff(tmp_path, release, failure):
     instance.close()
 
 
+def test_install_retries_failed_download_without_reset(tmp_path, release):
+    instance = client(tmp_path, release)
+    try:
+        checked(instance)
+        asset = instance.get_status()["release"]["installer"]
+        payload = release[1][asset["name"]]
+        instance.opener = lambda request, **kwargs: Stream(payload[:-1], request.full_url)
+        callbacks = []
+        failed = downloaded(instance, callbacks.append)
+        assert failed["installState"] == "failed" and failed["error"]
+        assert failed["canInstall"] is True and callbacks == []
+
+        instance.opener = release[2]
+        recovered = downloaded(instance, callbacks.append)
+        assert recovered["installState"] == "ready" and recovered["error"] is None
+        assert recovered["downloadedBytes"] == recovered["totalBytes"] == len(payload)
+        assert len(callbacks) == 1 and callbacks[0].path.read_bytes() == payload
+    finally:
+        instance.close()
+
+
 @pytest.mark.parametrize("cancel", ["close", "cancel"])
 def test_shutdown_or_cancellation_suppresses_handoff_and_second_download(tmp_path, release, cancel):
     instance = client(tmp_path, release)
