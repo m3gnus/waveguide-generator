@@ -113,6 +113,25 @@ def test_status_and_headless_share_start_argv_and_environment(tmp_path, monkeypa
     )
 
 
+@pytest.mark.parametrize("port", [None, 3199])
+@pytest.mark.parametrize("server_command", [None, ("custom-python", "custom-serve")])
+def test_shared_argv_omits_only_unspecified_port(tmp_path, port, server_command):
+    python = tmp_path / "venv" / "bin" / "python"
+    control = tmp_path / "stop"
+    expected = list(server_command) if server_command is not None else [
+        str(python), str(tmp_path / "launch" / "serve.py"),
+    ]
+    expected.extend(("--extra", "value", "--data-dir", str(tmp_path / "data"), "--no-browser"))
+    if port is not None:
+        expected.extend(("--port", str(port)))
+    expected.extend(("--status-control", str(control), "--parent-pid", str(os.getpid())))
+    assert backend_start.backend_argv(
+        repo_root=tmp_path, python_executable=python,
+        server_args=("--extra", "value"), server_command=server_command,
+        port=port, data_dir=tmp_path / "data", control_path=control,
+    ) == expected
+
+
 @pytest.mark.parametrize(
     "platform,relative,launcher",
     [

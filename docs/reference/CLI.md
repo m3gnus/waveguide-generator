@@ -127,9 +127,10 @@ stdout remains protocol-only.
 The CLI discovers the backend holding the selected data folder's `InstanceLock`
 and submits the existing request to `POST /api/solve`. With no healthy owner,
 `ensure_backend` serialises startup and launches `launch/serve.py` on that exact
-folder with `--no-browser`. The small argv builder is
-`launch/backend_argv.py:headless_backend_argv`, matching the status launcher's
-server entry point and working outside the checkout directory. Concurrent CLI
+folder with `--no-browser`. The shared argv/environment helpers are
+`launchers/backend_start.py:backend_argv` and `backend_environment`, also used by
+the status app and installed launcher. The CLI omits `--port`, leaving port
+selection to `serve.py`, and works outside the checkout directory. Concurrent CLI
 commands reach one backend; its database ownership guard remains in force.
 Only an explicitly supplied `--data-dir` is forwarded as an argument;
 `WG2_DATA_DIR` is inherited. With neither override, the backend uses the same

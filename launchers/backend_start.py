@@ -1,8 +1,4 @@
-"""Supported backend argv/environment shared by desktop and installed clients.
-
-The CLI's backend argv builder should converge on these helpers: an installed
-client and the status app must start the same serve.py on the same data folder.
-"""
+"""Supported backend argv/environment shared by desktop, CLI and installed clients."""
 
 from __future__ import annotations
 
@@ -21,7 +17,7 @@ def backend_argv(
     python_executable: str | Path | None = None,
     server_args: Sequence[str] = (),
     server_command: Sequence[str] | None = None,
-    port: int,
+    port: int | None,
     data_dir: Path | None = None,
     control_path: Path | None = None,
 ) -> list[str]:
@@ -29,6 +25,7 @@ def backend_argv(
 
     CLI clients can supply their remaining serve options in server_args and
     an override in data_dir, using backend_environment with the same override.
+    A port of None leaves port selection to serve.py.
     """
     # Do not resolve the interpreter symlink: that loses venv recognition.
     command = (
@@ -42,7 +39,9 @@ def backend_argv(
     command.extend(server_args)
     if data_dir is not None:
         command.extend(("--data-dir", str(data_dir)))
-    command.extend(("--no-browser", "--port", str(port)))
+    command.append("--no-browser")
+    if port is not None:
+        command.extend(("--port", str(port)))
     if control_path is not None:
         command.extend(("--status-control", str(control_path), "--parent-pid", str(os.getpid())))
     return command

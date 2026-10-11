@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request
 import pytest
 import uvicorn
 
-from launch.backend_argv import headless_backend_argv
+from launchers.backend_start import backend_argv, backend_environment
 from server.cli.args import build_parser
 from server.cli import solve as cli
 from server.cli.backend_client import BackendClient
@@ -217,15 +217,15 @@ def test_no_backend_concurrent_clients_ensure_starts_exactly_one(tmp_path, monke
     real_spawn = backend_owner._spawn
     real_ensure = cli.ensure_backend
 
-    def track(argv, root):
-        process, log = real_spawn(argv, root)
+    def track(argv, root, env=None):
+        process, log = real_spawn(argv, root, env)
         processes.append(process)
         return process, log
 
     monkeypatch.setattr(backend_owner, "_spawn", track)
-    monkeypatch.setattr(cli, "ensure_backend", lambda root, argv: real_ensure(root, argv, timeout=10))
-    monkeypatch.setattr(cli, "headless_backend_argv", lambda root: [
-        sys.executable, "-c", "from server.tests.test_cli_backend_client import _serve; _serve()", str(root),
+    monkeypatch.setattr(cli, "ensure_backend", lambda root, argv, **kwargs: real_ensure(root, argv, timeout=10, **kwargs))
+    monkeypatch.setattr(cli, "backend_argv", lambda **kwargs: [
+        sys.executable, "-c", "from server.tests.test_cli_backend_client import _serve; _serve()", str(kwargs["data_dir"]),
     ])
 
     async def scenario():
@@ -262,8 +262,8 @@ def test_typed_startup_errors_do_not_change_folder(tmp_path, monkeypatch, error,
     calls = []
     monkeypatch.setattr(cli, "discover_backend", lambda root: None)
 
-    def refuse(root, argv):
-        calls.append((root, argv))
+    def refuse(root, argv, *, start_env):
+        calls.append((root, argv, start_env))
         raise error("Check the backend installation and this data folder.")
 
     monkeypatch.setattr(cli, "ensure_backend", refuse)
@@ -272,7 +272,8 @@ def test_typed_startup_errors_do_not_change_folder(tmp_path, monkeypatch, error,
     assert messages[-1]["error"]["code"] == name
     assert "Check the backend installation" in stderr
     assert len(calls) == 1 and calls[0][0] == data_dir
-    assert calls[0][1] == headless_backend_argv(data_dir)
+    assert calls[0][1] == backend_argv(port=None, data_dir=data_dir.resolve())
+    assert calls[0][2] == backend_environment(os.environ, data_dir=data_dir.resolve())
     assert calls[0][1][-1] == "--no-browser"
     assert str(data_dir.resolve()) in calls[0][1]
 
@@ -384,13 +385,14 @@ def test_real_headless_argv_preserves_gui_workspace_defaults(tmp_path, monkeypat
         repo_root=app_root, python_executable=sys.executable,
         server_args=("--data-dir", str(override)) if override is not None else (),
     )
-    commands = [headless_backend_argv(override), controller._command(port, tmp_path / "stop")]
+    commands = [backend_argv(port=None, data_dir=override), controller._command(port, tmp_path / "stop")]
+    environments = [backend_environment(os.environ, data_dir=override), controller._server_environment()]
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     observations = []
-    for index, command in enumerate(commands):
+    for index, (command, environment) in enumerate(zip(commands, environments)):
         log_path = tmp_path / f"start-{index}.log"
         with log_path.open("wb") as log:
-            process = subprocess.Popen(command, cwd=tmp_path, env=dict(os.environ), stdout=log, stderr=log)
+            process = subprocess.Popen(command, cwd=tmp_path, env=environment, stdout=log, stderr=log)
             try:
                 deadline = time.monotonic() + 20
                 handle = None
@@ -423,24 +425,61 @@ def test_real_headless_argv_preserves_gui_workspace_defaults(tmp_path, monkeypat
     assert observations[0] == (data_dir, expected_workspace, selection == "legacy")
 
 
-def test_default_cli_start_passes_only_explicit_override_to_argv(tmp_path, monkeypatch):
+@pytest.mark.parametrize("selection", ["default", "environment", "explicit"])
+def test_cli_start_matches_shared_argv_and_environment(tmp_path, monkeypatch, selection):
+    from server.platform.paths import app_root, resolve_data_dir
+
     args = _args(_design(tmp_path), tmp_path / "data")
     args.data_dir = None
-    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WG2_DATA_DIR", raising=False)
+    for name in ("HOME", "USERPROFILE", "APPDATA", "XDG_DATA_HOME"):
+        monkeypatch.setenv(name, str(tmp_path / "home"))
+    if selection != "default":
+        monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path / "inherited"))
+    if selection == "explicit":
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data-link").symlink_to(tmp_path / "data", target_is_directory=True)
+        args.data_dir = Path("data-link")
+    override = args.data_dir.resolve() if args.data_dir is not None else None
+    data_dir = resolve_data_dir(args.data_dir)
+    python = tmp_path / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    if os.name == "nt":
+        python.touch()
+    else:
+        python.symlink_to(sys.executable)
+    monkeypatch.setattr(sys, "executable", str(python))
+    monkeypatch.setenv("WG2_UPDATE_STAGING_ROOT", "untrusted")
+    monkeypatch.setenv("WG2_NO_BROWSER", "0")
+    monkeypatch.setenv("PYTHONUNBUFFERED", "0")
+    monkeypatch.setenv("KEEP", "yes")
+    inherited = dict(os.environ)
     monkeypatch.setattr(cli, "discover_backend", lambda root: None)
     forwarded = []
-    original = headless_backend_argv
 
-    def argv(override):
-        forwarded.append(override)
-        return original(override)
+    def argv(**kwargs):
+        forwarded.append(kwargs)
+        return backend_argv(**kwargs)
 
-    def refuse(root, command):
-        assert root == tmp_path / "data"
-        assert "--data-dir" not in command
+    def refuse(root, command, *, start_env):
+        assert root == data_dir
+        expected = [str(python), str(app_root() / "launch" / "serve.py")]
+        if override is not None:
+            expected.extend(("--data-dir", str(override)))
+        expected.append("--no-browser")
+        assert command == expected == backend_argv(port=None, data_dir=override)
+        assert start_env == backend_environment(inherited, data_dir=override)
+        assert start_env.get("WG2_DATA_DIR") == (
+            str(override) if override is not None else inherited.get("WG2_DATA_DIR")
+        )
+        assert start_env["KEEP"] == "yes"
+        assert start_env["WG2_NO_BROWSER"] == start_env["PYTHONUNBUFFERED"] == "1"
+        assert "WG2_UPDATE_STAGING_ROOT" not in start_env
+        assert dict(os.environ) == inherited
         raise BackendSpawnError("test stops before spawn")
 
-    monkeypatch.setattr(cli, "headless_backend_argv", argv)
+    monkeypatch.setattr(cli, "backend_argv", argv)
     monkeypatch.setattr(cli, "ensure_backend", refuse)
     assert asyncio.run(_solve(args))[0] == 5
-    assert forwarded == [None]
+    assert forwarded == [{"port": None, "data_dir": override}]

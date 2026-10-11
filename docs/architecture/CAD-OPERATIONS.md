@@ -1149,9 +1149,11 @@ private data folder.
 
 Stage 6's CLI client uses that owner for `POST /api/solve`, relays `/ws/jobs`, and
 reads terminal status and artifacts over HTTP. If no backend is healthy, it calls
-`ensure_backend` with `launch/backend_argv.py:headless_backend_argv` (the supported
-`launch/serve.py` entry point, exact data folder, `--no-browser`). The CLI never
-owns a production `JobRuntime`. Two concurrent commands submit two jobs to one
+`ensure_backend` with argv and environment from `launchers/backend_start.py`
+(the supported `launch/serve.py` entry point, exact data folder, `--no-browser`,
+no explicit port). Only an explicit data-folder override is forwarded to the
+shared helpers; inherited overrides and GUI workspace defaults are preserved.
+The CLI never owns a production `JobRuntime`. Two concurrent commands submit two jobs to one
 queue, visible in WG history even when no frontend was open. Completed human
 output and terminal NDJSON `job_url` point at `/?job=<id>`. Effective and execution
 requests are available from `GET /api/jobs/{id}/requests`, preserving the existing
@@ -1206,8 +1208,8 @@ the current native exe. Only `--installer-entry` publishes the marker after
 publishing the supported exe (also on an identical-image reinstall). Missing
 or stale evidence advertises no entry: an app-layer update cannot claim support
 for an older stub, and a downgrade cannot retain a positive claim via the marker.
-The CLI argv builder from Stage 6 should delegate to `launchers/backend_start.py` when the
-CLI and installed-launcher slices converge, preserving one start definition.
+The CLI and installed launcher share `launchers/backend_start.py`, preserving one
+start definition.
 The installed CPU qualification gate checks JSON output, owner identity, and the
 capability path through that OS entry. It also cold-starts through the installed
 entry with no data override in a fresh isolated profile, reaps the caller, checks

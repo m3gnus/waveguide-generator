@@ -9,6 +9,7 @@ from collections.abc import Coroutine, Mapping
 from contextlib import contextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import signal
@@ -43,7 +44,7 @@ from server.platform.signal_rearm import (
 )
 from server.platform.staging import publish_staging_directory
 
-from launch.backend_argv import headless_backend_argv
+from launchers.backend_start import backend_argv, backend_environment
 from server.platform.backend_owner import (
     BackendDataDirMismatch, BackendOwnerError, BackendSpawnError, BackendStartTimeout,
     discover_backend, ensure_backend,
@@ -516,8 +517,10 @@ async def solve_path(
         else:
             handle = await asyncio.to_thread(discover_backend, data_dir)
             if handle is None:
+                override = args.data_dir.resolve() if args.data_dir is not None else None
                 handle = await asyncio.to_thread(
-                    ensure_backend, data_dir, headless_backend_argv(args.data_dir)
+                    ensure_backend, data_dir, backend_argv(port=None, data_dir=override),
+                    start_env=backend_environment(os.environ, data_dir=override),
                 )
             runtime = BackendClient(handle)
     except BackendOwnerError as exc:
