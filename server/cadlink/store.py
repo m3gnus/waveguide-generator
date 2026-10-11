@@ -729,13 +729,8 @@ class CadLinkStore:
             self._receipt_feed_needs_sync = receipt_feed_created or getattr(self, "_receipt_feed_needs_sync", False)
             conn.execute(f"PRAGMA user_version = {STORE_FORMAT_VERSION}")
         self._initialized = True
-        if self._receipt_feed_needs_sync:
-            try:
-                self.make_durable()
-                self._receipt_feed_needs_sync = False
-            except BaseException:
-                self._initialized = False
-                raise
+        # A new receipt feed id is made durable by receipt_page before any
+        # client sees it, not here: opening the store adds no checkpoint.
         if imported_ledger and self.legacy_solve_ledger is not None:
             _retire_legacy_solve_ledger(self.legacy_solve_ledger)
 
