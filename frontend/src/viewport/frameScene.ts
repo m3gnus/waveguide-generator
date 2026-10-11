@@ -32,12 +32,11 @@ export function isEnclosureRole(role: string): boolean {
 }
 
 /**
- * The parametric preview has exactly one radiating surface: the cap across the
- * throat, which is the compression driver's exit. That is the face a CAD Link
- * document paints HF, so the two workspaces agree on what red means.
+ * The parametric preview has one radiating surface: the throat cap or the
+ * standalone source disk. Both use the source colour shared with CAD Link.
  */
 export function sourceRoleForSurface(surface: Pick<FrameSurface, 'role'>): SourceRole | null {
-  return surface.role === 'source_cap' ? 'HF' : null;
+  return surface.role === 'source_cap' || surface.role === 'source_body.disk' ? 'HF' : null;
 }
 
 /**

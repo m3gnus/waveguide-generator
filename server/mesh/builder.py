@@ -390,6 +390,12 @@ def _solver_mesher_config(
         # what a formula-valued box is.
         _strict_scalar(root.enclosure.depth, 0.0, "enclosure.depth")
     config = design_to_mesher_config(design)
+    from server.design.native import NATIVE_FORMULAS
+
+    if root.formula in NATIVE_FORMULAS:
+        if not keep_placement:
+            config["mesh"]["vertical_offset_mm"] = 0.0
+        return config
     mesh = config.setdefault("mesh", {})
     quadrants, _ = _resolve_quadrants(design)
     mesh["quadrants"] = quadrants
@@ -489,10 +495,13 @@ def _mesh_policy(
     multiplier = _domain_multiplier_for_quadrants(quadrants)
     guarded = deepcopy(dict(config))
     guarded_mesh = guarded.setdefault("mesh", {})
-    guarded_mesh["maxTriangles"] = (
+    from server.design.native import NATIVE_FORMULAS
+
+    native = design.formula in NATIVE_FORMULAS
+    guarded_mesh["max_triangles" if native else "maxTriangles"] = (
         MAX_SOLVER_MESH_ARTIFACT_TRIANGLES * multiplier
     )
-    guarded_mesh["allowLargeMesh"] = False
+    guarded_mesh["allow_large_mesh" if native else "allowLargeMesh"] = False
     return guarded, warning_limit, multiplier
 
 

@@ -5,7 +5,14 @@
     "R-OSSE",
     "OSSE",
     "ICW",
-    "FREEFORM"
+    "FREEFORM",
+    "OSSE-ADAPTER",
+    "OSSE-ADAPTER-CONTROLS",
+    "OSSE-ADAPTER-AXIAL",
+    "OSSE-ROUNDOVER",
+    "OSSE-AXIAL",
+    "OSSE-ARC",
+    "SOURCE-DISK"
   ],
   "validation_authority": {
     "request_schema": "/openapi.json#/components/schemas/SolveRequest",
@@ -14,6 +21,1049 @@
     "note": "editor_bounds describe the WG editor, not hard solver validity or recommended search ranges"
   },
   "parameters": [
+    {
+      "id": "native.L",
+      "legacy_key": "L",
+      "path": "L",
+      "mirror_paths": [],
+      "label": "Body length",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 120,
+        "OSSE-ADAPTER-CONTROLS": 137,
+        "OSSE-ADAPTER-AXIAL": 120,
+        "OSSE-ROUNDOVER": 120,
+        "OSSE-AXIAL": 120,
+        "OSSE-ARC": 120
+      },
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 10000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Intrinsic length of the original circular OSSE body before scale, adapter trimming or arc attachment. Physical dimensions must satisfy the selected native construction."
+    },
+    {
+      "id": "native.r0",
+      "legacy_key": "r0",
+      "path": "r0",
+      "mirror_paths": [],
+      "label": "Body throat radius",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 12.7,
+        "OSSE-ADAPTER-CONTROLS": 17,
+        "OSSE-ADAPTER-AXIAL": 12.7,
+        "OSSE-ROUNDOVER": 12.7,
+        "OSSE-AXIAL": 12.7,
+        "OSSE-ARC": 12.7
+      },
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 10000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Intrinsic radius of the original OSSE body. Adapter driver radius is controlled separately."
+    },
+    {
+      "id": "native.a",
+      "legacy_key": "a",
+      "path": "a",
+      "mirror_paths": [],
+      "label": "Body coverage half-angle",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 40,
+        "OSSE-ADAPTER-CONTROLS": 37,
+        "OSSE-ADAPTER-AXIAL": 40,
+        "OSSE-ROUNDOVER": 40,
+        "OSSE-AXIAL": 40,
+        "OSSE-ARC": 40
+      },
+      "editor_bounds": {
+        "minimum": 1,
+        "maximum": 79.999
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Circular body flare angle. Must exceed the throat half-angle. Axial, arc and roundover formulas require 5 through 75 degrees."
+    },
+    {
+      "id": "native.a0",
+      "legacy_key": "a0",
+      "path": "a0",
+      "mirror_paths": [],
+      "label": "Body throat half-angle",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 15.5,
+        "OSSE-ADAPTER-CONTROLS": 6,
+        "OSSE-ADAPTER-AXIAL": 15.5,
+        "OSSE-ROUNDOVER": 15.5,
+        "OSSE-AXIAL": 15.5,
+        "OSSE-ARC": 15.5
+      },
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 79.999
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Circular body tangent angle at its original throat, strictly below its coverage angle."
+    },
+    {
+      "id": "native.k",
+      "legacy_key": "k",
+      "path": "k",
+      "mirror_paths": [],
+      "label": "Body flare constant",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 1,
+        "OSSE-ADAPTER-CONTROLS": 1.25,
+        "OSSE-ADAPTER-AXIAL": 1,
+        "OSSE-ROUNDOVER": 1,
+        "OSSE-AXIAL": 1,
+        "OSSE-ARC": 1
+      },
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 100
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Positive OSSE flare constant. Axial, arc and roundover formulas require 0.5 through 10."
+    },
+    {
+      "id": "native.scale",
+      "legacy_key": "scale",
+      "path": "scale",
+      "mirror_paths": [],
+      "label": "Transverse / uniform scale",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 1,
+        "OSSE-ADAPTER-CONTROLS": 1,
+        "OSSE-ADAPTER-AXIAL": 1,
+        "OSSE-ROUNDOVER": 1,
+        "OSSE-AXIAL": 1,
+        "OSSE-ARC": 1
+      },
+      "editor_bounds": {
+        "minimum": 0.001,
+        "maximum": 100
+      },
+      "step": 0.001,
+      "precision": 3,
+      "options": [],
+      "description": "Scales intrinsic body and adapter dimensions uniformly, or X/Y only when Absolute axial scale is present. Mesh sizes, lip radius, wall and final placement stay in finished mm. Most native formulas require 0.01 through 10."
+    },
+    {
+      "id": "native.axial_scale",
+      "legacy_key": "axial_scale",
+      "path": "axial_scale",
+      "mirror_paths": [],
+      "label": "Absolute axial scale",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE-AXIAL",
+        "OSSE-ADAPTER-AXIAL"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-AXIAL": 1,
+        "OSSE-ADAPTER-AXIAL": 1
+      },
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 10
+      },
+      "step": 0.001,
+      "precision": 3,
+      "options": [],
+      "description": "Absolute Z factor, replacing uniform scale on Z. Axial/transverse ratio must be 0.1 through 10."
+    },
+    {
+      "id": "native.adapter.driver_exit_diameter_mm",
+      "legacy_key": "throat_adapter.driver_exit_diameter_mm",
+      "path": "throat_adapter.driver_exit_diameter_mm",
+      "mirror_paths": [],
+      "label": "Driver exit diameter",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-AXIAL"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 25.4,
+        "OSSE-ADAPTER-AXIAL": 25.4
+      },
+      "editor_bounds": {
+        "minimum": 0.001,
+        "maximum": 20000
+      },
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Intrinsic driver opening diameter. The adapter joins this opening to the retained OSSE body."
+    },
+    {
+      "id": "native.adapter.exit_half_angle_deg",
+      "legacy_key": "throat_adapter.exit_half_angle_deg",
+      "path": "throat_adapter.exit_half_angle_deg",
+      "mirror_paths": [],
+      "label": "Driver exit half-angle",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-AXIAL"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 10,
+        "OSSE-ADAPTER-AXIAL": 10
+      },
+      "editor_bounds": {
+        "minimum": -89,
+        "maximum": 89
+      },
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Signed authored driver tangent angle; anisotropic scaling changes the finished angle."
+    },
+    {
+      "id": "native.adapter.length_mm",
+      "legacy_key": "throat_adapter.length_mm",
+      "path": "throat_adapter.length_mm",
+      "mirror_paths": [],
+      "label": "Adapter length",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-AXIAL"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 40,
+        "OSSE-ADAPTER-AXIAL": 40
+      },
+      "editor_bounds": {
+        "minimum": 0.001,
+        "maximum": 10000
+      },
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Intrinsic axial distance from driver plane to body join."
+    },
+    {
+      "id": "native.adapter.join_t",
+      "legacy_key": "throat_adapter.join_t",
+      "path": "throat_adapter.join_t",
+      "mirror_paths": [],
+      "label": "Retained body start",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "fraction",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-AXIAL"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 0.137,
+        "OSSE-ADAPTER-AXIAL": 0.137
+      },
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 0.999999
+      },
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Fraction along the original OSSE body where the adapter joins it. The remaining body keeps its shape."
+    },
+    {
+      "id": "native.adapter.driver_handle_mm",
+      "legacy_key": "throat_adapter.driver_handle_mm",
+      "path": "throat_adapter.driver_handle_mm",
+      "mirror_paths": [],
+      "label": "Driver handle length",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-AXIAL"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 10,
+        "OSSE-ADAPTER-AXIAL": 10
+      },
+      "editor_bounds": {
+        "minimum": 0.001,
+        "maximum": 10000
+      },
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Cubic handle distance along the driver tangent. Invalid or backward cubic controls are refused."
+    },
+    {
+      "id": "native.adapter.body_handle_mm",
+      "legacy_key": "throat_adapter.body_handle_mm",
+      "path": "throat_adapter.body_handle_mm",
+      "mirror_paths": [],
+      "label": "Body handle length",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-AXIAL"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 15,
+        "OSSE-ADAPTER-AXIAL": 15
+      },
+      "editor_bounds": {
+        "minimum": 0.001,
+        "maximum": 10000
+      },
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Cubic handle distance along the body tangent, giving a smooth oriented join."
+    },
+    {
+      "id": "native.controls.0.0",
+      "legacy_key": "throat_adapter.control_points_mm.0.0",
+      "path": "throat_adapter.control_points_mm.0.0",
+      "mirror_paths": [],
+      "label": "Cubic P0 Z",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER-CONTROLS"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER-CONTROLS": -31.7
+      },
+      "editor_bounds": {
+        "minimum": -1000000,
+        "maximum": 1000000
+      },
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Independent literal cubic pole in join-local coordinates. P3 is (0, body throat radius). The actual curve must stay forward and positive; the join may have a tangent corner."
+    },
+    {
+      "id": "native.controls.0.1",
+      "legacy_key": "throat_adapter.control_points_mm.0.1",
+      "path": "throat_adapter.control_points_mm.0.1",
+      "mirror_paths": [],
+      "label": "Cubic P0 radius",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER-CONTROLS"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER-CONTROLS": 16.2
+      },
+      "editor_bounds": {
+        "minimum": -1000000,
+        "maximum": 1000000
+      },
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Independent literal cubic pole in join-local coordinates. P3 is (0, body throat radius). The actual curve must stay forward and positive; the join may have a tangent corner."
+    },
+    {
+      "id": "native.controls.1.0",
+      "legacy_key": "throat_adapter.control_points_mm.1.0",
+      "path": "throat_adapter.control_points_mm.1.0",
+      "mirror_paths": [],
+      "label": "Cubic P1 Z",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER-CONTROLS"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER-CONTROLS": -22.1
+      },
+      "editor_bounds": {
+        "minimum": -1000000,
+        "maximum": 1000000
+      },
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Independent literal cubic pole in join-local coordinates. P3 is (0, body throat radius). The actual curve must stay forward and positive; the join may have a tangent corner."
+    },
+    {
+      "id": "native.controls.1.1",
+      "legacy_key": "throat_adapter.control_points_mm.1.1",
+      "path": "throat_adapter.control_points_mm.1.1",
+      "mirror_paths": [],
+      "label": "Cubic P1 radius",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER-CONTROLS"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER-CONTROLS": 16.9
+      },
+      "editor_bounds": {
+        "minimum": -1000000,
+        "maximum": 1000000
+      },
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Independent literal cubic pole in join-local coordinates. P3 is (0, body throat radius). The actual curve must stay forward and positive; the join may have a tangent corner."
+    },
+    {
+      "id": "native.controls.2.0",
+      "legacy_key": "throat_adapter.control_points_mm.2.0",
+      "path": "throat_adapter.control_points_mm.2.0",
+      "mirror_paths": [],
+      "label": "Cubic P2 Z",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER-CONTROLS"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER-CONTROLS": -9.3
+      },
+      "editor_bounds": {
+        "minimum": -1000000,
+        "maximum": 1000000
+      },
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Independent literal cubic pole in join-local coordinates. P3 is (0, body throat radius). The actual curve must stay forward and positive; the join may have a tangent corner."
+    },
+    {
+      "id": "native.controls.2.1",
+      "legacy_key": "throat_adapter.control_points_mm.2.1",
+      "path": "throat_adapter.control_points_mm.2.1",
+      "mirror_paths": [],
+      "label": "Cubic P2 radius",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER-CONTROLS"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER-CONTROLS": 20.4
+      },
+      "editor_bounds": {
+        "minimum": -1000000,
+        "maximum": 1000000
+      },
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Independent literal cubic pole in join-local coordinates. P3 is (0, body throat radius). The actual curve must stay forward and positive; the join may have a tangent corner."
+    },
+    {
+      "id": "native.arc.join_t",
+      "legacy_key": "terminating_arc.join_t",
+      "path": "terminating_arc.join_t",
+      "mirror_paths": [],
+      "label": "Arc attachment",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "fraction",
+      "families": [
+        "OSSE-ARC"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ARC": 0.05
+      },
+      "editor_bounds": {
+        "minimum": 0.000001,
+        "maximum": 1
+      },
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Fraction of original body retained before the exact tangent- and curvature-matched circular suffix."
+    },
+    {
+      "id": "native.arc.end_tangent_deg",
+      "legacy_key": "terminating_arc.end_tangent_deg",
+      "path": "terminating_arc.end_tangent_deg",
+      "mirror_paths": [],
+      "label": "Arc end tangent",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "OSSE-ARC"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ARC": 100
+      },
+      "editor_bounds": {
+        "minimum": 0.001,
+        "maximum": 180
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Absolute oriented tangent from forward Z toward increasing radius. Must exceed the join tangent; above 90 degrees turns backward. Source-plane clearance is required."
+    },
+    {
+      "id": "native.lip.radius",
+      "legacy_key": "mesh.mouth_roundover_radius_mm",
+      "path": "mesh.mouth_roundover_radius_mm",
+      "mirror_paths": [],
+      "label": "Mouth roundover radius",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ROUNDOVER"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ROUNDOVER": 25
+      },
+      "editor_bounds": {
+        "minimum": 0.2,
+        "maximum": 200
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Finished circular lip radius, at least 0.1 mm larger than wall thickness. The full lip must clear the rear and its outer offset must not fold."
+    },
+    {
+      "id": "native.lip.wall",
+      "legacy_key": "mesh.wall_thickness",
+      "path": "mesh.wall_thickness",
+      "mirror_paths": [],
+      "label": "Wall thickness",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ROUNDOVER"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ROUNDOVER": 5
+      },
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 199.9
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Finished normal wall thickness. Must remain at least 0.1 mm below the lip radius and satisfy the curvature clearance guard."
+    },
+    {
+      "id": "native.source.radius_mm",
+      "legacy_key": "source_body.radius_mm",
+      "path": "source_body.radius_mm",
+      "mirror_paths": [],
+      "label": "Source disk radius",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "SOURCE-DISK"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "SOURCE-DISK": 18
+      },
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 200
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Finished radius of the normal-driven front disk."
+    },
+    {
+      "id": "native.source.outer_radius_mm",
+      "legacy_key": "source_body.outer_radius_mm",
+      "path": "source_body.outer_radius_mm",
+      "mirror_paths": [],
+      "label": "Source body radius",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "SOURCE-DISK"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "SOURCE-DISK": 22
+      },
+      "editor_bounds": {
+        "minimum": 0.2,
+        "maximum": 500
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Finished exterior radius, at least 0.1 mm larger than source disk radius."
+    },
+    {
+      "id": "native.source.depth_mm",
+      "legacy_key": "source_body.depth_mm",
+      "path": "source_body.depth_mm",
+      "mirror_paths": [],
+      "label": "Source body depth",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "SOURCE-DISK"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "SOURCE-DISK": 8
+      },
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 500
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Finished depth behind the front disk. The rear and side are rigid."
+    },
+    {
+      "id": "native.source.size",
+      "legacy_key": "mesh.size_mm",
+      "path": "mesh.size_mm",
+      "mirror_paths": [],
+      "label": "Uniform source mesh size",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "SOURCE-DISK"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "SOURCE-DISK": 3
+      },
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 50
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Uniform finished-mm target, capped at source radius / 8. The mesher enforces its source-body allocation and triangle limits."
+    },
+    {
+      "id": "native.mesh.throat",
+      "legacy_key": "mesh.throat_resolution",
+      "path": "mesh.throat_resolution",
+      "mirror_paths": [],
+      "label": "Throat mesh resolution",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 6,
+        "OSSE-ADAPTER-CONTROLS": 6,
+        "OSSE-ADAPTER-AXIAL": 6,
+        "OSSE-ROUNDOVER": 6,
+        "OSSE-AXIAL": 6,
+        "OSSE-ARC": 6
+      },
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 10000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Finished-mm mesh target. Native curvature certificates may require finer facets or refuse the build. Smaller values cost solve time and memory."
+    },
+    {
+      "id": "native.mesh.mouth",
+      "legacy_key": "mesh.mouth_resolution",
+      "path": "mesh.mouth_resolution",
+      "mirror_paths": [],
+      "label": "Mouth mesh resolution",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 15,
+        "OSSE-ADAPTER-CONTROLS": 15,
+        "OSSE-ADAPTER-AXIAL": 15,
+        "OSSE-ROUNDOVER": 15,
+        "OSSE-AXIAL": 15,
+        "OSSE-ARC": 15
+      },
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 10000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Finished-mm mesh target. Native curvature certificates may require finer facets or refuse the build. Smaller values cost solve time and memory."
+    },
+    {
+      "id": "native.mesh.rear",
+      "legacy_key": "mesh.rear_resolution",
+      "path": "mesh.rear_resolution",
+      "mirror_paths": [],
+      "label": "Rear mesh resolution",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 40,
+        "OSSE-ADAPTER-CONTROLS": 40,
+        "OSSE-ADAPTER-AXIAL": 40,
+        "OSSE-ROUNDOVER": 40,
+        "OSSE-AXIAL": 40,
+        "OSSE-ARC": 40
+      },
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 10000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Finished-mm mesh target. Native curvature certificates may require finer facets or refuse the build. Smaller values cost solve time and memory."
+    },
+    {
+      "id": "native.mesh.budget",
+      "legacy_key": "mesh.max_triangles",
+      "path": "mesh.max_triangles",
+      "mirror_paths": [],
+      "label": "Native mesh triangle budget",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC",
+        "SOURCE-DISK"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 50000,
+        "OSSE-ADAPTER-CONTROLS": 50000,
+        "OSSE-ADAPTER-AXIAL": 50000,
+        "OSSE-ROUNDOVER": 50000,
+        "OSSE-AXIAL": 50000,
+        "OSSE-ARC": 50000,
+        "SOURCE-DISK": 50000
+      },
+      "editor_bounds": {
+        "minimum": 1,
+        "maximum": 10000000
+      },
+      "step": 1000,
+      "precision": 0,
+      "options": [],
+      "description": "Mesher triangle limit for native exports. Solve meshes also retain the independent 22,000-triangle and dense-memory ceilings."
+    },
+    {
+      "id": "native.mesh.allow_large",
+      "legacy_key": "allow_large_mesh",
+      "path": "mesh.allow_large_mesh",
+      "mirror_paths": [],
+      "label": "Allow larger native exports",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC",
+        "SOURCE-DISK"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 0,
+        "OSSE-ADAPTER-CONTROLS": 0,
+        "OSSE-ADAPTER-AXIAL": 0,
+        "OSSE-ROUNDOVER": 0,
+        "OSSE-AXIAL": 0,
+        "OSSE-ARC": 0,
+        "SOURCE-DISK": 0
+      },
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": 0,
+          "label": "No",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 1,
+          "label": "Yes",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "Allows native exports to exceed the user triangle budget. Source-body hard allocation limits and solve safety ceilings still apply."
+    },
+    {
+      "id": "native.mesh.offset",
+      "legacy_key": "mesh.vertical_offset",
+      "path": "mesh.vertical_offset",
+      "mirror_paths": [],
+      "label": "Export vertical offset",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC",
+        "SOURCE-DISK"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "OSSE-ADAPTER": 0,
+        "OSSE-ADAPTER-CONTROLS": 0,
+        "OSSE-ADAPTER-AXIAL": 0,
+        "OSSE-ROUNDOVER": 0,
+        "OSSE-AXIAL": 0,
+        "OSSE-ARC": 0,
+        "SOURCE-DISK": 0
+      },
+      "editor_bounds": {
+        "minimum": -10000,
+        "maximum": 10000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Finished Y placement for native STEP and STL exports. Live preview and solve stay centred."
+    },
     {
       "id": "common.s1",
       "legacy_key": "s1",
@@ -3541,7 +4591,14 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC",
+        "SOURCE-DISK"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -3549,7 +4606,14 @@
         "R-OSSE": 50,
         "OSSE": 50,
         "ICW": 50,
-        "FREEFORM": 50
+        "FREEFORM": 50,
+        "OSSE-ADAPTER": 50,
+        "OSSE-ADAPTER-CONTROLS": 50,
+        "OSSE-ADAPTER-AXIAL": 50,
+        "OSSE-ROUNDOVER": 50,
+        "OSSE-AXIAL": 50,
+        "OSSE-ARC": 50,
+        "SOURCE-DISK": 50
       },
       "editor_bounds": {
         "minimum": 20,
@@ -3574,7 +4638,14 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC",
+        "SOURCE-DISK"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -3582,7 +4653,14 @@
         "R-OSSE": 16000,
         "OSSE": 16000,
         "ICW": 16000,
-        "FREEFORM": 16000
+        "FREEFORM": 16000,
+        "OSSE-ADAPTER": 16000,
+        "OSSE-ADAPTER-CONTROLS": 16000,
+        "OSSE-ADAPTER-AXIAL": 16000,
+        "OSSE-ROUNDOVER": 16000,
+        "OSSE-AXIAL": 16000,
+        "OSSE-ARC": 16000,
+        "SOURCE-DISK": 16000
       },
       "editor_bounds": {
         "minimum": 20,
@@ -3607,7 +4685,14 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC",
+        "SOURCE-DISK"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -3615,7 +4700,14 @@
         "R-OSSE": 32,
         "OSSE": 32,
         "ICW": 32,
-        "FREEFORM": 32
+        "FREEFORM": 32,
+        "OSSE-ADAPTER": 32,
+        "OSSE-ADAPTER-CONTROLS": 32,
+        "OSSE-ADAPTER-AXIAL": 32,
+        "OSSE-ROUNDOVER": 32,
+        "OSSE-AXIAL": 32,
+        "OSSE-ARC": 32,
+        "SOURCE-DISK": 32
       },
       "editor_bounds": {
         "minimum": 10,
@@ -3685,7 +4777,14 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC",
+        "SOURCE-DISK"
       ],
       "accepts_expression": false,
       "writable": false,
@@ -3693,7 +4792,14 @@
         "R-OSSE": 1234,
         "OSSE": 1234,
         "ICW": 1234,
-        "FREEFORM": 1234
+        "FREEFORM": 1234,
+        "OSSE-ADAPTER": 1234,
+        "OSSE-ADAPTER-CONTROLS": 1234,
+        "OSSE-ADAPTER-AXIAL": 1234,
+        "OSSE-ROUNDOVER": 1234,
+        "OSSE-AXIAL": 1234,
+        "OSSE-ARC": 1234,
+        "SOURCE-DISK": 1234
       },
       "editor_bounds": null,
       "step": null,
@@ -3871,7 +4977,14 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC",
+        "SOURCE-DISK"
       ],
       "accepts_expression": false,
       "writable": false,
@@ -3896,7 +5009,14 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC",
+        "SOURCE-DISK"
       ],
       "accepts_expression": false,
       "writable": false,
@@ -3921,7 +5041,14 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC",
+        "SOURCE-DISK"
       ],
       "accepts_expression": false,
       "writable": false,
@@ -3946,7 +5073,14 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "OSSE-ADAPTER",
+        "OSSE-ADAPTER-CONTROLS",
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-ROUNDOVER",
+        "OSSE-AXIAL",
+        "OSSE-ARC",
+        "SOURCE-DISK"
       ],
       "accepts_expression": false,
       "writable": false,

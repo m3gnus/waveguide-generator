@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 import numpy as np
 
 from server.design.schema import DesignConfig, Expr
+from server.design.native import NATIVE_FORMULAS
 from server.exports.sizing import (
     EXPORT_CORNER_SEGMENTS,
     STEP_SURFACE_TOLERANCE_MM,
@@ -273,13 +274,14 @@ def _normalise_step_header(step_text: str) -> str:
     return fixed + separator + rest if swapped else step_text
 
 
-def _assert_step(step_text: str) -> None:
+def _assert_step(step_text: str, *, require_bspline: bool = True) -> None:
     required = (
         "ISO-10303-21",
         "END-ISO-10303-21",
         "ADVANCED_FACE",
-        "B_SPLINE_SURFACE",
     )
+    if require_bspline:
+        required += ("B_SPLINE_SURFACE",)
     if not step_text.strip() or any(token not in step_text for token in required):
         raise RuntimeError("STEP export did not contain valid surface geometry")
     header = step_text.partition("HEADER;")[2].partition("ENDSEC;")[0]
@@ -725,8 +727,24 @@ def _refuse_ath_step(design: DesignConfig) -> None:
         )
 
 
+def _native_step(design: DesignConfig) -> StepSolidResult:
+    from hornlab_mesher.cad import write_step_from_config
+
+    with tempfile.TemporaryDirectory(prefix="wg2-native-step-", dir=temporary_directory_root()) as folder:
+        path = Path(folder) / "geometry.step"
+        with _preserve_native_windows_path():
+            _, info = write_step_from_config(design_to_mesher_config(design), path)
+        text = _normalise_step_header(path.read_text(encoding="utf-8"))
+    # Exact revolutions, circles and planar source faces need no spline surface.
+    _assert_step(text, require_bspline=False)
+    return StepSolidResult(step_text=text, cad_info=info)
+
+
 def _build_step_sync(design_dump: dict[str, Any]) -> StepSurfaceResult:
     design = DesignConfig.model_validate(design_dump)
+    if design.formula in NATIVE_FORMULAS:
+        result = _native_step(design)
+        return StepSurfaceResult(step_text=result.step_text)
     _refuse_ath_step(design)
     plan = _surface_grid_plan(design)
     if plan.warning:
@@ -765,6 +783,8 @@ async def build_step(design: DesignConfig) -> StepSurfaceResult:
 
 def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     design = DesignConfig.model_validate(design_dump)
+    if design.formula in NATIVE_FORMULAS:
+        return _native_step(design)
     _refuse_ath_step(design)
     try:
         from hornlab_mesher.cad import write_step_from_config
@@ -1005,6 +1025,19 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
     # a parser that only runs when somebody exports geometry.
     import meshio
 
+    if design.formula in NATIVE_FORMULAS:
+        config = design_to_mesher_config(design)
+        with tempfile.TemporaryDirectory(prefix="wg2-native-stl-", dir=spawned_directory_root()) as folder:
+            path = Path(folder) / "geometry.msh"
+            with _preserve_native_windows_path():
+                build_from_config(config, path)
+            parsed = meshio.read(path)
+            triangles, tags = _triangles_and_tags(parsed)
+        return {
+            "vertices": np.asarray(parsed.points, dtype=float).reshape(-1).tolist(),
+            "indices": triangles.reshape(-1).astype(int).tolist(),
+            "surfaceTags": tags.astype(int).tolist(), "warnings": [],
+        }
     plan, params = _stl_grid_plan(design)
     prepared = _prepared_design(design, grid=(plan.angular, plan.length))
     config = _stl_mesher_config(prepared)
@@ -1113,6 +1146,8 @@ def profile_csv(inner_points_mm: np.ndarray, kind: str) -> str:
 def build_profiles(design: DesignConfig, kind: str) -> str:
     """Rebuild the bare, uniform-ring inner surface without vertical offset."""
 
+    if design.formula in NATIVE_FORMULAS:
+        raise ValueError(f"{design.formula} cannot export profile CSVs: the ring-grid format cannot represent the complete native construction. Export STEP instead.")
     return profile_csv(
         _inner_grid(design, profile_sampling=True),
         kind,

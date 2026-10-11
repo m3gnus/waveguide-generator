@@ -536,6 +536,11 @@ def _export_wglink_sync(
     place in the export sequence, is the same either way.
     """
 
+    from server.design.native import NATIVE_FORMULAS
+
+    if request.design.formula in NATIVE_FORMULAS:
+        raise HTTPException(status_code=422, detail=f"{request.design.formula} cannot be sent to CAD Link: native recipe transport is not supported. Export STEP instead.")
+
     from hornlab_mesher import WgLinkIdentity, WgLinkSourceInterface, write_wglink
     from hornlab_mesher.config_builder import resolve_geometry
 

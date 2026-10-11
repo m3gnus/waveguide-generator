@@ -1,4 +1,5 @@
 import type { DesignDocument, DesignFamily } from '../stores/design';
+import { NATIVE_FAMILIES, type NativeFamily } from './nativeFamilies';
 import type { WorkspaceMode } from '../stores/workspaceMode';
 import { backendSupports, hostLimitation, selectionLimitation, type BackendFeature, type BackendIdentity } from './backendSupport';
 import type { EngineCapability } from '../jobs/actions';
@@ -143,7 +144,44 @@ const SUPERFORMULA_HELP: Record<'sf_a' | 'sf_b' | 'sf_m1' | 'sf_m2' | 'sf_n1' | 
   sf_n3: 'Exponent on the sine term, setting how sharp or bulged the lobes are. Keep it at 0 or above — a negative value blows up wherever the sine crosses zero and fails the build.',
 };
 
+const nativeHorns = NATIVE_FAMILIES.filter((family) => family !== 'SOURCE-DISK');
+const authoredAdapters: DesignFamily[] = ['OSSE-ADAPTER', 'OSSE-ADAPTER-AXIAL'];
+const literalAdapters: DesignFamily[] = ['OSSE-ADAPTER-CONTROLS'];
+const nativeNumber = (id: string, path: string, label: string, options: Partial<ParameterDefinition>): ParameterDefinition =>
+  number(`native.${id}`, path, path, profile, label, options);
+
 export const PARAMETER_REGISTRY: ParameterDefinition[] = [
+  nativeNumber('L', 'L', 'Body length', { families: nativeHorns, unit: 'mm', min: .01, max: 10000, description: 'Intrinsic length of the original circular OSSE body before scale, adapter trimming or arc attachment. Physical dimensions must satisfy the selected native construction.' }),
+  nativeNumber('r0', 'r0', 'Body throat radius', { families: nativeHorns, unit: 'mm', min: .01, max: 10000, description: 'Intrinsic radius of the original OSSE body. Adapter driver radius is controlled separately.' }),
+  nativeNumber('a', 'a', 'Body coverage half-angle', { families: nativeHorns, unit: '°', min: 1, max: 79.999, description: 'Circular body flare angle. Must exceed the throat half-angle. Axial, arc and roundover formulas require 5 through 75 degrees.' }),
+  nativeNumber('a0', 'a0', 'Body throat half-angle', { families: nativeHorns, unit: '°', min: 0, max: 79.999, description: 'Circular body tangent angle at its original throat, strictly below its coverage angle.' }),
+  nativeNumber('k', 'k', 'Body flare constant', { families: nativeHorns, min: .01, max: 100, description: 'Positive OSSE flare constant. Axial, arc and roundover formulas require 0.5 through 10.' }),
+  nativeNumber('scale', 'scale', 'Transverse / uniform scale', { families: nativeHorns, min: .001, max: 100, step: .001, precision: 3, description: 'Scales intrinsic body and adapter dimensions uniformly, or X/Y only when Absolute axial scale is present. Mesh sizes, lip radius, wall and final placement stay in finished mm. Most native formulas require 0.01 through 10.' }),
+  nativeNumber('axial_scale', 'axial_scale', 'Absolute axial scale', { families: ['OSSE-AXIAL', 'OSSE-ADAPTER-AXIAL'], min: .01, max: 10, step: .001, precision: 3, description: 'Absolute Z factor, replacing uniform scale on Z. Axial/transverse ratio must be 0.1 through 10.' }),
+  ...([
+    ['driver_exit_diameter_mm', 'Driver exit diameter', 'mm', .001, 20000, 'Intrinsic driver opening diameter. The adapter joins this opening to the retained OSSE body.'],
+    ['exit_half_angle_deg', 'Driver exit half-angle', '°', -89, 89, 'Signed authored driver tangent angle; anisotropic scaling changes the finished angle.'],
+    ['length_mm', 'Adapter length', 'mm', .001, 10000, 'Intrinsic axial distance from driver plane to body join.'],
+    ['join_t', 'Retained body start', 'fraction', 0, .999999, 'Fraction along the original OSSE body where the adapter joins it. The remaining body keeps its shape.'],
+    ['driver_handle_mm', 'Driver handle length', 'mm', .001, 10000, 'Cubic handle distance along the driver tangent. Invalid or backward cubic controls are refused.'],
+    ['body_handle_mm', 'Body handle length', 'mm', .001, 10000, 'Cubic handle distance along the body tangent, giving a smooth oriented join.'],
+  ] as const).map(([path, label, unit, min, max, description]) => nativeNumber(`adapter.${path}`, `throat_adapter.${path}`, label, { families: authoredAdapters, unit, min, max, step: .001, precision: 6, description })),
+  ...[0, 1, 2].flatMap((pole) => [0, 1].map((axis) => nativeNumber(`controls.${pole}.${axis}`, `throat_adapter.control_points_mm.${pole}.${axis}`, `Cubic P${pole} ${axis === 0 ? 'Z' : 'radius'}`, { families: literalAdapters, unit: 'mm', min: -1000000, max: 1000000, step: .001, precision: 6, description: 'Independent literal cubic pole in join-local coordinates. P3 is (0, body throat radius). The actual curve must stay forward and positive; the join may have a tangent corner.' }))),
+  nativeNumber('arc.join_t', 'terminating_arc.join_t', 'Arc attachment', { families: ['OSSE-ARC'], unit: 'fraction', min: .000001, max: 1, step: .001, precision: 6, description: 'Fraction of original body retained before the exact tangent- and curvature-matched circular suffix.' }),
+  nativeNumber('arc.end_tangent_deg', 'terminating_arc.end_tangent_deg', 'Arc end tangent', { families: ['OSSE-ARC'], unit: '°', min: .001, max: 180, description: 'Absolute oriented tangent from forward Z toward increasing radius. Must exceed the join tangent; above 90 degrees turns backward. Source-plane clearance is required.' }),
+  nativeNumber('lip.radius', 'mesh.mouth_roundover_radius_mm', 'Mouth roundover radius', { families: ['OSSE-ROUNDOVER'], section: wallEnclosure, unit: 'mm', min: .2, max: 200, description: 'Finished circular lip radius, at least 0.1 mm larger than wall thickness. The full lip must clear the rear and its outer offset must not fold.' }),
+  nativeNumber('lip.wall', 'mesh.wall_thickness', 'Wall thickness', { families: ['OSSE-ROUNDOVER'], section: wallEnclosure, unit: 'mm', min: .1, max: 199.9, description: 'Finished normal wall thickness. Must remain at least 0.1 mm below the lip radius and satisfy the curvature clearance guard.' }),
+  ...([
+    ['radius_mm', 'Source disk radius', .1, 200, 'Finished radius of the normal-driven front disk.'],
+    ['outer_radius_mm', 'Source body radius', .2, 500, 'Finished exterior radius, at least 0.1 mm larger than source disk radius.'],
+    ['depth_mm', 'Source body depth', .1, 500, 'Finished depth behind the front disk. The rear and side are rigid.'],
+  ] as const).map(([path, label, min, max, description]) => nativeNumber(`source.${path}`, `source_body.${path}`, label, { families: ['SOURCE-DISK'], unit: 'mm', min, max, description })),
+  nativeNumber('source.size', 'mesh.size_mm', 'Uniform source mesh size', { families: ['SOURCE-DISK'], section: solveExportMesh, unit: 'mm', min: .1, max: 50, description: 'Uniform finished-mm target, capped at source radius / 8. The mesher enforces its source-body allocation and triangle limits.' }),
+  ...(['throat', 'mouth', 'rear'] as const).map((region) => nativeNumber(`mesh.${region}`, `mesh.${region}_resolution`, `${region[0].toUpperCase()}${region.slice(1)} mesh resolution`, { families: nativeHorns, section: solveExportMesh, unit: 'mm', min: .01, max: 10000, description: 'Finished-mm mesh target. Native curvature certificates may require finer facets or refuse the build. Smaller values cost solve time and memory.' })),
+  nativeNumber('mesh.budget', 'mesh.max_triangles', 'Native mesh triangle budget', { families: [...NATIVE_FAMILIES], section: solveExportMesh, min: 1, max: 10000000, step: 1000, precision: 0, description: 'Mesher triangle limit for native exports. Solve meshes also retain the independent 22,000-triangle and dense-memory ceilings.' }),
+  select('native.mesh.allow_large', 'allow_large_mesh', 'mesh.allow_large_mesh', solveExportMesh, 'Allow larger native exports', yesNo, { families: [...NATIVE_FAMILIES], description: 'Allows native exports to exceed the user triangle budget. Source-body hard allocation limits and solve safety ceilings still apply.' }),
+  nativeNumber('mesh.offset', 'mesh.vertical_offset', 'Export vertical offset', { families: [...NATIVE_FAMILIES], section: solveExportMesh, unit: 'mm', min: -10000, max: 10000, description: 'Finished Y placement for native STEP and STL exports. Live preview and solve stay centred.' }),
+
   // Plain coefficients; per-azimuth expressions are not supported by the mesher.
   number('common.s1', 's1', 's1', profile, 'Throat stretch amount', { symbol: 's1', families: osseFamilies, unit: 'plain number', min: 0, max: 10, step: .01, precision: 3, description: 'How much extra length is added near the throat. Uses a plain number from 0 to 10; either stretch control at zero turns stretching off. Needs mesher 0.2.4.' }),
   number('common.s2', 's2', 's2', profile, 'Throat stretch sharpness', { symbol: 's2', families: osseFamilies, unit: 'plain number', min: 0, max: 10, step: .01, precision: 3, description: 'How quickly the extra length builds up near the throat. Uses a plain number from 0 to 10; larger values make the transition sharper. Per-angle expressions are not supported. Needs mesher 0.2.4.' }),
@@ -300,7 +338,7 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   { id: 'passthrough.keys', legacyKey: 'extraKeys', section: 'Output & Passthrough', label: 'Unknown flat keys', kind: 'indicator', description: 'Top-level settings in the imported file that this app does not model. They are preserved verbatim and written back out on export, so nothing is lost in a round-trip.' },
 ];
 
-const familyTraceKeys: Record<DesignFamily, readonly string[]> = {
+const familyTraceKeys: Record<Exclude<DesignFamily, NativeFamily>, readonly string[]> = {
   'R-OSSE': ['scale', 'R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
   OSSE: ['scale', 'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h'],
   ICW: ['scale', 'r0', 'a0', 'L', 'R', 'coverage_angle', 'hold_start', 'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth'],
@@ -320,6 +358,16 @@ const commonTraceKeys = [
 ] as const;
 
 /** Current family-qualified parameter inventory, with family duplicates qualified. */
+// Unqualified legacy controls apply to the original families. Native shapes
+// expose only their canonical controls and the shared execution settings.
+PARAMETER_REGISTRY.forEach((field) => {
+  if (!field.families) field.families = [...allFamilies];
+  if (field.id.startsWith('simulation.f') || field.id === 'simulation.num_frequencies'
+    || field.section === 'Output & Passthrough' && field.kind === 'indicator') {
+    field.families = [...allFamilies, ...NATIVE_FAMILIES];
+  }
+});
+
 export const TRACEABILITY_PARAMETER_INVENTORY = [
   ...Object.entries(familyTraceKeys).flatMap(([family, keys]) => keys.map((key) => ({ key, family: family as DesignFamily }))),
   ...commonTraceKeys.map((key) => ({ key, family: undefined })),

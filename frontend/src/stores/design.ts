@@ -4,8 +4,11 @@ import { findParameterByPath } from '../design/parameterRegistry';
 import { replaceAthPolarBlocks } from './athPolars';
 import { advanceEditorMutation } from './editorMutation';
 import { DEFAULT_SWEEP } from './solveDefaults';
+import { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
 
-export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM';
+export { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
+export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM' | NativeFamily;
+export const isNativeFamily = (family: DesignFamily): family is NativeFamily => (NATIVE_FAMILIES as readonly string[]).includes(family);
 export type MutationReason = 'edit' | 'drag' | 'undo' | 'redo' | 'load' | 'family';
 export type DesignLoadSource = 'ordinary' | 'cad-project-switch';
 export type DesignValue = number | string | boolean | null | FreeformPoint[] | CrossSectionStation[];
@@ -101,6 +104,16 @@ export interface DesignDocument {
   circ_arc_radius?: number;
   circ_arc_term_angle?: number;
 
+  throat_adapter?: {
+    mode: 'authored' | 'controls'; contract_revision: number; join_t: number;
+    driver_exit_diameter_mm?: number; exit_half_angle_deg?: number; length_mm?: number;
+    driver_handle_mm?: number; body_handle_mm?: number;
+    control_points_mm?: [number, number][];
+  };
+  axial_scale?: number;
+  terminating_arc?: { contract_revision: number; join_t: number; end_tangent_deg: number };
+  source_body?: { radius_mm: number; outer_radius_mm: number; depth_mm: number };
+
   guiding_curve: {
     curve_type: number;
     distance: number;
@@ -152,6 +165,8 @@ export interface DesignDocument {
     ath_rear_shape?: 1 | 3;
     ath_rear_front_offset?: number;
     ath_rear_step?: number;
+    mouth_roundover_radius_mm?: number;
+    size_mm?: number;
     angular_segments: number;
     corner_segments: number;
     throat_segments: number;
@@ -245,6 +260,32 @@ export const seedDesign: DesignDocument = {
 
 export function designForFamily(family: DesignFamily): DesignDocument {
   const shared = structuredClone(common);
+  if (isNativeFamily(family)) {
+    const native: DesignDocument = {
+      ...shared, formula: family,
+      source: { ...shared.source, shape: 2 },
+      mesh: { ...shared.mesh, wall_thickness: family === 'OSSE-ROUNDOVER' ? 5 : 0 },
+    };
+    if (family === 'SOURCE-DISK') {
+      native.source_body = { radius_mm: 18, outer_radius_mm: 22, depth_mm: 8 };
+      native.mesh.size_mm = 3;
+      return native;
+    }
+    Object.assign(native, { L: 120, r0: 12.7, a: 40, a0: 15.5, k: 1, s: 0 });
+    if (family === 'OSSE-ADAPTER' || family === 'OSSE-ADAPTER-AXIAL') {
+      native.throat_adapter = { mode: 'authored', contract_revision: 1, driver_exit_diameter_mm: 25.4,
+        exit_half_angle_deg: 10, length_mm: 40, join_t: .137, driver_handle_mm: 10, body_handle_mm: 15 };
+    }
+    if (family === 'OSSE-ADAPTER-CONTROLS') {
+      Object.assign(native, { L: 137, r0: 17, a: 37, a0: 6, k: 1.25 });
+      native.throat_adapter = { mode: 'controls', contract_revision: 1, join_t: 0,
+        control_points_mm: [[-31.7, 16.2], [-22.1, 16.9], [-9.3, 20.4]] };
+    }
+    if (family === 'OSSE-AXIAL' || family === 'OSSE-ADAPTER-AXIAL') native.axial_scale = 1;
+    if (family === 'OSSE-ARC') native.terminating_arc = { contract_revision: 1, join_t: .05, end_tangent_deg: 100 };
+    if (family === 'OSSE-ROUNDOVER') native.mesh.mouth_roundover_radius_mm = 25;
+    return native;
+  }
   if (family === 'R-OSSE') return { ...structuredClone(seedDesign), formula: family };
   if (family === 'OSSE') {
     return {
@@ -278,6 +319,10 @@ export function designForFamily(family: DesignFamily): DesignDocument {
   };
 }
 
+const NATIVE_SPECIFIC_FIELDS = [
+  'L', 'r0', 'a', 'a0', 'k', 's', 'throat_adapter', 'axial_scale', 'terminating_arc', 'source_body',
+] as const satisfies readonly (keyof DesignDocument)[];
+
 const FAMILY_SPECIFIC_FIELDS = {
   OSSE: [
     'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h', 's1', 's2', 'throat_profile',
@@ -292,10 +337,10 @@ const FAMILY_SPECIFIC_FIELDS = {
     'length', 'profile_h', 'profile_v', 'cross_sections', 'inflection_policy',
     'corner_grids',
   ],
-} as const satisfies Record<DesignFamily, readonly (keyof DesignDocument)[]>;
+} as const satisfies Record<Exclude<DesignFamily, NativeFamily>, readonly (keyof DesignDocument)[]>;
 
 const ALL_FAMILY_SPECIFIC_FIELDS = new Set<keyof DesignDocument>(
-  Object.values(FAMILY_SPECIFIC_FIELDS).flat(),
+  [...Object.values(FAMILY_SPECIFIC_FIELDS).flat(), ...NATIVE_SPECIFIC_FIELDS],
 );
 
 interface CarriedScalar {
@@ -500,6 +545,15 @@ function pathBelongsToSharedState(path: string): boolean {
 /** Merge a family template with the current document's non-formula state. */
 export function mergeDesignForFamily(current: DesignDocument, family: DesignFamily): DesignDocument {
   if (current.formula === family) return structuredClone(current);
+  if (isNativeFamily(family) || isNativeFamily(current.formula)) {
+    // Native domains cannot inherit active legacy morphs, prefixes or shells.
+    const next = designForFamily(family);
+    next.simulation = { ...current.simulation, sim_type: 'freestanding' };
+    next.output = structuredClone(current.output);
+    next.extra_keys = structuredClone(current.extra_keys);
+    next.extra_blocks = structuredClone(current.extra_blocks);
+    return next;
+  }
 
   const compatible = compatibleFamilyValues(current);
   const shared: Partial<DesignDocument> = structuredClone(current);

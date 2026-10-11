@@ -358,6 +358,65 @@
         "title": "Attachment",
         "type": "object"
       },
+      "AuthoredThroatAdapter": {
+        "additionalProperties": false,
+        "properties": {
+          "body_handle_mm": {
+            "default": 15,
+            "exclusiveMinimum": 0.0,
+            "title": "Body Handle Mm",
+            "type": "number"
+          },
+          "contract_revision": {
+            "default": 1,
+            "maximum": 1.0,
+            "minimum": 1.0,
+            "title": "Contract Revision",
+            "type": "integer"
+          },
+          "driver_exit_diameter_mm": {
+            "default": 25.4,
+            "description": "Driver exit diameter in intrinsic mm",
+            "exclusiveMinimum": 0.0,
+            "title": "Driver Exit Diameter Mm",
+            "type": "number"
+          },
+          "driver_handle_mm": {
+            "default": 10,
+            "exclusiveMinimum": 0.0,
+            "title": "Driver Handle Mm",
+            "type": "number"
+          },
+          "exit_half_angle_deg": {
+            "default": 10,
+            "description": "Signed driver tangent angle in degrees",
+            "title": "Exit Half Angle Deg",
+            "type": "number"
+          },
+          "join_t": {
+            "default": 0.137,
+            "exclusiveMaximum": 1.0,
+            "minimum": 0.0,
+            "title": "Join T",
+            "type": "number"
+          },
+          "length_mm": {
+            "default": 40,
+            "description": "Adapter axial length in intrinsic mm",
+            "exclusiveMinimum": 0.0,
+            "title": "Length Mm",
+            "type": "number"
+          },
+          "mode": {
+            "const": "authored",
+            "default": "authored",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "AuthoredThroatAdapter",
+        "type": "object"
+      },
       "Body_choose_update_channel_api_updates_channel_put": {
         "properties": {
           "channel": {
@@ -2181,6 +2240,56 @@
         "title": "Contour",
         "type": "object"
       },
+      "ControlThroatAdapter": {
+        "additionalProperties": false,
+        "properties": {
+          "contract_revision": {
+            "default": 1,
+            "maximum": 1.0,
+            "minimum": 1.0,
+            "title": "Contract Revision",
+            "type": "integer"
+          },
+          "control_points_mm": {
+            "description": "Three independent join-local (Z, radius) cubic poles in intrinsic mm",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Control Points Mm",
+            "type": "array"
+          },
+          "join_t": {
+            "default": 0,
+            "maximum": 0.0,
+            "minimum": 0.0,
+            "title": "Join T",
+            "type": "number"
+          },
+          "mode": {
+            "const": "controls",
+            "default": "controls",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "control_points_mm"
+        ],
+        "title": "ControlThroatAdapter",
+        "type": "object"
+      },
       "CornerGrid": {
         "additionalProperties": false,
         "description": "Optional per-ring corner samples used by advanced FREEFORM payloads.",
@@ -2381,7 +2490,14 @@
             "FREEFORM": "#/components/schemas/FreeformConfig",
             "ICW": "#/components/schemas/ICWConfig",
             "OSSE": "#/components/schemas/OSSEConfig",
-            "R-OSSE": "#/components/schemas/ROSSEConfig"
+            "OSSE-ADAPTER": "#/components/schemas/NativeOSSEConfig",
+            "OSSE-ADAPTER-AXIAL": "#/components/schemas/NativeOSSEConfig",
+            "OSSE-ADAPTER-CONTROLS": "#/components/schemas/NativeOSSEConfig",
+            "OSSE-ARC": "#/components/schemas/NativeOSSEConfig",
+            "OSSE-AXIAL": "#/components/schemas/NativeOSSEConfig",
+            "OSSE-ROUNDOVER": "#/components/schemas/NativeOSSEConfig",
+            "R-OSSE": "#/components/schemas/ROSSEConfig",
+            "SOURCE-DISK": "#/components/schemas/SourceDiskConfig"
           },
           "propertyName": "formula"
         },
@@ -2397,6 +2513,12 @@
           },
           {
             "$ref": "#/components/schemas/FreeformConfig"
+          },
+          {
+            "$ref": "#/components/schemas/NativeOSSEConfig"
+          },
+          {
+            "$ref": "#/components/schemas/SourceDiskConfig"
           }
         ],
         "title": "DesignConfig"
@@ -6844,6 +6966,20 @@
               }
             ]
           },
+          "mouth_roundover_radius_mm": {
+            "anyOf": [
+              {
+                "maximum": 200.0,
+                "minimum": 0.2,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Finished mouth lip radius in mm; must exceed wall thickness by at least 0.1 mm",
+            "title": "Mouth Roundover Radius Mm"
+          },
           "quadrants": {
             "anyOf": [
               {
@@ -6874,6 +7010,20 @@
               }
             ],
             "title": "Sampling Mode"
+          },
+          "size_mm": {
+            "anyOf": [
+              {
+                "maximum": 50.0,
+                "minimum": 0.1,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SOURCE-DISK uniform finished-mm mesh target, capped at source radius / 8",
+            "title": "Size Mm"
           },
           "throat_resolution": {
             "anyOf": [
@@ -7141,6 +7291,241 @@
           "channel_order"
         ],
         "title": "MultiChannelResultEnvelope",
+        "type": "object"
+      },
+      "NativeOSSEConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "L": {
+            "default": 120,
+            "description": "Intrinsic OSSE body length in mm",
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "L",
+            "type": "number"
+          },
+          "a": {
+            "default": 40,
+            "description": "Body coverage half-angle in degrees",
+            "exclusiveMaximum": 80.0,
+            "minimum": 1.0,
+            "title": "A",
+            "type": "number"
+          },
+          "a0": {
+            "default": 15.5,
+            "description": "Body throat half-angle in degrees",
+            "exclusiveMaximum": 80.0,
+            "minimum": 0.0,
+            "title": "A0",
+            "type": "number"
+          },
+          "axial_scale": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 0.01,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absolute axial factor; scale controls X/Y",
+            "title": "Axial Scale"
+          },
+          "coverage_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Mode"
+          },
+          "enclosure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnclosureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extra_blocks": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ConfigBlock"
+            },
+            "title": "Extra Blocks",
+            "type": "object"
+          },
+          "extra_keys": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Extra Keys",
+            "type": "object"
+          },
+          "formula": {
+            "enum": [
+              "OSSE-ADAPTER",
+              "OSSE-ADAPTER-CONTROLS",
+              "OSSE-ADAPTER-AXIAL",
+              "OSSE-ROUNDOVER",
+              "OSSE-AXIAL",
+              "OSSE-ARC"
+            ],
+            "title": "Formula",
+            "type": "string"
+          },
+          "k": {
+            "default": 1,
+            "exclusiveMinimum": 0.0,
+            "maximum": 100.0,
+            "title": "K",
+            "type": "number"
+          },
+          "length_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "profile",
+                  "total"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length Mode"
+          },
+          "mesh": {
+            "$ref": "#/components/schemas/MeshConfig"
+          },
+          "morph": {
+            "$ref": "#/components/schemas/MorphConfig"
+          },
+          "output": {
+            "$ref": "#/components/schemas/OutputConfig"
+          },
+          "r0": {
+            "default": 12.7,
+            "description": "Intrinsic body throat radius in mm",
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "R0",
+            "type": "number"
+          },
+          "s": {
+            "default": 0,
+            "description": "Native bodies require zero termination",
+            "maximum": 0.0,
+            "minimum": 0.0,
+            "title": "S",
+            "type": "number"
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "simulation": {
+            "$ref": "#/components/schemas/SimulationConfig"
+          },
+          "slot_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceConfig"
+          },
+          "terminating_arc": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TerminatingArc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text_import_version": {
+            "anyOf": [
+              {
+                "const": "ath-2026-08c-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Import Version"
+          },
+          "throat_adapter": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "authored": "#/components/schemas/AuthoredThroatAdapter",
+                    "controls": "#/components/schemas/ControlThroatAdapter"
+                  },
+                  "propertyName": "mode"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/AuthoredThroatAdapter"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ControlThroatAdapter"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Throat Adapter"
+          },
+          "throat_ext_angle": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "throat_ext_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "formula"
+        ],
+        "title": "NativeOSSEConfig",
         "type": "object"
       },
       "OSSEConfig": {
@@ -7695,7 +8080,14 @@
                 "R-OSSE",
                 "OSSE",
                 "ICW",
-                "FREEFORM"
+                "FREEFORM",
+                "OSSE-ADAPTER",
+                "OSSE-ADAPTER-CONTROLS",
+                "OSSE-ADAPTER-AXIAL",
+                "OSSE-ROUNDOVER",
+                "OSSE-AXIAL",
+                "OSSE-ARC",
+                "SOURCE-DISK"
               ],
               "type": "string"
             },
@@ -7783,7 +8175,14 @@
                 "R-OSSE",
                 "OSSE",
                 "ICW",
-                "FREEFORM"
+                "FREEFORM",
+                "OSSE-ADAPTER",
+                "OSSE-ADAPTER-CONTROLS",
+                "OSSE-ADAPTER-AXIAL",
+                "OSSE-ROUNDOVER",
+                "OSSE-AXIAL",
+                "OSSE-ARC",
+                "SOURCE-DISK"
               ],
               "type": "string"
             },
@@ -9966,6 +10365,34 @@
         "title": "SolverSelectionRequest",
         "type": "object"
       },
+      "SourceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "depth_mm": {
+            "default": 8,
+            "maximum": 500.0,
+            "minimum": 0.1,
+            "title": "Depth Mm",
+            "type": "number"
+          },
+          "outer_radius_mm": {
+            "default": 22,
+            "maximum": 500.0,
+            "minimum": 0.2,
+            "title": "Outer Radius Mm",
+            "type": "number"
+          },
+          "radius_mm": {
+            "default": 18,
+            "maximum": 200.0,
+            "minimum": 0.1,
+            "title": "Radius Mm",
+            "type": "number"
+          }
+        },
+        "title": "SourceBody",
+        "type": "object"
+      },
       "SourceConfig": {
         "additionalProperties": false,
         "properties": {
@@ -10038,6 +10465,141 @@
           }
         },
         "title": "SourceConfig",
+        "type": "object"
+      },
+      "SourceDiskConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "coverage_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Mode"
+          },
+          "enclosure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnclosureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extra_blocks": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ConfigBlock"
+            },
+            "title": "Extra Blocks",
+            "type": "object"
+          },
+          "extra_keys": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Extra Keys",
+            "type": "object"
+          },
+          "formula": {
+            "const": "SOURCE-DISK",
+            "title": "Formula",
+            "type": "string"
+          },
+          "length_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "profile",
+                  "total"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length Mode"
+          },
+          "mesh": {
+            "$ref": "#/components/schemas/MeshConfig"
+          },
+          "morph": {
+            "$ref": "#/components/schemas/MorphConfig"
+          },
+          "output": {
+            "$ref": "#/components/schemas/OutputConfig"
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "simulation": {
+            "$ref": "#/components/schemas/SimulationConfig"
+          },
+          "slot_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceConfig"
+          },
+          "source_body": {
+            "$ref": "#/components/schemas/SourceBody"
+          },
+          "text_import_version": {
+            "anyOf": [
+              {
+                "const": "ath-2026-08c-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Import Version"
+          },
+          "throat_ext_angle": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "throat_ext_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "formula"
+        ],
+        "title": "SourceDiskConfig",
         "type": "object"
       },
       "SourceDocument": {
@@ -10124,6 +10686,34 @@
           "status"
         ],
         "title": "StopResponse",
+        "type": "object"
+      },
+      "TerminatingArc": {
+        "additionalProperties": false,
+        "properties": {
+          "contract_revision": {
+            "default": 1,
+            "maximum": 1.0,
+            "minimum": 1.0,
+            "title": "Contract Revision",
+            "type": "integer"
+          },
+          "end_tangent_deg": {
+            "default": 100,
+            "exclusiveMinimum": 0.0,
+            "maximum": 180.0,
+            "title": "End Tangent Deg",
+            "type": "number"
+          },
+          "join_t": {
+            "default": 0.05,
+            "exclusiveMinimum": 0.0,
+            "maximum": 1.0,
+            "title": "Join T",
+            "type": "number"
+          }
+        },
+        "title": "TerminatingArc",
         "type": "object"
       },
       "ValidationError": {

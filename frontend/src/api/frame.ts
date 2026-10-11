@@ -46,6 +46,8 @@ export interface FrameHeader {
       mouth_opening?: [number, number];
       horn_overall?: [number, number, number];
       enclosure_overall?: [number, number, number];
+      source_diameter?: [number, number];
+      body_overall?: [number, number, number];
     } | null;
     dimensions_status?: 'pending' | 'current' | 'unavailable';
     /** Requested morph targets before implicit sizing and no-shrink floors. */

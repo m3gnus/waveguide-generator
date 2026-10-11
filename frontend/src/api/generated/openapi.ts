@@ -2420,6 +2420,52 @@ export interface components {
              */
             kind: "baffle" | "horn";
         };
+        /** AuthoredThroatAdapter */
+        AuthoredThroatAdapter: {
+            /**
+             * Body Handle Mm
+             * @default 15
+             */
+            body_handle_mm?: number;
+            /**
+             * Contract Revision
+             * @default 1
+             */
+            contract_revision?: number;
+            /**
+             * Driver Exit Diameter Mm
+             * @description Driver exit diameter in intrinsic mm
+             * @default 25.4
+             */
+            driver_exit_diameter_mm?: number;
+            /**
+             * Driver Handle Mm
+             * @default 10
+             */
+            driver_handle_mm?: number;
+            /**
+             * Exit Half Angle Deg
+             * @description Signed driver tangent angle in degrees
+             * @default 10
+             */
+            exit_half_angle_deg?: number;
+            /**
+             * Join T
+             * @default 0.137
+             */
+            join_t?: number;
+            /**
+             * Length Mm
+             * @description Adapter axial length in intrinsic mm
+             * @default 40
+             */
+            length_mm?: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            mode: "authored";
+        };
         /** Body_choose_update_channel_api_updates_channel_put */
         Body_choose_update_channel_api_updates_channel_put: {
             /** Channel */
@@ -2929,6 +2975,32 @@ export interface components {
              */
             version?: number;
         };
+        /** ControlThroatAdapter */
+        ControlThroatAdapter: {
+            /**
+             * Contract Revision
+             * @default 1
+             */
+            contract_revision?: number;
+            /**
+             * Control Points Mm
+             * @description Three independent join-local (Z, radius) cubic poles in intrinsic mm
+             */
+            control_points_mm: [
+                number,
+                number
+            ][];
+            /**
+             * Join T
+             * @default 0
+             */
+            join_t?: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            mode: "controls";
+        };
         /**
          * CornerGrid
          * @description Optional per-ring corner samples used by advanced FREEFORM payloads.
@@ -3004,7 +3076,7 @@ export interface components {
          * DesignConfig
          * @description Root discriminated design union, serialized as a flat API object.
          */
-        DesignConfig: components["schemas"]["OSSEConfig"] | components["schemas"]["ROSSEConfig"] | components["schemas"]["ICWConfig"] | components["schemas"]["FreeformConfig"];
+        DesignConfig: components["schemas"]["OSSEConfig"] | components["schemas"]["ROSSEConfig"] | components["schemas"]["ICWConfig"] | components["schemas"]["FreeformConfig"] | components["schemas"]["NativeOSSEConfig"] | components["schemas"]["SourceDiskConfig"];
         /**
          * DesignSchemaDocument
          * @description Discoverable root of WG's generated JSON Schema document.
@@ -4372,10 +4444,20 @@ export interface components {
             max_edge?: components["schemas"]["Expr"] | null;
             max_triangles?: components["schemas"]["Expr"] | null;
             mouth_resolution?: components["schemas"]["Expr"] | null;
+            /**
+             * Mouth Roundover Radius Mm
+             * @description Finished mouth lip radius in mm; must exceed wall thickness by at least 0.1 mm
+             */
+            mouth_roundover_radius_mm?: number | null;
             quadrants?: components["schemas"]["Expr"] | null;
             rear_resolution?: components["schemas"]["Expr"] | null;
             /** Sampling Mode */
             sampling_mode?: string | null;
+            /**
+             * Size Mm
+             * @description SOURCE-DISK uniform finished-mm mesh target, capped at source radius / 8
+             */
+            size_mm?: number | null;
             throat_resolution?: components["schemas"]["Expr"] | null;
             throat_segments?: components["schemas"]["Expr"] | null;
             throat_slice_density?: components["schemas"]["Expr"] | null;
@@ -4451,6 +4533,81 @@ export interface components {
             result_kind: "multi_channel";
         } & {
             [key: string]: unknown;
+        };
+        /** NativeOSSEConfig */
+        NativeOSSEConfig: {
+            /**
+             * L
+             * @description Intrinsic OSSE body length in mm
+             * @default 120
+             */
+            L?: number;
+            /**
+             * A
+             * @description Body coverage half-angle in degrees
+             * @default 40
+             */
+            a?: number;
+            /**
+             * A0
+             * @description Body throat half-angle in degrees
+             * @default 15.5
+             */
+            a0?: number;
+            /**
+             * Axial Scale
+             * @description Absolute axial factor; scale controls X/Y
+             */
+            axial_scale?: number | null;
+            /** Coverage Mode */
+            coverage_mode?: string | null;
+            enclosure?: components["schemas"]["EnclosureConfig"] | null;
+            /** Extra Blocks */
+            extra_blocks?: {
+                [key: string]: components["schemas"]["ConfigBlock"];
+            };
+            /** Extra Keys */
+            extra_keys?: {
+                [key: string]: string;
+            };
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            formula: "OSSE-ADAPTER" | "OSSE-ADAPTER-AXIAL" | "OSSE-ADAPTER-CONTROLS" | "OSSE-ARC" | "OSSE-AXIAL" | "OSSE-ROUNDOVER";
+            /**
+             * K
+             * @default 1
+             */
+            k?: number;
+            /** Length Mode */
+            length_mode?: ("profile" | "total") | null;
+            mesh?: components["schemas"]["MeshConfig"];
+            morph?: components["schemas"]["MorphConfig"];
+            output?: components["schemas"]["OutputConfig"];
+            /**
+             * R0
+             * @description Intrinsic body throat radius in mm
+             * @default 12.7
+             */
+            r0?: number;
+            /**
+             * S
+             * @description Native bodies require zero termination
+             * @default 0
+             */
+            s?: number;
+            scale?: components["schemas"]["Expr"] | null;
+            simulation?: components["schemas"]["SimulationConfig"];
+            slot_length?: components["schemas"]["Expr"] | null;
+            source?: components["schemas"]["SourceConfig"];
+            terminating_arc?: components["schemas"]["TerminatingArc"] | null;
+            /** Text Import Version */
+            text_import_version?: "ath-2026-08c-v1" | null;
+            /** Throat Adapter */
+            throat_adapter?: (components["schemas"]["AuthoredThroatAdapter"] | components["schemas"]["ControlThroatAdapter"]) | null;
+            throat_ext_angle?: components["schemas"]["Expr"] | null;
+            throat_ext_length?: components["schemas"]["Expr"] | null;
         };
         /** OSSEConfig */
         OSSEConfig: {
@@ -4574,7 +4731,7 @@ export interface components {
              */
             catalog_version: 1;
             /** Design Families */
-            design_families: ("R-OSSE" | "OSSE" | "ICW" | "FREEFORM")[];
+            design_families: ("R-OSSE" | "OSSE" | "ICW" | "FREEFORM" | "OSSE-ADAPTER" | "OSSE-ADAPTER-CONTROLS" | "OSSE-ADAPTER-AXIAL" | "OSSE-ROUNDOVER" | "OSSE-AXIAL" | "OSSE-ARC" | "SOURCE-DISK")[];
             /** Parameters */
             parameters: components["schemas"]["ParameterDescriptor"][];
             /**
@@ -4599,7 +4756,7 @@ export interface components {
             disabled_when?: components["schemas"]["CatalogCondition"] | null;
             editor_bounds: components["schemas"]["CatalogEditorBounds"] | null;
             /** Families */
-            families: ("R-OSSE" | "OSSE" | "ICW" | "FREEFORM")[];
+            families: ("R-OSSE" | "OSSE" | "ICW" | "FREEFORM" | "OSSE-ADAPTER" | "OSSE-ADAPTER-CONTROLS" | "OSSE-ADAPTER-AXIAL" | "OSSE-ROUNDOVER" | "OSSE-AXIAL" | "OSSE-ARC" | "SOURCE-DISK")[];
             /** Id */
             id: string;
             /**
@@ -5350,6 +5507,24 @@ export interface components {
             /** Engine */
             engine: string;
         };
+        /** SourceBody */
+        SourceBody: {
+            /**
+             * Depth Mm
+             * @default 8
+             */
+            depth_mm?: number;
+            /**
+             * Outer Radius Mm
+             * @default 22
+             */
+            outer_radius_mm?: number;
+            /**
+             * Radius Mm
+             * @default 18
+             */
+            radius_mm?: number;
+        };
         /** SourceConfig */
         SourceConfig: {
             /** Contours */
@@ -5360,6 +5535,39 @@ export interface components {
             velocity?: components["schemas"]["Expr"] | null;
             /** Velocity Convention */
             velocity_convention?: ("normal" | "axial" | "legacy") | null;
+        };
+        /** SourceDiskConfig */
+        SourceDiskConfig: {
+            /** Coverage Mode */
+            coverage_mode?: string | null;
+            enclosure?: components["schemas"]["EnclosureConfig"] | null;
+            /** Extra Blocks */
+            extra_blocks?: {
+                [key: string]: components["schemas"]["ConfigBlock"];
+            };
+            /** Extra Keys */
+            extra_keys?: {
+                [key: string]: string;
+            };
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            formula: "SOURCE-DISK";
+            /** Length Mode */
+            length_mode?: ("profile" | "total") | null;
+            mesh?: components["schemas"]["MeshConfig"];
+            morph?: components["schemas"]["MorphConfig"];
+            output?: components["schemas"]["OutputConfig"];
+            scale?: components["schemas"]["Expr"] | null;
+            simulation?: components["schemas"]["SimulationConfig"];
+            slot_length?: components["schemas"]["Expr"] | null;
+            source?: components["schemas"]["SourceConfig"];
+            source_body?: components["schemas"]["SourceBody"];
+            /** Text Import Version */
+            text_import_version?: "ath-2026-08c-v1" | null;
+            throat_ext_angle?: components["schemas"]["Expr"] | null;
+            throat_ext_length?: components["schemas"]["Expr"] | null;
         };
         /** SourceDocument */
         SourceDocument: {
@@ -5393,6 +5601,24 @@ export interface components {
              * @enum {string}
              */
             status: "cancelled" | "cancelling";
+        };
+        /** TerminatingArc */
+        TerminatingArc: {
+            /**
+             * Contract Revision
+             * @default 1
+             */
+            contract_revision?: number;
+            /**
+             * End Tangent Deg
+             * @default 100
+             */
+            end_tangent_deg?: number;
+            /**
+             * Join T
+             * @default 0.05
+             */
+            join_t?: number;
         };
         /** ValidationError */
         ValidationError: {

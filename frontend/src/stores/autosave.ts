@@ -1,4 +1,4 @@
-import { useDesignStore, type DesignDocument } from './design';
+import { NATIVE_FAMILIES, useDesignStore, type DesignDocument } from './design';
 import { DESIGN_CONTENT_KEY_VERSION } from './designContentKey';
 import { durableSettings, namespaceStorage } from './durableSettings';
 import { designNameFromFilename } from './designName';
@@ -60,7 +60,7 @@ function isRecord(value: unknown): value is AutosaveRecord {
     && Number.isInteger(record.designRevision) && Number(record.designRevision) > 0
     && (record.savedRevision === null || (Number.isInteger(record.savedRevision) && Number(record.savedRevision) > 0))
     && Boolean(design)
-    && ['OSSE', 'R-OSSE', 'ICW', 'FREEFORM'].includes(String(design?.formula))
+    && ['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES].includes(String(design?.formula))
     && typeof design?.mesh === 'object'
     && typeof design?.simulation === 'object'
     && typeof design?.source === 'object';

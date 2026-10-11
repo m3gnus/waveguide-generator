@@ -619,6 +619,8 @@ class MeshConfig(StrictModel):
     aperture_resolution_scale: Expr | None = None
     max_triangles: Expr | None = None
     allow_large_mesh: Expr | None = None
+    mouth_roundover_radius_mm: Annotated[float, Field(strict=True, allow_inf_nan=False)] | None = Field(default=None, ge=0.2, le=200, exclude_if=lambda v: v is None, description="Finished mouth lip radius in mm; must exceed wall thickness by at least 0.1 mm")
+    size_mm: Annotated[float, Field(strict=True, allow_inf_nan=False)] | None = Field(default=None, ge=0.1, le=50, exclude_if=lambda v: v is None, description="SOURCE-DISK uniform finished-mm mesh target, capped at source radius / 8")
     # Optional post-build safety guard in millimetres. Regional resolution
     # controls remain authoritative; this rejects a mesh whose realized
     # longest triangle edge exceeds the configured ceiling.
@@ -928,9 +930,77 @@ class FreeformConfig(DesignCommon):
             )
         return self
 
+NativeNumber = Annotated[float, Field(strict=True, allow_inf_nan=False)]
+RevisionOne = Annotated[int, Field(strict=True, ge=1, le=1)]
+
+
+class AuthoredThroatAdapter(StrictModel):
+    mode: Literal["authored"] = "authored"
+    contract_revision: RevisionOne = 1
+    driver_exit_diameter_mm: NativeNumber = Field(default=25.4, gt=0, description="Driver exit diameter in intrinsic mm")
+    exit_half_angle_deg: NativeNumber = Field(default=10, description="Signed driver tangent angle in degrees")
+    length_mm: NativeNumber = Field(default=40, gt=0, description="Adapter axial length in intrinsic mm")
+    join_t: NativeNumber = Field(default=0.137, ge=0, lt=1)
+    driver_handle_mm: NativeNumber = Field(default=10, gt=0)
+    body_handle_mm: NativeNumber = Field(default=15, gt=0)
+
+
+class ControlThroatAdapter(StrictModel):
+    mode: Literal["controls"] = "controls"
+    contract_revision: RevisionOne = 1
+    join_t: NativeNumber = Field(default=0, ge=0, le=0)
+    control_points_mm: list[tuple[NativeNumber, NativeNumber]] = Field(
+        min_length=3, max_length=3, description="Three independent join-local (Z, radius) cubic poles in intrinsic mm"
+    )
+
+
+class TerminatingArc(StrictModel):
+    contract_revision: RevisionOne = 1
+    join_t: NativeNumber = Field(default=0.05, gt=0, le=1)
+    end_tangent_deg: NativeNumber = Field(default=100, gt=0, le=180)
+
+
+class SourceBody(StrictModel):
+    radius_mm: NativeNumber = Field(default=18, ge=0.1, le=200)
+    outer_radius_mm: NativeNumber = Field(default=22, ge=0.2, le=500)
+    depth_mm: NativeNumber = Field(default=8, ge=0.1, le=500)
+
+
+class NativeDesignCommon(DesignCommon):
+    @model_validator(mode="after")
+    def _native_contract(self) -> "NativeDesignCommon":
+        from .native import native_mesher_config
+        from hornlab_mesher.config_builder import build_geometry_params
+        from hornlab_mesher.config_parser import ConfigError
+
+        # The pinned authority checks coupled physical bounds and certified
+        # cubic validity as well as the scalar ranges advertised in OpenAPI.
+        try:
+            build_geometry_params(native_mesher_config(self))
+        except ConfigError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+
+class NativeOSSEConfig(NativeDesignCommon):
+    formula: Literal["OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL", "OSSE-ROUNDOVER", "OSSE-AXIAL", "OSSE-ARC"]
+    L: NativeNumber = Field(default=120, gt=0, le=10000, description="Intrinsic OSSE body length in mm")
+    r0: NativeNumber = Field(default=12.7, gt=0, le=10000, description="Intrinsic body throat radius in mm")
+    a: NativeNumber = Field(default=40, ge=1, lt=80, description="Body coverage half-angle in degrees")
+    a0: NativeNumber = Field(default=15.5, ge=0, lt=80, description="Body throat half-angle in degrees")
+    k: NativeNumber = Field(default=1, gt=0, le=100)
+    s: NativeNumber = Field(default=0, ge=0, le=0, description="Native bodies require zero termination")
+    throat_adapter: Annotated[AuthoredThroatAdapter | ControlThroatAdapter, Field(discriminator="mode")] | None = Field(default=None, exclude_if=lambda v: v is None)
+    axial_scale: NativeNumber | None = Field(default=None, ge=0.01, le=10, exclude_if=lambda v: v is None, description="Absolute axial factor; scale controls X/Y")
+    terminating_arc: TerminatingArc | None = Field(default=None, exclude_if=lambda v: v is None)
+
+
+class SourceDiskConfig(NativeDesignCommon):
+    formula: Literal["SOURCE-DISK"]
+    source_body: SourceBody = Field(default_factory=SourceBody)
 
 DesignVariant = Annotated[
-    OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig,
+    OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig | NativeOSSEConfig | SourceDiskConfig,
     Field(discriminator="formula"),
 ]
 

@@ -53,6 +53,10 @@ def effective_wall_thickness(root: Any) -> float:
     v2 imports keep the wall in unscaled millimetres, matching ATH output.
     """
 
+    from server.design.native import NATIVE_FORMULAS
+
+    if root.formula in NATIVE_FORMULAS:
+        return _structural_number(root.mesh.wall_thickness, "mesh.wall_thickness", 5 if root.formula == "OSSE-ROUNDOVER" else 0)
     default = 0.0 if root.simulation.sim_type == "infinite-baffle" else 5.0
     return _structural_number(root.mesh.wall_thickness, "mesh.wall_thickness", default)
 
@@ -132,7 +136,7 @@ def has_closed_outer_body(root: Any) -> bool:
     same wall/enclosure question as anything else, with its own 0 mm default.
     """
 
-    return enclosure_depth_of(root) > 0.0 or effective_wall_thickness(root) > 0.0
+    return root.formula == "SOURCE-DISK" or enclosure_depth_of(root) > 0.0 or effective_wall_thickness(root) > 0.0
 
 
 def _scale_factor(value: Expr | None) -> float:
@@ -323,6 +327,12 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
     if not isinstance(design, DesignConfig):
         raise TypeError("design must be a DesignConfig")
     root = design.root
+    from server.design.native import NATIVE_FORMULAS, native_mesher_config
+
+    if root.formula in NATIVE_FORMULAS:
+        return native_mesher_config(root)
+    if root.mesh.size_mm is not None or root.mesh.mouth_roundover_radius_mm is not None:
+        raise ValueError("Native mesh controls require their native formula marker")
     if root.source.contours is not None and root.source.contours.strip():
         raise ValueError("source.contours is not supported by the HornLab mesher preview")
 

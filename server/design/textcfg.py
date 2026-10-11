@@ -1477,6 +1477,33 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     version = next(iter(versions), None)
     if version is not None and version not in {*TEXT_IMPORT_VERSIONS, NATIVE_GEOMETRY_VERSION}:
         raise TextConfigError(f"unsupported geometry interpretation {version!r}")
+    native = blocks.get("WG.NativeDesign")
+    if native is not None:
+        from .native import NATIVE_FORMULAS
+
+        if dialect != "mwg" or version != NATIVE_GEOMETRY_VERSION:
+            raise TextConfigError("WG.NativeDesign requires a native WG design file")
+        if flat or set(blocks) - {"WG.NativeDesign", "CadLink", "Report", "WG.Solve"}:
+            raise TextConfigError("Native WG files cannot mix native and legacy geometry controls")
+        if set(native.items) != {"Payload"} or native.lines:
+            raise TextConfigError("WG.NativeDesign requires exactly one JSON Payload")
+        try:
+            payload = json.loads(native.items["Payload"])
+            if not isinstance(payload, dict) or payload.get("formula") not in NATIVE_FORMULAS:
+                raise ValueError("WG.NativeDesign requires a native formula")
+            for name in ("Report", "WG.Solve"):
+                if name in blocks:
+                    block = blocks[name]
+                    payload.setdefault("extra_blocks", {})[name] = ConfigBlock(
+                        items=block.items, lines=block.lines, comments=block.comments, entries=block.entries
+                    ).model_dump()
+            design = DesignConfig.model_validate(payload)
+        except (ValueError, TypeError) as exc:
+            raise TextConfigError(f"invalid native design: {exc}") from exc
+        return ParsedDesign(
+            design=design, dialect="mwg", comments=comments, source_text=text,
+            cadlink=cadlink, _initial_fingerprint=_semantic_fingerprint(design),
+        )
     geometry_dialect = "mwg" if version == NATIVE_GEOMETRY_VERSION else "ath" if version in TEXT_IMPORT_VERSIONS else dialect
     import_version = version if version in TEXT_IMPORT_VERSIONS else TEXT_IMPORT_VERSION if geometry_dialect == "ath" else None
     # Refuse only files that are ATH by their own text and carry no WG stamp. A WG-saved file that
@@ -1729,6 +1756,19 @@ def _serialize_canonical(
             lines.append(comment)
     if cadlink is not None:
         lines.extend(cadlink.block_lines())
+    from .native import NATIVE_FORMULAS
+
+    if config.formula in NATIVE_FORMULAS:
+        # JSON retains all native literal controls at full precision, including
+        # independent cubic pairs. Escape semicolons for the CFG comment lexer.
+        payload = config.model_dump(mode="json")
+        for name in ("Report", "WG.Solve"):
+            if name in payload["extra_blocks"]:
+                block = ConfigBlock.model_validate(payload["extra_blocks"].pop(name))
+                _emit_block(lines, name, block)
+        encoded = json.dumps(payload, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+        _block(lines, "WG.NativeDesign", [("Payload", encoded.replace(";", "\\u003b"))])
+        return "\n".join(lines) + "\n"
     # The design's name leads the file.
     #
     # ``Report`` is ATH's block and stays passthrough, but WG writes its

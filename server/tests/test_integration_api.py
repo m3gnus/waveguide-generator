@@ -18,7 +18,9 @@ def test_parameter_catalog_is_versioned_unique_and_declarative() -> None:
 
     assert catalog["schema_version"] == 1
     assert catalog["catalog_version"] == 1
-    assert catalog["design_families"] == ["R-OSSE", "OSSE", "ICW", "FREEFORM"]
+    assert catalog["design_families"] == ["R-OSSE", "OSSE", "ICW", "FREEFORM",
+        "OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL", "OSSE-ROUNDOVER",
+        "OSSE-AXIAL", "OSSE-ARC", "SOURCE-DISK"]
     ids = [field["id"] for field in catalog["parameters"]]
     assert len(ids) == len(set(ids))
     assert len(ids) >= 100
@@ -48,7 +50,9 @@ def test_design_schema_exposes_the_discriminated_families() -> None:
 
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["x-wg-schema-version"] == 1
-    assert all(family in encoded for family in ("R-OSSE", "OSSE", "ICW", "FREEFORM"))
+    from server.design.native import NATIVE_FORMULAS
+
+    assert all(family in encoded for family in {"R-OSSE", "OSSE", "ICW", "FREEFORM", *NATIVE_FORMULAS})
     assert response.headers["cache-control"] == "public, max-age=3600"
     assert response.media_type == "application/schema+json"
 
@@ -59,7 +63,9 @@ def test_design_schema_discriminator_excludes_an_invalid_design_family() -> None
     schema = json.loads(asyncio.run(design_schema()).body)
     discriminator = schema["discriminator"]
     assert discriminator["propertyName"] == "formula"
-    assert set(discriminator["mapping"]) == {"R-OSSE", "OSSE", "ICW", "FREEFORM"}
+    from server.design.native import NATIVE_FORMULAS
+
+    assert set(discriminator["mapping"]) == {"R-OSSE", "OSSE", "ICW", "FREEFORM", *NATIVE_FORMULAS}
 
     invalid_design = {"formula": "UNKNOWN"}
     matched_branches = []
@@ -67,7 +73,8 @@ def test_design_schema_discriminator_excludes_an_invalid_design_family() -> None
         definition_name = branch["$ref"].removeprefix("#/$defs/")
         definition = schema["$defs"][definition_name]
         assert "formula" in definition["required"]
-        expected_family = definition["properties"]["formula"]["const"]
-        if invalid_design["formula"] == expected_family:
+        selector = definition["properties"]["formula"]
+        expected_families = selector.get("enum", [selector.get("const")])
+        if invalid_design["formula"] in expected_families:
             matched_branches.append(definition_name)
     assert matched_branches == []

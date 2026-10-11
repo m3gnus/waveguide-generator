@@ -244,7 +244,9 @@ describe('frameToScene', () => {
     // would paint on the same face rather than a generic source material.
     expect(materialClassForSurface(surface('source_cap', 'cap', 'flat'))).toBe('hf-flat');
     expect(sourceRoleForSurface(surface('source_cap', 'cap', 'flat'))).toBe('HF');
-    for (const role of ['horn.inner', 'horn.outer', 'mouth_rim', 'wall.rear_cap']) {
+    expect(materialClassForSurface(surface('source_body.disk', 'disk', 'flat'))).toBe('hf-flat');
+    expect(sourceRoleForSurface(surface('source_body.disk', 'disk', 'flat'))).toBe('HF');
+    for (const role of ['horn.inner', 'horn.outer', 'mouth_rim', 'wall.rear_cap', 'source_body.annulus', 'source_body.side', 'source_body.rear']) {
       expect(materialClassForSurface(surface(role, role, 'smooth'))).toBe('horn-smooth');
       expect(sourceRoleForSurface(surface(role, role, 'smooth'))).toBeNull();
     }

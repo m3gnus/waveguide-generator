@@ -54,6 +54,17 @@ describe('live design dimensions', () => {
     render(); valid({ warnings: [] });
     expect(dimensions()).toBeNull();
   });
+  it('shows the standalone source and body dimensions without horn datums', () => {
+    act(() => useDesignStore.getState().setFamily('SOURCE-DISK'));
+    render();
+    const revision = useDesignStore.getState().designRevision;
+    publish({ frame: frame({ dimensions_mm: { source_diameter: [36, 36], body_overall: [44, 44, 8] } }, revision),
+      displayedRevision: revision, lastValidRevision: revision, stale: false });
+    expect(dimensions()?.textContent).toContain('Source disk36.0 × 36.0 mm');
+    expect(dimensions()?.textContent).toContain('Body overall44.0 × 44.0 × 8.0 mm');
+    expect(dimensions()?.textContent).not.toContain('Mouth opening');
+    expect(dimensions()?.textContent).not.toContain('Horn overall');
+  });
   it('displays the exact emitted W×H and W×H×D contract and preserves coarse/fine values', () => {
     render(); valid();
     expect(dimensions()?.textContent).toContain(expectedMouth);

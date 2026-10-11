@@ -1,4 +1,5 @@
 import {
+  NATIVE_FAMILIES,
   designForFamily,
   decodeQuadrants,
   serializeDesign,
@@ -237,7 +238,7 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
   const absent: string[] = [];
   const unwrapped = unwrapExpressions(wire, '', expressions, absent) as Record<string, unknown>;
   const formula = unwrapped.formula as DesignFamily;
-  if (!['OSSE', 'R-OSSE', 'ICW', 'FREEFORM'].includes(formula)) {
+  if (!['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES].includes(formula)) {
     throw new Error(`Unsupported design formula: ${String(unwrapped.formula)}`);
   }
   const document = merge(designForFamily(formula), unwrapped);

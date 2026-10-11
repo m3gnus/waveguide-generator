@@ -1,0 +1,2 @@
+export const NATIVE_FAMILIES = ['OSSE-ADAPTER', 'OSSE-ADAPTER-CONTROLS', 'OSSE-ADAPTER-AXIAL', 'OSSE-ROUNDOVER', 'OSSE-AXIAL', 'OSSE-ARC', 'SOURCE-DISK'] as const;
+export type NativeFamily = typeof NATIVE_FAMILIES[number];

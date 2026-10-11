@@ -2,10 +2,14 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
 import { currentDocumentLoad, useDesignStore } from '../stores/design';
 
-const readouts = [
+const hornReadouts = [
   ['mouth_opening', 'Mouth opening', 2],
   ['horn_overall', 'Horn overall', 3],
   ['enclosure_overall', 'Enclosure overall', 3],
+] as const;
+const sourceReadouts = [
+  ['source_diameter', 'Source disk', 2],
+  ['body_overall', 'Body overall', 3],
 ] as const;
 
 function formatted(value: unknown, count: number): string | null {
@@ -24,6 +28,7 @@ function formattedTarget(value: unknown): string | null {
 /** Read only the accepted frame; older meshers simply have no readouts. */
 export function LiveDimensions() {
   const revision = useDesignStore((state) => state.designRevision);
+  const formula = useDesignStore((state) => state.design.formula);
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   const host = useRef<HTMLElement>(null);
   const [invalidDraft, setInvalidDraft] = useState(false);
@@ -56,6 +61,7 @@ export function LiveDimensions() {
   const current = preview.displayedRevision === revision
     && frame?.header.designRevision === revision
     && !pending && !preview.stale && !preview.error && !invalidDraft;
+  const readouts = formula === 'SOURCE-DISK' ? sourceReadouts : hornReadouts;
   return <section ref={host} className="live-dimensions" aria-label="Design dimensions">
     <h3>Design size</h3>
     <p>W × H × D · {pending ? 'Updating dimensions' : dimensions ? current ? 'Current preview' : 'Last valid preview' : 'Dimensions unavailable'}</p>

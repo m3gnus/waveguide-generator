@@ -200,6 +200,10 @@ def _resolve_symmetry_uncached(design: DesignConfig | Mapping[str, Any]) -> Symm
         validated = (
             design if isinstance(design, DesignConfig) else DesignConfig.model_validate(design)
         )
+        from server.design.native import NATIVE_FORMULAS
+
+        if validated.formula in NATIVE_FORMULAS:
+            return _failed_resolution(f"{validated.formula} requires the full circular mesh domain")
         config = design_to_mesher_config(validated)
         mesh = dict(config.get("mesh") or {})
         mesh.update(

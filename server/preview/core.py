@@ -302,7 +302,10 @@ def _recentred_preview_config(design: DesignConfig) -> dict[str, Any]:
     """
 
     config = design_to_mesher_config(design)
-    config.setdefault("mesh", {})["verticalOffset"] = 0.0
+    from server.design.native import NATIVE_FORMULAS
+
+    key = "vertical_offset_mm" if design.formula in NATIVE_FORMULAS else "verticalOffset"
+    config.setdefault("mesh", {})[key] = 0.0
     return config
 
 

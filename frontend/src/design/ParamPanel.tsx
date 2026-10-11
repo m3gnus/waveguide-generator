@@ -26,7 +26,7 @@ import {
 } from '../stores/cadReturn';
 import { ChannelDriverPicker } from './DriverPicker';
 import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
-import { useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
+import { NATIVE_FAMILIES, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { namespaceStorage } from '../stores/durableSettings';
 import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -592,11 +592,15 @@ function SolveDomainControl({ design }: { design: DesignDocument }) {
     <div className="select-row">
       <label htmlFor="solve-symmetry">Solve domain</label>
       <select id="solve-symmetry" value={symmetry} onChange={(event) => setSymmetry(event.target.value as SymmetryMode)}>
-        {(Object.keys(symmetryModeLabels) as SymmetryMode[]).map((mode) => <option key={mode} value={mode} disabled={Boolean(limitation(mode))}>{symmetryModeLabels[mode]}{limitation(mode) ? ' · unsupported' : ''}</option>)}
+        {(Object.keys(symmetryModeLabels) as SymmetryMode[]).map((mode) => {
+          const nativeBlocked = isNativeFamily(design.formula) && mode !== 'auto' && mode !== 'full';
+          return <option key={mode} value={mode} disabled={nativeBlocked || Boolean(limitation(mode))}>{symmetryModeLabels[mode]}{!nativeBlocked && limitation(mode) ? ' · unsupported' : ''}</option>;
+        })}
       </select>
     </div>
     {(Object.keys(symmetryModeLabels) as SymmetryMode[]).filter((mode) => limitation(mode)).map((mode) => <small key={mode}>{limitation(mode)}</small>)}
     {symmetry === 'auto' && <AutoSymmetryReadout design={design} />}
+    {isNativeFamily(design.formula) && <small>This native formula requires the full circular mesh domain.</small>}
   </div>;
 }
 
@@ -1206,7 +1210,8 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     const fields = fieldsBySection.get(definition.title) ?? [];
     const showSolveDomain = definition.title === PARAMETRIC_CONTROLS.solveDomain.section
       && (!searching || matchingParametricSections.has(definition.title));
-    const hasCustomMode = (definition.title === 'Wall & Enclosure' && !searching) || showSolveDomain;
+    const showOuterBodyMode = definition.title === 'Wall & Enclosure' && !isNativeFamily(design.formula);
+    const hasCustomMode = (showOuterBodyMode && !searching) || showSolveDomain;
     if (fields.length === 0 && !hasCustomMode) return null;
     return <Section
       key={definition.title}
@@ -1214,7 +1219,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       description={definition.description}
       forceOpen={searching}
     >
-      {definition.title === 'Wall & Enclosure' && <WallEnclosureModeControl design={design} />}
+      {showOuterBodyMode && <WallEnclosureModeControl design={design} />}
       {/* Domain is an execution option, not a saved design parameter. Keeping
           it independent of mesh.quadrants prevents the round-trip-only ATH
           field from masquerading as a second solve/export control, while its
@@ -1240,6 +1245,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         else setFamily(family);
       }}>
         <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option>FREEFORM</option>
+        {NATIVE_FAMILIES.map((family) => <option key={family}>{family}</option>)}
       </select>
     </div>
     {conversionNotice && <div className="field-warning conversion-notice" role="status">

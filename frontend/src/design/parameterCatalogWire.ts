@@ -3,7 +3,7 @@ import {
   fieldAcceptsExpression,
   type ParameterDefinition,
 } from './parameterRegistry';
-import { designForFamily, type DesignDocument, type DesignFamily } from '../stores/design';
+import { NATIVE_FAMILIES, designForFamily, type DesignDocument, type DesignFamily } from '../stores/design';
 
 type Condition = {
   path?: string;
@@ -18,7 +18,7 @@ type FieldConditions = {
   disabled_reason?: string;
 };
 
-const ALL_FAMILIES = ['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'] as const;
+const ALL_FAMILIES = ['R-OSSE', 'OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES] as const;
 
 function valueAtPath(design: DesignDocument, path: string | undefined): unknown {
   if (!path) return undefined;

@@ -14,7 +14,7 @@ import { channelDriverPresent, channelDriverWire, driverEditedKeys, resetCadRetu
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetDriverLibraryStore, useDriverLibraryStore } from '../stores/driverLibrary';
 import { hydrateDesignDocument } from '../api/designIo';
-import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
+import { NATIVE_FAMILIES, designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { FusionParameterDrift, ParamPanel, RealizedDimensionsSection, channelHeadingText, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
@@ -218,6 +218,22 @@ describe('ParamPanel inventory UX', () => {
     });
     expect(xz.disabled).toBe(true);
     expect(host.textContent).toContain('No available engine in the automatic plan');
+  });
+
+  it.each(NATIVE_FAMILIES)('offers %s and its own Geometry controls', (family) => {
+    act(() => useDesignStore.getState().setFamily(family));
+    const picker = host.querySelector<HTMLSelectElement>('#family')!;
+    expect([...picker.options].map((option) => option.value)).toContain(family);
+    expect(picker.value).toBe(family);
+    expect(host.querySelector('[data-parameter-id^="native."] input')).not.toBeNull();
+    expect(host.querySelector('#outer-body-mode')).toBeNull();
+    expect(host.querySelector('[data-parameter-id="common.s1"]')).toBeNull();
+    if (family === 'OSSE-ADAPTER-CONTROLS') {
+      expect(host.querySelectorAll('[data-parameter-id^="native.controls."] input')).toHaveLength(6);
+    }
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    expect(host.querySelector<HTMLOptionElement>('#solve-symmetry option[value="quarter"]')!.disabled).toBe(true);
+    expect(host.querySelector<HTMLOptionElement>('#solve-symmetry option[value="full"]')!.disabled).toBe(false);
   });
 
   it('shows plain stretch controls for OSSE families and announces preview revisions on edits', () => {
