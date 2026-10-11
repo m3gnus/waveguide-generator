@@ -1291,3 +1291,54 @@ describe('combined output: band roles', () => {
     });
   });
 });
+
+describe('FEM exterior-only choice binding', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetSolveOptionsStore();
+    resetDocumentStore();
+    resetCadReturnStore();
+  });
+
+  it('resets an exterior-only choice when a later snapshot declares new FEM air', () => {
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    store.applyIngest(record(), store.beginIngestIntent());
+    store.setExteriorOnly(true);
+    expect(useCadReturnStore.getState().exteriorOnlyRegionIds).toEqual([]);
+    store.applyIngest({ ...record('new'), evidence: { fem_regions: [{ region_id: 'new-air' }] } }, store.beginIngestIntent());
+    expect(useCadReturnStore.getState().exteriorOnly).toBe(false);
+  });
+
+  it('preserves a choice only for the same excluded FEM set', () => {
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    const air = { ...record(), evidence: { fem_regions: [{ region_id: 'air' }] } };
+    store.applyIngest(air, store.beginIngestIntent());
+    store.setExteriorOnly(true);
+    store.applyIngest({ ...air, manifest_sha256: 'sha256:another' }, store.beginIngestIntent());
+    expect(useCadReturnStore.getState().exteriorOnly).toBe(true);
+    store.applyIngest({ ...air, evidence: { fem_regions: [{ region_id: 'air' }, { region_id: 'second' }] } }, store.beginIngestIntent());
+    expect(useCadReturnStore.getState().exteriorOnly).toBe(false);
+  });
+
+  it('retains existing exterior-only behavior on snapshots without regions', () => {
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    store.setExteriorOnly(true);
+    store.applyIngest(record(), store.beginIngestIntent());
+    expect(useCadReturnStore.getState().exteriorOnly).toBe(true);
+  });
+});
+
+it('recalls an explicit exterior-only run on its own FEM snapshot', () => {
+  resetCadReturnStore();
+  const store = useCadReturnStore.getState();
+  store.selectBundle(bundle);
+  const air = { ...record(), evidence: { fem_regions: [{ region_id: 'air' }] } };
+  store.restoreIngest(air, store.beginIngestIntent(), { exteriorOnly: true });
+  expect(useCadReturnStore.getState().exteriorOnly).toBe(true);
+  expect(useCadReturnStore.getState().exteriorOnlyRegionIds).toEqual(['air']);
+  store.applyIngest({ ...air, evidence: { fem_regions: [{ region_id: 'new' }] } }, store.beginIngestIntent());
+  expect(useCadReturnStore.getState().exteriorOnly).toBe(false);
+});

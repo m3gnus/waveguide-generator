@@ -173,3 +173,41 @@ def test_f7_open_box_radiates_the_pistons_monopole(worker, tmp_path, monkeypatch
     assert far == pytest.approx([monopole, monopole], rel=0.05)
     inside = np.abs(results[(100.0, "p")].ravel())
     assert 1.0 < inside.max() < 100.0
+
+
+def test_f8_managed_cpu_bridge_maps_f7_fields(worker, tmp_path, monkeypatch):
+    """Opt-in broker qualification of the managed F8 request/event route."""
+    from types import SimpleNamespace
+    from server.mesh.fem_coupling import read_coupled_exterior
+    from server.solver.beat_adapter.coupled_request import build_coupled_request
+    from server.solver.beat_adapter.observations import build_observations
+    from server.solver.beat_adapter.results import acceleration_scale
+    from server.solver.beat_runtime.manager import ManagedWorker
+    from server.solver.official_beat import solve_coupled_compiled
+    from server.tests.test_fem_coupling import _coupled, _coupling_bundle, _system
+
+    if not isinstance(worker, ManagedWorker):
+        pytest.skip("F8 managed bridge qualification requires a WG-provisioned CPU runtime")
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    bundle, manifest, region = _coupling_bundle(tmp_path / "returns")
+    built = _coupled(bundle, manifest, region)
+    _system(built, region)
+    surface = built["exterior"]
+    points, groups = read_coupled_exterior(surface["msh_text"])
+    exterior = ExteriorSurface(points, groups, surface["physical_names"])
+    domain = read_fem_region_domain(built["regions"][region["region_id"]]["msh_text"], region["region_id"])
+    layout = build_observations(angle_range=(0., 90., 2), planes=("horizontal",),
+                                origin_m=(.02, .015, .01), sphere_grid=None, precision="float64")
+    request = build_coupled_request(exterior, [FemRegionInput(region, domain)], layout=layout,
+        frequencies_hz=[100.], frame={"origin": [.02, .015, .01], "axis": [0., 0., 1.],
+                                     "u": [1., 0., 0.], "v": [0., 1., 0.]})
+    progress = []
+    sweep = solve_coupled_compiled(request, worker_manager=SimpleNamespace(get_worker=lambda *a, **k: worker),
+                                   progress_callback=lambda *args: progress.append(args))
+    assert progress == [(0, 1, 100.)] and not sweep.cancelled
+    response = sweep.channels["drive-LF"]
+    monopole = RHO * AREA_M2 / (4 * math.pi * 2.)
+    assert np.abs(response.pressure_complex[0, 0]) == pytest.approx([monopole, monopole], rel=.05)
+    velocity_pressure = np.abs(sweep.nodal_pressure / acceleration_scale(100.))
+    assert 1. < velocity_pressure.max() < 100.

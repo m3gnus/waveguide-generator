@@ -173,6 +173,7 @@ interface CadReturnState {
   areaDriftOverrides: string[];
   areaDriftSourceIds: string[];
   exteriorOnly: boolean;
+  exteriorOnlyRegionIds: string[] | null;
   /** The user's explicit choice for the combined output, or null while they
    * have made none. Null is not "off": `combineEnabledEffective` reads it as
    * on for a multi-driver return, which is what the rail and the wire use. */
@@ -302,7 +303,7 @@ const MAX_SOLVE_PROFILES = 20;
 
 type PersistedSolveSettings = Pick<CadReturnState,
   'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds' | 'driveChannels'
-  | 'exteriorOnly' | 'combineEnabled' | 'combineSpec'
+  | 'exteriorOnly' | 'exteriorOnlyRegionIds' | 'combineEnabled' | 'combineSpec'
   | 'channelDrivers' | 'passiveCardioid' | 'driveVoltageV' | 'maxDriveVoltageV'
   | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
 
@@ -616,6 +617,7 @@ function parseSolveSettings(
     skippedSourceIds,
     driveChannels,
     exteriorOnly: value.exteriorOnly,
+    exteriorOnlyRegionIds: stringArray(value.exteriorOnlyRegionIds) ?? null,
     combineEnabled: value.combineEnabled,
     channelDrivers,
     passiveCardioid,
@@ -777,6 +779,7 @@ function persistedSolveSettings(state: CadReturnState): PersistedSolveSettings {
     skippedSourceIds: [...state.skippedSourceIds],
     driveChannels: state.driveChannels.map((channel) => ({ ...channel, source_ids: [...channel.source_ids] })),
     exteriorOnly: state.exteriorOnly,
+    exteriorOnlyRegionIds: state.exteriorOnlyRegionIds,
     combineEnabled: state.combineEnabled,
     combineSpec: state.combineSpec ? cloneSpec(state.combineSpec) : null,
     channelDrivers: Object.fromEntries(Object.entries(state.channelDrivers).map(([channelId, form]) => [
@@ -872,6 +875,22 @@ function supersedeSelectionIntent(): number {
   modelChoiceGeneration += 1;
   selectionIntentGeneration += 1;
   return selectionIntentGeneration;
+}
+
+function femRegionIds(record: CadReturnIngestRecord | null): string[] {
+  const regions = record?.evidence?.fem_regions ?? record?.fem_regions ?? [];
+  return regions.flatMap(region => typeof region === 'object' && region !== null
+    && 'region_id' in region && typeof region.region_id === 'string' ? [region.region_id] : []).sort();
+}
+
+function currentExteriorChoice(
+  choice: Pick<CadReturnState, 'exteriorOnly' | 'exteriorOnlyRegionIds'>,
+  record: CadReturnIngestRecord,
+) {
+  const ids = femRegionIds(record);
+  return ids.length && JSON.stringify(choice.exteriorOnlyRegionIds) !== JSON.stringify(ids)
+    ? { exteriorOnly: false, exteriorOnlyRegionIds: null }
+    : {};
 }
 
 function reconcileListing(state: CadReturnState, selectedBundle: CadReturnBundle) {
@@ -990,6 +1009,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   ...initialFromBundle(null),
   areaDriftSourceIds: [],
   exteriorOnly: DEFAULT_EXTERIOR_ONLY,
+  exteriorOnlyRegionIds: null,
   combineEnabled: null,
   combineSpec: null,
   channelDrivers: {},
@@ -1023,6 +1043,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       projectLineageId: project,
       ...initialFromBundle(selectedBundle),
       exteriorOnly: DEFAULT_EXTERIOR_ONLY,
+      exteriorOnlyRegionIds: null,
       combineEnabled: null,
       combineSpec: null,
       channelDrivers: {},
@@ -1056,6 +1077,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
         projectLineageId: project,
         ...initialFromBundle(bundle),
         exteriorOnly: DEFAULT_EXTERIOR_ONLY,
+        exteriorOnlyRegionIds: null,
         combineEnabled: null,
         combineSpec: null,
         channelDrivers: {},
@@ -1133,7 +1155,13 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   },
   restoreIngest: (ingestRecord, generation, restored) => {
     if (generation !== ingestIntentGeneration) return false;
-    set({ ...restored, ingestRecord });
+    // A recalled run states its own explicit exclusion on this exact snapshot.
+    const choice = { ...get(), ...restored,
+      ...(restored.exteriorOnly === true && restored.exteriorOnlyRegionIds === undefined
+        ? { exteriorOnlyRegionIds: femRegionIds(ingestRecord) } : {}),
+    };
+    set({ ...restored, exteriorOnlyRegionIds: choice.exteriorOnlyRegionIds,
+      ingestRecord, ...currentExteriorChoice(choice, ingestRecord) });
     return true;
   },
   applyIngest: (ingestRecord, generation) => {
@@ -1169,6 +1197,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
         channelDrivers: driversForChannels(adopted.channelDrivers, channels),
       } : {}),
       ingestRecord,
+      ...currentExteriorChoice(adopted ?? current, ingestRecord),
       projectLineageId: project,
       sourceSizesMm: { ...ingestRecord.mesh_sizes.source_size_mm },
       rigidSizeMm: ingestRecord.mesh_sizes.rigid_size_mm,
@@ -1279,7 +1308,10 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
     }));
   },
   flagAreaDrift: (sourceId) => set((state) => ({ areaDriftSourceIds: [...new Set([...state.areaDriftSourceIds, sourceId])] })),
-  setExteriorOnly: (exteriorOnly) => { set({ exteriorOnly }); saveSolveProfile(get()); },
+  setExteriorOnly: (exteriorOnly) => {
+    set({ exteriorOnly, exteriorOnlyRegionIds: exteriorOnly ? femRegionIds(get().ingestRecord) : null });
+    saveSolveProfile(get());
+  },
   setCombineEnabled: (combineEnabled) => { set({ combineEnabled }); saveSolveProfile(get()); },
   setCombineSpec: (combineSpec) => { set({ combineSpec }); saveSolveProfile(get()); },
   updateCombineSpec: (edit) => {
@@ -1945,6 +1977,7 @@ export function resetCadReturnStore(): void {
     ...initialFromBundle(null),
     areaDriftSourceIds: [],
     exteriorOnly: DEFAULT_EXTERIOR_ONLY,
+    exteriorOnlyRegionIds: null,
     combineEnabled: null,
     combineSpec: null,
     channelDrivers: {},

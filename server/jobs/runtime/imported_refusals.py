@@ -176,13 +176,16 @@ _IMPORTED_DOMAIN_LABELS = {
 
 #: Imported features a request can use, as a refusal names them.
 _IMPORTED_FEATURE_LABELS = {"passive-cardioid": "the passive-cardioid radiation campaign",
-                            "exterior-transducers": "coupled exterior transducers"}
+                            "exterior-transducers": "coupled exterior transducers",
+                            "fem-regions": "coupled FEM regions (official CPU float64)"}
 
 
-def _imported_features_needed(geometry: ImportedGeometrySource) -> set[str]:
+def _imported_features_needed(geometry: ImportedGeometrySource, record=None) -> set[str]:
     features = {"passive-cardioid"} if geometry.passive_cardioid_enabled else set()
     if any(channel.exterior_transducer is not None for channel in geometry.drive_channels):
         features.add("exterior-transducers")
+    if record and record.get("fem_regions") and not geometry.exterior_only:
+        features.add("fem-regions")
     return features
 
 
@@ -308,6 +311,38 @@ def _imported_request_refusal(
 ) -> tuple[str, str] | None:
     """A refusal no engine can lift: the request asks what imported geometry never does."""
 
+    if not request.geometry.drive_channels and not (
+            record and not request.geometry.exterior_only
+            and any(g.get("kind") == "moving" for r in record.get("fem_regions", ())
+                    for g in r.get("surface_groups", ()))):
+        return "drive_source_coverage", "The return has no driven exterior source or FEM diaphragm"
+    if record and record.get("fem_regions") and not request.geometry.exterior_only:
+        from server.cadlink.build_flags import fem_regions_enabled
+        from server.solver.beat_runtime.provider import official_selected
+
+        if not fem_regions_enabled():
+            return "fem_required", "FEM regions are disabled; enable WG2_FEM_REGIONS"
+        if not official_selected():
+            return "fem_provider_unsupported", "FEM regions require the official BEAT provider"
+        if imported_domain_planes(record) or request.options.symmetry not in {"auto", "full"}:
+            return "fem_domain_unsupported", "FEM regions require a full domain"
+        if request.options.ground_plane.enabled or record.get("infinite_baffle"):
+            return "fem_domain_unsupported", "FEM regions require free space without a ground plane"
+        moving = {g.get("drive_channel_id") for r in record["fem_regions"]
+                  for g in r.get("surface_groups", ()) if g.get("kind") == "moving"}
+        for channel in request.geometry.drive_channels:
+            if channel.exterior_transducer is not None:
+                if channel.id in moving:
+                    return "fem_transducer_unsupported", (
+                        f"FEM diaphragm channel {channel.id!r} also carries an exterior_transducer; "
+                        "electrodynamic FEM diaphragms await F10")
+                return "fem_transducer_unsupported", (
+                    "The contract-2 FEM route supports ideal velocity drives only; "
+                    f"channel {channel.id!r} carries an exterior_transducer")
+            if channel.motion != "normal" or channel.driver is not None or channel.patch_weights is not None:
+                return "fem_drive_unsupported", "FEM regions currently require ideal normal-velocity drives"
+        if request.geometry.passive_cardioid_enabled:
+            return "fem_drive_unsupported", "FEM regions do not yet support passive-cardioid synthesis"
     mismatch = _imported_decision_refusal(record)
     if mismatch is not None:
         return mismatch

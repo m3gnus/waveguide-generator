@@ -12,8 +12,8 @@ developers opt in explicitly (see ``docs/DEVELOPMENT.md``). Any other value,
 including unset, means off.
 
 Declared FEM regions are also development-only (``WG2_FEM_REGIONS=1``).
-That flag gates the WGLink capability, bundle reader and isolated mesh task;
-the frontend and coupled solver routes remain parked pending their own slices.
+That flag gates the WGLink capability, bundle reader, isolated mesh tasks and
+the official CPU coupled solver route. The frontend field mount belongs to F9.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ FEM_REGIONS_ENV = "WG2_FEM_REGIONS"
 
 
 def fem_regions_enabled(*, environ: Mapping[str, str] | None = None) -> bool:
-    """Opt in to declared FEM region intake; solver and UI routes remain parked."""
+    """Opt in to declared FEM region intake and the official CPU coupled route."""
 
     env = os.environ if environ is None else environ
     return env.get(FEM_REGIONS_ENV, "").strip() == "1"

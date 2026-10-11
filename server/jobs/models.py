@@ -828,7 +828,7 @@ class ImportedGeometrySource(JobModel):
     ingest_id: str
     manifest_sha256: str
     artifact_sha256: str
-    drive_channels: list[DriveChannel] = Field(min_length=1)
+    drive_channels: list[DriveChannel]
     combine: ChannelCombineSpec | None = None
     drive_voltage_v: float = Field(default=2.83, gt=0, allow_inf_nan=False)
     rg_ohm: float = Field(default=0.0, ge=0, allow_inf_nan=False)

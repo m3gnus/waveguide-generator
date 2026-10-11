@@ -1346,6 +1346,8 @@ def _prepare_sync(
                 f"{record.get('report_sha256')}:{finding}" for finding in blocking
             ],
             client_request_id=submission_key(operation_id),
+            fem_region_ids=[r["region_id"] for r in
+                            (retained_manifest.get("scope") or {}).get("fem_regions", ())],
         )
         # Never narrower than the ingestion derived: the runtime refuses that.
         solve_request = widen_polar_to_derivation(solve_request, record.get("polar_grid_derivation"))

@@ -5509,7 +5509,6 @@
             "items": {
               "$ref": "#/components/schemas/DriveChannel"
             },
-            "minItems": 1,
             "title": "Drive Channels",
             "type": "array"
           },

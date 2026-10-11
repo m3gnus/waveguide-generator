@@ -1157,6 +1157,8 @@ class JobStore:
             for job_id in ids:
                 conn.execute("DELETE FROM simulation_jobs WHERE id = ?", (job_id,))
                 events.append(self._append_event(conn, job_id, "deleted", {}))
+        for job_id in ids:
+            self.delete_fem_field(job_id)
         self._delete_job_logs(ids)
         return ids, events
 
@@ -2355,6 +2357,57 @@ class JobStore:
             )
             return bool(deleted)
 
+    def _fem_field_path(self, job_id: str) -> Path:
+        return field_trace_artifact_dir(job_id, artifact_root=self.field_traces_dir) / "fem-field.npz"
+
+    def store_fem_field(self, job_id: str, payload: bytes) -> bool:
+        """Publish a lossless file sidecar; advertise it in existing task metadata."""
+        with self._lock, self._transaction() as conn:
+            if not self._job_exists(conn, job_id):
+                return False
+            path = self._fem_field_path(job_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, name = tempfile.mkstemp(prefix=".fem-", dir=path.parent)
+            try:
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(name, path)
+                conn.execute(
+                    """UPDATE simulation_jobs SET task_metadata_json = json_set(
+                       COALESCE(task_metadata_json, '{}'),
+                       '$.has_fem_field_artifact', json('true'), '$.fem_field_artifact_bytes', ?),
+                       updated_at = ? WHERE id = ?""", (len(payload), _now_iso(), job_id))
+            except BaseException:
+                path.unlink(missing_ok=True)
+                raise
+            finally:
+                Path(name).unlink(missing_ok=True)
+        return True
+
+    def get_fem_field(self, job_id: str) -> bytes | None:
+        with self._lock:
+            row = self.get_job_row(job_id)
+            if row is None or not row["task_metadata"].get("has_fem_field_artifact"):
+                return None
+            try:
+                return self._fem_field_path(job_id).read_bytes()
+            except FileNotFoundError:
+                return None
+
+    def delete_fem_field(self, job_id: str) -> bool:
+        with self._lock, self._transaction() as conn:
+            path = self._fem_field_path(job_id)
+            existed = path.exists()
+            conn.execute(
+                """UPDATE simulation_jobs SET task_metadata_json = json_set(
+                   COALESCE(task_metadata_json, '{}'),
+                   '$.has_fem_field_artifact', json('false'), '$.fem_field_artifact_bytes', json('null')),
+                   updated_at = ? WHERE id = ?""", (_now_iso(), job_id))
+            _unlink_or_log(path)
+        return existed
+
     def store_radiation_impedance(self, job_id: str, matrix_npz: bytes) -> None:
         with self._lock, self._transaction() as conn:
             if not self._job_exists(conn, job_id):
@@ -2551,6 +2604,7 @@ class JobStore:
             event = self._append_event(conn, job_id, "deleted", {})
         for row in trace_rows:
             self._remove_field_trace_path(job_id, self._field_trace_path(str(row["path"])))
+        self.delete_fem_field(job_id)
         self._delete_job_logs([job_id])
         return True, event
 
@@ -2590,6 +2644,8 @@ class JobStore:
             self._remove_field_trace_path(
                 str(row["job_id"]), self._field_trace_path(str(row["path"]))
             )
+        for job_id in ids:
+            self.delete_fem_field(job_id)
         self._delete_job_logs(ids)
         return ids, events
 
@@ -2765,6 +2821,8 @@ class JobStore:
                     f"""UPDATE simulation_jobs
                         SET task_metadata_json = json_set(
                               COALESCE(task_metadata_json, '{{}}'),
+                              '$.has_fem_field_artifact', json('false'),
+                              '$.fem_field_artifact_bytes', json('null'),
                               '$.has_pressure_basis_artifact', json('false'),
                               '$.pressure_basis_artifact_bytes', json('null'),
                               '$.has_radiation_impedance_artifact', json('false'),
@@ -2867,6 +2925,8 @@ class JobStore:
             self._remove_field_trace_path(
                 str(row["job_id"]), self._field_trace_path(str(row["path"]))
             )
+        for job_id in running_ids:
+            _unlink_or_log(self._fem_field_path(job_id))
         return queued_jobs, recovery_events
 
     def prune_terminal_jobs(
@@ -3055,6 +3115,19 @@ class JobStore:
                     ]
                 )
             )
+            removed_set = set(removed_ids)
+            fem_ids = [str(row["id"]) for row in conn.execute(
+                """SELECT id, status, has_results FROM simulation_jobs
+                   WHERE json_extract(task_metadata_json, '$.has_fem_field_artifact') = 1
+                     AND status IN ('complete', 'error', 'cancelled')""").fetchall()
+                if str(row["id"]) in removed_set or row["status"] in {"error", "cancelled"}
+                or not row["has_results"]]
+            for job_id in fem_ids:
+                conn.execute(
+                    """UPDATE simulation_jobs SET task_metadata_json = json_set(
+                       COALESCE(task_metadata_json, '{}'),
+                       '$.has_fem_field_artifact', json('false'), '$.fem_field_artifact_bytes', json('null'))
+                       WHERE id = ?""", (job_id,))
             trace_rows = conn.execute(
                 """SELECT simulation_field_traces.job_id,
                           simulation_field_traces.path,
@@ -3180,6 +3253,7 @@ class JobStore:
                         *removed_ids,
                         *channel_base_ids,
                         *radiation_ids,
+                        *fem_ids,
                         *trace_ids,
                         *mesh_ids,
                     ]
@@ -3204,6 +3278,7 @@ class JobStore:
                                     if job_id in radiation_ids
                                     else {}
                                 ),
+                                **({"has_fem_field_artifact": False} if job_id in fem_ids else {}),
                                 **(
                                     {
                                         "field_plane_available": False,
@@ -3228,6 +3303,8 @@ class JobStore:
             self._remove_field_trace_path(
                 str(row["job_id"]), self._field_trace_path(str(row["path"]))
             )
+        for job_id in fem_ids:
+            _unlink_or_log(self._fem_field_path(job_id))
         if deleted_results != len(removed_ids):  # pragma: no cover - SQLite rowcount invariant
             logger.warning(
                 "Retention selected %d result ids but SQLite reported %d deletions",

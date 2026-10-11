@@ -115,12 +115,14 @@ def solve_compiled(
     on_frequency_result: Callable[[int, float, dict[str, Any]], bool | None] | None = None,
     status_callback: Callable[[str], None] | None = None,
     _profile: SweepProfile | None = None,
+    _coupled: bool = False,
 ) -> SweepResult:
     """Negotiate and map one acquired batch, retaining the manager for reuse."""
     options = request.wire["solver_options"]
     if options.get("bem_backend") not in {"cpu", "metal", "cuda", "rocm"}:
         raise UnsupportedBackend("BEAT runtime supports CPU, Metal, CUDA and ROCm")
-    validate_exterior_physics(request.wire)
+    if not _coupled:
+        validate_exterior_physics(request.wire)
     profile = _profile or start_profile(logging.getLogger(__name__).info, "wg")
     if profile is not None and _profile is None:
         # Direct compiled callers have already selected their runtime.
@@ -178,27 +180,35 @@ def solve_compiled(
             finally:
                 events.close()
 
-        selected = channel_id if channel_callbacks is None else next(iter(channel_callbacks))
-        loading = request.channel_loading[selected]
-        native = map_sweep(
-            reported_events(), wire["frequencies_hz"], layout=request.layout,
-            source_area_m2=loading.area_m2,
-            excitation_port_id=request.channel_ports[selected][0],
-            symmetry=options["symmetry"], precision=options["precision"],
-            backend=options["bem_backend"], boundary_loading=loading,
-            trace_counts=(len(request.mesh.points_m), len(request.mesh.faces))
-            if request.surface_traces else None,
-            compiled_request=request, channel_id=channel_id, _channel_callbacks=channel_callbacks,
-            progress_callback=progress_callback, on_frequency_result=on_frequency_result,
-            request_cancel=session.request_cancel,
-        )
+        if _coupled:
+            from .beat_adapter.results import map_coupled_sweep
+
+            native = map_coupled_sweep(
+                reported_events(), request, progress_callback=progress_callback,
+                on_frequency_result=on_frequency_result, request_cancel=session.request_cancel)
+        else:
+            selected = channel_id if channel_callbacks is None else next(iter(channel_callbacks))
+            loading = request.channel_loading[selected]
+            native = map_sweep(
+                reported_events(), wire["frequencies_hz"], layout=request.layout,
+                source_area_m2=loading.area_m2,
+                excitation_port_id=request.channel_ports[selected][0],
+                symmetry=options["symmetry"], precision=options["precision"],
+                backend=options["bem_backend"], boundary_loading=loading,
+                trace_counts=(len(request.mesh.points_m), len(request.mesh.faces))
+                if request.surface_traces else None,
+                compiled_request=request, channel_id=channel_id, _channel_callbacks=channel_callbacks,
+                progress_callback=progress_callback, on_frequency_result=on_frequency_result,
+                request_cancel=session.request_cancel,
+            )
         if profile is not None:
             profile.mark("mapped")
         session.close()
         if profile is not None:
             profile.mark("closed")
         session.raise_callback_error()
-        first = next(iter(native.values())) if channel_callbacks is not None else native
+        first = (next(iter(native.channels.values())) if _coupled else
+                 next(iter(native.values())) if channel_callbacks is not None else native)
         if first.cancelled and not len(first.frequencies_hz):
             raise OfficialBeatUnavailable("BEAT solve cancelled before any results")
         return native
@@ -291,3 +301,23 @@ def solve_transducer_compiled(
         if result.cancelled and not result.rows:
             raise OfficialBeatUnavailable("BEAT solve cancelled before any results")
         return result
+
+
+def solve_coupled_compiled(request, **callbacks):
+    """CPU float64 FEM route using the production session, progress and cancel marker."""
+    import os
+    from .beat_adapter.coupled_request import CoupledRequest
+    from .beat_runtime.provider import official_selected
+
+    if not isinstance(request, CoupledRequest):
+        raise TypeError("Expected a CoupledRequest")
+    if os.environ.get("WG2_FEM_REGIONS", "").strip() != "1":
+        raise ValueError("FEM regions are disabled; enable WG2_FEM_REGIONS")
+    if not official_selected():
+        raise ValueError("FEM regions require the official BEAT provider")
+    options = request.wire["solver_options"]
+    if options.get("bem_backend") != "cpu" or options.get("precision") != "float64":
+        raise ValueError("FEM regions require CPU float64")
+    if options.get("symmetry") != "off":
+        raise ValueError("FEM regions require a full domain without a ground plane")
+    return solve_compiled(request, _coupled=True, **callbacks)

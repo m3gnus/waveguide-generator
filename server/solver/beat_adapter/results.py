@@ -11,7 +11,7 @@ from typing import Mapping, TYPE_CHECKING, Any
 
 import numpy as np
 
-from server.contracts.conventions import SOLVER_TIME_CONVENTION
+from server.contracts.conventions import PHASE_TIME_CONVENTION, SOLVER_TIME_CONVENTION
 from .driver_loading import BoundaryLoading
 from .observations import ObservationLayout
 
@@ -433,3 +433,170 @@ def map_sweep(
         close = getattr(events, "close", None) or getattr(stream, "close", None)
         if close is not None:
             close()
+
+
+@dataclass
+class CoupledSweep:
+    channels: dict[str, SweepResult]
+    nodal_pressure: np.ndarray  # frequency, channel, concatenated FEM node; Pa per m/s²
+    cancelled: bool
+
+
+def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_result=None,
+                      request_cancel=None) -> CoupledSweep:
+    """Validate contract-2 identities and node ordering before retaining any row."""
+    frequencies = request.wire["frequencies_hz"]
+    ports = request.wire["excitation_port_ids"]
+    outputs = request.wire["outputs"]
+    domains = request.regions
+    counts = [len(item.domain.points_mm) for item in domains]
+    metadata = {"mesh_ids": [f"mesh:fem:{item.domain.region_id}" for item in domains],
+                "region_ids": [f"region:fem:{item.domain.region_id}" for item in domains],
+                "node_counts": counts, "node_offsets": np.cumsum([0, *counts[:-1]]).tolist()}
+    rows, fields, logs = [], [], []
+    terminal = None
+    stream = iter(events)
+    try:
+        for event in stream:
+            if terminal is not None or not isinstance(event, dict):
+                raise ResultContractError("Invalid event after terminal or non-object event")
+            kind = event.get("type")
+            if kind in {"completed", "cancelled"}:
+                if (type(event.get("solved_count")) is not int or event["solved_count"] != len(rows)
+                        or kind == "completed" and len(rows) != len(frequencies)):
+                    raise ResultContractError("Terminal count differs from requested/received frequencies")
+                terminal = kind
+            elif kind == "result":
+                index = len(rows)
+                raw = event.get("result")
+                if (index >= len(frequencies) or not isinstance(raw, dict)
+                        or type(raw.get("schema_version")) is not int or raw["schema_version"] != 2
+                        or type(raw.get("freq_hz")) not in {int, float}
+                        or raw.get("freq_hz") != frequencies[index]
+                        or raw.get("excitation_port_ids") != ports):
+                    raise ResultContractError("Coupled result frequency, version or excitation identity changed")
+                diagnostics = raw.get("diagnostics")
+                expected = request.wire["solver_options"]
+                backend_key = ("bem_backend" if any(r["kind"] == "unbounded_air"
+                               for r in request.wire["compiled_system"]["regions"]) else "linear_backend")
+                if (not isinstance(diagnostics, dict) or diagnostics.get(backend_key) != "cpu"
+                        or any(diagnostics.get(k) != expected[k]
+                               for k in ("phasor_convention", "precision", "symmetry"))):
+                    raise ResultContractError("Coupled result physics changed")
+                quantities = raw.get("quantities")
+                if (not isinstance(quantities, list) or any(not isinstance(q, dict) for q in quantities)
+                        or [q.get("id") for q in quantities] != [o["id"] for o in outputs]):
+                    raise ResultContractError("Coupled result outputs changed")
+                decoded = {}
+                for output, item in zip(outputs, quantities):
+                    fem = output["quantity"] == "fem_nodal_pressure"
+                    axis = "fem_node" if fem else "observation"
+                    count = sum(counts) if fem else len(output["options"]["points_m"])
+                    if (item.get("quantity") != output["quantity"] or item.get("unit") != "Pa"
+                            or item.get("target_id") is not None
+                            or item.get("axes") != ["excitation", axis]
+                            or not isinstance(item.get("values"), dict)
+                            or item["values"].get("dtype") != "complex128"):
+                        raise ResultContractError("Coupled quantity identity, unit or precision changed")
+                    if fem and item.get("metadata") != metadata:
+                        raise ResultContractError("FEM result node layout differs from retained domains")
+                    decoded[output["id"]] = decode_complex_values(item["values"], (len(ports), count))
+                scale = acceleration_scale(frequencies[index])
+                fields.append(decoded.pop("fem:pressure") * scale)
+                rows.append({key: value * scale for key, value in decoded.items()})
+                logs.append({"frequency_hz": frequencies[index], "converged": True,
+                             "native_diagnostics": diagnostics, "timings": diagnostics.get("timings", {})})
+                if progress_callback:
+                    progress_callback(index, len(frequencies), frequencies[index])
+                if on_frequency_result and on_frequency_result(index, frequencies[index], rows[-1]) is False:
+                    if request_cancel is None:
+                        raise ValueError("A stopping callback requires request_cancel")
+                    request_cancel()
+            elif kind == "failed":
+                raise ResultContractError(f"Official BEAT coupled solve failed: {event.get('error')}")
+            elif kind not in {"status", "progress"}:
+                raise ResultContractError(f"Unknown coupled event {kind!r}")
+        if terminal is None:
+            raise ResultContractError("Coupled stream ended without a terminal event")
+        channels = {}
+        for channel, members in request.channel_ports.items():
+            port_index = ports.index(members[0])
+            pressure = (np.stack([np.stack([row[f"pressure:{p}"][port_index]
+                         for p in request.layout.planes]) for row in rows]) if rows and rows[0]
+                        else np.zeros((len(rows), len(request.layout.planes), len(request.layout.angles_deg)), complex))
+            sphere = (np.stack([row["pressure:sphere"][port_index] for row in rows])
+                      if rows and "pressure:sphere" in rows[0] else None)
+            with np.errstate(divide="ignore"):
+                spl = 20 * np.log10(np.abs(pressure) / 20e-6)
+            channels[channel] = SweepResult(
+                np.asarray(frequencies[:len(rows)]), pressure, spl,
+                np.full(len(rows), complex(np.nan, np.nan)), request.layout.angles_deg,
+                list(request.layout.planes), sphere, request.layout.sphere_theta_deg,
+                request.layout.sphere_phi_deg, None, None, terminal == "cancelled", len(frequencies), logs)
+        nodal = np.stack(fields) if fields else np.empty((0, len(ports), sum(counts)), complex)
+        return CoupledSweep(channels, nodal, terminal == "cancelled")
+    finally:
+        close = getattr(events, "close", None) or getattr(stream, "close", None)
+        if close:
+            close()
+
+
+def coupled_envelope(sweep, request, *, context, geometry, record, config, started):
+    """Map every ideal drive, including FEM-only drives, to the shared channel envelope."""
+    from server.solver.result_mapping import build_solver_response
+    from server.solver.imported_channels import channel_source_identity
+    from server.solver.combine import combine_drive_channels
+    from server.solver.coupled_system import solve_kind
+    from server.solver.official_beat import engine_version
+
+    channels = {}
+    formulation = solve_kind(request.wire["compiled_system"])
+    solver_engine = {"provider": "official", "engine": "beat-cpu", "package": "beat-engine",
+                     "package_version": engine_version(), "device": "cpu", "precision": "double",
+                     "formulation": formulation}
+    fem_metadata = {"experimental": True, "engine": "beat-cpu", "precision": "float64"}
+
+    specs = {c.id: c for c in geometry.drive_channels}
+    identity = channel_source_identity(geometry, record)
+    speed = request.regions[0].record["medium"]["sound_speed_m_per_s"]
+    for name, native in sweep.channels.items():
+        spec = specs.get(name)
+        response = build_solver_response(
+            result=native, config=config, context=context, start_time=started,
+            metadata={"drive_channel_id": name, "source_ids": list(spec.source_ids) if spec else [],
+                      **identity.get(name, {"role": None}), "solver_backend": "beat-cpu",
+                      "solver_engine": solver_engine, "fem": fem_metadata,
+                      "phase_time_convention": PHASE_TIME_CONVENTION,
+                      "pressure_normalization": "unit_acceleration_m_per_s2"},
+            sound_speed_m_per_s=speed)
+        response.pop("impedance", None)
+        channels[name] = response
+    if geometry.combine is not None and not sweep.cancelled:
+        spec = geometry.combine
+        resolved = spec.resolved()
+        combined, payload = combine_drive_channels(
+            sweep.channels, members=list(spec.members), channels=resolved["channels"],
+            reference=resolved["reference"],
+            member_roles={name: identity.get(name, {}).get("role") for name in spec.members})
+        response = build_solver_response(
+            result=combined, config=config, context=context, start_time=started,
+            metadata={"drive_channel_id": spec.id, "derived_from_channels": list(spec.members),
+                      "source_ids": [source for name in spec.members for source in specs[name].source_ids],
+                      "combine": payload, "solver_engine": solver_engine, "fem": fem_metadata,
+                      "phase_time_convention": PHASE_TIME_CONVENTION}, sound_speed_m_per_s=speed)
+        response.pop("impedance", None)
+        channels[spec.id] = response
+    first = next(iter(sweep.channels.values()))
+    return {"result_kind": "multi_channel", "result_contract_version": 2,
+            "channels": channels, "channel_order": list(channels),
+            "frequencies": first.frequencies_hz.tolist(),
+            "metadata": {"result_contract_version": 2, "geometry_type": "imported",
+                         "solver_backend": "beat", "solver_engine": solver_engine,
+                         "solver_mode": "full_3d",
+                         "phase_time_convention": PHASE_TIME_CONVENTION,
+                         "pressure_normalization": "unit_acceleration_m_per_s2",
+                         "solve_path": "interior-fem" if formulation == "interior_fem" else "coupled-fem-bem",
+                         "cancelled": sweep.cancelled, "exterior_only": False,
+                         "fem": fem_metadata,
+                         "ingest_id": geometry.ingest_id, "manifest_sha256": geometry.manifest_sha256,
+                         "artifact_sha256": geometry.artifact_sha256}}

@@ -181,6 +181,7 @@ source_modules =
     server.solver.beat
     server.solver.beat_imported
     server.solver.beat_transducer_imported
+    server.solver.beat_adapter.coupled_request
     server.solver.beat_cpu_runtime
     server.solver.official_beat
     server.engines.dryrun
@@ -203,6 +204,7 @@ source_modules =
     server.solver.beat
     server.solver.beat_imported
     server.solver.beat_transducer_imported
+    server.solver.beat_adapter.coupled_request
     server.solver.beat_cpu_runtime
     server.solver.official_beat
     server.engines.dryrun
@@ -235,6 +237,7 @@ forbidden_modules =
     server.solver.beat
     server.solver.beat_imported
     server.solver.beat_transducer_imported
+    server.solver.beat_adapter.coupled_request
     server.solver.beat_cpu_runtime
     server.solver.official_beat
 ignore_imports =
@@ -258,6 +261,7 @@ source_modules =
     server.solver.beat
     server.solver.beat_imported
     server.solver.beat_transducer_imported
+    server.solver.beat_adapter.coupled_request
     server.solver.beat_cpu_runtime
     server.solver.official_beat
 forbidden_modules =

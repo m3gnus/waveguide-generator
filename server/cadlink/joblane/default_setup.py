@@ -256,7 +256,9 @@ def default_setup(
 
     defaults = solve_defaults()
     sources = [source for source in manifest.get("sources") or [] if isinstance(source, Mapping)]
-    if not sources:
+    regions = (manifest.get("scope") or {}).get("fem_regions") or []
+    if not sources and not any(g.get("kind") == "moving" for r in regions
+                               for g in r.get("surface_groups", ())):
         raise ValueError("the model states no sources")
     missing = unsized_sources(manifest)
     if missing:
@@ -266,7 +268,7 @@ def default_setup(
             + ", and WG does not guess one"
         )
     sizes = {str(source["id"]): source["suggested_resolution_mm"] for source in sources}
-    coarsest = max(sizes.values())
+    coarsest = max(sizes.values()) if sizes else max(r["mesh_size_mm"] for r in regions)
     channels = _drive_channels(sources)
     sweep = defaults["sweep"]
     cad = defaults["cad"]

@@ -683,6 +683,11 @@ def _refuse_imported_fem(
         not isinstance(volume, Mapping) or volume.get("required", True)
         for volume in volumes
     )
+    from server.cadlink.build_flags import fem_regions_enabled
+
+    if (regions and record.get("fem_regions") and not required_fem
+            and not geometry.exterior_only and fem_regions_enabled()):
+        return evidence
     if (required_fem or regions) and not geometry.exterior_only:
         declared = "required FEM air volumes and FEM regions" if required_fem and regions else (
             "FEM regions" if regions else "required FEM air volumes"
@@ -1105,7 +1110,10 @@ async def resolve_imported_submission(
         )
     _refuse_removed_solver(request)
     original_requested = request.options.engine
-    request, cpu_fallback = await _accuracy_engine(request, engine_registry)
+    if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
+        cpu_fallback = None  # Capability selection must skip accelerators even in Accurate.
+    else:
+        request, cpu_fallback = await _accuracy_engine(request, engine_registry)
     requested = request.options.engine
     request_refusal = _imported_request_refusal(request, imported_record, imported_msh_text)
     if request_refusal is not None:
@@ -1185,7 +1193,7 @@ async def resolve_imported_submission(
 
     explicit = requested not in {"auto", "beat"}
     resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
-    needed_features = _imported_features_needed(request.geometry)
+    needed_features = _imported_features_needed(request.geometry, imported_record)
     selected: str | None = None
     passed_over: list[str] = []
     refused: list[str] = []
@@ -1328,7 +1336,7 @@ async def plan_imported_submission(
     _refuse_removed_solver(request)
     detected = await engine_registry.capabilities()
     resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
-    needed_features = _imported_features_needed(request.geometry)
+    needed_features = _imported_features_needed(request.geometry, imported_record)
     request_refusal = _imported_request_refusal(request, imported_record, imported_msh_text)
     verdicts: list[ImportedEngineVerdict] = []
     for name in full3d_engine_order():
@@ -2150,6 +2158,8 @@ class JobRuntime:
                 },
             )
         active_sources = set(source_by_id) - requested_skips
+        if not active_sources and not (record.get("fem_regions") and not geometry.exterior_only):
+            raise ImportedSolveRefusal("drive_source_coverage", "The return has no driven exterior source")
         for channel in geometry.drive_channels:
             if channel.driver is None:
                 continue
@@ -3756,6 +3766,7 @@ class JobRuntime:
         self._partial_results.pop(job_id, None)
         await self._discard_channel_bases(job_id)
         await self._discard_radiation_impedance(job_id)
+        await self._discard_fem_field(job_id)
         try:
             event = self._transition(
                 job_id,
@@ -3779,6 +3790,58 @@ class JobRuntime:
             await self._flush_runtime_update(job_id, forget=True)
         except Exception:
             logger.exception("Could not persist final logs for cancelled job %s", job_id)
+
+    async def _run_coupled_regions(self, job_id, request, record, stage_cb):
+        """Run declared air automatically; the ordinary job lifecycle owns persistence."""
+        from io import BytesIO
+        import numpy as np
+        from server.solver.base import EngineRunResult
+        from server.solver.context import SolverContext
+        from server.solver.frequency_sweep import canonical_frequencies
+        from server.solver.combine import serialize_channel_bases
+        from server.solver.beat_adapter.coupled_request import build_imported_coupled_request
+        from server.solver.beat_adapter.results import coupled_envelope
+        from server.solver.official_beat import solve_coupled_compiled, response_config
+
+        refusal = _imported_request_refusal(request, record)
+        if refusal:
+            raise ImportedSolveRefusal(*refusal)
+        if request.options.engine != "beat-cpu":
+            raise ImportedSolveRefusal("fem_backend_unsupported", "FEM regions require official BEAT CPU")
+        context = SolverContext.from_imported_request(request, quadrants=1234, source_motion="normal")
+        started = time.time()
+        compiled = await asyncio.to_thread(
+            build_imported_coupled_request, record, request.geometry, context,
+            frequencies_hz=canonical_frequencies(context))
+        sweep = await asyncio.to_thread(
+            solve_coupled_compiled, compiled,
+            cancellation_callback=lambda: self._check_cancelled(job_id),
+            status_callback=lambda message: stage_cb("solve", .45, message),
+            progress_callback=lambda i, total, freq: stage_cb(
+                "solve", .45 + .4 * (i + 1) / total, f"Solving FEM at {freq:g} Hz"))
+        results = coupled_envelope(sweep, compiled, context=context, geometry=request.geometry,
+                                   record=record, config=response_config(compiled, context), started=started)
+        arrays = {"schema": np.asarray("wg-fem-field-store-v1"),
+                  "phasor_convention": np.asarray(compiled.wire["solver_options"]["phasor_convention"]),
+                  "drive_normalization": np.asarray("unit_acceleration_m_per_s2"),
+                  "experimental": np.asarray(True),
+                  "frequencies_hz": next(iter(sweep.channels.values())).frequencies_hz,
+                  "channel_ids": np.asarray(list(compiled.channel_ports)),
+                  "region_ids": np.asarray([r.domain.region_id for r in compiled.regions]),
+                  "pressure": sweep.nodal_pressure}
+        for index, region in enumerate(compiled.regions):
+            arrays[f"points_mm_{index}"] = region.domain.points_mm
+            arrays[f"tetrahedra_{index}"] = region.domain.tetrahedra
+            names = list(region.domain.surfaces)
+            arrays[f"surface_names_{index}"] = np.asarray(names)
+            for j, name in enumerate(names):
+                arrays[f"surface_triangles_{index}_{j}"] = region.domain.surfaces[name]
+        buffer = BytesIO()
+        np.savez_compressed(buffer, **arrays)
+        self._check_cancelled(job_id)
+        await asyncio.to_thread(self.store.store_fem_field, job_id, buffer.getvalue())
+        return EngineRunResult(results=results, channel_bases=serialize_channel_bases(sweep.channels),
+                               field_trace_unavailable_reason="coupled_exterior_traces_unavailable")
 
     async def _run_real_engine(
         self,
@@ -3865,7 +3928,10 @@ class JobRuntime:
 
         try:
             solve_started = time.perf_counter()
-            if is_full3d_solver_port(engine):
+            if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
+                outcome = await self._run_coupled_regions(
+                    job_id, request, imported_record, stage_callback)
+            elif is_full3d_solver_port(engine):
                 # BEAT and Metal have one HornLab-facing port. Their native
                 # protocols differ; the scheduler never needs to inspect them.
                 outcome = await run_full3d_solver_port(
@@ -4363,6 +4429,7 @@ class JobRuntime:
         self._partial_results.pop(job_id, None)
         await self._discard_channel_bases(job_id)
         await self._discard_radiation_impedance(job_id)
+        await self._discard_fem_field(job_id)
         try:
             event = self._transition(
                 job_id,
@@ -4385,6 +4452,12 @@ class JobRuntime:
             await self._flush_runtime_update(job_id, forget=True)
         except Exception:
             logger.exception("Could not persist final logs for failed job %s", job_id)
+
+    async def _discard_fem_field(self, job_id: str) -> None:
+        try:
+            await asyncio.to_thread(self.store.delete_fem_field, job_id)
+        except Exception:
+            logger.exception("Could not discard FEM field for job %s", job_id)
 
     async def _discard_radiation_impedance(self, job_id: str) -> None:
         try:

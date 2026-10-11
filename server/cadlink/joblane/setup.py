@@ -89,6 +89,7 @@ def solve_request_for(
     acknowledged_findings: list[str],
     client_request_id: str | None = None,
     label: str | None = None,
+    fem_region_ids: list[str] | None = None,
 ) -> SolveRequest:
     """The exact solve request a setup makes of one prepared snapshot."""
 
@@ -100,6 +101,11 @@ def solve_request_for(
         "artifact_sha256": artifact_sha256,
         "acknowledged_findings": list(acknowledged_findings),
     }
+    excluded_ids = geometry.pop("exterior_only_region_ids", None)
+    if fem_region_ids and (not isinstance(excluded_ids, list)
+                           or sorted(excluded_ids) != sorted(fem_region_ids)):
+        # A project setup follows sources across snapshots; a FEM exclusion does not.
+        geometry["exterior_only"] = False
     return SolveRequest.model_validate(
         {
             "geometry": geometry,
@@ -114,6 +120,11 @@ def validate_setup(value: Mapping[str, Any]) -> CadSolveSetup:
     """Parse a setup and prove it is a valid submission once a snapshot is bound."""
 
     setup = CadSolveSetup.model_validate(value)
+    excluded = setup.geometry.get("exterior_only_region_ids")
+    if excluded is not None and (not isinstance(excluded, list)
+            or any(not isinstance(item, str) or not item for item in excluded)
+            or len(set(excluded)) != len(excluded)):
+        raise ValueError("exterior_only_region_ids must be distinct nonempty region ids")
     overlap = sorted(_SNAPSHOT_FIELDS & set(setup.geometry))
     if overlap:
         raise ValueError(

@@ -87,6 +87,18 @@ describe('CAD setup publisher', () => {
     workspaceModeStore.setMode('parametric');
   });
 
+  it('records which FEM regions an exterior-only choice excludes', () => {
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle, 'wgl_speaker');
+    const record = { ...ingested('wgl_speaker'), evidence: { fem_regions: [{ region_id: 'air' }] } };
+    store.applyIngest(record, store.beginIngestIntent());
+    store.setExteriorOnly(true);
+    const setup = buildCadProjectSetup();
+    expect(setup?.setup.geometry.exterior_only_region_ids).toEqual(['air']);
+    store.applyIngest({ ...record, evidence: { fem_regions: [{ region_id: 'second' }] } }, store.beginIngestIntent());
+    expect(useCadReturnStore.getState().exteriorOnly).toBe(false);
+  });
+
   it('builds the setup a solve of this project needs, without the snapshot and without widening its polar grid', () => {
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
     // A derivation that would widen the grid if the submission builder ran:

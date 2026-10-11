@@ -1,9 +1,9 @@
 # Coupled FEM/BEM solves of CAD Link geometry
 
 Status: proposed, 2026-10-11. Slices F1 to F5 are implemented on topic
-branches and tested. F6 ingest and F7 geometry preparation are implemented;
-engine routing and live F7 acoustic qualification remain pending. Nothing is
-routed to a solver yet, and `femRegions` is advertised only when `WG2_FEM_REGIONS=1`.
+branches and tested. F6 ingest, F7 geometry preparation and the F8 CPU engine route are implemented;
+live acoustic qualification remains pending. `femRegions` is advertised only
+when `WG2_FEM_REGIONS=1`; FX owns the default choice.
 
 The same flag gates bundle admission and the isolated `fem_region` task. When
 unset, WG refuses `fem-regions-v1` as an unknown required feature before STEP
@@ -111,7 +111,7 @@ count and mesh density remain user-selected.
 | F5 | waveguide-generator | done | frontend exact slice, element mode, ghost, role colours, `wg-fem-field-v1` decoder, `FemFieldView` |
 | F6 | waveguide-generator | open | ingest: mesh each region in the child at stage 7, retain region meshes, record `evidence.fem_regions`, list regions in the CAD Link panel |
 | F7 | waveguide-generator | preparation implemented; live qualification pending | exterior closure: mesh the exterior with each interface patch conforming to the FEM interface, by fragmenting the shell with the region's interface face so OCC shares the rim |
-| F8 | waveguide-generator | open | engine route: a coupled job through the official BEAT worker (`coupled_fem_bem_lem` / `interior_fem`), outputs mapped to the multi-channel result contract, the `fem_required` refusal lifted for declared regions, `femRegions` advertised by default |
+| F8 | waveguide-generator | CPU route implemented; qualification pending | official CPU float64 coupled jobs (`coupled_fem_bem_lem` / `interior_fem`), multi-channel results and FEM field sidecars; declared regions solve with `WG2_FEM_REGIONS=1`; FX owns default advertisement |
 | F9 | waveguide-generator | open | result route `/api/results/{id}/fem-field`, then mount `FemFieldView` with the field-plane gizmo, a frequency slider, system or channel response, phase animation, and a combined interior and exterior plane |
 | F10 | both | open | electrodynamic drivers on FEM diaphragms (voltage ports, T/S parameters), aligned with [DRIVER-REAR-LOAD](DRIVER-REAR-LOAD.md)'s meshed front chambers; candidate: coupled front and rear chambers sharing one moving diaphragm |
 | F11 | waveguide-generator | open | validation: sealed box against the lumped model; Boundary Lab's Simple_Sealed and compression_driver solved from the same meshes |
@@ -235,3 +235,66 @@ For a manually provisioned runtime, the existing `WG2_TEST_BEAT_JULIA` and
 points against the monopole within 5%, confirms interface normal signs are +1,
 and requires interior peak pressure between 1 and 100 Pa at 100 Hz for a
 1 m/s diaphragm. This live test has not been run as part of F7 production.
+
+## F8 engine and field sidecar contract
+
+With `WG2_FEM_REGIONS=1`, declared regions use the official BEAT CPU backend
+with float64 and contract 2. Auto skips other engines for this feature, including
+in Accurate. Explicit exterior-only solves retain the original surface and
+solver route. Legacy required `fem_air_volumes` remain refused unless explicitly
+excluded. Ideal normal-velocity FEM diaphragms use their declared channel ids;
+a diaphragm with no painted exterior source still produces its own channel.
+Reduced domains, ground planes, HBB and other backends refuse. Electrodynamic
+and axial/weighted drives and the passive-cardioid campaign are not represented
+by this ideal-source route and refuse rather than losing their physics.
+
+`JobStore.store_fem_field` publishes `fem-field.npz` atomically in the job's
+field artifact directory. `get_fem_field` reads its bytes. The existing
+`task_metadata_json` carries `has_fem_field_artifact` and
+`fem_field_artifact_bytes`; neither database schema changes. Failure,
+cancellation, interrupted-job recovery, job deletion and result retention remove
+the sidecar. Rated results retain it, and disabling automatic result cleanup
+retains it with completed results. F9 owns the public route and display.
+
+The NPZ is readable with `numpy.load(..., allow_pickle=False)`:
+
+- `schema`: scalar string `wg-fem-field-store-v1`;
+- `phasor_convention`: scalar string `exp(-i omega t)`;
+- `drive_normalization`: scalar string `unit_acceleration_m_per_s2`;
+- `experimental`: scalar boolean, true;
+- `frequencies_hz`: float64 frequency axis in execution order;
+- `channel_ids`: string drive-channel ids, in excitation order;
+- `region_ids`: string region ids, in compiled FEM-domain order;
+- `pressure`: complex128, shape `(frequency, channel, total_fem_nodes)`, Pa
+  per unit acceleration. Nodes concatenate in `region_ids` order;
+- `points_mm_<r>`: float64 `(node, 3)` coordinates for region index `r`;
+- `tetrahedra_<r>`: integer `(tetrahedron, 4)`, zero-based local node indices;
+- `surface_names_<r>`: physical names in surface order;
+- `surface_triangles_<r>_<s>`: integer `(triangle, 3)`, zero-based local node
+  indices for surface index `s` in region `r`.
+
+To make `wg-fem-field-v1`, F9 selects a frequency and channel, slices `pressure`
+using cumulative region node counts, and encodes the selected domain coordinates,
+indices, and pressure real/imaginary parts as the existing little-endian
+float32/uint32 decoder expects. The sidecar preserves float64/complex128;
+conversion to float32 belongs only to the display payload. Exterior observation
+pressure and FEM pressure share the same acceleration scaling. Exterior field
+traces are not retained for coupled results.
+
+An exterior-only choice saved in a setup or frontend profile records the
+excluded region ids. Binding a later snapshot with a different FEM set resets
+that choice; old unbound choices also reset when regions are present. Snapshots
+without regions keep their existing exterior-only behavior.
+
+The opt-in managed CPU bridge qualification runs through the compute broker:
+
+```bash
+WG2_RUN_LIVE=1 WG2_FEM_REGIONS=1 WG2_BEAT_PROVIDER=official python scripts/run_tests.py \
+  server/tests/test_fem_coupled_beat_live.py::test_f8_managed_cpu_bridge_maps_f7_fields \
+  -m live -q
+```
+
+It requires a WG-provisioned CPU runtime and checks the F7 skin through managed
+session admission, contract-2 output mapping, polar pressure against the
+monopole within 5%, and duct-scale interior pressure. The broker owns native
+solver qualification.

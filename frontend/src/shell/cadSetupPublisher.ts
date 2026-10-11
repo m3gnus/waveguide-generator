@@ -130,6 +130,7 @@ export function buildCadProjectSetup(
         },
         skipped_source_ids: [...state.skippedSourceIds],
         exterior_only: state.exteriorOnly,
+        ...(state.exteriorOnly ? { exterior_only_region_ids: state.exteriorOnlyRegionIds } : {}),
         ...(combine ? { combine } : {}),
         ...(passiveCardioid ?? {}),
       },
