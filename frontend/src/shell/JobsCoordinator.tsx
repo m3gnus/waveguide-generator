@@ -616,6 +616,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, []);
 
   const reportError = useCallback((message: string) => setActionError(message), []);
+  // An empty `?job=` names no run; drop it at once.
+  useEffect(() => {
+    if (linkedJobId.current === null) clearJobLink();
+  }, []);
+  // `openLinkedJob` reaches `showJobModel`, which imports CadLinkCoordinator,
+  // which imports this module's bridge: a cycle that is safe only because
+  // every use is inside a function. It goes with the coordinator (Stage 5).
   useEffect(() => {
     const id = linkedJobId.current;
     if (!id || !jobsLoaded) return;

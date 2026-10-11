@@ -91,6 +91,13 @@ describe('?job= deep link', () => {
     expect(window.location.search).toBe('');
   });
 
+  it('drops an empty job parameter at once and opens nothing', async () => {
+    await mount('?job=&keep=1');
+    expect(window.location.search).toBe('?keep=1');
+    await act(async () => { publish([job('done-1', 'complete', true)]); });
+    expect(compareSelection.getSnapshot().primary).toBeNull();
+  });
+
   it('does nothing without the parameter and does not re-trigger after being handled', async () => {
     await mount('');
     await act(async () => { publish([job('done-1', 'complete', true)]); });
