@@ -1010,15 +1010,23 @@ need.
 
 ## Backend ownership
 
-One backend owns a data folder: the process holding the instance lock on
-`<data dir>/locks/server.pid`. `server/platform/backend_owner.py` is how a client (the
-CLI, the add-in launcher) reaches it. `discover_backend` trusts a recorded owner only
-if the lock is really held and `GET /health` on its port reports the same data folder
-and the same pid; anything else is a refusal with a reason, never a fresh private data
-folder. `ensure_backend` serialises start-up on `<data dir>/locks/backend-start.lock`,
-re-discovers under it, then spawns the supported backend detached with its output in
-`logs/backend-start.log`. A spawn that exits 2 lost the instance-lock race and its
-winner is adopted. Two clients starting at once therefore get one backend.
+One backend owns a data folder: the process holding `InstanceLock` on
+`<data dir>/locks/server.pid`, acquired by the supported backend in `launch/serve.py`.
+`server/platform/backend_owner.py` lets a client (the CLI, the add-in launcher)
+reach it. `discover_backend` reads metadata without creating or locking `server.pid`,
+then confirms that `GET /health` on the recorded port reports the same filesystem
+folder and pid. Missing or mismatched answers mean no confirmed owner yet: the
+metadata may name a preferred port occupied by another WG during startup.
+`ensure_backend` serialises start-up on `<data dir>/locks/backend-start.lock`,
+re-discovers under it, then starts the supported backend on this exact data folder
+with `--no-browser`, detached with output in `logs/backend-start.log`. Exit 2 means
+another starter owns the instance lock; poll until the overall deadline without
+respawning. Other non-zero exits report the start-log tail. At the deadline,
+timeout errors name the recorded pid/port, and a live matching-pid backend serving
+a different folder produces a typed refusal. An unconfirmed child still running
+at the deadline is terminated and waited for; a healthy backend stays detached.
+Concurrent clients find one backend and never work around a conflict with a
+private data folder.
 
 ## Solve-command delivery
 

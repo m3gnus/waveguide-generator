@@ -1,22 +1,21 @@
 """One backend owner per data folder: find it, or start it, exactly once.
 
-A client (the CLI, the Fusion add-in launcher) that wants to submit work needs the
-backend that owns a data folder. The ownership rules are:
+A client (the CLI, the Fusion add-in launcher) submits to the backend owning its
+exact data folder. InstanceLock on ``<data>/locks/server.pid``, taken by the
+supported backend, is the authority. Discovery never creates or locks that file:
+it reads metadata, then confirms that ``GET /health`` reports the same folder
+(filesystem identity) and pid. Missing, stale or mismatched answers mean no
+confirmed owner yet; the preferred metadata port may change during startup.
 
-* The owner is whichever process holds the ``InstanceLock`` on
-  ``<data>/locks/server.pid``. The lock is an OS lock released by the kernel when
-  the holder dies, so a leftover metadata file never counts as an owner.
-* A claimed owner is only trusted after ``GET /health`` on the port it recorded
-  reports the same data folder and the same pid. A mismatch is a refusal with a
-  reason, never a reason to start a second backend or use a private data folder.
-* Starting is serialised by a blocking lock on ``<data>/locks/backend-start.lock``.
-  The second of two concurrent clients waits, re-discovers under the lock and
-  finds the backend the first one started.
-* A spawned backend that exits 2 lost the ``InstanceLock`` race to another
-  starter (for instance the GUI launcher); its winner is adopted.
+Starting is serialised on ``<data>/locks/backend-start.lock``. Exit 2 means
+another starter owns InstanceLock: wait for it until the overall deadline without
+respawning. A matching-pid backend reporting a different folder is a typed
+refusal only at the deadline. Never work around conflicts with a private folder.
+A timeout terminates and reaps our unconfirmed child; success leaves it detached.
 
-Stdlib plus ``server.platform.instance`` only, so a CLI can import this without
-loading the server application.
+``start_argv`` must start the supported backend on this exact data folder with
+``--no-browser`` (the launcher slice defines that argv later).
+Stdlib plus ``server.platform.instance`` only, without loading the application.
 """
 
 from __future__ import annotations
@@ -45,10 +44,7 @@ START_LOCK_FILENAME = "backend-start.lock"
 LOG_FILENAME = "backend-start.log"
 HEALTH_TIMEOUT = 2.0
 POLL_INTERVAL = 0.1
-# A starter that exits 2 should have a live winner within moments. If none shows
-# up the exit was a probe collision (see _lock_is_held), not a real owner.
-ADOPT_GRACE = 5.0
-MAX_SPAWN_ATTEMPTS = 3
+TERMINATE_GRACE = 1.0
 EXIT_ALREADY_RUNNING = 2
 
 
@@ -67,11 +63,11 @@ class BackendOwnerError(RuntimeError):
 
 
 class BackendDataDirMismatch(BackendOwnerError):
-    """A live owner answers, but not for this data folder / pid."""
+    """At the deadline, the metadata pid serves a different data folder."""
 
 
 class BackendStartTimeout(BackendOwnerError):
-    """The spawned backend did not become healthy in time."""
+    """No confirmed owner became healthy before the deadline."""
 
 
 class BackendSpawnError(BackendOwnerError):
@@ -82,34 +78,18 @@ def _locks_dir(data_dir: Path) -> Path:
     return data_dir / "locks"
 
 
-def _lock_is_held(path: Path) -> bool:
-    """Same liveness test as ``InstanceLock``: try the non-blocking lock.
-
-    Not pid existence: pids are reused and a crashed owner leaves its file behind.
-    The probe holds the lock for an instant, which can make a backend starting at
-    that very moment see exit 2; ``ensure_backend`` tolerates that.
-    """
-
+def _owner_info(data_dir: Path) -> InstanceInfo | None:
     try:
-        descriptor = os.open(path, LOCK_OPEN_FLAGS, 0o600)
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return False
-    try:
-        try:
-            lock_exclusive(descriptor)
-        except BlockingIOError:
-            return True
-        except OSError:
-            return False
-        try:
-            unlock(descriptor)
-        except OSError:
-            pass
-        return False
-    finally:
-        os.close(descriptor)
+        return read_lock_info(_locks_dir(data_dir) / LOCK_FILENAME)
+    except RuntimeError:
+        return None
+
+
+def _owner_description(data_dir: Path) -> str:
+    info = _owner_info(data_dir)
+    if info is None:
+        return "Instance-lock metadata is not available yet."
+    return f"Instance-lock metadata names pid {info.pid}, port {info.port}."
 
 
 def _fetch_health(port: int) -> dict[str, object] | None:
@@ -123,43 +103,30 @@ def _fetch_health(port: int) -> dict[str, object] | None:
 
 
 def _same_path(left: object, right: Path) -> bool:
+    if not isinstance(left, (str, os.PathLike)):
+        return False
     try:
-        return Path(str(left)).resolve() == right.resolve()
+        try:
+            return os.path.samefile(left, right)
+        except FileNotFoundError:
+            return Path(left).resolve() == right.resolve()
     except (OSError, ValueError):
         return False
 
 
-def _discover(data_dir: Path) -> BackendHandle | None:
-    lock_path = _locks_dir(data_dir) / LOCK_FILENAME
-    if not _lock_is_held(lock_path):
-        return None
-    try:
-        info = read_lock_info(lock_path)
-    except RuntimeError:
-        return None
-    if info is None or info.port <= 0:
-        return None  # holder is still starting; metadata not written yet
-    health = _fetch_health(info.port)
-    if health is None:
-        return None  # lock held but not serving (yet)
-    return _validate(data_dir, info, health)
+def _observe(data_dir: Path) -> tuple[InstanceInfo | None, dict[str, object] | None]:
+    info = _owner_info(data_dir)
+    health = _fetch_health(info.port) if info is not None and info.port > 0 else None
+    return info, health
 
 
-def _validate(data_dir: Path, info: InstanceInfo, health: dict[str, object]) -> BackendHandle:
-    reported_dir = health.get("data_dir")
-    if not _same_path(reported_dir, data_dir):
-        raise BackendDataDirMismatch(
-            f"The backend on port {info.port} reports data folder {reported_dir!r}, not "
-            f"{str(data_dir)!r}. Refusing to use it. Stop that backend or point the client "
-            "at its data folder; do not work around this with a different data folder."
-        )
-    reported_pid = health.get("pid")
-    if reported_pid != info.pid:
-        raise BackendDataDirMismatch(
-            f"The instance lock for {data_dir} names pid {info.pid} on port {info.port}, but "
-            f"that port answers as pid {reported_pid!r}. Another program may hold the port. "
-            "Stop the backend and start it again."
-        )
+def _validate(
+    data_dir: Path, info: InstanceInfo | None, health: dict[str, object] | None
+) -> BackendHandle | None:
+    if info is None or health is None:
+        return None
+    if health.get("pid") != info.pid or not _same_path(health.get("data_dir"), data_dir):
+        return None
     return BackendHandle(
         base_url=f"http://127.0.0.1:{info.port}",
         pid=info.pid,
@@ -170,11 +137,14 @@ def _validate(data_dir: Path, info: InstanceInfo, health: dict[str, object]) -> 
     )
 
 
-def discover_backend(data_dir: str | os.PathLike[str]) -> BackendHandle | None:
-    """Return the running backend that owns ``data_dir``, or ``None``.
+def _discover(data_dir: Path) -> BackendHandle | None:
+    return _validate(data_dir, *_observe(data_dir))
 
-    Raises :class:`BackendDataDirMismatch` when something holds the lock but does
-    not identify as this data folder's backend.
+
+def discover_backend(data_dir: str | os.PathLike[str]) -> BackendHandle | None:
+    """Confirm the metadata pid's healthy backend for this folder, or return None.
+
+    Never create or acquire server.pid's lock, nor refuse transient mismatches.
     """
 
     return _discover(Path(data_dir).resolve())
@@ -188,8 +158,14 @@ class _StartLock:
         self._descriptor: int | None = None
 
     def acquire(self, deadline: float) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(self.path, LOCK_OPEN_FLAGS, 0o600)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(self.path, LOCK_OPEN_FLAGS, 0o600)
+        except OSError as exc:
+            raise BackendOwnerError(
+                f"Could not open backend start lock {self.path}: {exc}. "
+                "Check that the data folder is writable and its locks directory is accessible."
+            ) from exc
         while True:
             try:
                 lock_exclusive(descriptor)
@@ -198,14 +174,17 @@ class _StartLock:
                     os.close(descriptor)
                     raise BackendStartTimeout(
                         f"Another client is starting the backend (lock {self.path}) and it "
-                        "did not finish in time. Check the backend log in the data folder's "
-                        "logs directory, then try again."
+                        f"did not finish in time. {_owner_description(self.path.parent.parent)} "
+                        "Check the backend log in the data folder's logs directory, then try again."
                     ) from None
                 time.sleep(POLL_INTERVAL)
                 continue
-            except OSError:
+            except OSError as exc:
                 os.close(descriptor)
-                raise
+                raise BackendOwnerError(
+                    f"Could not acquire backend start lock {self.path}: {exc}. "
+                    "Check permissions and filesystem locking support for the data folder."
+                ) from exc
             self._descriptor = descriptor
             return
 
@@ -223,18 +202,16 @@ class _StartLock:
 
 def _spawn(argv: Sequence[str], data_dir: Path) -> tuple[subprocess.Popen[bytes], Path]:
     log_dir = data_dir / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / LOG_FILENAME
     kwargs: dict[str, object] = {}
     if sys.platform == "win32":
-        kwargs["creationflags"] = (
-            getattr(subprocess, "DETACHED_PROCESS", 0)
-            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        )
+        kwargs["creationflags"] = getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+        ) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
     else:
         kwargs["start_new_session"] = True
     try:
+        log_dir.mkdir(parents=True, exist_ok=True)
         with open(log_path, "ab") as log_file:
             process = subprocess.Popen(  # noqa: S603
                 list(argv),
@@ -252,13 +229,42 @@ def _spawn(argv: Sequence[str], data_dir: Path) -> tuple[subprocess.Popen[bytes]
     return process, log_path
 
 
+def _log_tail(path: Path) -> str:
+    try:
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - 4096))
+            return stream.read().decode("utf-8", errors="replace").strip()
+    except OSError:
+        return "(start log unavailable)"
+
+
+def _terminate_child(process: subprocess.Popen[bytes]) -> str:
+    if process.poll() is not None:
+        return ""
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        pass  # The child exited between poll() and terminate(); still reap it.
+    try:
+        process.wait(timeout=TERMINATE_GRACE)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+    return f" Terminated and waited for unconfirmed spawned child pid {process.pid}."
+
+
 def ensure_backend(
     data_dir: str | os.PathLike[str],
     start_argv: Sequence[str],
     *,
     timeout: float = 60,
 ) -> BackendHandle:
-    """Return the backend owning ``data_dir``, starting it exactly once if needed."""
+    """Find or start the owner; start_argv must use this folder and --no-browser.
+
+    Exit 2 waits until the overall deadline without respawning. Discovery
+    mismatches are transient; a matching-pid folder mismatch refuses at deadline.
+    """
 
     root = Path(data_dir).resolve()
     deadline = time.monotonic() + timeout
@@ -278,34 +284,37 @@ def ensure_backend(
 
 
 def _start_and_wait(root: Path, argv: Sequence[str], deadline: float) -> BackendHandle:
-    log_path = root / "logs" / LOG_FILENAME
-    for _attempt in range(MAX_SPAWN_ATTEMPTS):
-        process, log_path = _spawn(argv, root)
-        adopt_until: float | None = None
-        while True:
-            found = _discover(root)
-            if found is not None:
-                return found
-            code = process.poll()
-            now = time.monotonic()
-            if code is not None:
-                if code != EXIT_ALREADY_RUNNING:
-                    raise BackendSpawnError(
-                        f"The backend exited with code {code} before it was ready. "
-                        f"See {log_path}."
-                    )
-                # Lost the InstanceLock race: wait briefly for the winner to serve.
-                if adopt_until is None:
-                    adopt_until = min(now + ADOPT_GRACE, deadline)
-                if now >= adopt_until:
-                    break  # no owner materialised; the exit was a probe collision
-            if now >= deadline:
-                raise BackendStartTimeout(
-                    f"The backend did not become ready within the timeout. See {log_path}."
+    process, log_path = _spawn(argv, root)
+    while True:
+        info, health = _observe(root)
+        found = _validate(root, info, health)
+        if found is not None:
+            return found
+        code = process.poll()
+        if code is not None and code not in (0, EXIT_ALREADY_RUNNING):
+            raise BackendSpawnError(
+                f"The backend exited with code {code} before it was ready. "
+                f"See {log_path}. Start log tail:\n{_log_tail(log_path)}"
+            )
+        if time.monotonic() >= deadline:
+            cleanup = _terminate_child(process)
+            # A same-pid backend serving another folder should be impossible for
+            # the supported backend. Refuse only now: preferred-port conflicts
+            # and metadata updates are normal during a legitimate startup.
+            if (
+                info is not None
+                and health is not None
+                and health.get("pid") == info.pid
+                and not _same_path(health.get("data_dir"), root)
+            ):
+                raise BackendDataDirMismatch(
+                    f"The backend pid {info.pid} on port {info.port} reports data folder "
+                    f"{health.get('data_dir')!r}, not {str(root)!r}, at the startup deadline. "
+                    "Stop that backend or correct its data-folder configuration; do not "
+                    f"work around this with a different data folder. See {log_path}.{cleanup}"
                 )
-            time.sleep(POLL_INTERVAL)
-    raise BackendSpawnError(
-        f"The backend kept exiting with code {EXIT_ALREADY_RUNNING} but no owner is "
-        f"serving data folder {root}. Another program may hold the instance lock "
-        f"({_locks_dir(root) / LOCK_FILENAME}). See {log_path}."
-    )
+            raise BackendStartTimeout(
+                "The backend did not become ready within the timeout. "
+                f"{_owner_description(root)} See {log_path}.{cleanup}"
+            )
+        time.sleep(POLL_INTERVAL)
