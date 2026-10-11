@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from server.design.textcfg import TextConfigError, parse, serialize
+from server.design.textcfg import (
+    TextConfigError, _GEOMETRY_STAMP, _MWG_SNIFF, _formula, _lex, parse, serialize,
+)
 from server.design_io.api import open_design
 from server.preview.translate import design_to_mesher_config
 from server.tests._ath_contract import saved_v1
@@ -317,7 +319,34 @@ def test_no_ath_corpus_file_is_refused_by_the_integrity_checks(path: Path) -> No
         # this module's concern; only its own refusals count.
         assert "unsupported item" not in str(exc), f"{path.name}: {exc}"
         assert "appears more than once" not in str(exc), f"{path.name}: {exc}"
-    # Fresh v2 documents also obey the mesher's bounded import refusals.
+    # Recognition precedes the fresh-import oracle, just as it precedes WG's
+    # v2 stamp. The corpus also contains native WG files and unrelated configs.
+    # For those, assert the outcome classes measured at WG 279caea0 directly:
+    # malformed block terminators and missing designs refuse with these exact
+    # messages; native/stamped and FREEFORM designs remain accepted.
+    try:
+        flat, blocks, comments, _ = _lex(source.removeprefix("\ufeff"))
+    except TextConfigError as exc:
+        assert str(exc) == "unexpected block terminator"
+        with pytest.raises(TextConfigError) as actual:
+            parse(source)
+        assert str(actual.value) == "unexpected block terminator"
+        return
+    try:
+        formula = _formula(flat, blocks, v2=True)
+    except TextConfigError as exc:
+        message = "could not find an OSSE, R-OSSE, ICW, or FREEFORM design"
+        assert str(exc) == message
+        with pytest.raises(TextConfigError) as actual:
+            parse(source)
+        assert str(actual.value) == message
+        return
+    if (_MWG_SNIFF.search(source) or any(_GEOMETRY_STAMP.match(c) for c in comments)
+            or formula == "FREEFORM"):
+        parse(source)
+        return
+    # Every recognised fresh ATH design must agree with the mesher, including
+    # the exact refusal message. ConfigError must never escape WG's API.
     from hornlab_mesher.config_parser import ConfigError, parse_text_config
 
     try:
@@ -325,14 +354,88 @@ def test_no_ath_corpus_file_is_refused_by_the_integrity_checks(path: Path) -> No
     except ConfigError as reference:
         with pytest.raises(TextConfigError) as actual:
             parse(source)
-        if "Source.Contours" in str(reference):
-            # WG diagnoses contour sources before the final mesher validation.
-            assert "Source.Contours" in str(actual.value)
-            assert "contour-drawn (dome) sources are not implemented" in str(actual.value)
-        else:
-            assert str(actual.value) == str(reference)
+        assert str(actual.value) == str(reference)
     else:
+        assert parse(source).design.root.text_import_version == "ath-2026-09a-v2"
+
+
+@pytest.mark.parametrize("key", ["ABEC.SimType", "Simulation.SimType"])
+@pytest.mark.parametrize("enclosure", [
+    "Mesh.Enclosure = {\n Depth = 200\n}\n",
+    "Mesh.Enclosure = {\n Depth = 0\n Spacing = 70,25,70,40\n}\n",
+    "Mesh.Enclosure.Depth = 200\n",
+    "Mesh.Enclosure.Depth = 0\n",
+])
+def test_fresh_baffle_enclosure_refusal_matches_mesher(key: str, enclosure: str) -> None:
+    from server.tests._ath_contract import assert_v2_refusal
+
+    text = BASE.replace("ABEC.SimType = 2", f"{key} = 1") + enclosure
+    assert_v2_refusal(text)
+    # Both legacy forms still accept the same authored combination.
+    assert parse(saved_v1(text)).design.root.simulation.sim_type == "infinite-baffle"
+    assert parse("; Parameter config\n" + text).design.root.simulation.sim_type == "infinite-baffle"
+
+
+@pytest.mark.parametrize("source, message", [
+    ('{\n "setting": 1\n}\n', "unexpected block terminator"),
+    ("[bdist_rpm]\ndoc_files = docs/\n", "could not find an OSSE, R-OSSE, ICW, or FREEFORM design"),
+    ("home = python-runtime\ninclude-system-site-packages = false\n", "could not find an OSSE, R-OSSE, ICW, or FREEFORM design"),
+])
+def test_unrelated_configs_keep_legacy_refusal_without_mesher_validation(monkeypatch, source: str, message: str) -> None:
+    from hornlab_mesher import config_parser
+
+    def unexpected_validation(*args, **kwargs):
+        pytest.fail("unrecognised text must not reach mesher fresh-import validation")
+
+    monkeypatch.setattr(config_parser, "parse_text_config", unexpected_validation)
+    with pytest.raises(TextConfigError) as actual:
         parse(source)
+    assert str(actual.value) == message
+
+
+@pytest.mark.parametrize("stage", ["text", "geometry"])
+def test_fresh_mesher_config_error_is_wrapped_without_changing_message(monkeypatch, stage: str) -> None:
+    from hornlab_mesher import config_builder, config_parser
+
+    def refuse(text):
+        raise config_parser.ConfigError("fresh import refused")
+
+    if stage == "text":
+        monkeypatch.setattr(config_parser, "parse_text_config", refuse)
+    else:
+        monkeypatch.setattr(config_builder, "build_geometry_params", refuse)
+    with pytest.raises(TextConfigError) as actual:
+        parse(BASE)
+    assert str(actual.value) == "fresh import refused"
+    assert isinstance(actual.value.__cause__, config_parser.ConfigError)
+    assert parse(saved_v1(BASE)) is not None
+    assert parse("; Parameter config\n" + BASE) is not None
+
+
+def test_freeform_skips_ath_validation_and_import_metadata(monkeypatch) -> None:
+    from hornlab_mesher import config_parser, text_import
+
+    def unexpected_validation(*args, **kwargs):
+        pytest.fail("FREEFORM is not a fresh ATH import")
+
+    monkeypatch.setattr(config_parser, "parse_text_config", unexpected_validation)
+    monkeypatch.setattr(text_import, "ath_axial_sampling_rule", unexpected_validation)
+    parsed = parse("""Freeform.Length = 100
+Freeform.ThroatRadius = 10
+Freeform.H = {
+ MouthRadius = 50
+}
+Freeform.V = {
+ MouthRadius = 40
+}
+Freeform.CrossSections = {
+ 0 ellipse
+ 1 ellipse
+}
+""")
+    assert parsed.design.root.text_import_version is None
+    assert parsed.design.root.ath_axial_sampling_rule is None
+    assert parsed.design.root.ath_nac_present is None
 
 
 RBASE = """R-OSSE = {
@@ -404,6 +507,10 @@ GAP_STUDY_KEYS = {
 @pytest.mark.parametrize("family, base", [("OSSE", BASE), ("R-OSSE", RBASE)])
 @pytest.mark.parametrize("key", sorted(GAP_STUDY_KEYS))
 def test_every_gap_study_key_has_transport_or_a_named_refusal(family: str, base: str, key: str) -> None:
+    if key == "Source.Contours":
+        from server.tests._ath_contract import assert_v2_refusal
+        assert_v2_refusal(base + GAP_STUDY_KEYS[key])
+        return
     # These three controls now have qualified v2 transport. Check their exact
     # payloads here; the unsupported family composition still refuses by name.
     if key in {"NAC", "Mesh.RearShape", "Mesh.Roundover"}:

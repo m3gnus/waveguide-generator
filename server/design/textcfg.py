@@ -1057,6 +1057,14 @@ def _build_payload(
     refusal_keys = {*flat, *selected, *blocks} if dialect == "ath" and active_stretch else set()
     multi_source = sorted(key for key in refusal_keys if key == "Source.Contours"
                           or key.startswith(("LFSource", "Source.Velocity.")))
+    if dialect == "ath" and refuse_unsupported and v2 and "Source.Contours" in {*flat, *selected, *blocks}:
+        # Fresh contour imports use the mesher's diagnostic even without
+        # throat stretch. Saved v1/native files retain their original reader.
+        from hornlab_mesher.config_parser import ConfigError, _reject_unsupported_ath_keys
+        try:
+            _reject_unsupported_ath_keys(flat, selected, {}, {name: block.items for name, block in blocks.items()})
+        except ConfigError as exc:
+            raise TextConfigError(str(exc)) from exc
     if multi_source:
         raise TextConfigError(
             "multi-source ATH configs are not supported by this mesher "
@@ -1383,7 +1391,12 @@ def _mesher_validation_text(
     rows = list(comments)
     rows.extend(items(flat))
     enclosure = payload.get("enclosure")
-    inactive_enclosure = enclosure is not None and _ath_number(str(enclosure.get("depth", "0"))) == 0
+    # Even a zero-depth enclosure conflicts with an explicit infinite baffle
+    # in the mesher's fresh-import contract. Do not hide that authored pair.
+    explicit_baffle = _ath_number(flat.get("ABEC.SimType", flat.get("Simulation.SimType", ""))) == 1
+    inactive_enclosure = (enclosure is not None
+                          and _ath_number(str(enclosure.get("depth", "0"))) == 0
+                          and not explicit_baffle)
     if inactive_enclosure:
         rows = [row for row in rows if not row.startswith(_ENCLOSURE_FLAT_PREFIX)]
         if payload.get("simulation", {}).get("sim_type") is None:
@@ -1474,11 +1487,12 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         refuse_unsupported=dialect == "ath" and version is None,
         v2=import_version == TEXT_IMPORT_VERSION,
     )
+    fresh_ath = version is None and dialect == "ath" and payload["formula"] != "FREEFORM"
     if import_version is not None and payload["formula"] != "FREEFORM":
         payload["text_import_version"] = import_version
-        if version is None and dialect == "ath":
+        if fresh_ath:
             ignored_profile.extend(IgnoredSetting(*entry) for entry in apply_ath_import_defaults(payload))
-    if import_version == TEXT_IMPORT_VERSION:
+    if payload.get("text_import_version") == TEXT_IMPORT_VERSION:
         from hornlab_mesher.text_import import ath_axial_sampling_rule
         try:
             rule, _echo = ath_axial_sampling_rule(text)
@@ -1493,16 +1507,16 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         except (OverflowError, ValueError) as exc:
             raise TextConfigError(str(exc)) from exc
     mesh_payload = payload.get("mesh", {})
-    if (payload.get("text_import_version") == TEXT_IMPORT_VERSION and version is None and dialect == "ath"
+    if (fresh_ath
             or mesh_payload.get("ath_roundover") is not None or mesh_payload.get("ath_rear_shape") == 3):
         # The mesher owns the bounded combinations and their named diagnostics.
         # This is config validation only; no surfaces or mesh jobs are built.
-        from hornlab_mesher.config_parser import parse_text_config
+        from hornlab_mesher.config_parser import ConfigError, parse_text_config
         from hornlab_mesher.config_builder import build_geometry_params
         try:
             validation_text = _mesher_validation_text(flat, blocks, comments, payload, ignored_profile)
             build_geometry_params(parse_text_config(validation_text))
-        except ValueError as exc:
+        except (ConfigError, ValueError) as exc:
             raise TextConfigError(str(exc)) from exc
     try:
         design = DesignConfig.model_validate(payload)
