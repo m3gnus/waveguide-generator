@@ -42,7 +42,7 @@ from typing import Any, Callable
 
 import pytest
 
-from server.cadlink import preparation, solve_command
+from server.cadlink import job_shims, solve_command
 from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT
 from server.cadlink.solve_command import CAD_SOLVE_SUBMISSION_PREFIX, CLAIM_PREFIX, SOLVE_REQUESTS_DIRECTORY
 from server.cadlink.store import CadLinkStore
@@ -315,7 +315,7 @@ def _after_accept(wg: JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict
 
 
 def _after_retention(wg: JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
-    _crash_after(preparation, "settle_snapshot_operation", monkeypatch)
+    _crash_after(job_shims, "settle_snapshot_operation", monkeypatch)
 
     def check(request: dict[str, Any]) -> None:
         assert len(_claims(wg)) == 1

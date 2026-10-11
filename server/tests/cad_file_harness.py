@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 from server.app import create_app
-from server.cadlink import preparation
+from server.cadlink import job_shims, preparation
 from server.cadlink.delivery_status import delivery_status
 from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT, normalize_request, request_digest
 from server.tests.test_app_batch_e import TestClient
@@ -46,7 +46,7 @@ class Wg:
             ctx = _preparation_context(
                 self.app.state, workspace_root=_selected_workspace_root(self.app.state)
             )
-            return await preparation.run_delivery_pass(
+            return await job_shims.run_delivery_pass(
                 ctx, spawn=spawn, running=frozenset(running or ())
             )
 

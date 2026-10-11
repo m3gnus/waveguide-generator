@@ -100,10 +100,9 @@ from .preparation import (
     operation_summary,
     recover_operations,
     DeliveryPassReporter,
-    run_delivery_pass,
     settle_received_snapshots,
 )
-from .job_shims import accept_operation_solve, operation_detail, sweep_pending_solves
+from .job_shims import accept_operation_solve, operation_detail, run_delivery_pass, sweep_pending_solves
 from .project_setup import SOLVER_SELECTION, inventory_sha256
 from .setup import setup_content, setup_digest, validate_setup
 from .roles import canonical_source_role

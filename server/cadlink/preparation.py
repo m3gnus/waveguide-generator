@@ -118,7 +118,6 @@ from .solve_command import (
     RETAIN_TRANSIENT,
     RETAINED,
     SolveOutcomeConflict,
-    collect_solve_deliveries,
     record_outcome,
 )
 from .store import BindingConflict, CadLinkStore, StaleAttempt
@@ -1821,161 +1820,6 @@ async def prepare_operation(
         )
 
 
-async def run_delivery_pass(
-    ctx: PreparationContext,
-    *,
-    spawn: Callable[[str, Awaitable[Any]], object],
-    running: set[str] | frozenset[str] = frozenset(),
-    note: Callable[[str | None], None] | None = None,
-) -> list[str]:
-    """Collect Fusion's solve commands, and start preparing each new one.
-
-    The backend is the one consumer of solve commands (CAD-OPERATIONS.md,
-    "Delivery"): each is retained, recorded and acknowledged, then prepared
-    from its project's setup and submitted. Only an operation no attempt has
-    touched (``received``) is started, so one waiting for the user is never
-    retried unasked; ``running`` names the ones already started. One whose
-    delivery is kept because its return cannot be read yet is started once the
-    return is retained, or once the delivery is given up. Without a WGLink
-    folder nothing is collected, because nothing could be retained. While an
-    update restart is approved the pass does nothing at all: no preparation
-    starts, and delivered files stay on disk for after the restart. Once the
-    latch is down, the solves it held at submission are queued again first,
-    with or without a WGLink folder. Received snapshots nobody is delivering
-    are settled first (``settle_received_snapshots``). Persisted file claims
-    still awaiting retention hold their operation. Returns what the pass started.
-    """
-
-    if ctx.runtime is not None:
-        return await _job_delivery_pass(ctx, running=running, note=note)
-
-    def _note(reason: str | None) -> None:
-        # Exactly once per pass, and outside every handler that swallows: a
-        # pass that starts nothing must say whether that is idleness or a
-        # stopped consumer. The two are otherwise identical from outside, and
-        # this loop runs about 86 000 times a day.
-        if note is not None:
-            note(reason)
-
-    blocked = _restart_pending(ctx)
-    if blocked:
-        _note(blocked)
-        return []
-    await asyncio.to_thread(requeue_restart_parked, ctx)
-    if ctx.workspace_root is None:
-        _note(NO_WORKSPACE_REASON)
-        return []
-    await asyncio.to_thread(settle_received_snapshots, ctx)
-    held: set[str] = set()
-    await asyncio.to_thread(
-        collect_solve_deliveries,
-        ctx.data_dir,
-        ctx.store,
-        # A snapshot is settled as it is retained before file acknowledgement.
-        # Other kinds are retained before job admission.
-        retain=lambda operation_id: settle_snapshot_operation(
-            ctx.store, ctx.data_dir, ctx.workspace_root, operation_id
-        ),
-        held=held,
-        publish=lambda row: _publish(ctx, row),
-        refuse=ctx.refuse,
-    )
-    blocked = _restart_pending(ctx)
-    if blocked:
-        # Approved while this pass collected: nothing starts.
-        _note(blocked)
-        return []
-    rows = await asyncio.to_thread(
-        ctx.store.list_operations,
-        kind=PREPARE_AND_SOLVE, states={RECEIVED}, oldest_first=True, limit=100,
-    )
-    started: list[str] = []
-    for row in rows:
-        operation_id = str(row["operation_id"])
-        if row.get("legacy") or operation_id in running or operation_id in held:
-            continue
-        started.append(operation_id)
-        spawn(
-            operation_id,
-            prepare_operation(
-                ctx, operation_id, PreparationInput(),
-                expected_generation=int(row["attempt_generation"]),
-            ),
-        )
-    _note(None)
-    return started
-
-
-async def _job_delivery_pass(ctx: PreparationContext, *, running: Any, note: Any) -> list[str]:
-    from .job_shims import accept_operation_solve_isolated
-
-    blocked = _restart_pending(ctx)
-    if blocked or ctx.workspace_root is None:
-        if note:
-            note(blocked or NO_WORKSPACE_REASON)
-        return []
-    await asyncio.to_thread(settle_received_snapshots, ctx)
-    accepted: list[str] = []
-    loop = asyncio.get_running_loop()
-
-    def accept(operation_id: str) -> bool:
-        try:
-            row = ctx.store.get_operation(operation_id)
-            if row and row["kind"] == PREPARE_AND_SOLVE and not row.get("legacy") and operation_id not in running:
-                was_pending = row["state"] not in TERMINAL_STATES
-                job_id = asyncio.run_coroutine_threadsafe(
-                    accept_operation_solve_isolated(ctx, operation_id, schedule=False, delivery_released=True), loop
-                ).result()
-                if was_pending and job_id is not None:
-                    accepted.append(operation_id)
-                # A terminal refusal can be consumed, but only a job is an
-                # admission. Re-read because Cancel may have won during retention.
-                current = ctx.store.get_operation(operation_id)
-                return job_id is not None or bool(current and current["state"] in TERMINAL_STATES)
-            return True
-        except Exception:
-            logger.exception("Could not recover CAD delivery %s; retrying on a later pass", operation_id)
-            return False
-
-    held: set[str] = set()
-    await asyncio.to_thread(
-        collect_solve_deliveries, ctx.data_dir, ctx.store,
-        retain=lambda op: settle_snapshot_operation(ctx.store, ctx.data_dir, ctx.workspace_root, op),
-        accept_solve=accept, held=held, publish=lambda row: _publish(ctx, row), refuse=ctx.refuse,
-    )
-    # Acceptance is durable before acknowledgement, but the lane starts only
-    # after collection has finished and can see a restart approved during it.
-    for operation_id in accepted:
-        try:
-            job = await asyncio.to_thread(ctx.job_store.latest_cad_job, operation_id)
-            if job:
-                ctx.runtime.schedule_cad_solve(job["id"])
-        except Exception:
-            logger.exception("Could not schedule CAD delivery %s; retrying on a later pass", operation_id)
-    blocked = _restart_pending(ctx)
-    if blocked:
-        if note:
-            note(blocked)
-        return []
-    # The remaining join is acceptance recovery. It never prepares or takes over
-    # an operation attempt, and never retries a refused job.
-    cursor = 0
-    while True:
-        page = await asyncio.to_thread(ctx.store.operation_page, kind=PREPARE_AND_SOLVE,
-                                      states={RECEIVED, PROCESSING, NEEDS_USER_INPUT, CANCEL_REQUESTED},
-                                      after_rowid=cursor, limit=100)
-        if not page:
-            break
-        for cursor, row in page:
-            op = str(row["operation_id"])
-            if not row.get("legacy") and op not in held and op not in running:
-                if await accept_operation_solve_isolated(ctx, op) is not None:
-                    accepted.append(op)
-    if note:
-        note(None)
-    return accepted
-
-
 def recover_operations(ctx: PreparationContext) -> int:
     """Startup: settle what a backend that stopped left of its solve operations.
 
@@ -2048,7 +1892,6 @@ __all__ = [
     "recover_operations",
     "requeue_restart_parked",
     "retain_operation_snapshot",
-    "run_delivery_pass",
     "settle_received_snapshots",
     "settle_snapshot_operation",
     "submission_key",

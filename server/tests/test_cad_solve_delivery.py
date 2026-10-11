@@ -25,11 +25,11 @@ from typing import Any
 import pytest
 
 from server.cadlink.operations import prepare_and_solve_request, request_digest
+from server.cadlink.job_shims import run_delivery_pass
 from server.cadlink.preparation import (
     DeliveryPassReporter,
     PreparationContext,
     reconcile_with_jobs,
-    run_delivery_pass,
 )
 from server.cadlink import solve_command
 from server.cadlink.solve_command import collect_solve_deliveries, record_outcome

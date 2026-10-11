@@ -19,9 +19,9 @@ from typing import Any
 import pytest
 
 from server.cadlink import ingest as ingest_module
+from server.cadlink.job_shims import run_delivery_pass
 from server.cadlink.preparation import (
     PreparationContext,
-    run_delivery_pass,
 )
 from server.cadlink.solve_command import record_outcome
 from server.cadlink.store import CadLinkStore

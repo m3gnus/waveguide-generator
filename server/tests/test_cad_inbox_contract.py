@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from server.cadlink import preparation, solve_command
+from server.cadlink import job_shims, preparation, solve_command
 from server.cadlink.delivery_status import RECENT_REFUSALS, DeliveryStatus, delivery_status
 from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT
 from server.cadlink.solve_command import collect_solve_deliveries
@@ -126,7 +126,7 @@ def test_a_pass_pushes_arrivals_and_keeps_refusals_for_the_panel(tmp_path: Path)
         events.publish = pushed.append
         try:
             ctx = _preparation_context(application.state, workspace_root=workspace.resolve())
-            await preparation.run_delivery_pass(ctx, spawn=lambda _id, coroutine: coroutine.close())
+            await job_shims.run_delivery_pass(ctx, spawn=lambda _id, coroutine: coroutine.close())
             await asyncio.sleep(0)  # the pushes are scheduled onto this loop
             return await get_delivery_status(SimpleNamespace(app=application))
         finally:

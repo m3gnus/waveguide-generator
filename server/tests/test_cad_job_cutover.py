@@ -143,7 +143,7 @@ def test_an_acceptance_acknowledgement_names_the_durable_preparing_job(h):
     bundle, manifest = _write_return(h.workspace)
     _deliver_file(h, bundle, manifest)
     h.runtime._ensure_prep_lane = lambda: None
-    from server.cadlink.preparation import run_delivery_pass
+    from server.cadlink.job_shims import run_delivery_pass
     assert h._loop.run(run_delivery_pass(h.context(), spawn=lambda *_args: None)) == ["cmd-1"]
     ack = json.loads((h.data_dir / "ipc" / "wglink" / SOLVE_ACKS_DIRECTORY / "cmd-1.json").read_text())
     job = h.jobs_store.latest_cad_job("cmd-1")
@@ -407,7 +407,8 @@ def test_startup_recovers_retention_before_accepting_a_persisted_delivery(h):
 @pytest.mark.parametrize("recovery", ["startup", "delivery"])
 def test_interrupted_manual_intake_waits_for_its_first_prepare(h, recovery):
     from server.cadlink.manual_solve import create_manual_solve
-    from server.cadlink.preparation import retain_operation_snapshot, run_delivery_pass
+    from server.cadlink.preparation import retain_operation_snapshot
+    from server.cadlink.job_shims import run_delivery_pass
     from server.cadlink.ingest import retained_snapshot_path
     _received(h)
     retain_operation_snapshot(h.store, h.data_dir, h.workspace, "cmd-1")
@@ -483,7 +484,7 @@ def test_replay_stops_an_existing_keyed_job_when_the_ledger_still_requests_cance
 @pytest.mark.parametrize("press", [False, True])
 @pytest.mark.parametrize("state", ["received", "processing", "needs_user_input"])
 def test_missing_return_after_bound_is_visibly_refused_and_dismissal_never_replays(h, press, state):
-    from server.cadlink.preparation import run_delivery_pass
+    from server.cadlink.job_shims import run_delivery_pass
     bundle, _ = _received(h)
     if state != "received":
         generation = h.store.claim("cmd-1", 0)
@@ -571,7 +572,7 @@ def test_return_refusal_keeps_preparations_exact_stage_and_message(h, invalid):
 @pytest.mark.parametrize("error", [OSError, sqlite3.OperationalError, RuntimeError, KeyError, TypeError])
 def test_each_row_is_isolated_and_code_failures_are_retried_with_bounded_backoff(h, monkeypatch, caplog, recovery, error):
     from server.cadlink import job_shims
-    from server.cadlink.preparation import run_delivery_pass
+    from server.cadlink.job_shims import run_delivery_pass
     from test_cad_preparation import _accept
     bundle, manifest = _received(h)
     _accept(h.store, "cmd-2", bundle, manifest)
@@ -613,7 +614,7 @@ def test_bad_payload_fallback_recovers_a_job_committed_before_the_error(h, monke
 
 def test_startup_keeps_a_persisted_claim_until_its_file_bound_then_lane_refuses(h, monkeypatch):
     from server.cadlink import solve_command
-    from server.cadlink.preparation import run_delivery_pass
+    from server.cadlink.job_shims import run_delivery_pass
     from test_cad_preparation import _deliver_file
     bundle, manifest = _received(h)
     (h.workspace / bundle).rename(h.workspace / "gone")
@@ -656,7 +657,7 @@ def test_prepare_of_manual_solve_with_missing_copy_keeps_damaged_copy_remedy(h):
 def test_dismissal_joins_existing_terminal_job_even_while_delivery_waits(h, monkeypatch):
     import shutil
     from server.cadlink import solve_command
-    from server.cadlink.preparation import run_delivery_pass
+    from server.cadlink.job_shims import run_delivery_pass
     from test_cad_preparation import _deliver_file
     bundle, manifest = _received(h)
     h.ingest.findings = [{"id": "review", "kind": "warning", "blocking": True}]
@@ -688,7 +689,7 @@ def test_dismissal_joins_existing_terminal_job_even_while_delivery_waits(h, monk
 
 def test_failed_admission_keeps_claim_then_refuses_at_bound_and_still_retries(h, monkeypatch):
     from server.cadlink import solve_command
-    from server.cadlink.preparation import run_delivery_pass
+    from server.cadlink.job_shims import run_delivery_pass
     from test_cad_preparation import _deliver_file
     bundle, manifest = _received(h)
     inbox = _deliver_file(h, bundle, manifest)
@@ -727,7 +728,7 @@ def test_failed_admission_keeps_claim_then_refuses_at_bound_and_still_retries(h,
 
 @pytest.mark.parametrize("state", ["processing", "needs_user_input", "cancel_requested"])
 def test_delivery_pass_retries_failed_startup_migrations(h, monkeypatch, state):
-    from server.cadlink.preparation import run_delivery_pass
+    from server.cadlink.job_shims import run_delivery_pass
     _received(h)
     generation = h.store.claim("cmd-1", 0)
     if state == "needs_user_input":
@@ -789,7 +790,7 @@ def test_prepare_during_claim_retention_is_visibly_refused_with_settings(h):
 
 def test_real_cancel_before_admission_is_refused_when_delivery_is_collected(h):
     from server.cadlink import solve_command
-    from server.cadlink.preparation import run_delivery_pass
+    from server.cadlink.job_shims import run_delivery_pass
     from test_cad_preparation import _deliver_file
     bundle, manifest = _received(h)
     inbox = _deliver_file(h, bundle, manifest)
@@ -880,7 +881,8 @@ def test_f2_cad_state_keeps_missing_historical_data_null(h, record_kind):
 @pytest.mark.parametrize("origin, provenance, axis", [("wg_defaults", "automatic", "+x"), ("user", "chosen", None)])
 def test_f2_acceptance_joins_copy_the_jobs_defaults_and_automatic_axis(h, monkeypatch, path, origin, provenance, axis):
     from server.cadlink import job_shims
-    from server.cadlink.preparation import reconcile_with_jobs, run_delivery_pass
+    from server.cadlink.preparation import reconcile_with_jobs
+    from server.cadlink.job_shims import run_delivery_pass
     from server.jobs.cad_intent import CadSolveIntent
 
     _received(h)

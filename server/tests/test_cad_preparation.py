@@ -2160,7 +2160,7 @@ def test_the_delivery_loop_starts_nothing_while_an_update_restart_is_pending(
     harness: Harness,
 ) -> None:
     from server.cadlink.api import _preparation_context
-    from server.cadlink.preparation import run_delivery_pass
+    from server.cadlink.job_shims import run_delivery_pass
     from server.updates.restart import RestartApproval
 
     first_path, first_manifest = _write_return(harness.workspace, "first.wgreturn")
@@ -2214,18 +2214,18 @@ def test_a_press_while_an_update_restart_is_approved_reports_each_lifecycle(
 def test_an_update_restart_approved_while_a_pass_collects_starts_nothing(
     harness: Harness, monkeypatch
 ) -> None:
-    from server.cadlink import preparation
+    from server.cadlink import job_shims
 
     bundle_path, manifest = _write_return(harness.workspace)
     _deliver_file(harness, bundle_path, manifest)
-    real_collect = preparation.collect_solve_deliveries
+    real_collect = job_shims.collect_solve_deliveries
 
     def collect_then_approve(*args: Any, **kwargs: Any) -> Any:
         answer = real_collect(*args, **kwargs)
         harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
         return answer
 
-    monkeypatch.setattr(preparation, "collect_solve_deliveries", collect_then_approve)
+    monkeypatch.setattr(job_shims, "collect_solve_deliveries", collect_then_approve)
 
     assert harness.delivery_pass() == []
     # The ledger acknowledges the durable job; the restart latch holds its lane.
