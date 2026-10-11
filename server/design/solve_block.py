@@ -2,8 +2,8 @@
 
 The browser's durable settings layer is deliberately absent here: a headless
 request starts from the portable UI defaults (or an explicit ``base``), then
-applies ``ABEC.Polars:*`` followed by ``WG.Solve``.  Serialization remains
-frontend-owned.
+applies ``ABEC.Polars:*``, the ATH import's simulation-dependent polar origin,
+and then ``WG.Solve``. Serialization remains frontend-owned.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from typing import Any
 
 from server.jobs.models import SolveOptions
 
+from .schema import DesignCommon, DesignConfig
 
 _ATH_POLAR_PREFIX = "ABEC.Polars:"
 _DIAGONAL_BLOCK = f"{_ATH_POLAR_PREFIX}SPL_D"
@@ -173,11 +174,14 @@ def _polar_count(start: float, end: float, step: float) -> int:
 def solve_options_from_blocks(
     extra_blocks: Mapping[str, Any] | None,
     base: SolveOptions | None = None,
+    *,
+    design: DesignConfig | DesignCommon | None = None,
 ) -> SolveOptions:
     """Apply portable file blocks to browser defaults or an explicit base.
 
     Resolution deliberately omits browser-owned durable settings.  ATH polar
-    values apply first and WG's block wins where both formats describe a solve.
+    values and the imported design's origin apply first; WG's block wins where
+    both formats describe a solve.
     Unknown blocks, keys, and unreadable individual values are ignored.
     """
 
@@ -224,6 +228,14 @@ def solve_options_from_blocks(
         axes = [axis for axis in _AXIS_ORDER if axis in selected]
         if axes:
             polar["enabled_axes"] = axes
+
+        # Counterpart of athPolars.athPolarObservationOrigin in the frontend:
+        # imported polars use the throat unless the simulation is a baffle.
+        root = design.root if isinstance(design, DesignConfig) else design
+        if root is not None and root.text_import_version is not None:
+            polar["observation_origin"] = (
+                "mouth" if root.simulation.sim_type == "infinite-baffle" else "throat"
+            )
 
     solve_items = _items(blocks.get("WG.Solve"))
     if solve_items:

@@ -109,7 +109,7 @@ def build_request(
     """Resolve file blocks, overlay, and engine flag in authoritative order."""
 
     file_settings = has_solve_blocks(parsed.extra_blocks)
-    options = solve_options_from_blocks(parsed.extra_blocks)
+    options = solve_options_from_blocks(parsed.extra_blocks, design=parsed.design)
     if overlay is not None:
         options = _apply_overlay(options, _overlay_options(overlay))
     if engine is not None:

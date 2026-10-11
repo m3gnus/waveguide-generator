@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MIN_POLAR_DISTANCE_M,
+  athPolarObservationOrigin,
   athPolarOverrides,
   designWireWithAthPolars,
   polarUiFromAthBlocks,
@@ -8,6 +9,37 @@ import {
 } from './athPolars';
 
 describe('ATH directivity config compatibility', () => {
+  const polarBlocks = { 'ABEC.Polars:SPL_H': { items: { MapAngleRange: '0,90,19' } } };
+  const importedDesign = { text_import_version: 'ath-2026-08c-v1' };
+
+  it.each([
+    ['freestanding', 'throat'],
+    ['infinite-baffle', 'mouth'],
+    [undefined, 'throat'],
+  ])('defaults imported polar origin for simulation %s to %s', (simType, origin) => {
+    expect(athPolarObservationOrigin(polarBlocks, {
+      ...importedDesign, simulation: { sim_type: simType },
+    })).toBe(origin);
+  });
+
+  it.each(['mouth', 'throat'])('leaves a stated WG.Solve origin %s authoritative', (origin) => {
+    expect(athPolarObservationOrigin({
+      ...polarBlocks, 'WG.Solve': { items: { ObservationOrigin: origin } },
+    }, importedDesign)).toBeNull();
+  });
+
+  it('uses the import origin when WG.Solve has an invalid origin', () => {
+    expect(athPolarObservationOrigin({
+      ...polarBlocks, 'WG.Solve': { items: { ObservationOrigin: 'unknown' } },
+    }, importedDesign)).toBe('throat');
+  });
+
+  it('leaves native designs and designs without polars unchanged', () => {
+    expect(athPolarObservationOrigin(polarBlocks, {})).toBeNull();
+    expect(athPolarObservationOrigin(polarBlocks, { text_import_version: null })).toBeNull();
+    expect(athPolarObservationOrigin({}, importedDesign)).toBeNull();
+  });
+
   it('reads old ATH H/V blocks, including the historical 270 degree vertical plane', () => {
     const polar = polarUiFromAthBlocks({
       'ABEC.Polars:SPL_H': {

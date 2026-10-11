@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping
 
 from pydantic import ValidationError
 
+from .ath_import_defaults import apply_ath_import_defaults
 from .migrate import MigrationApplication, apply_migrations
 from .text_import import TEXT_IMPORT_VERSION, NATIVE_GEOMETRY_VERSION, GEOMETRY_STAMP_LABEL
 from .schema import (
@@ -1356,6 +1357,8 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     )
     if version == TEXT_IMPORT_VERSION or (version is None and dialect == "ath" and payload["formula"] != "FREEFORM"):
         payload["text_import_version"] = TEXT_IMPORT_VERSION
+        if version is None:
+            ignored_profile.extend(IgnoredSetting(*entry) for entry in apply_ath_import_defaults(payload))
     applications: list[MigrationApplication] = []
     if migrate:
         try:

@@ -651,7 +651,30 @@ function preserveSharedForFreeform(converted: DesignDocument, source: DesignDocu
   const commonExpression = /^(?:scale|throat_ext_angle|throat_ext_length|slot_length|morph\.|source\.|enclosure\.|mesh\.|simulation\.|output\.)/;
   const expressions = Object.fromEntries(Object.entries(source._expressions ?? {}).filter(([path]) => commonExpression.test(path) && path !== 'morph.target_shape'));
   if (Object.keys(expressions).length) converted._expressions = expressions;
-  const absent = (source._absent ?? []).filter((path) => commonExpression.test(path) && path !== 'morph.target_shape');
+  let absent = (source._absent ?? []).filter((path) => commonExpression.test(path) && path !== 'morph.target_shape');
+  const scale = source.scale;
+  if (source.text_import_version != null && Number.isFinite(scale) && scale !== 1) {
+    // Native FREEFORM scales these dimensions; ATH imports keep them in mm.
+    for (const key of ['wall_thickness', 'throat_resolution', 'mouth_resolution', 'rear_resolution'] as const) {
+      const path = `mesh.${key}`;
+      if (absent.includes(path)) {
+        if (key === 'wall_thickness' && source.simulation.sim_type !== 'infinite-baffle') {
+          converted.mesh[key] = 5 / scale;
+          absent = absent.filter((entry) => entry !== path);
+        }
+        continue;
+      }
+      converted.mesh[key] /= scale;
+      const expression = expressions[path];
+      if (expression) {
+        expressions[path] = {
+          ...expression,
+          value: expression.value === null ? null : expression.value / scale,
+          raw: expression.raw == null ? expression.raw : `(${expression.raw})/${scale}`,
+        };
+      }
+    }
+  }
   if (absent.length) converted._absent = absent;
   return converted;
 }

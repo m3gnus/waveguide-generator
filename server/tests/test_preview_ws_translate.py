@@ -457,7 +457,7 @@ def test_tritonia_reference_import_translates_to_mesher_config() -> None:
     surface_roles = [surface.role for surface in geometry.surfaces]
 
     assert config["mode"] == "freestanding"
-    assert config["mesh"]["wallThickness"] == pytest.approx(3.51)
+    assert config["mesh"]["wallThickness"] == 5
     assert surface_roles == [
         "horn.inner",
         "horn.outer",

@@ -49,7 +49,8 @@ def effective_wall_thickness(root: Any) -> float:
     a bare shell and disagrees with the mesh that was generated.
 
     The returned value is unscaled millimetres; ``design_to_mesher_config``
-    applies the waveguide ``scale`` on top of it.
+    applies the waveguide ``scale`` for native designs. ATH imports keep the
+    wall in unscaled millimetres, matching ATH V2026-08c output.
     """
 
     default = 0.0 if root.simulation.sim_type == "infinite-baffle" else 5.0
@@ -338,7 +339,9 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
     # ATH treats an omitted wall thickness as 5 mm for normal simulations and
     # 0 mm for infinite-baffle simulations. Keep the document field nullable
     # for lossless CFG round-trips and apply that default only at translation.
-    wall_thickness = effective_wall_thickness(root) * scale
+    # Imported walls and mesh resolutions stay in millimetres under Scale.
+    mesh_scale = 1.0 if root.text_import_version is not None else scale
+    wall_thickness = effective_wall_thickness(root) * mesh_scale
     if root.mesh.quadrants is not None:
         _structural_number(root.mesh.quadrants, "mesh.quadrants")
     # Inactive enclosure values remain valid preconfiguration. Simulation mode
@@ -371,11 +374,11 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 "wallThickness": (
                     wall_thickness
                     if mesh.wall_thickness is None
-                    else _scaled_expr(mesh.wall_thickness, scale)
+                    else _scaled_expr(mesh.wall_thickness, mesh_scale)
                 ),
-                "throatResolution": _scaled_expr(mesh.throat_resolution, scale),
-                "mouthResolution": _scaled_expr(mesh.mouth_resolution, scale),
-                "rearResolution": _scaled_expr(mesh.rear_resolution, scale),
+                "throatResolution": _scaled_expr(mesh.throat_resolution, mesh_scale),
+                "mouthResolution": _scaled_expr(mesh.mouth_resolution, mesh_scale),
+                "rearResolution": _scaled_expr(mesh.rear_resolution, mesh_scale),
                 "apertureResolutionScale": _expr(mesh.aperture_resolution_scale),
                 "maxTriangles": _expr(mesh.max_triangles),
                 "allowLargeMesh": _expr(mesh.allow_large_mesh),

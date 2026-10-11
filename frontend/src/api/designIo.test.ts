@@ -80,6 +80,82 @@ describe('FREEFORM conversion of a rolled-back profile', () => {
   ].join('\r\n');
   const increasing = (values: number[]) => values.every((value, index) => index === 0 || value > values[index - 1]);
 
+  it('preserves imported wall and mesh sizes under Scale 1.5', () => {
+    const source = hydrateDesignDocument({
+      formula: 'OSSE', text_import_version: 'ath-2026-08c-v1', scale: 1.5,
+      mesh: { wall_thickness: 5, throat_resolution: 3, mouth_resolution: 7, rear_resolution: 9 },
+    });
+    const { design } = freeformFromProfileCsv(exportCsv(rolledBack), source);
+    expect(design.text_import_version).toBeUndefined();
+    expect(design.scale).toBe(1.5);
+    for (const key of ['wall_thickness', 'throat_resolution', 'mouth_resolution', 'rear_resolution'] as const) {
+      expect(design.mesh[key] * design.scale).toBeCloseTo(source.mesh[key]);
+    }
+    expect(source.mesh).toMatchObject({ wall_thickness: 5, throat_resolution: 3, mouth_resolution: 7, rear_resolution: 9 });
+  });
+
+  it.each(['wall_thickness', 'throat_resolution', 'mouth_resolution', 'rear_resolution'] as const)(
+    'rescales the carried %s expression without changing the source', (key) => {
+      for (const value of [6, null]) {
+        const source = hydrateDesignDocument({
+          formula: 'OSSE', text_import_version: 'ath-2026-08c-v1', scale: 1.5,
+          mesh: { [key]: { value, raw: '3 * 2' } },
+        });
+        const { design } = freeformFromProfileCsv(exportCsv(rolledBack), source);
+        const expression = { value: value === null ? null : 4, raw: '(3 * 2)/1.5' };
+        expect(design._expressions?.[`mesh.${key}`]).toEqual(expression);
+        expect(serializeDesign(design)).toMatchObject({ mesh: { [key]: expression } });
+        expect(source._expressions?.[`mesh.${key}`]).toEqual({ value, raw: '3 * 2' });
+      }
+    },
+  );
+
+  it.each(['freestanding', 'infinite-baffle'] as const)(
+    'preserves omitted wall and resolution defaults for imported %s under Scale 1.5', (simType) => {
+      const source = hydrateDesignDocument({
+        formula: 'OSSE', text_import_version: 'ath-2026-08c-v1', scale: 1.5,
+        simulation: { sim_type: simType },
+        mesh: { wall_thickness: null, throat_resolution: null, mouth_resolution: null, rear_resolution: null },
+      });
+      const { design } = freeformFromProfileCsv(exportCsv(rolledBack), source);
+      const mesh = serializeDesign(design).mesh as Record<string, unknown>;
+      expect(mesh.wall_thickness).toBe(simType === 'freestanding' ? 5 / 1.5 : null);
+      expect(design._absent?.includes('mesh.wall_thickness') ?? false).toBe(simType === 'infinite-baffle');
+      for (const key of ['throat_resolution', 'mouth_resolution', 'rear_resolution']) {
+        expect(mesh[key]).toBeNull();
+        expect(design._absent).toContain(`mesh.${key}`);
+      }
+      expect(source._absent).toContain('mesh.wall_thickness');
+    },
+  );
+
+  it.each([
+    { scale: 1.5 },
+    { scale: 1, text_import_version: 'ath-2026-08c-v1' },
+  ])('keeps shared mesh settings unchanged for source %j', (settings) => {
+    for (const wall of [5, null]) {
+      const source = hydrateDesignDocument({
+        formula: 'OSSE', ...settings,
+        mesh: { wall_thickness: wall, throat_resolution: { value: 6, raw: '3 * 2' }, mouth_resolution: 7, rear_resolution: null },
+      });
+      const { design } = freeformFromProfileCsv(exportCsv(rolledBack), source);
+      expect(design.mesh).toEqual(source.mesh);
+      expect(design._expressions).toEqual(source._expressions);
+      expect(design._absent).toEqual(source._absent?.filter((path) => path.startsWith('mesh.')));
+    }
+  });
+
+  it('preserves imported mesh sizes in the endpoint fallback too', async () => {
+    const source = hydrateDesignDocument({
+      formula: 'OSSE', text_import_version: 'ath-2026-08c-v1', scale: 1.5,
+      mesh: { wall_thickness: null, throat_resolution: 3, mouth_resolution: 7, rear_resolution: 9 },
+    });
+    const fetcher = vi.fn(async () => new Response('', { status: 404 }));
+    const { design } = await convertDesignToFreeform(source, fetcher);
+    expect(design.mesh).toMatchObject({ wall_thickness: 5 / 1.5, throat_resolution: 2, mouth_resolution: 7 / 1.5, rear_resolution: 6 });
+    expect(design._absent ?? []).not.toContain('mesh.wall_thickness');
+  });
+
   it('ends the profile at its fold on a vertical tangent and says what it left out', () => {
     const { design, notice } = freeformFromProfileCsv(exportCsv(rolledBack), designForFamily('R-OSSE'));
     expect(design.length).toBeCloseTo(137.52, 6);

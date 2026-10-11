@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { withEditSignals } from './solveSettingsEdits';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import { DEFAULT_ATH_POLAR_UI, MIN_POLAR_DISTANCE_M, athPolarOverrides } from './athPolars';
+import { DEFAULT_ATH_POLAR_UI, MIN_POLAR_DISTANCE_M, athPolarObservationOrigin, athPolarOverrides } from './athPolars';
 import { durableSettings } from './durableSettings';
 import { DEFAULT_GROUND_PLANE, DEFAULT_SOLVER, DEFAULT_SWEEP } from './solveDefaults';
 import { MAX_FREQUENCY_POINTS, parseFrequencyList, type FrequencyListParse } from './frequencyList';
@@ -478,10 +478,17 @@ export function restorePolarUiFromAthBlocks(blocks: unknown): void {
  * Covers ATH's directivity blocks and WG's own `WG.Solve` block in one call,
  * so a design carries the sweep, mesh policy, and measurement origin it was
  * saved with. Settings the file is silent about are left as they are, except
- * accuracy: designs predating the choice mean Fast.
+ * accuracy (designs predating the choice mean Fast) and the measurement origin
+ * of an imported ATH design's polars: ATH V2026-08c measures them about the
+ * throat for a free-standing horn and the mouth for an infinite baffle, so that
+ * applies unless `WG.Solve` states an origin (`athPolarObservationOrigin`).
  */
-export function restoreSolveSettingsFromBlocks(blocks: unknown): void {
+export function restoreSolveSettingsFromBlocks(blocks: unknown, design?: unknown): void {
   restorePolarUiFromAthBlocks(blocks);
+  const origin = athPolarObservationOrigin(blocks, design);
+  if (origin !== null) {
+    useSolveOptionsStore.setState((state) => ({ polar: { ...state.polar, observationOrigin: origin } }));
+  }
   const solve = wgSolveOverrides(blocks);
   if (!solve) {
     useSolveOptionsStore.setState({ accuracy: 'fast' });

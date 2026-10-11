@@ -7,11 +7,44 @@ import {
   parseFrequencyList,
   polarConfigFromUi,
   resetSolveOptionsStore,
+  restoreSolveSettingsFromBlocks,
   useSolveOptionsStore,
 } from './solveOptions';
 
 describe('solve and directivity options', () => {
   beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); });
+
+  it.each([
+    ['freestanding', 'throat'],
+    ['infinite-baffle', 'mouth'],
+    [undefined, 'throat'],
+  ])('restores imported polar origin for simulation %s as %s', (simType, origin) => {
+    useSolveOptionsStore.getState().updatePolar({ observationOrigin: origin === 'mouth' ? 'throat' : 'mouth' });
+    restoreSolveSettingsFromBlocks({
+      'ABEC.Polars:SPL_H': { items: { MapAngleRange: '0,90,19', Distance: '2', NormAngle: '0' } },
+    }, { text_import_version: 'ath-2026-08c-v1', simulation: { sim_type: simType } });
+    expect(useSolveOptionsStore.getState().polar).toMatchObject({ observationOrigin: origin, distance: 2, normAngle: 0 });
+  });
+
+  it.each([
+    ['freestanding', 'mouth'],
+    ['infinite-baffle', 'throat'],
+  ] as const)('WG.Solve origin wins for imported %s polars', (simType, origin) => {
+    restoreSolveSettingsFromBlocks({
+      'ABEC.Polars:SPL_H': { items: { MapAngleRange: '0,90,19' } },
+      'WG.Solve': { items: { ObservationOrigin: origin } },
+    }, { text_import_version: 'ath-2026-08c-v1', simulation: { sim_type: simType } });
+    expect(useSolveOptionsStore.getState().polar.observationOrigin).toBe(origin);
+  });
+
+  it('keeps the current origin for native designs and imports without polars', () => {
+    useSolveOptionsStore.getState().updatePolar({ observationOrigin: 'throat' });
+    restoreSolveSettingsFromBlocks({ 'ABEC.Polars:SPL_H': { items: {} } }, {});
+    expect(useSolveOptionsStore.getState().polar.observationOrigin).toBe('throat');
+    useSolveOptionsStore.getState().updatePolar({ observationOrigin: 'mouth' });
+    restoreSolveSettingsFromBlocks({}, { text_import_version: 'ath-2026-08c-v1' });
+    expect(useSolveOptionsStore.getState().polar.observationOrigin).toBe('mouth');
+  });
 
   it('defaults to Full 3D, v1 solve policies, and the new polar_config field names', () => {
     const options = useSolveOptionsStore.getState().options();

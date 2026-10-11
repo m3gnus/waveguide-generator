@@ -40,7 +40,7 @@ export function applyOpenedDesign(
 ): OpenedDesign {
   const openedDesign = hydrateDesignDocument(opened.design);
   useDesignStore.getState().replaceDesign(openedDesign, { loadSource });
-  restoreSolveSettingsFromBlocks(openedDesign.extra_blocks);
+  restoreSolveSettingsFromBlocks(openedDesign.extra_blocks, openedDesign);
   const document = useDocumentStore.getState();
   // One name for the whole document: the opened file's, unless the file's own
   // Report.Title is that same name spelled more fully.
