@@ -41,14 +41,14 @@ def parse_snapshot(raw):
         pid = struct.unpack_from('=i', raw, offset + 40)[0]
         flag = struct.unpack_from('=i', raw, offset + 32)[0]
         status = raw[offset + 36]
-        # SZOMB owns no resident memory. Neither does a process whose exit has
-        # begun: its task is torn down, so libproc answers ESRCH, while the
-        # snapshot can still list it with a running p_stat.
-        if pid <= 0 or status == 5 or flag & P_WEXIT:
+        if pid <= 0 or status == 5:  # SZOMB owns no resident memory
             continue
+        # A process whose exit has begun stays in the tree: its live children
+        # may not be reparented yet, and ownership is traced through it.
         rows[pid] = {
             'ppid': struct.unpack_from('=i', raw, offset + 560)[0],
-            'start': struct.unpack_from('=qq', raw, offset), 'rss': 0}
+            'start': struct.unpack_from('=qq', raw, offset), 'rss': 0,
+            'exiting': bool(flag & P_WEXIT)}
     return rows
 
 
@@ -123,6 +123,11 @@ class DarwinProcesses:
                 current = after.get(pid)
                 if current is None or current['start'] != rows[pid]['start']:
                     del rows[pid]
+                elif pid in errors and current.get('exiting'):
+                    # Exit has begun, so libproc no longer finds the task
+                    # (ESRCH) while the snapshot still lists it. It holds no
+                    # memory the tree keeps; its descendants are still read.
+                    rows[pid]['rss'] = 0
                 elif pid in errors:
                     live_errors[pid] = errors[pid]
                 elif current['ppid'] != rows[pid]['ppid']:

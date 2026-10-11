@@ -200,8 +200,29 @@ def kinfo(pid, *, ppid=1, start=(5, 6), status=2, flag=0):
     return bytes(raw)
 
 
-def test_snapshot_skips_zombies_and_processes_whose_exit_has_begun():
+def test_snapshot_skips_zombies_and_marks_processes_whose_exit_has_begun():
     raw = (kinfo(7, ppid=3) + kinfo(8, status=5) + kinfo(9, flag=P_WEXIT | 0x4004)
            + kinfo(10, flag=0x4004) + kinfo(0))
-    assert parse_snapshot(raw) == {7: {'ppid': 3, 'start': (5, 6), 'rss': 0},
-                                   10: {'ppid': 1, 'start': (5, 6), 'rss': 0}}
+    rows = parse_snapshot(raw)
+    assert sorted(rows) == [7, 9, 10]
+    assert rows[7] == {'ppid': 3, 'start': (5, 6), 'rss': 0, 'exiting': False}
+    assert rows[9]['exiting'] and not rows[10]['exiting']
+
+
+def exiting(start=1, parent=1):
+    return dict(row(start, parent), exiting=True)
+
+
+def test_exiting_parent_waives_only_its_own_rss_and_keeps_live_child():
+    snapshot = {2: exiting(), 3: row(parent=2)}
+    native = reader([snapshot, snapshot], lambda pid: (_ for _ in ()).throw(
+        OSError(errno.ESRCH, 'gone')) if pid == 2 else 700)
+    rows = native.read_owned(lambda rows: set(rows))
+    assert rows[2]['rss'] == 0 and rows[3]['rss'] == 700
+
+
+def test_unreadable_live_child_of_exiting_parent_still_refuses():
+    snapshot = {2: exiting(), 3: row(parent=2)}
+    native = reader([snapshot] * 6, denied)
+    with pytest.raises(OSError, match='denied'):
+        native.read_owned(lambda rows: set(rows))
