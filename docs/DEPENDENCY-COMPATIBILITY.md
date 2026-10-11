@@ -1,11 +1,15 @@
 # Dependency compatibility
 
-The mesher pin `a515334c` supplies native source-contour, front-baffle woofer,
-shared horn/woofer and passive phase-plug contracts. It also preserves saved
-ATH geometry interpretation and permits bounded near-planar imported rear
-returns, with pointwise displacement at most the smaller of 0.0001 mm and
-0.0001 times the wall thickness. Incompatible accepted rear sampling planes
-and larger warps remain refused; native rear construction is unchanged.
+The mesher pin `232dff4c` supplies native source-contour, front-baffle woofer,
+shared horn/woofer and passive phase-plug contracts. Its ATH import contract is
+versioned: designs saved with the `ath-2026-08c-v1` stamp build exactly as
+before, including bounded near-planar imported rear returns (pointwise
+displacement at most the smaller of 0.0001 mm and 0.0001 times the wall
+thickness). Fresh ATH imports are stamped `ath-2026-09a-v2` and follow ATH
+V2026-09a: the ATH expression functions with natural `log`, NAC, current ATH
+axial sampling, `Mesh.Roundover` lips, `Mesh.RearShape = 3` rears, warped
+RearShape 1 rears and the corrected import defaults. STEP export of lip or
+RearShape 3 imports is refused by name. Native rear construction is unchanged.
 See [Native source contour ingestion](architecture/NATIVE-SOURCE-CONTOURS.md)
 and [Source contour and assembly editors](architecture/source-contour-editor.md).
 
