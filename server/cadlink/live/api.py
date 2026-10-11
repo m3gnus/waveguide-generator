@@ -360,6 +360,7 @@ def mount_live(application: FastAPI) -> None:
     # import this module.
     from . import deliveries, heartbeat, requests  # noqa: F401
 
+    fusion_delivery.set_request_notifier(lambda data_dir: live_wake.notify(data_dir))
     application.state.live_registry = None
     for router in (public_router, registration_router, session_router):
         application.include_router(router)

@@ -69,6 +69,31 @@ describe('CAD connection observations without the coordinator', () => {
     expect(connection.getState().fusionStatus).toBeNull();
   });
 
+  it('lets a command finish across background polls and resumes observation afterward', async () => {
+    const pending = deferred<CadConnectionStatus>();
+    const command = connection.readCommand(() => pending.promise);
+    const poll = vi.fn(async () => status({ documentId: 'poll-document' }));
+    expect(await connection.read(poll)).toBeNull();
+    expect(poll).not.toHaveBeenCalled();
+    const answer = status(); pending.resolve(answer);
+    expect(await command).toBe(answer);
+    expect(connection.getState().fusionStatus).toBe(answer);
+    expect(await connection.read(poll)).toEqual(status({ documentId: 'poll-document' }));
+    expect(poll).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a background answer overtaken by a command and fences older commands', async () => {
+    const background = deferred<CadConnectionStatus>();
+    const old = deferred<CadConnectionStatus>();
+    const backgroundRead = connection.read(() => background.promise);
+    const oldCommand = connection.readCommand(() => old.promise);
+    const next = status({ documentId: 'new-command' });
+    expect(await connection.readCommand(async () => next)).toBe(next);
+    background.resolve(status({ documentId: 'old-background' })); old.resolve(status());
+    expect(await backgroundRead).toBeNull(); expect(await oldCommand).toBeNull();
+    expect(connection.getState().fusionStatus).toBe(next);
+  });
+
   it('cancels the old expiry when a new report is published', async () => {
     await connection.read(async () => status());
     await vi.advanceTimersByTimeAsync(10_000);

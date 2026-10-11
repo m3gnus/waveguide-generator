@@ -3,7 +3,7 @@ import { createCadConnectionStore } from '../../stores/cadConnection';
 import { designForFamily, resetDesignStore, useDesignStore } from '../../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../../stores/solveOptions';
-import { createCadOutboundController, OutboundSupersededError } from './outbound';
+import { createCadOutboundController, isOutboundSupersededError, OutboundSupersededError } from './outbound';
 import { deferred, json } from './selection.fixtures';
 import { exported, identity, link, status } from './outbound.fixtures';
 import menuSource from '../../design/DesignFileMenu.tsx?raw';
@@ -63,7 +63,7 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
   });
   it.each(['closed', 'no_document', 'not_linked'] as const)('chooses Insert from fresh %s evidence', async (state) => {
     const { controller, fetcher, reader, connection } = setup(status({ state, link: null, selectedInstanceId: null }));
-    await connection.read(async () => status({ state: 'addin_offline' }));
+    await connection.readCommand(async () => status({ state: 'addin_offline' }));
     await controller.sendWgToFusion();
     const body = JSON.parse(String(exportsFrom(fetcher)[0][1]?.body));
     expect(body.expectedFusionDocumentId).toBeNull(); expect(body.expectedFusionInstanceId).toBeNull();
@@ -72,7 +72,7 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
   });
   it('chooses an exact guarded Update from command-time evidence instead of a held Insert status', async () => {
     const { controller, fetcher, connection } = setup();
-    await connection.read(async () => status({ state: 'closed', link: null }));
+    await connection.readCommand(async () => status({ state: 'closed', link: null }));
     await controller.sendWgToFusion();
     expect(JSON.parse(String(exportsFrom(fetcher)[0][1]?.body))).toMatchObject({
       identity, expectedFusionDocumentId: 'document-1', expectedFusionInstanceId: link.instanceId,
@@ -127,12 +127,18 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/select') ? pick.promise
       : String(input).endsWith('/wglink') ? json(exported) : json({ selected: true }));
     const { controller, setStatus } = setup(status({ cadFolderConfigured: false }), fetcher);
-    const first = controller.sendWgToFusion().catch((error) => error);
+    const feedback = vi.fn();
+    // DesignFileMenu-style cut-over caller: cancellation produces no message.
+    const first = controller.sendWgToFusion().catch((error: unknown) => {
+      if (isOutboundSupersededError(error)) return;
+      feedback(error);
+    });
     await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
     const second = controller.sendWgToFusion();
     await Promise.resolve(); await Promise.resolve();
     setStatus(status()); pick.resolve(json({ selected: true }));
-    expect(await first).toBeInstanceOf(OutboundSupersededError); await second;
+    expect(await first).toBeUndefined(); await second;
+    expect(feedback).not.toHaveBeenCalled(); expect(controller.getState().error).toBeNull();
     expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith('/select'))).toHaveLength(1);
     expect(exportsFrom(fetcher)).toHaveLength(1);
   });
@@ -155,8 +161,26 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
     const pending = deferred<ReturnType<typeof status>>();
     const { controller, connection, reader, fetcher } = setup(); reader.mockImplementationOnce(() => pending.promise);
     const first = controller.sendWgToFusion();
-    await connection.read(async () => status({ state: 'addin_offline' })); pending.resolve(status());
+    await connection.readCommand(async () => status({ state: 'addin_offline' })); pending.resolve(status());
     await expect(first).rejects.toThrow('could not check'); expect(exportsFrom(fetcher)).toHaveLength(0);
+  });
+  it('sends through a status read overlapping a background observation poll', async () => {
+    const pending = deferred<ReturnType<typeof status>>();
+    const { controller, connection, reader, fetcher } = setup(); reader.mockImplementationOnce(() => pending.promise);
+    const sending = controller.sendWgToFusion();
+    await connection.read(async () => status()); pending.resolve(status());
+    await sending; expect(exportsFrom(fetcher)).toHaveLength(1);
+  });
+  it('describes an identity-only change as a changed Fusion link', async () => {
+    const old = deferred<Response>();
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/wglink') ? old.promise : json({ selected: true }));
+    const { controller } = setup(status(), fetcher);
+    const sending = controller.sendWgToFusion();
+    await vi.waitFor(() => expect(exportsFrom(fetcher)).toHaveLength(1));
+    useDocumentStore.getState().setCadLink({ ...identity, designId: 'wgd_new' }, 'current');
+    old.resolve(json(exported)); await sending;
+    expect(controller.getState().status).toContain('The Fusion link changed');
+    expect(controller.getState().status).not.toContain('Another design was opened');
   });
   it('leaves polar edits made during export uncommitted', async () => {
     const old = deferred<Response>();
@@ -198,4 +222,10 @@ it.each(['document', 'parameters', 'settings', 'identity'] as const)('never send
   if (change === 'settings') useSolveOptionsStore.getState().updatePolar({ distance: 4 });
   if (change === 'identity') useDocumentStore.getState().setCadLink({ ...identity, designId: 'new' }, 'current');
   pending.resolve(status()); await expect(first).rejects.toThrow(); expect(exportsFrom(fetcher)).toHaveLength(0);
+});
+
+it('exposes supersession distinctly from failures and conflict returns', () => {
+  expect(isOutboundSupersededError(new OutboundSupersededError())).toBe(true);
+  expect(isOutboundSupersededError(new Error('unavailable'))).toBe(false);
+  expect(isOutboundSupersededError(null)).toBe(false);
 });

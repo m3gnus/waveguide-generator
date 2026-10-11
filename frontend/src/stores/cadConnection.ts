@@ -27,6 +27,7 @@ export function createCadConnectionStore(now: () => number = Date.now) {
     fusionStatus: null, receivedAt: null, expiresAt: null, linkName: null, recoveryError: null,
   }));
   let generation = 0;
+  let commandGeneration: number | null = null;
   let expiryTimer: ReturnType<typeof setTimeout> | null = null;
   const clearExpiry = () => {
     if (expiryTimer !== null) clearTimeout(expiryTimer);
@@ -50,24 +51,34 @@ export function createCadConnectionStore(now: () => number = Date.now) {
     }
     return held;
   };
+  const read = async (reader: () => Promise<CadConnectionStatus>, command = false): Promise<CadConnectionStatus | null> => {
+    // Observation polls yield to a pending command. They cannot invalidate its
+    // evidence, publish over it, or pile up while its read is stalled.
+    if (!command && commandGeneration !== null) return null;
+    const started = ++generation;
+    if (command) commandGeneration = started;
+    try {
+      const status = await reader();
+      // Newer commands and context fences still supersede both the answer and
+      // its publication, even if the newer command's read later fails.
+      if (started !== generation || !VALID_STATES.has(status.state)) return null;
+      return publish(status);
+    } catch {
+      // Presence is advisory. Keep the last report and let its own TTL age it.
+      return null;
+    } finally {
+      if (commandGeneration === started) commandGeneration = null;
+    }
+  };
   return Object.assign(store, {
-    async read(reader: () => Promise<CadConnectionStatus>): Promise<CadConnectionStatus | null> {
-      const started = ++generation;
-      try {
-        const status = await reader();
-        // Refuse the answer as well as its publication: an older read must not
-        // drive an action while a newer read is pending, even if it later fails.
-        if (started !== generation || !VALID_STATES.has(status.state)) return null;
-        return publish(status);
-      } catch {
-        // Presence is advisory. Keep the last report and let its own TTL age it.
-        return null;
-      }
-    },
+    read,
+    /** Fresh action evidence; background reads yield until this read finishes. */
+    readCommand: (reader: () => Promise<CadConnectionStatus>) => read(reader, true),
     /** Supersede pending reads while retaining the last report and its TTL. */
-    fence() { generation += 1; },
+    fence() { generation += 1; commandGeneration = null; },
     invalidate() {
       generation += 1;
+      commandGeneration = null;
       clearExpiry();
       store.setState({ fusionStatus: null, receivedAt: null, expiresAt: null, linkName: null });
     },

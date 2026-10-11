@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
+import textwrap
 
 import pytest
 
@@ -78,13 +80,9 @@ def _report(tmp_path, request_id="pull-a", outcome="refused", **changes):
     return marker
 
 
-def test_file_refusal_is_correlated_persisted_once_and_survives_reopen(tmp_path, monkeypatch):
+def test_file_refusal_is_correlated_persisted_once_and_survives_reopen(tmp_path):
     from server.cadlink.fusion_return import read_return_request
 
-    # Reading a return outcome never consults the live registry or wakes it.
-    registry = sys.modules.get("server.cadlink.live.registry")
-    if registry is not None:
-        monkeypatch.setattr(registry, "registry_for", lambda *_: (_ for _ in ()).throw(AssertionError("live read")))
     store, _path, request_id = _request(tmp_path)
     marker = _report(tmp_path)
     first = read_return_request(tmp_path, store, request_id)
@@ -187,4 +185,81 @@ def test_exact_http_read_without_coordinator_live_session_or_job(tmp_path):
         response = client.get(f"/api/cadlink/return-requests/{request_id}")
         assert response.status_code == 200 and response.json()["state"] == "rejected"
         assert client.get("/api/cadlink/return-requests/unknown").status_code == 404
+    store.close()
+
+def test_file_return_owner_imports_and_operates_with_all_live_imports_blocked(tmp_path):
+    script = textwrap.dedent("""
+        import importlib.abc
+        import json
+        from pathlib import Path
+        import sys
+        from datetime import datetime, timezone
+
+        class BlockLive(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == 'server.cadlink.live' or fullname.startswith('server.cadlink.live.'):
+                    raise ImportError('live imports blocked: ' + fullname)
+        sys.meta_path.insert(0, BlockLive())
+        from server.cadlink.fusion_return import publish_return_request, read_return_request, router
+        from server.cadlink.store import CadLinkStore
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        data = Path(sys.argv[1])
+        store = CadLinkStore.for_data_dir(data)
+        path, request_id = publish_return_request(data, store, session_id='session-a',
+            design_id='wgd_a', document_id='document-a', instance_id='instance-a',
+            expected_return_state_hash='sha256:state', request_id='pull-a')
+        assert path.is_file()
+        assert read_return_request(data, store, request_id)['state'] == 'received'
+        (path.parent.parent / '.fusion-status.json').write_text(json.dumps({
+            'schemaVersion': 1, 'cadApplication': 'fusion360', 'deliveryVersion': 3,
+            'updatedAt': datetime.now(timezone.utc).isoformat(),
+            'diagnostics': {'lastRequest': {'channel': 'returnRequest',
+                'correlationId': request_id, 'outcome': 'refused'}}}))
+        app = FastAPI()
+        app.state.data_dir = data
+        app.state.cadlink_store = store
+        app.include_router(router)
+        with TestClient(app) as client:
+            result = client.get('/api/cadlink/return-requests/' + request_id)
+            assert result.status_code == 200
+            assert result.json()['state'] == 'rejected'
+        assert not any(name == 'server.cadlink.live' or name.startswith('server.cadlink.live.') for name in sys.modules)
+        store.close()
+        store = CadLinkStore.for_data_dir(data)
+        assert read_return_request(data, store, request_id)['state'] == 'rejected'
+        store.close()
+    """)
+    result = subprocess.run([sys.executable, '-c', script, str(tmp_path)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_mounted_live_layer_receives_publication_and_recovery_wakes(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from server.cadlink import fusion_delivery
+    from server.cadlink.live.api import mount_live
+    from server.cadlink.live import wake
+
+    # Restore the process-level hook after testing mounting without a lifespan.
+    monkeypatch.setattr(fusion_delivery, '_request_notifier', fusion_delivery._request_notifier)
+    notified = []
+    monkeypatch.setattr(wake, 'notify', notified.append)
+    mount_live(FastAPI())
+    store, path, request_id = _request(tmp_path)
+    assert notified == [tmp_path]
+    path.rename(path.with_name('.' + request_id + '.json.staged.tmp'))
+    assert fusion_delivery.recover_staged_fusion_requests(tmp_path, lookup_operation=store.get_operation) == (request_id,)
+    assert path.is_file()
+    assert notified == [tmp_path, tmp_path]
+    store.close()
+
+
+@pytest.mark.parametrize('seconds,state', [(4, 'rejected'), (6, 'received')])
+def test_return_outcomes_use_the_documented_tighter_future_tolerance(tmp_path, seconds, state):
+    from datetime import datetime, timedelta, timezone
+    from server.cadlink.fusion_return import read_return_request
+
+    store, _path, request_id = _request(tmp_path)
+    _report(tmp_path, updatedAt=(datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat())
+    assert read_return_request(tmp_path, store, request_id)['state'] == state
     store.close()

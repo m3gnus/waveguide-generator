@@ -6,7 +6,9 @@ import { resetDocumentStore, useDocumentStore } from '../../stores/document';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { createCadArrivalActions, SupersededError } from './arrivals';
 import { createCadReturnWaiter, FUSION_RETURN_TIMEOUT_MS } from './returnWaiter';
-import { bundle, deferred, json } from './selection.fixtures';
+import { restoreCadJobModel } from './restores';
+import { importedMeshStore } from '../../viewport/importedMeshStore';
+import { bundle, deferred, job, json, mesh, record } from './selection.fixtures';
 import { identity, link, status } from './outbound.fixtures';
 
 const returned = { ...bundle, requestId: 'pull-1', designIds: [identity.designId] };
@@ -14,12 +16,12 @@ const waiters: ReturnType<typeof createCadReturnWaiter>[] = [];
 const connections: ReturnType<typeof createCadConnectionStore>[] = [];
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime('2026-10-11T12:00:00Z');
-  resetDesignStore(); resetDocumentStore(); resetCadReturnStore();
+  localStorage.clear(); resetDesignStore(); resetDocumentStore(); resetCadReturnStore(); importedMeshStore.clear();
   useDocumentStore.getState().setCadLink(identity, 'current'); workspaceModeStore.setMode('parametric');
 });
 afterEach(() => {
   waiters.forEach((waiter) => waiter.dispose()); connections.forEach((connection) => connection.invalidate());
-  waiters.length = connections.length = 0; vi.useRealTimers(); vi.restoreAllMocks();
+  waiters.length = connections.length = 0; importedMeshStore.clear(); vi.useRealTimers(); vi.restoreAllMocks();
 });
 const flush = () => vi.advanceTimersByTimeAsync(0);
 function setup() {
@@ -224,4 +226,68 @@ it('keeps polling geometry when an outcome read stalls', async () => {
     ? new Promise<Response>(() => undefined) : original(input, init));
   const first = waiter.pullFromFusion(); await flush(); setItems([returned]);
   await vi.advanceTimersByTimeAsync(2_500); expect(await first).toEqual(returned);
+});
+
+it.each(['status', 'listing'] as const)('a delayed archive restore supersedes a pull during its %s read', async (stage) => {
+  const { waiter, read, fetcher, arrival } = setup();
+  const statusRead = deferred<ReturnType<typeof status>>();
+  const listing = deferred<Response>();
+  const archive = deferred<Response>();
+  const original = fetcher.getMockImplementation()!;
+  if (stage === 'status') read.mockImplementationOnce(() => statusRead.promise);
+  else fetcher.mockImplementation(async (input, init) => String(input).endsWith('/returns') ? listing.promise : original(input, init));
+  const first = waiter.pullFromFusion().catch((error) => error); await flush();
+  // beginSelectionIntent emits no store update while the ingest read is pending.
+  const state = useCadReturnStore.getState();
+  const restored = restoreCadJobModel(job(), { enterCadWorkspace: () => undefined },
+    (async (input) => String(input).endsWith('/viewport-mesh') ? new Response(mesh) : archive.promise) as typeof fetch);
+  expect(useCadReturnStore.getState()).toBe(state);
+  const viewportIntent = importedMeshStore.captureGeneration();
+  if (stage === 'status') statusRead.resolve(status());
+  else listing.resolve(json({ items: [returned] }));
+  await flush();
+  expect(waiter.getState().pullingFromFusion).toBe(false);
+  expect(await first).toBeInstanceOf(SupersededError);
+  expect(arrival).not.toHaveBeenCalled();
+  expect(importedMeshStore.isCurrentGeneration(viewportIntent)).toBe(true);
+  expect(posts(fetcher)).toHaveLength(stage === 'status' ? 0 : 1);
+  archive.resolve(json(record)); expect(await restored).toBe(true);
+  expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+});
+
+it('publishes a pull across a background observation poll', async () => {
+  const { waiter, read, connection, fetcher, setItems } = setup();
+  const pending = deferred<ReturnType<typeof status>>(); read.mockImplementationOnce(() => pending.promise);
+  const first = waiter.pullFromFusion();
+  await connection.read(async () => status()); pending.resolve(status());
+  await flush(); expect(posts(fetcher)).toHaveLength(1);
+  setItems([returned]); await waiter.refresh(); expect(await first).toEqual(returned);
+});
+
+it.each(['listing', 'outcome'] as const)('aborts stalled %s reads before retrying and never overlaps batches', async (endpoint) => {
+  const { waiter, fetcher, setItems } = setup();
+  const original = fetcher.getMockImplementation()!;
+  const signals: AbortSignal[] = [];
+  let inFlight = 0; let maximum = 0;
+  fetcher.mockImplementation(async (input, init) => {
+    const stalled = endpoint === 'listing' ? String(input).endsWith('/returns') : String(input).includes('/return-requests/');
+    if (!stalled) return original(input, init);
+    const signal = init?.signal as AbortSignal; signals.push(signal);
+    inFlight += 1; maximum = Math.max(maximum, inFlight);
+    return new Promise<Response>((_resolve, reject) => signal?.addEventListener('abort', () => {
+      inFlight -= 1; reject(new DOMException('Aborted', 'AbortError'));
+    }, { once: true }));
+  });
+  const first = waiter.pullFromFusion().catch((error) => error); await flush();
+  const batch = waiter.refresh(); expect(waiter.refresh()).toBe(batch);
+  await vi.advanceTimersByTimeAsync(10_001);
+  expect(signals.length).toBeGreaterThanOrEqual(4);
+  expect(signals.slice(0, -1).every((signal) => signal.aborted)).toBe(true);
+  expect(maximum).toBe(1);
+  if (endpoint === 'listing') waiter.dispose();
+  else { setItems([returned]); await vi.advanceTimersByTimeAsync(2_500); }
+  await first; await flush();
+  expect(signals.every((signal) => signal.aborted)).toBe(true);
+  expect(inFlight).toBe(0); expect(vi.getTimerCount()).toBe(0);
 });

@@ -14,6 +14,10 @@ import { polarConfigFromUi, useSolveOptionsStore } from '../../stores/solveOptio
 import { runGuardedFusionSend } from './send';
 
 export class OutboundSupersededError extends Error {}
+/** At cut-over, UI callers should return quietly from their catch when true. */
+export function isOutboundSupersededError(error: unknown): error is OutboundSupersededError {
+  return error instanceof OutboundSupersededError;
+}
 export interface CadOutboundOptions {
   connection?: CadConnectionStore;
   fetcher?: typeof fetch;
@@ -50,7 +54,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
     const settings = documentSettingsSignature();
     const identity = useDocumentStore.getState().identity;
     const selected = instance();
-    const result = await connection.read(options.readFusionStatus ?? (() => getFusionCadStatus(
+    const result = await connection.readCommand(options.readFusionStatus ?? (() => getFusionCadStatus(
       useDesignStore.getState().design, useDocumentStore.getState().identity,
       useCadReturnStore.getState().selectedBundle?.bundlePath ?? null, fetcher, selected,
     )));
@@ -124,7 +128,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
           rememberSentCopy(sentKey, result.identity?.designId, adopt);
           if (!current()) return result;
           if (!adopt) {
-            store.setState({ status: `Sent to Fusion 360 · sequence ${result.sequence}. Another design was opened while it was sending, so its CAD link stayed with the design that was exported.` });
+            store.setState({ status: `Sent to Fusion 360 · sequence ${result.sequence}. The Fusion link changed while it was sending, so the returned CAD link was not adopted.` });
             return result;
           }
           try {

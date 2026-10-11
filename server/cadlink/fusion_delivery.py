@@ -37,7 +37,18 @@ from typing import Any, Callable, Literal, Mapping
 from server.platform.exclusive_rename import take_by_rename
 from server.platform.private_paths import ensure_private_directory
 
-from .live import wake as live_wake
+# File delivery is independent of the optional live transport. The live layer
+# registers its wake hint when mounted; without it, files need no notification.
+def _no_request_notifier(_data_dir: Path) -> None:
+    """Files need no notification when no live transport is mounted."""
+
+
+_request_notifier: Callable[[Path], None] = _no_request_notifier
+
+
+def set_request_notifier(notifier: Callable[[Path], None]) -> None:
+    global _request_notifier
+    _request_notifier = notifier
 
 
 IPC_SUBDIRECTORY = Path("ipc") / "wglink"
@@ -381,7 +392,7 @@ def publish_fusion_request(
                 continue
             withdrawn.append(operation_id)
     # A live long poll may be waiting for exactly this (a hint; it rescans too).
-    live_wake.notify(data_dir)
+    _request_notifier(data_dir)
     # The request id is the operation id: it follows the request through the
     # add-in's heartbeat and outcomes (CAD-OPERATIONS.md, "WG-produced Fusion requests").
     logger.info(
@@ -483,7 +494,7 @@ def recover_staged_fusion_requests(
                 recovered.append(operation_id)
                 logger.info("Recovered staged Fusion request %s at startup.", operation_id)
     if recovered:
-        live_wake.notify(data_dir)
+        _request_notifier(data_dir)
     return tuple(recovered)
 
 

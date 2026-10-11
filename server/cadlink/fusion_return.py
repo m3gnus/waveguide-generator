@@ -147,6 +147,10 @@ def read_return_request(data_dir: Path, store: CadLinkStore, request_id: str) ->
     correlation id. Persist it before replying so another command overwriting
     the diagnostic slot cannot erase the result. Old command-time reports are
     allowed: they carry an exact id and never claim current document presence.
+    The five-second future tolerance is deliberately tighter than
+    fusion_status.FUSION_STATUS_MAX_SKEW (one minute): command outcomes need no
+    presence grace period. Do not import fusion_status here; it loads live
+    heartbeat selection, which this file-only owner must remain independent of.
     """
     row = store.get_operation(request_id)
     if row is None or row["kind"] != REQUEST_RETURN:

@@ -22,7 +22,7 @@ export interface CadReturnWaiterOptions {
   fetcher?: typeof fetch;
   readFusionStatus?: () => Promise<CadConnectionStatus>;
   selectedInstanceId?: () => string | null;
-  readOutcome?: (requestId: string) => Promise<FusionReturnOutcome>;
+  readOutcome?: (requestId: string, signal: AbortSignal) => Promise<FusionReturnOutcome>;
   /** Select and display through the S5-4 arrival actions at cut-over. By
    * default selection keeps compatible settings and enters the CAD workspace. */
   onArrival?: (bundle: CadReturnBundle) => void;
@@ -44,8 +44,8 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
   }));
   const selectedInstance = options.selectedInstanceId
     ?? (() => connection.getState().fusionStatus?.selectedInstanceId ?? null);
-  const readOutcome = options.readOutcome ?? ((id: string) => jsonRequest<FusionReturnOutcome>(
-    `/api/cadlink/return-requests/${encodeURIComponent(id)}`, undefined, fetcher,
+  const readOutcome = options.readOutcome ?? ((id: string, signal: AbortSignal) => jsonRequest<FusionReturnOutcome>(
+    `/api/cadlink/return-requests/${encodeURIComponent(id)}`, { signal }, fetcher,
   ));
   let active = true;
   let pending: {
@@ -55,6 +55,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
     finish(bundle: CadReturnBundle | null, error?: Error): void;
   } | null = null;
   let reading: Promise<void> | null = null;
+  let readingAbort: AbortController | null = null;
   let poll: ReturnType<typeof setTimeout> | null = null;
   let deadline: ReturnType<typeof setTimeout> | null = null;
   const clearTimers = () => {
@@ -67,36 +68,51 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
     if (!operation?.requestId || !operation.current()) return Promise.resolve();
     if (reading) return reading;
     const id = operation.requestId;
+    const started = Date.now();
+    const controller = new AbortController();
+    readingAbort = controller;
+    const aborted = new Promise<void>((resolve) => {
+      controller.signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+    // Bound the whole batch, including response body reads. One pair of
+    // independent endpoints is active at a time; a stalled peer is cancelled
+    // before another poll can start.
+    const readDeadline = setTimeout(() => controller.abort(), POLL_MS);
+    const pollingFetch: typeof fetch = (input, init) => fetcher(input, { ...init, signal: controller.signal });
     const read = (async () => {
       // An outcome read may fail while geometry succeeds, or vice versa. An
       // absent listing/outcome is not terminal; the independent deadline wins.
       let returned: CadReturnBundle | undefined;
-      const listing = listReturns(fetcher).then((page) => {
-        if (pending !== operation || !operation.current()) return;
+      const listing = listReturns(pollingFetch).then((page) => {
+        if (controller.signal.aborted || pending !== operation || !operation.current()) return;
         returned = page.items.find((item) => item.readable && item.requestId === id);
         if (!returned) return;
         if (returnBelongsToAnotherProject(returned, useDocumentStore.getState().identity?.designId)) {
           operation.finish(null, new Error(`Received ${returned.documentName ?? returned.name}, but it belongs to another CAD-linked project. Open that project from File → CAD-linked designs.`));
         } else operation.finish(returned);
       }).catch(() => undefined);
-      const answer = readOutcome(id).then(async (outcome) => {
+      const answer = readOutcome(id, controller.signal).then(async (outcome) => {
         // Give a listing already in hand precedence over adapter diagnostics.
         await Promise.resolve();
-        if (pending !== operation || !operation.current() || returned) return;
+        if (controller.signal.aborted || pending !== operation || !operation.current() || returned) return;
         if (outcome.requestId === id && ['rejected', 'cancelled', 'failed'].includes(outcome.state)) {
           const presented = presentCadRefusal(outcome.message);
           operation.finish(null, new Error(presented ? refusalSentence(presented)
             : `Fusion ${outcome.state === 'cancelled' ? 'did not carry out' : 'refused'} the request for this model’s geometry, and reported no detail.`));
         }
       }).catch(() => undefined);
-      // One stalled endpoint must not hold either settlement or the next poll
-      // hostage. Late handlers retain the operation fence and settle only once.
-      await Promise.race([listing, answer, operation.promise.then(() => undefined, () => undefined)]);
+      await Promise.race([Promise.all([listing, answer]), aborted,
+        operation.promise.then(() => undefined, () => undefined)]);
     })().finally(() => {
+      clearTimeout(readDeadline);
+      controller.abort();
+      if (readingAbort === controller) readingAbort = null;
       if (reading === read) reading = null;
       if (pending === operation && operation.current()) {
         if (poll !== null) clearTimeout(poll);
-        poll = setTimeout(() => { poll = null; void refresh(); }, POLL_MS);
+        const remaining = POLL_MS - (Date.now() - started);
+        if (remaining <= 0) void refresh();
+        else poll = setTimeout(() => { poll = null; void refresh(); }, remaining);
       }
     });
     reading = read;
@@ -113,18 +129,30 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
     const instance = selectedInstance();
     let expectedInstance = instance;
     let requesting = false;
+    const contextCurrent = () => isCurrentDocumentLoad(load)
+      && useCadReturnStore.getState().isCurrentModelChoice(choice)
+      && identity === useDocumentStore.getState().identity
+      && (!(requesting || options.selectedInstanceId) || expectedInstance === selectedInstance());
     let resolve!: (bundle: CadReturnBundle) => void;
     let reject!: (error: Error) => void;
     const promise = new Promise<CadReturnBundle>((yes, no) => { resolve = yes; reject = no; });
     const stops: Array<() => void> = [];
     const operation = {
       promise, requestId: null as string | null,
-      current: () => active && pending === operation,
+      current: (): boolean => {
+        if (!active || pending !== operation) return false;
+        // Starting an archive restore advances intent without a store update.
+        // Subscriptions are only an early hint; every async boundary checks it.
+        if (!contextCurrent()) { operation.finish(null); return false; }
+        return true;
+      },
       finish: (returned: CadReturnBundle | null, error?: Error) => {
-        if (!operation.current()) return;
+        if (!active || pending !== operation) return;
+        if (!contextCurrent()) { returned = null; error = undefined; }
         // Clear before selection, callbacks and promise settlement. Reentrant
         // manual picks and duplicate reads cannot settle this operation twice.
-        pending = null; reading = null; clearTimers(); stops.forEach((stop) => stop());
+        pending = null; reading = null; readingAbort?.abort(); readingAbort = null;
+        clearTimers(); stops.forEach((stop) => stop());
         store.setState({ pullingFromFusion: false, requestId: null });
         if (returned) {
           store.setState({ status: `Received ${returned.documentName ?? returned.name} from Fusion 360.` });
@@ -152,13 +180,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
     };
     pending = operation;
     store.setState({ pullingFromFusion: true, requestId: null, error: null, status: null });
-    const changed = () => {
-      if (!isCurrentDocumentLoad(load) || !useCadReturnStore.getState().isCurrentModelChoice(choice)
-        || identity !== useDocumentStore.getState().identity
-        || ((requesting || options.selectedInstanceId) && expectedInstance !== selectedInstance())) {
-        operation.finish(null);
-      }
-    };
+    const changed = () => { operation.current(); };
     stops.push(useCadReturnStore.subscribe(changed), useDesignStore.subscribe(changed),
       useDocumentStore.subscribe(changed), connection.subscribe(changed), subscribeRevision(changed));
     deadline = setTimeout(() => operation.finish(null, new Error(
@@ -167,7 +189,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
     options.noteCadActivity?.();
     void (async () => {
       try {
-        const status = await connection.read(options.readFusionStatus ?? (() => getFusionCadStatus(
+        const status = await connection.readCommand(options.readFusionStatus ?? (() => getFusionCadStatus(
           useDesignStore.getState().design, identity,
           useCadReturnStore.getState().selectedBundle?.bundlePath ?? null, fetcher, instance,
         )));
