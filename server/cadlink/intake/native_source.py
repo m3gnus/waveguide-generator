@@ -260,7 +260,7 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
         request = {"manifest": imported_manifest, "sizes": sizes}
         (stage / "request.json").write_bytes(_canonical(request))
         run = subprocess.run(
-            [sys.executable, "-m", "server.cadlink.intake.native_source", str(stage)],
+            _worker_command(stage),
             capture_output=True,
             text=True,
         )
@@ -800,6 +800,21 @@ def _verify_recipe_faces(stage, gmsh):
         unmatched.remove(matches[0])
     if unmatched:
         raise ValueError("native horn/housing STEP coverage is incomplete")
+
+
+_WORKER_MODULE = "server.cadlink.intake.native_source"
+
+
+def _worker_command(stage: Path) -> list[str]:
+    """Start the worker the way the isolation child starts, on any interpreter.
+
+    A bundled interpreter's ``._pth`` file ignores the working directory and
+    PYTHONPATH, so ``-m`` alone cannot find ``server``; the isolation
+    bootstrap puts the app root on the path first.
+    """
+    from .isolation import child_command
+
+    return [*child_command(_WORKER_MODULE), str(stage)]
 
 
 if __name__ == "__main__":
