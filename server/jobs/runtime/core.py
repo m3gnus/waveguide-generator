@@ -369,8 +369,8 @@ def _legacy_enclosure_resolution_changed(design: DesignConfig) -> bool:
     root = design.root
     if outer_body_mode(root) != "enclosure" or root.enclosure is None:
         return False
-    for field in ("front_resolution", "back_resolution"):
-        values = getattr(root.enclosure, field)
+    for side in ("front_resolution", "back_resolution"):
+        values = getattr(root.enclosure, side)
         if not isinstance(values, tuple):
             continue
         # Old WG used only q1. All non-positive entries share mouth fallback.
