@@ -106,6 +106,7 @@ from .setup import setup_content, setup_digest, validate_setup
 from .roles import canonical_source_role
 from .solver_frame import AXES as SOLVER_FRAME_AXES, ensure_frame_suggestion, record_is_unlinked
 from .store import CadLinkStore
+from . import receipts_api
 from .wgreturn import WgReturnError, declared_domain_planes
 
 
@@ -2601,6 +2602,7 @@ def _abandon_preparations_on_shutdown(application: FastAPI):
 
 def mount_cadlink(application: FastAPI) -> None:
     application.include_router(router)
+    application.include_router(receipts_api.router)
     # An unlinked model's solver frame: preview and confirmation.
     from .solver_frame_api import router as solver_frame_router
 

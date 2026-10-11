@@ -1318,6 +1318,9 @@ def collect_solve_deliveries(
                 logger.debug("Could not publish a delivered operation.", exc_info=True)
 
     def refused(refusal: Mapping[str, Any]) -> None:
+        from .receipts import record_refusal
+
+        record_refusal(store, refusal)
         if refuse is not None:
             try:
                 refuse(refusal)

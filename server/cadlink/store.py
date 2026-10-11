@@ -58,6 +58,7 @@ from .operations import (
     validate_outcome,
 )
 from .solve_command import legacy_ledger_path
+from . import receipts
 
 # How long ``make_durable`` waits for a reader that pins the log.
 DURABLE_BUSY_TIMEOUT_MS = 250
@@ -724,6 +725,7 @@ class CadLinkStore:
                 if column not in operation_columns:
                     conn.execute(f"ALTER TABLE cad_operations ADD COLUMN {column} {declaration}")
             imported_ledger = _import_legacy_solve_ledger(conn, self.legacy_solve_ledger)
+            receipts.initialize(conn)
             conn.execute(f"PRAGMA user_version = {STORE_FORMAT_VERSION}")
         self._initialized = True
         if imported_ledger and self.legacy_solve_ledger is not None:
@@ -916,6 +918,8 @@ class CadLinkStore:
                 "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
                 (operation_id,),
             ).fetchone()
+            if row is not None:
+                receipts.record_operation(conn, dict(row))
         return self._row(row)
 
     # -- Fusion-bound requests claimed live: CADLINK-LIVE-PROTOCOL.md, section 7 --
