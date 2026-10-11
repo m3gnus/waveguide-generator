@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
-import json
 import math
 import re
 from pathlib import Path
@@ -18,6 +17,8 @@ import tempfile
 from typing import Any
 
 import numpy as np
+
+from server.contracts.canonical import canonical_ascii_strict_json
 
 from server.cadlink.wglink_protocol import source_physical_name
 from server.contracts.geometry import (
@@ -1729,14 +1730,11 @@ REFLECTED_SOURCE_AREA_REL_TOLERANCE = 1.0e-6
 
 def _geometry_fingerprint(geometries: Iterable[Any]) -> str:
     return "sha256:" + hashlib.sha256(
-        json.dumps(
+        canonical_ascii_strict_json(
             [
                 {"center_mm": list(center), "area_mm2": area}
                 for center, area in geometries
-            ],
-            allow_nan=False,
-            sort_keys=True,
-            separators=(",", ":"),
+            ]
         ).encode("utf-8")
     ).hexdigest()
 

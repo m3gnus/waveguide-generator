@@ -62,6 +62,8 @@ from typing import Any
 
 import numpy as np
 
+from server.contracts.canonical import canonical_normalized_bytes as _canonical
+
 from .domain_interpretation import (
     DECLARATION,
     MIN_RIM_EDGES,
@@ -107,14 +109,6 @@ REFLECTION_PENDING = "pending-s3-2"
 
 _FRACTION = {0: "full", 1: "half", 2: "quarter"}
 _DETERMINANT_TOLERANCE = 1.0e-6
-
-
-def _canonical(value: Any) -> bytes:
-    from server.exports.geometry_identity import normalize_json_value
-
-    return json.dumps(
-        normalize_json_value(value), allow_nan=False, ensure_ascii=True, separators=(",", ":"), sort_keys=True
-    ).encode("utf-8")
 
 
 def _sha256(value: Any) -> str | None:

@@ -18,8 +18,9 @@ from typing import Any
 
 import numpy as np
 
+from server.contracts.canonical import canonical_ascii_strict_bytes as _canonical
+
 from server.mesh.imported import geometry_candidate_matches
-from server.cadlink.wglink_protocol import ASCII_STRICT, canonical_json
 
 
 _VOLUME_REL_TOLERANCE = 3.0e-5
@@ -30,10 +31,6 @@ _BBOX_ABS_TOLERANCE_MM = 1.0e-2
 
 class ReturnedStepError(ValueError):
     """The returned STEP cannot honestly satisfy the wgreturn contract."""
-
-
-def _canonical(value: Any) -> bytes:
-    return canonical_json(value, ASCII_STRICT).encode("utf-8")
 
 
 def _sha256(data: bytes) -> str:

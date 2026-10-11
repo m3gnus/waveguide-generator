@@ -11,7 +11,7 @@ from collections.abc import Mapping
 import hashlib
 from typing import Any, Literal
 
-from .wglink_protocol import UTF8_STRICT, canonical_json as protocol_canonical_json
+from server.contracts.canonical import canonical_utf8_strict_json as canonical_json
 
 
 DIGEST_VERSION = 1
@@ -219,12 +219,6 @@ def normalize_request(
         _fields(kind, "target", target, target_fields),
         _fields(kind, "inputs", inputs, input_fields),
     )
-
-
-def canonical_json(value: Any) -> str:
-    """Sorted keys, no whitespace, UTF-8 rather than ASCII escapes."""
-
-    return protocol_canonical_json(value, UTF8_STRICT)
 
 
 def request_digest(

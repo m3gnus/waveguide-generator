@@ -21,6 +21,7 @@ from server.cadlink import fusion_status, ingest, operations, step_evidence, wgl
 from server.cadlink.fusion_delivery import capabilities, ipc_folder
 from server.cadlink.store import CadLinkStore
 from server.cadlink import solve_command
+from server.contracts.canonical import canonical_ascii_strict_json
 from server.cadlink.wgreturn import read_wgreturn, validate_manifest
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 from server.tests.test_wglink_packaged_pair import CORPUS, _from_package, _verdict
@@ -101,8 +102,8 @@ def test_observation_fingerprint_equality(addin: Path):
     api_tree = ast.parse((ROOT / "server/cadlink/api.py").read_text())
     observed_dump = next(
         node for node in ast.walk(api_tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "dumps" and node.args
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "canonical_ascii_strict_json" and node.args
         and isinstance(node.args[0], ast.Name) and node.args[0].id == "observed"
     )
     api_json = compile(ast.Expression(observed_dump), str(ROOT / "server/cadlink/api.py"), "eval")
@@ -110,9 +111,9 @@ def test_observation_fingerprint_equality(addin: Path):
         assert fusion_status._fingerprint_hash(value) == addin_hash(value)
         if isinstance(value.get("x"), float) and value["x"] != value["x"]:
             with pytest.raises(ValueError):
-                eval(api_json, {"json": json, "observed": value})
+                eval(api_json, {"canonical_ascii_strict_json": canonical_ascii_strict_json, "observed": value})
         else:
-            actual = "sha256:" + hashlib.sha256(eval(api_json, {"json": json, "observed": value}).encode("utf-8")).hexdigest()
+            actual = "sha256:" + hashlib.sha256(eval(api_json, {"canonical_ascii_strict_json": canonical_ascii_strict_json, "observed": value}).encode("utf-8")).hexdigest()
             assert actual == addin_hash(value)
 
 

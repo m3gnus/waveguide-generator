@@ -8,13 +8,14 @@ block rows.  Stable writer order mirrors ``src/export/mwgConfig.js:46-295``.
 from __future__ import annotations
 
 import ast
-import json
 import math
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Mapping
 
 from pydantic import ValidationError
+
+from server.contracts.canonical import canonical_ascii_json
 
 from .ath_import_defaults import apply_ath_import_defaults
 from .migrate import MigrationApplication, apply_migrations
@@ -72,7 +73,7 @@ class _RawBlock:
 
 
 def _semantic_fingerprint(design: DesignConfig) -> str:
-    return json.dumps(design.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return canonical_ascii_json(design.model_dump(mode="json"))
 
 
 @dataclass(frozen=True)

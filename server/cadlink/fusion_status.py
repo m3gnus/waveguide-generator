@@ -26,6 +26,8 @@ import subprocess
 import unicodedata
 from typing import Any, Mapping
 
+from server.contracts.canonical import canonical_ascii_json
+
 from server.cadlink.fusion_delivery import DELIVERY_VERSION, addin_delivery_version
 from server.cadlink.live.registry import registry_for
 from server.platform.process import background_process_kwargs
@@ -340,7 +342,7 @@ def _fingerprint_hash(value: object) -> str | None:
     if not isinstance(value, (Mapping, list)):
         return None
     try:
-        encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        encoded = canonical_ascii_json(value).encode("utf-8")
     except (TypeError, ValueError):
         return None
     return "sha256:" + hashlib.sha256(encoded).hexdigest()

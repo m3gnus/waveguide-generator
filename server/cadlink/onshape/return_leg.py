@@ -18,6 +18,8 @@ from pathlib import Path
 import shutil
 from typing import Any
 
+from server.contracts.canonical import canonical_ascii_strict_bytes as _canonical  # noqa: F401 (compatibility alias)
+
 from server.cadlink.identity import mint_id
 from server.cadlink.ingest import ingest_bundle
 from server.cadlink.isolated import inspect_returned_step
@@ -51,16 +53,6 @@ def _string(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value:
         raise OnshapeReturnError(f"Stored outbound evidence is missing {label}.")
     return value
-
-
-def _canonical(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        allow_nan=False,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
 
 
 def _sha256(data: bytes) -> str:

@@ -9,6 +9,8 @@ import json
 import re
 from typing import TYPE_CHECKING, Any, Mapping
 
+from server.contracts.canonical import canonical_utf8_strict_bytes as _canonical_json
+
 from server.platform.paths import app_root
 
 if TYPE_CHECKING:
@@ -26,16 +28,6 @@ _PIN_REQUIREMENT_RE = re.compile(
     r"^git\+https://github\.com/m3gnus/[A-Za-z0-9._-]+\.git@"
     r"(?P<sha>[0-9a-f]{40})#egg=(?P<name>[A-Za-z0-9._-]+)$"
 )
-
-
-def _canonical_json(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
 
 
 def canonical_json_sha256(value: Any) -> str:

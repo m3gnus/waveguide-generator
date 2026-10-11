@@ -5,12 +5,13 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import asdict, dataclass
 import hashlib
-import json
 import math
 import threading
 from typing import Any, Mapping
 
 import numpy as np
+
+from server.contracts.canonical import canonical_ascii_string_json
 
 from server.contracts.geometry import (
     PLANE_BY_QUADRANTS,
@@ -157,7 +158,7 @@ def _resolution_cache_key(design: DesignConfig | Mapping[str, Any]) -> str | Non
     except Exception:  # noqa: BLE001 - an unhashable design just skips the cache
         return None
     try:
-        serialized = json.dumps(config, sort_keys=True, separators=(",", ":"), default=str)
+        serialized = canonical_ascii_string_json(config)
     except (TypeError, ValueError):
         return None
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()

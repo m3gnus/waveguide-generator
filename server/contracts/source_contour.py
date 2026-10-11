@@ -1,7 +1,8 @@
 """Authoritative native contour request/excitation admission contract."""
 
 import hashlib
-import json
+
+from server.contracts.canonical import canonical_ascii_strict_json
 
 FEATURE = "native-source-contour-v1"
 BAFFLE_FEATURE = "native-front-baffle-woofer-v1"
@@ -44,9 +45,7 @@ def validate_contour_request(geometry, record):
             "motion": expected[0]["motion"],
         }
     )
-    encoded = json.dumps(
-        excitation, sort_keys=True, separators=(",", ":"), allow_nan=False
-    ).encode()
+    encoded = canonical_ascii_strict_json(excitation).encode()
     if "sha256:" + hashlib.sha256(encoded).hexdigest() != native["excitation_sha256"]:
         raise ValueError("native ingestion excitation identity is inconsistent")
     actual = [

@@ -19,6 +19,8 @@ import tempfile
 import time
 from typing import TYPE_CHECKING, Any, Callable, Iterator
 
+from server.contracts.canonical import canonical_ascii_strict_json
+
 from . import paths
 from .ipc import Endpoint, validate_identifier
 
@@ -49,7 +51,7 @@ def _validate_scope(raw: dict[str, Any]) -> None:
 
 
 def key_id(key: dict[str, Any]) -> str:
-    canonical = json.dumps(key, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    canonical = canonical_ascii_strict_json(key)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 

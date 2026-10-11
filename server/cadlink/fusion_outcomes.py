@@ -7,6 +7,8 @@ import logging
 from pathlib import Path
 from typing import Any, Mapping
 
+from server.contracts.canonical import canonical_ascii_json
+
 from .operations import (
     ACCEPTED,
     CANCELLED,
@@ -187,7 +189,7 @@ def _log_last_request(heartbeat: Mapping[str, Any], ipc: Path) -> None:
     value = _object(diagnostics.get("lastRequest"))
     if value is None:
         return
-    fingerprint = json.dumps(dict(value), sort_keys=True, separators=(",", ":"))
+    fingerprint = canonical_ascii_json(dict(value))
     key = str(ipc.resolve())
     if _last_request_seen.get(key) == fingerprint:
         return

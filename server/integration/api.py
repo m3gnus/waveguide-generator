@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from functools import lru_cache
 import hashlib
-import json
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, FastAPI
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
+
+from server.contracts.canonical import canonical_ascii_strict_json
 
 from server.design.schema import DesignConfig
 
@@ -136,7 +137,7 @@ def design_schema_text() -> str:
     payload: dict[str, Any] = DesignConfig.model_json_schema()
     payload["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     payload["x-wg-schema-version"] = 1
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return canonical_ascii_strict_json(payload)
 
 
 @router.get(

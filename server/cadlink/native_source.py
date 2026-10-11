@@ -13,15 +13,13 @@ import subprocess
 import sys
 import tempfile
 
+from server.contracts.canonical import canonical_ascii_strict_bytes as _canonical
+
 FEATURE = "native-source-contour-v1"
 BAFFLE_FEATURE = "native-front-baffle-woofer-v1"
 ASSEMBLY_FEATURE = "native-shared-horn-woofer-v1"
 PLUG_FEATURE = "native-phase-plug-passages-v1"
 GENERAL_FEATURE = "native-general-horn-attachment-v1"
-
-
-def _canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
 
 
 def _digest(data):

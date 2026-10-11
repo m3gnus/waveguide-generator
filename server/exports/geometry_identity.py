@@ -2,48 +2,26 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
-from enum import Enum
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
-import json
-from typing import Any, Mapping
 
+from server.contracts.canonical import canonical_ascii_strict_json
+from server.contracts.canonical import normalize_json_value as normalize_json_value
 from server.design.schema import DesignConfig
 from server.preview.translate import design_to_mesher_config
-
-
-def normalize_json_value(value: Any) -> Any:
-    """Recursively coerce dataclasses, enums, and numpy-like values to JSON."""
-
-    if is_dataclass(value):
-        return normalize_json_value(asdict(value))
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, Mapping):
-        return {str(key): normalize_json_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [normalize_json_value(item) for item in value]
-    if hasattr(value, "tolist"):
-        return normalize_json_value(value.tolist())
-    return value
 
 
 def geometry_hash(geometry: object, mesher_version: str) -> str:
     """Hash resolved export geometry using the outbound artifact contract."""
 
-    canonical = json.dumps(
+    canonical = canonical_ascii_strict_json(
         {
             "datum_schema": 1,
             "domain": "full",
             "geometry": normalize_json_value(geometry),
             "mesher_version": mesher_version,
             "open_throat": True,
-        },
-        allow_nan=False,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
+        }
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(canonical).hexdigest()
 

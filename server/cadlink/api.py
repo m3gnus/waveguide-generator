@@ -20,6 +20,8 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
+from server.contracts.canonical import canonical_ascii_strict_json
+
 from server.cadlink.identity import SaveIdentity, design_hash
 from server.design.schema import DesignConfig
 from server.integration.contracts import ErrorEnvelope, error_envelope
@@ -398,7 +400,6 @@ async def post_install_addin(request: Request) -> dict[str, str]:
     return {"verdict": verdict, "detail": detail}
 
 
-
 def _realized_dimensions_payload(
     status: Mapping[str, Any],
     store: CadLinkStore,
@@ -628,12 +629,7 @@ def _return_inventory(
                         "bodyFingerprintHash": (
                             "sha256:"
                             + hashlib.sha256(
-                                json.dumps(
-                                    observed,
-                                    allow_nan=False,
-                                    sort_keys=True,
-                                    separators=(",", ":"),
-                                ).encode("utf-8")
+                                canonical_ascii_strict_json(observed).encode("utf-8")
                             ).hexdigest()
                             if isinstance(observed, Mapping)
                             else None
@@ -641,12 +637,7 @@ def _return_inventory(
                         "transformHash": (
                             "sha256:"
                             + hashlib.sha256(
-                                json.dumps(
-                                    matrix,
-                                    allow_nan=False,
-                                    sort_keys=True,
-                                    separators=(",", ":"),
-                                ).encode("utf-8")
+                                canonical_ascii_strict_json(matrix).encode("utf-8")
                             ).hexdigest()
                             if isinstance(matrix, list)
                             else None

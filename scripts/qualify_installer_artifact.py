@@ -345,7 +345,11 @@ def verify_snapshot(value: dict) -> dict:
 
 
 def entries_digest(entries: dict) -> str:
-    return hashlib.sha256(json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    # Load the stdlib-only leaf directly: this script needs no server dependencies.
+    canonical_ascii_json = load_module(
+        "wg_qualification_canonical", ROOT / "server" / "contracts" / "canonical.py"
+    ).canonical_ascii_json
+    return hashlib.sha256(canonical_ascii_json(entries).encode()).hexdigest()
 
 
 def payload_relative(platform: str) -> str:

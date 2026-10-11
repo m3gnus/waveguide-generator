@@ -1,0 +1,1572 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "1ad76dd2d4a25e9231b97fbda139d7b7c8b38d96",
+  "pinned_protocol_sha256": "c0d391f7149d8b50497218428b8d41d0b79729ce4bce01ca03e53dc9e8affa60",
+  "sites": [
+    {
+      "kind": "inline",
+      "path": "scripts/beat_conformance/legacy_compiled_inputs.py",
+      "scope": "verify_contract",
+      "ordinal": 0,
+      "original_line": 98,
+      "original_source": "json.dumps(files, sort_keys=True, separators=(\",\", \":\"))",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "bytes_hex": "7b226e756d626572223a4e614e7d",
+          "sha256": "85eee1ec8c934034fa557b72376e798678056074f4dbdfcf9e65f7d537aeff08"
+        },
+        {
+          "input": "positive_infinity",
+          "bytes_hex": "5b496e66696e6974795d",
+          "sha256": "10058b8cd98a02ff73d5cd3092bb44f05b0d11148d0a81fde35c2a90673f1254"
+        },
+        {
+          "input": "negative_infinity",
+          "bytes_hex": "2d496e66696e697479",
+          "sha256": "c64ddf11bcd45660f0cf66dd0c22d2b4570ef3d3fc6527a9a6f6c722aefa3c39"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "scripts/qualify_installer_artifact.py",
+      "scope": "entries_digest",
+      "ordinal": 0,
+      "original_line": 348,
+      "original_source": "json.dumps(entries, sort_keys=True, separators=(\",\", \":\"))",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "bytes_hex": "7b226e756d626572223a4e614e7d",
+          "sha256": "85eee1ec8c934034fa557b72376e798678056074f4dbdfcf9e65f7d537aeff08"
+        },
+        {
+          "input": "positive_infinity",
+          "bytes_hex": "5b496e66696e6974795d",
+          "sha256": "10058b8cd98a02ff73d5cd3092bb44f05b0d11148d0a81fde35c2a90673f1254"
+        },
+        {
+          "input": "negative_infinity",
+          "bytes_hex": "2d496e66696e697479",
+          "sha256": "c64ddf11bcd45660f0cf66dd0c22d2b4570ef3d3fc6527a9a6f6c722aefa3c39"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "scripts/verify_model_identity.py",
+      "scope": "canonical_bytes",
+      "ordinal": 0,
+      "original_line": 124,
+      "original_source": "json.dumps(\n            payload,\n            sort_keys=True,\n            separators=(\",\", \":\"),\n            ensure_ascii=True,\n            allow_nan=False,\n        )",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/cadlink/api.py",
+      "scope": "_return_inventory",
+      "ordinal": 0,
+      "original_line": 631,
+      "original_source": "json.dumps(\n                                    observed,\n                                    allow_nan=False,\n                                    sort_keys=True,\n                                    separators=(\",\", \":\"),\n                                )",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/cadlink/api.py",
+      "scope": "_return_inventory",
+      "ordinal": 1,
+      "original_line": 644,
+      "original_source": "json.dumps(\n                                    matrix,\n                                    allow_nan=False,\n                                    sort_keys=True,\n                                    separators=(\",\", \":\"),\n                                )",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "helper",
+      "path": "server/cadlink/domain_decision.py",
+      "symbol": "_canonical",
+      "original_line": 112,
+      "original_source": "def _canonical(value: Any) -> bytes:\n    from server.exports.geometry_identity import normalize_json_value\n\n    return json.dumps(\n        normalize_json_value(value), allow_nan=False, ensure_ascii=True, separators=(\",\", \":\"), sort_keys=True\n    ).encode(\"utf-8\")",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "bytes_hex": "7b2237223a226e756d65726963206b6579222c226172726179223a5b302e312c31652d30375d2c22646174756d223a7b226c6162656c223a225c7530306539222c2276616c756573223a5b302e312c6e756c6c5d7d2c22656e756d223a225c7539366561227d",
+          "sha256": "da103e91e7e726a0b324fae91ab9e3adff62a4918bf6ff06239a8f0ed4d2cb64"
+        },
+        {
+          "input": "string_default",
+          "bytes_hex": "7b22646174756d223a7b226c6162656c223a225c7530306539222c2276616c756573223a5b302e312c6e756c6c5d7d2c22656e756d223a225c7539366561227d",
+          "sha256": "3e871d8a8800c542dfa49bde0c1a92a52aa298848f5ff12bac62daf696657aa3"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/cadlink/fusion_outcomes.py",
+      "scope": "_log_last_request",
+      "ordinal": 0,
+      "original_line": 190,
+      "original_source": "json.dumps(dict(value), sort_keys=True, separators=(\",\", \":\"))",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "bytes_hex": "7b226e756d626572223a4e614e7d",
+          "sha256": "85eee1ec8c934034fa557b72376e798678056074f4dbdfcf9e65f7d537aeff08"
+        },
+        {
+          "input": "positive_infinity",
+          "bytes_hex": "5b496e66696e6974795d",
+          "sha256": "10058b8cd98a02ff73d5cd3092bb44f05b0d11148d0a81fde35c2a90673f1254"
+        },
+        {
+          "input": "negative_infinity",
+          "bytes_hex": "2d496e66696e697479",
+          "sha256": "c64ddf11bcd45660f0cf66dd0c22d2b4570ef3d3fc6527a9a6f6c722aefa3c39"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/cadlink/fusion_status.py",
+      "scope": "_fingerprint_hash",
+      "ordinal": 0,
+      "original_line": 343,
+      "original_source": "json.dumps(value, sort_keys=True, separators=(\",\", \":\"))",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "bytes_hex": "7b226e756d626572223a4e614e7d",
+          "sha256": "85eee1ec8c934034fa557b72376e798678056074f4dbdfcf9e65f7d537aeff08"
+        },
+        {
+          "input": "positive_infinity",
+          "bytes_hex": "5b496e66696e6974795d",
+          "sha256": "10058b8cd98a02ff73d5cd3092bb44f05b0d11148d0a81fde35c2a90673f1254"
+        },
+        {
+          "input": "negative_infinity",
+          "bytes_hex": "2d496e66696e697479",
+          "sha256": "c64ddf11bcd45660f0cf66dd0c22d2b4570ef3d3fc6527a9a6f6c722aefa3c39"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "helper",
+      "path": "server/cadlink/ingest.py",
+      "symbol": "_canonical",
+      "original_line": 172,
+      "original_source": "def _canonical(value: Any) -> bytes:\n    return canonical_json(value, ASCII_NORMALIZED).encode(\"utf-8\")",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "bytes_hex": "7b2237223a226e756d65726963206b6579222c226172726179223a5b302e312c31652d30375d2c22646174756d223a7b226c6162656c223a225c7530306539222c2276616c756573223a5b302e312c6e756c6c5d7d2c22656e756d223a225c7539366561227d",
+          "sha256": "da103e91e7e726a0b324fae91ab9e3adff62a4918bf6ff06239a8f0ed4d2cb64"
+        },
+        {
+          "input": "string_default",
+          "bytes_hex": "7b22646174756d223a7b226c6162656c223a225c7530306539222c2276616c756573223a5b302e312c6e756c6c5d7d2c22656e756d223a225c7539366561227d",
+          "sha256": "3e871d8a8800c542dfa49bde0c1a92a52aa298848f5ff12bac62daf696657aa3"
+        }
+      ]
+    },
+    {
+      "kind": "helper",
+      "path": "server/cadlink/native_source.py",
+      "symbol": "_canonical",
+      "original_line": 23,
+      "original_source": "def _canonical(value):\n    return json.dumps(value, sort_keys=True, separators=(\",\", \":\"), allow_nan=False).encode()",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "helper",
+      "path": "server/cadlink/onshape/return_leg.py",
+      "symbol": "_canonical",
+      "original_line": 56,
+      "original_source": "def _canonical(value: Any) -> bytes:\n    return json.dumps(\n        value,\n        allow_nan=False,\n        ensure_ascii=True,\n        separators=(\",\", \":\"),\n        sort_keys=True,\n    ).encode(\"utf-8\")",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "helper",
+      "path": "server/cadlink/operations.py",
+      "symbol": "canonical_json",
+      "original_line": 224,
+      "original_source": "def canonical_json(value: Any) -> str:\n    \"\"\"Sorted keys, no whitespace, UTF-8 rather than ASCII escapes.\"\"\"\n\n    return protocol_canonical_json(value, UTF8_STRICT)",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b22c3a9223a22e99baa2ff09f98805c6e5c225c5c227d5d7d",
+          "sha256": "21c69847eadcafee242ee29565044818558b48bbe434203a3650e26fe9c2c89d"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b22c3a5222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "0fb7d1ceaca53df86d7cc8f47d97b37c9bce84c015d6656d7c8ed131542bce80"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c22c3a9e99baaf09f9880225d",
+          "sha256": "e1a12b4c22197ee287b75b5fe6e94e6154dba9b4a81d7800a0e46e60dee3cb3d"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "helper",
+      "path": "server/cadlink/step_evidence.py",
+      "symbol": "_canonical",
+      "original_line": 35,
+      "original_source": "def _canonical(value: Any) -> bytes:\n    return canonical_json(value, ASCII_STRICT).encode(\"utf-8\")",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/charts/api.py",
+      "scope": "_key",
+      "ordinal": 0,
+      "original_line": 156,
+      "original_source": "json.dumps(payload, sort_keys=True, separators=(\",\", \":\"))",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "bytes_hex": "7b226e756d626572223a4e614e7d",
+          "sha256": "85eee1ec8c934034fa557b72376e798678056074f4dbdfcf9e65f7d537aeff08"
+        },
+        {
+          "input": "positive_infinity",
+          "bytes_hex": "5b496e66696e6974795d",
+          "sha256": "10058b8cd98a02ff73d5cd3092bb44f05b0d11148d0a81fde35c2a90673f1254"
+        },
+        {
+          "input": "negative_infinity",
+          "bytes_hex": "2d496e66696e697479",
+          "sha256": "c64ddf11bcd45660f0cf66dd0c22d2b4570ef3d3fc6527a9a6f6c722aefa3c39"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/contracts/source_contour.py",
+      "scope": "validate_contour_request",
+      "ordinal": 0,
+      "original_line": 47,
+      "original_source": "json.dumps(\n        excitation, sort_keys=True, separators=(\",\", \":\"), allow_nan=False\n    )",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/design/textcfg.py",
+      "scope": "_semantic_fingerprint",
+      "ordinal": 0,
+      "original_line": 74,
+      "original_source": "json.dumps(design.model_dump(mode=\"json\"), sort_keys=True, separators=(\",\", \":\"))",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "bytes_hex": "7b226e756d626572223a4e614e7d",
+          "sha256": "85eee1ec8c934034fa557b72376e798678056074f4dbdfcf9e65f7d537aeff08"
+        },
+        {
+          "input": "positive_infinity",
+          "bytes_hex": "5b496e66696e6974795d",
+          "sha256": "10058b8cd98a02ff73d5cd3092bb44f05b0d11148d0a81fde35c2a90673f1254"
+        },
+        {
+          "input": "negative_infinity",
+          "bytes_hex": "2d496e66696e697479",
+          "sha256": "c64ddf11bcd45660f0cf66dd0c22d2b4570ef3d3fc6527a9a6f6c722aefa3c39"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/engines/dryrun.py",
+      "scope": "_canonical_seed",
+      "ordinal": 0,
+      "original_line": 18,
+      "original_source": "json.dumps(design, sort_keys=True, separators=(\",\", \":\"))",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "bytes_hex": "7b226e756d626572223a4e614e7d",
+          "sha256": "85eee1ec8c934034fa557b72376e798678056074f4dbdfcf9e65f7d537aeff08"
+        },
+        {
+          "input": "positive_infinity",
+          "bytes_hex": "5b496e66696e6974795d",
+          "sha256": "10058b8cd98a02ff73d5cd3092bb44f05b0d11148d0a81fde35c2a90673f1254"
+        },
+        {
+          "input": "negative_infinity",
+          "bytes_hex": "2d496e66696e697479",
+          "sha256": "c64ddf11bcd45660f0cf66dd0c22d2b4570ef3d3fc6527a9a6f6c722aefa3c39"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/exports/geometry_identity.py",
+      "scope": "geometry_hash",
+      "ordinal": 0,
+      "original_line": 35,
+      "original_source": "json.dumps(\n        {\n            \"datum_schema\": 1,\n            \"domain\": \"full\",\n            \"geometry\": normalize_json_value(geometry),\n            \"mesher_version\": mesher_version,\n            \"open_throat\": True,\n        },\n        allow_nan=False,\n        ensure_ascii=True,\n        separators=(\",\", \":\"),\n        sort_keys=True,\n    )",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/integration/api.py",
+      "scope": "design_schema_text",
+      "ordinal": 0,
+      "original_line": 139,
+      "original_source": "json.dumps(payload, sort_keys=True, separators=(\",\", \":\"), allow_nan=False)",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "helper",
+      "path": "server/integration/provenance.py",
+      "symbol": "_canonical_json",
+      "original_line": 31,
+      "original_source": "def _canonical_json(value: Any) -> bytes:\n    return json.dumps(\n        value,\n        sort_keys=True,\n        separators=(\",\", \":\"),\n        ensure_ascii=False,\n        allow_nan=False,\n    ).encode(\"utf-8\")",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b22c3a9223a22e99baa2ff09f98805c6e5c225c5c227d5d7d",
+          "sha256": "21c69847eadcafee242ee29565044818558b48bbe434203a3650e26fe9c2c89d"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b22c3a5222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "0fb7d1ceaca53df86d7cc8f47d97b37c9bce84c015d6656d7c8ed131542bce80"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c22c3a9e99baaf09f9880225d",
+          "sha256": "e1a12b4c22197ee287b75b5fe6e94e6154dba9b4a81d7800a0e46e60dee3cb3d"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/jobs/models.py",
+      "scope": "SolveRequest.validate_client_metadata",
+      "ordinal": 0,
+      "original_line": 1134,
+      "original_source": "json.dumps(\n                value,\n                sort_keys=True,\n                separators=(\",\", \":\"),\n                ensure_ascii=False,\n                allow_nan=False,\n            )",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b22c3a9223a22e99baa2ff09f98805c6e5c225c5c227d5d7d",
+          "sha256": "21c69847eadcafee242ee29565044818558b48bbe434203a3650e26fe9c2c89d"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b22c3a5222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "0fb7d1ceaca53df86d7cc8f47d97b37c9bce84c015d6656d7c8ed131542bce80"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c22c3a9e99baaf09f9880225d",
+          "sha256": "e1a12b4c22197ee287b75b5fe6e94e6154dba9b4a81d7800a0e46e60dee3cb3d"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/mesh/builder.py",
+      "scope": "_solver_mesh_cache_key",
+      "ordinal": 0,
+      "original_line": 814,
+      "original_source": "json.dumps(\n        payload,\n        allow_nan=False,\n        ensure_ascii=True,\n        separators=(\",\", \":\"),\n        sort_keys=True,\n    )",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/mesh/imported.py",
+      "scope": "_geometry_fingerprint",
+      "ordinal": 0,
+      "original_line": 1732,
+      "original_source": "json.dumps(\n            [\n                {\"center_mm\": list(center), \"area_mm2\": area}\n                for center, area in geometries\n            ],\n            allow_nan=False,\n            sort_keys=True,\n            separators=(\",\", \":\"),\n        )",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/preview/core.py",
+      "scope": "PreviewProtocol._compute_frame",
+      "ordinal": 0,
+      "original_line": 859,
+      "original_source": "json.dumps(\n            {\n                # Test/application-injected builders use the production cache\n                # path but have an unambiguous per-protocol namespace.\n                \"builder\": self._preview_builder_namespace,\n                \"mesher_identity\": mesher_identity(),\n                \"lod\": request.lod,\n                # Two frames for the same design differ in whether they carry\n                # curvature sections, so they cannot share a cache entry. Only\n                # fine frames ever have them, so coarse keeps one entry either\n                # way and a drag never splits its cache.\n                \"curvature\": request.curvature and request.lod == \"fine\",\n                \"config\": _cache_relevant_config(config),\n            },\n            allow_nan=False,\n            separators=(\",\", \":\"),\n            sort_keys=True,\n        )",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/solver/beat_runtime/registry.py",
+      "scope": "key_id",
+      "ordinal": 0,
+      "original_line": 52,
+      "original_source": "json.dumps(key, sort_keys=True, separators=(\",\", \":\"), allow_nan=False)",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/solver/combine.py",
+      "scope": "serialize_channel_bases",
+      "ordinal": 0,
+      "original_line": 96,
+      "original_source": "json.dumps(dict(metadata), sort_keys=True, separators=(\",\", \":\"))",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "bytes_hex": "7b226e756d626572223a4e614e7d",
+          "sha256": "85eee1ec8c934034fa557b72376e798678056074f4dbdfcf9e65f7d537aeff08"
+        },
+        {
+          "input": "positive_infinity",
+          "bytes_hex": "5b496e66696e6974795d",
+          "sha256": "10058b8cd98a02ff73d5cd3092bb44f05b0d11148d0a81fde35c2a90673f1254"
+        },
+        {
+          "input": "negative_infinity",
+          "bytes_hex": "2d496e66696e697479",
+          "sha256": "c64ddf11bcd45660f0cf66dd0c22d2b4570ef3d3fc6527a9a6f6c722aefa3c39"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/solver/field_plane.py",
+      "scope": "FieldPlaneService._synthesis_revision",
+      "ordinal": 0,
+      "original_line": 858,
+      "original_source": "json.dumps(\n            canonical,\n            sort_keys=True,\n            separators=(\",\", \":\"),\n            allow_nan=False,\n        )",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "error": "ValueError"
+        },
+        {
+          "input": "positive_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "negative_infinity",
+          "error": "ValueError"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "error": "TypeError"
+        }
+      ]
+    },
+    {
+      "kind": "inline",
+      "path": "server/solver/symmetry.py",
+      "scope": "_resolution_cache_key",
+      "ordinal": 0,
+      "original_line": 160,
+      "original_source": "json.dumps(config, sort_keys=True, separators=(\",\", \":\"), default=str)",
+      "cases": [
+        {
+          "input": "nested",
+          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
+          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
+        },
+        {
+          "input": "numbers",
+          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
+          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
+        },
+        {
+          "input": "tuple",
+          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
+          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
+        },
+        {
+          "input": "scalars",
+          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
+          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
+        },
+        {
+          "input": "empty",
+          "bytes_hex": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "input": "nan",
+          "bytes_hex": "7b226e756d626572223a4e614e7d",
+          "sha256": "85eee1ec8c934034fa557b72376e798678056074f4dbdfcf9e65f7d537aeff08"
+        },
+        {
+          "input": "positive_infinity",
+          "bytes_hex": "5b496e66696e6974795d",
+          "sha256": "10058b8cd98a02ff73d5cd3092bb44f05b0d11148d0a81fde35c2a90673f1254"
+        },
+        {
+          "input": "negative_infinity",
+          "bytes_hex": "2d496e66696e697479",
+          "sha256": "c64ddf11bcd45660f0cf66dd0c22d2b4570ef3d3fc6527a9a6f6c722aefa3c39"
+        },
+        {
+          "input": "normalized",
+          "error": "TypeError"
+        },
+        {
+          "input": "string_default",
+          "bytes_hex": "7b22646174756d223a2253616d706c65286c6162656c3d275c7530306539272c2076616c7565733d28302e312c204e6f6e652929222c22656e756d223a224c6162656c2e54455854227d",
+          "sha256": "d429fb8edbf3b888e1bc7eb0e8338b83519c7c07ff5163c2fab06fb5e58c58c9"
+        }
+      ]
+    }
+  ]
+}

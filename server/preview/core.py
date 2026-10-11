@@ -18,6 +18,8 @@ from typing import Any, Literal, Protocol
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from server.contracts.canonical import canonical_ascii_strict_json
+
 from server.design.migrate import apply_migrations
 from server.design.schema import DesignConfig
 from server.integration.mesher_identity import mesher_identity
@@ -856,7 +858,7 @@ class PreviewProtocol:
             from hornlab_mesher.preview.api import build_preview_geometry
 
             builder = build_preview_geometry
-        cache_key = json.dumps(
+        cache_key = canonical_ascii_strict_json(
             {
                 # Test/application-injected builders use the production cache
                 # path but have an unambiguous per-protocol namespace.
@@ -869,10 +871,7 @@ class PreviewProtocol:
                 # way and a drag never splits its cache.
                 "curvature": request.curvature and request.lod == "fine",
                 "config": _cache_relevant_config(config),
-            },
-            allow_nan=False,
-            separators=(",", ":"),
-            sort_keys=True,
+            }
         )
         geometry = self._preview_service.get_or_build(
             cache_key,

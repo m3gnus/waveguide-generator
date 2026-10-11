@@ -17,6 +17,7 @@ if __package__ in {None, ""}:
 from pydantic import BaseModel  # noqa: E402
 
 from server.design.schema import DesignConfig, Expr  # noqa: E402
+from server.contracts.canonical import canonical_ascii_strict_json  # noqa: E402
 
 
 SCHEMA_VERSION = 2
@@ -121,13 +122,7 @@ def normalize_design_snapshot(document: Any) -> dict[str, Any]:
 
 def canonical_bytes(payload: Any) -> bytes:
     try:
-        rendered = json.dumps(
-            payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        )
+        rendered = canonical_ascii_strict_json(payload)
     except (TypeError, ValueError) as exc:
         raise IdentityError(f"identity payload is not canonical JSON: {exc}") from exc
     return rendered.encode("utf-8")

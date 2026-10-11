@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from concurrent.futures import Future
 import hashlib
 import io
-import json
 import math
 import threading
 from collections import OrderedDict
@@ -16,6 +15,8 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from server.contracts.canonical import canonical_ascii_json
 
 from .directivity import render_directivity_heatmap_b64
 
@@ -153,7 +154,7 @@ def _plots() -> Any:
 
 
 def _key(kind: str, payload: dict[str, Any]) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    encoded = canonical_ascii_json(payload).encode()
     return f"{kind}:{hashlib.sha256(encoded).hexdigest()}"
 
 

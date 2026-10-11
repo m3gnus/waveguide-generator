@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 from typing import Any, Mapping, Sequence
+
+from server.contracts.canonical import canonical_ascii_json
 
 from server.jobs.models import PolarConfig
 from server.solver.acoustics import solver_sound_speed_m_per_s
@@ -15,7 +16,7 @@ from server.solver.directivity_index import calculate_di_from_spherical_grid
 
 
 def _canonical_seed(design: Mapping[str, Any]) -> tuple[str, float]:
-    encoded = json.dumps(design, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    encoded = canonical_ascii_json(design).encode("utf-8")
     digest = hashlib.sha256(encoded).hexdigest()
     return digest, int(digest[:8], 16) / 0xFFFFFFFF
 

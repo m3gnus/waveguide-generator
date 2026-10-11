@@ -21,12 +21,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import io
-import json
 import math
 from types import SimpleNamespace
 from typing import Any, Mapping
 
 import numpy as np
+
+from server.contracts.canonical import canonical_ascii_json
 
 from server.contracts.conventions import (
     SOLVER_PHASE_CONVENTION,
@@ -93,7 +94,7 @@ def serialize_channel_bases(
         metadata = (metadata_by_id or {}).get(name)
         if metadata:
             arrays[f"metadata::{name}"] = np.asarray(
-                json.dumps(dict(metadata), sort_keys=True, separators=(",", ":"))
+                canonical_ascii_json(dict(metadata))
             )
     buffer = io.BytesIO()
     np.savez_compressed(buffer, **arrays)
@@ -526,8 +527,6 @@ def _on_axis_angle_index(angles: np.ndarray, point_count: int) -> int | None:
     if usable.size == 0:
         return None
     return int(usable[np.argmin(np.abs(angles[usable]))])
-
-
 
 
 def _resolve_channels(

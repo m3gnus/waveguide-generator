@@ -35,8 +35,6 @@ unmatched_ignore_imports_alerting = error
 # Remove an edge when its dependency is extracted into a lower layer.
 ignore_imports =
     # cadlink -> exports: existing upward dependency.
-    # Legacy use: normalize_json_value.
-    server.cadlink.domain_decision -> server.exports.geometry_identity
     # Legacy use: geometry_hash_for_design.
     server.cadlink.ingest -> server.exports.geometry_identity
     # Legacy use: WgLinkExportRequest, _base_name, _export_wglink_sync.

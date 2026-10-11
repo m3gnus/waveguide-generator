@@ -11,7 +11,6 @@ from __future__ import annotations
 import functools
 import hashlib
 import importlib.metadata
-import json
 import logging
 import math
 import os
@@ -23,6 +22,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+from server.contracts.canonical import canonical_ascii_strict_json
 
 from server.design.schema import DesignConfig, Expr
 from server.integration.mesher_identity import mesher_identity
@@ -811,13 +812,7 @@ def _solver_mesh_cache_key(design: DesignConfig) -> str:
         "mesher_identity": mesher_identity(),
         "mesher_config": _solver_mesher_config(design),
     }
-    canonical = json.dumps(
-        payload,
-        allow_nan=False,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
+    canonical = canonical_ascii_strict_json(payload).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
 
 

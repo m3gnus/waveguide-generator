@@ -20,6 +20,8 @@ import zipfile
 import meshio
 import numpy as np
 
+from server.contracts.canonical import canonical_ascii_json
+
 from server.solver.beat_adapter.observations import build_observations
 from server.solver.beat_adapter.request import SourceBasis, build_request
 
@@ -95,7 +97,7 @@ def verify_contract(root: Path, expected_sha256: str) -> dict:
             files[file.relative_to(root).as_posix()] = sha256(file.read_bytes())
     if not {"__init__.py", "mesh.py", "system-v1.schema.json"} <= files.keys():
         raise ValueError("BEAT contract resources are incomplete")
-    digest = sha256(json.dumps(files, sort_keys=True, separators=(",", ":")).encode())
+    digest = sha256(canonical_ascii_json(files).encode())
     if digest != expected_sha256:
         raise ValueError("BEAT contract fingerprint differs from the expected pin")
     for name, member in tuple(sys.modules.items()):

@@ -16,6 +16,8 @@ import stat
 import time
 from typing import Any
 
+from server.contracts.canonical import canonical_normalized_bytes as _canonical
+
 from server.cadlink.isolated import (
     build_imported_mesh_isolated,
     build_imported_viewport_mesh_isolated,
@@ -35,8 +37,6 @@ from server.integration.mesher_identity import mesher_identity
 from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
 from server.solver.imported import imported_domain_planes
-
-from .wglink_protocol import ASCII_NORMALIZED, canonical_json
 
 from .cut_recovery import (
     ASYMMETRIC_SECTION,
@@ -167,10 +167,6 @@ class IngestRefusal(ValueError):
         self.corruption = corruption
         self.area_drift_sources = tuple(area_drift_sources)
         super().__init__(f"{stage}: {message}")
-
-
-def _canonical(value: Any) -> bytes:
-    return canonical_json(value, ASCII_NORMALIZED).encode("utf-8")
 
 
 def solve_model_sha256(record: Mapping[str, Any]) -> str:

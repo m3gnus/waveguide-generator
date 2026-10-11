@@ -22,6 +22,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from server.contracts.canonical import canonical_ascii_strict_json
+
 from server.jobs.models import FieldPlaneRequest, FieldPlaneSpec
 from server.jobs.store import JobStore
 from server.mesh.artifact import mesh_text_sha256
@@ -855,12 +857,7 @@ class FieldPlaneService:
                 [name, canonical_float(delays_s[name])] for name in members
             ],
         }
-        encoded = json.dumps(
-            canonical,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
+        encoded = canonical_ascii_strict_json(canonical).encode("utf-8")
         digest = hashlib.sha256(b"field-plane-synthesis:combine:" + encoded)
         return digest.hexdigest()[:16]
 

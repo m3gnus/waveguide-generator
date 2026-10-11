@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import math
 import re
 from typing import Annotated, Any, Literal
 
 from pydantic import Field, field_validator, model_serializer, model_validator
+
+from server.contracts.canonical import canonical_utf8_strict_json
 
 from server.contracts import DriverSpec as DriverSpec, JobModel as JobModel
 from server.design.defaults import default_sweep_start_hz
@@ -1131,13 +1132,7 @@ class SolveRequest(JobModel):
     @classmethod
     def validate_client_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
         try:
-            encoded = json.dumps(
-                value,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-                allow_nan=False,
-            ).encode("utf-8")
+            encoded = canonical_utf8_strict_json(value).encode("utf-8")
         except (TypeError, ValueError) as exc:
             raise ValueError("client_metadata must contain finite JSON values") from exc
         if len(encoded) > 16 * 1024:
