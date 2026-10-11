@@ -4,7 +4,9 @@ from copy import deepcopy
 
 import pytest
 
-from scripts.beat_conformance.mac_processes import DarwinProcesses
+import struct
+
+from scripts.beat_conformance.mac_processes import DarwinProcesses, P_WEXIT, parse_snapshot
 
 
 def row(start=1, parent=1):
@@ -186,3 +188,20 @@ def test_registry_pid_reused_within_read_stays_excluded_on_next_sample(monkeypat
     sampler.sample()
     assert [sample['pids'] for sample in sampler.samples] == [[10], [10]]
     assert sampler.known[11] == (2, 0)
+
+
+def kinfo(pid, *, ppid=1, start=(5, 6), status=2, flag=0):
+    raw = bytearray(648)
+    struct.pack_into('=qq', raw, 0, *start)
+    struct.pack_into('=i', raw, 32, flag)
+    raw[36] = status
+    struct.pack_into('=i', raw, 40, pid)
+    struct.pack_into('=i', raw, 560, ppid)
+    return bytes(raw)
+
+
+def test_snapshot_skips_zombies_and_processes_whose_exit_has_begun():
+    raw = (kinfo(7, ppid=3) + kinfo(8, status=5) + kinfo(9, flag=P_WEXIT | 0x4004)
+           + kinfo(10, flag=0x4004) + kinfo(0))
+    assert parse_snapshot(raw) == {7: {'ppid': 3, 'start': (5, 6), 'rss': 0},
+                                   10: {'ppid': 1, 'start': (5, 6), 'rss': 0}}

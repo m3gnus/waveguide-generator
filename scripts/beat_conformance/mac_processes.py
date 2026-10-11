@@ -31,6 +31,27 @@ class TaskInfo(C.Structure):
         'csw', 'threads', 'running', 'priority')]
 
 
+P_WEXIT = 0x2000  # extern_proc.p_flag: exit has begun
+
+
+def parse_snapshot(raw):
+    """Live processes from KERN_PROC_ALL rows (648-byte 64-bit kinfo_proc)."""
+    rows = {}
+    for offset in range(0, len(raw), 648):
+        pid = struct.unpack_from('=i', raw, offset + 40)[0]
+        flag = struct.unpack_from('=i', raw, offset + 32)[0]
+        status = raw[offset + 36]
+        # SZOMB owns no resident memory. Neither does a process whose exit has
+        # begun: its task is torn down, so libproc answers ESRCH, while the
+        # snapshot can still list it with a running p_stat.
+        if pid <= 0 or status == 5 or flag & P_WEXIT:
+            continue
+        rows[pid] = {
+            'ppid': struct.unpack_from('=i', raw, offset + 560)[0],
+            'start': struct.unpack_from('=qq', raw, offset), 'rss': 0}
+    return rows
+
+
 class DarwinProcesses:
     def __init__(self):
         if platform.system() != 'Darwin' or platform.machine() not in ('arm64', 'x86_64'):
@@ -67,16 +88,7 @@ class DarwinProcesses:
                 raise OSError(code, 'Cannot read complete Darwin process snapshot')
             if size.value > capacity or size.value % 648:
                 raise ValueError('Unexpected Darwin process snapshot ABI')
-            rows = {}
-            for offset in range(0, size.value, 648):
-                pid = struct.unpack_from('=i', buf, offset + 40)[0]
-                status = buf[offset + 36][0]
-                if pid <= 0 or status == 5:  # SZOMB owns no resident memory
-                    continue
-                rows[pid] = {
-                    'ppid': struct.unpack_from('=i', buf, offset + 560)[0],
-                    'start': struct.unpack_from('=qq', buf, offset), 'rss': 0}
-            return rows
+            return parse_snapshot(buf.raw[:size.value])
         raise OSError(errno.EAGAIN, 'Darwin process snapshot keeps growing')
 
     def task_rss(self, pid):
