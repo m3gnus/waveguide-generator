@@ -6,7 +6,8 @@ import { resetDocumentStore, useDocumentStore } from '../../stores/document';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { createCadArrivalActions, createCadReturnArrivalReader, SupersededError } from './arrivals';
-import { bundle, deferred, json, mesh, record, send } from './selection.fixtures';
+import { restoreCadJobModel } from './restores';
+import { bundle, deferred, job, json, mesh, record, send } from './selection.fixtures';
 
 const newer = { ...bundle, name: 'new.wgreturn', bundlePath: 'wgreturn/new.wgreturn' };
 
@@ -96,7 +97,8 @@ describe('selection actions without the coordinator', () => {
     pending.resolve(outcome === 'success' ? json({ cadFolderConfigured: true, items: [bundle] }) : json({}, 500));
     await first;
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(newer.bundlePath);
-    expect(status).toHaveBeenCalledTimes(before);
+    expect(status).toHaveBeenCalledTimes(before + 1);
+    expect(status.mock.calls.at(-1)?.[0]).toContain('newer model selection');
   });
 
   it('orders recovered Send displays by acceptance sequence', async () => {
@@ -161,11 +163,14 @@ describe('selection actions without the coordinator', () => {
     expect(requests.some((item) => item.path.endsWith('/returns'))).toBe(false);
   });
 
-  it('refuses the Onshape action when its build capability is unavailable', async () => {
+  it('preserves the direct Onshape action while its build capability is unavailable', async () => {
     preferencesStore.setOnshapeAvailable(false);
-    const fetcher = vi.fn();
-    await expect(createCadArrivalActions({}, fetcher).returnFromOnshape()).rejects.toThrow('unavailable in this build');
-    expect(fetcher).not.toHaveBeenCalled();
+    useDocumentStore.getState().setCadLink({ designId: 'wgd_open', lineageId: 'wgl_open', baseEditVersion: 1 }, 'current');
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/onshape/return')
+      ? json({ bundle, ingest: record }) : new Response(mesh));
+    await createCadArrivalActions({}, fetcher).returnFromOnshape();
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
+    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith('/onshape/return'))).toBe(true);
   });
 
   it.each(['success', 'error'] as const)('fences an Onshape %s after another selection', async (outcome) => {
@@ -182,6 +187,92 @@ describe('selection actions without the coordinator', () => {
     expect(useCadReturnStore.getState().ingestRecord).toBeNull();
     expect(error).toHaveBeenCalledTimes(before);
   });
+});
+
+it.each(['refresh', 'listing'] as const)('keeps an archived run opened during a Send %s', async (wait) => {
+  const pending = deferred<Response>(); const refreshing = deferred<void>(); const listed = vi.fn();
+  const status = vi.fn();
+  const actions = createCadArrivalActions({
+    setStatus: status,
+    refresh: wait === 'refresh' ? () => refreshing.promise : async () => undefined,
+  }, (async () => { listed(); return pending.promise; }) as typeof fetch);
+  const first = actions.displaySend(send());
+  if (wait === 'listing') await vi.waitFor(() => expect(listed).toHaveBeenCalledOnce());
+  expect(await restoreCadJobModel(job(), {}, (async (input: RequestInfo | URL) =>
+    String(input).endsWith('/viewport-mesh') ? new Response(mesh) : json(record)) as typeof fetch)).toBe(true);
+  refreshing.resolve(); pending.resolve(json({ cadFolderConfigured: true, items: [bundle] }));
+  await first;
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe('');
+  expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
+  expect(status.mock.calls.at(-1)?.[0]).toContain('newer model selection');
+  if (wait === 'refresh') expect(listed).not.toHaveBeenCalled();
+});
+
+it('displays a Send after its own refresh automatically selects a listing entry', async () => {
+  let reads = 0;
+  const fetcher = (async () => json({ cadFolderConfigured: true, items: ++reads === 1 ? [newer] : [newer, bundle] })) as typeof fetch;
+  const reader = createCadReturnArrivalReader({}, fetcher);
+  await createCadArrivalActions({ refresh: reader.refresh }, fetcher).displaySend(send());
+  expect(reads).toBe(2);
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
+});
+
+it('keeps a newer archive choice even while its record is still loading', async () => {
+  const refreshing = deferred<void>(); const archive = deferred<Response>();
+  const listed = vi.fn(async () => json({ cadFolderConfigured: true, items: [bundle] }));
+  const sendDisplay = createCadArrivalActions({ refresh: () => refreshing.promise }, listed).displaySend(send());
+  const archiveDisplay = restoreCadJobModel(job(), {}, (async (input: RequestInfo | URL) =>
+    String(input).endsWith('/viewport-mesh') ? new Response(mesh) : archive.promise) as typeof fetch);
+  refreshing.resolve(); await sendDisplay;
+  expect(listed).not.toHaveBeenCalled();
+  archive.resolve(json(record)); expect(await archiveDisplay).toBe(true);
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe('');
+});
+
+it.each(['listing revision', 'mesh edit'] as const)(
+  'displays a delayed Send through a background %s', async (change) => {
+    const state = useCadReturnStore.getState(); state.selectBundle(newer);
+    const pending = deferred<Response>(); const listed = vi.fn();
+    const actions = createCadArrivalActions({}, (async () => { listed(); return pending.promise; }) as typeof fetch);
+    const first = actions.displaySend(send());
+    await vi.waitFor(() => expect(listed).toHaveBeenCalledOnce());
+    if (change === 'listing revision') state.refreshSelectedBundle({ ...newer, modifiedAt: '2026-08-14T00:00:00Z' });
+    else state.setRigidSize(9);
+    pending.resolve(json({ cadFolderConfigured: true, items: [bundle] })); await first;
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
+  },
+);
+
+it.each(['listing revision', 'mesh edit'] as const)(
+  'accepts a listing through a background %s', async (change) => {
+    const state = useCadReturnStore.getState(); state.selectBundle(bundle);
+    const pending = deferred<Response>(); const items = vi.fn();
+    const reader = createCadReturnArrivalReader({
+      setBundles: items, seenReturnRevisions: { current: new Map([[bundle.bundlePath, bundle.modifiedAt]]) },
+    }, (() => pending.promise) as typeof fetch);
+    const first = reader.refresh({ background: true });
+    if (change === 'listing revision') state.refreshSelectedBundle({ ...bundle, modifiedAt: '2026-08-14T00:00:00Z' });
+    else state.setRigidSize(9);
+    pending.resolve(json({ cadFolderConfigured: true, items: [bundle] })); await first;
+    expect(items).toHaveBeenCalledWith([bundle]);
+  },
+);
+
+it('fences a manual pick without aborting its previous in-flight ingest', async () => {
+  const pending = deferred<Response>(); const busy = vi.fn(); let signal: AbortSignal | undefined;
+  const actions = createCadArrivalActions({ setIngesting: busy }, (async (_input, init) => {
+    signal = init?.signal as AbortSignal; return pending.promise;
+  }) as typeof fetch);
+  actions.selectBundleAs(bundle);
+  const first = actions.ingestSelected().catch((error) => error);
+  const before = busy.mock.calls.length;
+  actions.selectBundleAs(newer);
+  expect(signal?.aborted).toBe(false);
+  expect(busy).toHaveBeenCalledTimes(before);
+  pending.resolve(json(record));
+  expect(await first).toBeInstanceOf(SupersededError);
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(newer.bundlePath);
+  expect(useCadReturnStore.getState().ingestRecord).toBeNull();
 });
 
 it.each(['design identity', 'instance'] as const)('fences an Onshape return after a changed %s without React', async (change) => {

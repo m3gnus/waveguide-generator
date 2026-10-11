@@ -206,10 +206,17 @@ interface CadReturnState {
   isCurrentIngestIntent: (generation: number) => boolean;
   /** Observe selection intent without superseding in-flight preparation. */
   captureIngestIntent: () => number;
+  /** Model selections, independent of preparation, mesh edits and listing revisions. */
+  beginSelectionIntent: () => number;
+  captureSelectionIntent: () => number;
+  isCurrentSelectionIntent: (generation: number) => boolean;
+  /** User choices also fence Sends across the Send's own automatic listing selection. */
+  captureModelChoice: () => number;
+  isCurrentModelChoice: (generation: number) => boolean;
   /** Whether the record held is the one the newest intent applied: no ingest,
    * selection or edit has superseded it since, and none is in flight. */
   isIngestSettled: () => boolean;
-  selectBundle: (bundle: CadReturnBundle | null, projectLineageId?: string | null) => void;
+  selectBundle: (bundle: CadReturnBundle | null, projectLineageId?: string | null, automatic?: boolean) => void;
   /** Select a newly arrived return. When it correlates with the current
    * selection — same source inventory by id, role, and required flag — the
    * user's mesh sizes, channel mapping, drivers, combine, and sweep survive.
@@ -219,7 +226,8 @@ interface CadReturnState {
   refreshSelectedBundle: (bundle: CadReturnBundle | null) => void;
   markIngestStale: (reason: string) => void;
   applyIngest: (record: CadReturnIngestRecord, generation: number) => boolean;
-  /** Restore an immutable job model without writing over a project's saved profile. */
+  /** Restore an immutable job model without writing over a project's saved profile
+   * or marking it as settled by current preparation. */
   restoreIngest: (record: CadReturnIngestRecord, generation: number, restored: Partial<CadReturnState>) => boolean;
   setSourceSize: (sourceId: string, value: number) => void;
   setRigidSize: (value: number) => void;
@@ -850,12 +858,20 @@ function restoreSolveProfile(bundle: CadReturnBundle, projectLineageId: string |
 // reject a late network result without manufacturing a render by itself. Every
 // input that changes the bytes an ingest represents advances the same token.
 let ingestIntentGeneration = 0;
+let selectionIntentGeneration = 0;
+let modelChoiceGeneration = 0;
 /** The intent whose `applyIngest` put the held record in place. */
 let appliedIngestGeneration = -1;
 
 function supersedeIngestIntent(): number {
   ingestIntentGeneration += 1;
   return ingestIntentGeneration;
+}
+
+function supersedeSelectionIntent(): number {
+  modelChoiceGeneration += 1;
+  selectionIntentGeneration += 1;
+  return selectionIntentGeneration;
 }
 
 function reconcileListing(state: CadReturnState, selectedBundle: CadReturnBundle) {
@@ -988,9 +1004,16 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   ingestStaleReason: null,
   beginIngestIntent: supersedeIngestIntent,
   captureIngestIntent: () => ingestIntentGeneration,
+  beginSelectionIntent: supersedeSelectionIntent,
+  captureSelectionIntent: () => selectionIntentGeneration,
+  isCurrentSelectionIntent: (generation) => generation === selectionIntentGeneration,
+  captureModelChoice: () => modelChoiceGeneration,
+  isCurrentModelChoice: (generation) => generation === modelChoiceGeneration,
   isCurrentIngestIntent: (generation) => generation === ingestIntentGeneration,
   isIngestSettled: () => get().ingestRecord !== null && appliedIngestGeneration === ingestIntentGeneration,
-  selectBundle: (selectedBundle, projectLineageId) => {
+  selectBundle: (selectedBundle, projectLineageId, automatic = false) => {
+    if (!automatic) supersedeSelectionIntent();
+    else selectionIntentGeneration += 1;
     supersedeIngestIntent();
     const project = resolvedProjectLineage(get(), projectLineageId);
     const restored = selectedBundle ? restoreSolveProfile(selectedBundle, project) : null;
@@ -1019,6 +1042,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
     });
   },
   selectArrivedBundle: (bundle, projectLineageId) => {
+    selectionIntentGeneration += 1;
     const previous = get().selectedBundle;
     const project = resolvedProjectLineage(get(), projectLineageId);
     const nextProfileKey = currentSolveProfileKey(bundle, project);
@@ -1109,7 +1133,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   },
   restoreIngest: (ingestRecord, generation, restored) => {
     if (generation !== ingestIntentGeneration) return false;
-    appliedIngestGeneration = generation;
     set({ ...restored, ingestRecord });
     return true;
   },
@@ -1912,6 +1935,7 @@ export function blockingFindingWire(record: CadReturnIngestRecord): string[] {
 subscribeSolveSettingsEdits(() => saveSolveProfile(useCadReturnStore.getState()));
 
 export function resetCadReturnStore(): void {
+  supersedeSelectionIntent();
   supersedeIngestIntent();
   selectedSolveProfileKey = null;
   useCadReturnStore.setState({

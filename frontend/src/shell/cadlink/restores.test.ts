@@ -12,6 +12,8 @@ import { restoreRememberedCadProject, observeRememberedCadProject, restoreCadJob
 import { bundle, deferred, job, json, mesh, record } from './selection.fixtures';
 
 import type { JobItem } from '../../api/jobsSocket';
+import { createCadArrivalActions, createCadReturnArrivalReader } from './arrivals';
+import { adoptSolvedCadModel } from './solvedModel';
 
 it('does not recall an unnumbered CAD preparation as an archived run', async () => {
   const enterCadWorkspace = vi.fn();
@@ -64,7 +66,7 @@ describe('job and remembered-project restores without the coordinator', () => {
       driveChannels: [{ id: 'archive-hf', source_ids: ['source-hf'], motion: 'normal' }],
       sourceSizesMm: { 'source-hf': 4 }, needsIngest: false,
     });
-    expect(useCadReturnStore.getState().isIngestSettled()).toBe(true);
+    expect(useCadReturnStore.getState().isIngestSettled()).toBe(false);
     expect(useCadReturnStore.getState().selectedBundle?.readable).toBe(false);
     expect(useSolveOptionsStore.getState().frequencyListText).toBe('100\n500\n1000');
     expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
@@ -155,11 +157,63 @@ describe('job and remembered-project restores without the coordinator', () => {
     const status = vi.fn(); const stop = observeRememberedCadProject({ reportStatus: status });
     try {
       workspaceModeStore.setMode('cad');
+      // The mounted Viewport's empty-CAD effect runs after the mode notification.
+      importedMeshStore.beginIntent();
+      importedMeshStore.clear('cad');
       await vi.waitFor(() => expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath));
       expect(status).toHaveBeenCalledWith('Reopened Speaker.');
     } finally { stop(); }
   });
 });
+
+it('keeps a recalled run ineligible for solved-model adoption', async () => {
+  expect(await restoreCadJobModel(job(), {}, archiveFetcher)).toBe(true);
+  const fetcher = vi.fn(async () => json({ ...record, ingest_id: 'wgi_prepared' }));
+  expect(await adoptSolvedCadModel(job('wgi_prepared'), {
+    manifestSha256: record.manifest_sha256, sourceIngestId: record.ingest_id,
+  }, { showIngestedMesh: vi.fn() }, fetcher)).toBe('declined');
+  expect(fetcher).not.toHaveBeenCalled();
+  expect(useCadReturnStore.getState().ingestRecord).toEqual(record);
+});
+
+it.each(['manual selection', 'listing arrival'] as const)(
+  're-reads drivers for the same %s while auto-ingest is in flight', async (caller) => {
+    const preset = { id: 'driver-fixture', label: 'Fixture', source: 'database' as const,
+      kind: 'cd' as const, z_ohm: 8, xo_min_hz: null, base: { re_ohm: 5 } };
+    const state = useCadReturnStore.getState();
+    state.selectBundle(bundle, 'wgl_project');
+    state.setChannelDriverPreset('drive-hf', preset);
+    const pending = deferred<Response>();
+    const ingestPending = deferred<Response>();
+    const status = vi.fn();
+    let refresh!: Promise<string[]>;
+    let ingest!: Promise<typeof record>;
+    const reread = () => {
+      refresh = refreshChannelDriverBases((() => pending.promise) as typeof fetch);
+      return refresh.then((drivers) => {
+        if (drivers.length) status(`Re-read ${drivers.length} drivers from the library.`);
+      });
+    };
+    const autoIngestSelected = () => { ingest = actions.ingestSelected(); };
+    const actions = createCadArrivalActions({
+      rereadDrivers: () => { void reread(); }, autoIngestSelected, showIngestedMesh: async () => undefined,
+    }, (() => ingestPending.promise) as typeof fetch);
+    if (caller === 'manual selection') {
+      actions.selectBundleAs(bundle, 'wgl_project');
+    } else {
+      await createCadReturnArrivalReader({
+        refreshChannelDriverBases: reread, autoIngestSelected,
+      }, (async () => json({ cadFolderConfigured: true,
+        items: [{ ...bundle, modifiedAt: new Date().toISOString() }] })) as typeof fetch)
+        .refresh({ autoOpenNew: true });
+    }
+    pending.resolve(json({ spec: { re_ohm: 7 }, xo_min_hz: 1200 }));
+    expect(await refresh).toEqual(['drive-hf']);
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].preset?.base.re_ohm).toBe(7);
+    expect(status).toHaveBeenCalledWith('Re-read 1 drivers from the library.');
+    ingestPending.resolve(json(record)); await ingest;
+  },
+);
 
 it('an archive restore leaves the project profile intact', async () => {
   const state = useCadReturnStore.getState(); state.selectBundle(bundle, 'wgl_project');

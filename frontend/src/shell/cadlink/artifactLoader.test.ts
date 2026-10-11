@@ -25,6 +25,37 @@ afterEach(async () => {
 const displayMesh = mesh.replace('2 1 0 0', '2 2 0 0');
 
 describe('ingest-keyed artifact loading without the coordinator', () => {
+  describe.each(['model', 'solver'] as const)('initial %s mesh', (slot) => {
+    it.each(['rigid size', 'source size', 'skipped source', 'stale mark'] as const)(
+      'finishes through a %s edit to the held ingest', async (edit) => {
+        const pending = deferred<Response>();
+        const fetcher = (() => pending.promise) as typeof fetch;
+        const loading = slot === 'model'
+          ? showIngestedMeshInViewport(record, 'Speaker', undefined, fetcher)
+          : showIngestedSolverMeshInViewport(record, 'Speaker', fetcher);
+        const state = useCadReturnStore.getState();
+        if (edit === 'rigid size') state.setRigidSize(9);
+        else if (edit === 'source size') state.setSourceSize('source-hf', 7);
+        else if (edit === 'skipped source') state.setSkipped('source-hf', true);
+        else state.markIngestStale('Settings changed.');
+        expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
+        pending.resolve(new Response(mesh)); await loading;
+        expect(importedMeshStore.getSnapshot()[slot === 'model' ? 'cad' : 'cadSolver']?.ingestId).toBe(record.ingest_id);
+      },
+    );
+
+    it.each(['pick', 'clear'] as const)('drops a completion after a direct store %s', async (change) => {
+      const pending = deferred<Response>();
+      const fetcher = (() => pending.promise) as typeof fetch;
+      const loading = slot === 'model'
+        ? showIngestedMeshInViewport(record, 'Speaker', undefined, fetcher)
+        : showIngestedSolverMeshInViewport(record, 'Speaker', fetcher);
+      useCadReturnStore.getState().selectBundle(change === 'pick' ? { ...bundle, bundlePath: 'new.wgreturn' } : null);
+      pending.resolve(new Response(mesh)); await loading;
+      expect(importedMeshStore.getSnapshot()[slot === 'model' ? 'cad' : 'cadSolver']).toBeNull();
+    });
+  });
+
   it('shows the solver artifact immediately and recovers a missed readiness event by a bounded re-read', async () => {
     let reads = 0;
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {

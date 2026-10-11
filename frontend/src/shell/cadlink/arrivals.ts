@@ -94,7 +94,7 @@ export async function refreshCadReturnArrivals(
   } = integration;
   const background = options.background === true;
   const request = ++returnListRequest.current;
-  const selection = useCadReturnStore.getState().captureIngestIntent();
+  const selection = useCadReturnStore.getState().captureSelectionIntent();
   const documentLoad = currentDocumentLoad();
   if (preferencesStore.getSnapshot().cadApplication === 'onshape') {
     if (projectOpenPending.current) {
@@ -108,7 +108,7 @@ export async function refreshCadReturnArrivals(
   try {
     const response = await listReturns(fetcher);
     if (request !== returnListRequest.current
-      || !useCadReturnStore.getState().isCurrentIngestIntent(selection)
+      || !useCadReturnStore.getState().isCurrentSelectionIntent(selection)
       || !isCurrentDocumentLoad(documentLoad)) return;
     setBundles(response.items);
     const previous = seenReturnRevisions.current;
@@ -202,7 +202,7 @@ export async function refreshCadReturnArrivals(
     if (opened && !projectMismatch && !heldForManualPick) {
       continuity = arrived
         ? useCadReturnStore.getState().selectArrivedBundle(arrived, destination)
-        : (useCadReturnStore.getState().selectBundle(opened, destination), 'initial');
+        : (useCadReturnStore.getState().selectBundle(opened, destination, true), 'initial');
       void refreshChannelDriverBases().catch(() => undefined);
       importedMeshStore.beginIntent();
     }
@@ -262,7 +262,7 @@ export async function refreshCadReturnArrivals(
     }
   } catch (reason) {
     if (request === returnListRequest.current
-      && useCadReturnStore.getState().isCurrentIngestIntent(selection)
+      && useCadReturnStore.getState().isCurrentSelectionIntent(selection)
       && isCurrentDocumentLoad(documentLoad) && !background) {
       if (projectOpenPending.current) {
         projectOpenPending.current = false;
@@ -615,11 +615,8 @@ export function createCadArrivalActions(
       refusedForeignReturn.current = false;
       manualSelectionAt.current = Date.now();
       manualSelections.current += 1;
-      ingestRequest.current += 1;
-      ingestAbortController.current?.abort();
-      setIngesting(false);
     }
-    useCadReturnStore.getState().selectBundle(bundle, projectLineageId);
+    useCadReturnStore.getState().selectBundle(bundle, projectLineageId, automatic);
     rereadDrivers();
     importedMeshStore.beginIntent();
     activateWorkspace();
@@ -628,8 +625,8 @@ export function createCadArrivalActions(
 
   const returnFromOnshape = async () => {
     const identity = useDocumentStore.getState().identity;
-    if (!preferencesStore.isOnshapeAvailable()) throw new Error('Onshape is unavailable in this build.');
     if (!identity?.designId) throw new Error('Send this design to Onshape before returning it.');
+    useCadReturnStore.getState().beginSelectionIntent();
     let ingestGeneration = useCadReturnStore.getState().beginIngestIntent();
     const documentLoad = currentDocumentLoad();
     const instanceId = onshapeInstanceId();
@@ -719,7 +716,19 @@ export function createCadArrivalActions(
     )) return;
     const intent = { acceptedSeq, sentAt: order, picks: manualSelections.current };
     adapter.sendIntent.current = intent;
-    const superseded = () => adapter.sendIntent.current !== intent || manualSelections.current !== intent.picks;
+    // Capture before refresh: opening an archive is a selection too, even
+    // though it does not increment the panel's manual-pick counter.
+    const selection = useCadReturnStore.getState().captureModelChoice();
+    const documentLoad = currentDocumentLoad();
+    const superseded = () => {
+      if (adapter.sendIntent.current !== intent) return true;
+      if (manualSelections.current === intent.picks
+        && useCadReturnStore.getState().isCurrentModelChoice(selection)
+        && isCurrentDocumentLoad(documentLoad)) return false;
+      const name = operation.snapshot?.documentName ?? 'the model Fusion sent';
+      setStatus(`Received ${name} from Fusion 360. A newer model selection stays on screen; select ${name} from the return list to use it.`);
+      return true;
+    };
     noteCadActivity();
     await refresh({ background: true, autoOpenNew: true }).catch(() => undefined);
     if (superseded()) return;
@@ -734,11 +743,8 @@ export function createCadArrivalActions(
       setStatus(`Received ${name} from Fusion 360. You selected another return after it was sent, so that one stays selected; select ${name} from the return list to use it.`);
       return;
     }
-    const selection = useCadReturnStore.getState().captureIngestIntent();
-    const documentLoad = currentDocumentLoad();
     const listed = await listReturns(fetcher).catch(() => null);
-    if (superseded() || !useCadReturnStore.getState().isCurrentIngestIntent(selection)
-      || !isCurrentDocumentLoad(documentLoad)) return;
+    if (superseded()) return;
     const bundle = listed?.items.find((item) => item.bundlePath === bundlePath && item.readable);
     if (bundle) {
       // Automatic: displaying a Send is not the user's pick.

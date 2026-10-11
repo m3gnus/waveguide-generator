@@ -7,6 +7,7 @@ import { getDriver } from '../../api/drivers';
 import { fromResult, parseWire } from '../../results/crossoverSpec';
 import {
   DRIVER_FIELD_KEYS,
+  bundleIdentity,
   PASSIVE_CARDIOID_DEFAULTS,
   driverBaseFromSpec,
   driversForChannels,
@@ -183,7 +184,9 @@ function restoreCadJobSolveOptions(job: JobItem): void {
 }
 
 export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch): Promise<string[]> {
-  const selection = useCadReturnStore.getState().captureIngestIntent();
+  const owner = useCadReturnStore.getState();
+  const selection = owner.captureSelectionIntent();
+  const bundle = owner.selectedBundle ? bundleIdentity(owner.selectedBundle) : null;
   const documentLoad = currentDocumentLoad();
   const forms = useCadReturnStore.getState().channelDrivers;
   const saved = new Map(useDriverLibraryStore.getState().saved.map((driver) => [driver.id, driver]));
@@ -204,7 +207,10 @@ export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch): 
       xo_min_hz: typeof hit.xo_min_hz === 'number' && Number.isFinite(hit.xo_min_hz) ? hit.xo_min_hz : null,
     };
   }));
-  if (!useCadReturnStore.getState().isCurrentIngestIntent(selection)
+  const current = useCadReturnStore.getState();
+  if (!current.isCurrentSelectionIntent(selection)
+    || current.projectLineageId !== owner.projectLineageId
+    || (current.selectedBundle ? bundleIdentity(current.selectedBundle) : null) !== bundle
     || !isCurrentDocumentLoad(documentLoad)) return [];
   return useCadReturnStore.getState().refreshChannelDriverBases(updates);
 }
@@ -243,6 +249,7 @@ export async function restoreCadJobModel(
     return false;
   }
   integration.reportStatus(`Loading ${displayName} from run #${job.run_number}…`);
+  useCadReturnStore.getState().beginSelectionIntent();
   const selection = useCadReturnStore.getState().beginIngestIntent();
   const viewportGeneration = importedMeshStore.beginIntent();
   const documentLoad = currentDocumentLoad();
@@ -364,12 +371,10 @@ export async function restoreRememberedCadProject(
   const lineage = rememberedCadProject();
   const selection = useCadReturnStore.getState().captureIngestIntent();
   const documentLoad = currentDocumentLoad();
-  const viewport = importedMeshStore.captureGeneration();
   const empty = () => {
     const current = useCadReturnStore.getState();
     return !current.selectedBundle && !current.ingestRecord
       && current.isCurrentIngestIntent(selection) && isCurrentDocumentLoad(documentLoad)
-      && importedMeshStore.isCurrentGeneration(viewport)
       && workspaceModeStore.getSnapshot().mode === 'cad'
       && preferencesStore.getSnapshot().cadApplication !== 'onshape' && integration.isAllowed();
   };

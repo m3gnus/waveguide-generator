@@ -80,9 +80,8 @@ const displayUpgradesInFlight = new Set<string>();
  * selection's viewport load is never cancelled by it. The swap also only
  * takes the viewport if the CAD model view still owns it, leaving a user who
  * switched to the solve-mesh view where they are. */
-/** Whether CAD Link has moved on from this ingestion: another return is
- * selected, or this one is being prepared again, so a viewport load for it
- * may be in flight. */
+/** Another model owns CAD Link. Editing or preparing the held record again
+ * leaves its immutable artifact displayable until a replacement is applied. */
 function anotherSelectionInFlight(ingestId: string): boolean {
   const current = useCadReturnStore.getState();
   return current.ingestRecord
@@ -179,11 +178,13 @@ export async function showIngestedMeshInViewport(
   fetcher: typeof fetch = fetch,
   generation = importedMeshStore.beginIntent(),
 ): Promise<void> {
-  const selection = useCadReturnStore.getState().captureIngestIntent();
+  const selection = useCadReturnStore.getState().captureSelectionIntent();
   const documentLoad = currentDocumentLoad();
   const current = () => importedMeshStore.isCurrentGeneration(generation)
-    && useCadReturnStore.getState().isCurrentIngestIntent(selection)
+    && useCadReturnStore.getState().isCurrentSelectionIntent(selection)
+    && !anotherSelectionInFlight(record.ingest_id)
     && isCurrentDocumentLoad(documentLoad);
+  if (!current()) return;
   const ingestId = record.ingest_id;
   const available = importedMeshStore.getSnapshot().cad;
   if (available?.ingestId === ingestId) {
@@ -258,11 +259,13 @@ export async function showIngestedSolverMeshInViewport(
   fetcher: typeof fetch = fetch,
   generation = importedMeshStore.beginIntent(),
 ): Promise<string | null> {
-  const selection = useCadReturnStore.getState().captureIngestIntent();
+  const selection = useCadReturnStore.getState().captureSelectionIntent();
   const documentLoad = currentDocumentLoad();
   const current = () => importedMeshStore.isCurrentGeneration(generation)
-    && useCadReturnStore.getState().isCurrentIngestIntent(selection)
+    && useCadReturnStore.getState().isCurrentSelectionIntent(selection)
+    && !anotherSelectionInFlight(record.ingest_id)
     && isCurrentDocumentLoad(documentLoad);
+  if (!current()) return null;
   const ingestId = record.ingest_id;
   const available = importedMeshStore.getSnapshot().cadSolver;
   if (available?.ingestId === ingestId) {
