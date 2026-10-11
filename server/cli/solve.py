@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import deque
 from collections.abc import Coroutine, Mapping
 from contextlib import contextmanager
 import hashlib
@@ -56,6 +57,7 @@ from .request import load_request_document
 
 _TERMINAL_STATUSES = {"complete", "error", "cancelled"}
 _TERMINAL_EVENTS = {"completed", "failed", "cancelled"}
+_TERMINAL_EVENT_GRACE_SECONDS = 0.5
 _DATABASE_ONLY_WARNING = (
     "Warning: no --output directory was requested. Results are retained only in "
     "the WG job database, visible in WG history, and are subject to its retention "
@@ -73,6 +75,7 @@ class _StreamTransport:
         self._terminal = asyncio.Event()
         self._job_id: str | None = None
         self._terminal_jobs: set[str] = set()
+        self._before_submission: deque[Mapping[str, Any]] = deque(maxlen=256)
 
     async def receive(self) -> None:
         await self._closed.wait()
@@ -88,10 +91,27 @@ class _StreamTransport:
     async def wait_terminal(self) -> None:
         await self._terminal.wait()
 
-    def watch_job(self, job_id: str) -> None:
+    async def watch_job(self, job_id: str) -> None:
         self._job_id = job_id
         if job_id in self._terminal_jobs:
             self._terminal.set()
+        for message in self._before_submission:
+            if message.get("jobId") == job_id:
+                await self._emit(message)
+        self._before_submission.clear()
+
+    async def send_json(self, message: Mapping[str, Any]) -> None:
+        self._observe(message)
+        if message.get("kind") in {"hello", "snapshot", "ping"}:
+            await self._emit(message)
+        elif self._job_id is None:
+            if message.get("jobId") is not None:
+                self._before_submission.append(message)
+        elif message.get("jobId") == self._job_id:
+            await self._emit(message)
+
+    async def _emit(self, message: Mapping[str, Any]) -> None:
+        raise NotImplementedError
 
     def _observe(self, message: Mapping[str, Any]) -> None:
         if message.get("kind") == "hello":
@@ -113,21 +133,20 @@ class _StreamTransport:
 
 
 class NdjsonTransport(_StreamTransport):
-    """Print every jobs-protocol message as strict JSON on stdout."""
+    """Print protocol control records and this solve's events as strict JSON."""
 
-    async def send_json(self, message: Mapping[str, Any]) -> None:
+    async def _emit(self, message: Mapping[str, Any]) -> None:
         print(
             json.dumps(dict(message), separators=(",", ":"), allow_nan=False),
             file=self.stdout,
             flush=True,
         )
-        self._observe(message)
 
 
 class TextTransport(_StreamTransport):
     """Render only useful live job lines; the command prints the final summary."""
 
-    async def send_json(self, message: Mapping[str, Any]) -> None:
+    async def _emit(self, message: Mapping[str, Any]) -> None:
         kind = message.get("kind")
         if kind == "event":
             event_type = str(message.get("type") or "event")
@@ -145,7 +164,6 @@ class TextTransport(_StreamTransport):
                 file=self.stderr,
                 flush=True,
             )
-        self._observe(message)
 
 
 @contextmanager
@@ -153,7 +171,7 @@ def _capture_sigint(interrupted: asyncio.Event):
     """Turn the first Ctrl-C into cooperative cancellation of this solve."""
 
     if threading.current_thread() is not threading.main_thread():
-        yield
+        yield lambda: None
         return
     previous = signal.getsignal(signal.SIGINT)
     received = False
@@ -174,11 +192,19 @@ def _capture_sigint(interrupted: asyncio.Event):
 
     token = register_signal_rearm(install)
     install()
+    restored = False
+
+    def restore() -> None:
+        nonlocal restored
+        if not restored:
+            unregister_signal_rearm(token)
+            signal.signal(signal.SIGINT, previous)
+            restored = True
+
     try:
-        yield
+        yield restore
     finally:
-        unregister_signal_rearm(token)
-        signal.signal(signal.SIGINT, previous)
+        restore()
 
 
 def _validation_messages(exc: ValidationError) -> list[str]:
@@ -221,18 +247,38 @@ async def _wait_for_terminal(runtime: JobRuntime | BackendClient, job_id: str) -
 
 
 async def _wait_for_stream(
-    waiter: Coroutine[Any, Any, None], protocol_task: asyncio.Task[None]
-) -> None:
+    waiter: Coroutine[Any, Any, None], protocol_task: asyncio.Task[None],
+    interrupted: asyncio.Event,
+) -> bool:
     event_task = asyncio.create_task(waiter)
-    done, _pending = await asyncio.wait(
-        {event_task, protocol_task}, return_when=asyncio.FIRST_COMPLETED
-    )
-    if protocol_task in done:
+    interrupt_task = asyncio.create_task(interrupted.wait())
+    try:
+        done, _pending = await asyncio.wait(
+            {event_task, protocol_task, interrupt_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if interrupted.is_set():
+            return False
+        if event_task not in done:
+            protocol_task.result()
+            raise BackendClientError("job event stream closed unexpectedly")
+        return True
+    finally:
+        for task in (event_task, interrupt_task):
+            task.cancel()
+        await asyncio.gather(event_task, interrupt_task, return_exceptions=True)
+
+
+async def _drain_terminal_events(transport: _StreamTransport, protocol_task: asyncio.Task[None]) -> None:
+    """Give queued progress a bounded chance to print; HTTP has already finished."""
+    event_task = asyncio.create_task(transport.wait_terminal())
+    try:
+        await asyncio.wait(
+            {event_task, protocol_task}, timeout=_TERMINAL_EVENT_GRACE_SECONDS,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    finally:
         event_task.cancel()
         await asyncio.gather(event_task, return_exceptions=True)
-        protocol_task.result()
-        raise RuntimeError("job event stream closed unexpectedly")
-    await event_task
 
 
 def _sha256_text(value: str) -> str:
@@ -471,7 +517,7 @@ async def solve_path(
             handle = await asyncio.to_thread(discover_backend, data_dir)
             if handle is None:
                 handle = await asyncio.to_thread(
-                    ensure_backend, data_dir, headless_backend_argv(data_dir)
+                    ensure_backend, data_dir, headless_backend_argv(args.data_dir)
                 )
             runtime = BackendClient(handle)
     except BackendOwnerError as exc:
@@ -537,6 +583,10 @@ async def solve_path(
         # any message already in flight print first; otherwise a slow host can
         # print a jobs-protocol message after the outcome.
         await transport.close(1000)
+        if isinstance(runtime, BackendClient):
+            # A reconnect may still be inside its connection timeout. Closing
+            # the socket cannot wait for another hello after the HTTP result.
+            protocol_task.cancel()
         await asyncio.gather(protocol_task, return_exceptions=True)
         if isinstance(runtime, BackendClient) and job_id is not None:
             fields["job_url"] = runtime.job_url(job_id)
@@ -546,9 +596,16 @@ async def solve_path(
     shutdown_done = False
     terminal_task: asyncio.Task[Any] | None = None
     interrupt_task: asyncio.Task[Any] | None = None
-    with _capture_sigint(interrupted):
+    with _capture_sigint(interrupted) as restore_sigint:
         try:
-            await _wait_for_stream(transport.wait_ready(), protocol_task)
+            if not await _wait_for_stream(transport.wait_ready(), protocol_task, interrupted):
+                if ndjson:
+                    await final_outcome(
+                        status="interrupted", client_request_id=request.client_request_id,
+                        error_code="interrupted", error_stage="submission",
+                        error_message="Solve interrupted by SIGINT before submission",
+                    )
+                return 130
             try:
                 job_id = await runtime.submit(request)
             except EngineUnavailableError as exc:
@@ -607,39 +664,48 @@ async def solve_path(
                     )
                 return 1
 
-            transport.watch_job(job_id)
+            await transport.watch_job(job_id)
             terminal_task = asyncio.create_task(_wait_for_terminal(runtime, job_id))
             interrupt_task = asyncio.create_task(interrupted.wait())
             done, _pending = await asyncio.wait(
-                {terminal_task, interrupt_task, protocol_task},
+                {terminal_task, interrupt_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if interrupt_task in done and interrupted.is_set():
-                terminal_task.cancel()
-                await asyncio.gather(terminal_task, return_exceptions=True)
-                if isinstance(runtime, BackendClient):
-                    await runtime.stop(job_id)
-                else:
-                    await runtime.shutdown()
-                    shutdown_done = True
-                if ndjson:
-                    await final_outcome(
-                        status="interrupted",
-                        job_id=job_id,
-                        client_request_id=request.client_request_id,
-                        error_code="interrupted",
-                        error_stage="cancellation",
-                        error_message="Solve interrupted by SIGINT",
-                    )
-                return 130
-            if protocol_task in done:
-                protocol_task.result()
-                raise BackendClientError("WG job event stream closed unexpectedly")
+                job = await runtime.get_job(job_id)
+                if job["status"] not in _TERMINAL_STATUSES:
+                    if isinstance(runtime, BackendClient):
+                        try:
+                            await runtime.stop(job_id)
+                        except BackendClientError as exc:
+                            # A finish can race the stop. Only a terminal HTTP
+                            # state makes the route's 400 harmless.
+                            job = await runtime.get_job(job_id)
+                            if exc.http_status != 400 or job["status"] not in _TERMINAL_STATUSES:
+                                raise
+                    else:
+                        await runtime.shutdown()
+                        shutdown_done = True
+                    job = await terminal_task
+                restore_sigint()
+                if job["status"] == "cancelled":
+                    if ndjson:
+                        await final_outcome(
+                            status="interrupted",
+                            job_id=job_id,
+                            client_request_id=request.client_request_id,
+                            error_code="interrupted",
+                            error_stage="cancellation",
+                            error_message="Solve interrupted by SIGINT",
+                        )
+                    return 130
+            else:
+                job = terminal_task.result()
+                restore_sigint()
             interrupt_task.cancel()
             await asyncio.gather(interrupt_task, return_exceptions=True)
-            job = terminal_task.result()
 
-            await _wait_for_stream(transport.wait_terminal(), protocol_task)
+            await _drain_terminal_events(transport, protocol_task)
             results: str | None = None
             output_summary: dict[str, Any] | None = None
             if job["status"] == "complete":
@@ -759,6 +825,8 @@ async def solve_path(
                 return_exceptions=True,
             )
             await transport.close(1000)
+            if isinstance(runtime, BackendClient):
+                protocol_task.cancel()
             await asyncio.gather(protocol_task, return_exceptions=True)
             if not shutdown_done and not isinstance(runtime, BackendClient):
                 await runtime.shutdown()

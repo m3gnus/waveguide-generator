@@ -610,7 +610,7 @@ def test_a_refusal_outcome_is_the_last_line_even_with_a_message_in_flight(
         async def run(self, transport) -> None:
             await transport.send_json({"kind": "hello"})
             await asyncio.sleep(0.05)
-            await transport.send_json({"kind": "event", "type": "in-flight"})
+            await transport.send_json({"kind": "snapshot", "jobs": [], "marker": "in-flight"})
             await transport.receive()
 
     monkeypatch.setattr(solve_module, "JobsProtocol", SlowStreamProtocol)
@@ -623,4 +623,4 @@ def test_a_refusal_outcome_is_the_last_line_even_with_a_message_in_flight(
 
     assert second == 1
     assert json.loads(lines[-1])["status"] == "refused"
-    assert any(json.loads(line).get("type") == "in-flight" for line in lines[:-1])
+    assert any(json.loads(line).get("marker") == "in-flight" for line in lines[:-1])

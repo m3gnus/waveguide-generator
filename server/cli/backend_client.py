@@ -22,8 +22,12 @@ from server.platform.backend_owner import BackendHandle
 
 
 class BackendClientError(RuntimeError):
-    def __init__(self, message: str, *, error: dict[str, Any] | None = None):
+    def __init__(
+        self, message: str, *, error: dict[str, Any] | None = None,
+        http_status: int | None = None,
+    ):
         super().__init__(message)
+        self.http_status = http_status
         self.error = error if isinstance(error, dict) else {
             "code": "backend_connection_failed",
             "stage": "backend",
@@ -64,7 +68,13 @@ class BackendClient:
                 error = payload.get("error") if isinstance(payload, dict) else None
                 detail = payload.get("detail") if isinstance(payload, dict) else None
                 message = str(error.get("message") if isinstance(error, dict) else detail or exc)
-                raise BackendClientError(message, error=error) from exc
+                if not isinstance(error, dict):
+                    error = {
+                        "code": "backend_http_error", "stage": "backend",
+                        "message": message, "retryable": exc.code >= 500,
+                        "details": {"http_status": exc.code},
+                    }
+                raise BackendClientError(message, error=error, http_status=exc.code) from exc
             except (OSError, UnicodeError) as exc:
                 raise BackendClientError(f"Could not reach WG backend at {self.handle.base_url}: {exc}") from exc
 
@@ -80,9 +90,21 @@ class BackendClient:
             raise BackendClientError(f"Invalid WG backend response for {path}: {exc}") from exc
 
     async def submit(self, request: SolveRequest) -> str:
-        accepted = await self._json(
-            "/api/solve", body=request.model_dump(mode="json"), method="POST"
-        )
+        try:
+            accepted = await self._json(
+                "/api/solve", body=request.model_dump(mode="json"), method="POST"
+            )
+        except BackendClientError as exc:
+            if exc.error.get("code") == "submission_key_conflict":
+                message = (
+                    f"{exc}. The stored job was made by a different request or "
+                    "solver configuration; choose a new clientRequestId to solve again."
+                )
+                raise BackendClientError(
+                    message, http_status=exc.http_status,
+                    error=dict(exc.error, code="submission_conflict", message=message),
+                ) from exc
+            raise
         try:
             return SolveAccepted.model_validate(accepted).job_id
         except ValueError as exc:
@@ -126,22 +148,40 @@ class BackendClient:
 
         closed = asyncio.create_task(transport.receive())
         receiver: asyncio.Task[Any] | None = None
+        cursor: int | None = None
+        connected = False
         try:
-            async with connect(
-                self.handle.base_url.replace("http://", "ws://", 1) + "/ws/jobs",
-                origin=None,
-                proxy=None,
-                max_size=None,
-                open_timeout=10,
-            ) as websocket:
-                while True:
-                    receiver = asyncio.create_task(websocket.recv())
-                    done, _ = await asyncio.wait({receiver, closed}, return_when=asyncio.FIRST_COMPLETED)
-                    if closed in done:
-                        break
-                    await transport.send_json(json.loads(receiver.result()))
-        except (OSError, WebSocketException, ValueError) as exc:
-            raise BackendClientError(f"WG job event stream closed: {exc}") from exc
+            while not closed.done():
+                resume_cursor = cursor
+                try:
+                    async with connect(
+                        self.handle.base_url.replace("http://", "ws://", 1) + "/ws/jobs",
+                        origin=None,
+                        proxy=None,
+                        max_size=None,
+                        open_timeout=10,
+                    ) as websocket:
+                        while not closed.done():
+                            receiver = asyncio.create_task(websocket.recv())
+                            done, _ = await asyncio.wait({receiver, closed}, return_when=asyncio.FIRST_COMPLETED)
+                            if closed in done:
+                                break
+                            message = json.loads(receiver.result())
+                            if message.get("kind") == "hello":
+                                connected = True
+                                if resume_cursor is not None:
+                                    await websocket.send(json.dumps({
+                                        "v": 1, "kind": "resume", "epoch": message["epoch"],
+                                        "cursor": resume_cursor,
+                                    }))
+                            if type(message.get("cursor")) is int:
+                                cursor = max(cursor or 0, message["cursor"])
+                            await transport.send_json(message)
+                except (OSError, WebSocketException, ValueError) as exc:
+                    if not connected:
+                        raise BackendClientError(f"WG job event stream closed: {exc}") from exc
+                    # Status polling continues independently during reconnect.
+                    await asyncio.wait({closed}, timeout=0.2)
         finally:
             for task in (receiver, closed):
                 if task is not None:

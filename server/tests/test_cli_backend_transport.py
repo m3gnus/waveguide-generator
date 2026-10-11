@@ -46,10 +46,14 @@ async def _transports(data_dir, monkeypatch, registry=None):
         assert url == "ws://127.0.0.1:3100/ws/jobs"
         assert kwargs["origin"] is None and kwargs["proxy"] is None
         messages = asyncio.Queue()
+        client_messages = asyncio.Queue()
 
         class Bridge:
             async def receive(self):
-                await asyncio.Event().wait()
+                return await client_messages.get()
+
+            async def send(self, message):
+                await client_messages.put(message)
 
             async def send_json(self, message):
                 await messages.put(json.dumps(message))

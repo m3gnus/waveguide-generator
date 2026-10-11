@@ -335,3 +335,107 @@ def test_sigint_stops_only_the_submitted_job_and_keeps_owner_alive(tmp_path):
                     await asyncio.wait_for(process.wait(), 10)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("selection", ["default", "environment", "explicit", "legacy"])
+def test_real_headless_argv_preserves_gui_workspace_defaults(tmp_path, monkeypatch, selection):
+    """Execute the supported launcher, including its isolation/adoption decision."""
+    import time
+    import urllib.request
+    from launchers.statusapp.controller import StatusController
+    from server.platform.paths import default_runs_dir, resolve_data_dir
+
+    home, app_root = tmp_path / "home", tmp_path / "app"
+    home.mkdir()
+    app_root.mkdir()
+    # Real entry point/modules, with a private legacy output candidate.
+    for name in ("launch", "launchers", "scripts", "server", "shared", "frontend"):
+        (app_root / name).symlink_to(ROOT / name, target_is_directory=True)
+    for name in ("WG2_DATA_DIR", "WG2_PORT", "WG2_BUNDLE", "WG2_UPDATE_STAGING_ROOT"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in {
+        "HOME": home, "USERPROFILE": home, "APPDATA": home / "appdata",
+        "XDG_DATA_HOME": home / "data", "XDG_DOCUMENTS_DIR": home / "Documents",
+        "WG2_APP_ROOT": app_root, "TMPDIR": tmp_path / "temp",
+        "WG2_SOLVER_WARMUP": "0", "WG2_SKIP_BEAT_CPU_PROVISION": "1",
+        "WG2_WGLINK_REFRESH": "0",
+    }.items():
+        monkeypatch.setenv(name, str(value))
+    (tmp_path / "temp").mkdir()
+    override = tmp_path / "explicit" if selection == "explicit" else None
+    if selection == "environment":
+        monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path / "environment"))
+    if selection == "legacy":
+        (app_root / "output" / "old-run").mkdir(parents=True)
+    data_dir = resolve_data_dir(override).resolve()
+    expected_workspace = (
+        app_root / "output" if selection == "legacy" else
+        data_dir / "workspace" if selection in {"explicit", "environment"} else default_runs_dir()
+    ).resolve()
+    # The real launcher reserves the first free port, just as the GUI does.
+    port = 3100
+    monkeypatch.setenv("WG2_PORT", str(port))
+    controller = StatusController(
+        repo_root=app_root, python_executable=sys.executable,
+        server_args=("--data-dir", str(override)) if override is not None else (),
+    )
+    commands = [headless_backend_argv(override), controller._command(port, tmp_path / "stop")]
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    observations = []
+    for index, command in enumerate(commands):
+        log_path = tmp_path / f"start-{index}.log"
+        with log_path.open("wb") as log:
+            process = subprocess.Popen(command, cwd=tmp_path, env=dict(os.environ), stdout=log, stderr=log)
+            try:
+                deadline = time.monotonic() + 20
+                handle = None
+                while time.monotonic() < deadline:
+                    assert process.poll() is None, log_path.read_text()
+                    handle = discover_backend(data_dir)
+                    if handle is not None:
+                        break
+                    time.sleep(0.05)
+                assert handle is not None, log_path.read_text()
+                assert handle.pid == process.pid
+                with opener.open(handle.base_url + "/health", timeout=2) as response:
+                    health = json.load(response)
+                with opener.open(handle.base_url + "/api/workspace/path", timeout=2) as response:
+                    workspace = json.load(response)
+                observations.append((Path(health["data_dir"]).resolve(), Path(workspace["path"]).resolve(), workspace["selected"]))
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                try:
+                    process.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+            # The documented headless stop targets the health PID, releases
+            # ownership and permits the status launcher to start the same folder.
+            if os.name != "nt":
+                assert process.returncode == 0, log_path.read_text()
+    assert observations[0] == observations[1]
+    assert observations[0] == (data_dir, expected_workspace, selection == "legacy")
+
+
+def test_default_cli_start_passes_only_explicit_override_to_argv(tmp_path, monkeypatch):
+    args = _args(_design(tmp_path), tmp_path / "data")
+    args.data_dir = None
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(cli, "discover_backend", lambda root: None)
+    forwarded = []
+    original = headless_backend_argv
+
+    def argv(override):
+        forwarded.append(override)
+        return original(override)
+
+    def refuse(root, command):
+        assert root == tmp_path / "data"
+        assert "--data-dir" not in command
+        raise BackendSpawnError("test stops before spawn")
+
+    monkeypatch.setattr(cli, "headless_backend_argv", argv)
+    monkeypatch.setattr(cli, "ensure_backend", refuse)
+    assert asyncio.run(_solve(args))[0] == 5
+    assert forwarded == [None]

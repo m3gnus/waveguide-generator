@@ -65,11 +65,20 @@ Process exits are:
 | `3` | backend data-folder mismatch (`backend_data_dir_mismatch`) |
 | `4` | backend startup deadline expired (`backend_start_timeout`) |
 | `5` | backend could not be spawned or exited during startup (`backend_spawn_failed`) |
-| `130` | interrupted by SIGINT after cooperative cancellation began |
+| `130` | SIGINT before submission, after this job was stopped, or during result/output work |
 
 Backend errors explain the installation, folder or log to check. The CLI never
 retries into another folder. SIGINT calls `POST /api/stop/{id}` for this job;
-the backend and its other queued jobs stay running.
+the backend and its other queued jobs stay running. Before submission, SIGINT exits
+without creating a job. If completion races cancellation, the job's HTTP terminal
+state wins; exit 130 for cooperative cancellation requires a cancelled job. Once
+HTTP reports terminal, normal SIGINT handling resumes for result downloads and output.
+
+Submission key conflicts retain the CLI code `submission_conflict` and the
+instruction to choose a new `clientRequestId`. Other HTTP error envelopes retain
+their backend codes. HTTP refusals without an error envelope use
+`backend_http_error`, with `details.http_status`; only 5xx responses are retryable.
+Transport failures use `backend_connection_failed` and are retryable.
 
 ## Solve output
 
@@ -122,16 +131,31 @@ folder with `--no-browser`. The small argv builder is
 `launch/backend_argv.py:headless_backend_argv`, matching the status launcher's
 server entry point and working outside the checkout directory. Concurrent CLI
 commands reach one backend; its database ownership guard remains in force.
+Only an explicitly supplied `--data-dir` is forwarded as an argument;
+`WG2_DATA_DIR` is inherited. With neither override, the backend uses the same
+Documents runs default and legacy workspace adoption as a GUI start. Discovery
+still verifies that the backend owns the selected data folder.
 
 Progress uses the existing `/ws/jobs` stream with pinned `websockets`, preserving
 Jobs Protocol v1 records and partial results. HTTP status checks determine the
-terminal job state. HTTP uses stdlib `urllib`; both transports send no Origin
+terminal job state. After a disconnect, the relay reconnects using the protocol's
+cursor resume while HTTP polling continues. Stream loss cannot fail an accepted
+job; after HTTP reports terminal the CLI waits at most 0.5 seconds for its terminal
+event, then uses HTTP's result even if that event was dropped. Snapshots include
+the shared job history; individual events and partial results are filtered to this
+command's job. HTTP uses stdlib `urllib`; both transports send no Origin
 header. The CLI closes its relay before printing the last outcome line.
 
 One WG backend executes a one-worker FIFO queue. Separate `--data-dir` values isolate
 job stores; they are not a promise that multiple solver processes are safe or faster on
 one machine. In particular, GPU and dense CPU solves can exhaust shared resources.
 Version 1 supports serial execution. The backend remains running after the CLI exits.
+To stop a backend started by the CLI, read its `pid` from `GET /health` at the
+printed job URL's host and terminate that process: `kill -TERM PID` on macOS/Linux,
+or `Stop-Process -Id PID` in Windows PowerShell. SIGTERM uses the launcher's graceful
+shutdown on macOS/Linux; Windows process termination is immediate. Closing the
+browser or a status window that adopted this backend does not stop it. Terminating
+the backend also ends its active work; CLI SIGINT stops only the submitted job.
 
 Runtime unit tests may explicitly pass the Python-only keyword
 `_internal_in_process=True` to `server.cli.args.main` or `server.cli.solve.solve_path`.
