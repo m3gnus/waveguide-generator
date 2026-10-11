@@ -73,7 +73,15 @@ FAKE_BACKEND = textwrap.dedent(
     if mode == "hold":
         time.sleep(600)
     time.sleep(delay)
-    server = HTTPServer(("127.0.0.1", 0), Handler)
+    class Server(HTTPServer):
+        # HTTPServer.server_bind resolves the host's FQDN (reverse DNS), which
+        # can stall for many seconds on hosted runners; a loopback fake needs none.
+        def server_bind(self):
+            import socketserver
+            socketserver.TCPServer.server_bind(self)
+            self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
+
+    server = Server(("127.0.0.1", 0), Handler)
     lock.update_port(server.server_address[1])
     server.serve_forever()
     """

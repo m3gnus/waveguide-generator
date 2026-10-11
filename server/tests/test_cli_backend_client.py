@@ -285,6 +285,11 @@ class CancellableEngine(TinyEngine):
             await asyncio.sleep(0.02)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Python cannot deliver SIGINT to a child process on Windows (send_signal supports only "
+    "SIGTERM and console CTRL events); the CLI's interrupt handling is covered on POSIX.",
+)
 def test_sigint_stops_only_the_submitted_job_and_keeps_owner_alive(tmp_path):
     data_dir = tmp_path / "data"
     design = _design(tmp_path)
