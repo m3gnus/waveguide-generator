@@ -31,3 +31,7 @@ specification. The package preserves the upstream sources, license and member
 hashes. This version change preserves the CAD protocol and refreshes the
 endpoint-oracle provenance against the selected source. Unit fixture versions
 remain identifiers of their original cases.
+
+That repository has since been made private. WGLink and its history moved to
+[`github.com/m3gnus/wglink`](https://github.com/m3gnus/wglink), where the same
+0.2.1 source is commit `fa5d671b5a09c954397a1b0f97414c53c3b480b0`; its `docs/HISTORY.md` maps every earlier commit.
