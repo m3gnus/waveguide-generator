@@ -88,11 +88,9 @@ def run_sweep(layout):
 
 
 def _workspace_contract_roots() -> list[Path]:
-    roots = [parent / "BEAT_Engine/src/beat_engine/beat_contract"
-             for parent in Path(__file__).resolve().parents]
-    # The suite redirects HOME; retain the supplied read-only workspace fallback.
-    roots.append(Path("/Users/magnus/Code/hornlab-workspace/BEAT_Engine/src/beat_engine/beat_contract"))
-    return roots
+    # A checkout outside the workspace is named with WG_BEAT_ENGINE_SRC instead.
+    return [parent / "BEAT_Engine/src/beat_engine/beat_contract"
+            for parent in Path(__file__).resolve().parents]
 
 
 def _official_contract():
