@@ -28,10 +28,10 @@ import pytest
 from server.cadlink import domain_decision as dd
 from server.cadlink.domain_interpretation import (
     cut_shaped_open_rim,
-    interpretation_view,
     observe,
     record_plan_identity,
 )
+from server.cadlink.intake.readings import interpretation_view
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 from test_cadlink_domain_automatic import (
     BOX_DRIVER,
@@ -411,7 +411,7 @@ def _job_request(record: dict[str, Any]) -> Any:
 
 def test_preview_plan_preparation_and_job_consume_the_same_decision(tmp_path: Path) -> None:
     from server.cadlink import preparation
-    from server.cadlink.solver_frame import confirm_frame
+    from server.cadlink.intake.readings import confirm_frame
     from server.jobs.runtime import JobRuntime
     from server.jobs.store import JobStore
     from test_cad_preparation_solver_frame import _PreparedStore
@@ -727,7 +727,7 @@ def _lifecycle(
 
 
 def _pair(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
-    from server.cadlink.solver_frame import confirm_frame
+    from server.cadlink.intake.readings import confirm_frame
 
     data_dir = tmp_path / "data"
     record = _ingest(

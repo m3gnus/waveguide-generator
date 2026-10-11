@@ -17,7 +17,6 @@ import pytest
 from server.cadlink import store as store_module
 from server.cadlink.operations import fusion_mutation_precheck, request_digest
 from server.cadlink.solve_command import (
-    LEDGER_FILENAME,
     SOLVE_REQUEST_FILENAME,
     PendingSolveCommand,
     collect_solve_deliveries,
@@ -25,6 +24,7 @@ from server.cadlink.solve_command import (
     read_ledger,
     solve_command_request,
 )
+from server.cadlink.ipc import LEDGER_FILENAME
 from server.cadlink.store import CadLinkStore
 
 

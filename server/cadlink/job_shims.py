@@ -48,7 +48,7 @@ from .preparation import (
     submission_key,
 )
 from .solve_command import collect_solve_deliveries, waiting_claim_operation_ids
-from .solver_frame import frame_provenance, record_solved_frame_provenance
+from server.cadlink.intake.readings import frame_provenance, record_solved_frame_provenance
 
 
 logger = logging.getLogger(__name__)

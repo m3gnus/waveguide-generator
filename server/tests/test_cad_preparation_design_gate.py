@@ -2,7 +2,7 @@
 
 docs/architecture/CAD-OPERATIONS.md, "Preparation". The backend prepares a solve
 into the snapshot's own project: the lineage of the solver anchor instance's WG
-design, the one ``project_setup.snapshot_project`` resolves. So the ingest's
+design, the one ``readings.snapshot_project`` resolves. So the ingest's
 project gate is given that design and that instance. No open model is involved.
 
 Every test here runs the production ``ingest_bundle``: the bundle reader, the
@@ -22,8 +22,8 @@ from typing import Any
 import pytest
 
 from server.cadlink import ingest as ingest_module
-from server.cadlink.project_setup import snapshot_project
-from server.cadlink.solver_frame import confirm_frame
+from server.cadlink.intake.readings import snapshot_project
+from server.cadlink.intake.readings import confirm_frame
 from server.design.textcfg import parse
 from server.exports.geometry_identity import geometry_hash_for_design
 from server.mesh.imported import polar_grid_from_symmetry

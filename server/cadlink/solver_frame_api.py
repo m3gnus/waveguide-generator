@@ -17,7 +17,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .ingest import get_ingestion_record
-from .solver_frame import FrameConfirmationError, confirm_frame, frame_preview
+from .solver_frame import FrameConfirmationError
+from server.cadlink.intake.readings import confirm_frame, frame_preview
 from .store import CadLinkStore
 
 

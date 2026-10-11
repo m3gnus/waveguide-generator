@@ -330,7 +330,7 @@ def test_exact_return_outcome_wins_before_file_timeout(tmp_path):
 
 def test_old_exact_command_evidence_wins_over_bulk_file_timeout(tmp_path):
     from server.cadlink.fusion_outcomes import settle_abandoned_file_returns
-    from server.cadlink.fusion_delivery import ipc_folder
+    from server.cadlink.ipc import ipc_folder
 
     store, _path, request_id, workspace = _lost_file_return(tmp_path)
     _report(tmp_path, outcome='refused', updatedAt='2026-01-01T00:00:00Z')

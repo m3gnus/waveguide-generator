@@ -47,20 +47,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 
 from .wgreturn import (
     CUT_ORIGIN_PLANES,
     DOMAIN_PLANES,
-    cut_provenance,
-    declared_domain_planes,
-    domain_kind,
 )
-
-if TYPE_CHECKING:  # pragma: no cover
-    from .store import CadLinkStore
 
 
 CONTRACT = "cad-domain-interpretation-v1"
@@ -186,196 +180,10 @@ def _export_frame(manifest: Mapping[str, Any]) -> str:
     return str(frame or "root-component")
 
 
-def _is_unlinked(manifest: Mapping[str, Any]) -> bool:
-    from .solver_frame import is_unlinked_manifest
-
-    return is_unlinked_manifest(manifest)
-
-
-def _manifest_context(manifest: Mapping[str, Any]) -> tuple[tuple[str, ...], str]:
-    scope = manifest.get("scope")
-    included = scope.get("included") if isinstance(scope, Mapping) else None
-    body_ids = tuple(
-        sorted(
-            str(item.get("object_id"))
-            for item in included or ()
-            if isinstance(item, Mapping) and item.get("object_id")
-        )
-    )
-    return body_ids, _export_frame(manifest)
-
-
-def _remembered_applies(
-    remembered: Mapping[str, Any], manifest_sha256: str, context: tuple[tuple[str, ...], str]
-) -> bool:
-    """A reading carries only to the same exported bodies in the same frame."""
-
-    if remembered.get("snapshot") == manifest_sha256:
-        return True
-    body_ids, export_frame = context
-    return (
-        tuple(sorted(str(item) for item in remembered.get("body_object_ids") or ()))
-        == body_ids
-        and remembered.get("export_frame") == export_frame
-    )
-
-
-def reading_key(store: CadLinkStore, manifest: Mapping[str, Any], manifest_sha256: str) -> str:
-    """Where a lineage's reading is remembered: its project, or this exact snapshot."""
-
-    from .project_setup import snapshot_project
-    from .solver_frame import confirmation_key
-
-    return confirmation_key(snapshot_project(store, manifest), manifest_sha256)
-
-
 def record_key(record: Mapping[str, Any]) -> str:
     from .solver_frame import record_confirmation_key
 
     return record_confirmation_key(record)
-
-
-def resolve_domain_plan(
-    store: CadLinkStore | None, manifest: Mapping[str, Any], manifest_sha256: str
-) -> DomainPlan:
-    """The evidence for this snapshot's domain, in precedence order.
-
-    1. A declaration in the return: today's declared path, unchanged.
-    2. The user's reading (Change) for this lineage: theirs wins over any
-       provenance, in either direction.
-    3. This return's own cut provenance, when it belongs to this snapshot.
-    4. An earlier provenance-backed reading of the lineage.
-    """
-
-    kind = domain_kind(manifest)
-    declared = declared_domain_planes(manifest)
-    if kind == "declared":
-        return DomainPlan(
-            manifest_domain=kind,
-            source=DECLARATION if declared else None,
-            reading=READING_REDUCED if declared else None,
-            planes=declared,
-        )
-    unlinked = _is_unlinked(manifest)
-    if not unlinked:
-        # A linked return is solved in its WG design's frame, and a pre-cut
-        # linked throat already fails role resolution; nothing to read here.
-        return DomainPlan(manifest_domain=kind, unlinked=False)
-    body_ids, export_frame = _manifest_context(manifest)
-    remembered = None
-    if store is not None:
-        remembered = store.get_domain_reading(reading_key(store, manifest, manifest_sha256))
-        if remembered is not None and not _remembered_applies(
-            remembered, manifest_sha256, (body_ids, export_frame)
-        ):
-            remembered = None
-    if remembered is not None and remembered.get("source") == USER:
-        own = remembered.get("snapshot") == manifest_sha256
-        return DomainPlan(
-            manifest_domain=kind,
-            source=USER if own else USER_LINEAGE,
-            reading=str(remembered.get("reading")),
-            planes=tuple(plane for plane in PLANES if plane in (remembered.get("planes") or [])),
-            snapshot=str(remembered.get("snapshot") or "") or None,
-            body_object_ids=body_ids,
-            export_frame=export_frame,
-        )
-    entries, ignored = _usable_provenance(manifest)
-    if entries:
-        features = tuple(
-            {"plane": entry["plane"], "kind": entry["feature"]["kind"], "name": entry["feature"]["name"]}
-            for entry in entries
-        )
-        planes = tuple(plane for plane in PLANES if any(entry["plane"] == plane for entry in entries))
-        refusals = _provenance_refusals(entries)
-        return DomainPlan(
-            manifest_domain=kind,
-            source=PROVENANCE,
-            reading=READING_REDUCED,
-            planes=planes,
-            features=features,
-            ignored=tuple(ignored),
-            refusal=refusals[0][1] if refusals else None,
-            refusals=tuple(refusals),
-            kept_sides=tuple(
-                (str(entry["plane"]), str(entry.get("kept_side") or "positive"))
-                for entry in entries
-                if entry.get("kept_side") in ("positive", "negative")
-            ),
-            body_object_ids=body_ids,
-            export_frame=export_frame,
-        )
-    if remembered is not None and remembered.get("source") == PROVENANCE:
-        return DomainPlan(
-            manifest_domain=kind,
-            source=LINEAGE,
-            reading=READING_REDUCED,
-            planes=tuple(plane for plane in PLANES if plane in (remembered.get("planes") or [])),
-            snapshot=str(remembered.get("snapshot") or "") or None,
-            features=tuple(dict(item) for item in remembered.get("features") or []),
-            ignored=tuple(ignored),
-            body_object_ids=body_ids,
-            export_frame=export_frame,
-        )
-    return DomainPlan(
-        manifest_domain=kind,
-        ignored=tuple(ignored),
-        body_object_ids=body_ids,
-        export_frame=export_frame,
-    )
-
-
-def _usable_provenance(
-    manifest: Mapping[str, Any],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Provenance entries that belong to this snapshot's bodies and frame.
-
-    The reader already checked the body is one of this return's included
-    bodies. An entry recorded in another component's frame names a plane in
-    coordinates this STEP is not written in, so it is not used.
-    """
-
-    frame = _export_frame(manifest)
-    usable: list[dict[str, Any]] = []
-    ignored: list[dict[str, Any]] = []
-    for entry in cut_provenance(manifest):
-        if entry.get("export_frame") != frame:
-            ignored.append(
-                {
-                    "feature": (entry.get("feature") or {}).get("name"),
-                    "reason": f"recorded in the {entry.get('export_frame')} frame; this model is in the {frame} frame",
-                }
-            )
-            continue
-        usable.append(entry)
-    return usable, ignored
-
-
-def _provenance_refusals(
-    entries: Sequence[Mapping[str, Any]],
-) -> list[tuple[str, str]]:
-    refusals: list[tuple[str, str]] = []
-    for entry in entries:
-        plane = str(entry["plane"])
-        name = (entry.get("feature") or {}).get("name") or "the cut"
-        if plane not in SUPPORTED_PLANES:
-            refusals.append(
-                (
-                    plane,
-                    f"{name} cuts this model on {plane_words(plane)} "
-                    f"(the {_ORIGIN_PLANE[plane]} plane), which WG cannot mirror yet. Cut it on "
-                    "the YZ or XZ origin plane instead, or send the whole model.",
-                )
-            )
-        elif entry.get("kept_side") not in ("positive", "negative"):
-            refusals.append(
-                (
-                    plane,
-                    f"{name} does not say which side of {plane_words(plane)} it kept; "
-                    "send the model again, or send the whole model.",
-                )
-            )
-    return refusals
 
 
 # -- the detector: observations on the solve mesh ------------------------------------------
@@ -1300,131 +1108,6 @@ def excitation_problem(
     return None
 
 
-# -- the Change: a user's reading ----------------------------------------------------------
-
-
-def record_reading(store: CadLinkStore, record: Mapping[str, Any], reading: Mapping[str, Any]) -> dict[str, Any]:
-    """Remember the user's reading of this model's domain for its lineage.
-
-    Only a reading the record offers (``choices``) is taken: a reduced reading
-    offered is one the geometry already revalidated, and it is checked again,
-    like a declaration, when the model is prepared. Solve prepares again,
-    under the new plan, so no approval given before carries to it.
-    """
-
-    interpretation = record.get("domain_interpretation")
-    if not isinstance(interpretation, Mapping):
-        raise DomainReadingError("this model was prepared before WG interpreted its domain; prepare it again")
-    if interpretation.get("evidence", {}).get("source") == DECLARATION:
-        raise DomainReadingError("this return declares its domain in Fusion; change it there")
-    kind = reading.get("reading")
-    planes = [str(plane) for plane in reading.get("planes") or []]
-    if kind == READING_AS_SHOWN:
-        wanted: dict[str, Any] = {"reading": READING_AS_SHOWN}
-        planes = []
-    elif kind == READING_REDUCED:
-        planes = [plane for plane in PLANES if plane in set(planes)]
-        wanted = {"reading": READING_REDUCED, "planes": planes}
-    else:
-        raise DomainReadingError("a reading is 'as-shown' or 'reduced' with its planes")
-    offered = [dict(choice) for choice in interpretation.get("choices") or []]
-    current = {"reading": interpretation.get("reading"), **({"planes": list(interpretation.get("planes") or [])} if interpretation.get("reading") == READING_REDUCED else {})}
-    if wanted not in offered and wanted != current:
-        raise DomainReadingError(
-            "this model cannot be read that way: "
-            + ("WG solves it as shown already" if kind == READING_AS_SHOWN else "the cut does not validate on the planes named")
-        )
-    return store.record_domain_reading(
-        record_key(record),
-        {
-            "source": USER,
-            "reading": wanted["reading"],
-            "planes": planes,
-            "snapshot": str(record.get("manifest_sha256") or ""),
-            "ingest_id": record.get("ingest_id"),
-            **dict(interpretation.get("lineage_context") or {}),
-        },
-    )
-
-
-def remember_provenance_reading(store: CadLinkStore, record: Mapping[str, Any]) -> None:
-    """After a provenance-backed reading solved, remember it for the lineage.
-
-    Only a project lineage remembers; a snapshot with none has nothing to carry
-    it to. A user's own reading is never replaced by it.
-    """
-
-    interpretation = record.get("domain_interpretation")
-    if not isinstance(interpretation, Mapping):
-        return
-    evidence = interpretation.get("evidence") or {}
-    if interpretation.get("reading") != READING_REDUCED or evidence.get("source") != PROVENANCE:
-        return
-    key = record_key(record)
-    if not key.startswith("lineage:"):
-        return
-    held = store.get_domain_reading(key)
-    if held is not None and held.get("source") == USER:
-        return
-    store.record_domain_reading(
-        key,
-        {
-            "source": PROVENANCE,
-            "reading": READING_REDUCED,
-            "planes": list(interpretation.get("planes") or []),
-            "features": list(evidence.get("features") or []),
-            "snapshot": str(record.get("manifest_sha256") or ""),
-            "ingest_id": record.get("ingest_id"),
-            **dict(interpretation.get("lineage_context") or {}),
-        },
-    )
-
-
-def lineage_reading(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, Any] | None:
-    """The reading remembered for this record's lineage (or snapshot), if any."""
-
-    return store.get_domain_reading(record_key(record))
-
-
-def interpretation_view(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, Any]:
-    """The model card's domain line: what was solved, why, the Change choices, and a pending Change."""
-
-    interpretation = record.get("domain_interpretation")
-    if not isinstance(interpretation, Mapping):
-        return {"ingestId": record.get("ingest_id"), "available": False}
-    remembered = lineage_reading(store, record)
-    pending = None
-    if remembered is not None and remembered.get("source") == USER:
-        wanted = {"reading": remembered.get("reading")}
-        if wanted["reading"] == READING_REDUCED:
-            wanted["planes"] = list(remembered.get("planes") or [])
-        solved = {"reading": interpretation.get("reading")}
-        if solved["reading"] == READING_REDUCED:
-            solved["planes"] = list(interpretation.get("planes") or [])
-        solved_as_user = (interpretation.get("evidence") or {}).get("source") in (USER, USER_LINEAGE)
-        if wanted["reading"] == READING_AS_SHOWN:
-            differs = solved["reading"] == READING_REDUCED
-        else:
-            differs = solved != wanted or not solved_as_user
-        offered = [dict(choice) for choice in interpretation.get("choices") or []]
-        # A carried reading can stop applying after the model changes (for
-        # example, a former half becomes whole). Do not promise that Solve
-        # will apply a reading this geometry no longer offers.
-        if differs and wanted in offered:
-            pending = wanted
-    decision = record.get("domain_decision")
-    return {
-        "ingestId": record.get("ingest_id"),
-        "available": True,
-        "interpretation": dict(interpretation),
-        # The snapshot's one domain decision (``domain_decision.py``), exactly
-        # as the ingestion record seals it and every submission checks it.
-        "decision": dict(decision) if isinstance(decision, Mapping) else None,
-        "remembered": remembered,
-        "pending": pending,
-    }
-
-
 __all__ = [
     "CONTRACT",
     "DECLARATION",
@@ -1446,15 +1129,10 @@ __all__ = [
     "excitation_problem",
     "interpretation_finding",
     "interpretation_record",
-    "interpretation_view",
-    "lineage_reading",
     "observe",
     "observe_record_mesh",
     "plane_words",
     "record_key",
     "record_plan_identity",
-    "record_reading",
-    "remember_provenance_reading",
-    "resolve_domain_plan",
     "valid_choices",
 ]

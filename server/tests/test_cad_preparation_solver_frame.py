@@ -23,7 +23,8 @@ import pytest
 from server.cadlink import ingest as ingest_module
 from server.cadlink import preparation
 from server.cadlink.preparation import PreparationInput, operation_summary, prepare_operation
-from server.cadlink.solver_frame import CONTRACT, confirm_frame
+from server.cadlink.solver_frame import CONTRACT
+from server.cadlink.intake.readings import confirm_frame
 
 from cad_backends import Harness, backend_fixture, old_only
 from test_cad_preparation import _accept, _manifest, _revision, _setup
@@ -925,7 +926,7 @@ def _suggest(harness: Harness, record: dict[str, Any], axis: str, status: str = 
 
 
 def test_frame_provenance_says_suggested_chosen_or_automatic(real) -> None:
-    from server.cadlink.solver_frame import frame_provenance
+    from server.cadlink.intake.readings import frame_provenance
 
     harness, _mesher = real
     step = b"STEP authored"

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-import hashlib
 import json
 import logging
 import math
@@ -13,14 +11,12 @@ from pathlib import Path
 import re
 import sqlite3
 import subprocess
-import threading
 from typing import Any, Awaitable, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
-from server.contracts.canonical import canonical_ascii_strict_json
 
 from server.cadlink.identity import SaveIdentity, design_hash
 from server.design.schema import DesignConfig
@@ -65,9 +61,9 @@ from .fusion_outcomes import (
 from .fusion_delivery import (
     advertise_fusion_delivery,
     expire_unstarted_insert_handoffs,
-    ipc_folder,
     recover_staged_fusion_requests,
 )
+from .ipc import ipc_folder
 from .fusion_return import publish_return_request
 from .ingest import (
     IngestRefusal,
@@ -105,21 +101,19 @@ from .preparation import (
 from .job_shims import accept_operation_solve, operation_detail, run_delivery_pass, sweep_pending_solves
 from .project_setup import SOLVER_SELECTION, inventory_sha256
 from .setup import setup_content, setup_digest, validate_setup
-from .roles import canonical_source_role
-from .solver_frame import AXES as SOLVER_FRAME_AXES, ensure_frame_suggestion, record_is_unlinked
+from .solver_frame import AXES as SOLVER_FRAME_AXES, record_is_unlinked
+from server.cadlink.intake.readings import ensure_frame_suggestion
+from server.cadlink.intake.returns_folder import return_inventory, selected_workspace_root
 from .store import CadLinkStore
 from . import receipts_api, recovery_api
-from .wgreturn import WgReturnError, declared_domain_planes
+from .wgreturn import WgReturnError
 
 
 logger = logging.getLogger(__name__)
 
 
 _INGEST_ID = re.compile(r"^wgi_[0-9A-HJKMNP-TV-Z]{26}$")
-_RETURN_INVENTORY_CACHE: dict[
-    tuple[str, int, int], tuple[dict[str, Any], Mapping[str, Any] | None]
-] = {}
-_RETURN_INVENTORY_CACHE_LOCK = threading.Lock()
+
 
 #: Display tessellations currently being built for an already-published record,
 #: keyed by the record's viewport lookup key. This only answers "is it still
@@ -296,13 +290,6 @@ def _schedule_frame_suggestion(store: CadLinkStore, record: Mapping[str, Any]) -
             _FRAME_SUGGESTIONS.pop(snapshot, None)
 
     _FRAME_SUGGESTIONS[snapshot] = asyncio.create_task(survey())
-
-
-def _parse_return_manifest(path: Path) -> Mapping[str, Any]:
-    parsed = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(parsed, Mapping):
-        raise ValueError("manifest inventory has the wrong shape")
-    return parsed
 
 
 class ImportedMeshRequest(BaseModel):
@@ -489,227 +476,8 @@ def _realized_dimensions_payload(
     return {"state": payload_state, **base, "parameters": parameters}
 
 
-def _return_inventory(
-    workspace_root: Path,
-) -> list[tuple[dict[str, Any], Mapping[str, Any] | None, Path]]:
-    returns_root = workspace_root / "wgreturn"
-    if not returns_root.is_dir():
-        return []
-    items: list[tuple[dict[str, Any], Mapping[str, Any] | None, Path]] = []
-    active_cache_keys: set[tuple[str, int, int]] = set()
-    for candidate in sorted(returns_root.glob("*.wgreturn"), key=lambda item: item.name.casefold()):
-        try:
-            resolved = candidate.resolve()
-            _strictly_inside(resolved, workspace_root, "bundlePath")
-            if not resolved.is_dir():
-                continue
-            candidate_stat = candidate.stat()
-            modified_at = datetime.fromtimestamp(
-                candidate_stat.st_mtime, tz=timezone.utc
-            ).isoformat().replace("+00:00", "Z")
-        except (OSError, ValueError):
-            continue
-        item: dict[str, Any] = {
-            "name": candidate.name,
-            "bundlePath": f"wgreturn/{candidate.name}",
-            "modifiedAt": modified_at,
-            "readable": False,
-            "documentName": None,
-            "documentNativeId": None,
-            "declaredCutPlanes": [],
-            "requestId": None,
-            "sourceCount": None,
-            "instanceCount": None,
-            "designIds": [],
-            "solverAnchorInstanceId": None,
-            "instances": [],
-            "sources": [],
-        }
-        manifest: Mapping[str, Any] | None = None
-        cache_key: tuple[str, int, int] | None = None
-        try:
-            manifest_path = resolved / "wgreturn.json"
-            manifest_stat = manifest_path.stat()
-            cache_key = (
-                str(manifest_path),
-                manifest_stat.st_mtime_ns,
-                manifest_stat.st_size,
-            )
-            active_cache_keys.add(cache_key)
-            with _RETURN_INVENTORY_CACHE_LOCK:
-                cached = _RETURN_INVENTORY_CACHE.get(cache_key)
-            if cached is not None:
-                cached_item = dict(cached[0])
-                cached_item["modifiedAt"] = modified_at
-                items.append((cached_item, cached[1], resolved))
-                continue
-            manifest = _parse_return_manifest(manifest_path)
-            document = manifest.get("document")
-            sources = manifest.get("sources")
-            instances = manifest.get("instances")
-            coordinates = manifest.get("coordinate_system")
-            scope = manifest.get("scope")
-            if (
-                not isinstance(document, dict)
-                or not isinstance(sources, list)
-                or not isinstance(instances, list)
-            ):
-                raise ValueError("manifest inventory has the wrong shape")
-            coordinates = coordinates if isinstance(coordinates, dict) else {}
-            scope = scope if isinstance(scope, dict) else {}
-            included = scope.get("included")
-            included = included if isinstance(included, list) else []
-            source_summaries = []
-            for source in sources:
-                if not isinstance(source, dict):
-                    raise ValueError("manifest source has the wrong shape")
-                raw_suggested_resolution = source.get("suggested_resolution_mm")
-                suggested_resolution = (
-                    None
-                    if raw_suggested_resolution is None
-                    else float(raw_suggested_resolution)
-                )
-                if suggested_resolution is not None and (
-                    not math.isfinite(suggested_resolution)
-                    or suggested_resolution <= 0
-                ):
-                    raise ValueError("manifest source suggestion is not finite and positive")
-                source_summaries.append(
-                    {
-                        "id": str(source["id"]),
-                        "role": canonical_source_role(
-                            str(source.get("role") or "source")
-                        ),
-                        "instanceId": (
-                            str(source["instance_id"])
-                            if source.get("instance_id")
-                            else None
-                        ),
-                        "required": bool(source.get("required", True)),
-                        "suggestedResolutionMm": suggested_resolution,
-                        "defaultDriveChannelId": str(
-                            source["default_drive_channel_id"]
-                        ),
-                    }
-                )
-            instance_summaries = []
-            for instance in instances:
-                if not isinstance(instance, dict):
-                    raise ValueError("manifest instance has the wrong shape")
-                instance_id = str(instance["instance_id"])
-                body_evidence = instance.get("body_evidence")
-                observed = (
-                    body_evidence.get("observed_fingerprint")
-                    if isinstance(body_evidence, Mapping)
-                    else None
-                )
-                matrix = instance.get("assembly_from_link")
-                source_records = [
-                    source
-                    for source in source_summaries
-                    if source["instanceId"] == instance_id
-                ]
-                body_object_ids = sorted(
-                    str(body["object_id"])
-                    for body in included
-                    if isinstance(body, dict)
-                    and body.get("wglink_instance_id") == instance_id
-                    and body.get("object_id")
-                )
-                instance_summaries.append(
-                    {
-                        "instanceId": instance_id,
-                        "designId": str(instance.get("design_id") or "") or None,
-                        "occurrencePath": (
-                            str(instance["occurrence_path"])
-                            if instance.get("occurrence_path")
-                            else None
-                        ),
-                        "bodyObjectIds": body_object_ids,
-                        "bodyFingerprintHash": (
-                            "sha256:"
-                            + hashlib.sha256(
-                                canonical_ascii_strict_json(observed).encode("utf-8")
-                            ).hexdigest()
-                            if isinstance(observed, Mapping)
-                            else None
-                        ),
-                        "transformHash": (
-                            "sha256:"
-                            + hashlib.sha256(
-                                canonical_ascii_strict_json(matrix).encode("utf-8")
-                            ).hexdigest()
-                            if isinstance(matrix, list)
-                            else None
-                        ),
-                        "sourceIds": sorted(
-                            str(source["id"]) for source in source_records
-                        ),
-                        "driveChannelIds": sorted(
-                            {str(source["defaultDriveChannelId"]) for source in source_records}
-                        ),
-                    }
-                )
-            item.update(
-                {
-                    "readable": True,
-                    "documentName": str(document.get("name") or candidate.stem),
-                    # The CAD document this is a return of, when the adapter
-                    # recorded it: a newer return of the same document is the
-                    # only one that may supersede a solve request made for it.
-                    "documentNativeId": (
-                        str(document.get("native_id"))
-                        if document.get("native_id")
-                        else None
-                    ),
-                    "requestId": (
-                        str(document.get("request_id"))
-                        if document.get("request_id")
-                        else None
-                    ),
-                    "sourceCount": len(sources),
-                    "instanceCount": len(instances),
-                    # The domain the CAD author declared, so the panel can say
-                    # which model is about to be solved before anyone presses
-                    # anything. Empty for a full model, which is every bundle
-                    # written before the declaration existed.
-                    "declaredCutPlanes": list(declared_domain_planes(manifest)),
-                    "solverAnchorInstanceId": (
-                        str(coordinates["solver_anchor_instance_id"])
-                        if coordinates.get("solver_anchor_instance_id")
-                        else None
-                    ),
-                    "designIds": sorted({
-                        str(instance["design_id"])
-                        for instance in instances
-                        if isinstance(instance, dict) and instance.get("design_id")
-                    }),
-                    "instances": sorted(
-                        instance_summaries, key=lambda value: value["instanceId"]
-                    ),
-                    "sources": source_summaries,
-                }
-            )
-        except (OSError, UnicodeError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
-            item["reason"] = str(exc) or "Manifest is unreadable"
-        if cache_key is not None:
-            with _RETURN_INVENTORY_CACHE_LOCK:
-                _RETURN_INVENTORY_CACHE[cache_key] = (dict(item), manifest)
-        items.append((item, manifest, resolved))
-    root_prefix = str(returns_root.resolve()) + "/"
-    with _RETURN_INVENTORY_CACHE_LOCK:
-        stale = [
-            key
-            for key in _RETURN_INVENTORY_CACHE
-            if key[0].startswith(root_prefix) and key not in active_cache_keys
-        ]
-        for key in stale:
-            del _RETURN_INVENTORY_CACHE[key]
-    return sorted(items, key=lambda entry: entry[0]["modifiedAt"], reverse=True)
-
-
 def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
-    return [item for item, _manifest, _path in _return_inventory(workspace_root)]
+    return [item for item, _manifest, _path in return_inventory(workspace_root)]
 
 
 def _manifest_matches_return(
@@ -732,7 +500,7 @@ def _resolve_return_bundle(
     design_id: str | None,
     instance_id: str | None,
 ) -> tuple[Path | None, Mapping[str, Any] | None]:
-    inventory = _return_inventory(workspace_root)
+    inventory = return_inventory(workspace_root)
     if requested_path:
         selected_return = (workspace_root / requested_path).resolve()
         _strictly_inside(selected_return, workspace_root, "returnBundlePath")
@@ -1797,12 +1565,6 @@ class PrepareOperationRequest(BaseModel):
 _PENDING_STATES = frozenset(STATES - TERMINAL_STATES)
 
 
-def _selected_workspace_root(state: Any) -> Path | None:
-    workspace = getattr(state, "cad_workspace", None)
-    selected = workspace.selected_path() if workspace is not None else None
-    return selected.resolve() if selected is not None else None
-
-
 _UNRESOLVED = object()
 
 
@@ -1821,14 +1583,14 @@ def _preparation_context(state: Any, *, workspace_root: Any = _UNRESOLVED) -> Pr
     )
 
     if workspace_root is _UNRESOLVED:
-        workspace_root = _selected_workspace_root(state)
+        workspace_root = selected_workspace_root(state)
     runtime = getattr(state, "jobs_runtime", None)
     job_store = getattr(runtime, "store", None)
     if runtime is not None and hasattr(runtime, "configure_cad_preparation") and not getattr(state, "cad_job_shims", False):
         from server.jobs.cad_preparation import CadPreparationHost
         runtime.configure_cad_preparation(CadPreparationHost(
             store=state.cadlink_store, data_dir=Path(state.data_dir),
-            workspace_root=lambda: _selected_workspace_root(state),
+            workspace_root=lambda: selected_workspace_root(state),
             ingest=lambda *args, **kwargs: ingest_bundle(*args, **kwargs),
         ))
         state.cad_job_shims = True
@@ -2487,7 +2249,7 @@ def _deliver_solve_commands(application: FastAPI):
                 while True:
                     try:
                         status.pass_started()
-                        workspace_root = await asyncio.to_thread(_selected_workspace_root, state)
+                        workspace_root = await asyncio.to_thread(selected_workspace_root, state)
                         try:
                             next_addin_signature = await asyncio.to_thread(
                                 addin_inbox_session_signature, workspace_root

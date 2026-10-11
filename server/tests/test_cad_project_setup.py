@@ -23,9 +23,9 @@ from server.cadlink.identity import design_hash
 from server.cadlink.preparation import PreparationInput, prepare_operation
 from server.cadlink.project_setup import (
     inventory_sha256,
-    snapshot_project,
     widen_polar_to_derivation,
 )
+from server.cadlink.intake.readings import snapshot_project
 from server.cadlink.setup import solve_request_for, validate_setup
 from server.cadlink.wgreturn import read_wgreturn
 from server.design.schema import DesignConfig
@@ -835,8 +835,8 @@ def test_a_delivery_pass_that_fails_once_still_delivers_and_prepares(
     requests = _deliver(harness, "cmd-b", bundle_path, manifest)
     if failure == "wglink-folder":
         monkeypatch.setattr(
-            api, "_selected_workspace_root",
-            _failing(1, OSError("the WGLink folder's drive is not mounted"), api._selected_workspace_root),
+            api, "selected_workspace_root",
+            _failing(1, OSError("the WGLink folder's drive is not mounted"), api.selected_workspace_root),
         )
     else:
         # After the claim, before the operation is stored: the next pass finishes the claim.
@@ -872,8 +872,8 @@ def test_a_persisting_delivery_failure_is_logged_once_not_every_pass(
     bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
     _deliver(harness, "cmd-b", bundle_path, manifest)
     monkeypatch.setattr(
-        api, "_selected_workspace_root",
-        _failing(6, OSError("the WGLink folder's drive is not mounted"), api._selected_workspace_root),
+        api, "selected_workspace_root",
+        _failing(6, OSError("the WGLink folder's drive is not mounted"), api.selected_workspace_root),
     )
 
     with caplog.at_level(logging.WARNING, logger="server.cadlink.api"):

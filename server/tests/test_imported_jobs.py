@@ -1306,7 +1306,7 @@ def _unlinked_changes(axis: str | None = "+z") -> dict[str, Any]:
 def test_unlinked_freshness_finding_does_not_block_a_confirmed_frame(tmp_path: Path) -> None:
     """The unlinked finding stays informational; the confirmed frame is the gate."""
 
-    from server.cadlink.solver_frame import confirm_frame
+    from server.cadlink.intake.readings import confirm_frame
 
     async def scenario() -> None:
         runtime, ingest_id, record = await _runtime_fixture(tmp_path, _unlinked_changes())
@@ -1361,7 +1361,7 @@ def test_a_legacy_unlinked_record_is_refused_even_when_the_project_confirmed(
 
 @pytest.mark.slow
 def test_retrying_an_unlinked_job_after_the_frame_changed_is_refused(tmp_path: Path) -> None:
-    from server.cadlink.solver_frame import confirm_frame
+    from server.cadlink.intake.readings import confirm_frame
 
     class HoldingEngine:
         name = "metal"
@@ -1392,7 +1392,8 @@ def test_a_queued_unlinked_job_runs_in_its_own_frame_after_a_later_confirmation(
 ) -> None:
     """Execution never re-reads confirmations: a queued job keeps the axis it was submitted in."""
 
-    from server.cadlink.solver_frame import confirm_frame, frame_matrix
+    from server.cadlink.solver_frame import frame_matrix
+    from server.cadlink.intake.readings import confirm_frame
 
     gate = asyncio.Event()
     seen: list[dict[str, Any]] = []

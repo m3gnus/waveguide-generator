@@ -29,8 +29,8 @@ to run with only the standard library, bypassing the contracts package initializ
 | `scripts/beat_conformance/legacy_compiled_inputs.py:100` | `verify_contract` | `canonical_ascii_json` |
 | `scripts/qualify_installer_artifact.py:352` | `entries_digest` | `canonical_ascii_json` |
 | `scripts/verify_model_identity.py:125` | `canonical_bytes` | `canonical_ascii_strict_json` |
-| `server/cadlink/api.py:632` | `_return_inventory [1]` | `canonical_ascii_strict_json` |
-| `server/cadlink/api.py:640` | `_return_inventory [2]` | `canonical_ascii_strict_json` |
+| `server/cadlink/intake/returns_folder.py:174` | `return_inventory [1]` | `canonical_ascii_strict_json` |
+| `server/cadlink/intake/returns_folder.py:182` | `return_inventory [2]` | `canonical_ascii_strict_json` |
 | `server/cadlink/domain_decision.py:65` | `_canonical` | `canonical_normalized_bytes` |
 | `server/cadlink/fusion_outcomes.py:192` | `_log_last_request` | `canonical_ascii_json` |
 | `server/cadlink/fusion_status.py:345` | `_fingerprint_hash` | `canonical_ascii_json` |

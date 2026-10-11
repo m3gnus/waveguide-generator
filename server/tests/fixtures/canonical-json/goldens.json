@@ -176,8 +176,8 @@
     },
     {
       "kind": "inline",
-      "path": "server/cadlink/api.py",
-      "scope": "_return_inventory",
+      "path": "server/cadlink/intake/returns_folder.py",
+      "scope": "return_inventory",
       "ordinal": 0,
       "original_line": 631,
       "original_source": "json.dumps(\n                                    observed,\n                                    allow_nan=False,\n                                    sort_keys=True,\n                                    separators=(\",\", \":\"),\n                                )",
@@ -231,8 +231,8 @@
     },
     {
       "kind": "inline",
-      "path": "server/cadlink/api.py",
-      "scope": "_return_inventory",
+      "path": "server/cadlink/intake/returns_folder.py",
+      "scope": "return_inventory",
       "ordinal": 1,
       "original_line": 644,
       "original_source": "json.dumps(\n                                    matrix,\n                                    allow_nan=False,\n                                    sort_keys=True,\n                                    separators=(\",\", \":\"),\n                                )",

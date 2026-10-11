@@ -20,11 +20,9 @@ import pytest
 from server.cadlink import frame_infer
 from server.cadlink.solver_frame import (
     AXES,
-    confirm_frame,
-    ensure_frame_suggestion,
-    frame_preview,
     record_solver_frame,
 )
+from server.cadlink.intake.readings import confirm_frame, ensure_frame_suggestion, frame_preview
 from server.cadlink.solver_frame_api import router
 from server.cadlink.store import CadLinkStore
 from server.mesh.artifact import mesh_text_sha256

@@ -21,7 +21,8 @@ import pytest
 from scripts import build_wglink_package
 from server.cadlink import ingest, solve_command
 from server.cadlink.ingest import IngestRefusal
-from server.cadlink.fusion_delivery import capabilities, ipc_folder
+from server.cadlink.fusion_delivery import capabilities
+from server.cadlink.ipc import ipc_folder
 from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import read_wgreturn, source_physical_name, validate_manifest
 from server.mesh.gmsh_worker import _run_in_gmsh_session

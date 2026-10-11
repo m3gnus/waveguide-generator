@@ -34,7 +34,8 @@ class Wg:
     def run_pass(self, *, running: set[str] | None = None) -> list[str]:
         """One pass of the backend delivery loop; returns what it started."""
 
-        from server.cadlink.api import _preparation_context, _selected_workspace_root
+        from server.cadlink.api import _preparation_context
+        from server.cadlink.intake.returns_folder import selected_workspace_root
 
         spawned: list[str] = []
 
@@ -44,7 +45,7 @@ class Wg:
 
         async def one() -> list[str]:
             ctx = _preparation_context(
-                self.app.state, workspace_root=_selected_workspace_root(self.app.state)
+                self.app.state, workspace_root=selected_workspace_root(self.app.state)
             )
             return await job_shims.run_delivery_pass(
                 ctx, spawn=spawn, running=frozenset(running or ())
@@ -66,11 +67,12 @@ class Wg:
         return started
 
     def settle(self) -> list[str]:
-        from server.cadlink.api import _preparation_context, _selected_workspace_root
+        from server.cadlink.api import _preparation_context
+        from server.cadlink.intake.returns_folder import selected_workspace_root
 
         async def one() -> list[str]:
             ctx = _preparation_context(
-                self.app.state, workspace_root=_selected_workspace_root(self.app.state)
+                self.app.state, workspace_root=selected_workspace_root(self.app.state)
             )
             return await asyncio.to_thread(preparation.settle_received_snapshots, ctx)
 

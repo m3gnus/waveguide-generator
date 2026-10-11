@@ -18,7 +18,8 @@ import zipfile
 import pytest
 
 from scripts import cadlink_evidence
-from server.cadlink.fusion_delivery import CAPABILITIES_FILENAME, RETURN_REQUESTS, ipc_folder
+from server.cadlink.fusion_delivery import CAPABILITIES_FILENAME, RETURN_REQUESTS
+from server.cadlink.ipc import ipc_folder
 from server.cadlink.fusion_status import FUSION_STATUS_FILENAME
 from server.platform.paths import data_paths
 
@@ -30,7 +31,7 @@ def _write_json(path: Path, payload: dict) -> None:
 
 def _ipc_folder(data_dir: Path) -> Path:
     """The real, production ipc/wglink location -- rooted at the app data
-    directory itself (``server/cadlink/fusion_delivery.py:ipc_folder``), not
+    directory itself (``server/cadlink/ipc.py:ipc_folder``), not
     the user-chosen CAD-link exchange folder. Deliberately calls the
     production function rather than reconstructing the path by hand, so a
     fixture built with this helper can never silently drift from where the

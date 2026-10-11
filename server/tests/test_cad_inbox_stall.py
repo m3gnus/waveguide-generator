@@ -35,7 +35,8 @@ import pytest
 from server.app import create_app
 from server.cadlink import preparation, solve_command
 from server.cadlink.api import CAD_DELIVERY_ENV
-from server.cadlink.fusion_delivery import CAPABILITIES_FILENAME, ipc_folder
+from server.cadlink.fusion_delivery import CAPABILITIES_FILENAME
+from server.cadlink.ipc import ipc_folder
 from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT
 from server.cadlink.solve_command import SOLVE_REQUESTS_DIRECTORY, collect_solve_deliveries
 from server.tests.test_cad_preparation import _write_return

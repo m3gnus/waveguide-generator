@@ -15,13 +15,14 @@ from typing import Any
 
 import pytest
 
+from server.cadlink import ipc
 from server.cadlink import fusion_delivery, solve_command
 from server.cadlink.solve_command import (
     CLAIM_PREFIX,
     SOLVE_REQUESTS_DIRECTORY,
     collect_solve_deliveries,
-    ipc_folder,
 )
+from server.cadlink.ipc import ipc_folder
 from server.cadlink.store import CadLinkStore
 from server.app import create_app
 from server.platform import private_paths
@@ -211,7 +212,7 @@ def test_a_directory_with_a_request_name_is_left_alone(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes")
 def test_fusion_delivery_creates_an_owner_only_ipc_folder(tmp_path: Path) -> None:
-    folder = fusion_delivery.ipc_folder(tmp_path / "data", create=True)
+    folder = ipc.ipc_folder(tmp_path / "data", create=True)
     assert stat.S_IMODE(folder.stat().st_mode) == 0o700
 
 
@@ -245,7 +246,7 @@ def test_owned_shipping_directories_with_loose_modes_are_tightened(tmp_path: Pat
         path.mkdir(parents=True, exist_ok=True)
         path.chmod(0o755)
 
-    fusion_delivery.ipc_folder(data_dir, create=True)
+    ipc.ipc_folder(data_dir, create=True)
     assert stat.S_IMODE(paths[0].stat().st_mode) == 0o700
 
     store = CadLinkStore.for_data_dir(data_dir)
@@ -294,7 +295,7 @@ def test_recreated_directory_is_tightened(tmp_path: Path) -> None:
     path.mkdir(mode=0o755)
     path.chmod(0o755)
 
-    fusion_delivery.ipc_folder(data_dir, create=True)
+    ipc.ipc_folder(data_dir, create=True)
 
     assert stat.S_IMODE(path.stat().st_mode) == 0o700
 
@@ -394,7 +395,7 @@ def test_chmod_failure_does_not_abort_startup_fusion_recovery(
     db = tmp_path / "db"
     db.mkdir(exist_ok=True)
     db.chmod(0o755)
-    staged = fusion_delivery.ipc_folder(tmp_path, create=True) / fusion_delivery.HANDOFFS.directory
+    staged = ipc.ipc_folder(tmp_path, create=True) / fusion_delivery.HANDOFFS.directory
     staged.mkdir()
     (staged / ".pending.json.stage.tmp").write_text(
         json.dumps({"schemaVersion": 3, "operationId": "pending"}), encoding="utf-8"

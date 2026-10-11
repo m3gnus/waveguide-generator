@@ -60,49 +60,6 @@ def inventory_sha256(sources: Sequence[Mapping[str, Any]]) -> str:
     return "sha256:" + hashlib.sha256(canonical_json(entries).encode("utf-8")).hexdigest()
 
 
-def solver_anchor(manifest: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    """A snapshot's solver anchor instance: the one its frame names, else its only one.
-
-    The project a snapshot belongs to (``snapshot_project``) and the design that
-    backend preparation names to the ingest's project gate
-    (``preparation._project_gate``) both come from this, so they cannot disagree.
-    """
-
-    instances = [
-        instance for instance in manifest.get("instances") or [] if isinstance(instance, Mapping)
-    ]
-    frame = manifest.get("coordinate_system")
-    anchor_id = frame.get("solver_anchor_instance_id") if isinstance(frame, Mapping) else None
-    anchor = next(
-        (instance for instance in instances if instance.get("instance_id") == anchor_id), None
-    )
-    if anchor is None and len(instances) == 1:
-        anchor = instances[0]
-    return anchor
-
-
-def snapshot_project(store: CadLinkStore, manifest: Mapping[str, Any]) -> str | None:
-    """The project lineage a snapshot belongs to, without claiming one.
-
-    The same project ingestion files the return under (``ingest._resolve_project``):
-    the lineage of the solver anchor instance's WG design, or, when the anchor
-    names no design, the lineage its Fusion document already has. None when WG
-    has never seen that document: such a snapshot has no recorded setup yet.
-    """
-
-    anchor = solver_anchor(manifest)
-    design_id = str((anchor or {}).get("design_id") or "").strip()
-    if design_id:
-        row = store.get_design(design_id)
-        return str((row or {}).get("lineage_id") or "").strip() or None
-    document = manifest.get("document") if isinstance(manifest.get("document"), Mapping) else {}
-    native_id = str(document.get("native_id") or "").strip()
-    if not native_id:
-        return None
-    row = store.get_lineage_for_cad_document(native_id)
-    return str((row or {}).get("lineage_id") or "").strip() or None
-
-
 def solver_selection(store: CadLinkStore) -> dict[str, str]:
     """The shared accuracy and engine choice, as WG last recorded it."""
 
@@ -188,7 +145,6 @@ __all__ = [
     "SOLVER_SELECTION",
     "inventory_sha256",
     "project_setup",
-    "snapshot_project",
     "solver_selection",
     "widen_polar_to_derivation",
 ]

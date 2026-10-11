@@ -14,13 +14,16 @@ from typing import Any
 
 import pytest
 
-from server.cadlink import preparation, solver_frame
+from server.cadlink.intake import readings
+from server.cadlink import preparation
 from server.jobs import cad_preparation as job_preparation
 from server.jobs.cad_intent import intent_of
 from server.cadlink.frame_infer import ALGORITHM_VERSION
 from server.cadlink.solver_frame import (
-    confirm_frame,
     record_confirmation_key,
+)
+from server.cadlink.intake.readings import (
+    confirm_frame,
     record_frame_refusal,
     record_solved_frame_provenance,
 )
@@ -229,7 +232,7 @@ def test_the_second_mesh_is_made_at_most_once_even_if_the_two_sides_disagree(rea
     # The record side keeps naming an axis nothing is ever meshed in.
     monkeypatch.setattr(preparation, "record_automatic_axis", lambda store, record: "-y")
     # The gate reads the same record side, so it refuses the +x mesh too.
-    monkeypatch.setattr(solver_frame, "record_automatic_axis", lambda store, record: "-y")
+    monkeypatch.setattr(readings, "record_automatic_axis", lambda store, record: "-y")
     stages: list[str] = []
     real_advance = preparation._advance
 
@@ -272,7 +275,7 @@ def test_the_jobs_second_mesh_is_bounded_when_the_two_sides_disagree(tmp_path, m
         monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", mesher)
         _verdict(monkeypatch, status="automatic", axis="+x")
         monkeypatch.setattr(job_preparation, "record_automatic_axis", lambda store, record: "-y")
-        monkeypatch.setattr(solver_frame, "record_automatic_axis", lambda store, record: "-y")
+        monkeypatch.setattr(readings, "record_automatic_axis", lambda store, record: "-y")
         passes: list[bool] = []
         real_prepare = job_preparation.prepare_job_sync
 

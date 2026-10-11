@@ -62,7 +62,8 @@ import zipfile
 # ``CadWorkspaceState``) is a *different* directory (where a returned STEP
 # bundle is written) and is reported here only as informational metadata,
 # never used to locate the ipc/wglink signaling files above.
-from server.cadlink.fusion_delivery import CAPABILITIES_FILENAME, HANDOFFS, RETURN_REQUESTS, ipc_folder
+from server.cadlink.fusion_delivery import CAPABILITIES_FILENAME, HANDOFFS, RETURN_REQUESTS
+from server.cadlink.ipc import ipc_folder
 from server.cadlink.fusion_status import FUSION_STATUS_FILENAME
 from server.platform.paths import data_paths
 

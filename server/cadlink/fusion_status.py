@@ -24,11 +24,12 @@ from typing import Any, Mapping
 from server.contracts.canonical import canonical_ascii_json
 
 from server.cadlink.fusion_delivery import DELIVERY_VERSION, addin_delivery_version
+
+from .ipc import IPC_SUBDIRECTORY
 from server.platform.process import background_process_kwargs
 
 
 FUSION_STATUS_FILENAME = ".fusion-status.json"
-IPC_SUBDIRECTORY = Path("ipc") / "wglink"
 FUSION_STATUS_TTL = timedelta(seconds=20)
 _MAX_STATUS_BYTES = 256 * 1024
 _LEGACY_SIGNATURE_EXPLANATION = (

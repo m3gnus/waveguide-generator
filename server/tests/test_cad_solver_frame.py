@@ -15,7 +15,7 @@ import sqlite3
 import numpy as np
 import pytest
 
-from server.cadlink import solver_frame
+from server.cadlink.intake import readings
 from server.cadlink.solver_frame import (
     AS_MODELLED,
     AXES,
@@ -23,16 +23,14 @@ from server.cadlink.solver_frame import (
     CONTRACT_V1,
     FrameConfirmationError,
     allowed_axes,
-    confirm_frame,
     confirmation_key,
     frame_matrix,
-    frame_preview,
     frame_requirement,
     frame_spec,
-    record_frame_refusal,
     record_is_unlinked,
     spec_matrix,
 )
+from server.cadlink.intake.readings import confirm_frame, frame_preview, record_frame_refusal
 from server.cadlink.store import STORE_FORMAT_VERSION, CadLinkStore
 
 
@@ -346,12 +344,12 @@ def test_the_preview_names_each_axis_matrix_relative_to_the_displayed_record(tmp
 def test_resolving_a_manifest_uses_the_confirmed_axis_or_the_modelled_frame(tmp_path: Path) -> None:
     store = CadLinkStore(tmp_path / "cadlink.db")
     manifest = _manifest()
-    resolved = solver_frame.resolve_for_manifest(store, manifest, MANIFEST_SHA)
+    resolved = readings.resolve_for_manifest(store, manifest, MANIFEST_SHA)
     assert resolved is not None
     assert (resolved.confirmed_axis, resolved.axis) == (None, AS_MODELLED)
     store.record_frame_confirmation(resolved.key, resolved.requirement, "+x")
-    again = solver_frame.resolve_for_manifest(store, manifest, MANIFEST_SHA)
+    again = readings.resolve_for_manifest(store, manifest, MANIFEST_SHA)
     assert (again.confirmed_axis, again.axis, again.confirmed) == ("+x", "+x", True)
     linked = _manifest()
     linked["instances"] = [{"instance_id": "i"}]
-    assert solver_frame.resolve_for_manifest(store, linked, MANIFEST_SHA) is None
+    assert readings.resolve_for_manifest(store, linked, MANIFEST_SHA) is None

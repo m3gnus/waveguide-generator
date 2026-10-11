@@ -59,9 +59,8 @@ from .domain_interpretation import (
     evidence_refusal_message,
     interpretation_finding,
     observe_record_mesh,
-    remember_provenance_reading,
-    resolve_domain_plan,
 )
+from server.cadlink.intake.readings import remember_provenance_reading, resolve_domain_plan
 from .solver_frame import (
     AS_MODELLED,
     allowed_axes,
@@ -69,9 +68,9 @@ from .solver_frame import (
     frame_spec,
     is_unlinked_manifest,
     record_solver_frame,
-    resolve_for_manifest,
     spec_matrix,
 )
+from server.cadlink.intake.readings import resolve_for_manifest
 from .wgreturn import (
     DOMAIN_PLANES,
     WgReturnBundle,
@@ -1259,7 +1258,7 @@ def ingest_bundle(
     """Run the nine ingestion stages and persist the immutable WG verdict.
 
     ``resolve_confirmed_frame`` meshes a return with no WG instance in the
-    solver frame its project confirmed (``solver_frame.resolve_for_manifest``),
+    solver frame its project confirmed (``readings.resolve_for_manifest``),
     as modelled until one is; it is how a UI's ingest shows what would be
     solved without the request naming a frame. Backend preparation resolves the
     frame itself and passes it in ``prep_options``.

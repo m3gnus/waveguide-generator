@@ -66,18 +66,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-import logging
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 import numpy as np
 
 from .wgreturn import DOCUMENT_UP_AXES, DOCUMENT_UP_FEATURE
 
-if TYPE_CHECKING:  # pragma: no cover
-    from .store import CadLinkStore
-
-
-logger = logging.getLogger(__name__)
 
 CONTRACT_V1 = "cad-solver-frame-v1"
 CONTRACT_V2 = "cad-solver-frame-v2"
@@ -104,7 +98,7 @@ _VECTORS: dict[str, tuple[float, float, float]] = {
 
 # Contract v1. Row-major rotations, solver_from_assembly. Each takes its axis
 # to +Z by the minimal rotation.
-_ROTATIONS: dict[str, tuple[tuple[float, float, float], ...]] = {
+ROTATIONS: dict[str, tuple[tuple[float, float, float], ...]] = {
     "+z": ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
     # 180 degrees about X.
     "-z": ((1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0)),
@@ -123,8 +117,8 @@ class FrameConfirmationError(ValueError):
     """A confirmation this snapshot cannot take: linked, or an axis it does not allow."""
 
 
-def _require_axis(axis: object) -> str:
-    if not isinstance(axis, str) or axis not in _ROTATIONS:
+def require_axis(axis: object) -> str:
+    if not isinstance(axis, str) or axis not in ROTATIONS:
         raise ValueError(f"solver frame axis must be one of {', '.join(AXES)}, got {axis!r}")
     return axis
 
@@ -132,7 +126,7 @@ def _require_axis(axis: object) -> str:
 def frame_matrix(axis: str) -> np.ndarray:
     """Contract v1's ``solver_from_assembly`` for one axis (historical records)."""
 
-    rotation = _ROTATIONS[_require_axis(axis)]
+    rotation = ROTATIONS[require_axis(axis)]
     matrix = np.eye(4)
     matrix[:3, :3] = np.asarray(rotation, dtype=float)
     return matrix
@@ -163,7 +157,7 @@ def document_up(manifest: Mapping[str, Any]) -> str | None:
 def resolve_up(forward: str, stated_up: str | None) -> tuple[str, str]:
     """The model's up for a forward axis, and where it came from."""
 
-    _require_axis(forward)
+    require_axis(forward)
     if stated_up is None:
         return ("+y" if forward[1] == "z" else "+z"), UP_DEFAULT
     if stated_up not in DOCUMENT_UP_AXES:
@@ -190,8 +184,8 @@ def frame_spec(axis: str, manifest: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _v2_matrix(axis: str, up: str) -> np.ndarray:
-    forward = np.asarray(_VECTORS[_require_axis(axis)])
-    upward = np.asarray(_VECTORS[_require_axis(up)])
+    forward = np.asarray(_VECTORS[require_axis(axis)])
+    upward = np.asarray(_VECTORS[require_axis(up)])
     if abs(float(forward @ upward)) > 0.5:
         raise ValueError(f"up {up} is parallel to the forward axis {axis}")
     matrix = np.eye(4)
@@ -216,7 +210,7 @@ def spec_matrix(spec: str | Mapping[str, Any]) -> np.ndarray:
     if contract == CONTRACT_V1:
         return frame_matrix(spec.get("axis"))  # type: ignore[arg-type]
     if contract == CONTRACT_V2:
-        axis = _require_axis(spec.get("axis"))
+        axis = require_axis(spec.get("axis"))
         up, source = resolve_up(axis, spec.get("document_up"))
         if spec.get("up") != up or spec.get("up_source") != source:
             raise ValueError(
@@ -232,7 +226,7 @@ def spec_axis(spec: str | Mapping[str, Any]) -> str:
     """The forward axis a frame names."""
 
     axis = spec if isinstance(spec, str) else spec.get("axis") if isinstance(spec, Mapping) else None
-    return _require_axis(axis)
+    return require_axis(axis)
 
 
 def frame_requirement(manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -356,16 +350,6 @@ class FrameResolution:
         }
 
 
-def _confirmed_axis(
-    store: CadLinkStore, key: str, requirement: Mapping[str, Any]
-) -> str | None:
-    row = store.get_frame_confirmation(key)
-    if row is None or row.get("requirement") != dict(requirement):
-        return None
-    axis = row.get("axis")
-    return axis if axis in _ROTATIONS else None
-
-
 def carried_axis(
     row: Mapping[str, Any] | None, requirement: Mapping[str, Any] | None
 ) -> str | None:
@@ -390,51 +374,7 @@ def carried_axis(
     ):
         return None
     axis = row.get("axis")
-    return axis if axis in _ROTATIONS else None
-
-
-def resolve_for_manifest(
-    store: CadLinkStore,
-    manifest: Mapping[str, Any],
-    manifest_sha256: str,
-    *,
-    automatic: bool = False,
-) -> FrameResolution | None:
-    """The frame state of a snapshot about to be prepared; None when it is linked.
-
-    ``automatic``: a Solve that may use WG's confident automatic axis
-    (:func:`automatic_solve_axis`) meshes in it when nothing is confirmed.
-    """
-
-    if not is_unlinked_manifest(manifest):
-        return None
-    from .project_setup import snapshot_project
-
-    key = confirmation_key(snapshot_project(store, manifest), manifest_sha256)
-    requirement = frame_requirement(manifest)
-    allowed = allowed_axes(manifest)
-    confirmed = _confirmed_axis(store, key, requirement)
-    carried = carried_axis(store.get_frame_confirmation(key), requirement)
-    automatic_axis = None
-    if automatic and (confirmed is None or confirmed not in allowed) and carried is None:
-        automatic_axis = automatic_solve_axis(
-            store.get_frame_suggestion(manifest_sha256, _algorithm_version()), allowed
-        )
-    return FrameResolution(
-        key=key,
-        requirement=requirement,
-        allowed_axes=allowed,
-        confirmed_axis=confirmed,
-        document_up=document_up(manifest),
-        carried_axis=carried,
-        automatic_axis=automatic_axis,
-    )
-
-
-def _algorithm_version() -> str:
-    from .frame_infer import ALGORITHM_VERSION
-
-    return ALGORITHM_VERSION
+    return axis if axis in ROTATIONS else None
 
 
 def automatic_solve_axis(
@@ -454,40 +394,6 @@ def automatic_solve_axis(
         return None
     axis = suggestion.get("axis")
     return axis if isinstance(axis, str) and axis in set(allowed) else None
-
-
-def record_automatic_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
-    """The confident automatic axis this record's snapshot would be solved along.
-
-    None for a linked record, a record stating no frame, one whose project (or
-    snapshot) already confirmed a frame under this requirement, one with a v1
-    confirmation carried forward, and whenever WG is not confident.
-    """
-
-    if not record_is_unlinked(record):
-        return None
-    frame = _record_frame(record)
-    if frame is None:
-        return None
-    key = record_confirmation_key(record)
-    requirement = dict(frame["requirement"])
-    if _confirmed_axis(store, key, requirement) is not None:
-        return None
-    if carried_axis(store.get_frame_confirmation(key), requirement) is not None:
-        return None
-    return automatic_solve_axis(_cached_suggestion(store, record), _record_allowed(frame))
-
-
-def record_solved_frame_provenance(
-    store: CadLinkStore, record: Mapping[str, Any]
-) -> str | None:
-    """``"automatic"`` when this record solves along WG's own confident axis
-    with no confirmation behind it, else None."""
-
-    frame = _record_frame(record) if record_is_unlinked(record) else None
-    if frame is None:
-        return None
-    return "automatic" if record_automatic_axis(store, record) == frame.get("axis") else None
 
 
 def record_solver_frame(
@@ -540,34 +446,18 @@ def record_is_unlinked(record: Mapping[str, Any]) -> bool:
     return False
 
 
-def _record_frame(record: Mapping[str, Any]) -> Mapping[str, Any] | None:
+def record_frame(record: Mapping[str, Any]) -> Mapping[str, Any] | None:
     normalisation = record.get("normalisation")
     frame = normalisation.get("solver_frame") if isinstance(normalisation, Mapping) else None
     if (
         isinstance(frame, Mapping)
         and frame.get("contract") in CONTRACTS
-        and frame.get("axis") in _ROTATIONS
+        and frame.get("axis") in ROTATIONS
         and isinstance(frame.get("requirement"), Mapping)
         and frame["requirement"].get("contract") == frame.get("contract")
     ):
         return frame
     return None
-
-
-def _frame_for_axis(frame: Mapping[str, Any], axis: str) -> dict[str, Any]:
-    """The complete frame ``axis`` would be under this record's contract."""
-
-    if frame.get("contract") == CONTRACT_V1:
-        return {"contract": CONTRACT_V1, "axis": axis}
-    stated = frame.get("requirement", {}).get("document_up")
-    up, source = resolve_up(axis, stated)
-    return {
-        "contract": CONTRACT_V2,
-        "axis": axis,
-        "up": up,
-        "up_source": source,
-        "document_up": stated,
-    }
 
 
 def resolution_identity(resolution: FrameResolution) -> dict[str, Any]:
@@ -593,7 +483,7 @@ def resolution_identity(resolution: FrameResolution) -> dict[str, Any]:
 def record_frame_identity(record: Mapping[str, Any]) -> dict[str, Any] | None:
     """The complete frame an unlinked record states it was meshed in, or None."""
 
-    frame = _record_frame(record)
+    frame = record_frame(record)
     if frame is None:
         return None
     requirement = frame.get("requirement")
@@ -614,121 +504,6 @@ def record_confirmation_key(record: Mapping[str, Any]) -> str:
     return confirmation_key(lineage, str(record.get("manifest_sha256") or ""))
 
 
-def _record_allowed(frame: Mapping[str, Any]) -> tuple[str, ...]:
-    allowed = frame.get("allowed_axes")
-    if not isinstance(allowed, list):
-        return (AS_MODELLED,)
-    return tuple(axis for axis in AXES if axis in allowed)
-
-
-def record_frame_refusal(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
-    """Why this record cannot be solved yet, or None when its frame is confirmed.
-
-    A linked record is never gated. An unlinked record solves only when its
-    project (or, with no project, this snapshot) confirmed exactly the frame it
-    was meshed in, under the same requirement -- and so the same contract. A
-    record prepared before the frame contract states no frame and is never
-    taken as confirmed.
-    """
-
-    if not record_is_unlinked(record):
-        return None
-    frame = _record_frame(record)
-    if frame is None:
-        return (
-            "This model was prepared before WG asked for its solver frame. "
-            "Prepare it again in WG and confirm the axis it radiates along."
-        )
-    key = record_confirmation_key(record)
-    requirement = dict(frame["requirement"])
-    confirmed = _confirmed_axis(store, key, requirement)
-    allowed = _record_allowed(frame)
-    automatic = record_automatic_axis(store, record) if confirmed is None else None
-    if confirmed is None and automatic == frame["axis"]:
-        # WG is confident which way it faces and this is the frame it was
-        # meshed in: solved along it, and never recorded as a confirmation.
-        return None
-    if confirmed is None and automatic is not None:
-        # Meshed as modelled, but WG is confident of another axis: the next
-        # preparation meshes along it (headless preparation owes the same).
-        return (
-            f"This model was prepared along {frame['axis']}, but WG would solve it "
-            f"along {automatic}. Prepare it again in WG."
-        )
-    if confirmed is None:
-        return (
-            "Confirm this model's solver frame in WG first: choose the axis it "
-            "radiates along and check the preview, then solve it."
-        )
-    if confirmed not in allowed:
-        return (
-            f"The confirmed solver frame ({confirmed}) cannot be used: this model is "
-            "solved as a half or quarter model, which is solved only in the frame "
-            "it was modelled in (+z). Confirm +z, or return the whole model."
-        )
-    if confirmed != frame["axis"]:
-        return (
-            f"This model was prepared along {frame['axis']}, but its confirmed solver "
-            f"frame is {confirmed}. Prepare it again in WG to solve it in that frame."
-        )
-    return None
-
-
-def confirm_frame(
-    store: CadLinkStore, record: Mapping[str, Any], axis: object
-) -> dict[str, Any]:
-    """Record the user's confirmation for the project an ingestion record belongs to.
-
-    The row records the complete transform the confirmed axis means under this
-    record's contract, its up and where that came from, and the automatic
-    suggestion it agreed with or overrode.
-    """
-
-    if not record_is_unlinked(record):
-        raise FrameConfirmationError("a linked model is solved in its WG design's frame")
-    frame = _record_frame(record)
-    if frame is None:
-        raise FrameConfirmationError(
-            "this model was prepared before WG asked for its solver frame; prepare it again"
-        )
-    try:
-        chosen = _require_axis(axis)
-    except ValueError as exc:
-        raise FrameConfirmationError(str(exc)) from exc
-    if chosen not in _record_allowed(frame):
-        raise FrameConfirmationError(
-            "this model is solved as a half or quarter model, and so only "
-            "in the frame it was modelled in (+z)"
-        )
-    spec = _frame_for_axis(frame, chosen)
-    suggestion = _cached_suggestion(store, record)
-    confirmed_frame = {
-        **spec,
-        "matrix": spec_matrix(spec).tolist(),
-        "provenance": (
-            "suggested"
-            if suggestion is not None
-            and suggestion.get("status") == "automatic"
-            and suggestion.get("axis") == chosen
-            else "chosen"
-        ),
-        "suggestion": (
-            {
-                "algorithm": suggestion.get("algorithm"),
-                "status": suggestion.get("status"),
-                "axis": suggestion.get("axis"),
-                "confidence": suggestion.get("confidence"),
-                "snapshotSha256": suggestion.get("snapshotSha256"),
-            }
-            if suggestion is not None
-            else None
-        ),
-    }
-    return store.record_frame_confirmation(
-        record_confirmation_key(record), dict(frame["requirement"]), chosen, frame=confirmed_frame
-    )
-
-
 #: How the frame a run was solved in came to be. ``chosen``: a person picked the
 #: axis. ``suggested``: a person confirmed the axis WG's survey had proposed.
 #: ``automatic``: WG solved in its own automatic axis and nobody confirmed it
@@ -740,235 +515,6 @@ def confirm_frame(
 FRAME_PROVENANCES = (
     "chosen", "suggested", "automatic", "carried", "confirmed", "linked", "unconfirmed",
 )
-
-
-def frame_provenance(
-    store: CadLinkStore, record: Mapping[str, Any], *, automatic: bool = False
-) -> dict[str, Any]:
-    """The frame provenance a job records, read from the record it solves.
-
-    ``{axis, provenance, confirmed, requirement}``, plus ``suggestion`` (the
-    cached survey, when there is one). ``confirmed`` is true only when a person
-    confirmed the axis, so a chosen or suggested frame is distinguishable from
-    one nobody confirmed.
-
-    ``automatic`` is the caller's statement that WG solved in its own
-    automatic axis. This function holds no rule for it: the one definition is
-    ``record_solved_frame_provenance`` (the same value the operation records as
-    ``frame_axis_automatic``), and a person's confirmation always wins.
-    """
-
-    if not record_is_unlinked(record):
-        return {"axis": None, "provenance": "linked", "confirmed": False, "requirement": None}
-    frame = _record_frame(record)
-    if frame is None:
-        return {"axis": None, "provenance": "unconfirmed", "confirmed": False, "requirement": None}
-    axis = frame["axis"]
-    requirement = dict(frame["requirement"])
-    row = store.get_frame_confirmation(record_confirmation_key(record))
-    suggestion = _cached_suggestion(store, record)
-    provenance = "unconfirmed"
-    confirmed = False
-    if row is not None and row.get("requirement") == requirement and row.get("axis") == axis:
-        held = (row.get("frame") or {}).get("provenance")
-        provenance = held if held in ("chosen", "suggested") else "confirmed"
-        confirmed = True
-    elif automatic:
-        provenance = "automatic"
-    elif carried_axis(row, requirement) == axis:
-        provenance = "carried"
-    out: dict[str, Any] = {
-        "axis": axis,
-        "provenance": provenance,
-        "confirmed": confirmed,
-        "requirement": requirement,
-    }
-    if suggestion is not None:
-        out["suggestion"] = {
-            "algorithm": suggestion.get("algorithm"),
-            "status": suggestion.get("status"),
-            "axis": suggestion.get("axis"),
-            "confidence": suggestion.get("confidence"),
-        }
-    return out
-
-
-# -- the automatic suggestion ----------------------------------------------------
-
-
-def _snapshot(record: Mapping[str, Any]) -> str:
-    return str(record.get("manifest_sha256") or "")
-
-
-def _cached_suggestion(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, Any] | None:
-    from .frame_infer import ALGORITHM_VERSION
-
-    snapshot = _snapshot(record)
-    if not snapshot:
-        return None
-    return store.get_frame_suggestion(snapshot, ALGORITHM_VERSION)
-
-
-def ensure_frame_suggestion(
-    store: CadLinkStore, record: Mapping[str, Any]
-) -> dict[str, Any] | None:
-    """The automatic suggestion for this record's snapshot, computed once and cached.
-
-    Run inside the explicit import and preparation commands. Keyed by the
-    snapshot and the algorithm version, so a new algorithm recomputes and a
-    confirmation is never touched. A survey that could not run is returned
-    but not cached, so the next command tries again. None for a linked record.
-    """
-
-    if not record_is_unlinked(record):
-        return None
-    from server.mesh.artifact import read_verified_import_mesh
-
-    from .frame_infer import STATUS_UNAVAILABLE, infer_record_frame, unavailable
-
-    cached = _cached_suggestion(store, record)
-    if cached is not None:
-        return cached
-    frame = _record_frame(record)
-    allowed = _record_allowed(frame) if frame is not None else ()
-    try:
-        result = infer_record_frame(record, read_verified_import_mesh(record), supported_axes=allowed)
-    except Exception as exc:  # noqa: BLE001 - the survey only ever advises
-        logger.warning("Solver frame survey failed for %s: %s", record.get("ingest_id"), exc)
-        result = unavailable(str(exc) or type(exc).__name__, supported_axes=allowed)
-    payload = {
-        **result.to_json(),
-        "snapshotSha256": _snapshot(record),
-        "ingestId": record.get("ingest_id"),
-    }
-    if result.status != STATUS_UNAVAILABLE and payload["snapshotSha256"]:
-        return store.record_frame_suggestion(
-            payload["snapshotSha256"], result.algorithm, payload, str(record.get("ingest_id") or "")
-        )
-    return payload
-
-
-def _differs_notice(confirmed_axis: str | None, suggestion: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    if (
-        confirmed_axis is None
-        or suggestion is None
-        or suggestion.get("status") != "automatic"
-        or suggestion.get("axis") in (None, confirmed_axis)
-    ):
-        return None
-    suggested = str(suggestion["axis"])
-    return {
-        "confirmedAxis": confirmed_axis,
-        "suggestedAxis": suggested,
-        "message": (
-            f"This version looks like it faces {suggested}; this project is set to "
-            f"{confirmed_axis}. WG keeps {confirmed_axis} until you switch."
-        ),
-    }
-
-
-def frame_preview(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, Any]:
-    """Every axis's matrix, relative to the frame this record's geometry is shown in.
-
-    Also the automatic suggestion for the snapshot, which axis is preselected
-    and why -- a matching confirmed frame first, then a v1 confirmation
-    carried forward, then an automatic suggestion the snapshot allows, else
-    none -- and, when the suggestion clearly
-    disagrees with the confirmed frame, a notice that never changes it.
-    """
-
-    if not record_is_unlinked(record):
-        return {"linked": True}
-    frame = _record_frame(record)
-    record_axis = str(frame["axis"]) if frame is not None else AS_MODELLED
-    requirement = (
-        dict(frame["requirement"]) if frame is not None else None
-    )
-    allowed = _record_allowed(frame) if frame is not None else ()
-    key = record_confirmation_key(record)
-    row = store.get_frame_confirmation(key)
-    matching = row is not None and requirement is not None and row.get("requirement") == requirement
-    confirmed = (
-        {
-            "axis": row["axis"],
-            "confirmedAt": row["confirmed_at"],
-            "frame": row.get("frame"),
-        }
-        if matching
-        else None
-    )
-    contract = str(frame["contract"]) if frame is not None else CONTRACT
-    if frame is not None:
-        record_from_assembly = spec_matrix(_frame_for_axis(frame, record_axis))
-    else:
-        record_from_assembly = np.eye(4)
-    assembly_from_record = record_from_assembly.T  # a rotation's inverse
-    axes = []
-    for axis in AXES:
-        spec = _frame_for_axis(frame, axis) if frame is not None else {"contract": CONTRACT_V1, "axis": axis}
-        solver_from_assembly = spec_matrix(spec)
-        axes.append(
-            {
-                "axis": axis,
-                "allowed": axis in allowed,
-                "reason": (
-                    None
-                    if axis in allowed
-                    else (
-                        "prepare this model again first"
-                        if frame is None
-                        else "a half or quarter model is solved only as modelled (+z)"
-                    )
-                ),
-                "up": spec.get("up"),
-                "upSource": spec.get("up_source"),
-                "solverFromAssembly": solver_from_assembly.tolist(),
-                "previewFromRecord": (solver_from_assembly @ assembly_from_record).tolist(),
-            }
-        )
-    suggestion = _cached_suggestion(store, record) if frame is not None else None
-    if frame is not None and suggestion is None:
-        suggestion = ensure_frame_suggestion(store, record)
-    confirmed_axis = confirmed["axis"] if confirmed is not None else None
-    carried = carried_axis(row, requirement) if confirmed is None else None
-    if confirmed_axis is not None and confirmed_axis in allowed:
-        preselected = {"axis": confirmed_axis, "source": "confirmed"}
-    elif carried is not None and carried in allowed:
-        # Confirmed under contract v1: the project's own choice, preselected
-        # ahead of any suggestion, and confirmed under v2 by Solve.
-        preselected = {"axis": carried, "source": "carried"}
-        confirmed_axis = carried
-    elif (
-        suggestion is not None
-        and suggestion.get("status") == "automatic"
-        and suggestion.get("axis") in allowed
-    ):
-        preselected = {"axis": suggestion["axis"], "source": "suggested"}
-    else:
-        preselected = None
-    return {
-        "linked": False,
-        "ingestId": record.get("ingest_id"),
-        "contract": contract,
-        "requirement": requirement,
-        "recordAxis": record_axis,
-        "recordStatesFrame": frame is not None,
-        "recordFrame": (
-            {
-                "up": frame.get("up"),
-                "upSource": frame.get("up_source"),
-                "documentUp": frame.get("document_up"),
-                "matrix": record_from_assembly.tolist(),
-            }
-            if frame is not None
-            else None
-        ),
-        "confirmed": confirmed,
-        "axes": axes,
-        "suggestion": suggestion,
-        "preselected": preselected,
-        "differs": _differs_notice(confirmed_axis if confirmed_axis in allowed else None, suggestion),
-    }
 
 
 __all__ = [
@@ -984,28 +530,24 @@ __all__ = [
     "FrameResolution",
     "REASON",
     "REDUCED_DOMAIN_AXES",
+    "ROTATIONS",
     "allowed_axes",
     "axes_in_planes",
     "carried_axis",
-    "confirm_frame",
     "confirmation_key",
     "document_up",
-    "ensure_frame_suggestion",
     "frame_matrix",
-    "frame_preview",
     "frame_requirement",
     "frame_spec",
     "is_unlinked_manifest",
     "automatic_solve_axis",
-    "record_automatic_axis",
-    "record_solved_frame_provenance",
     "record_confirmation_key",
+    "record_frame",
     "record_frame_identity",
-    "record_frame_refusal",
     "record_is_unlinked",
     "record_solver_frame",
+    "require_axis",
     "resolution_identity",
-    "resolve_for_manifest",
     "resolve_up",
     "spec_axis",
     "spec_matrix",

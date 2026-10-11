@@ -23,10 +23,10 @@ import uuid
 
 from server.cadlink.fusion_delivery import (
     HANDOFFS,
-    IPC_SUBDIRECTORY,
     PublishedRequest,
     publish_fusion_request,
 )
+from server.cadlink.ipc import IPC_SUBDIRECTORY
 from server.cadlink.fusion_status import read_fusion_status
 from server.cadlink.operations import (
     CANCELLED,

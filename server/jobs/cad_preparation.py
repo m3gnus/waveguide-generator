@@ -45,7 +45,8 @@ from server.cadlink.default_setup import (
     DEFAULT_SETTINGS_NOTE,
     SolveDefaultsDamaged,
 )
-from server.cadlink.domain_interpretation import excitation_problem, resolve_domain_plan
+from server.cadlink.domain_interpretation import excitation_problem
+from server.cadlink.intake.readings import resolve_domain_plan
 from server.cadlink.ingest import (
     IngestRefusal,
     ingest_bundle,
@@ -87,10 +88,12 @@ from server.cadlink.setup import DEFAULTS_ORIGIN, solve_request_for
 from server.cadlink.solver_frame import (
     AS_MODELLED,
     REASON as FRAME_CONFIRMATION_REQUIRED,
+    resolution_identity,
+)
+from server.cadlink.intake.readings import (
     ensure_frame_suggestion,
     record_automatic_axis,
     record_frame_refusal,
-    resolution_identity,
     resolve_for_manifest as resolve_solver_frame,
 )
 from server.cadlink.store import CadLinkStore, StaleAttempt

@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from server.cadlink.intake import readings
 from server.cadlink.frame_infer import ALGORITHM_VERSION
 from server.cadlink.solver_frame import (
     AS_MODELLED,
@@ -22,16 +23,18 @@ from server.cadlink.solver_frame import (
     CONTRACT_V1,
     CONTRACT_V2,
     DOCUMENT_UP_FEATURE,
-    confirm_frame,
     frame_matrix,
-    frame_preview,
     frame_requirement,
     frame_spec,
-    record_frame_refusal,
     record_solver_frame,
-    resolve_for_manifest,
     resolve_up,
     spec_matrix,
+)
+from server.cadlink.intake.readings import (
+    confirm_frame,
+    frame_preview,
+    record_frame_refusal,
+    resolve_for_manifest,
 )
 from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import WgReturnValidationError, validate_manifest
@@ -238,9 +241,8 @@ def test_a_v1_confirmation_is_preselected_for_a_v2_preparation(tmp_path: Path) -
 
 
 def test_a_v2_preparation_meshes_in_the_carried_axis(tmp_path: Path, monkeypatch) -> None:
-    import server.cadlink.project_setup as project_setup
 
-    monkeypatch.setattr(project_setup, "snapshot_project", lambda _store, _manifest: "wgl_project")
+    monkeypatch.setattr(readings, "snapshot_project", lambda _store, _manifest: "wgl_project")
     store = CadLinkStore(tmp_path / "cadlink.db")
     manifest = _manifest()
     resolved = resolve_for_manifest(store, manifest, "sha256:" + "d" * 64)

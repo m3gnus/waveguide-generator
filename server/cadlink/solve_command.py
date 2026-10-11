@@ -43,6 +43,7 @@ import time
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 import uuid
 
+from .ipc import IPC_SUBDIRECTORY, ipc_folder
 from .identity import utc_now
 from .operations import (
     ACCEPTED,
@@ -168,10 +169,6 @@ ACK_MAX_FILES = 500
 ACK_FAILURE_PASSES = 30
 # Pruning runs at most this often, from the delivery pass.
 ACK_PRUNE_INTERVAL_SECONDS = 60.0
-# The JSON outcome ledger of earlier versions. The store imports it once and
-# renames it; nothing reads it after that.
-LEDGER_FILENAME = "solve-commands.json"
-IPC_SUBDIRECTORY = Path("ipc") / "wglink"
 # How many recent outcomes ``read_ledger`` returns.
 LEDGER_LIMIT = 200
 
@@ -332,21 +329,6 @@ class SolveOutcomeConflict(ValueError):
         self.command_id = command_id
         self.existing = existing
         super().__init__(f"solve command {command_id!r} already has a different outcome")
-
-
-def ipc_folder(data_dir: Path, *, create: bool = False) -> Path:
-    # Harden through the path as configured, so a symlinked data root is seen
-    # and left alone; hand callers the resolved folder, as before.
-    folder = Path(data_dir) / IPC_SUBDIRECTORY
-    if create:
-        ensure_private_directory(folder, parents=True, data_root=Path(data_dir))
-    return folder.resolve()
-
-
-def legacy_ledger_path(data_dir: Path) -> Path:
-    """Where earlier versions kept terminal solve-command outcomes."""
-
-    return ipc_folder(Path(data_dir)) / LEDGER_FILENAME
 
 
 class InvalidRequest(ValueError):

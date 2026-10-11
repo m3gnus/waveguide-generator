@@ -18,6 +18,7 @@ import numpy as np
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from server.cadlink.intake import returns_folder
 from server.app import create_app
 from server.cadlink.api import (
     CadReturnIngestRequest,
@@ -758,16 +759,15 @@ def test_return_inventory_parses_only_new_or_changed_manifests(
         manifests.append(manifest)
     app.state.cad_workspace.select(workspace)
 
-    from server.cadlink import api as cadlink_api
 
-    original_parse = cadlink_api._parse_return_manifest
+    original_parse = returns_folder.parse_return_manifest
     parsed: list[Path] = []
 
     def counted_parse(path: Path):
         parsed.append(path)
         return original_parse(path)
 
-    monkeypatch.setattr(cadlink_api, "_parse_return_manifest", counted_parse)
+    monkeypatch.setattr(returns_folder, "parse_return_manifest", counted_parse)
 
     first = asyncio.run(list_returns(SimpleNamespace(app=app)))
     second = asyncio.run(list_returns(SimpleNamespace(app=app)))
@@ -2243,7 +2243,7 @@ def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
     # A CAD-authored model solves only once its project confirmed the frame it
     # was meshed in (server/cadlink/solver_frame.py); this one was modelled
     # along +z and prepared as modelled.
-    from server.cadlink.solver_frame import confirm_frame
+    from server.cadlink.intake.readings import confirm_frame
 
     assert first["normalisation"]["solver_frame"]["axis"] == "+z"
     confirm_frame(store, first, "+z")

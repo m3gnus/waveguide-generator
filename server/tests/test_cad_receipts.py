@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 import pytest
 
+from server.cadlink.intake import returns_folder
 from server.cadlink.operations import request_digest
 from server.cadlink.receipts import receipt_page, record_refusal
 from server.cadlink.receipts_api import list_receipts, router
@@ -425,7 +426,6 @@ def test_backfill_skips_existing_and_malformed_rows_and_discovers_later_settleme
 
 def test_http_caches_inventory_and_hashes_across_pages_but_refreshes_changed_source(store, tmp_path, monkeypatch):
     from pathlib import Path
-    from server.cadlink import api
     import hashlib
     body = json.dumps({'document': {}, 'sources': [], 'instances': []}).encode()
     root = tmp_path / 'workspace'
@@ -440,7 +440,7 @@ def test_http_caches_inventory_and_hashes_across_pages_but_refreshes_changed_sou
             payload['manifest_sha256'] = 'sha256:' + hashlib.sha256(body).hexdigest()
             conn.execute('UPDATE cad_send_receipts SET payload_json = ? WHERE cursor = ?', (json.dumps(payload), row['cursor']))
     scans, hashes = [], []
-    inventory, read = api._return_inventory, Path.read_bytes
+    inventory, read = returns_folder.return_inventory, Path.read_bytes
     def scan(path):
         scans.append(path)
         return inventory(path)
@@ -448,7 +448,7 @@ def test_http_caches_inventory_and_hashes_across_pages_but_refreshes_changed_sou
         if path.name == 'wgreturn.json':
             hashes.append(path)
         return read(path)
-    monkeypatch.setattr(api, '_return_inventory', scan)
+    monkeypatch.setattr(returns_folder, 'return_inventory', scan)
     monkeypatch.setattr(Path, 'read_bytes', reading)
     app = application(store, root)
     one = get(app, limit=1)

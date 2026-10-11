@@ -19,10 +19,12 @@ from typing import Any
 import numpy as np
 import pytest
 
+from server.cadlink.intake import readings
 from server.cadlink import domain_interpretation as di
 from server.cadlink import ingest as ingest_module
 from server.cadlink.fusion_delivery import capabilities
-from server.cadlink.solver_frame import AXES, allowed_axes, axes_in_planes, confirm_frame
+from server.cadlink.solver_frame import AXES, allowed_axes, axes_in_planes
+from server.cadlink.intake.readings import confirm_frame
 from server.cadlink.wgreturn import WgReturnValidationError, validate_manifest
 from cad_backends import JobsHarness as Harness
 from test_cad_preparation import _revision, _setup
@@ -109,7 +111,7 @@ def test_an_old_add_in_manifest_still_validates_and_declares_nothing() -> None:
     validated = validate_manifest(_unlinked())
 
     assert "domain" not in validated["assembly"]
-    plan = di.resolve_domain_plan(None, validated, "sha256:" + "0" * 64)
+    plan = readings.resolve_domain_plan(None, validated, "sha256:" + "0" * 64)
     assert (plan.manifest_domain, plan.source, plan.identity()) == ("absent", None, None)
 
 
@@ -178,24 +180,24 @@ def test_validated_precut_planes_restrict_the_axes_and_reduced_stays_plus_z() ->
 def test_provenance_on_z0_is_refused_before_meshing_and_a_negative_side_is_read() -> None:
     # Stage 3: a cut that kept the negative side is mirrored by reflecting its
     # mesh; the geometry then checks the recorded side (``apply_evidence``).
-    negative = di.resolve_domain_plan(None, validate_manifest(_new_add_in(cut=[_cut(kept_side="negative")])), "s")
+    negative = readings.resolve_domain_plan(None, validate_manifest(_new_add_in(cut=[_cut(kept_side="negative")])), "s")
     assert negative.refusal is None and negative.planes == ("x0",)
     assert negative.kept_sides == (("x0", "negative"),)
-    top = di.resolve_domain_plan(
+    top = readings.resolve_domain_plan(
         None,
         validate_manifest(_new_add_in(cut=[_cut(plane="z0", tool={"kind": "origin-plane", "origin_plane": "XY"})])),
         "s",
     )
     assert top.refusal is not None and "cannot mirror yet" in top.refusal
     # Positive control.
-    ok = di.resolve_domain_plan(None, validate_manifest(_new_add_in(cut=[_cut()])), "s")
+    ok = readings.resolve_domain_plan(None, validate_manifest(_new_add_in(cut=[_cut()])), "s")
     assert (ok.refusal, ok.source, ok.planes, ok.strict) == (None, di.PROVENANCE, ("x0",), True)
 
 
 def test_provenance_recorded_in_another_frame_is_not_this_snapshots_evidence() -> None:
     manifest = validate_manifest(_new_add_in(cut=[_cut(export_frame="selected-occurrence-component")]))
 
-    plan = di.resolve_domain_plan(None, manifest, "s")
+    plan = readings.resolve_domain_plan(None, manifest, "s")
 
     assert plan.source is None and plan.evidenced_planes == ()
     assert "frame" in plan.ignored[0]["reason"]
@@ -206,15 +208,15 @@ def test_a_users_reading_wins_over_provenance(tmp_path: Path) -> None:
 
     store = CadLinkStore(tmp_path / "cadlink.db")
     manifest = validate_manifest(_new_add_in(cut=[_cut()]))
-    key = di.reading_key(store, manifest, "sha256:this")
+    key = readings.reading_key(store, manifest, "sha256:this")
     store.record_domain_reading(key, {"source": "user", "reading": "as-shown", "planes": [], "snapshot": "sha256:this"})
 
-    plan = di.resolve_domain_plan(store, manifest, "sha256:this")
+    plan = readings.resolve_domain_plan(store, manifest, "sha256:this")
 
     assert (plan.source, plan.reading, plan.evidenced_planes) == (di.USER, "as-shown", ())
     # With no project, a reading is keyed by its exact snapshot and carries to
     # no other: another snapshot reads its own provenance.
-    assert di.resolve_domain_plan(store, manifest, "sha256:other").source == di.PROVENANCE
+    assert readings.resolve_domain_plan(store, manifest, "sha256:other").source == di.PROVENANCE
 
 
 def test_a_lineage_reading_does_not_carry_to_other_bodies(tmp_path: Path) -> None:
@@ -222,7 +224,7 @@ def test_a_lineage_reading_does_not_carry_to_other_bodies(tmp_path: Path) -> Non
 
     store = CadLinkStore(tmp_path / "cadlink.db")
     first = validate_manifest(_new_add_in())
-    key = di.reading_key(store, first, "sha256:first")
+    key = readings.reading_key(store, first, "sha256:first")
     store.record_domain_reading(
         key,
         {
@@ -237,7 +239,7 @@ def test_a_lineage_reading_does_not_carry_to_other_bodies(tmp_path: Path) -> Non
     other = copy.deepcopy(first)
     other["scope"]["included"][0]["object_id"] = "another-body"
 
-    plan = di.resolve_domain_plan(store, other, "sha256:later")
+    plan = readings.resolve_domain_plan(store, other, "sha256:later")
 
     assert plan.source is None
     assert plan.evidenced_planes == ()
@@ -592,4 +594,4 @@ def test_change_is_refused_for_a_declared_domain(tmp_path) -> None:
 
     record = _interpreted_record(evidence={"source": "declaration"}, reading="reduced", planes=["x0"], choices=[])
     with pytest.raises(di.DomainReadingError, match="declares its domain in Fusion"):
-        di.record_reading(CadLinkStore(tmp_path / "cadlink.db"), record, {"reading": "as-shown"})
+        readings.record_reading(CadLinkStore(tmp_path / "cadlink.db"), record, {"reading": "as-shown"})

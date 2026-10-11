@@ -2,7 +2,7 @@
 
 The production ``ingest_bundle`` meshes generated models; the suggestion is
 computed from the record exactly as preparation computes it
-(``solver_frame.ensure_frame_suggestion``). This covers what the synthetic
+(``readings.ensure_frame_suggestion``). This covers what the synthetic
 arrays cannot: WG's own symmetry cut and the mirror-back of its reduced mesh,
 the frame inverse after a confirmed non-+z preparation, and an axial drive
 channel in a frame whose forward axis is not CAD +Z.
@@ -21,11 +21,13 @@ from server.cadlink.frame_infer import infer_record_frame, survey_mesh_from_reco
 from server.cadlink.ingest import ingest_bundle
 from server.cadlink.solver_frame import (
     CONTRACT,
+    frame_spec,
+    spec_matrix,
+)
+from server.cadlink.intake.readings import (
     confirm_frame,
     ensure_frame_suggestion,
-    frame_spec,
     record_frame_refusal,
-    spec_matrix,
 )
 from server.cadlink.store import CadLinkStore
 from server.mesh.artifact import read_verified_import_mesh

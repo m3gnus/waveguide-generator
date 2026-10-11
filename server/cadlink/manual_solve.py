@@ -9,7 +9,7 @@ from typing import Any
 
 from .ingest import read_snapshot, retained_snapshot_path
 from .operations import PREPARE_AND_SOLVE, prepare_and_solve_request, request_digest
-from .project_setup import snapshot_project
+from server.cadlink.intake.readings import snapshot_project
 from .store import CadLinkStore
 
 

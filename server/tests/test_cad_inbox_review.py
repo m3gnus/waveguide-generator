@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 
 from server.cadlink import solve_command
-from server.cadlink.fusion_delivery import ipc_folder
+from server.cadlink.ipc import ipc_folder
 from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT
 from server.cadlink.preparation import settle_snapshot_operation
 from server.cadlink.solve_command import (

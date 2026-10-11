@@ -9,6 +9,8 @@ from typing import Any
 
 from fastapi import APIRouter, Query, Request
 
+from server.cadlink.intake import returns_folder
+
 from .receipts import receipt_page, with_source_outcome
 
 _SOURCE_LOCK = threading.RLock()
@@ -20,15 +22,12 @@ router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
 @router.get("/receipts")
 async def list_receipts(request: Request, after: int = Query(0, ge=0),
                         limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
-    # Lazy import: api mounts this router. Share the existing folder reader.
-    from .api import _return_inventory, _selected_workspace_root
-
     def read() -> dict[str, Any]:
         state = request.app.state
         page = receipt_page(state.cadlink_store, after=after, limit=limit)
         if not any(item["outcome"] == "accepted" for item in page["receipts"]):
             return page
-        root = _selected_workspace_root(state)
+        root = returns_folder.selected_workspace_root(state)
         try:
             sources = {}
             wanted = {item["bundle_path"] for item in page["receipts"] if item["outcome"] == "accepted"}
@@ -52,7 +51,7 @@ async def list_receipts(request: Request, after: int = Query(0, ge=0),
                         cached["revisions"].get(bundle) != rev for bundle, rev in revisions.items()
                     ):
                         old_hashes = cached["hashes"] if cached else {}
-                        inventory = _return_inventory(root)
+                        inventory = returns_folder.return_inventory(root)
                         cached = {"directory": signature, "items": {}, "revisions": {}, "hashes": {}}
                         for item, _manifest, path in inventory:
                             bundle = item["bundlePath"]

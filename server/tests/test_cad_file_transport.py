@@ -9,7 +9,8 @@ import pytest
 from server.app import create_app
 from server.cadlink import addin_update, preparation, solve_command
 from server.cadlink.api import post_reconcile_cad_operation
-from server.cadlink.fusion_delivery import capabilities, ipc_folder
+from server.cadlink.fusion_delivery import capabilities
+from server.cadlink.ipc import ipc_folder
 from server.cadlink.fusion_outcomes import LEGACY_LIVE_CLAIM_MAX_AGE, settle_abandoned_live_claims, settle_from_heartbeat
 from server.cadlink.fusion_status import select_heartbeat
 from server.cadlink.store import CadLinkStore

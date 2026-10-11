@@ -12,9 +12,10 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request
 
 from .fusion_delivery import (
-    IPC_SUBDIRECTORY, RETURN_REQUESTS,
+    RETURN_REQUESTS,
     publish_fusion_request,
 )
+from .ipc import IPC_SUBDIRECTORY
 from .fusion_outcomes import settle_return_from_file, settle_abandoned_file_returns
 from .operations import CANCELLED, REQUEST_RETURN, TERMINAL_STATES, request_digest
 from .store import CadLinkStore

@@ -79,11 +79,10 @@ from .default_setup import (
 from .project_setup import (
     inventory_sha256,
     project_setup,
-    snapshot_project,
-    solver_anchor,
     solver_selection,
     widen_polar_to_derivation,
 )
+from server.cadlink.intake.readings import snapshot_project, solver_anchor
 from .setup import (
     DEFAULTS_ORIGIN,
     CadSolveSetup,
@@ -96,18 +95,20 @@ from .domain_decision import decision_problem
 from .domain_interpretation import (
     excitation_problem,
     record_plan_identity,
-    resolve_domain_plan,
 )
+from server.cadlink.intake.readings import resolve_domain_plan
 from .solver_frame import (
     AS_MODELLED,
     CONTRACT as FRAME_CONTRACT,
     REASON as FRAME_CONFIRMATION_REQUIRED,
-    ensure_frame_suggestion,
-    frame_provenance,
     record_frame_identity,
-    record_frame_refusal,
     record_is_unlinked,
     resolution_identity,
+)
+from server.cadlink.intake.readings import (
+    ensure_frame_suggestion,
+    frame_provenance,
+    record_frame_refusal,
     record_automatic_axis,
     record_solved_frame_provenance,
     resolve_for_manifest as resolve_solver_frame,

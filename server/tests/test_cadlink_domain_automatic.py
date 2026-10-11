@@ -891,7 +891,7 @@ def test_undeclared_negative_side_half_is_recovered_by_reflection(tmp_path: Path
 def test_change_to_half_is_checked_mirrored_and_remembered_for_the_lineage(tmp_path: Path) -> None:
     """A cut WG does not recover by itself (no driver meets it) is mirrored on the user's Change."""
 
-    from server.cadlink.domain_interpretation import interpretation_view, record_reading
+    from server.cadlink.intake.readings import interpretation_view, record_reading
 
     data_dir = tmp_path / "data"
     first = _ingest(_bundle(tmp_path, "half-change", _split_open_backed_shell, BOX_DRIVER), data_dir)
@@ -1158,7 +1158,7 @@ def test_a_split_open_backed_shell_with_provenance_is_mirrored_and_change_unmirr
 ) -> None:
     """The residual risk Magnus accepted: stated on the card, and Change is the remedy."""
 
-    from server.cadlink.domain_interpretation import record_reading
+    from server.cadlink.intake.readings import record_reading
 
     data_dir = tmp_path / "data"
     bundle = _bundle(
@@ -1249,7 +1249,7 @@ def test_a_capped_half_with_provenance_is_refused(tmp_path: Path) -> None:
 def test_repeated_imports_without_evidence_stay_unmirrored(tmp_path: Path) -> None:
     """A previous 'solved as shown' never authorises mirroring."""
 
-    from server.cadlink.domain_interpretation import lineage_reading
+    from server.cadlink.intake.readings import lineage_reading
 
     data_dir = tmp_path / "data"
     # A cut WG cannot recover from its geometry (no driver meets it).
@@ -1334,7 +1334,7 @@ def test_an_explicit_reading_enters_the_mesh_cache_key_even_when_the_mesh_is_the
 ) -> None:
     """The interpretation is part of what was prepared, not only of what was meshed."""
 
-    from server.cadlink.domain_interpretation import record_reading
+    from server.cadlink.intake.readings import record_reading
 
     data_dir = tmp_path / "data"
     default = _ingest(_bundle(tmp_path, "cache-key", _split_open_backed_shell, BOX_DRIVER), data_dir)

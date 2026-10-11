@@ -14,6 +14,7 @@ import time
 
 import pytest
 
+from server.cadlink.intake import returns_folder
 from server.app import create_app
 from server.cadlink.api import (
     FusionStatusRequest,
@@ -546,7 +547,7 @@ def test_returns_and_status_share_one_cached_manifest_parse(
         adapter_version="1.2.3",
         workspace_root=workspace,
     )
-    original_parse = cadlink_api._parse_return_manifest
+    original_parse = returns_folder.parse_return_manifest
     parses = 0
 
     def counted_parse(path: Path):
@@ -554,7 +555,7 @@ def test_returns_and_status_share_one_cached_manifest_parse(
         parses += 1
         return original_parse(path)
 
-    monkeypatch.setattr(cadlink_api, "_parse_return_manifest", counted_parse)
+    monkeypatch.setattr(returns_folder, "parse_return_manifest", counted_parse)
     monkeypatch.setattr(cadlink_api, "fusion_process_running", lambda: False)
     payload = FusionStatusRequest.model_validate(
         {
@@ -605,7 +606,7 @@ def test_status_resolution_with_500_returns_keeps_event_loop_responsive(
         )
     app = create_app(data_dir=data_dir)
     app.state.cad_workspace.select(workspace)
-    original_parse = cadlink_api._parse_return_manifest
+    original_parse = returns_folder.parse_return_manifest
 
     parse_threads: set[str] = set()
     parse_calls: list[Path] = []
@@ -616,7 +617,7 @@ def test_status_resolution_with_500_returns_keeps_event_loop_responsive(
         time.sleep(0.0002)
         return original_parse(path)
 
-    monkeypatch.setattr(cadlink_api, "_parse_return_manifest", measurable_parse)
+    monkeypatch.setattr(returns_folder, "parse_return_manifest", measurable_parse)
     monkeypatch.setattr(cadlink_api, "fusion_process_running", lambda: False)
     payload = FusionStatusRequest.model_validate(
         {

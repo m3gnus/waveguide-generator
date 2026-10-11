@@ -52,7 +52,7 @@ from .operations import (
     require_kind,
     validate_outcome,
 )
-from .solve_command import legacy_ledger_path
+from .ipc import legacy_ledger_path
 from . import receipts
 
 # How long ``make_durable`` waits for a reader that pins the log.
@@ -1422,7 +1422,7 @@ class CadLinkStore:
         """Confirm an unlinked model's solver frame; the latest confirmation wins.
 
         ``frame`` records the complete transform the axis means and where its
-        up came from (``solver_frame.confirm_frame``).
+        up came from (``readings.confirm_frame``).
         """
 
         from .solver_frame import AXES

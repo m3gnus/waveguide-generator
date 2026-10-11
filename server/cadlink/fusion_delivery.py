@@ -37,7 +37,9 @@ from typing import Any, Callable, Literal, Mapping
 from server.platform.exclusive_rename import take_by_rename
 from server.platform.private_paths import ensure_private_directory
 
-IPC_SUBDIRECTORY = Path("ipc") / "wglink"
+from .ipc import IPC_SUBDIRECTORY, ipc_folder
+
+
 CAPABILITIES_FILENAME = "wg-capabilities.json"
 CAPABILITIES_SCHEMA_VERSION = 1
 # The one delivery version WG speaks, in both directions. The add-in reports
@@ -107,15 +109,6 @@ class PublishedRequest:
     path: Path
     withdrawn: tuple[str, ...] = ()
     recovered: bool = False
-
-
-def ipc_folder(data_dir: Path, *, create: bool = False) -> Path:
-    # Harden through the path as configured, so a symlinked data root is seen
-    # and left alone; hand callers the resolved folder, as before.
-    folder = Path(data_dir) / IPC_SUBDIRECTORY
-    if create:
-        ensure_private_directory(folder, parents=True, data_root=Path(data_dir))
-    return folder.resolve()
 
 
 def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:

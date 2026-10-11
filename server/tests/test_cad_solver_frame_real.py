@@ -19,12 +19,10 @@ import pytest
 from server.cadlink.ingest import IngestRefusal, ingest_bundle
 from server.cadlink.solver_frame import (
     CONTRACT,
-    confirm_frame,
-    frame_preview,
     frame_spec,
-    record_frame_refusal,
     spec_matrix,
 )
+from server.cadlink.intake.readings import confirm_frame, frame_preview, record_frame_refusal
 from server.cadlink.store import CadLinkStore
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 from server.solver.imported import imported_anchor_frame

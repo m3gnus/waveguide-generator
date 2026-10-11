@@ -320,7 +320,7 @@ def validate_outcome(
             normalized["setup_defaults"] = True
     if "frame_axis_automatic" in outcome:
         # The solver axis WG chose itself, confident and unconfirmed
-        # (solver_frame.record_solved_frame_provenance).
+        # (readings.record_solved_frame_provenance).
         axis = outcome["frame_axis_automatic"]
         if state != ACCEPTED:
             raise ValueError("outcome.frame_axis_automatic is recorded only with an accepted solve")
