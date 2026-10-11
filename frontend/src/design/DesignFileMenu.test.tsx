@@ -138,7 +138,8 @@ describe('design file export menu', () => {
   ] as const)('applies the unstamped ATH polar origin for %s on open', (simType, origin) => {
     useSolveOptionsStore.getState().updatePolar({ observationOrigin: origin === 'mouth' ? 'throat' : 'mouth' });
     const opened = openedResponse(150);
-    opened.design.text_import_version = 'ath-2026-08c-v1';
+    // A fresh ATH import is stamped v2, which carries the ATH polar origin.
+    opened.design.text_import_version = 'ath-2026-09a-v2';
     opened.design.simulation = { ...opened.design.simulation, sim_type: simType };
     opened.design.extra_blocks = {
       'ABEC.Polars:SPL_H': { items: { MapAngleRange: '0,90,19' }, lines: [] },
@@ -147,8 +148,24 @@ describe('design file export menu', () => {
     act(() => { applyOpenedDocument(opened, 'imported.cfg'); });
 
     expect(useSolveOptionsStore.getState().polar.observationOrigin).toBe(origin);
-    expect(useDesignStore.getState().design.text_import_version).toBe('ath-2026-08c-v1');
+    expect(useDesignStore.getState().design.text_import_version).toBe('ath-2026-09a-v2');
   });
+
+  it.each(['freestanding', 'infinite-baffle'] as const)(
+    'keeps the polar origin of a saved v1 ATH design (%s) on open', (simType) => {
+      useSolveOptionsStore.getState().updatePolar({ observationOrigin: 'mouth' });
+      const opened = openedResponse(150);
+      opened.design.text_import_version = 'ath-2026-08c-v1';
+      opened.design.simulation = { ...opened.design.simulation, sim_type: simType };
+      opened.design.extra_blocks = {
+        'ABEC.Polars:SPL_H': { items: { MapAngleRange: '0,90,19' }, lines: [] },
+      };
+
+      act(() => { applyOpenedDocument(opened, 'imported.cfg'); });
+
+      expect(useSolveOptionsStore.getState().polar.observationOrigin).toBe('mouth');
+      expect(useDesignStore.getState().design.text_import_version).toBe('ath-2026-08c-v1');
+    });
 
   it('confirms only after parsing before replacing an unsaved local design', async () => {
     useDesignStore.getState().updateField('R', 321);
