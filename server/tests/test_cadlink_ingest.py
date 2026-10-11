@@ -1264,10 +1264,11 @@ def test_legacy_ingest_api_derives_fem_evidence_from_verified_manifest(
             assert served["evidence"] == expected
             assert served["evidence"]["fem_regions"][0]["region_id"] == "rear-chamber"
         else:
-            with pytest.raises(HTTPException) as refused:
-                asyncio.run(get_ingest(row["ingest_id"], request))
-            assert refused.value.status_code == 409
-            assert "re-ingest this return" in refused.value.detail
+            # Viewing stays possible; only solving refuses an unverifiable record.
+            served = asyncio.run(get_ingest(row["ingest_id"], request))
+            assert "fem_regions" not in served["evidence"]
+            with pytest.raises(IngestRefusal, match="re-ingest this return"):
+                current_fem_evidence(json.loads(store.get_ingest(row["ingest_id"])["record_json"]))
         persisted = json.loads(store.get_ingest(row["ingest_id"])["record_json"])
         assert "fem_regions" not in persisted["evidence"]
     finally:
@@ -2439,3 +2440,15 @@ def test_an_isolated_mesh_refusal_publishes_nothing_and_poisons_no_cache(
     # The immutable record table is where a partial publication would show up.
     rows = store._connect().execute("SELECT COUNT(*) FROM ingests").fetchone()
     assert rows[0] == 0
+
+
+def test_native_source_records_carry_no_fem_regions_and_read_no_manifest(tmp_path: Path) -> None:
+    from server.cadlink.intake.ingest import current_fem_evidence
+
+    record = {
+        "producer": "native",
+        "bundle_store_path": str(tmp_path / "native"),  # holds source.json, not wgreturn.json
+        "manifest_sha256": "sha256:" + "0" * 64,
+        "native_source": {"channel": "drive-hf"},
+    }
+    assert current_fem_evidence(record) == {"fem_regions": []}

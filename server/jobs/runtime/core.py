@@ -661,6 +661,11 @@ def _refuse_removed_solver(request: SolveRequest) -> None:
         )
 
 
+def _evidence_count(evidence: Mapping[str, Any], key: str) -> int:
+    value = evidence.get(key)
+    return len(value) if isinstance(value, list) else 0
+
+
 def _refuse_imported_fem(
     geometry: ImportedGeometrySource, record: Mapping[str, Any]
 ) -> Mapping[str, Any]:
@@ -671,7 +676,9 @@ def _refuse_imported_fem(
     except IngestRefusal as exc:
         raise ImportedSolveRefusal("ingest_record_incomplete", str(exc)) from exc
     volumes = evidence.get("fem_air_volumes") or []
+    volumes = volumes if isinstance(volumes, list) else [volumes]
     regions = evidence.get("fem_regions") or []
+    regions = regions if isinstance(regions, list) else [regions]
     required_fem = any(
         not isinstance(volume, Mapping) or volume.get("required", True)
         for volume in volumes
@@ -3908,13 +3915,14 @@ class JobRuntime:
             evidence = imported_record.get("evidence")
             evidence = evidence if isinstance(evidence, Mapping) else {}
             fem_regions = evidence.get("fem_regions") or []
+            fem_regions = fem_regions if isinstance(fem_regions, list) else []
             if fem_regions and request.geometry.exterior_only:
                 # The runtime owns this note for every imported engine, using
                 # the same exclusion metadata as legacy FEM air volumes.
                 outcome_metadata["exterior_only"] = True
                 outcome_metadata["fem_exclusion"] = {
                     "excluded": True,
-                    "declared_volume_count": len(evidence.get("fem_air_volumes") or []),
+                    "declared_volume_count": _evidence_count(evidence, "fem_air_volumes"),
                     "declared_region_count": len(fem_regions),
                     "region_ids": [
                         region["region_id"] for region in fem_regions

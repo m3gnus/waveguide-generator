@@ -1139,8 +1139,9 @@ async def get_ingest(ingest_id: str, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Unknown ingestion record {ingest_id}")
     try:
         evidence = await asyncio.to_thread(current_fem_evidence, record)
-    except IngestRefusal as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except IngestRefusal:
+        # Viewing and restoring stay possible; only solving refuses the record.
+        return record
     return {**record, "evidence": evidence}
 
 

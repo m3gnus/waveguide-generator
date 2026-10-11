@@ -2085,6 +2085,9 @@ def current_fem_evidence(record: Mapping[str, Any]) -> Mapping[str, Any]:
     evidence = evidence if isinstance(evidence, Mapping) else {}
     if "fem_regions" in evidence:
         return evidence
+    if record.get("producer") == "native" or "native_source" in record:
+        # A native source has no wgreturn manifest and cannot declare regions.
+        return {**evidence, "fem_regions": []}
     try:
         bundle_path = Path(record["bundle_store_path"])
         manifest_path = bundle_path / "wgreturn.json"
