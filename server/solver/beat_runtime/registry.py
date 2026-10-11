@@ -301,8 +301,42 @@ def new_token() -> str:
     return secrets.token_hex(32)
 
 
+_DARWIN_KINFO_SIZE = 648  # struct kinfo_proc on 64-bit Darwin (arm64, x86_64)
+
+
+def _darwin_process(pid: int) -> tuple[str, str] | None | bool:
+    """Kernel start time and state without spawning setuid ``ps``.
+
+    Returns False when this ABI cannot be read, so the caller keeps ``ps``.
+    """
+    import ctypes
+    import struct
+
+    if ctypes.sizeof(ctypes.c_void_p) != 8:
+        return False
+    libc = ctypes.CDLL(None, use_errno=True)
+    mib = (ctypes.c_int * 4)(1, 14, 1, pid)  # CTL_KERN, KERN_PROC, KERN_PROC_PID
+    buffer = ctypes.create_string_buffer(_DARWIN_KINFO_SIZE)
+    size = ctypes.c_size_t(_DARWIN_KINFO_SIZE)
+    if libc.sysctl(mib, 4, buffer, ctypes.byref(size), None, ctypes.c_size_t(0)):
+        return False
+    if size.value == 0:
+        return None  # No such process.
+    if size.value != _DARWIN_KINFO_SIZE or struct.unpack_from("=i", buffer, 40)[0] != pid:
+        return False
+    # extern_proc: p_starttime (timeval) at 0, p_stat at 36 (SZOMB == 5).
+    seconds, microseconds = struct.unpack_from("=qq", buffer, 0)
+    return ("Z" if buffer.raw[36] == 5 else "S"), f"darwin:{seconds}.{microseconds:06d}"
+
+
 def _posix_process(pid: int) -> tuple[str, str] | None:
     try:
+        if sys.platform == "darwin":
+            # One sysctl, microsecond epoch identity; ps costs a setuid spawn
+            # per query on the host start path and reads local time to 1 s.
+            process = _darwin_process(pid)
+            if process is not False:
+                return process
         if sys.platform.startswith("linux"):
             # comm can contain spaces and parentheses; fields follow its last ')'.
             fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import types
 
 import pytest
@@ -319,9 +320,31 @@ def test_linux_process_start_uses_stat_field_22_and_boot_identity(tmp_path, monk
     assert r.process_start_identity(42) == "linux:boot-identity:22"
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Darwin kernel process table")
+def test_darwin_process_start_is_native_and_never_spawns_ps(monkeypatch):
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        monkeypatch.setattr(r.subprocess, "run", lambda *a, **k: pytest.fail("ps spawned"))
+        own = r.process_start_identity(os.getpid())
+        assert own is not None and own.startswith("darwin:") and own == r.process_start_identity(os.getpid())
+        started = r.process_start_identity(child.pid)
+        assert started is not None and started != own
+        deadline = time.monotonic() + 10
+        while r._posix_process(child.pid)[0] != "Z":  # exited, not yet reaped
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert not r.pid_alive(child.pid)
+        assert r.process_start_identity(child.pid) == started
+    finally:
+        child.wait()
+    assert r._posix_process(child.pid) is None or r.process_start_identity(child.pid) != started
+
+
 def test_posix_ps_process_start_and_zombie_stat_with_fixed_locale(monkeypatch):
     monkeypatch.setattr(r, "os", types.SimpleNamespace(**{**vars(os), "name": "posix"}))
     monkeypatch.setattr(r, "sys", types.SimpleNamespace(platform="darwin"))
+    # An unreadable kinfo ABI keeps the ps path.
+    monkeypatch.setattr(r, "_darwin_process", lambda pid: False)
     calls = []
 
     def ps(command, **kwargs):
