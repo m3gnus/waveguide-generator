@@ -2371,29 +2371,33 @@ class JobStore:
         return self._publish_fem_field(job_id, lambda stream: np.savez_compressed(stream, **arrays))
 
     def _publish_fem_field(self, job_id: str, write) -> bool:
-        with self._lock, self._transaction() as conn:
-            if not self._job_exists(conn, job_id):
-                return False
-            path = self._fem_field_path(job_id)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            fd, name = tempfile.mkstemp(prefix=".fem-", dir=path.parent)
-            try:
-                with os.fdopen(fd, "wb") as stream:
-                    write(stream)
-                    size_bytes = stream.tell()
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(name, path)
-                conn.execute(
-                    """UPDATE simulation_jobs SET task_metadata_json = json_set(
-                       COALESCE(task_metadata_json, '{}'),
-                       '$.has_fem_field_artifact', json('true'), '$.fem_field_artifact_bytes', ?),
-                       updated_at = ? WHERE id = ?""", (size_bytes, _now_iso(), job_id))
-            except BaseException:
-                path.unlink(missing_ok=True)
-                raise
-            finally:
-                Path(name).unlink(missing_ok=True)
+        # Writing and compressing can take seconds for a large field, so it
+        # happens in staging without the store lock; only the existence check,
+        # the rename and the metadata update are serialised with deletion.
+        path = self._fem_field_path(job_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix=".fem-", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                write(stream)
+                size_bytes = stream.tell()
+                stream.flush()
+                os.fsync(stream.fileno())
+            with self._lock, self._transaction() as conn:
+                if not self._job_exists(conn, job_id):
+                    return False
+                try:
+                    os.replace(name, path)
+                    conn.execute(
+                        """UPDATE simulation_jobs SET task_metadata_json = json_set(
+                           COALESCE(task_metadata_json, '{}'),
+                           '$.has_fem_field_artifact', json('true'), '$.fem_field_artifact_bytes', ?),
+                           updated_at = ? WHERE id = ?""", (size_bytes, _now_iso(), job_id))
+                except BaseException:
+                    path.unlink(missing_ok=True)
+                    raise
+        finally:
+            Path(name).unlink(missing_ok=True)
         return True
 
     def get_fem_field(self, job_id: str) -> bytes | None:

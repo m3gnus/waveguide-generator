@@ -699,6 +699,37 @@ def test_streamed_field_publication_failure_is_atomic(tmp_path, monkeypatch, ope
     assert list(store._fem_field_path("one").parent.iterdir()) == []
 
 
+def test_fem_field_compression_runs_without_the_store_lock(tmp_path):
+    import threading
+    from server.jobs import store as stores
+    from server.tests.test_jobs_store import _job
+
+    store = stores.JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("one"))
+    lock_free = []
+
+    def write(stream):
+        # Another thread must be able to take the store lock while this runs.
+        result = []
+
+        def take_and_release():
+            got = store._lock.acquire(timeout=1)
+            if got:
+                store._lock.release()
+            result.append(got)
+
+        probe = threading.Thread(target=take_and_release)
+        probe.start()
+        probe.join()
+        lock_free.append(bool(result and result[0]))
+        stream.write(b"field")
+
+    assert store._publish_fem_field("one", write)
+    assert lock_free == [True]
+    assert store.get_fem_field("one") == b"field"
+
+
 def test_fem_without_setup_channels_or_diaphragms_has_named_refusal(fem_admission):
     fem_admission.geometry.drive_channels = []
     region = region_input()

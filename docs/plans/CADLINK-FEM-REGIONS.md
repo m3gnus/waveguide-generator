@@ -245,7 +245,11 @@ with float64 and contract 2. Auto skips other engines for this feature, includin
 in Accurate. Explicit exterior-only solves retain the original surface and
 solver route. Legacy required `fem_air_volumes` remain refused unless explicitly
 excluded. Ideal normal-velocity FEM diaphragms use their declared channel ids;
-a diaphragm with no painted exterior source still produces its own channel.
+a diaphragm still produces its own channel only when the design has no painted
+exterior sources; next to painted sources it must use one of their channels.
+`validation_diagnostics` is sent as false, which in the pinned engine also selects
+the statically condensed (Schur) solver; interior nodal pressure is still
+reconstructed.
 Reduced domains, ground planes, HBB and other backends refuse.
 
 **0.3.6 limitation:** the contract-2 coupled route supports ideal normal-velocity
