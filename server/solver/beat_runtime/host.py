@@ -769,8 +769,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             host.close()
         except BaseException as exc:
-            host._log(f"host close failed: {exc}")
             status = 1
+            host._log(f"host close failed: {exc}")
             raise
         finally:
             if host._retirement_failed:
