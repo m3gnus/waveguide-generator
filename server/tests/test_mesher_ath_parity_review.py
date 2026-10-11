@@ -1,8 +1,8 @@
 """ATH importer regressions from the independent C4 review.
 
 Parser/report checks run on either pin. Point-grid parity uses supported ATH
-inputs as the independent oracle when the installed mesher supports C4. WG
-retains legacy ignored settings; the strict mesher refuses those raw inputs.
+inputs as the independent oracle when the installed mesher supports C4. Saved v1 files
+retain legacy ignored settings; fresh imports surface strict mesher refusals.
 """
 from __future__ import annotations
 
@@ -16,6 +16,9 @@ from server.design.textcfg import TextConfigError, parse, serialize
 from server.design.throat_stretch import mesher_supports_stretch
 from server.design_io.api import open_design
 from server.preview.translate import design_to_mesher_config
+
+
+_V1_STAMP = "; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\n"
 
 
 _REAL_C4 = pytest.mark.skipif(not mesher_supports_stretch(), reason="needs real C4 mesher")
@@ -66,7 +69,14 @@ def test_rosse_alias_selects_same_family_and_reaches_capability_gate(family, top
     # Canonical R-OSSE follows the mesher even with one coefficient. ROSSE
     # promotion requires active stretch; dormant legacy documents use base WG.
     text = _profile(family, coefficients=coefficients) + "\n" + top
-    parsed = parse(text)
+    prefix = _V1_STAMP if top else ""
+    if top:
+        with pytest.raises(ConfigError) as direct:
+            parse_text_config(text)
+        with pytest.raises(TextConfigError) as imported:
+            parse(text)
+        assert str(imported.value) == str(direct.value)
+    parsed = parse(prefix + text)
     assert parsed.design.formula == "R-OSSE"
     assert family not in parsed.extra_blocks
     assert parsed.ignored_settings == []
@@ -75,7 +85,7 @@ def test_rosse_alias_selects_same_family_and_reaches_capability_gate(family, top
     got = _translate_or_pin_refusal(parsed.design)
     if got is not None:
         expected = _ath_oracle(
-            text, _profile(family, coefficients=coefficients),
+            text, prefix + _profile(family, coefficients=coefficients),
             tuple(line.split(" = ")[0] for line in top.splitlines()),
         )
         assert got["formula"] == expected["formula"]
@@ -98,7 +108,9 @@ def test_rosse_alias_enforces_r_osse_top_length_refusal(family, top):
 def test_canonical_rosse_block_wins_over_alias_and_osse_block():
     text = (_profile("R-OSSE") + "\n" + _profile("ROSSE", coefficients="s1 = 1\ns2 = 2")
             + "\n" + _profile("OSSE", coefficients="s1 = 3\ns2 = 4"))
-    parsed = parse(text)
+    with pytest.raises(TextConfigError, match="second profile"):
+        parse(text)
+    parsed = parse(_V1_STAMP + text)
     assert parsed.design.formula == "R-OSSE"
     assert parsed.design.root.s1 == .5 and parsed.design.root.s2 == .2
     assert set(parsed.extra_blocks) == {"ROSSE", "OSSE"}
@@ -108,6 +120,9 @@ def test_canonical_rosse_block_wins_over_alias_and_osse_block():
 
 def test_rosse_alias_ignored_coefficients_use_actual_selected_block_name():
     text = _profile("ROSSE") + "\ns1 = 1\ns2 = 2\n" + _profile("OSSE")
+    with pytest.raises(TextConfigError, match="second profile"):
+        parse(text)
+    text = _V1_STAMP + text
     parsed = parse(text)
     assert "ROSSE" not in parsed.extra_blocks and "OSSE" in parsed.extra_blocks
     ignored = {item.key: item for item in parsed.ignored_settings}
@@ -148,7 +163,10 @@ def test_block_scale_matches_mesher_and_is_reported(family, placement, scale):
 @pytest.mark.parametrize("family", ["OSSE", "R-OSSE"])
 @pytest.mark.parametrize("coefficients", ["", "s1 = 0\ns2 = 0"])
 def test_legacy_and_wg_native_block_scale_keep_existing_behavior(family, coefficients):
-    legacy = parse(_profile(family, "Scale = 2", coefficients=coefficients))
+    source = _profile(family, "Scale = 2", coefficients=coefficients)
+    with pytest.raises(TextConfigError, match=family + r"\.Scale"):
+        parse(source)
+    legacy = parse(_V1_STAMP + source)
     native = parse("; MWG config\n" + _profile(family, "Scale = 2"))
     assert legacy.design.root.scale.constant_value() == native.design.root.scale.constant_value() == 2
     assert legacy.ignored_settings == native.ignored_settings == []

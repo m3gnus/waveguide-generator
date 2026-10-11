@@ -80,9 +80,31 @@ describe('FREEFORM conversion of a rolled-back profile', () => {
   ].join('\r\n');
   const increasing = (values: number[]) => values.every((value, index) => index === 0 || value > values[index - 1]);
 
+  it.each(['profiles', 'fallback'] as const)('removes ATH controls and their sidecars in %s conversion with a notice', async (mode) => {
+    const source = hydrateDesignDocument({
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2',
+      mesh: { ath_roundover: { radius: 42, segments: 6 }, ath_rear_shape: 3, ath_rear_front_offset: 40, ath_rear_step: 50 },
+    });
+    source._expressions = { 'mesh.ath_rear_step': { value: 50, raw: '25*2' } };
+    source._absent = ['mesh.ath_rear_front_offset'];
+    const original = structuredClone(source);
+    const fetcher = vi.fn(async () => new Response('', { status: 404 }));
+    const { design, notice } = mode === 'profiles'
+      ? freeformFromProfileCsv(exportCsv(rolledBack), source)
+      : await convertDesignToFreeform(source, fetcher);
+    const wire = serializeDesign(design);
+    expect(design.formula).toBe('FREEFORM');
+    expect(design.text_import_version).toBeUndefined();
+    expect(Object.keys(wire.mesh as object).filter((key) => key.startsWith('ath_'))).toEqual([]);
+    expect(Object.keys(design._expressions ?? {}).filter((key) => key.startsWith('mesh.ath_'))).toEqual([]);
+    expect((design._absent ?? []).filter((key) => key.startsWith('mesh.ath_'))).toEqual([]);
+    expect(notice).toContain('removes the imported Mesh.Roundover and Mesh.RearShape controls');
+    expect(source).toEqual(original);
+  });
+
   it('preserves imported wall and mesh sizes under Scale 1.5', () => {
     const source = hydrateDesignDocument({
-      formula: 'OSSE', text_import_version: 'ath-2026-08c-v1', scale: 1.5,
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', scale: 1.5,
       mesh: { wall_thickness: 5, throat_resolution: 3, mouth_resolution: 7, rear_resolution: 9 },
     });
     const { design } = freeformFromProfileCsv(exportCsv(rolledBack), source);
@@ -98,7 +120,7 @@ describe('FREEFORM conversion of a rolled-back profile', () => {
     'rescales the carried %s expression without changing the source', (key) => {
       for (const value of [6, null]) {
         const source = hydrateDesignDocument({
-          formula: 'OSSE', text_import_version: 'ath-2026-08c-v1', scale: 1.5,
+          formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', scale: 1.5,
           mesh: { [key]: { value, raw: '3 * 2' } },
         });
         const { design } = freeformFromProfileCsv(exportCsv(rolledBack), source);
@@ -113,7 +135,7 @@ describe('FREEFORM conversion of a rolled-back profile', () => {
   it.each(['freestanding', 'infinite-baffle'] as const)(
     'preserves omitted wall and resolution defaults for imported %s under Scale 1.5', (simType) => {
       const source = hydrateDesignDocument({
-        formula: 'OSSE', text_import_version: 'ath-2026-08c-v1', scale: 1.5,
+        formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', scale: 1.5,
         simulation: { sim_type: simType },
         mesh: { wall_thickness: null, throat_resolution: null, mouth_resolution: null, rear_resolution: null },
       });
@@ -131,6 +153,7 @@ describe('FREEFORM conversion of a rolled-back profile', () => {
 
   it.each([
     { scale: 1.5 },
+    { scale: 1.5, text_import_version: 'ath-2026-08c-v1' },
     { scale: 1, text_import_version: 'ath-2026-08c-v1' },
   ])('keeps shared mesh settings unchanged for source %j', (settings) => {
     for (const wall of [5, null]) {
@@ -147,7 +170,7 @@ describe('FREEFORM conversion of a rolled-back profile', () => {
 
   it('preserves imported mesh sizes in the endpoint fallback too', async () => {
     const source = hydrateDesignDocument({
-      formula: 'OSSE', text_import_version: 'ath-2026-08c-v1', scale: 1.5,
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', scale: 1.5,
       mesh: { wall_thickness: null, throat_resolution: 3, mouth_resolution: 7, rear_resolution: 9 },
     });
     const fetcher = vi.fn(async () => new Response('', { status: 404 }));

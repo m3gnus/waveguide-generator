@@ -148,6 +148,9 @@ def _prepared_design(
         root["mesh"]["corner_segments"] = EXPORT_CORNER_SEGMENTS
     root["mesh"]["quadrants"] = 1234
     root["mesh"]["wall_thickness"] = 0
+    # Bore exports retain the authored lip rows, but have no outer rear body.
+    for key in ("ath_rear_shape", "ath_rear_front_offset", "ath_rear_step"):
+        root["mesh"][key] = None
     root["mesh"]["vertical_offset"] = 0
     if root.get("enclosure") is not None:
         root["enclosure"]["depth"] = 0

@@ -230,9 +230,9 @@ def solve_options_from_blocks(
             polar["enabled_axes"] = axes
 
         # Counterpart of athPolars.athPolarObservationOrigin in the frontend:
-        # imported polars use the throat unless the simulation is a baffle.
+        # v2 imported polars use the throat unless the simulation is a baffle.
         root = design.root if isinstance(design, DesignConfig) else design
-        if root is not None and root.text_import_version is not None:
+        if root is not None and root.text_import_version == "ath-2026-09a-v2":
             polar["observation_origin"] = (
                 "mouth" if root.simulation.sim_type == "infinite-baffle" else "throat"
             )

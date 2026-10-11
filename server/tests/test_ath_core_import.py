@@ -292,3 +292,44 @@ def test_core_stl_retains_authored_patches_and_existing_axis_mapping(monkeypatch
     vertex = np.asarray(mesh['vertices']).reshape(-1,3)[mesh['indices'][0]]
     np.testing.assert_array_equal(struct.unpack_from('<3f', data, 96),
         (vertex * np.array([1000,-1000,1000])).astype(np.float32))
+
+
+@pytest.mark.parametrize('text', [
+    'OSSE = {\nr0=8\na=35\n}\nLength=80\n',
+    'OSSE = {\nRot=10\n}\nLength=80\nCoverage.Angle=35\n',
+])
+def test_fresh_v2_missing_block_length_surfaces_the_mesher_refusal(text):
+    with pytest.raises(ValueError) as direct:
+        build_geometry_params(parse_text_config(text))
+    with pytest.raises(TextConfigError) as imported:
+        parse(text)
+    assert str(imported.value) == str(direct.value)
+    assert 'must set Length' in str(imported.value)
+    # Historical native/v1 files retain their flat fallback interpretation.
+    for stamp in ('native-v1', 'ath-2026-08c-v1'):
+        saved = parse(f'; Waveguide Generator geometry-interpretation: {stamp}\n' + text).design
+        assert saved.root.L.constant_value() == 80
+
+
+@pytest.mark.parametrize('kind', ['profiles', 'slices'])
+def test_core_bore_csv_api_keeps_every_authored_lip_row_and_drops_rear_controls(kind):
+    from server.exports.core import _bare_grid_config, _inner_grid, profile_csv
+    from server.tests.test_exports_contract import _post_asgi
+
+    design = parse(CORE).design
+    original = design.model_dump(mode='json')
+    config = _bare_grid_config(design, profile_sampling=True)
+    for key in ('athRearShape', 'athRearFrontOffset', 'athRearStep'):
+        assert key not in config['mesh']
+    assert config['mesh']['athRoundover'] == {'radius': 42, 'segments': 6}
+    bore = _inner_grid(design, profile_sampling=True)
+    reference = resolve_geometry(design_to_mesher_config(design)).geometry.inner_points
+    np.testing.assert_array_equal(bore, reference)
+    assert bore.shape == (100, 27, 3)
+    assert np.any(np.diff(bore[:, :, 2], axis=1) < 0)
+    status, content = _post_asgi(f'/api/export/profiles?kind={kind}', {
+        'design': original, 'designRevision': 1,
+    })
+    assert status == 200
+    assert content.decode() == profile_csv(reference, kind)
+    assert design.model_dump(mode='json') == original

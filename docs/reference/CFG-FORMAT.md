@@ -1,7 +1,7 @@
 # Waveguide Generator text configuration format
 
 Status: canonical file-format contract, verified against `server/design/` on
-2026-08-13.
+2026-10-11.
 
 The conventional suffix is `.cfg` or `.txt`. Legacy `.mwg` files use the same
 ATH-style grammar and remain readable.
@@ -25,7 +25,8 @@ morph target is supplied. Translation applies the same profile scale as an
 explicit corner dimension; active throat stretch retains the existing final
 scale path. Native omitted corners retain their native default.
 Native authored documents use `native-v1`; external ATH imports without a stamp
-use the bounded `ath-2026-08c-v1` interpretation. Rewritten imports retain that
+use the bounded `ath-2026-09a-v2` interpretation. Saved `ath-2026-08c-v1`
+designs retain their earlier geometry and defaults. Rewritten imports retain their
 stamp even though the canonical writer uses the Parameter config heading.
 Historical Parameter/MWG configs without a stamp retain native behavior.
 Unknown or conflicting interpretation stamps are rejected.
@@ -35,6 +36,40 @@ field and passed to the mesher as `_textImportVersion`. Copying, editing,
 saving/reopening, preview, solve mesh, and STEP export must retain it. Native
 documents omit the JSON field, so their existing default serialization and
 geometry identity stay unchanged. The stamp is metadata, not an editor control.
+
+Current imports also retain `ath_axial_sampling_rule`, `ath_nac_present`, and
+optional integer `ath_nac` in JSON. The mesher dictionary receives
+`_athAxialSamplingRule` and `_athNacPresent` alongside `_textImportVersion`.
+The rule is `ath-v2025-06` for an ATH echo of V2025-06 or older, and
+`ath-v2025-12+` otherwise. It selects the axial station map and corner budget.
+With the current rule, integer `NAC` presence suppresses the angular corner
+addition; its value does not change the point grid. These controls never
+upgrade a saved v1 design. Canonical CFGs persist the rule and presence as
+`_athAxialSamplingRule` and `_athNacPresent`, and emit `NAC` when its value is
+known. WG reads the underscore keys as metadata; the mesher CLI treats them as
+disabled items. CLI-portable metadata would require mesher parser support for
+these keys (including validation and precedence over echo/NAC), or a coordinated
+writer contract using an ATH version echo and integer NAC. An echo cannot
+encode arbitrary explicit overrides unless its precedence is also defined.
+
+Fresh v2 imports default to infinite baffle when no simulation type or enclosure
+members are stated. Imported polar blocks default to mouth origin for a baffle
+and throat origin otherwise; `WG.Solve.ObservationOrigin` overrides this.
+Scale changes profile dimensions while wall thickness and throat, mouth, and
+rear mesh resolutions remain in millimetres. Native and saved v1 designs keep
+their previous scaling and origin defaults. Fresh imports are checked with the
+mesher's profile parser and geometry parameter builder; a populated OSSE block
+must provide its own length, even when a flat `Length` is present. WG parks its
+nongeometry metadata and already validated no-op controls for this check.
+
+V2 supports `Mesh.Roundover = { Radius; Segments }` (Segments default 5),
+`Mesh.RearShape = 3`, `Mesh.RearShape.FrontOffset` (default 40 mm), and
+`Mesh.RearShape.Step` (default 25 mm). These are import-only controls retained
+through preview, solve, and save. Profile/slice CSV exports keep the lip rows
+and remove rear-body controls for their bore-only geometry. FREEFORM conversion
+removes these controls and reports that change. STEP and CAD Link exports
+refuse these imports by name because their patches have no faithful STEP
+transport yet.
 
 The bounded import policy uses a tapered OSSE slot at the throat angle, counted
 inside `Length`, and derives circular morph radius from the largest raw mouth
@@ -67,6 +102,14 @@ Every numeric schema value is represented internally as an `Expr` with a finite 
 `value` when one can be resolved and the original `raw` spelling. Serialization prefers
 the raw spelling. Parsing never executes arbitrary code; angular expressions involving
 ATH's `p` variable remain raw expressions without an invented scalar value.
+
+ATH-dialect expressions use the mesher's scalar C99 function set, including
+`sf`, `exp`, natural `log`, and explicit base-10 `log10`; `frexp` and `modf`
+are refused because they return two values. Native WG expressions preserve the
+documented base-10 `log` and natural `ln` meanings. Their raw spelling survives
+save/reopen; execution uses unambiguous `log10` and `log` names. The native
+rewrite applies only to expression fields, never filenames or passthrough text,
+and legacy axis migration evaluates expressions in the document's dialect.
 
 The root design is discriminated as `OSSE`, `R-OSSE`, `ICW`, or `FREEFORM`. Common
 sections cover scale, throat, morphing, mesh/sizing, sampling, enclosure, source,

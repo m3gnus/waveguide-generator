@@ -445,14 +445,27 @@ def test_tritonia_reference_import_translates_to_mesher_config() -> None:
         production.inner_points, production.outer_points,
         wall_thickness_mm=production.wall_thickness_mm,
     )
-    # Independently certify the actual production boundary, rather than
-    # dropping the import marker or using the preview's resampled normals.
+    # The unscaled 5 mm wall crosses the unchanged planar displacement
+    # budget. v2 therefore selects the measured RearShape 1 ring and fan.
+    from hornlab_mesher.ath_import_surfaces import meridional_normals
+    from hornlab_mesher.profile_sampling import build_point_grid_arrays
+    from hornlab_mesher.rear_compatibility import resample_rear_ring
+
     target_z = outer[:, 0, 2] - production.wall_thickness_mm
     plane_z = float(target_z.min() + (target_z.max() - target_z.min()) / 2)
     displacement = float(np.max(np.abs(target_z - plane_z)))
     budget = min(0.0001, 0.0001 * production.wall_thickness_mm)
     assert np.all(np.isfinite(target_z))
-    assert 0 < displacement <= budget
+    assert displacement > budget
+    rear = production.ath_warped_rear_points
+    assert rear is not None
+    assert np.ptp(rear[:, 2]) > budget
+    params = build_geometry_params(config)[0]
+    authored = build_point_grid_arrays(params)["inner_grid"]
+    authored_rear = authored[:, 0] + production.wall_thickness_mm * meridional_normals(authored)[:, 0]
+    authored_rear[:, 2] -= 5
+    expected_rear = resample_rear_ring(authored_rear, production.inner_points[:, 0], closed=production.closed)
+    np.testing.assert_array_equal(rear, expected_rear)
     geometry = build_preview_geometry(config, preview_options("coarse"))
     surface_roles = [surface.role for surface in geometry.surfaces]
 
@@ -476,12 +489,18 @@ def test_tritonia_reference_import_translates_to_mesher_config() -> None:
         preview = geometry if lod == "coarse" else build_preview_geometry(config, preview_options(lod))
         roles = {surface.role: surface for surface in preview.surfaces}
         cap = roles["wall.rear_cap"]
-        np.testing.assert_allclose(cap.positions[:, 2], plane_z, rtol=0, atol=1e-12)
-        rear_return = roles["wall.rear_return"].positions
-        rear_rim = rear_return[rear_return[:, 2] == plane_z]
-        assert len(rear_rim) > 2
-        # The cap and return share the same boundary; quarter-cut edges remain
-        # open on the authored symmetry planes, rather than a fictitious seal.
+        # The preview carries the production ring at its selected azimuths,
+        # with only the displayed vertical offset added.
+        return_points = roles["wall.rear_return"].positions
+        rear_rim = return_points[:len(return_points) // 2]
+        target_ring = rear_rim.copy()
+        target_ring[:, 1] -= production.vertical_offset_mm
+        expected = resample_rear_ring(rear, target_ring, closed=production.closed)
+        expected[:, 1] += production.vertical_offset_mm
+        np.testing.assert_allclose(rear_rim, expected, rtol=0, atol=1e-12)
+        apex = production.ath_warped_rear_apex.copy()
+        apex[1] += production.vertical_offset_mm
+        assert np.any(np.all(cap.positions == apex, axis=1))
         for point in rear_rim:
             assert np.any(np.all(cap.positions == point, axis=1))
         triangles = cap.positions[cap.indices.reshape(-1, 3)]

@@ -242,5 +242,11 @@ def test_ath_extension_inside_profile_still_refused_by_reader_wg_and_api(family,
 
 
 def test_populated_ath_profile_still_reports_ignored_flat_coefficients():
-    parsed = parse(text("OSSE", top="s1 = .1\ns2 = .3"))
+    source = text("OSSE", top="s1 = .1\ns2 = .3")
+    with pytest.raises(ValueError) as direct:
+        parse_text_config(source)
+    with pytest.raises(ValueError) as imported:
+        parse(source)
+    assert str(imported.value) == str(direct.value)
+    parsed = parse("; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\n" + source)
     assert {item.key for item in parsed.ignored_profile} >= {"s1", "s2"}

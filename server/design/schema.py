@@ -904,24 +904,23 @@ class DesignConfig(RootModel[DesignVariant]):
             return value
         # Lazy import avoids a schema/migration import cycle while ensuring
         # every API path validates the post-migration strict Literal schema.
-        from .migrate import apply_migrations
+        from .migrate import _is_known_numeric_path, apply_migrations
 
         migrated, _applications = apply_migrations(value)
         if migrated.get("text_import_version") is None:
             # Old WG files documented base-10 log and natural ln. Retain the
             # exact source while sending unambiguous function names downstream.
-            def native_logs(item: Any) -> Any:
-                if isinstance(item, str) and re.search(r"\b(?:log|ln)\s*\(", item):
-                    return {"raw": item, "dialect": "wg-v1"}
-                if isinstance(item, Mapping):
-                    if isinstance(item.get("raw"), str):
-                        if re.search(r"\b(?:log|ln)\s*\(", item["raw"]):
-                            return {**item, "dialect": "wg-v1"}
+            def native_logs(item: Any, path: tuple[str, ...] = ()) -> Any:
+                if _is_known_numeric_path(path):
+                    raw = item.get("raw") if isinstance(item, Mapping) else item
+                    if isinstance(raw, str) and re.search(r"\b(?:log|ln)\s*\(", raw):
+                        return {**item, "dialect": "wg-v1"} if isinstance(item, Mapping) else {"raw": item, "dialect": "wg-v1"}
+                    if not isinstance(item, (list, tuple)):
                         return item
-                    return {key: native_logs(child) if key not in {"extra_keys", "extra_blocks"} else child
-                            for key, child in item.items()}
+                if isinstance(item, Mapping):
+                    return {key: native_logs(child, (*path, str(key))) for key, child in item.items()}
                 if isinstance(item, (list, tuple)):
-                    return [native_logs(child) for child in item]
+                    return [native_logs(child, (*path, "*")) for child in item]
                 return item
             migrated = native_logs(migrated)
         if migrated.get("formula") not in {"OSSE", "R-OSSE"}:

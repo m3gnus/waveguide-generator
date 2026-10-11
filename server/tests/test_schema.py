@@ -498,3 +498,23 @@ def test_a_design_stated_solver_mode_is_dropped_and_reported(stated: str) -> Non
         {"formula": "OSSE", "simulation": {"solver_mode": stated}}
     )
     assert design.root.simulation.solver_mode is None
+
+
+def test_native_log_rewrite_only_visits_expression_fields():
+    payload = {
+        'formula': 'OSSE', 'L': '80+log(100)+ln(e)',
+        'source': {'contours': 'contours/log(10).csv'},
+        'mesh': {'z_map_points': 'log(10)'},
+        'extra_keys': {'Filename': 'log(10).csv'},
+        'extra_blocks': {'Future': {'items': {'Formula': 'log(10)'}}},
+        'enclosure': {'front_resolution': ['log(100)'] * 4},
+    }
+    design = DesignConfig.model_validate(payload)
+    assert design.root.L.constant_value() == 83
+    assert design.root.L.dialect == 'wg-v1'
+    assert design.root.source.contours == 'contours/log(10).csv'
+    assert design.root.mesh.z_map_points == 'log(10)'
+    assert design.root.extra_keys == payload['extra_keys']
+    assert design.root.extra_blocks['Future'].items == {'Formula': 'log(10)'}
+    assert all(item.constant_value() == 2 for item in design.root.enclosure.front_resolution)
+    assert DesignConfig.model_validate_json(design.model_dump_json()) == design

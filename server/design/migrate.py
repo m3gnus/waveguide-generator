@@ -297,7 +297,7 @@ def _numeric_paths_for_annotation(
     origin = get_origin(annotation)
     if origin is Annotated:
         return _numeric_paths_for_annotation(get_args(annotation)[0], prefix)
-    if origin is list:
+    if origin in {list, tuple}:
         return _numeric_paths_for_annotation(get_args(annotation)[0], (*prefix, "*"))
     if origin in {Union, UnionType}:
         result: set[tuple[str, ...]] = set()
@@ -427,26 +427,26 @@ def _has_freeform_millimetre_axis(payload: Payload) -> bool:
     return _freeform_normalized_axis_plan(payload) is not None
 
 
-def _scalar_number(value: Any) -> float | None:
+def _scalar_number(value: Any, *, dialect: str) -> float | None:
     """Return a finite scalar without manufacturing a fallback geometry value."""
 
     try:
-        number = Expr.model_validate(value).constant_value()
+        number = Expr.model_validate(value, context={"expression_dialect": dialect}).constant_value()
     except (OverflowError, TypeError, ValueError):
         return None
     return number if number is not None and math.isfinite(number) else None
 
 
-def _legacy_axis_point(point: Any) -> tuple[float, dict[str, Any]] | None:
+def _legacy_axis_point(point: Any, *, dialect: str) -> tuple[float, dict[str, Any]] | None:
     if isinstance(point, Mapping):
-        z = _scalar_number(point.get("z"))
+        z = _scalar_number(point.get("z"), dialect=dialect)
         if z is None:
             return None
         rewritten = dict(point)
         rewritten.pop("z", None)
         return z, rewritten
     if isinstance(point, (list, tuple)) and len(point) >= 2:
-        z = _scalar_number(point[0])
+        z = _scalar_number(point[0], dialect=dialect)
         if z is None:
             return None
         rewritten = {"r": point[1]}
@@ -469,7 +469,8 @@ def _freeform_normalized_axis_plan(
     horizontal_points = horizontal.get("points")
     if not isinstance(horizontal_points, (list, tuple)) or not horizontal_points:
         return None
-    last = _legacy_axis_point(horizontal_points[-1])
+    dialect = "ath" if payload.get("text_import_version") is not None else "wg-v1"
+    last = _legacy_axis_point(horizontal_points[-1], dialect=dialect)
     if last is None or last[0] <= 0:
         return None
     length = last[0]
@@ -484,7 +485,7 @@ def _freeform_normalized_axis_plan(
             return None
         rewritten: list[dict[str, Any]] = []
         for point in points:
-            parsed = _legacy_axis_point(point)
+            parsed = _legacy_axis_point(point, dialect=dialect)
             if parsed is None:
                 return None
             z, values = parsed

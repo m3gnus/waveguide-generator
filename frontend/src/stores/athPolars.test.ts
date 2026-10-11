@@ -10,7 +10,7 @@ import {
 
 describe('ATH directivity config compatibility', () => {
   const polarBlocks = { 'ABEC.Polars:SPL_H': { items: { MapAngleRange: '0,90,19' } } };
-  const importedDesign = { text_import_version: 'ath-2026-08c-v1' };
+  const importedDesign = { text_import_version: 'ath-2026-09a-v2' };
 
   it.each([
     ['freestanding', 'throat'],
@@ -36,6 +36,7 @@ describe('ATH directivity config compatibility', () => {
 
   it('leaves native designs and designs without polars unchanged', () => {
     expect(athPolarObservationOrigin(polarBlocks, {})).toBeNull();
+    expect(athPolarObservationOrigin(polarBlocks, { text_import_version: 'ath-2026-08c-v1' })).toBeNull();
     expect(athPolarObservationOrigin(polarBlocks, { text_import_version: null })).toBeNull();
     expect(athPolarObservationOrigin({}, importedDesign)).toBeNull();
   });

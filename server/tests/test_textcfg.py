@@ -372,7 +372,7 @@ def test_morph_exponent_round_trips_through_exact_text_key(exponent: int | str) 
 
 def test_morph_exponent_is_mapped_while_unknown_key_remains_passthrough() -> None:
     parsed = parse(
-        "OSSE = {\n}\nMorph.Exponent = 6\nMorph.FutureOption = alpha=beta\n"
+        "OSSE = {\n L = 80\n}\nMorph.Exponent = 6\nMorph.FutureOption = alpha=beta\n"
     )
 
     exponent = parsed.design.root.morph.target_exponent

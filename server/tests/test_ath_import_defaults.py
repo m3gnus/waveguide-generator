@@ -241,3 +241,36 @@ def test_import_scale_keeps_wall_and_resolutions_in_millimetres(explicit_wall: b
     for key, value in [("throatResolution", 3), ("mouthResolution", 7), ("rearResolution", 9)]:
         assert translated["mesh"][key] == value * 1.5
     assert translated["profile"]["L"] == 180
+
+
+@pytest.mark.parametrize('stamp,wall,origin', [
+    ('native-v1', 7.5, 'mouth'), ('ath-2026-08c-v1', 7.5, 'mouth'),
+    ('ath-2026-09a-v2', 5, 'throat'), (None, 5, 'throat'),
+])
+def test_v2_defaults_compose_without_changing_native_or_saved_v1(stamp, wall, origin):
+    text = _text('osse_scale')
+    text += 'Mesh.ThroatResolution=3\nMesh.MouthResolution=7\nMesh.RearResolution=9\n'
+    text += 'ABEC.Polars:SPL_H = {\nMapAngleRange=0,90,19\n}\n'
+    if stamp:
+        text = _stamp(text, stamp)
+    parsed = parse(text)
+    assert parsed.design.root.text_import_version == (None if stamp == 'native-v1' else stamp or TEXT_IMPORT_VERSION)
+    for design in (parsed.design, parse(serialize(parsed.design)).design,
+                   DesignConfig.model_validate_json(parsed.design.model_dump_json())):
+        config = design_to_mesher_config(design)
+        assert config['profile']['L'] == 180
+        assert float(config['mesh']['wallThickness']) == wall
+        for key, value in [('throatResolution', 3), ('mouthResolution', 7), ('rearResolution', 9)]:
+            assert float(config['mesh'][key]) == value * wall / 5
+        options = solve_options_from_blocks(design.root.extra_blocks, design=design)
+        assert options.polar_config.observation_origin == origin
+    assert len(parsed.ignored_settings) == (2 if stamp is None else 0)
+
+
+def test_saved_v1_omitted_simtype_and_polar_origin_are_not_upgraded():
+    text = _text('osse_no_simtype') + 'ABEC.Polars:SPL_H = {\nMapAngleRange=0,90,19\n}\n'
+    parsed = parse(_stamp(text, 'ath-2026-08c-v1'))
+    assert parsed.design.root.simulation.sim_type is None
+    assert design_to_mesher_config(parsed.design)['mode'] == 'freestanding'
+    assert build_request(parsed).request.options.polar_config.observation_origin == 'mouth'
+    assert parsed.ignored_settings == []

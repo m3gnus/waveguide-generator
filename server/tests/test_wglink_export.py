@@ -756,3 +756,25 @@ def test_wglink_export_rejects_a_stale_workspace_path(tmp_path: Path) -> None:
 
     assert caught.value.status_code == 409
     assert not workspace.exists()
+
+
+@pytest.mark.parametrize('mesh', [
+    {'ath_roundover': {'radius': 10, 'segments': 5}},
+    {'ath_rear_shape': 3, 'ath_rear_front_offset': 40, 'ath_rear_step': 25},
+])
+def test_ath_cad_link_refusal_is_422_before_identity_or_geometry_work(tmp_path, monkeypatch, mesh):
+    design = DesignConfig.model_validate({
+        'formula': 'OSSE', 'L': 80, 'text_import_version': 'ath-2026-09a-v2', 'mesh': mesh,
+    })
+    store = CadLinkStore(tmp_path / 'cadlink.sqlite3')
+    request = api.WgLinkExportRequest(design=design, designRevision=1)
+    def unexpected(*args, **kwargs):
+        pytest.fail('a refused CAD link must not commit or build geometry')
+    monkeypatch.setattr(api, '_commit_design_for_export', unexpected)
+    monkeypatch.setattr('hornlab_mesher.config_builder.resolve_geometry', unexpected)
+    with pytest.raises(HTTPException) as caught:
+        api._export_wglink_sync(request, store, tmp_path, 'ath-refused')
+    assert caught.value.status_code == 422
+    assert 'STEP export of Mesh.Roundover / Mesh.RearShape = 3' in caught.value.detail
+    assert not (tmp_path / 'cadlink.sqlite3').exists()
+    assert not (tmp_path / 'wglink').exists()

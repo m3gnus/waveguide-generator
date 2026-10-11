@@ -291,7 +291,7 @@ export async function convertDesignToFreeform(
   fallback.profile_v!.throat_angle_deg = design.a0 ?? 15.5;
   fallback.profile_h!.mouth_angle_deg = design.a ?? 60;
   fallback.profile_v!.mouth_angle_deg = design.a ?? 60;
-  return { design: fallback };
+  return { design: fallback, notice: athFreeformNotice(design) };
 }
 
 async function exportProfileCsv(design: DesignDocument, fetcher: typeof fetch): Promise<string | null> {
@@ -622,15 +622,24 @@ export function freeformFromProfileCsv(text: string, source: DesignDocument): Fr
   converted.profile_v!.throat_angle_deg = tangentAngle(V);
   converted.profile_h!.mouth_angle_deg = mouthAngle(unfoldedH, H);
   converted.profile_v!.mouth_angle_deg = mouthAngle(unfoldedV, V);
-  if (!unfoldedH.folded && !unfoldedV.folded) return { design: converted };
+  const athNotice = athFreeformNotice(source);
+  if (!unfoldedH.folded && !unfoldedV.folded) return { design: converted, notice: athNotice };
   const mm = (value: number) => `${value.toFixed(1)} mm`;
   return {
     design: converted,
     notice: `The ${source.formula} profile rolls back: it reaches z = ${mm(length)}, then curls back toward the throat. `
       + 'A FREEFORM profile cannot fold back, so the converted profile ends there and leaves out the rolled-back lip. '
       + `Mouth radius: horizontal ${mm(H.at(-1)!.r)} (source ${mm(horizontal.at(-1)!.r)}), `
-      + `vertical ${mm(V.at(-1)!.r)} (source ${mm(vertical.at(-1)!.r)}).`,
+      + `vertical ${mm(V.at(-1)!.r)} (source ${mm(vertical.at(-1)!.r)}).`
+      + (athNotice ? ` ${athNotice}` : ''),
   };
+}
+
+function athFreeformNotice(source: DesignDocument): string | undefined {
+  const controls = Object.keys(source.mesh).filter((key) => key.startsWith('ath_') && source.mesh[key as keyof typeof source.mesh] != null);
+  if (!controls.length) return undefined;
+  return 'FREEFORM conversion removes the imported Mesh.Roundover and Mesh.RearShape controls. '
+    + 'The bore profile is sampled into anchors; the ATH lip and rear body are not retained as editable controls.';
 }
 
 function preserveSharedForFreeform(converted: DesignDocument, source: DesignDocument): DesignDocument {
@@ -645,16 +654,20 @@ function preserveSharedForFreeform(converted: DesignDocument, source: DesignDocu
   converted.quadrants = structuredClone(source.quadrants);
   converted.enclosure = structuredClone(source.enclosure);
   converted.mesh = structuredClone(source.mesh);
+  for (const key of Object.keys(converted.mesh)) {
+    if (key.startsWith('ath_')) delete converted.mesh[key as keyof typeof converted.mesh];
+  }
   converted.simulation = structuredClone(source.simulation);
   converted.output = structuredClone(source.output);
   converted.extra_keys = structuredClone(source.extra_keys);
   converted.extra_blocks = structuredClone(source.extra_blocks);
   const commonExpression = /^(?:scale|throat_ext_angle|throat_ext_length|slot_length|morph\.|source\.|enclosure\.|mesh\.|simulation\.|output\.)/;
-  const expressions = Object.fromEntries(Object.entries(source._expressions ?? {}).filter(([path]) => commonExpression.test(path) && path !== 'morph.target_shape'));
+  const keep = (path: string) => commonExpression.test(path) && path !== 'morph.target_shape' && !path.startsWith('mesh.ath_');
+  const expressions = Object.fromEntries(Object.entries(source._expressions ?? {}).filter(([path]) => keep(path)));
   if (Object.keys(expressions).length) converted._expressions = expressions;
-  let absent = (source._absent ?? []).filter((path) => commonExpression.test(path) && path !== 'morph.target_shape');
+  let absent = (source._absent ?? []).filter(keep);
   const scale = source.scale;
-  if (source.text_import_version != null && Number.isFinite(scale) && scale !== 1) {
+  if (source.text_import_version === 'ath-2026-09a-v2' && Number.isFinite(scale) && scale !== 1) {
     // Native FREEFORM scales these dimensions; ATH imports keep them in mm.
     for (const key of ['wall_thickness', 'throat_resolution', 'mouth_resolution', 'rear_resolution'] as const) {
       const path = `mesh.${key}`;

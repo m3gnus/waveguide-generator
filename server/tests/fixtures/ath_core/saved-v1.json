@@ -205,5 +205,41 @@
       "source": {},
       "_textImportVersion": "ath-2026-08c-v1"
     }
+  },
+  {
+    "text": "; Parameter config\n; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\nOSSE = {\nL=80\nr0=8\na=35\na0=5\ns=.5\n}\nScale=1.5\nMesh.WallThickness=3\nMesh.ThroatResolution=3\nMesh.MouthResolution=7\nMesh.RearResolution=9\nMesh.AngularSegments=8\nMesh.LengthSegments=8\nABEC.Polars:SPL_H = {\nMapAngleRange=0,90,19\n}\nThroat.Profile=1\n",
+    "config": {
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "profile": {
+        "formula": "OSSE",
+        "r0": 12.0,
+        "a": "35",
+        "a0": "5",
+        "_athLengthMode": "total",
+        "L": 120.0,
+        "s": ".5",
+        "throatProfile": "1"
+      },
+      "mesh": {
+        "angularSegments": "8",
+        "lengthSegments": "8",
+        "quadrants": 1234,
+        "wallThickness": 4.5,
+        "throatResolution": 4.5,
+        "mouthResolution": 10.5,
+        "rearResolution": 13.5,
+        "surfaceFit": "interpolate",
+        "scaleToMetres": true
+      },
+      "cross_section": {
+        "exponent": 2.0,
+        "aspectRatio": 1.0
+      },
+      "morph": {},
+      "gcurve": {},
+      "source": {},
+      "_textImportVersion": "ath-2026-08c-v1"
+    }
   }
 ]

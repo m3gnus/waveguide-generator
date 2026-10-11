@@ -34,7 +34,7 @@ from .cad_launch import focus_cad
 from server.cadlink.fusion_status import ADDIN_OUTDATED_MESSAGE, read_fusion_status
 
 from .cad_handoff import UPDATE_TARGET_REQUIRED, publish_fusion_handoff
-from .core import build_profiles, build_step, build_step_solid, build_stl
+from .core import _refuse_ath_step, build_profiles, build_step, build_step_solid, build_stl
 from .geometry_identity import geometry_hash as _geometry_hash
 from .geometry_identity import mesher_version as _mesher_version
 
@@ -539,6 +539,10 @@ def _export_wglink_sync(
     from hornlab_mesher import WgLinkIdentity, WgLinkSourceInterface, write_wglink
     from hornlab_mesher.config_builder import resolve_geometry
 
+    try:
+        _refuse_ath_step(request.design)
+    except ValueError as exc:
+        raise _export_error(exc) from exc
     workspace_root = workspace_root.resolve()
     if not workspace_root.is_dir():
         raise HTTPException(status_code=409, detail=unavailable_detail)

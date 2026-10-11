@@ -14,6 +14,14 @@ import {
 describe('solve and directivity options', () => {
   beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); });
 
+  it('keeps saved v1 polar origin unchanged', () => {
+    useSolveOptionsStore.getState().updatePolar({ observationOrigin: 'mouth' });
+    restoreSolveSettingsFromBlocks({
+      'ABEC.Polars:SPL_H': { items: { MapAngleRange: '0,90,19' } },
+    }, { text_import_version: 'ath-2026-08c-v1', simulation: { sim_type: 'freestanding' } });
+    expect(useSolveOptionsStore.getState().polar.observationOrigin).toBe('mouth');
+  });
+
   it.each([
     ['freestanding', 'throat'],
     ['infinite-baffle', 'mouth'],
@@ -22,7 +30,7 @@ describe('solve and directivity options', () => {
     useSolveOptionsStore.getState().updatePolar({ observationOrigin: origin === 'mouth' ? 'throat' : 'mouth' });
     restoreSolveSettingsFromBlocks({
       'ABEC.Polars:SPL_H': { items: { MapAngleRange: '0,90,19', Distance: '2', NormAngle: '0' } },
-    }, { text_import_version: 'ath-2026-08c-v1', simulation: { sim_type: simType } });
+    }, { text_import_version: 'ath-2026-09a-v2', simulation: { sim_type: simType } });
     expect(useSolveOptionsStore.getState().polar).toMatchObject({ observationOrigin: origin, distance: 2, normAngle: 0 });
   });
 
@@ -33,7 +41,7 @@ describe('solve and directivity options', () => {
     restoreSolveSettingsFromBlocks({
       'ABEC.Polars:SPL_H': { items: { MapAngleRange: '0,90,19' } },
       'WG.Solve': { items: { ObservationOrigin: origin } },
-    }, { text_import_version: 'ath-2026-08c-v1', simulation: { sim_type: simType } });
+    }, { text_import_version: 'ath-2026-09a-v2', simulation: { sim_type: simType } });
     expect(useSolveOptionsStore.getState().polar.observationOrigin).toBe(origin);
   });
 
@@ -42,7 +50,7 @@ describe('solve and directivity options', () => {
     restoreSolveSettingsFromBlocks({ 'ABEC.Polars:SPL_H': { items: {} } }, {});
     expect(useSolveOptionsStore.getState().polar.observationOrigin).toBe('throat');
     useSolveOptionsStore.getState().updatePolar({ observationOrigin: 'mouth' });
-    restoreSolveSettingsFromBlocks({}, { text_import_version: 'ath-2026-08c-v1' });
+    restoreSolveSettingsFromBlocks({}, { text_import_version: 'ath-2026-09a-v2' });
     expect(useSolveOptionsStore.getState().polar.observationOrigin).toBe('mouth');
   });
 

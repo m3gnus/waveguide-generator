@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from server.design.migrate import MIGRATIONS, apply_migrations
@@ -293,3 +295,26 @@ def test_corner_ratio_non_finite_or_overflow_is_a_migration_error(ratio: object)
     }
     with pytest.raises(ValueError, match="finite"):
         apply_migrations(payload)
+
+
+@pytest.mark.parametrize('stamp,expected_length,expected_t', [
+    (None, 200, .5), ('ath-2026-08c-v1', 100 * math.log(100), 100 / (100 * math.log(100))),
+])
+@pytest.mark.parametrize('row_form', ['mapping', 'sequence'])
+def test_axis_migration_uses_the_documents_log_dialect(stamp, expected_length, expected_t, row_form):
+    def points(mouth):
+        rows = [[0, 10], ['100*ln(e)' if stamp is None else 100, 30], ['100*log(100)', mouth]]
+        return [{'z': z, 'r': r} for z, r in rows] if row_form == 'mapping' else rows
+    payload = {
+        'formula': 'FREEFORM', 'profile_h': {'points': points(50)},
+        'profile_v': {'points': points(40)},
+        'cross_sections': [{'t': 0, 'shape': 'ellipse'}, {'t': 1, 'shape': 'ellipse'}],
+    }
+    if stamp is not None:
+        payload['text_import_version'] = stamp
+    migrated, applied = apply_migrations(payload)
+    assert [item.name for item in applied] == ['005_freeform_normalized_axis']
+    assert migrated['length'] == expected_length
+    assert migrated['profile_h']['points'][1]['t'] == expected_t
+    assert migrated['profile_v']['points'][1]['t'] == expected_t
+    DesignConfig.model_validate(migrated)

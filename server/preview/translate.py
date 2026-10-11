@@ -49,8 +49,8 @@ def effective_wall_thickness(root: Any) -> float:
     a bare shell and disagrees with the mesh that was generated.
 
     The returned value is unscaled millimetres; ``design_to_mesher_config``
-    applies the waveguide ``scale`` for native designs. ATH imports keep the
-    wall in unscaled millimetres, matching ATH V2026-08c output.
+    applies the waveguide ``scale`` for native and saved v1 designs. Current
+    v2 imports keep the wall in unscaled millimetres, matching ATH output.
     """
 
     default = 0.0 if root.simulation.sim_type == "infinite-baffle" else 5.0
@@ -339,8 +339,8 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
     # ATH treats an omitted wall thickness as 5 mm for normal simulations and
     # 0 mm for infinite-baffle simulations. Keep the document field nullable
     # for lossless CFG round-trips and apply that default only at translation.
-    # Imported walls and mesh resolutions stay in millimetres under Scale.
-    mesh_scale = 1.0 if root.text_import_version is not None else scale
+    # Current imports keep mesh dimensions in mm; saved v1 retains its scaling.
+    mesh_scale = 1.0 if root.text_import_version == "ath-2026-09a-v2" else scale
     wall_thickness = effective_wall_thickness(root) * mesh_scale
     if root.mesh.quadrants is not None:
         _structural_number(root.mesh.quadrants, "mesh.quadrants")

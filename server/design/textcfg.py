@@ -1348,6 +1348,59 @@ def _build_payload(
     return payload
 
 
+def _mesher_validation_text(
+    flat: Mapping[str, str], blocks: Mapping[str, _RawBlock], comments: list[str],
+    payload: Mapping[str, Any], ignored: list[IgnoredSetting],
+) -> str:
+    """Keep ATH profile precedence while parking WG's nongeometry extensions.
+
+    WG accepts evaluated no-op switches, inactive enclosure preconfiguration,
+    and solve metadata that the mesher's stricter text reader does not read.
+    Normalize only those already checked cases before its geometry validation.
+    """
+    ignored_names = {item.key for item in ignored}
+    rollback_off = _ath_rollback_disabled(flat)
+
+    def items(source: Mapping[str, str], prefix: str = "") -> list[str]:
+        rows = []
+        for key, value in source.items():
+            name = prefix + key
+            if (name in ignored_names and name not in {"OSSE.Rot", "NAC"}) or name.startswith("WG."):
+                continue
+            if rollback_off and (name == "Rollback" or name.startswith("Rollback.")):
+                continue
+            if name in _ATH_NOOP_VALUES and _ath_number(value) == _ATH_NOOP_VALUES[name]:
+                continue
+            if name in {"Mesh.RearShape", "Throat.Profile", "OSSE.Throat.Profile"}:
+                number = _ath_number(value)
+                if number is not None:
+                    value = str(number)
+            if name == "Rot" and _ath_number(value) == 0:
+                value = "0"
+            rows.append(f"{key} = {value}")
+        return rows
+
+    rows = list(comments)
+    rows.extend(items(flat))
+    enclosure = payload.get("enclosure")
+    inactive_enclosure = enclosure is not None and _ath_number(str(enclosure.get("depth", "0"))) == 0
+    if inactive_enclosure:
+        rows = [row for row in rows if not row.startswith(_ENCLOSURE_FLAT_PREFIX)]
+        if payload.get("simulation", {}).get("sim_type") is None:
+            rows.append("ABEC.SimType = 2")
+    for name, block in blocks.items():
+        if name.startswith("WG.") or (inactive_enclosure and name == "Mesh.Enclosure"):
+            continue
+        if rollback_off and (name == "Rollback" or name.startswith("Rollback.")):
+            continue
+        if _ath_unsupported_reason(name) is not None and not any(
+            not key.startswith("_") for key in block.items
+        ) and not block.lines:
+            continue
+        rows.extend([f"{name} = {{", *items(block.items, name + "."), *block.lines, "}"])
+    return "\n".join(rows)
+
+
 def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     """Parse and validate a v1 text design, preserving raw expressions/extras.
 
@@ -1440,13 +1493,15 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         except (OverflowError, ValueError) as exc:
             raise TextConfigError(str(exc)) from exc
     mesh_payload = payload.get("mesh", {})
-    if mesh_payload.get("ath_roundover") is not None or mesh_payload.get("ath_rear_shape") == 3:
+    if (payload.get("text_import_version") == TEXT_IMPORT_VERSION and version is None and dialect == "ath"
+            or mesh_payload.get("ath_roundover") is not None or mesh_payload.get("ath_rear_shape") == 3):
         # The mesher owns the bounded combinations and their named diagnostics.
         # This is config validation only; no surfaces or mesh jobs are built.
         from hornlab_mesher.config_parser import parse_text_config
         from hornlab_mesher.config_builder import build_geometry_params
         try:
-            build_geometry_params(parse_text_config(text))
+            validation_text = _mesher_validation_text(flat, blocks, comments, payload, ignored_profile)
+            build_geometry_params(parse_text_config(validation_text))
         except ValueError as exc:
             raise TextConfigError(str(exc)) from exc
     try:
