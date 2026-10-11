@@ -223,9 +223,9 @@ def _link_name(value: object) -> str | None:
 
     if not isinstance(value, str):
         return None
-    if any(unicodedata.category(char) == "Cc" for char in value):
+    if any(unicodedata.category(char) in {"Cc", "Cf", "Zl", "Zp"} for char in value):
         return None
-    return value.strip()[:120] or None
+    return value.strip()[:120].strip() or None
 
 
 #: How far in the future ``updatedAt`` may be. A minute of clock skew is much

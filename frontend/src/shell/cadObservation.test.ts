@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadOperationListener, JobItem, JobsSnapshot } from '../api/jobsSocket';
 import { createCadConnectionStore, type CadConnectionStatus } from '../stores/cadConnection';
 import { connectCadObservation, type CadObservationActivity } from './cadObservation';
+import { fusionWorkflowView } from './cadWorkflowView';
 
 function status(overrides: Partial<CadConnectionStatus> = {}): CadConnectionStatus {
   return {
@@ -134,6 +135,39 @@ describe('CAD observation scheduler without the coordinator', () => {
     if (event === 'addin-session') channel.addinStatusChanged?.();
     await vi.advanceTimersByTimeAsync(0); expect(reads()).toEqual(before.map((count) => count + 1));
     const woke = reads(); await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual(woke);
+  });
+
+  it.each(['focus', 'visibility', 'addin-session', 'resync', 'refresh'])('off: a held status survives %s and a failing wake read, then ages into last report', async (event) => {
+    const link = { instanceId: 'instance-1', designName: 'WG design', linkName: 'Upper horn' } as NonNullable<CadConnectionStatus['link']>;
+    readStatus.mockResolvedValueOnce(status({ link }));
+    await mount();
+    const held = connection.getState();
+    await vi.advanceTimersByTimeAsync(5_000);
+    readStatus.mockRejectedValue(new Error('offline'));
+    if (event === 'focus') window.dispatchEvent(new Event('focus'));
+    if (event === 'visibility') {
+      visible = false; document.dispatchEvent(new Event('visibilitychange'));
+      visible = true; document.dispatchEvent(new Event('visibilitychange'));
+    }
+    if (event === 'addin-session') channel.addinStatusChanged?.();
+    if (event === 'resync') channel.resync();
+    if (event === 'refresh') stop!.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readStatus).toHaveBeenCalledTimes(2);
+    expect(connection.getState().fusionStatus).toBe(held.fusionStatus);
+    expect(connection.getState().receivedAt).toBe(held.receivedAt);
+    expect(connection.getState().expiresAt).toBe(held.expiresAt);
+    expect(connection.getState().linkName).toBe('Upper horn');
+    expect(connection.getState().fusionStatus?.processRunning).toBe(true);
+    expect(fusionWorkflowView(connection.getState().fusionStatus).state).toBe('current');
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(connection.getState().fusionStatus?.statusObserved).not.toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(connection.getState().fusionStatus?.statusObserved).toBe(false);
+    expect(fusionWorkflowView(connection.getState().fusionStatus).headline).toContain('last reported');
+    expect(connection.getState().fusionStatus?.processRunning).toBe(true);
+    expect(connection.getState().linkName).toBe('Upper horn');
+    expect(readStatus).toHaveBeenCalledTimes(2);
   });
 
   it('off: a design/instance change fences the old report and reads status once', async () => {

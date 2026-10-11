@@ -90,6 +90,25 @@ describe('CAD connection observations without the coordinator', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('fences an in-flight action without losing the held report or its expiry clock', async () => {
+    const link = { instanceId: 'instance-1', linkName: 'Upper horn' } as NonNullable<CadConnectionStatus['link']>;
+    await connection.read(async () => status({ link }));
+    const held = connection.getState();
+    const pending = deferred<CadConnectionStatus>();
+    const read = connection.read(() => pending.promise);
+    await vi.advanceTimersByTimeAsync(5_000);
+    connection.fence();
+    pending.resolve(status({ documentId: 'superseded' }));
+    expect(await read).toBeNull();
+    expect(connection.getState()).toBe(held);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(connection.getState().fusionStatus?.statusObserved).toBe(false);
+    expect(connection.getState().fusionStatus?.processRunning).toBe(true);
+    expect(connection.getState().linkName).toBe('Upper horn');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('keeps advisory read failures quiet, rejects unknown states, and ages already expired answers immediately', async () => {
     await connection.read(async () => status());
     expect(await connection.read(async () => { throw new Error('offline'); })).toBeNull();

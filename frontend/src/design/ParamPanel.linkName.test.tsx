@@ -44,17 +44,20 @@ describe('ParamPanel Fusion link label', () => {
     act(() => root.render(<QueryClientProvider client={client}><ParamPanel tab="geometry"/></QueryClientProvider>));
   }
 
-  it('shows the coordinator linkName today beside the Fusion document status', () => {
-    render(fusionStatus());
+  it.each(['Upper horn', undefined, null, ''])('keeps linkName %s out of the linked design card', (name) => {
+    render(fusionStatus([link('instance-1', name)]));
     const card = host.querySelector('.linked-design-card')!;
     expect(card.textContent).toContain('Assembly document');
-    expect(card.textContent).toContain('Fusion link: Upper horn');
-    expect(card.textContent).not.toContain('Fusion link: WG design');
+    expect(card.textContent).not.toContain('Fusion link:');
+    expect(card.textContent).not.toContain('Upper horn');
   });
 
-  it.each([undefined, null, ''])('falls back to the WG design label when linkName is %s', (name) => {
-    render(fusionStatus([link('instance-1', name)]));
-    expect(host.querySelector('.linked-design-card')?.textContent).toContain('Fusion link: WG design');
+  it.each([undefined, null, '', '   '])('preserves the exact WG design chooser label when linkName is %s', (name) => {
+    const designName = '  WG design \u00a0 ';
+    render(fusionStatus([{ ...link('instance-1', name), designName }, link('instance-2')]));
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="Linked Fusion instance"]')!;
+    expect(select.options[1].textContent).toBe(`${designName} · instance-1`);
+    expect(select.options[1].value).toBe('instance-1');
   });
 
   it('uses labels in the instance chooser while preserving exact instance IDs', () => {
@@ -65,9 +68,21 @@ describe('ParamPanel Fusion link label', () => {
     ]);
   });
 
-  it('also displays the new connection store label without a coordinator status', async () => {
+  it('uses connection store labels in the chooser while preserving the document card', async () => {
+    await useCadConnectionStore.read(async () => fusionStatus([link('instance-1', 'Store label'), link('instance-2', 'Second label')]));
+    render(fusionStatus([link('instance-1'), link('instance-2')]));
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="Linked Fusion instance"]')!;
+    expect([...select.options].map((option) => [option.value, option.textContent])).toEqual([
+      ['', 'Choose an instance'], ['instance-1', 'Store label · instance-1'], ['instance-2', 'Second label · instance-2'],
+    ]);
+    expect(host.querySelector('.linked-design-card')?.textContent).not.toContain('Fusion link:');
+    expect(host.querySelector('.linked-design-card')?.textContent).toContain('Assembly document');
+  });
+
+  it('keeps a connection store label out of the card without a coordinator status', async () => {
     await useCadConnectionStore.read(async () => fusionStatus([link('instance-1', 'Store label')]));
     render(null);
-    expect(host.querySelector('.linked-design-card')?.textContent).toContain('Fusion link: Store label');
+    expect(host.querySelector('.linked-design-card')?.textContent).not.toContain('Fusion link:');
+    expect(host.querySelector('.linked-design-card')?.textContent).not.toContain('Store label');
   });
 });

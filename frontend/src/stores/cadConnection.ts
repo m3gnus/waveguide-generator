@@ -64,6 +64,8 @@ export function createCadConnectionStore(now: () => number = Date.now) {
         return null;
       }
     },
+    /** Supersede pending reads while retaining the last report and its TTL. */
+    fence() { generation += 1; },
     invalidate() {
       generation += 1;
       clearExpiry();

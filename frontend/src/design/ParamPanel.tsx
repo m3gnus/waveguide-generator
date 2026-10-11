@@ -680,10 +680,6 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
     ? workflow.action === 'update' ? 'Send WG changes to Onshape' : 'Create in Onshape'
     : workflow.action === 'update' ? 'Send WG changes to Fusion' : 'Open in Fusion 360';
   const matchingFusionLinks = cadCoordinator.fusionStatus?.matchingLinks ?? [];
-  // The observation service is mounted in S5-7. Until then, the coordinator's
-  // additive status field supplies the same display label today.
-  const fusionDisplayStatus = observedFusionStatus ?? cadCoordinator.fusionStatus;
-  const fusionLinkName = fusionDisplayStatus?.link ? fusionLinkDisplayName(fusionDisplayStatus.link) : null;
   const matchingOnshapeLinks = cadCoordinator.onshapeStatus?.matchingLinks ?? [];
   return <Section
     title={CAD_CONTROLS.linkedDesign.section}
@@ -693,7 +689,7 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
   >
     <div className={`linked-design-card cad-connection-${workflow.state}`}>
       <span className="cad-connection-dot" aria-hidden="true"/>
-      <div><b>{workflow.headline}</b>{!onshape && fusionLinkName && <span>Fusion link: {fusionLinkName}</span>}<span>{workflow.detail}</span></div>
+      <div><b>{workflow.headline}</b><span>{workflow.detail}</span></div>
     </div>
     {!onshape && matchingFusionLinks.length > 1 && <label className="field-row linked-instance-selection">
       <span>Managed Fusion instance</span>

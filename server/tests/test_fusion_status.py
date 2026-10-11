@@ -1287,6 +1287,7 @@ def test_non_string_revision_tokens_are_never_compared_as_equal(tmp_path: Path) 
         ("Upper horn", "Upper horn"),
         ("  Upper horn  ", "Upper horn"),
         ("A" * 121, "A" * 120),
+        ("A" * 119 + "  B", "A" * 119),
         (None, None),
         ("", None),
         ("   ", None),
@@ -1300,6 +1301,11 @@ def test_non_string_revision_tokens_are_never_compared_as_equal(tmp_path: Path) 
         ("bad\x00name", None),
         ("bad\x7fname", None),
         ("bad\x85name", None),
+        ("bad\u2028name", None),
+        ("bad\u2029name", None),
+        ("bad\u202ename", None),
+        ("bad\u200bname", None),
+        ("A" * 120 + "\u202e", None),
     ],
 )
 def test_link_name_projection_is_display_only_and_validated(

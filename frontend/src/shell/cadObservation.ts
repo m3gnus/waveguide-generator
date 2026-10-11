@@ -148,8 +148,8 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
   const wake = () => { noteActivity(); readReturns(); readStatus(); };
   const invalidateDeclaration = () => {
     declaredInbox = false;
-    // Also fence a read belonging to the previous add-in session.
-    connection.invalidate();
+    // Fence the previous session's read, but let its held report age by its TTL.
+    connection.fence();
     restart();
   };
   const unsubscribeChannel = manager.subscribeCadOperations({
@@ -173,8 +173,8 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       // A design/instance change invalidates its status, not the add-in's
       // transport declaration. A stalled read must not restart legacy listing
       // clocks for an add-in already known to deliver through the inbox.
+      connection.invalidate();
       if (applicationChanged) invalidateDeclaration();
-      else connection.invalidate();
       if (!(folderChanged || enteredCad || applicationChanged)) readStatus();
     }
     if (folderChanged || enteredCad || applicationChanged) wake();
