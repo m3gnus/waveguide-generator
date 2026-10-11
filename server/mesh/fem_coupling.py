@@ -328,6 +328,11 @@ def build_coupled_mesh(
         prepared = []
         sizing = []
         air_owners: dict[int, str] = {}
+        region_names = {
+            region["region_id"]: str(region.get("name", region["region_id"]))
+            for region, *_rest in region_data
+        }
+        moving_claims: dict[str, dict[int, str]] = {}
         region_volumes = []
         for region, original_volumes, _boundary_tags, assigned in region_data:
             volumes = sorted(set().union(*(descendants[(3, tag)] for tag in original_volumes)))
@@ -338,28 +343,46 @@ def build_coupled_mesh(
             for volume in volumes:
                 if volume in air_owners:
                     raise FemRegionMeshError(
-                        f"{_label(region)} overlaps FEM region {air_owners[volume]!r}."
+                        f"{_label(region)} overlaps FEM region {region_names[air_owners[volume]]!r}."
                     )
-                air_owners[volume] = str(region.get("name", region["region_id"]))
-            region_volumes.append((region, volumes, assigned))
-        # Check all regions before assigning implicit walls or interfaces.
-        # A shared air/air face is neither a wall nor an exterior interface.
-        for tag in _boundary(gmsh, sorted(air_owners)):
-            adjacent = [int(v) for v in gmsh.model.getAdjacencies(2, tag)[0]]
-            owners = [air_owners[v] for v in adjacent if v in air_owners]
-            if len(owners) > 1:
-                raise FemRegionMeshError(
-                    f"FEM regions {owners[0]!r} and {owners[1]!r} touch at boundary "
-                    f"face {tag}; shared FEM air boundaries are unsupported in 0.3.6."
-                )
-        for region, volumes, assigned in region_volumes:
-            boundary = _boundary(gmsh, volumes)
+                air_owners[volume] = region["region_id"]
             groups = {
                 physical_name(region["region_id"], group["group_id"], group["kind"]): set().union(
                     *(descendants[(2, tag)] for tag in assigned[group["group_id"]])
                 )
                 for group in region["surface_groups"]
             }
+            moving_claims[region["region_id"]] = {
+                tag: str(group.get("name", group["group_id"]))
+                for group in region["surface_groups"] if group["kind"] == "moving"
+                for tag in groups[physical_name(region["region_id"], group["group_id"], "moving")]
+            }
+            region_volumes.append((region, volumes, groups))
+        # Check all regions before assigning implicit walls or interfaces.
+        # A shared air/air face is neither a wall nor an exterior interface.
+        for tag in _boundary(gmsh, sorted(air_owners)):
+            adjacent = [int(v) for v in gmsh.model.getAdjacencies(2, tag)[0] if int(v) in air_owners]
+            owners = list(dict.fromkeys(air_owners[v] for v in adjacent))
+            if len(adjacent) > 1 and len(owners) == 1:
+                raise FemRegionMeshError(
+                    f"FEM region {region_names[owners[0]]!r} is cut into pieces by another body; "
+                    "make the region one closed solid"
+                )
+            if len(owners) > 1:
+                first, second = owners[:2]
+                if tag in moving_claims[first] and tag in moving_claims[second]:
+                    raise FemRegionMeshError(
+                        f"FEM regions {region_names[first]!r} and {region_names[second]!r} "
+                        f"share the diaphragm {moving_claims[first][tag]!r}. "
+                        "Solving both sides of one diaphragm is not supported yet; "
+                        "declare one of the two chambers."
+                    )
+                raise FemRegionMeshError(
+                    f"FEM regions {region_names[first]!r} and {region_names[second]!r} touch at boundary "
+                    f"face {tag}; shared FEM air boundaries are unsupported in 0.3.6."
+                )
+        for region, volumes, groups in region_volumes:
+            boundary = _boundary(gmsh, volumes)
             moving = set().union(*(
                 groups[physical_name(region["region_id"], g["group_id"], g["kind"])]
                 for g in region["surface_groups"] if g["kind"] == "moving"

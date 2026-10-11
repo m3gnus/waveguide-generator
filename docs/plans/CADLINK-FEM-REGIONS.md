@@ -113,7 +113,7 @@ count and mesh density remain user-selected.
 | F7 | waveguide-generator | preparation implemented; live qualification pending | exterior closure: mesh the exterior with each interface patch conforming to the FEM interface, by fragmenting the shell with the region's interface face so OCC shares the rim |
 | F8 | waveguide-generator | open | engine route: a coupled job through the official BEAT worker (`coupled_fem_bem_lem` / `interior_fem`), outputs mapped to the multi-channel result contract, the `fem_required` refusal lifted for declared regions, `femRegions` advertised by default |
 | F9 | waveguide-generator | open | result route `/api/results/{id}/fem-field`, then mount `FemFieldView` with the field-plane gizmo, a frequency slider, system or channel response, phase animation, and a combined interior and exterior plane |
-| F10 | both | open | electrodynamic drivers on FEM diaphragms (voltage ports, T/S parameters), aligned with [DRIVER-REAR-LOAD](DRIVER-REAR-LOAD.md)'s meshed front chambers |
+| F10 | both | open | electrodynamic drivers on FEM diaphragms (voltage ports, T/S parameters), aligned with [DRIVER-REAR-LOAD](DRIVER-REAR-LOAD.md)'s meshed front chambers; candidate: coupled front and rear chambers sharing one moving diaphragm |
 | F11 | waveguide-generator | open | validation: sealed box against the lumped model; Boundary Lab's Simple_Sealed and compression_driver solved from the same meshes |
 | F12 | wglink | open | live Fusion verification of the dialog and the temporary-component export in a parametric timeline; regions under reduced domains and non-root frames |
 
@@ -183,6 +183,12 @@ interface refuses rather than losing its closure. Nested closed skin components
 refuse with their location and area: a sealed chamber does not border unbounded
 exterior air and requires an explicit modelling decision. Touching regions
 refuse naming both regions rather than acquiring a silent rigid partition.
+In 0.3.6, two regions claiming their shared face as a `moving` group also
+refuse, with a specific message naming both chambers and the diaphragm:
+solving both sides of one diaphragm is not supported yet; declare one of the
+two chambers. Supporting this compression-driver front/rear configuration is
+a candidate for F10. A region fragmented into pieces by another body refuses
+with a single-region message asking for one closed solid.
 Painted sources covered wholly or partly by a region refuse; when a diaphragm
 group owns the same faces, unpaint the source because the region's diaphragm
 group drives it. Thus an aperture's OCC face is

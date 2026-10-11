@@ -69,7 +69,6 @@ def orient_closed_surface(
             triangles[rows] = triangles[rows][:, [0, 2, 1]]
     for rows in components:
         inner = points[triangles[rows]]
-        probe = inner[0, 0]
         for enclosing in components:
             if enclosing is rows:
                 continue
@@ -78,8 +77,12 @@ def orient_closed_surface(
                 inner.max(axis=(0, 1)) > outer.max(axis=(0, 1))
             ):
                 continue
+            # A node shared at a concave vertex has an ambiguous solid angle.
+            # Probe inside a triangle, preferably one with no shared vertices.
+            separate = ~np.isin(triangles[rows], triangles[enclosing]).any(axis=1)
+            probe = inner[np.flatnonzero(separate)[0] if separate.any() else 0].mean(axis=0)
             # The signed solid angle is +/-4*pi inside a closed skin, zero
-            # outside. Unlike a centroid test this also handles concave skins.
+            # outside. Unlike a whole-component centroid this handles concave skins.
             a, b, c = (outer[:, index] - probe for index in range(3))
             la, lb, lc = (np.linalg.norm(v, axis=1) for v in (a, b, c))
             numerator = np.einsum("ij,ij->i", a, np.cross(b, c))

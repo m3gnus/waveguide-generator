@@ -912,6 +912,100 @@ def test_nested_closed_components_refuse_even_with_opposite_seed_windings():
         _closed(points, triangles)
 
 
+@pytest.mark.parametrize("into_body", [False, True])
+def test_components_touching_at_a_concave_vertex_are_not_nested(into_body):
+    # L-shaped prism: the reentrant vertical edge has an interior solid angle
+    # greater than 2*pi. A probe at its middle vertex falsely classifies the
+    # separate tetrahedron in the missing quadrant as enclosed.
+    outline = np.array([[0, 0], [2, 0], [2, 1], [1, 1], [1, 2], [0, 2]])
+    points = np.array([[x, y, z] for z in (0, 1, 2) for x, y in outline], dtype=float)
+    cap = np.array([[0, 1, 3], [1, 2, 3], [0, 3, 5], [3, 4, 5]])
+    sides = []
+    for layer in (0, 6):
+        for a in range(6):
+            b = (a + 1) % 6
+            sides.extend([[layer + a, layer + b, layer + b + 6],
+                          [layer + a, layer + b + 6, layer + a + 6]])
+    outer = np.concatenate([cap, cap + 12, sides])
+    points = np.concatenate([points, [[1.4, 1.1, 1], [1.1, 1.4, 1], [1.1, 1.1, 1.4]]])
+    inner = np.array([[9, 19, 18], [9, 18, 20], [18, 19, 20], [9, 20, 19]])
+    triangles = np.concatenate([outer, inner])
+    oriented = orient_closed_surface(points, triangles, into_body=into_body)
+    assert open_edges(oriented) == 0
+    for component in (oriented[:len(outer)], oriented[len(outer):]):
+        corners = points[component]
+        volume = np.einsum(
+            "ij,ij->i", corners[:, 0], np.cross(corners[:, 1], corners[:, 2])
+        ).sum() / 6
+        assert volume < 0 if into_body else volume > 0
+    assert np.array_equal(
+        oriented, orient_closed_surface(points, oriented, into_body=into_body)
+    )
+
+
+@pytest.mark.parametrize("interface", [True, False], ids=["two-interface-regions", "interior-only-neighbour"])
+def test_two_chambers_sharing_a_moving_diaphragm_have_a_specific_refusal(tmp_path, interface):
+    from server.cadlink.intake import ingest
+    from server.tests.test_fem_regions import _face
+
+    bundle, manifest, first = _coupling_bundle(tmp_path / "returns", cavity_width=60)
+    second = _add_region(bundle, manifest, origin=(0, 30, 0), interface=interface)
+    diaphragm = _face(800, (20, 30, 10), [0, 1, 0], (0, 30, 0), (40, 30, 20))
+    first["surface_groups"][0]["faces"] = [diaphragm]
+    second["surface_groups"][0]["faces"] = [{**diaphragm, "normal": [0, -1, 0]}]
+    (bundle / "wgreturn.json").write_text(json.dumps(manifest))
+    message = (
+        "FEM regions 'Rear chamber' and 'Front chamber' share the diaphragm 'Cone'. "
+        "Solving both sides of one diaphragm is not supported yet; declare one of the two chambers."
+    )
+    with pytest.raises(FemRegionMeshError) as caught:
+        _coupled(bundle, manifest, first, extra_regions=[second])
+    assert message in str(caught.value)
+    with pytest.raises(ingest.IngestRefusal) as caught:
+        _ingest(bundle, tmp_path)
+    assert message in str(caught.value)
+    assert caught.value.stage == "stage 7 meshing"
+
+
+def test_region_split_by_a_rigid_sheet_has_a_single_region_refusal(tmp_path):
+    from server.mesh import fem_coupling
+    from server.mesh.imported import _geometry_fingerprint, _import_occ_root_bodies
+    from hornlab_mesher.step_import import gmsh_surface_geometries, gmsh_surface_tags
+
+    assembly = tmp_path / "partition.step"
+    air = _write_step(tmp_path / "air.step")
+
+    def build():
+        import gmsh
+
+        gmsh.clear()
+        gmsh.model.add("partition")
+        sheet = gmsh.model.occ.addRectangle(0, 0, 0, 20, 30)
+        gmsh.model.occ.rotate([(2, sheet)], 0, 0, 0, 0, 1, 0, -np.pi / 2)
+        gmsh.model.occ.translate([(2, sheet)], 20, 0, 0)
+        gmsh.model.occ.synchronize()
+        gmsh.write(str(assembly))
+        gmsh.clear()
+        gmsh.model.add("partition-reference")
+        _import_occ_root_bodies(gmsh, assembly)
+        reference = gmsh_surface_geometries(gmsh_surface_tags())
+        return fem_coupling.build_coupled_mesh(
+            assembly, [(air, _region())],
+            recipe={"healing_options": [], "normalisation_matrix": np.eye(4).tolist(),
+                    "recentre_translation_mm": [0, 0, 0], "surface_order_reference": reference},
+            expected_geometry_hash=_geometry_fingerprint(reference),
+            normalisation_matrix=np.eye(4).tolist(), sizes=SIZES, exterior_names={},
+        )
+
+    with pytest.raises(FemRegionMeshError) as caught:
+        _run_in_gmsh_session(build)
+    assert (
+        "FEM region 'Rear chamber' is cut into pieces by another body; "
+        "make the region one closed solid"
+    ) in str(caught.value)
+    assert "'Rear chamber' and 'Rear chamber'" not in str(caught.value)
+
+
 @pytest.mark.parametrize("interface", [True, False], ids=["two-interface-regions", "interior-only-neighbour"])
 def test_touching_regions_refuse_by_both_names_before_implicit_walls(tmp_path, interface):
     from server.cadlink.intake import ingest
