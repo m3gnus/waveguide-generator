@@ -11,9 +11,9 @@ from types import SimpleNamespace
 import pytest
 
 from server.cadlink import api
-from server.cadlink import ingest as ingest_module
-from server.cadlink import preparation as preparation_module
-from server.cadlink.ingest import retain_snapshot
+from server.cadlink.intake import ingest as ingest_module
+from server.cadlink.joblane import preparation as preparation_module
+from server.cadlink.intake.ingest import retain_snapshot
 from server.cadlink.operations import PREPARE_AND_SOLVE
 from server.cadlink.wgreturn import WgReturnIntegrityError
 

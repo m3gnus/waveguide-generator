@@ -17,9 +17,10 @@ from typing import Any, Literal, Mapping
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from .fusion_outcomes import RECOVERY_NOTICE_SCHEMA, recovery_document_id, settle_from_heartbeat
-from .store import CadLinkStore
-from .wglink_protocol import FUSION_REQUEST_DELIVERY_VERSION
+from server.cadlink.fusion.fusion_outcomes import RECOVERY_NOTICE_SCHEMA, recovery_document_id, settle_from_heartbeat
+from server.cadlink import ipc
+from server.cadlink.store import CadLinkStore
+from server.cadlink.wglink_protocol import FUSION_REQUEST_DELIVERY_VERSION
 
 router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
 
@@ -62,8 +63,8 @@ def file_evidence(data_dir: Path, *, for_loudness: bool = False) -> Mapping[str,
     Freshness controls settlement; a missing/stale report never erases
     durable recovery.
     """
-    path = data_dir / "ipc" / "wglink" / ".fusion-status.json"
     try:
+        path = ipc.ipc_folder(data_dir) / ".fusion-status.json"
         if path.is_symlink() or path.stat().st_size > 256 * 1024:
             return None
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -98,7 +99,7 @@ def recovery_notices(store: CadLinkStore, data_dir: Path) -> RecoveryNoticesResp
     # binding and an overlapping dismissal cannot revive the same request.
     with store._lock:
         if heartbeat is not None:
-            settle_from_heartbeat(store, heartbeat, data_dir / "ipc" / "wglink", mutations_only=True)
+            settle_from_heartbeat(store, heartbeat, ipc.ipc_folder(data_dir), mutations_only=True)
         document = last_report.get("document") if last_report else None
         document = document if isinstance(document, Mapping) else {}
         active_id = _text(document.get("id"))

@@ -97,7 +97,7 @@ REASON_CODES: Mapping[str, str] = {
     "setup_required": NEEDS_USER_INPUT,
     "findings_need_review": NEEDS_USER_INPUT,
     # An unlinked (CAD-authored) model whose solver frame its project has not
-    # confirmed for this frame requirement (server/cadlink/solver_frame.py).
+    # confirmed for this frame requirement (server/cadlink/interpretation/solver_frame.py).
     "frame_confirmation_required": NEEDS_USER_INPUT,
     "preparation_failed": NEEDS_USER_INPUT,
     "engine_unavailable": NEEDS_USER_INPUT,

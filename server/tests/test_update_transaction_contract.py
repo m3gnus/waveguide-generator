@@ -3818,7 +3818,7 @@ def test_a_cad_preparation_requested_after_restart_approval_is_held(tmp_path: Pa
         app = create_app(data_dir=tmp_path / "data")
         store = app.state.cadlink_store
         from test_cad_preparation import _write_return, _accept
-        from server.cadlink.preparation import retain_operation_snapshot
+        from server.cadlink.joblane.preparation import retain_operation_snapshot
         workspace = tmp_path / "exchange"
         bundle, manifest = _write_return(workspace)
         _accept(store, "cmd-1", bundle, manifest)

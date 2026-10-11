@@ -7,14 +7,16 @@ from types import SimpleNamespace
 import pytest
 
 from server.app import create_app
-from server.cadlink import addin_update, preparation, solve_command
+from server.cadlink.fusion import addin_update
+from server.cadlink.joblane import preparation
+from server.cadlink.intake import solve_command
 from server.cadlink.api import post_reconcile_cad_operation
-from server.cadlink.fusion_delivery import capabilities
+from server.cadlink.fusion.fusion_delivery import capabilities
 from server.cadlink.ipc import ipc_folder
-from server.cadlink.fusion_outcomes import LEGACY_LIVE_CLAIM_MAX_AGE, settle_abandoned_live_claims, settle_from_heartbeat
-from server.cadlink.fusion_status import select_heartbeat
+from server.cadlink.fusion.fusion_outcomes import LEGACY_LIVE_CLAIM_MAX_AGE, settle_abandoned_live_claims, settle_from_heartbeat
+from server.cadlink.fusion.fusion_status import select_heartbeat
 from server.cadlink.store import CadLinkStore
-from server.cadlink.ingest import retained_snapshot_path
+from server.cadlink.intake.ingest import retained_snapshot_path
 from server.cadlink.operations import RECEIVE_SNAPSHOT
 from server.tests.cad_file_harness import STARTUP, _snapshot_digest, wg
 from server.tests.test_cad_preparation import _write_return
@@ -131,7 +133,7 @@ def test_loaded_dev_identity_uses_only_reported_commit(tmp_path, monkeypatch):
 
 
 def test_timed_out_mutation_is_discoverable_as_a_recovery_notice(tmp_path):
-    from server.cadlink.recovery_api import recovery_notices
+    from server.cadlink.fusion.recovery_api import recovery_notices
     store = CadLinkStore.for_data_dir(tmp_path)
     _legacy(store)
     settle_abandoned_live_claims(store, now=NOW)
@@ -281,7 +283,8 @@ def test_snapshot_unreadable_bound_survives_restart_and_file_replay(tmp_path, mo
 
 
 def test_status_settles_and_reports_one_file_heartbeat_when_file_changes(tmp_path, monkeypatch):
-    from server.cadlink import api, fusion_status
+    from server.cadlink import api
+    from server.cadlink.fusion import fusion_status
 
     wall = datetime.now(timezone.utc)
     selections, settled = [], []
@@ -322,7 +325,7 @@ def test_status_settles_and_reports_one_file_heartbeat_when_file_changes(tmp_pat
 
 @pytest.mark.parametrize('state', ['received', 'processing', 'cancelled'])
 def test_legacy_hidden_request_is_restored_only_if_never_claimed(tmp_path, state):
-    from server.cadlink.fusion_delivery import HANDOFFS, recover_staged_fusion_requests
+    from server.cadlink.fusion.fusion_delivery import HANDOFFS, recover_staged_fusion_requests
 
     store = CadLinkStore.for_data_dir(tmp_path)
     try:
@@ -364,7 +367,7 @@ def test_exact_file_evidence_settles_recovery_after_timeout_and_restart(tmp_path
 
 @pytest.mark.parametrize('case', ['malformed', 'oversized', 'schema', 'stale', 'future'])
 def test_file_heartbeat_rejects_invalid_stale_or_future_reports(tmp_path, case):
-    from server.cadlink.fusion_status import FUSION_STATUS_MAX_SKEW, FUSION_STATUS_TTL
+    from server.cadlink.fusion.fusion_status import FUSION_STATUS_MAX_SKEW, FUSION_STATUS_TTL
 
     now = datetime.now(timezone.utc)
     _status(tmp_path, updatedAt=now.isoformat())
@@ -402,7 +405,7 @@ def test_cancelled_legacy_return_with_lost_completion_settles_durably(tmp_path):
 @pytest.mark.parametrize('endpoint_kind', ['locked', 'directory'])
 def test_capabilities_publish_before_stale_endpoint_cleanup(tmp_path, monkeypatch, caplog, endpoint_kind):
     from pathlib import Path
-    from server.cadlink import fusion_delivery
+    from server.cadlink.fusion import fusion_delivery
 
     folder = ipc_folder(tmp_path, create=True)
     endpoint = folder / 'wg-endpoint.json'
@@ -433,7 +436,7 @@ def test_capabilities_publish_before_stale_endpoint_cleanup(tmp_path, monkeypatc
 
 
 def test_endpoint_cleanup_still_runs_after_capability_write_failure(tmp_path, monkeypatch, caplog):
-    from server.cadlink import fusion_delivery
+    from server.cadlink.fusion import fusion_delivery
 
     endpoint = ipc_folder(tmp_path, create=True) / 'wg-endpoint.json'
     endpoint.write_text('{"liveProtocol":1}')
@@ -450,7 +453,7 @@ def test_endpoint_cleanup_still_runs_after_capability_write_failure(tmp_path, mo
 @pytest.mark.parametrize('entrypoint', ['startup', 'return-api', 'status', 'reconcile'])
 def test_file_return_lost_slot_settlement_is_wired_to_backend_entrypoints(tmp_path, entrypoint):
     from server.cadlink import api
-    from server.cadlink.fusion_return import get_return_request
+    from server.cadlink.fusion.fusion_return import get_return_request
 
     app = create_app(data_dir=tmp_path)
     workspace = tmp_path / 'cadlink-folder'  # <data>/workspace is the runs folder

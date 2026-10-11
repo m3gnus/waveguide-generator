@@ -318,7 +318,7 @@ def ingest(
     exposes; omitted, the server default applies.
     """
 
-    from server.cadlink.ingest import ingest_bundle
+    from server.cadlink.intake.ingest import ingest_bundle
     from server.cadlink.store import CadLinkStore
     from server.mesh.gmsh_worker import _run_in_gmsh_session
 

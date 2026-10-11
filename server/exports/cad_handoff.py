@@ -5,7 +5,7 @@ delivery notification: it tells a running (or newly launched) Fusion add-in
 which completed export the user just asked to open.  Keeping it beside the
 bundles makes the protocol work for custom workspaces without another setting.
 
-A handoff is its own file (see ``server/cadlink/fusion_delivery.py``). One that
+A handoff is its own file (see ``server/cadlink/fusion/fusion_delivery.py``). One that
 names an instance is an update of that exact link, and it must name the Fusion
 document and the model state WG measured, which the add-in re-checks
 immediately before it changes anything. One that names no instance is an
@@ -21,13 +21,13 @@ from pathlib import Path
 from typing import Mapping
 import uuid
 
-from server.cadlink.fusion_delivery import (
+from server.cadlink.fusion.fusion_delivery import (
     HANDOFFS,
     PublishedRequest,
     publish_fusion_request,
 )
 from server.cadlink.ipc import IPC_SUBDIRECTORY
-from server.cadlink.fusion_status import read_fusion_status
+from server.cadlink.fusion.fusion_status import read_fusion_status
 from server.cadlink.operations import (
     CANCELLED,
     INSERT_LINK,

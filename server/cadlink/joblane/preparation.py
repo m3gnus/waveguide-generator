@@ -44,7 +44,7 @@ from typing import Any
 
 from server.jobs.models import SolveRequest
 
-from .ingest import (
+from server.cadlink.intake.ingest import (
     IngestRefusal,
     ingest_bundle,
     meshing_semantics_fingerprint,
@@ -52,8 +52,8 @@ from .ingest import (
     retain_snapshot,
     retained_snapshot_path,
 )
-from .isolation import ChildRefusal
-from .operations import (
+from server.cadlink.intake.isolation import ChildRefusal
+from server.cadlink.operations import (
     ACCEPTED,
     CANCEL_REQUESTED,
     NEEDS_USER_INPUT,
@@ -70,20 +70,20 @@ from .operations import (
     TERMINAL_STATES,
     canonical_json,
 )
-from .default_setup import (
+from server.cadlink.joblane.default_setup import (
     DAMAGED_DEFAULTS_MESSAGE,
     DEFAULT_SETTINGS_NOTE,
     SolveDefaultsDamaged,
     default_setup,
 )
-from .project_setup import (
+from server.cadlink.joblane.project_setup import (
     inventory_sha256,
     project_setup,
     solver_selection,
     widen_polar_to_derivation,
 )
 from server.cadlink.intake.readings import snapshot_project, solver_anchor
-from .setup import (
+from server.cadlink.joblane.setup import (
     DEFAULTS_ORIGIN,
     CadSolveSetup,
     setup_content,
@@ -91,13 +91,13 @@ from .setup import (
     solve_request_for,
     validate_setup,
 )
-from .domain_decision import decision_problem
-from .domain_interpretation import (
+from server.cadlink.interpretation.domain_decision import decision_problem
+from server.cadlink.interpretation.domain_interpretation import (
     excitation_problem,
     record_plan_identity,
 )
 from server.cadlink.intake.readings import resolve_domain_plan
-from .solver_frame import (
+from server.cadlink.interpretation.solver_frame import (
     AS_MODELLED,
     CONTRACT as FRAME_CONTRACT,
     REASON as FRAME_CONFIRMATION_REQUIRED,
@@ -113,7 +113,7 @@ from server.cadlink.intake.readings import (
     record_solved_frame_provenance,
     resolve_for_manifest as resolve_solver_frame,
 )
-from .solve_command import (
+from server.cadlink.intake.solve_command import (
     CAD_SOLVE_SUBMISSION_PREFIX,
     RETAIN_INVALID,
     RETAIN_TRANSIENT,
@@ -121,8 +121,8 @@ from .solve_command import (
     SolveOutcomeConflict,
     record_outcome,
 )
-from .store import BindingConflict, CadLinkStore, StaleAttempt
-from .wgreturn import WgReturnError
+from server.cadlink.store import BindingConflict, CadLinkStore, StaleAttempt
+from server.cadlink.wgreturn import WgReturnError
 
 
 logger = logging.getLogger(__name__)

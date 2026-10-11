@@ -1,6 +1,6 @@
 """One domain decision per prepared CAD snapshot (``cad-domain-decision-v1``).
 
-Stage 3, branch 1: ``server/cadlink/domain_decision.py`` states, once, what
+Stage 3, branch 1: ``server/cadlink/interpretation/domain_decision.py`` states, once, what
 an imported model is (full, cut, open sheet, unresolved), where each CAD cut
 is and which side it kept, what WG cut, the planes and fraction the solver
 mirrors, the frame, each source's identity, the evidence and conflicts, the
@@ -25,8 +25,8 @@ from typing import Any
 import numpy as np
 import pytest
 
-from server.cadlink import domain_decision as dd
-from server.cadlink.domain_interpretation import (
+from server.cadlink.interpretation import domain_decision as dd
+from server.cadlink.interpretation.domain_interpretation import (
     cut_shaped_open_rim,
     observe,
     record_plan_identity,
@@ -410,7 +410,7 @@ def _job_request(record: dict[str, Any]) -> Any:
 
 
 def test_preview_plan_preparation_and_job_consume_the_same_decision(tmp_path: Path) -> None:
-    from server.cadlink import preparation
+    from server.cadlink.joblane import preparation
     from server.cadlink.intake.readings import confirm_frame
     from server.jobs.runtime import JobRuntime
     from server.jobs.store import JobStore
@@ -740,7 +740,7 @@ def _pair(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
 def test_swapped_left_and_right_source_tags_are_refused_at_every_entry_point(tmp_path: Path) -> None:
     """Review finding 1: the decision binds which tag is which source identity."""
 
-    from server.cadlink import preparation
+    from server.cadlink.joblane import preparation
     from server.jobs.runtime import JobRuntime, _imported_request_refusal
     from server.jobs.store import JobStore
     from test_cad_preparation_solver_frame import _PreparedStore

@@ -404,7 +404,7 @@ def test_a_design_project_reports_what_cad_calls_it(tmp_path: Path) -> None:
 
 
 def test_ingestion_gives_a_cad_authored_return_a_project(tmp_path: Path) -> None:
-    from server.cadlink.ingest import _resolve_project
+    from server.cadlink.intake.ingest import _resolve_project
 
     store = CadLinkStore(tmp_path / "cadlink.db")
     urn = "urn:adsk.wipprod:dm.lineage:party"
@@ -422,7 +422,7 @@ def test_ingestion_gives_a_cad_authored_return_a_project(tmp_path: Path) -> None
 
 
 def test_a_return_with_no_document_identity_claims_nothing(tmp_path: Path) -> None:
-    from server.cadlink.ingest import _resolve_project
+    from server.cadlink.intake.ingest import _resolve_project
 
     store = CadLinkStore(tmp_path / "cadlink.db")
 

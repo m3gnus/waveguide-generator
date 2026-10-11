@@ -141,7 +141,7 @@ A writer that leaves the domain to WG requires `domain-automatic-v1` and writes
 with nothing else in it. The feature and the automatic kind are paired both
 ways; a declared `full`/`half`/`quarter` never carries the feature. WG
 advertises the feature as `"automaticDomain": 1` in `wg-capabilities.json`
-(`server/cadlink/fusion_delivery.py`), and a writer uses it only then: a WG
+(`server/cadlink/fusion/fusion_delivery.py`), and a writer uses it only then: a WG
 without it refuses the return as an unknown required feature, so a new writer
 is refused visibly by an old WG and never read as a declaration. An absent
 domain keeps its meaning — a full model that WG may cut on its own validated
@@ -172,7 +172,7 @@ the body kept. `export_frame` must be the frame `assembly.step` is written in.
 The reader checks the schema and that the body is an included one; everything
 else is WG's revalidation.
 
-WG decides with one detector (`server/cadlink/domain_interpretation.py`) that
+WG decides with one detector (`server/cadlink/interpretation/domain_interpretation.py`) that
 reads the solve mesh, never the display mesh, and separates observations (per
 CAD plane: which side the geometry is on, a free rim on the plane, faces lying
 in it, sources meeting or bisected by it, open edges elsewhere) from
@@ -187,7 +187,7 @@ conclusions:
 | An opening that is not a cut (a port, a standalone sheet, a horn mouth on the solver's z0) | solved as shown | refused where evidence names it a cut |
 
 A cut is never solved as an open shell in free space. The flip conditions
-(`server/cadlink/cut_recovery.py`) are judged on the observations of the model
+(`server/cadlink/interpretation/cut_recovery.py`) are judged on the observations of the model
 as it arrived: the plane contains the radiation axis and the model is solved in
 the frame it was modelled in (+Z): a cut square to the confirmed axis is a
 front/back cut, and a model confirmed to face another way is refused rather

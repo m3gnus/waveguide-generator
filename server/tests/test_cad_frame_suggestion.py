@@ -17,13 +17,13 @@ from fastapi import FastAPI
 import numpy as np
 import pytest
 
-from server.cadlink import frame_infer
-from server.cadlink.solver_frame import (
+from server.cadlink.interpretation import frame_infer
+from server.cadlink.interpretation.solver_frame import (
     AXES,
     record_solver_frame,
 )
 from server.cadlink.intake.readings import confirm_frame, ensure_frame_suggestion, frame_preview
-from server.cadlink.solver_frame_api import router
+from server.cadlink.intake.solver_frame_api import router
 from server.cadlink.store import CadLinkStore
 from server.mesh.artifact import mesh_text_sha256
 from server.mesh.gmsh_worker import _run_in_gmsh_session
@@ -173,7 +173,7 @@ def test_a_declared_half_facing_elsewhere_is_asked_about(tmp_path: Path) -> None
 def test_the_route_returns_the_suggestion_and_what_is_preselected(tmp_path: Path, monkeypatch) -> None:
     store = CadLinkStore(tmp_path / "cadlink.db")
     record = _record(tmp_path, "+y")
-    monkeypatch.setattr("server.cadlink.solver_frame_api.get_ingestion_record", lambda _store, _id: record)
+    monkeypatch.setattr("server.cadlink.intake.solver_frame_api.get_ingestion_record", lambda _store, _id: record)
     app = FastAPI()
     app.include_router(router)
     app.state.cadlink_store = store

@@ -731,7 +731,7 @@ def test_a_bempp_worker_no_job_can_hold_fails_the_solve_and_frees_the_host(
 
 
 def test_the_cad_child_deadline_takes_the_stubs_interpreter(tree, tmp_path, monkeypatch) -> None:
-    from server.cadlink import isolation
+    from server.cadlink.intake import isolation
 
     stub, pidfile = tree
     seen: list[bool] = []
@@ -891,7 +891,7 @@ def _run_cad_child(isolation: Any, staging: Path) -> None:
 
 
 def test_a_cad_child_whose_job_is_refused_never_runs(tree, tmp_path, monkeypatch) -> None:
-    from server.cadlink import isolation
+    from server.cadlink.intake import isolation
 
     stub, pidfile = tree
     assigned: list[int] = []
@@ -920,7 +920,7 @@ def test_a_refused_breakaway_retry_is_still_confined_before_it_runs(
     so the armed thread must survive it for the retry.
     """
 
-    from server.cadlink import isolation
+    from server.cadlink.intake import isolation
 
     stub, pidfile = tree
     seen: list[bool] = []
@@ -988,7 +988,7 @@ def _pipe_with_an_outside_writer() -> tuple[int, int]:
 
 
 def test_the_cad_drain_does_not_wait_forever_on_a_pipe_held_elsewhere() -> None:
-    from server.cadlink.isolation import _BoundedDrain
+    from server.cadlink.intake.isolation import _BoundedDrain
 
     read_fd, writer = _pipe_with_an_outside_writer()
     # Buffered exactly as Popen's stdout is (bufsize=-1): an unbuffered stream

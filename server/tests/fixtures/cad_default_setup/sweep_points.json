@@ -1,5 +1,5 @@
 {
-  "about": "The default sweep's point count, ceil(log2(end / start) * points_per_octave) + 1. server/cadlink/default_setup.py (sweep_points) and frontend/src/stores/solveDefaults.ts (sweepPoints) must both give exactly these.",
+  "about": "The default sweep's point count, ceil(log2(end / start) * points_per_octave) + 1. server/cadlink/joblane/default_setup.py (sweep_points) and frontend/src/stores/solveDefaults.ts (sweepPoints) must both give exactly these.",
   "cases": [
     { "start_hz": 50, "end_hz": 20000, "points_per_octave": 4, "points": 36 },
     { "start_hz": 200, "end_hz": 20000, "points_per_octave": 4, "points": 28 },

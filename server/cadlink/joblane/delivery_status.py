@@ -19,7 +19,7 @@ from collections import deque
 import threading
 from typing import Any, Mapping
 
-from .identity import utc_now
+from server.cadlink.identity import utc_now
 
 #: The consumer has not been started (an application assembled without its
 #: start-up, or a test driving passes itself).

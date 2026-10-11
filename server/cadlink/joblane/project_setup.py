@@ -22,10 +22,10 @@ from typing import Any
 
 from server.jobs.models import SolveRequest
 
-from .operations import canonical_json
-from .roles import canonical_source_role
-from .setup import CadSolveSetup, setup_content, setup_digest, validate_setup
-from .store import CadLinkStore
+from server.cadlink.operations import canonical_json
+from server.cadlink.roles import canonical_source_role
+from server.cadlink.joblane.setup import CadSolveSetup, setup_content, setup_digest, validate_setup
+from server.cadlink.store import CadLinkStore
 
 
 SOLVER_SELECTION = "solver_selection"

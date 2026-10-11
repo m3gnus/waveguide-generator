@@ -12,9 +12,9 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from server.cadlink.fusion_outcomes import settle_from_heartbeat
+from server.cadlink.fusion.fusion_outcomes import settle_from_heartbeat
 from server.cadlink.operations import request_digest
-from server.cadlink.recovery_api import (
+from server.cadlink.fusion.recovery_api import (
     dismiss_recovery_notice, get_recovery_notices, post_dismiss_recovery_notice, recovery_notices,
 )
 from server.cadlink.store import CadLinkStore
@@ -66,6 +66,34 @@ def test_evidence_alone_settles_recovery_and_requires_exact_ids(tmp_path):
     assert recovery_notices(store, tmp_path).notices == []
     assert store.get_operation("mutation")["state"] == "accepted"
     store.close()
+
+
+@pytest.mark.parametrize("root_kind", ["absolute", "relative", "symlink"])
+def test_recovery_evidence_and_settlement_share_the_resolved_ipc_folder(tmp_path, monkeypatch, root_kind):
+    data = tmp_path / "data"
+    data.mkdir()
+    store = CadLinkStore.for_data_dir(data)
+    accept(store)
+    report(data)
+    root = data
+    if root_kind == "relative":
+        monkeypatch.chdir(tmp_path)
+        root = Path("data")
+    elif root_kind == "symlink":
+        root = tmp_path / "data-alias"
+        try:
+            root.symlink_to(data, target_is_directory=True)
+        except OSError:
+            store.close()
+            pytest.skip("Directory symlinks unavailable")
+    try:
+        notice, = recovery_notices(store, root).notices
+        assert notice.active_document and notice.document_id == "fusion:active"
+        report(data, applying=None, links=[{"operationId": "mutation", "exportId": "export"}])
+        assert recovery_notices(store, root).notices == []
+        assert store.get_operation("mutation")["state"] == "accepted"
+    finally:
+        store.close()
 
 
 def test_dismissal_is_idempotent_durable_and_does_not_claim_repair(tmp_path):
@@ -208,9 +236,9 @@ def test_dismissal_rejects_ids_without_an_accepted_mutation(tmp_path, notice_id)
 
 def test_evidence_request_directories_match_the_delivery_channels(tmp_path):
     import ast
-    from server.cadlink.fusion_outcomes import _visible_request
+    from server.cadlink.fusion.fusion_outcomes import _visible_request
     # Read the file transport constants without assembling the application.
-    source = Path(__file__).parents[1] / "cadlink" / "fusion_delivery.py"
+    source = Path(__file__).parents[1] / "cadlink" / "fusion" / "fusion_delivery.py"
     channels = {node.targets[0].id: ast.literal_eval(node.value.args[0])
                 for node in ast.parse(source.read_text()).body
                 if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
@@ -253,7 +281,7 @@ def test_recovery_routes_work_in_a_separate_process(tmp_path):
     script = """
 import sys
 from pathlib import Path
-from server.cadlink.recovery_api import recovery_notices, dismiss_recovery_notice
+from server.cadlink.fusion.recovery_api import recovery_notices, dismiss_recovery_notice
 from server.cadlink.store import CadLinkStore
 store = CadLinkStore.for_data_dir(Path(sys.argv[1]))
 assert recovery_notices(store, Path(sys.argv[1])).notices[0].id == 'mutation'

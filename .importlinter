@@ -36,7 +36,7 @@ unmatched_ignore_imports_alerting = error
 ignore_imports =
     # cadlink -> exports: existing upward dependency.
     # Legacy use: geometry_hash_for_design.
-    server.cadlink.ingest -> server.exports.geometry_identity
+    server.cadlink.intake.ingest -> server.exports.geometry_identity
     # Legacy use: WgLinkExportRequest, _base_name, _export_wglink_sync.
     server.cadlink.onshape.api -> server.exports.api
     # cadlink -> updates: existing upward dependency.
@@ -61,7 +61,7 @@ ignore_imports =
     server.jobs.runtime.core -> server.updates.restart
     # mesh -> cadlink: existing upward dependency.
     # Legacy use: AS_MODELLED, spec_axis, spec_matrix.
-    server.mesh.imported -> server.cadlink.solver_frame
+    server.mesh.imported -> server.cadlink.interpretation.solver_frame
     # Legacy use: source_physical_name.
     server.mesh.imported -> server.cadlink.wglink_protocol
     # mesh -> solver: existing upward dependency.
@@ -104,6 +104,54 @@ ignore_imports =
     server.solver.polar_arc -> server.jobs.models
     # Legacy use: ChannelCombineSpec, ImportedGeometrySource, SolveRequest.
     server.solver.recombine -> server.jobs.models
+
+# CAD Link lanes (S7-1). Highest to lowest; docs/architecture/CAD-OPERATIONS.md, "Server layout".
+# onshape sits above joblane|fusion and identity above interpretation only because of existing
+# indirect chains through other server packages (onshape.api -> exports.api -> fusion_status;
+# identity -> design.textcfg -> ... -> jobs.models -> interpretation.solver_frame).
+[importlinter:contract:cadlink-lanes]
+name = CAD Link lanes
+type = layers
+containers =
+    server.cadlink
+layers =
+    api
+    onshape
+    joblane | fusion
+    intake
+    store : receipts
+    identity
+    interpretation
+    wgreturn : operations : roles : usage : ipc : build_flags
+    wglink_protocol : limits
+exhaustive = true
+unmatched_ignore_imports_alerting = error
+
+# Interpretation is pure: no store, no lane, directly or through another server package.
+[importlinter:contract:cadlink-interpretation-pure]
+name = CAD interpretation reads no store, directly or through another package
+type = forbidden
+source_modules =
+    server.cadlink.interpretation
+forbidden_modules =
+    server.cadlink.store
+    server.cadlink.receipts
+    server.cadlink.intake
+    server.cadlink.joblane
+    server.cadlink.fusion
+    server.cadlink.onshape
+    server.cadlink.api
+    server.jobs.store
+    server.platform.sqlite
+
+# Replaces server/tests/test_cadlink_import_direction.py (S7-2); same rule, transitive.
+[importlinter:contract:cadlink-preparation-not-shims]
+name = Preparation never imports the job admission shims
+type = forbidden
+source_modules =
+    server.cadlink.joblane.preparation
+forbidden_modules =
+    server.cadlink.joblane.job_shims
 
 [importlinter:contract:contracts-leaf]
 name = Shared contracts import no other server package

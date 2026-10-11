@@ -273,7 +273,7 @@ _SCHEMA = (
     """,
     # The solver frame the user confirmed for an unlinked model, per project
     # (or per snapshot when it belongs to none), under the frame requirement it
-    # was confirmed for (server/cadlink/solver_frame.py). Additive: an older
+    # was confirmed for (server/cadlink/interpretation/solver_frame.py). Additive: an older
     # release never opens it, and no row means unconfirmed -- the table is
     # never filled at open.
     """
@@ -284,7 +284,7 @@ _SCHEMA = (
       confirmed_at TEXT NOT NULL
     )
     """,
-    # The automatic solver-frame suggestion (server/cadlink/frame_infer.py),
+    # The automatic solver-frame suggestion (server/cadlink/interpretation/frame_infer.py),
     # one per snapshot and algorithm version: a new algorithm recomputes, and
     # nothing here ever confirms a frame. Additive, like the table above.
     """
@@ -1425,7 +1425,7 @@ class CadLinkStore:
         up came from (``readings.confirm_frame``).
         """
 
-        from .solver_frame import AXES
+        from server.cadlink.interpretation.solver_frame import AXES
 
         if not key or axis not in AXES:
             raise ValueError("a frame confirmation names a key and one of the solver frame axes")

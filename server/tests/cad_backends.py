@@ -18,12 +18,12 @@ from typing import Any
 
 import pytest
 
-from server.cadlink import ingest as ingest_module
-from server.cadlink.job_shims import run_delivery_pass
-from server.cadlink.preparation import (
+from server.cadlink.intake import ingest as ingest_module
+from server.cadlink.joblane.job_shims import run_delivery_pass
+from server.cadlink.joblane.preparation import (
     PreparationContext,
 )
-from server.cadlink.solve_command import record_outcome
+from server.cadlink.intake.solve_command import record_outcome
 from server.cadlink.store import CadLinkStore
 from server.jobs.cad_intent import CadSolveIntent
 from server.jobs.cad_preparation import CadPreparationHost, job_operation_view
@@ -416,7 +416,7 @@ class JobsHarness(Harness):
         self._loop.run(self._recover_ledger())
 
     async def _recover_ledger(self) -> None:
-        from server.cadlink.job_shims import sweep_pending_solves
+        from server.cadlink.joblane.job_shims import sweep_pending_solves
         await sweep_pending_solves(self.context())
         await self.runtime.wait_cad_preparations()
 

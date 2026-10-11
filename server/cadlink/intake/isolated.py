@@ -1,6 +1,6 @@
 """The two isolated CAD tasks, as ordinary functions the parent can call.
 
-:mod:`server.cadlink.isolation` knows how to run *a* child.  This module knows
+:mod:`server.cadlink.intake.isolation` knows how to run *a* child.  This module knows
 the two the gate actually names -- inspect and mesh -- and what each one is
 allowed to send back.  Callers see plain functions that either return a result
 or raise; the process boundary is an implementation detail of how the answer
@@ -19,7 +19,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
-from server.cadlink.isolation import (
+from server.cadlink.intake.isolation import (
     INSPECT_BUDGET,
     MESH_BUDGET,
     ChildRefusal,
@@ -44,7 +44,7 @@ MESH_STAGE = "stage 7 meshing"
 # no argument, request field, or environment variable that can select it. The
 # real-geometry regression uses the context manager below to ask the disposable
 # child to install one named fixture before importing the mesher's function.
-# The child keeps its own copy of these names (``server.cadlink.child_main``).
+# The child keeps its own copy of these names (``server.cadlink.intake.child_main``).
 _MESH_CHILD_FAULT_FIXTURE: ContextVar[str | None] = ContextVar(
     "mesh_child_fault_fixture", default=None
 )

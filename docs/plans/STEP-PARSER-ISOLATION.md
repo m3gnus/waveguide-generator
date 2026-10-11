@@ -115,12 +115,12 @@ rather than quietly.
 | --- | --- |
 | Downloaded STEP body, 64 MiB | `server/cadlink/onshape/client.py` — streamed, with `Content-Length` refused before the first read |
 | `wgreturn.json`, 1 MiB | `server/cadlink/wgreturn.py`, from `stat()` before the file is read |
-| Records, record length, decoded label | `server/cadlink/step_text.py`, one streaming scan, run in both children |
-| Wall time, resident memory, result and artifact size, concurrency | `server/cadlink/isolation.py` |
+| Records, record length, decoded label | `server/cadlink/intake/step_text.py`, one streaming scan, run in both children |
+| Wall time, resident memory, result and artifact size, concurrency | `server/cadlink/intake/isolation.py` |
 
-Inspect runs `server/cadlink/step_evidence.py`; mesh and viewport run
-`server/mesh/imported.py`. Both go through `server/cadlink/child_main.py`,
-launched once per artifact by `server/cadlink/isolation.py` and never reused.
+Inspect runs `server/cadlink/intake/step_evidence.py`; mesh and viewport run
+`server/mesh/imported.py`. Both go through `server/cadlink/intake/child_main.py`,
+launched once per artifact by `server/cadlink/intake/isolation.py` and never reused.
 The parent still owns the registry, the cache index, and every atomic move.
 
 Two deliberate departures:

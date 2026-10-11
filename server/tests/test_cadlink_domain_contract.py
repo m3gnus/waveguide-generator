@@ -20,10 +20,10 @@ import numpy as np
 import pytest
 
 from server.cadlink.intake import readings
-from server.cadlink import domain_interpretation as di
-from server.cadlink import ingest as ingest_module
-from server.cadlink.fusion_delivery import capabilities
-from server.cadlink.solver_frame import AXES, allowed_axes, axes_in_planes
+from server.cadlink.interpretation import domain_interpretation as di
+from server.cadlink.intake import ingest as ingest_module
+from server.cadlink.fusion.fusion_delivery import capabilities
+from server.cadlink.interpretation.solver_frame import AXES, allowed_axes, axes_in_planes
 from server.cadlink.intake.readings import confirm_frame
 from server.cadlink.wgreturn import WgReturnValidationError, validate_manifest
 from cad_backends import JobsHarness as Harness
@@ -562,12 +562,12 @@ def _interpreted_record(**interpretation: Any) -> dict[str, Any]:
 def test_change_records_an_offered_reading_and_refuses_one_not_offered(tmp_path, monkeypatch) -> None:
     from fastapi import FastAPI
 
-    from server.cadlink.domain_interpretation_api import router
+    from server.cadlink.intake.domain_interpretation_api import router
     from server.cadlink.store import CadLinkStore
     from test_cad_solver_frame_api import _Client
 
     record = _interpreted_record()
-    monkeypatch.setattr("server.cadlink.solver_frame_api.get_ingestion_record", lambda _store, _id: record)
+    monkeypatch.setattr("server.cadlink.intake.solver_frame_api.get_ingestion_record", lambda _store, _id: record)
     app = FastAPI()
     app.state.cadlink_store = CadLinkStore(tmp_path / "cadlink.db")
     app.include_router(router)

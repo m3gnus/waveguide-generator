@@ -33,12 +33,13 @@ from typing import Any
 import pytest
 
 from server.app import create_app
-from server.cadlink import preparation, solve_command
+from server.cadlink.joblane import preparation
+from server.cadlink.intake import solve_command
 from server.cadlink.api import CAD_DELIVERY_ENV
-from server.cadlink.fusion_delivery import CAPABILITIES_FILENAME
+from server.cadlink.fusion.fusion_delivery import CAPABILITIES_FILENAME
 from server.cadlink.ipc import ipc_folder
 from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT
-from server.cadlink.solve_command import SOLVE_REQUESTS_DIRECTORY, collect_solve_deliveries
+from server.cadlink.intake.solve_command import SOLVE_REQUESTS_DIRECTORY, collect_solve_deliveries
 from server.tests.test_cad_preparation import _write_return
 
 FIXTURES = Path(__file__).parent / "fixtures" / "wglink_inbox"

@@ -7,7 +7,7 @@ import textwrap
 
 import pytest
 
-from server.cadlink.fusion_return import RETURN_REQUESTS_DIRECTORY, publish_return_request
+from server.cadlink.fusion.fusion_return import RETURN_REQUESTS_DIRECTORY, publish_return_request
 from server.cadlink.store import CadLinkStore
 
 
@@ -37,7 +37,7 @@ def test_return_request_is_machine_local_and_targets_the_addin_session(tmp_path)
 def test_a_published_request_logs_its_request_id(tmp_path, caplog) -> None:
     import logging
 
-    with caplog.at_level(logging.INFO, logger="server.cadlink.fusion_delivery"):
+    with caplog.at_level(logging.INFO, logger="server.cadlink.fusion.fusion_delivery"):
         _path, request_id = publish_return_request(
             tmp_path,
             CadLinkStore.for_data_dir(tmp_path),
@@ -51,7 +51,7 @@ def test_a_published_request_logs_its_request_id(tmp_path, caplog) -> None:
     assert any(
         request_id in record.getMessage() and "delivery sequence 1" in record.getMessage()
         for record in caplog.records
-        if record.name == "server.cadlink.fusion_delivery"
+        if record.name == "server.cadlink.fusion.fusion_delivery"
     )
 
 
@@ -81,7 +81,7 @@ def _report(tmp_path, request_id="pull-a", outcome="refused", **changes):
 
 
 def test_file_refusal_is_correlated_persisted_once_and_survives_reopen(tmp_path):
-    from server.cadlink.fusion_return import read_return_request
+    from server.cadlink.fusion.fusion_return import read_return_request
 
     store, _path, request_id = _request(tmp_path)
     marker = _report(tmp_path)
@@ -100,7 +100,7 @@ def test_file_refusal_is_correlated_persisted_once_and_survives_reopen(tmp_path)
 
 
 def test_recent_file_outcome_survives_last_request_slot_being_overwritten(tmp_path):
-    from server.cadlink.fusion_return import read_return_request
+    from server.cadlink.fusion.fusion_return import read_return_request
 
     store, _path, request_id = _request(tmp_path)
     _report(tmp_path, diagnostics={"lastRequest": {"channel": "handoff", "correlationId": "other", "outcome": "applied"},
@@ -111,7 +111,7 @@ def test_recent_file_outcome_survives_last_request_slot_being_overwritten(tmp_pa
 
 
 def test_old_command_time_file_can_report_exact_request_outcome_without_claiming_presence(tmp_path):
-    from server.cadlink.fusion_return import read_return_request
+    from server.cadlink.fusion.fusion_return import read_return_request
 
     store, _path, request_id = _request(tmp_path)
     _report(tmp_path, updatedAt="2026-01-01T00:00:00Z")
@@ -124,7 +124,7 @@ def test_old_command_time_file_can_report_exact_request_outcome_without_claiming
     ("superseded", "cancelled", "superseded"), ("discarded", "cancelled", "adapter_not_started"),
 ])
 def test_file_return_outcomes_are_exact_and_acceptance_is_only_adapter_completion(tmp_path, outcome, state, reason):
-    from server.cadlink.fusion_return import read_return_request
+    from server.cadlink.fusion.fusion_return import read_return_request
 
     store, _path, request_id = _request(tmp_path)
     _report(tmp_path, outcome=outcome)
@@ -143,7 +143,7 @@ def test_file_return_outcomes_are_exact_and_acceptance_is_only_adapter_completio
     {"diagnostics": {"lastRequest": {"channel": "returnRequest", "correlationId": "pull-a", "outcome": "unknown"}}},
 ])
 def test_invalid_or_uncorrelated_file_evidence_never_settles_the_wait(tmp_path, changes):
-    from server.cadlink.fusion_return import read_return_request
+    from server.cadlink.fusion.fusion_return import read_return_request
 
     store, path, request_id = _request(tmp_path)
     _report(tmp_path, **changes)
@@ -154,7 +154,7 @@ def test_invalid_or_uncorrelated_file_evidence_never_settles_the_wait(tmp_path, 
 
 @pytest.mark.parametrize("file_kind", ["missing", "malformed", "too large", "symlink"])
 def test_missing_or_unsafe_file_is_not_an_outcome(tmp_path, file_kind):
-    from server.cadlink.fusion_return import read_return_request
+    from server.cadlink.fusion.fusion_return import read_return_request
 
     store, _path, request_id = _request(tmp_path)
     marker = tmp_path / "ipc" / "wglink" / ".fusion-status.json"
@@ -173,7 +173,7 @@ def test_missing_or_unsafe_file_is_not_an_outcome(tmp_path, file_kind):
 def test_exact_http_read_without_coordinator_or_job(tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from server.cadlink.fusion_return import router
+    from server.cadlink.fusion.fusion_return import router
 
     store, _path, request_id = _request(tmp_path)
     _report(tmp_path)
@@ -194,7 +194,7 @@ def test_file_return_owner_operates_and_reopens_in_a_separate_process(tmp_path):
         import sys
         from datetime import datetime, timezone
 
-        from server.cadlink.fusion_return import publish_return_request, read_return_request, router
+        from server.cadlink.fusion.fusion_return import publish_return_request, read_return_request, router
         from server.cadlink.store import CadLinkStore
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
@@ -230,7 +230,7 @@ def test_file_return_owner_operates_and_reopens_in_a_separate_process(tmp_path):
 @pytest.mark.parametrize('seconds,state', [(4, 'rejected'), (6, 'received')])
 def test_return_outcomes_use_the_documented_tighter_future_tolerance(tmp_path, seconds, state):
     from datetime import datetime, timedelta, timezone
-    from server.cadlink.fusion_return import read_return_request
+    from server.cadlink.fusion.fusion_return import read_return_request
 
     store, _path, request_id = _request(tmp_path)
     _report(tmp_path, updatedAt=(datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat())
@@ -279,7 +279,7 @@ def _lost_file_return(tmp_path, *, cancelled=False, age=None):
 
 @pytest.mark.parametrize('cancelled,state', [(False, 'rejected'), (True, 'cancelled')])
 def test_overwritten_last_request_file_return_settles_after_bound_and_restart(tmp_path, cancelled, state):
-    from server.cadlink.fusion_return import read_return_request
+    from server.cadlink.fusion.fusion_return import read_return_request
 
     store, _path, request_id, workspace = _lost_file_return(tmp_path, cancelled=cancelled)
     store.close()
@@ -298,7 +298,7 @@ def test_overwritten_last_request_file_return_settles_after_bound_and_restart(tm
 @pytest.mark.parametrize('progress', ['recent', 'visible', 'publication', 'withdrawal', 'claim', 'export', 'staging', 'reservation', 'unknown-folder'])
 def test_file_return_timeout_preserves_every_progressing_path(tmp_path, progress):
     from datetime import timedelta
-    from server.cadlink.fusion_return import read_return_request
+    from server.cadlink.fusion.fusion_return import read_return_request
 
     store, path, request_id, workspace = _lost_file_return(tmp_path, age=timedelta(seconds=1) if progress == 'recent' else None)
     if progress == 'visible':
@@ -320,7 +320,7 @@ def test_file_return_timeout_preserves_every_progressing_path(tmp_path, progress
 
 
 def test_exact_return_outcome_wins_before_file_timeout(tmp_path):
-    from server.cadlink.fusion_return import read_return_request
+    from server.cadlink.fusion.fusion_return import read_return_request
 
     store, _path, request_id, workspace = _lost_file_return(tmp_path)
     _report(tmp_path, outcome='refused')
@@ -329,7 +329,7 @@ def test_exact_return_outcome_wins_before_file_timeout(tmp_path):
 
 
 def test_old_exact_command_evidence_wins_over_bulk_file_timeout(tmp_path):
-    from server.cadlink.fusion_outcomes import settle_abandoned_file_returns
+    from server.cadlink.fusion.fusion_outcomes import settle_abandoned_file_returns
     from server.cadlink.ipc import ipc_folder
 
     store, _path, request_id, workspace = _lost_file_return(tmp_path)
@@ -342,7 +342,7 @@ def test_old_exact_command_evidence_wins_over_bulk_file_timeout(tmp_path):
 @pytest.mark.parametrize('folder', ['workspace', 'requests', 'returns'])
 def test_unavailable_file_progress_folder_never_implies_timeout(tmp_path, monkeypatch, folder):
     from pathlib import Path
-    from server.cadlink.fusion_return import read_return_request
+    from server.cadlink.fusion.fusion_return import read_return_request
 
     store, path, request_id, workspace = _lost_file_return(tmp_path)
     (workspace / 'wgreturn').mkdir(exist_ok=True)

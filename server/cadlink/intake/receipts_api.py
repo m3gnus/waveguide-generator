@@ -11,7 +11,7 @@ from fastapi import APIRouter, Query, Request
 
 from server.cadlink.intake import returns_folder
 
-from .receipts import receipt_page, with_source_outcome
+from server.cadlink.receipts import receipt_page, with_source_outcome
 
 _SOURCE_LOCK = threading.RLock()
 

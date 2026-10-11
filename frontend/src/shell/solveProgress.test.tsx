@@ -62,7 +62,7 @@ function op(overrides: Partial<OperationProgressLike> = {}): OperationProgressLi
 }
 
 describe('operationStageWord', () => {
-  it('reads server/cadlink/preparation.py stages onto the same words a job uses, monotonically', () => {
+  it('reads server/cadlink/joblane/preparation.py stages onto the same words a job uses, monotonically', () => {
     expect(operationStageWord(op({ state: 'received', stage: null }))).toBe('Received');
     expect(operationStageWord(op({ state: 'received', stage: 'validating' }))).toBe('Received');
     expect(operationStageWord(op({ state: 'processing', stage: 'preparing-mesh' }))).toBe('Preparing mesh');

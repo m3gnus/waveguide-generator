@@ -21,7 +21,7 @@ from typing import Any
 
 import numpy as np
 
-from server.cadlink.frame_infer import SurveyMesh, SurveySource
+from server.cadlink.interpretation.frame_infer import SurveyMesh, SurveySource
 
 #: (role, source_id, predicate(face) -> bool)
 SourceRule = tuple[str, str, Callable[["_Face"], bool]]

@@ -103,7 +103,7 @@ function explainedStaleDetail(status: FusionCadStatus, detail: string): string {
   return explanation ? `${detail} ${explanation}` : detail;
 }
 
-/** Activation verdicts that changed Fusion's WGLink folder (server/cadlink/addin_update.py). */
+/** Activation verdicts that changed Fusion's WGLink folder (server/cadlink/fusion/addin_update.py). */
 const ACTIVATED_VERDICTS = new Set(['installed', 'updated', 'replaced']);
 /** Registry findings that decide whether Fusion loads what WG installed. */
 const REGISTRATION_PROBLEMS = new Set(['duplicate', 'elsewhere', 'manual']);

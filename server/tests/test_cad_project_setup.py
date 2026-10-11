@@ -20,13 +20,13 @@ from typing import Any
 import pytest
 
 from server.cadlink.identity import design_hash
-from server.cadlink.preparation import PreparationInput, prepare_operation
-from server.cadlink.project_setup import (
+from server.cadlink.joblane.preparation import PreparationInput, prepare_operation
+from server.cadlink.joblane.project_setup import (
     inventory_sha256,
     widen_polar_to_derivation,
 )
 from server.cadlink.intake.readings import snapshot_project
-from server.cadlink.setup import solve_request_for, validate_setup
+from server.cadlink.joblane.setup import solve_request_for, validate_setup
 from server.cadlink.wgreturn import read_wgreturn
 from server.design.schema import DesignConfig
 from server.design.textcfg import serialize
@@ -324,7 +324,7 @@ def test_backend_preparation_defaults_older_selection_and_setup_to_fast(harness:
 def test_a_model_with_no_recorded_setup_is_solved_with_wg_defaults_and_remembers_them(
     harness: Harness,
 ) -> None:
-    from server.cadlink.default_setup import DEFAULT_SETTINGS_NOTE
+    from server.cadlink.joblane.default_setup import DEFAULT_SETTINGS_NOTE
 
     b_design, b_lineage = _project(harness, 60.0)
     _select_engine(harness, "metal", "accurate")
@@ -416,7 +416,7 @@ def test_a_damaged_defaults_file_is_wgs_fault_not_the_users(
 ) -> None:
     import logging
 
-    from server.cadlink import default_setup as defaults_module
+    from server.cadlink.joblane import default_setup as defaults_module
 
     damaged = tmp_path / "solve-defaults.json"
     damaged.write_text("{ not json", encoding="utf-8")
@@ -427,7 +427,7 @@ def test_a_damaged_defaults_file_is_wgs_fault_not_the_users(
     _accept(harness.store, "cmd-b", bundle_path, manifest)
 
     try:
-        with caplog.at_level(logging.ERROR, logger="server.cadlink.preparation"):
+        with caplog.at_level(logging.ERROR, logger="server.cadlink.joblane.preparation"):
             summary = harness.prepare("cmd-b")
     finally:
         defaults_module.solve_defaults.cache_clear()
@@ -885,7 +885,7 @@ def test_a_persisting_delivery_failure_is_logged_once_not_every_pass(
 
 
 def test_a_waiting_claim_holds_its_operation_when_a_pass_stops_early(harness: Harness) -> None:
-    from server.cadlink.solve_command import record_outcome
+    from server.cadlink.intake.solve_command import record_outcome
 
     b_design, b_lineage = _project(harness, 60.0)
     _record_setup(harness, b_lineage, _setup())

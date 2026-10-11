@@ -14,8 +14,9 @@ from pathlib import Path
 
 import pytest
 
-from server.cadlink import fusion_delivery, solve_command
-from server.cadlink.solve_command import (
+from server.cadlink.fusion import fusion_delivery
+from server.cadlink.intake import solve_command
+from server.cadlink.intake.solve_command import (
     ACK_FAILURE_PASSES,
     ACK_MAX_FILES,
     record_outcome,
@@ -627,8 +628,8 @@ def test_acknowledgement_writer_preserves_a_sends_retention_failure(data_dir):
 
 @pytest.mark.parametrize("invalid_manifest", [False, True])
 def test_send_acknowledgement_follows_snapshot_retention(data_dir, workspace, store, monkeypatch, invalid_manifest):
-    from server.cadlink.preparation import SNAPSHOT_INVALID_MESSAGE, settle_snapshot_operation
-    from server.cadlink.ingest import retained_snapshot_path
+    from server.cadlink.joblane.preparation import SNAPSHOT_INVALID_MESSAGE, settle_snapshot_operation
+    from server.cadlink.intake.ingest import retained_snapshot_path
     from test_cad_preparation import _write_return
 
     bundle_path, manifest = _write_return(workspace)

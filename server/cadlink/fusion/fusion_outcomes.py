@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 from server.contracts.canonical import canonical_ascii_json
 
-from .operations import (
+from server.cadlink.operations import (
     ACCEPTED,
     CANCELLED,
     CANCEL_REQUESTED,
@@ -26,8 +26,8 @@ from .operations import (
     FUSION_STAGES,
     UPDATE_LINK,
 )
-from .store import CadLinkStore
-from .wglink_protocol import FUSION_REQUEST_DELIVERY_VERSION
+from server.cadlink.store import CadLinkStore
+from server.cadlink.wglink_protocol import FUSION_REQUEST_DELIVERY_VERSION
 
 
 logger = logging.getLogger(__name__)

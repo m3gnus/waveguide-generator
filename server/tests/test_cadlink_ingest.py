@@ -30,7 +30,7 @@ from server.cadlink.api import (
     post_ingest,
 )
 from server.cadlink.identity import SaveIdentity
-from server.cadlink.ingest import (
+from server.cadlink.intake.ingest import (
     IMPORT_MESH_PIPELINE_CONTRACT,
     IMPORT_VIEWPORT_PIPELINE_CONTRACT,
     IngestRefusal,
@@ -272,7 +272,7 @@ def test_ingest_refuses_repeated_design_without_exact_anchor_instance(
         ],
     }
     monkeypatch.setattr(
-        "server.cadlink.ingest.read_wgreturn",
+        "server.cadlink.intake.ingest.read_wgreturn",
         lambda _path, **_kwargs: SimpleNamespace(manifest=manifest),
     )
     store = CadLinkStore(tmp_path / "cadlink.db")
@@ -353,7 +353,7 @@ def test_a_real_source_identity_bundle_survives_into_the_ingest_record(
         meshed.append(args)
         return _built_for_source(source_id)
 
-    monkeypatch.setattr("server.cadlink.ingest.build_imported_mesh_isolated", build)
+    monkeypatch.setattr("server.cadlink.intake.ingest.build_imported_mesh_isolated", build)
     store = CadLinkStore(tmp_path / "cadlink.db")
 
     record = ingest_bundle(
@@ -387,7 +387,7 @@ def test_an_untrimmed_source_id_is_refused_at_stage_1_only_when_identity_is_decl
         meshed.append(args)
         return _built_for_source(source_id)
 
-    monkeypatch.setattr("server.cadlink.ingest.build_imported_mesh_isolated", build)
+    monkeypatch.setattr("server.cadlink.intake.ingest.build_imported_mesh_isolated", build)
     store = CadLinkStore(tmp_path / "cadlink.db")
 
     def ingest() -> dict:
@@ -787,7 +787,7 @@ def test_ingest_refuses_a_return_from_another_active_project(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        "server.cadlink.ingest.read_wgreturn",
+        "server.cadlink.intake.ingest.read_wgreturn",
         lambda _path, **_kwargs: SimpleNamespace(
             manifest={"instances": [{"design_id": "wgd_other"}]},
         ),
@@ -817,7 +817,7 @@ def test_ingest_refuses_a_design_owned_return_when_no_design_is_named(
     """
 
     monkeypatch.setattr(
-        "server.cadlink.ingest.read_wgreturn",
+        "server.cadlink.intake.ingest.read_wgreturn",
         lambda _path, **_kwargs: SimpleNamespace(
             manifest={"instances": [{"design_id": "wgd_tritonia"}]},
         ),
@@ -855,7 +855,7 @@ def test_ingest_refusal_names_a_known_target_design_by_its_registry_filename(
     )
     design_id = saved["identity"].design_id
     monkeypatch.setattr(
-        "server.cadlink.ingest.read_wgreturn",
+        "server.cadlink.intake.ingest.read_wgreturn",
         lambda _path, **_kwargs: SimpleNamespace(
             manifest={"instances": [{"design_id": design_id}]},
         ),
@@ -891,7 +891,7 @@ def test_ingest_still_accepts_a_cad_authored_return_that_names_no_design(
         raise AssertionError("stage 2 was passed")
 
     monkeypatch.setattr(
-        "server.cadlink.ingest.read_wgreturn",
+        "server.cadlink.intake.ingest.read_wgreturn",
         lambda _path, **_kwargs: SimpleNamespace(
             manifest={
                 "instances": [{"instance_id": "anchor", "design_id": None}],
@@ -901,7 +901,7 @@ def test_ingest_still_accepts_a_cad_authored_return_that_names_no_design(
         ),
     )
     monkeypatch.setattr(
-        "server.cadlink.ingest.validate_imported_sizes", refuse_at_the_next_stage
+        "server.cadlink.intake.ingest.validate_imported_sizes", refuse_at_the_next_stage
     )
 
     with pytest.raises(AssertionError, match="stage 2 was passed"):
@@ -1647,7 +1647,7 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
         "metadata": {"numpy_array": np.array([1, 2])},
         "integrity": {"valid": np.bool_(True)},
     }
-    monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path, **_kwargs: bundle)
+    monkeypatch.setattr("server.cadlink.intake.ingest.read_wgreturn", lambda _path, **_kwargs: bundle)
     isolated_integrity: dict[str, object] = {}
 
     def build_isolated(*_args, **kwargs):
@@ -1662,7 +1662,7 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
         return build_isolated(*args, **kwargs)
 
     monkeypatch.setattr(
-        "server.cadlink.ingest.build_imported_mesh_isolated", counted_build_isolated
+        "server.cadlink.intake.ingest.build_imported_mesh_isolated", counted_build_isolated
     )
     record = ingest_bundle(
         bundle_path,
@@ -1804,9 +1804,9 @@ def test_visual_mesh_failure_is_advisory_and_does_not_create_healing_finding(
         "integrity": {"valid": True},
         "viewport_mesh": {"available": False, "reason": "visual tessellation failed"},
     }
-    monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path, **_kwargs: bundle)
+    monkeypatch.setattr("server.cadlink.intake.ingest.read_wgreturn", lambda _path, **_kwargs: bundle)
     monkeypatch.setattr(
-        "server.cadlink.ingest.build_imported_mesh_isolated", lambda *_args, **_kwargs: built
+        "server.cadlink.intake.ingest.build_imported_mesh_isolated", lambda *_args, **_kwargs: built
     )
     record = ingest_bundle(
         bundle_path,
@@ -2241,7 +2241,7 @@ def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
     )
 
     # A CAD-authored model solves only once its project confirmed the frame it
-    # was meshed in (server/cadlink/solver_frame.py); this one was modelled
+    # was meshed in (server/cadlink/interpretation/solver_frame.py); this one was modelled
     # along +z and prepared as modelled.
     from server.cadlink.intake.readings import confirm_frame
 
@@ -2291,7 +2291,7 @@ def test_an_isolated_mesh_refusal_publishes_nothing_and_poisons_no_cache(
     to the next import as though it were an artifact.
     """
 
-    from server.cadlink.isolation import ChildRefusal
+    from server.cadlink.intake.isolation import ChildRefusal
 
     bundle_path = tmp_path / "fixture.wgreturn"
     bundle_path.mkdir()
@@ -2325,8 +2325,8 @@ def test_an_isolated_mesh_refusal_publishes_nothing_and_poisons_no_cache(
             "stopped with its descendants",
         )
 
-    monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path, **_kwargs: bundle)
-    monkeypatch.setattr("server.cadlink.ingest.build_imported_mesh_isolated", refuse)
+    monkeypatch.setattr("server.cadlink.intake.ingest.read_wgreturn", lambda _path, **_kwargs: bundle)
+    monkeypatch.setattr("server.cadlink.intake.ingest.build_imported_mesh_isolated", refuse)
 
     store = CadLinkStore(tmp_path / "cadlink.db")
     data_dir = tmp_path / "data"

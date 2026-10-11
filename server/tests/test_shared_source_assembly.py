@@ -18,7 +18,7 @@ import pytest
 from hornlab_mesher.source_contour import ContourDrive, cone, dome, flat
 from hornlab_mesher.source_assembly import SourceAssembly
 from hornlab_mesher.assembly_artifact import export_assembly
-from server.cadlink.native_source import ingest_native_source, read_native_source
+from server.cadlink.intake.native_source import ingest_native_source, read_native_source
 from server.cadlink.store import CadLinkStore
 from server.contracts.source_contour import validate_contour_request
 from server.jobs.models import SolveRequest, ChannelFilterSpec

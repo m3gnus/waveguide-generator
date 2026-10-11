@@ -43,9 +43,9 @@ import time
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 import uuid
 
-from .ipc import IPC_SUBDIRECTORY, ipc_folder
-from .identity import utc_now
-from .operations import (
+from server.cadlink.ipc import IPC_SUBDIRECTORY, ipc_folder
+from server.cadlink.identity import utc_now
+from server.cadlink.operations import (
     ACCEPTED,
     PREPARE_AND_SOLVE,
     RECEIVE_SNAPSHOT,
@@ -58,7 +58,7 @@ from .operations import (
 from server.platform.private_paths import ensure_private_directory
 
 if TYPE_CHECKING:
-    from .store import CadLinkStore
+    from server.cadlink.store import CadLinkStore
 
 
 # What a WGLink older than delivery version 3 writes: the single slot, and
@@ -1159,7 +1159,7 @@ def collect_solve_deliveries(
                 logger.debug("Could not publish a delivered operation.", exc_info=True)
 
     def refused(refusal: Mapping[str, Any], claim_id: str) -> dict[str, Any]:
-        from .receipts import record_refusal
+        from server.cadlink.receipts import record_refusal
 
         # Persist the UUID rename before tying a durable receipt to it. A
         # power cut must not restore the original slot with a different UUID.
@@ -1183,7 +1183,7 @@ def collect_solve_deliveries(
     def consume(claim: Path, *, quiet: bool = False, dir_fd: int | None = None) -> bool:
         if not _acknowledge(claim, quiet=quiet, dir_fd=dir_fd):
             return False
-        from .receipts import forget_claim
+        from server.cadlink.receipts import forget_claim
         # A valid delivery initializes the store through accept_delivery too.
         forget_claim(store, claim.name)
         return True

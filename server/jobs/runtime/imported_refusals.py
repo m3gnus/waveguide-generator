@@ -6,14 +6,14 @@ import asyncio
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
-from server.cadlink.domain_decision import (
+from server.cadlink.interpretation.domain_decision import (
     MISMATCH_CODE as DOMAIN_DECISION_MISMATCH,
     decision_mismatch_message,
     decision_problem,
     decision_refusal,
     job_decision_problem,
 )
-from server.cadlink.domain_interpretation import (
+from server.cadlink.interpretation.domain_interpretation import (
     cut_shaped_open_rim,
     has_rigid_rim_observations,
     observe_record_mesh,
@@ -46,7 +46,7 @@ class ImportedSolveRefusal(ValueError):
 def _imported_decision_refusal(record: Mapping[str, Any] | None) -> tuple[str, str] | None:
     """Refuse a record whose sealed domain decision does not describe it.
 
-    Ingest decides a snapshot's domain once (``server/cadlink/domain_decision.py``)
+    Ingest decides a snapshot's domain once (``server/cadlink/interpretation/domain_decision.py``)
     and every submission solves exactly that decision: the planes it mirrors,
     the mesh and observations it was made on, its frame. A record from an
     earlier build carries none and is judged as before.
@@ -99,7 +99,7 @@ def _imported_side_identity_refusal(record: Mapping[str, Any] | None) -> tuple[s
     precut = sorted(planes - wg_cut)
     if not precut:
         return None
-    from server.cadlink.cut_recovery import side_of_source
+    from server.cadlink.interpretation.cut_recovery import side_of_source
 
     for source in record.get("sources") or ():
         side = side_of_source(source) if isinstance(source, Mapping) else None

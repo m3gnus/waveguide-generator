@@ -158,7 +158,7 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
  * It never claims the displayed model is Fusion's latest unless the add-in's
  * measurement is of the revision Fusion is at (`observationFreshness`
  * `current`, or `unknown`: an add-in older than the revision tokens, whose
- * heartbeat measured what it published -- see server/cadlink/fusion_status.py.
+ * heartbeat measured what it published -- see server/cadlink/fusion/fusion_status.py.
  * `unknown` is not an incompatible add-in). An older snapshot stays solvable on
  * purpose; this line only says so.
  */

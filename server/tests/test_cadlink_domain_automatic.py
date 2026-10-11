@@ -5,7 +5,7 @@ narrowed on 2026-09-22). A model that is already cut is mirrored with
 recorded evidence of the cut -- a declaration, an earlier explicit or
 provenance-backed interpretation of the same lineage, or cut provenance the
 add-in recorded -- and, since stage 3 branch 2, recovered from its geometry
-alone when every flip condition holds (``server/cadlink/cut_recovery.py``;
+alone when every flip condition holds (``server/cadlink/interpretation/cut_recovery.py``;
 a negative-side cut by reflecting its mesh). Any other open cut is refused at
 solve, naming the condition it failed. Nothing here asks.
 
@@ -26,7 +26,7 @@ from typing import Any, Callable
 import numpy as np
 import pytest
 
-from server.cadlink.ingest import IngestRefusal, ingest_bundle
+from server.cadlink.intake.ingest import IngestRefusal, ingest_bundle
 from server.cadlink.store import CadLinkStore
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 from test_cadlink_ingest_symmetry import _count_step_shell_bodies, _write_horn_step
@@ -1088,7 +1088,7 @@ def test_an_open_half_with_another_body_on_the_plane_is_still_refused(
 def test_a_cut_through_a_winged_shell_is_refused(tmp_path: Path) -> None:
     """A side wing leaves the cut section at about 70% of the shell's width."""
 
-    from server.cadlink.domain_interpretation import SPANNING_RIM_FRACTION
+    from server.cadlink.interpretation.domain_interpretation import SPANNING_RIM_FRACTION
     from server.jobs.runtime import _imported_open_half_refusal
 
     # The x=0 rim is 80 mm wide; the attached shell plus wing is 115 mm.
@@ -1107,7 +1107,7 @@ def test_a_cut_through_a_winged_shell_is_refused(tmp_path: Path) -> None:
 def test_a_curved_source_sheet_edged_on_the_plane_is_not_a_shell_cut(tmp_path: Path) -> None:
     """Its straight edges span the box on x = 0; only rigid edges can be a cut."""
 
-    from server.cadlink.domain_interpretation import observe_record_mesh
+    from server.cadlink.interpretation.domain_interpretation import observe_record_mesh
     from server.jobs.runtime import _imported_open_half_refusal
 
     record = _ingest(_bundle(tmp_path, "curved-sheet", _curved_source_sheet, _curved_face), tmp_path / "data")

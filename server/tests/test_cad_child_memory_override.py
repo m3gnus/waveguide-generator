@@ -1,7 +1,7 @@
 """The dense-solver memory override reaches the isolated CAD child.
 
 Imported CAD geometry is meshed, and its dense-solver ceiling enforced, inside
-the isolated child (``server/cadlink/isolated.py`` ->
+the isolated child (``server/cadlink/intake/isolated.py`` ->
 ``server/mesh/imported.py``). That child's environment is an allowlist, so
 until the two memory variables were on it an operator's
 ``WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES`` held for parametric designs and was
@@ -15,7 +15,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from server.cadlink.isolation import child_environment
+from server.cadlink.intake.isolation import child_environment
 from server.mesh.builder import (
     DENSE_SOLVER_MEMORY_LIMIT_ENV,
     DENSE_SOLVER_MEMORY_LIMIT_UNSAFE_ENV,

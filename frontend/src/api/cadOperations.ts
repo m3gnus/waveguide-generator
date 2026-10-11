@@ -179,7 +179,7 @@ export function putSolverSelection(
 }
 
 /** A taken inbox file WG refused that has no operation row of its own
- * (server/cadlink/solve_command.py `inbox_refusal`). */
+ * (server/cadlink/intake/solve_command.py `inbox_refusal`). */
 export interface CadInboxRefusal {
   operationId: string | null;
   file: string;
@@ -187,7 +187,7 @@ export interface CadInboxRefusal {
   at: string;
 }
 
-/** WG's request consumer (server/cadlink/delivery_status.py). */
+/** WG's request consumer (server/cadlink/joblane/delivery_status.py). */
 export interface CadDeliveryStatus {
   consumer: 'running' | 'disabled' | 'stopped' | 'not_started';
   /** Why the last completed pass started nothing, or null when it was idle. */

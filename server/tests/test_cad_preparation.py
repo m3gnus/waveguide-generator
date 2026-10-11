@@ -25,24 +25,24 @@ from typing import Any
 
 import pytest
 
-from server.cadlink import ingest as ingest_module
-from server.cadlink import preparation as preparation_module
-from server.cadlink.ingest import read_snapshot, retain_snapshot
-from server.cadlink.isolation import ChildRefusal
+from server.cadlink.intake import ingest as ingest_module
+from server.cadlink.joblane import preparation as preparation_module
+from server.cadlink.intake.ingest import read_snapshot, retain_snapshot
+from server.cadlink.intake.isolation import ChildRefusal
 from server.cadlink.operations import (
     PREPARE_AND_SOLVE,
     prepare_and_solve_request,
     request_digest,
 )
-from server.cadlink.preparation import (
+from server.cadlink.joblane.preparation import (
     PreparationInput,
     operation_summary,
     prepare_operation,
     recover_operations,
     retain_operation_snapshot,
 )
-from server.cadlink.setup import setup_content, setup_digest, validate_setup
-from server.cadlink.solve_command import collect_solve_deliveries
+from server.cadlink.joblane.setup import setup_content, setup_digest, validate_setup
+from server.cadlink.intake.solve_command import collect_solve_deliveries
 from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import WgReturnError, read_wgreturn
 
@@ -223,7 +223,7 @@ def test_a_solve_is_prepared_from_the_retained_snapshot_and_submitted_once(harne
 
 
 def test_a_first_cad_authored_model_is_solved_with_wg_default_settings(harness: Harness) -> None:
-    from server.cadlink.default_setup import DEFAULT_SETTINGS_NOTE
+    from server.cadlink.joblane.default_setup import DEFAULT_SETTINGS_NOTE
 
     _received(harness)
 
@@ -656,7 +656,7 @@ def test_the_startup_handler_recovers_through_the_jobs_database_alone(harness: H
     _received(harness)
     # The keyed job is durable; the ledger acceptance has not committed yet.
     harness.runtime._ensure_prep_lane = lambda: None
-    from server.cadlink.job_shims import accept_operation_solve
+    from server.cadlink.joblane.job_shims import accept_operation_solve
     original = harness.store.record_outcome
     harness.store.record_outcome = lambda *args, **kw: (_ for _ in ()).throw(RuntimeError("cut"))
     with pytest.raises(RuntimeError, match="cut"):
@@ -930,7 +930,7 @@ def _old_installation(path: Path) -> None:
     for command_id, state in (("cmd-done", "accepted"), ("cmd-refused", "refused"), ("cmd-open", None)):
         _accept(store, command_id, f"wgreturn/{command_id}.wgreturn", "sha256:" + "a" * 64)
         if state is not None:
-            from server.cadlink.solve_command import record_outcome
+            from server.cadlink.intake.solve_command import record_outcome
 
             record_outcome(
                 store, command_id, state=state,
@@ -1388,7 +1388,7 @@ def test_retaining_again_does_not_accept_a_copy_that_is_not_the_return_it_names(
     a different bundle left at this digest's path.
     """
 
-    from server.cadlink.solve_command import RETAINED
+    from server.cadlink.intake.solve_command import RETAINED
 
     _bundle_path, manifest = _received(harness)
     workspace = harness.workspace.resolve()
@@ -1835,7 +1835,7 @@ def _claims(requests: Path) -> list[str]:
 
 
 def _retention_passes(monkeypatch, passes: int) -> None:
-    from server.cadlink import solve_command
+    from server.cadlink.intake import solve_command
 
     # raising=False: the bound is what acknowledging after retention introduced.
     monkeypatch.setattr(solve_command, "RETENTION_PASSES", passes, raising=False)
@@ -1874,7 +1874,7 @@ def test_a_claim_whose_return_stays_unreadable_is_acknowledged_at_the_bound(
     (harness.workspace / bundle_path).rename(harness.workspace / "gone")
     requests = _deliver_file(harness, bundle_path, manifest)
 
-    with caplog.at_level(logging.INFO, logger="server.cadlink.solve_command"):
+    with caplog.at_level(logging.INFO, logger="server.cadlink.intake.solve_command"):
         for _kept in range(2):
             _collect(harness)
             assert len(_claims(requests)) == 1
@@ -2051,10 +2051,10 @@ def test_each_attempt_logs_its_operation_and_generation(harness: Harness, caplog
         return any(
             all(part in record.getMessage() for part in parts)
             for record in caplog.records
-            if record.name == "server.cadlink.preparation"
+            if record.name == "server.cadlink.joblane.preparation"
         )
 
-    with caplog.at_level(logging.INFO, logger="server.cadlink.preparation"):
+    with caplog.at_level(logging.INFO, logger="server.cadlink.joblane.preparation"):
         assert harness.prepare()["reason"] == "setup_required"
         assert harness.prepare(setup_revision_id=_revision(harness.store, _setup()))["state"] == "accepted"
 
@@ -2160,7 +2160,7 @@ def test_the_delivery_loop_starts_nothing_while_an_update_restart_is_pending(
     harness: Harness,
 ) -> None:
     from server.cadlink.api import _preparation_context
-    from server.cadlink.job_shims import run_delivery_pass
+    from server.cadlink.joblane.job_shims import run_delivery_pass
     from server.updates.restart import RestartApproval
 
     first_path, first_manifest = _write_return(harness.workspace, "first.wgreturn")
@@ -2214,7 +2214,7 @@ def test_a_press_while_an_update_restart_is_approved_reports_each_lifecycle(
 def test_an_update_restart_approved_while_a_pass_collects_starts_nothing(
     harness: Harness, monkeypatch
 ) -> None:
-    from server.cadlink import job_shims
+    from server.cadlink.joblane import job_shims
 
     bundle_path, manifest = _write_return(harness.workspace)
     _deliver_file(harness, bundle_path, manifest)
@@ -2273,7 +2273,7 @@ def test_a_solve_dismissed_while_an_update_restart_held_it_is_never_queued_again
     harness: Harness,
 ) -> None:
     from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING as HELD
-    from server.cadlink.preparation import requeue_restart_parked
+    from server.cadlink.joblane.preparation import requeue_restart_parked
 
     _received(harness)
     generation = harness.store.claim("cmd-1", 0)
@@ -2406,13 +2406,13 @@ def test_a_needs_user_input_finish_logs_the_refusal_message(harness: Harness, ca
 
     _received(harness)
     harness.submit_error = Refused("BEAT CUDA solves CAD returns only in Accurate. Choose Accurate, or Metal / AUTO.")
-    with caplog.at_level(logging.INFO, logger="server.cadlink.preparation"):
+    with caplog.at_level(logging.INFO, logger="server.cadlink.joblane.preparation"):
         harness.prepare(setup_revision_id=_revision(harness.store, _setup(engine="metal")))
 
     finished = [
         record.getMessage()
         for record in caplog.records
-        if record.name == "server.cadlink.preparation" and "finished needs_user_input" in record.getMessage()
+        if record.name == "server.cadlink.joblane.preparation" and "finished needs_user_input" in record.getMessage()
     ]
     assert len(finished) == 1
     assert "engine_cannot_solve_return" in finished[0]

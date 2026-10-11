@@ -2,7 +2,7 @@
 
 The producer API and canonical model are documented in the mesher's
 `docs/source-contours.md`. This coordinated additive contract uses
-`server.cadlink.native_source.ingest_native_source` with `CadLinkStore`, a data
+`server.cadlink.intake.native_source.ingest_native_source` with `CadLinkStore`, a data
 directory and `ImportedMeshSizes`. It publishes a normal immutable ingestion
 ID usable by the existing imported solve job route. No managed CAD-return
 manifest or `linked_throat` disc is fabricated.

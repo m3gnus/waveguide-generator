@@ -70,7 +70,7 @@ from typing import Any
 
 import numpy as np
 
-from .wgreturn import DOCUMENT_UP_AXES, DOCUMENT_UP_FEATURE
+from server.cadlink.wgreturn import DOCUMENT_UP_AXES, DOCUMENT_UP_FEATURE
 
 
 CONTRACT_V1 = "cad-solver-frame-v1"
@@ -274,7 +274,7 @@ def allowed_axes(
       lying in every plane, and a reduced domain is then +Z only until M1d.
     """
 
-    from .wgreturn import domain_kind
+    from server.cadlink.wgreturn import domain_kind
 
     if domain_kind(manifest) == "declared":
         return (AS_MODELLED,)
@@ -388,7 +388,7 @@ def automatic_solve_axis(
     An ``ask`` or ``unavailable`` suggestion never qualifies.
     """
 
-    from .frame_infer import STATUS_AUTOMATIC
+    from server.cadlink.interpretation.frame_infer import STATUS_AUTOMATIC
 
     if suggestion is None or suggestion.get("status") != STATUS_AUTOMATIC:
         return None

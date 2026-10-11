@@ -16,8 +16,9 @@ from typing import Any
 import pytest
 
 from server.cadlink import ipc
-from server.cadlink import fusion_delivery, solve_command
-from server.cadlink.solve_command import (
+from server.cadlink.fusion import fusion_delivery
+from server.cadlink.intake import solve_command
+from server.cadlink.intake.solve_command import (
     CLAIM_PREFIX,
     SOLVE_REQUESTS_DIRECTORY,
     collect_solve_deliveries,
@@ -98,7 +99,7 @@ def test_an_oversize_request_is_refused_logged_and_removed(
     store = CadLinkStore.for_data_dir(data_dir)
     refused: list[dict[str, Any]] = []
     try:
-        with caplog.at_level(logging.WARNING, logger="server.cadlink.solve_command"):
+        with caplog.at_level(logging.WARNING, logger="server.cadlink.intake.solve_command"):
             collect_solve_deliveries(data_dir, store, refuse=refused.append)
     finally:
         store.close()
@@ -144,7 +145,7 @@ def test_a_regular_file_swapped_to_a_fifo_is_refused_without_blocking(
 import os
 from pathlib import Path
 import stat
-from server.cadlink.solve_command import _read_payload, _UnsafePayload
+from server.cadlink.intake.solve_command import _read_payload, _UnsafePayload
 
 request = Path({str(request)!r})
 request.write_text('{{}}', encoding='utf-8')

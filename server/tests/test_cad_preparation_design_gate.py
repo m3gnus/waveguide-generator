@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from server.cadlink import ingest as ingest_module
+from server.cadlink.intake import ingest as ingest_module
 from server.cadlink.intake.readings import snapshot_project
 from server.cadlink.intake.readings import confirm_frame
 from server.design.textcfg import parse

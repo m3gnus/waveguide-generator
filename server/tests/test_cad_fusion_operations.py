@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from server.cadlink import fusion_delivery
-from server.cadlink.fusion_delivery import expire_unstarted_insert_handoffs
-from server.cadlink.fusion_delivery import recover_staged_fusion_requests
+from server.cadlink.fusion import fusion_delivery
+from server.cadlink.fusion.fusion_delivery import expire_unstarted_insert_handoffs
+from server.cadlink.fusion.fusion_delivery import recover_staged_fusion_requests
 from server.cadlink.operations import request_digest
-from server.cadlink.fusion_return import publish_return_request
+from server.cadlink.fusion.fusion_return import publish_return_request
 from server.cadlink.store import CadLinkStore
 from server.exports.cad_handoff import publish_fusion_handoff
 

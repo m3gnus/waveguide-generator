@@ -9,8 +9,8 @@ import sqlite3
 import pytest
 
 from server.cadlink.operations import request_digest
-from server.cadlink.preparation import retain_operation_snapshot
-from server.cadlink.solve_command import (
+from server.cadlink.joblane.preparation import retain_operation_snapshot
+from server.cadlink.intake.solve_command import (
     SOLVE_REQUESTS_DIRECTORY,
     SolveOutcomeConflict,
     _deliveries,

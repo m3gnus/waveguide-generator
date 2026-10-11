@@ -1257,7 +1257,7 @@ def test_current_report_acknowledgement_and_imported_retry(tmp_path: Path) -> No
 def _unlinked_changes(axis: str | None = "+z") -> dict[str, Any]:
     """A record prepared from a return with no WG instance (CAD-authored)."""
 
-    from server.cadlink.solver_frame import CONTRACT, frame_matrix
+    from server.cadlink.interpretation.solver_frame import CONTRACT, frame_matrix
 
     normalisation: dict[str, Any] = {
         "anchor_instance_id": None,
@@ -1340,7 +1340,7 @@ def test_an_unlinked_record_with_no_confirmed_frame_is_refused_at_submission(
 def test_a_legacy_unlinked_record_is_refused_even_when_the_project_confirmed(
     tmp_path: Path,
 ) -> None:
-    from server.cadlink.solver_frame import CONTRACT
+    from server.cadlink.interpretation.solver_frame import CONTRACT
 
     async def scenario() -> None:
         runtime, ingest_id, _ = await _runtime_fixture(tmp_path, _unlinked_changes(axis=None))
@@ -1392,7 +1392,7 @@ def test_a_queued_unlinked_job_runs_in_its_own_frame_after_a_later_confirmation(
 ) -> None:
     """Execution never re-reads confirmations: a queued job keeps the axis it was submitted in."""
 
-    from server.cadlink.solver_frame import frame_matrix
+    from server.cadlink.interpretation.solver_frame import frame_matrix
     from server.cadlink.intake.readings import confirm_frame
 
     gate = asyncio.Event()

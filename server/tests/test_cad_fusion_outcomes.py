@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from server.cadlink.fusion_outcomes import settle_from_heartbeat
+from server.cadlink.fusion.fusion_outcomes import settle_from_heartbeat
 from server.cadlink.operations import request_digest
 from server.cadlink.store import CadLinkStore
 

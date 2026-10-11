@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from server.cadlink.fusion_status import FUSION_STATUS_TTL, addin_declares_inbox_transfer
+from server.cadlink.fusion.fusion_status import FUSION_STATUS_TTL, addin_declares_inbox_transfer
 from server.tests.test_fusion_status import NOW, _link, _read, _write_status
 
 QUIET = NOW - FUSION_STATUS_TTL - timedelta(minutes=5)

@@ -24,8 +24,8 @@ from typing import Any, Callable
 
 import pytest
 
-from server.cadlink.fusion_return import publish_return_request
-from server.cadlink.solve_command import collect_solve_deliveries
+from server.cadlink.fusion.fusion_return import publish_return_request
+from server.cadlink.intake.solve_command import collect_solve_deliveries
 from server.cadlink.store import CadLinkStore
 from server.exports.cad_handoff import UPDATE_TARGET_REQUIRED, publish_fusion_handoff
 

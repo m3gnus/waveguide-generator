@@ -783,7 +783,7 @@ def test_a_job_reads_in_the_operations_vocabulary(
 
 
 def test_a_job_solved_with_wgs_defaults_says_so_in_the_operations_words() -> None:
-    from server.cadlink.default_setup import DEFAULT_SETTINGS_NOTE
+    from server.cadlink.joblane.default_setup import DEFAULT_SETTINGS_NOTE
 
     view = job_operation_view({
         "id": "job-1", "status": "queued", "stage": "queued", "started_at": None,

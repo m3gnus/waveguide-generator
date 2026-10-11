@@ -489,7 +489,7 @@ def create_router(data_dir: Path) -> APIRouter:
         model, drives, _ = native_assembly(body)
         try:
             from hornlab_mesher.assembly_artifact import export_assembly
-            from server.cadlink.native_source import ingest_native_source
+            from server.cadlink.intake.native_source import ingest_native_source
         except ImportError as exc:
             raise HTTPException(
                 503, "This mesher does not support shared horn and woofer geometry."

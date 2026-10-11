@@ -3,7 +3,7 @@ import type { DomainReading } from './domainInterpretation';
 
 /**
  * The one domain decision WG makes about an imported model
- * (`server/cadlink/domain_decision.py`, contract `cad-domain-decision-v1`):
+ * (`server/cadlink/interpretation/domain_decision.py`, contract `cad-domain-decision-v1`):
  * what the model is, which planes the solver mirrors, what was reflected, and
  * the frame. The ingestion record seals it (`domain_decision`), every
  * submission checks it, and a job records its summary

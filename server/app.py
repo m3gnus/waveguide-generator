@@ -33,7 +33,7 @@ from server.exports import mount_exports
 from server.jobs import mount_jobs
 from server.integration import mount_integration
 from server.mesh.api import mount_solver_mesh
-from server.cadlink.addin_update import shutdown_addin_refresh, start_addin_refresh
+from server.cadlink.fusion.addin_update import shutdown_addin_refresh, start_addin_refresh
 from server.mesh.child import begin_mesher_child_shutdown, close_mesher_child
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm

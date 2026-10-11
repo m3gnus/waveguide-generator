@@ -51,7 +51,7 @@ from typing import Any
 
 import numpy as np
 
-from .wgreturn import (
+from server.cadlink.wgreturn import (
     CUT_ORIGIN_PLANES,
     DOMAIN_PLANES,
 )
@@ -90,7 +90,7 @@ READING_REDUCED = "reduced"
 READING_AS_SHOWN = "as-shown"
 
 _LETTER = {"x0": "x", "y0": "y", "z0": "z"}
-_ORIGIN_PLANE = {plane: origin for origin, plane in CUT_ORIGIN_PLANES.items()}
+ORIGIN_PLANE = {plane: origin for origin, plane in CUT_ORIGIN_PLANES.items()}
 
 
 class DomainReadingError(ValueError):
@@ -174,14 +174,14 @@ class DomainPlan:
         }
 
 
-def _export_frame(manifest: Mapping[str, Any]) -> str:
+def export_frame(manifest: Mapping[str, Any]) -> str:
     coordinates = manifest.get("coordinate_system")
     frame = coordinates.get("export_frame") if isinstance(coordinates, Mapping) else None
     return str(frame or "root-component")
 
 
 def record_key(record: Mapping[str, Any]) -> str:
-    from .solver_frame import record_confirmation_key
+    from server.cadlink.interpretation.solver_frame import record_confirmation_key
 
     return record_confirmation_key(record)
 
@@ -546,7 +546,7 @@ def observe(
 def observe_record_mesh(built: Mapping[str, Any], msh_text: str | None = None) -> Observations | None:
     """:func:`observe` over a fresh or cached build; None when its mesh cannot be read."""
 
-    from .frame_infer import parse_tagged_msh
+    from server.cadlink.interpretation.frame_infer import parse_tagged_msh
 
     try:
         points_m, triangles, tags, _names = parse_tagged_msh(
@@ -644,7 +644,7 @@ def _mirrorable(observation: PlaneObservation, other_open_edges: int) -> str | N
         if other_open_edges:
             return (
                 f"the model's open edge is not on {words}: cut it on the "
-                f"{_ORIGIN_PLANE[plane]} origin plane (or a plane coincident with it) and leave the cut open"
+                f"{ORIGIN_PLANE[plane]} origin plane (or a plane coincident with it) and leave the cut open"
             )
         return f"the model has no open cut on {words}"
     if other_open_edges:
@@ -1115,6 +1115,7 @@ __all__ = [
     "DomainReadingError",
     "LINEAGE",
     "Observations",
+    "ORIGIN_PLANE",
     "PROVENANCE",
     "READING_AS_SHOWN",
     "READING_FULL",
@@ -1127,6 +1128,7 @@ __all__ = [
     "conclusions",
     "evidence_refusal_message",
     "excitation_problem",
+    "export_frame",
     "interpretation_finding",
     "interpretation_record",
     "observe",

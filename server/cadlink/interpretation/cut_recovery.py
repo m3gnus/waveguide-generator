@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 import re
 from typing import Any
 
-from .domain_interpretation import (
+from server.cadlink.interpretation.domain_interpretation import (
     MIN_RIM_EDGES,
     PLANES,
     SUPPORTED_PLANES,

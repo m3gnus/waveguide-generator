@@ -4,7 +4,7 @@ Stage 4 of the CAD Link simplification (docs/architecture/CAD-OPERATIONS.md,
 "A CAD solve is a job") makes the job the one lifecycle of a CAD solve. WG
 accepts a solve by creating a job in status ``preparing`` that holds a typed
 :class:`CadSolveIntent` instead of a ``SolveRequest``. The preparation lane
-(``JobRuntime``) then does what ``server/cadlink/preparation.py`` does for an
+(``JobRuntime``) then does what ``server/cadlink/joblane/preparation.py`` does for an
 operation today, and this module is that work, moved rather than rewritten:
 
     retain -> setup -> ingest (mesh) -> frame and domain -> findings -> compose
@@ -40,19 +40,19 @@ import logging
 from pathlib import Path
 from typing import Any, Protocol
 
-from server.cadlink.default_setup import (
+from server.cadlink.joblane.default_setup import (
     DAMAGED_DEFAULTS_MESSAGE,
     DEFAULT_SETTINGS_NOTE,
     SolveDefaultsDamaged,
 )
-from server.cadlink.domain_interpretation import excitation_problem
+from server.cadlink.interpretation.domain_interpretation import excitation_problem
 from server.cadlink.intake.readings import resolve_domain_plan
-from server.cadlink.ingest import (
+from server.cadlink.intake.ingest import (
     IngestRefusal,
     ingest_bundle,
     meshing_semantics_fingerprint,
 )
-from server.cadlink.isolation import ChildRefusal
+from server.cadlink.intake.isolation import ChildRefusal
 from server.cadlink.operations import (
     REASON_CODES,
     REASON_UPDATE_RESTART_PENDING,
@@ -63,7 +63,7 @@ from server.cadlink.operations import (
     STAGE_SUBMITTED,
     STAGE_VALIDATING,
 )
-from server.cadlink.preparation import (
+from server.cadlink.joblane.preparation import (
     DAMAGED_COPY_MESSAGE,
     PreparationContext,
     SnapshotUnavailable,
@@ -83,9 +83,9 @@ from server.cadlink.preparation import (
     cad_provenance_record,
     resumable_record,
 )
-from server.cadlink.project_setup import widen_polar_to_derivation
-from server.cadlink.setup import DEFAULTS_ORIGIN, solve_request_for
-from server.cadlink.solver_frame import (
+from server.cadlink.joblane.project_setup import widen_polar_to_derivation
+from server.cadlink.joblane.setup import DEFAULTS_ORIGIN, solve_request_for
+from server.cadlink.interpretation.solver_frame import (
     AS_MODELLED,
     REASON as FRAME_CONFIRMATION_REQUIRED,
     resolution_identity,
@@ -399,7 +399,7 @@ def prepare_job_sync(
     *,
     automatic_retry: bool = False,
 ) -> tuple[str, Any]:
-    """The blocking half: retain, mesh, record. ``server.cadlink.preparation._prepare_sync``.
+    """The blocking half: retain, mesh, record. ``server.cadlink.joblane.preparation._prepare_sync``.
 
     Returns ``("done", None)`` when the job was refused, and
     ``("bind", (request, revision_id, preparation))`` when a request is ready.

@@ -64,7 +64,7 @@ import numpy as np
 
 from server.contracts.canonical import canonical_normalized_bytes as _canonical
 
-from .domain_interpretation import (
+from server.cadlink.interpretation.domain_interpretation import (
     DECLARATION,
     MIN_RIM_EDGES,
     PLANES,

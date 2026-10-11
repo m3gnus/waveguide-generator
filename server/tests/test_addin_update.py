@@ -8,7 +8,7 @@ import sqlite3
 
 import pytest
 
-from server.cadlink import addin_update
+from server.cadlink.fusion import addin_update
 from server.cadlink.usage import cadlink_in_use, record_usage
 
 

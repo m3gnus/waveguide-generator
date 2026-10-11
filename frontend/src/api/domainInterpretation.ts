@@ -10,7 +10,7 @@ export type DomainReading =
 
 /**
  * How WG read an imported model's acoustic domain (PLAN.md M1c-auto,
- * `server/cadlink/domain_interpretation.py`), as the ingestion record states it.
+ * `server/cadlink/interpretation/domain_interpretation.py`), as the ingestion record states it.
  * `reading` is what was solved: the whole model (`full`, WG's own validated
  * mirror cuts included), a model already cut in CAD mirrored on recorded
  * evidence (`reduced`), or a model that looks cut solved unmirrored (`as-shown`).

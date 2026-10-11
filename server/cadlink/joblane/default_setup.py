@@ -23,13 +23,13 @@ import math
 from pathlib import Path
 from typing import Any
 
-from .roles import canonical_source_role
-from .setup import DEFAULTS_ORIGIN, CadSolveSetup, validate_setup
+from server.cadlink.roles import canonical_source_role
+from server.cadlink.joblane.setup import DEFAULTS_ORIGIN, CadSolveSetup, validate_setup
 
 
 # Beside the code in the same app layer, bundled or checked out, so
 # ``__file__`` finds it wherever the server itself was loaded from.
-SOLVE_DEFAULTS_PATH = Path(__file__).resolve().parents[2] / "shared" / "solve-defaults.json"
+SOLVE_DEFAULTS_PATH = Path(__file__).resolve().parents[3] / "shared" / "solve-defaults.json"
 #: What the run details say about a completed solve made with them. The
 #: solve card says "Solved with" only once the run has completed, and
 #: "Using WG's default settings" until then (CadSolveCard.tsx).

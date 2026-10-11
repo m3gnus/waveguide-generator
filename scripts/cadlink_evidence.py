@@ -7,8 +7,8 @@ and an optional operation id, this writes one zip holding:
 - ``fusion-status.json``, ``wg-capabilities.json`` and ``wg-endpoint.json``:
   the contents of ``.fusion-status.json``, ``wg-capabilities.json`` and the
   legacy ``wg-endpoint.json`` under the data
-  directory's own ``ipc/wglink`` folder (``server/cadlink/fusion_status.py``,
-  ``server/cadlink/fusion_delivery.py`` -- this is WG-internal signaling,
+  directory's own ``ipc/wglink`` folder (``server/cadlink/fusion/fusion_status.py``,
+  ``server/cadlink/fusion/fusion_delivery.py`` -- this is WG-internal signaling,
   rooted at the application data directory itself, not at the user-chosen
   CAD-link exchange folder ``CadWorkspaceState`` persists: every real caller
   of ``advertise_fusion_delivery``, ``publish_return_request`` and
@@ -62,9 +62,9 @@ import zipfile
 # ``CadWorkspaceState``) is a *different* directory (where a returned STEP
 # bundle is written) and is reported here only as informational metadata,
 # never used to locate the ipc/wglink signaling files above.
-from server.cadlink.fusion_delivery import CAPABILITIES_FILENAME, HANDOFFS, RETURN_REQUESTS
+from server.cadlink.fusion.fusion_delivery import CAPABILITIES_FILENAME, HANDOFFS, RETURN_REQUESTS
 from server.cadlink.ipc import ipc_folder
-from server.cadlink.fusion_status import FUSION_STATUS_FILENAME
+from server.cadlink.fusion.fusion_status import FUSION_STATUS_FILENAME
 from server.platform.paths import data_paths
 
 

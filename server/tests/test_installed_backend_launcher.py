@@ -10,7 +10,7 @@ import pytest
 
 from launchers import backend_start, desktop, ensure_backend as entry
 from launchers.statusapp.controller import StatusController
-from server.cadlink import fusion_delivery
+from server.cadlink.fusion import fusion_delivery
 from server.platform import backend_owner
 from server.platform.backend_owner import BackendHandle
 

@@ -24,7 +24,7 @@ from server.cadlink.onshape.return_leg import (
 )
 # The OCC observation moved behind the untrusted-CAD process boundary
 # (``docs/plans/STEP-PARSER-ISOLATION.md``); its identity helpers live with it.
-from server.cadlink.step_evidence import (
+from server.cadlink.intake.step_evidence import (
     ReturnedStepError,
     _fingerprints_match,
     _select_linked_root,
@@ -533,9 +533,9 @@ def test_the_real_return_smoke_test_crosses_two_fresh_process_boundaries(
 
     import os
 
-    from server.cadlink import isolated
-    from server.cadlink.isolation import isolated_step_task as real_task
-    from server.cadlink.step_evidence import observe_returned_step
+    from server.cadlink.intake import isolated
+    from server.cadlink.intake.isolation import isolated_step_task as real_task
+    from server.cadlink.intake.step_evidence import observe_returned_step
 
     crossings: list[dict] = []
 

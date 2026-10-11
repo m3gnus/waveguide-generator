@@ -45,27 +45,27 @@ from server.workspace.archive import (
     reclaim_captured_documents,
 )
 
-from .addin_update import last_refresh, loaded_addin_identity, poll_activation
-from .delivery_status import delivery_status
-from .fusion_status import (
+from server.cadlink.fusion.addin_update import last_refresh, loaded_addin_identity, poll_activation
+from server.cadlink.joblane.delivery_status import delivery_status
+from server.cadlink.fusion.fusion_status import (
     ADDIN_OUTDATED_MESSAGE,
     addin_inbox_session_signature,
     fusion_process_running,
     read_fusion_status,
 )
-from .fusion_status import heartbeat_now, select_heartbeat, settleable_heartbeat
-from .fusion_outcomes import (
+from server.cadlink.fusion.fusion_status import heartbeat_now, select_heartbeat, settleable_heartbeat
+from server.cadlink.fusion.fusion_outcomes import (
     FUSION_KINDS, settle_from_heartbeat, settle_abandoned_live_claims,
     settle_abandoned_file_returns,
 )
-from .fusion_delivery import (
+from server.cadlink.fusion.fusion_delivery import (
     advertise_fusion_delivery,
     expire_unstarted_insert_handoffs,
     recover_staged_fusion_requests,
 )
 from .ipc import ipc_folder
-from .fusion_return import publish_return_request
-from .ingest import (
+from server.cadlink.fusion.fusion_return import publish_return_request
+from server.cadlink.intake.ingest import (
     IngestRefusal,
     build_deferred_viewport,
     current_viewport_record,
@@ -74,7 +74,7 @@ from .ingest import (
     ingest_bundle,
     resolve_deferred_viewport,
 )
-from .manual_solve import (
+from server.cadlink.joblane.manual_solve import (
     OperationConflict,
     SnapshotNotRetained,
     UnknownIngest,
@@ -88,7 +88,7 @@ from .manual_solve import (
 from .build_flags import onshape_enabled
 from .onshape.return_leg import RETURN_SUBDIRECTORY as ONSHAPE_RETURN_SUBDIRECTORY
 from .operations import CANCELLED, KINDS, PREPARE_AND_SOLVE, STATES, TERMINAL_STATES
-from .preparation import (
+from server.cadlink.joblane.preparation import (
     DismissalUnconfirmed,
     PreparationContext,
     PreparationInput,
@@ -98,14 +98,15 @@ from .preparation import (
     DeliveryPassReporter,
     settle_received_snapshots,
 )
-from .job_shims import accept_operation_solve, operation_detail, run_delivery_pass, sweep_pending_solves
-from .project_setup import SOLVER_SELECTION, inventory_sha256
-from .setup import setup_content, setup_digest, validate_setup
-from .solver_frame import AXES as SOLVER_FRAME_AXES, record_is_unlinked
+from server.cadlink.joblane.job_shims import accept_operation_solve, operation_detail, run_delivery_pass, sweep_pending_solves
+from server.cadlink.joblane.project_setup import SOLVER_SELECTION, inventory_sha256
+from server.cadlink.joblane.setup import setup_content, setup_digest, validate_setup
+from server.cadlink.interpretation.solver_frame import AXES as SOLVER_FRAME_AXES, record_is_unlinked
 from server.cadlink.intake.readings import ensure_frame_suggestion
 from server.cadlink.intake.returns_folder import return_inventory, selected_workspace_root
 from .store import CadLinkStore
-from . import receipts_api, recovery_api
+from server.cadlink.intake import receipts_api
+from server.cadlink.fusion import recovery_api
 from .wgreturn import WgReturnError
 
 
@@ -378,7 +379,7 @@ router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
 @router.post("/install-addin")
 async def post_install_addin(request: Request) -> dict[str, str]:
     """Record the explicit choice even if activation must wait or cannot install."""
-    from server.cadlink.addin_update import refresh_and_log
+    from server.cadlink.fusion.addin_update import refresh_and_log
     from server.cadlink.usage import record_usage
 
     data_dir = Path(request.app.state.data_dir)
@@ -716,7 +717,7 @@ async def fusion_status(
         heartbeat=selected_heartbeat,
     )
     # WGLink activation waits for Fusion to close, and while WG runs this poll
-    # is what finishes it (server/cadlink/addin_update.py). Once WG has decided,
+    # is what finishes it (server/cadlink/fusion/addin_update.py). Once WG has decided,
     # the report goes with every state, so the UI can name a pending, activated,
     # superseded or failed activation anywhere; an outdated add-in always gets
     # it, to name the remedy. Activation turned off is said only there.
@@ -2060,7 +2061,7 @@ async def post_cancel_cad_operation(operation_id: str, request: Request) -> dict
     while the jobs store cannot be read (409).
     """
 
-    from .job_shims import operation_fence
+    from server.cadlink.joblane.job_shims import operation_fence
     async with operation_fence(operation_id):
         return await _cancel_cad_operation(operation_id, request)
 
@@ -2364,15 +2365,15 @@ def mount_cadlink(application: FastAPI) -> None:
     application.include_router(router)
     application.include_router(receipts_api.router)
     application.include_router(recovery_api.router)
-    from .fusion_return import router as return_requests_router
+    from server.cadlink.fusion.fusion_return import router as return_requests_router
 
     application.include_router(return_requests_router)
     # An unlinked model's solver frame: preview and confirmation.
-    from .solver_frame_api import router as solver_frame_router
+    from server.cadlink.intake.solver_frame_api import router as solver_frame_router
 
     application.include_router(solver_frame_router)
     # A model's domain interpretation: what was solved, and Change (M1c-auto).
-    from .domain_interpretation_api import router as domain_interpretation_router
+    from server.cadlink.intake.domain_interpretation_api import router as domain_interpretation_router
 
     application.include_router(domain_interpretation_router)
 

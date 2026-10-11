@@ -37,6 +37,34 @@ back to `designName` byte for byte, from `stores/cadConnection.ts` observations.
 `shell/cadObservation.ts` schedules connection reads and reloads the receipt feed
 and exact-id return waiter on reconnect.
 
+## Server layout
+
+`server/cadlink/` separates four lanes while keeping shared contracts at the root:
+
+- `intake/` admits returned and native geometry, isolates untrusted STEP work,
+  consumes solve requests, and owns stored frame/domain readings and receipt routers.
+- `interpretation/` contains pure frame inference, domain decisions and cut recovery.
+  Its functions accept no store or preparation context and import only leaf contracts.
+- `joblane/` owns setup revisions, operation preparation, job admission and delivery status.
+- `fusion/` owns the WGLink file channel: delivery, heartbeat status, outcomes,
+  return requests, recovery notices and add-in pin reconciliation.
+
+`api.py` assembles the CAD Link routers at the top. `store.py` and `receipts.py`
+keep persistence; `identity.py` owns model identity. Root contracts remain in
+`wgreturn.py`, `operations.py`, `roles.py`, `usage.py`, `ipc.py`, `build_flags.py`,
+`wglink_protocol.py` and `limits.py`. The pinned `wglink_protocol.py` stays at its
+existing path. The parked `onshape/` adapter keeps its own package.
+
+The `cadlink-lanes` contract in `.importlinter` enforces these layers, highest to
+lowest: `api`, `onshape`, independent `joblane | fusion`, `intake`, collaborating
+`store : receipts`, `identity`, `interpretation`, the root leaf contracts, then
+`wglink_protocol : limits`. Onshape and identity sit above the lanes and
+interpretation respectively because of existing indirect imports through other
+server packages. Fusion currently imports only persistence and root contracts.
+A separate forbidden contract prevents interpretation from reaching persistence
+or any lane, even through another server package; another prevents preparation
+from importing job admission shims. Subpackage initializers contain only a docstring.
+
 ## Operation kinds
 
 | Kind | Target: what it addresses | Inputs: immutable references | Needs a current Fusion file report |
@@ -328,7 +356,7 @@ whatever project is open. Nothing on the backend reads the live UI:
   the selection says otherwise; the setup actually used is itself a setup revision, which
   the operation names.
 - **None yet** means WG's default settings: a first-time model is prepared and solved
-  with them (`server/cadlink/default_setup.py`), never with another project's. The
+  with them (`server/cadlink/joblane/default_setup.py`), never with another project's. The
   defaults are stated once, in `shared/solve-defaults.json`, which the frontend's initial
   solve settings read too, so they are exactly what a first-time Solve in WG would use:
   the default sweep and directivity, the selected engine and accuracy, each source's
@@ -356,8 +384,8 @@ frame is confirmed, once per project, or WG is confident enough to choose it its
 "Automatic axis" below). WG infers the frame from the geometry and preselects it, so
 confirming it is normally one press of Solve in WG, and a Solve from Fusion needs no
 press at all when WG is confident.
-`server/cadlink/solver_frame.py` is the executable half of this section, and
-`server/cadlink/frame_infer.py` the inference.
+`server/cadlink/interpretation/solver_frame.py` is the executable half of this section, and
+`server/cadlink/interpretation/frame_infer.py` the inference.
 
 - **The frame.** The model axis that points out of the mouth, one of
   `+z -z +x -x +y -y`, is the solver's +Z; the origin is the model's own. Two contracts
@@ -686,7 +714,7 @@ in `task_metadata.cad`, next to `task_metadata.imported_geometry`. It is written
 job is created and never changed. The operation row stays the acceptance ledger; a run
 is described from the job even after that row is gone. `SolveRequest` is unchanged: the
 record travels through the keyword-only `cad_provenance` argument of
-`JobRuntime.submit` (`server/cadlink/preparation.py`, `_cad_provenance`), not through
+`JobRuntime.submit` (`server/cadlink/joblane/preparation.py`, `_cad_provenance`), not through
 the wire request, and a direct submission carries none.
 
 | Field | Meaning |
@@ -775,10 +803,10 @@ under `frontend/src/` unless they start with `server/`.
 | 1 | An accepted Send ingests and fronts its snapshot once in Fusion mode, without a solve; a new Send id fronts the same model again | none | `server/cadlink/receipts.py`, `stores/cadReceipts.ts`, `shell/cadlink/receiptDisplay.ts`; discovery waits for the feed and skips pending/fronted bundle identities | `receiptDisplay.test.ts :: ingests and fronts a receipt with no job once across reload; a new Send fronts the same model again`; `CadWorkspaceOwners.test.ts` pending-reload and invalidated-status Send regressions; `CadWorkspaceOwners.test.ts :: mounts the receipt feed and display without a solve or operations-list reader (rows 1, 7, 14)` |
 | 2 | A refused Send, or one whose folder entry is gone, is said, never dropped | none | Receipt outcomes and persisted feedback in `stores/cadReceipts.ts`, `shell/cadlink/receiptDisplay.ts` | `receiptDisplay.test.ts :: reports %s distinctly and never opens the retained copy`; `test_cad_receipts.py :: test_http_projects_refused_missing_unreadable_and_retained_copy` |
 | 3 | Requests not about the model on screen sit under "Earlier requests (n)" | partial (solves are jobs; Fusion recovery is not) | `stores/cadRecoveryNotices.ts :: selectCadRequests`, `shell/CadOperationsSection.tsx` | `cadRequests.test.ts :: joins mixed jobs and notices in stable order and keeps only on-screen requests loud`; `CadOperationsSection.onScreen.test.tsx` |
-| 4 | Dismiss and Clear all act on the named requests once and never claim a repair | partial: solves use `POST /api/jobs/{id}/dismiss` | `stores/cadRecoveryNotices.ts :: createCadRequestActions`, job dismissal, `server/cadlink/recovery_api.py` | `cadRequests.test.ts :: Dismiss and Clear all share named requests once even if job binding changes meanwhile`; `test_cad_recovery_notices.py` durable dismissal tests |
+| 4 | Dismiss and Clear all act on the named requests once and never claim a repair | partial: solves use `POST /api/jobs/{id}/dismiss` | `stores/cadRecoveryNotices.ts :: createCadRequestActions`, job dismissal, `server/cadlink/fusion/recovery_api.py` | `cadRequests.test.ts :: Dismiss and Clear all share named requests once even if job binding changes meanwhile`; `test_cad_recovery_notices.py` durable dismissal tests |
 | 5 | An older listing, ingest, Send display or mesh load never replaces a newer selection or the selected CAD application | none (job fencing is not selection fencing) | `shell/cadlink/arrivals.ts`, `shell/cadlink/receiptDisplay.ts`, `shell/cadlink/artifactLoader.ts`, `stores/cadReturn.ts`, `viewport/importedMeshStore.ts` | `arrivals.test.ts` deferred success/error tests; `receiptDisplay.test.ts` selection fences; `artifactLoader.test.ts`; `CadWorkspaceOwners.test.ts` single-pull-owner and Onshape deferred listing/ingest/mesh tests |
 | 6 | After a reconnect, pending work reloads and missed outcomes of awaited requests are found | partial (solves: jobs) | `shell/cadObservation.ts` reloads jobs, the receipt feed and exact return/outbound outcomes; settled pull evidence remains available across recovery awaits; `stores/cadConnection.ts` holds reconnect feedback | `cadObservation.test.ts` disconnected completion, bounded retry, omitted exact outcomes and superseded reconnect tests; `returnWaiter.test.ts` exact outcomes and settled evidence; `CadWorkspaceOwners.test.ts` pull settlement during a delayed reconnect feed; `cadSetupPublisher.test.ts` visible recovery feedback |
-| 7 | Sends accepted before the page connected, or during an outage, are discovered | none | `server/cadlink/receipts_api.py`, cursor feed `stores/cadReceipts.ts` | `cadReceipts.test.ts` cursor paging, overlap, failed-page recovery and push/resync tests; `test_cad_receipts.py` |
+| 7 | Sends accepted before the page connected, or during an outage, are discovered | none | `server/cadlink/intake/receipts_api.py`, cursor feed `stores/cadReceipts.ts` | `cadReceipts.test.ts` cursor paging, overlap, failed-page recovery and push/resync tests; `test_cad_receipts.py` |
 | 8 | A solve's job is claimed and its label advanced once, despite duplicates, reloads or a lost response | *job* | `jobs/cadSolve.ts`, `shell/JobsCoordinator.tsx` job/client-request-keyed claims | `JobsCoordinator.mutex.test.tsx`; `M1Acceptance.test.tsx :: makes no second job and no second result…` |
 | 9 | A pinned result stays until the new run has results; Results is revealed once, only if the user has not navigated | yes | `api/results.ts`, `shell/ResultsPanel.tsx`, `shell/solveAttention.ts` | `ResultsPanel.transition.test.tsx`, `solveAttention.test.tsx` |
 | 10 | Idle CAD work makes no routine reads; events and moving work resume them | none | `shell/cadObservation.ts` uses moving requests/CAD jobs, including published and restored Insert/Update operations. WG reports the retired coordination gate as off; the environment switch is gone. Older add-ins without inbox Send still need folder discovery; the pin uses schema-4 Send. Listing changes and Sends reset the quiet clock; coarse job notifications do not. Mount wake and an overlapping hello share reads; hidden/Onshape mounts clear model loading | `cadObservation.test.ts` idle/off, moving jobs, parked requests, hidden pages and legacy discovery; `CadWorkspaceOwners.test.ts` outbound cadence, startup coalescing and initial loading; `cadObservation.test.ts` listing/Send quiet resets; `:: on: moving jobs and coarse notifications do not hold the base rate or reset the quiet clock` |
@@ -787,7 +815,7 @@ under `frontend/src/` unless they start with `server/`.
 | 13 | The solver-mesh view shows the exact verified solve triangles in its own slot | none | `shell/cadlink/artifactLoader.ts`, `viewport/importedMeshStore.ts` | `artifactLoader.test.ts :: fetches only the verified solve triangles into its own slot and caches by ingest`; `artifactLoader.mirroredDisplay.test.tsx` |
 | 14 | Delivery health explains a disabled, declining or hung intake; a healthy idle one is quiet | *re-homed* (fails before a job) | Server delivery-health projection, `stores/cadDeliveryHealth.ts`, `shell/CadDeliveryHealth.tsx`. Shell mounts one operations-list reader, also projecting outbound activity to the observation owner | `CadDeliveryHealth.test.tsx` shell ownership and waiting intake tests; `cadDeliveryHealth.test.ts` listing/push fences and restored outbound activity |
 | 15 | Intake refusals with no operation or job stay visible and deduplicated, also for a late page | none | Server refusal log, `stores/cadDeliveryHealth.ts` refusal/unseen state, receipt recovery in `stores/cadReceipts.ts` | `cadReceipts.test.ts` late refusal recovery/dedupe; `CadDeliveryHealth.test.tsx` unseen badge; `test_cad_receipts.py` durable intake refusals |
-| 16 | An interrupted Insert/Update is loud only for the active Fusion document, settles from evidence, and Dismiss never repeats it | none | `server/cadlink/recovery_api.py`, `server/cadlink/fusion_outcomes.py`, `stores/cadRecoveryNotices.ts`; `shell/CadOperationsSection.tsx` Check Fusion again asks the server to reconcile the exact mutation, then refreshes status/notices; notices alone write delivery-health recovery errors | `cadRecoveryNotices.test.ts` status changes/expiry, dismissal fences, sole health-feedback ownership and delayed unmount failure; `CadOperationsSection.onScreen.test.tsx` exact reconcile before refresh; `test_cad_recovery_notices.py` exact document evidence |
+| 16 | An interrupted Insert/Update is loud only for the active Fusion document, settles from evidence, and Dismiss never repeats it | none | `server/cadlink/fusion/recovery_api.py`, `server/cadlink/fusion/fusion_outcomes.py`, `stores/cadRecoveryNotices.ts`; `shell/CadOperationsSection.tsx` Check Fusion again asks the server to reconcile the exact mutation, then refreshes status/notices; notices alone write delivery-health recovery errors | `cadRecoveryNotices.test.ts` status changes/expiry, dismissal fences, sole health-feedback ownership and delayed unmount failure; `CadOperationsSection.onScreen.test.tsx` exact reconcile before refresh; `test_cad_recovery_notices.py` exact document evidence |
 | 17 | Sending WG changes picks guarded Insert/Update from current evidence, confirms a two-way conflict and fences late identity adoption | none | `shell/cadlink/outbound.ts` retains published IDs and consumes operation outcomes for observation/reconnect, shared guards in `shell/cadlink/send.ts`, `stores/cadConnection.ts` observations | `CadWorkspaceOwners.test.ts` polling until settlement; `outbound.test.ts` every guard/entry point, folder joins, conflict confirmation and identity fences; `DesignFileMenu.test.tsx` silent supersession |
 | 18 | Solve captures the snapshot and settings on screen before any await, under the right project | *job* (press captured into `POST /api/jobs/cad-solve`) | `shell/JobsCoordinator.tsx` captures and records the clicked snapshot/settings under its project before job submission | `JobsCoordinator.mutex.test.tsx :: uses the clicked settings while the fresh Advanced plan is pending`; `:: refuses to record the settings under a mismatched job project` |
 | 19 | Solve confirms the axis actually shown and reports a frame changed elsewhere | *job* (axis passed explicitly) | Ingest-keyed `stores/cadSolverFrame.ts`, `shell/JobsCoordinator.tsx` | `cadSolverFrame.test.ts`; `M1bSolveCard.test.tsx :: never solves along an axis the card did not show…` |
@@ -796,7 +824,7 @@ under `frontend/src/` unless they start with `server/`.
 | 22 | A return for another project never replaces the parametric design or its undo history | none | `shell/cadlink/arrivals.ts`, `shell/cadlink/restores.ts`, `shell/cadlink/receiptDisplay.ts` design-identity fences | `arrivals.test.ts :: refuses a foreign arrival without replacing design or undo history`; `receiptDisplay.test.ts` foreign project and undo tests |
 | 23 | Entering an empty CAD mode reopens the remembered project only while still empty | none | `shell/cadlink/restores.ts` guarded remembered-project observer, `stores/cadProjectMemory.ts` | `restores.test.ts` remembered empty-mode observer and delayed-read fences |
 | 24 | Opening an archived CAD run restores its ingest and setup; a late restore never overtakes a newer pick | partial (`cad_source`, `cad_setup` on the job) | `shell/cadlink/restores.ts` job-model restore, `stores/cadReturn.ts` archive fencing | `restores.test.ts` standalone archived ingest/setup/sweep restore and newer-selection fences |
-| 25 | "Bring in geometry" joins repeated pulls, waits for the correlated return, reports refusal or timeout; late returns after timeout remain discoverable | none (a correlation id, not a job) | `shell/cadlink/returnWaiter.ts`, exact file outcome reader/router `server/cadlink/fusion_return.py`; the waiter alone selects a pending correlated pull; Bring in and solve reports preparation/submission and clears stale status on failure | `returnWaiter.test.ts` correlation, joining, refusal, deadline, stalled batches and command cancellation; `CadWorkspaceOwners.test.ts` plain-pull and pull-and-solve ingestion, phase/error feedback and late-after-timeout discovery; `test_fusion_return.py :: test_production_cadlink_mount_exposes_exact_file_return_outcome` |
+| 25 | "Bring in geometry" joins repeated pulls, waits for the correlated return, reports refusal or timeout; late returns after timeout remain discoverable | none (a correlation id, not a job) | `shell/cadlink/returnWaiter.ts`, exact file outcome reader/router `server/cadlink/fusion/fusion_return.py`; the waiter alone selects a pending correlated pull; Bring in and solve reports preparation/submission and clears stale status on failure | `returnWaiter.test.ts` correlation, joining, refusal, deadline, stalled batches and command cancellation; `CadWorkspaceOwners.test.ts` plain-pull and pull-and-solve ingestion, phase/error feedback and late-after-timeout discovery; `test_fusion_return.py :: test_production_cadlink_mount_exposes_exact_file_return_outcome` |
 | 26 | Onshape returns stay ingestible with their own origin, without Fusion-folder polling | none | `shell/cadlink/arrivals.ts` origin-aware Onshape actions/readers, UI capability gate; `shell/CadWorkspaceOwners.tsx` gates Fusion receipt display and fences every deferred boundary | `arrivals.test.ts` Onshape origin/identity/instance fences; `CadWorkspaceOwners.test.ts` Onshape mount and deferred display isolation; `CadLinkPanel.test.tsx` Onshape choices and return display |
 | 27 | Retries and reloads keep one solve identity; a waiting solve for the snapshot is continued, not duplicated | *job* | `jobs/cadSolve.ts`, `shell/JobsCoordinator.tsx` client request id and `/solve-again` | `M1bSolveCard.test.tsx`; `JobsCoordinator.mutex.test.tsx` continuation and press-mutex tests |
 | 28 | The solve card shows the latest request for its snapshot, never a previous run's outcome | *job* (`cad_state`) | `shell/CadSolveCard.tsx`, `shell/CadOperationsSection.tsx` job selector | `CadSolveCard.test.tsx :: never shows a previous run's outcome under a new request for the same snapshot` |
@@ -826,13 +854,13 @@ Menu-style callers catch `isOutboundSupersededError(error)`
 and return quietly before setting feedback; supersession is not an export failure
 or a null conflict result.
 
-Row 25 remains a deliberate file-transport command: `fusion_return.py` publishes
+Row 25 remains a deliberate file-transport command: `fusion/fusion_return.py` publishes
 on `fusion_delivery.RETURN_REQUESTS`, consumed by the add-in's
 `next_return_request`. **The existing `GET /api/cadlink/returns` listing is the
 authoritative geometry source**: a readable item with the exact `requestId`
 settles the waiter. S5-2's receipt feed projects received snapshots and cannot
 prove the outcome of a `request_return`. The narrow
-`GET /api/cadlink/return-requests/{request_id}` router in `fusion_return.py` reads
+`GET /api/cadlink/return-requests/{request_id}` router in `fusion/fusion_return.py` reads
 bounded `.fusion-status.json` diagnostics by exact id and persists refusal or
 adapter completion in the existing request record. Adapter completion alone
 cannot settle geometry. `mount_cadlink`
@@ -1505,13 +1533,13 @@ ships.
   per session that WG needs updating.
 - **WG always installs and updates its own add-in.** At every start WG brings Fusion's
   WGLink to the commit it pins, from the package the release ships
-  (`server/cadlink/addin_update.py`). It installs it where Fusion is installed and has no
+  (`server/cadlink/fusion/addin_update.py`). It installs it where Fusion is installed and has no
   WGLink, and replaces a WGLink that no Waveguide Generator manages. It leaves alone a
   developer sync, and an add-in another Waveguide Generator installation manages; WG
   still refuses either while it is too old, and says why. The add-in Fusion is running
   changes only when Fusion restarts.
 - **WGLink activation.** Changing Fusion's add-in follows the order an app update needs
-  (`server/cadlink/addin_update.py`):
+  (`server/cadlink/fusion/addin_update.py`):
   - **After this start is confirmed.** Nothing changes while this installation has an open
     update journal. A healthy start closes it through `commit_transaction`, which the
     healthy-start settlement calls in every launch mode: the window, `--browser` and

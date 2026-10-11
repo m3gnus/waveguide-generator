@@ -1,9 +1,9 @@
 """A deliberately badly-behaved child, driven through the real harness.
 
-``server/cadlink/isolation.py`` accepts an ``entrypoint`` so the acceptance
+``server/cadlink/intake/isolation.py`` accepts an ``entrypoint`` so the acceptance
 tests in ``docs/plans/STEP-PARSER-ISOLATION.md`` can be demonstrated rather
 than asserted about.  This module is that entrypoint: it speaks the same stdin
-envelope protocol as :mod:`server.cadlink.child_main` and then does whatever
+envelope protocol as :mod:`server.cadlink.intake.child_main` and then does whatever
 ``payload["misbehaviour"]`` names -- hang, abort, overflow its result, or try
 to write outside its staging directory.
 

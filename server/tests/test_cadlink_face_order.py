@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from server.cadlink.ingest import IngestRefusal, ingest_bundle
+from server.cadlink.intake.ingest import IngestRefusal, ingest_bundle
 from server.cadlink.store import CadLinkStore
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 from test_cadlink_wgreturn import _manifest as wgreturn_manifest
@@ -136,7 +136,7 @@ def _build_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
         kwargs.pop("expected_size_bytes", None)
         return build_imported_mesh(assembly_path, manifest, normalization, **kwargs)
 
-    monkeypatch.setattr("server.cadlink.ingest.build_imported_mesh_isolated", build)
+    monkeypatch.setattr("server.cadlink.intake.ingest.build_imported_mesh_isolated", build)
 
 
 def _source_triangles(record: dict) -> int:

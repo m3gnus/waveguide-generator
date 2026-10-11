@@ -12,7 +12,7 @@ import meshio
 import numpy as np
 import pytest
 
-from server.cadlink.native_source import read_native_source
+from server.cadlink.intake.native_source import read_native_source
 from server.source_editor import PresetStore, create_router
 from server.tests.native_geometry_oracle import certificate, segment
 

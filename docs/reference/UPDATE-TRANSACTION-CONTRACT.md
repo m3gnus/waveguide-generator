@@ -289,7 +289,7 @@ full-installer dialog and its download recovery are described in §2.2 above.
 - Their location is chosen there, and it must not be under `<data>/updates/`. It is
   `<data>/integrations/wglink/activation/<installation key>/`: `pending.json`, and the
   managed add-in a replacement displaced, under `previous/`
-  (`server/cadlink/addin_update.py`; `docs/architecture/CAD-OPERATIONS.md`, "WGLink
+  (`server/cadlink/fusion/addin_update.py`; `docs/architecture/CAD-OPERATIONS.md`, "WGLink
   activation"). The package it names is the one inside the app layer, verified by digest.
 - The updater never reads, writes or removes them. Nothing in Phase 1 creates them.
 - The update status does report WGLink's partial success, from the activation's

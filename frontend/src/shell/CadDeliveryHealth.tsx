@@ -23,7 +23,7 @@ function clock(iso: string): string {
  *
  * A consumer that is off, one that declines (no WGLink folder, an approved
  * update restart) and one stuck inside a pass all look idle from outside. The
- * server records which (server/cadlink/delivery_status.py); this says it.
+ * server records which (server/cadlink/joblane/delivery_status.py); this says it.
  * An idle, running consumer says nothing.
  */
 export function deliveryHealthLines(status: CadDeliveryStatus | null, now: number): DeliveryHealthLine[] {

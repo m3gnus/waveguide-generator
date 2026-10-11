@@ -1214,7 +1214,7 @@ class UpdateService:
         """What WG last decided about Fusion's WGLink, for the update dialog (the review §3.8).
 
         The verdict and its detail only, with the home folder as ``~``: the
-        in-memory report of ``server.cadlink.addin_update``, never the pending
+        in-memory report of ``server.cadlink.fusion.addin_update``, never the pending
         files, which the updater does not read (contract §2.4). ``None`` before
         WG has decided, and when activation is turned off. The import is made
         here, not at module level, so ``server.updates`` never imports
@@ -1222,7 +1222,7 @@ class UpdateService:
         """
 
         try:
-            from server.cadlink.addin_update import last_refresh
+            from server.cadlink.fusion.addin_update import last_refresh
 
             report = last_refresh()
         except Exception:  # noqa: BLE001 - the update status never fails over WGLink

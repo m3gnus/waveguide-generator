@@ -18,7 +18,7 @@ developer-marked copy or a symlink. The source-checkout installer can explicitly
 replace an external copy with `--replace-wglink`.
 
 Packaged WG's healthy-startup check is a separate path:
-[`server/cadlink/addin_update.py`](../../server/cadlink/addin_update.py) installs
+[`server/cadlink/fusion/addin_update.py`](../../server/cadlink/fusion/addin_update.py) installs
 an absent copy where Fusion is installed, updates the copy owned by that WG
 installation, and replaces an unmanaged hand-copied add-in. It uses the exact
 revision in the verified bundled package, offline. It preserves developer-marked

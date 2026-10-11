@@ -16,10 +16,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .ingest import get_ingestion_record
-from .solver_frame import FrameConfirmationError
+from server.cadlink.intake.ingest import get_ingestion_record
+from server.cadlink.interpretation.solver_frame import FrameConfirmationError
 from server.cadlink.intake.readings import confirm_frame, frame_preview
-from .store import CadLinkStore
+from server.cadlink.store import CadLinkStore
 
 
 router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])

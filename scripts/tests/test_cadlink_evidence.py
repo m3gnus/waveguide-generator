@@ -18,9 +18,9 @@ import zipfile
 import pytest
 
 from scripts import cadlink_evidence
-from server.cadlink.fusion_delivery import CAPABILITIES_FILENAME, RETURN_REQUESTS
+from server.cadlink.fusion.fusion_delivery import CAPABILITIES_FILENAME, RETURN_REQUESTS
 from server.cadlink.ipc import ipc_folder
-from server.cadlink.fusion_status import FUSION_STATUS_FILENAME
+from server.cadlink.fusion.fusion_status import FUSION_STATUS_FILENAME
 from server.platform.paths import data_paths
 
 

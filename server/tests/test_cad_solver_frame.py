@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from server.cadlink.intake import readings
-from server.cadlink.solver_frame import (
+from server.cadlink.interpretation.solver_frame import (
     AS_MODELLED,
     AXES,
     CONTRACT,

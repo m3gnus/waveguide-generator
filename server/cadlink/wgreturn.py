@@ -65,7 +65,7 @@ REDUCED_DOMAIN_FEATURE = protocol._wg_REDUCED_DOMAIN_FEATURE
 #
 # The provenance is evidence, not a verdict: WG revalidates every entry
 # against the body, frame and meshed geometry before it mirrors anything
-# (``server/cadlink/domain_interpretation.py``).
+# (``server/cadlink/interpretation/domain_interpretation.py``).
 DOMAIN_AUTOMATIC_FEATURE = protocol._wg_DOMAIN_AUTOMATIC_FEATURE
 DOMAIN_AUTOMATIC = protocol._wg_DOMAIN_AUTOMATIC
 CUT_FEATURE_KINDS = protocol._wg_CUT_FEATURE_KINDS

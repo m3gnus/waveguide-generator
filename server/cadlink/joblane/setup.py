@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from server.jobs.models import SolveRequest
 
-from .operations import canonical_json
+from server.cadlink.operations import canonical_json
 
 
 SETUP_SCHEMA_VERSION = 1

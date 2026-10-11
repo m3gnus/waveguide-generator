@@ -25,14 +25,14 @@ from typing import Any
 import pytest
 
 from server.cadlink.operations import prepare_and_solve_request, request_digest
-from server.cadlink.job_shims import run_delivery_pass
-from server.cadlink.preparation import (
+from server.cadlink.joblane.job_shims import run_delivery_pass
+from server.cadlink.joblane.preparation import (
     DeliveryPassReporter,
     PreparationContext,
     reconcile_with_jobs,
 )
-from server.cadlink import solve_command
-from server.cadlink.solve_command import collect_solve_deliveries, record_outcome
+from server.cadlink.intake import solve_command
+from server.cadlink.intake.solve_command import collect_solve_deliveries, record_outcome
 from server.cadlink.store import CadLinkStore
 
 
@@ -727,7 +727,7 @@ def test_delivery_loop_pushes_when_addin_session_or_declaration_changes(
     data_dir, workspace, store, monkeypatch
 ) -> None:
     from server.cadlink import api
-    from server.cadlink.fusion_status import FUSION_STATUS_FILENAME
+    from server.cadlink.fusion.fusion_status import FUSION_STATUS_FILENAME
 
     workspace.mkdir(parents=True)
     published: list[dict[str, Any]] = []
@@ -790,7 +790,7 @@ def test_malformed_addin_declaration_does_not_stop_delivery(
     data_dir, workspace, store, monkeypatch, setting
 ) -> None:
     from server.cadlink import api
-    from server.cadlink.fusion_status import FUSION_STATUS_FILENAME
+    from server.cadlink.fusion.fusion_status import FUSION_STATUS_FILENAME
 
     marker = workspace / "ipc" / "wglink" / FUSION_STATUS_FILENAME
     marker.parent.mkdir(parents=True)
@@ -891,7 +891,7 @@ def test_transient_partial_heartbeat_does_not_publish_addin_transition(
     data_dir, workspace, store, monkeypatch
 ) -> None:
     from server.cadlink import api
-    from server.cadlink.fusion_status import FUSION_STATUS_FILENAME
+    from server.cadlink.fusion.fusion_status import FUSION_STATUS_FILENAME
 
     marker = workspace / "ipc" / "wglink" / FUSION_STATUS_FILENAME
     marker.parent.mkdir(parents=True)

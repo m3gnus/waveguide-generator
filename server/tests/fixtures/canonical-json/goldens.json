@@ -286,7 +286,7 @@
     },
     {
       "kind": "helper",
-      "path": "server/cadlink/domain_decision.py",
+      "path": "server/cadlink/interpretation/domain_decision.py",
       "symbol": "_canonical",
       "original_line": 112,
       "original_source": "def _canonical(value: Any) -> bytes:\n    from server.exports.geometry_identity import normalize_json_value\n\n    return json.dumps(\n        normalize_json_value(value), allow_nan=False, ensure_ascii=True, separators=(\",\", \":\"), sort_keys=True\n    ).encode(\"utf-8\")",
@@ -342,7 +342,7 @@
     },
     {
       "kind": "inline",
-      "path": "server/cadlink/fusion_outcomes.py",
+      "path": "server/cadlink/fusion/fusion_outcomes.py",
       "scope": "_log_last_request",
       "ordinal": 0,
       "original_line": 190,
@@ -400,7 +400,7 @@
     },
     {
       "kind": "inline",
-      "path": "server/cadlink/fusion_status.py",
+      "path": "server/cadlink/fusion/fusion_status.py",
       "scope": "_fingerprint_hash",
       "ordinal": 0,
       "original_line": 343,
@@ -458,7 +458,7 @@
     },
     {
       "kind": "helper",
-      "path": "server/cadlink/ingest.py",
+      "path": "server/cadlink/intake/ingest.py",
       "symbol": "_canonical",
       "original_line": 172,
       "original_source": "def _canonical(value: Any) -> bytes:\n    return canonical_json(value, ASCII_NORMALIZED).encode(\"utf-8\")",
@@ -514,7 +514,7 @@
     },
     {
       "kind": "helper",
-      "path": "server/cadlink/native_source.py",
+      "path": "server/cadlink/intake/native_source.py",
       "symbol": "_canonical",
       "original_line": 23,
       "original_source": "def _canonical(value):\n    return json.dumps(value, sort_keys=True, separators=(\",\", \":\"), allow_nan=False).encode()",
@@ -676,7 +676,7 @@
     },
     {
       "kind": "helper",
-      "path": "server/cadlink/step_evidence.py",
+      "path": "server/cadlink/intake/step_evidence.py",
       "symbol": "_canonical",
       "original_line": 35,
       "original_source": "def _canonical(value: Any) -> bytes:\n    return canonical_json(value, ASCII_STRICT).encode(\"utf-8\")",

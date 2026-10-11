@@ -59,7 +59,7 @@ interface FindingReview {
 const NO_REVIEW: FindingReview = { preparationId: null, findingIds: [], approvedIds: [], findings: [], error: null };
 
 /** The gates a preparation stops at, in the backend's order
- * (server/cadlink/preparation.py): frame, then findings, then the submission. */
+ * (server/cadlink/joblane/preparation.py): frame, then findings, then the submission. */
 const LADDER_REASONS: ReadonlySet<string> = new Set(['frame_confirmation_required', 'findings_need_review']);
 
 /** The blocking findings one preparation reported, as the backend records them.

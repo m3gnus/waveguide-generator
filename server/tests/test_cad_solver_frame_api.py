@@ -12,8 +12,8 @@ from urllib.parse import urlencode
 from fastapi import FastAPI
 import numpy as np
 
-from server.cadlink.solver_frame import AXES, CONTRACT, frame_matrix
-from server.cadlink.solver_frame_api import router
+from server.cadlink.interpretation.solver_frame import AXES, CONTRACT, frame_matrix
+from server.cadlink.intake.solver_frame_api import router
 from server.cadlink.store import CadLinkStore
 from test_cad_operations_store import SOLVE, _solve_request
 

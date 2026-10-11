@@ -20,7 +20,7 @@ from typing import Any
 
 from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, cad_of
 from server.jobs.models import SolveRequest
-from .operations import (
+from server.cadlink.operations import (
     CANCEL_REQUESTED,
     NEEDS_USER_INPUT,
     PREPARE_AND_SOLVE,
@@ -28,7 +28,7 @@ from .operations import (
     RECEIVED,
     TERMINAL_STATES,
 )
-from .preparation import (
+from server.cadlink.joblane.preparation import (
     NO_WORKSPACE_REASON,
     RETAINED,
     RETAIN_TRANSIENT,
@@ -47,7 +47,7 @@ from .preparation import (
     settle_snapshot_operation,
     submission_key,
 )
-from .solve_command import collect_solve_deliveries, waiting_claim_operation_ids
+from server.cadlink.intake.solve_command import collect_solve_deliveries, waiting_claim_operation_ids
 from server.cadlink.intake.readings import frame_provenance, record_solved_frame_provenance
 
 

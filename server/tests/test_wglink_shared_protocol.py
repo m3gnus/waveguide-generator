@@ -17,11 +17,15 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from server.cadlink import fusion_status, ingest, operations, step_evidence, wglink_protocol
-from server.cadlink.fusion_delivery import capabilities
+from server.cadlink.fusion import fusion_status
+from server.cadlink.intake import ingest
+from server.cadlink import operations
+from server.cadlink.intake import step_evidence
+from server.cadlink import wglink_protocol
+from server.cadlink.fusion.fusion_delivery import capabilities
 from server.cadlink.ipc import ipc_folder
 from server.cadlink.store import CadLinkStore
-from server.cadlink import solve_command
+from server.cadlink.intake import solve_command
 from server.cadlink.intake import returns_folder
 from server.cadlink.wgreturn import read_wgreturn, validate_manifest
 from server.mesh.gmsh_worker import _run_in_gmsh_session

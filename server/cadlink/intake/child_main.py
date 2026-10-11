@@ -1,6 +1,6 @@
 """The disposable child that is allowed to touch untrusted STEP.
 
-Run as ``__main__`` by :mod:`server.cadlink.isolation` (its ``child_command``),
+Run as ``__main__`` by :mod:`server.cadlink.intake.isolation` (its ``child_command``),
 once per artifact, never reused.  It reads one
 JSON envelope from stdin, does exactly one task, writes one JSON result into
 its staging directory, and exits.
@@ -207,8 +207,8 @@ def _task_inspect(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Scan the STEP text, then observe its OCC topology."""
 
-    from server.cadlink.step_evidence import ReturnedStepError, observe_returned_step
-    from server.cadlink.step_text import scan_step_text
+    from server.cadlink.intake.step_evidence import ReturnedStepError, observe_returned_step
+    from server.cadlink.intake.step_text import scan_step_text
 
     payload = envelope.get("payload")
     payload = payload if isinstance(payload, dict) else {}
@@ -233,7 +233,7 @@ def _task_mesh(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Build the solver mesh and, when asked, the viewport mesh."""
 
-    from server.cadlink.step_text import scan_step_text
+    from server.cadlink.intake.step_text import scan_step_text
     from server.mesh.imported import build_imported_mesh
 
     payload = envelope.get("payload")
@@ -309,7 +309,7 @@ def _task_viewport(
     again is safe.
     """
 
-    from server.cadlink.step_text import scan_step_text
+    from server.cadlink.intake.step_text import scan_step_text
     from server.mesh.imported import build_imported_viewport_mesh
 
     payload = envelope.get("payload")

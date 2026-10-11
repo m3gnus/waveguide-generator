@@ -656,7 +656,7 @@ def test_the_update_status_reports_a_pending_wglink_activation(tmp_path: Path, m
     nothing.
     """
 
-    from server.cadlink import addin_update
+    from server.cadlink.fusion import addin_update
 
     now = [1_700_000_000.0]
     update = service(tmp_path, lambda _etag: ReleaseResponse(release("2.0.0"), None), now)

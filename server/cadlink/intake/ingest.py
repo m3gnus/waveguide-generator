@@ -18,11 +18,11 @@ from typing import Any
 
 from server.contracts.canonical import canonical_normalized_bytes as _canonical
 
-from server.cadlink.isolated import (
+from server.cadlink.intake.isolated import (
     build_imported_mesh_isolated,
     build_imported_viewport_mesh_isolated,
 )
-from server.cadlink.isolation import ChildRefusal
+from server.cadlink.intake.isolation import ChildRefusal
 from server.cadlink.store import CadLinkStore
 from server.design.textcfg import parse
 from server.exports.geometry_identity import geometry_hash_for_design
@@ -38,7 +38,7 @@ from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
 from server.solver.imported import imported_domain_planes
 
-from .cut_recovery import (
+from server.cadlink.interpretation.cut_recovery import (
     ASYMMETRIC_SECTION,
     MESH_DENIED,
     CutRecovery,
@@ -48,8 +48,8 @@ from .cut_recovery import (
     recovery_options,
     side_of_source,
 )
-from .domain_decision import decide_domain_and_frame
-from .domain_interpretation import (
+from server.cadlink.interpretation.domain_decision import decide_domain_and_frame
+from server.cadlink.interpretation.domain_interpretation import (
     DECLARATION,
     READING_AS_SHOWN,
     USER,
@@ -61,7 +61,7 @@ from .domain_interpretation import (
     observe_record_mesh,
 )
 from server.cadlink.intake.readings import remember_provenance_reading, resolve_domain_plan
-from .solver_frame import (
+from server.cadlink.interpretation.solver_frame import (
     AS_MODELLED,
     allowed_axes,
     frame_matrix,
@@ -71,7 +71,7 @@ from .solver_frame import (
     spec_matrix,
 )
 from server.cadlink.intake.readings import resolve_for_manifest
-from .wgreturn import (
+from server.cadlink.wgreturn import (
     DOMAIN_PLANES,
     WgReturnBundle,
     WgReturnError,

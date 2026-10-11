@@ -26,7 +26,7 @@ outlive a dead server. When bundled, the mesher, BEMPP and sweep children hold
 ``WaveguideGeneratorRunning`` through ``running_exclusion``, so the installer
 waits on such a child, but nothing would kill it.
 :func:`popen_in_windows_job` (the OpenCL check) and
-``server.cadlink.isolation`` also refuse when no job can hold the child.
+``server.cadlink.intake.isolation`` also refuse when no job can hold the child.
 The BEAT host uses :func:`confine_to_job_owned_by`: its stub owns the job,
 so killing the stub ends the interpreter; it refuses to start without one.
 """

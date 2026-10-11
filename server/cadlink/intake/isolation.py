@@ -11,7 +11,7 @@ The harness is deliberately dumb about geometry.  It knows how to start a
 child that cannot see credentials or the data directory, feed it exactly one
 checksum-verified STEP, stop it when it misbehaves, and refuse everything it
 sends back that is not a small, well-named, correctly-sized artifact.  What
-the child does with the STEP lives in :mod:`server.cadlink.child_main`.
+the child does with the STEP lives in :mod:`server.cadlink.intake.child_main`.
 
 Layout of one invocation::
 
@@ -68,7 +68,7 @@ from server.platform.child_process import (
 from server.platform.temp_session import remove_tree, temporary_directory_root
 
 
-CHILD_ENTRYPOINT = "server.cadlink.child_main"
+CHILD_ENTRYPOINT = "server.cadlink.intake.child_main"
 PROTOCOL_VERSION = 1
 _REPO_ROOT = app_root()
 _COPY_CHUNK_BYTES = 1024 * 1024

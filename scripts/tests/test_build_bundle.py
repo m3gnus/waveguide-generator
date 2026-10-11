@@ -3884,7 +3884,7 @@ def _assert_backend_entry(app: Path, launcher: Path, platform: str) -> None:
         (launcher.parent / "Waveguide Generator.ensure-backend-v1").write_bytes(signature)
     assert installed_launcher_argv(environ={"WG2_BUNDLE": "1", "WG2_APP_ROOT": str(app)},
                                    platform_name=platform) == [str(launcher)]
-    from server.cadlink.fusion_delivery import capabilities
+    from server.cadlink.fusion.fusion_delivery import capabilities
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("WG2_BUNDLE", "1")
         patch.setenv("WG2_APP_ROOT", str(app))

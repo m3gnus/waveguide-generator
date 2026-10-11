@@ -42,9 +42,10 @@ from typing import Any, Callable
 
 import pytest
 
-from server.cadlink import job_shims, solve_command
+from server.cadlink.joblane import job_shims
+from server.cadlink.intake import solve_command
 from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT
-from server.cadlink.solve_command import CAD_SOLVE_SUBMISSION_PREFIX, CLAIM_PREFIX, SOLVE_REQUESTS_DIRECTORY
+from server.cadlink.intake.solve_command import CAD_SOLVE_SUBMISSION_PREFIX, CLAIM_PREFIX, SOLVE_REQUESTS_DIRECTORY
 from server.cadlink.store import CadLinkStore
 
 from cad_backends import JobsHarness

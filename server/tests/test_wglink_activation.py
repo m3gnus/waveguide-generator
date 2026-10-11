@@ -26,7 +26,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from server.cadlink import addin_update
+from server.cadlink.fusion import addin_update
 from server.cadlink.usage import record_usage, usage_path
 
 
@@ -1439,7 +1439,7 @@ def test_the_fusion_process_check_says_unknown_when_it_cannot_tell(monkeypatch) 
     its other callers expect.
     """
 
-    from server.cadlink import fusion_status
+    from server.cadlink.fusion import fusion_status
 
     monkeypatch.setattr(fusion_status.shutil, "which", lambda _name: None)
     for system in ("Darwin", "Windows"):
@@ -1476,7 +1476,7 @@ def test_the_fusion_process_check_says_unknown_when_it_cannot_tell(monkeypatch) 
     ],
 )
 def test_the_fusion_process_check_reads_its_tool(monkeypatch, system, returncode, stdout, state) -> None:
-    from server.cadlink import fusion_status
+    from server.cadlink.fusion import fusion_status
 
     monkeypatch.setattr(fusion_status.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(

@@ -1,7 +1,7 @@
 """The suite never reaches the WGLink add-in installed on the machine running it.
 
 Every application start runs the add-in reconciliation
-(``server/cadlink/addin_update.py``), and that resolves Fusion's AddIns
+(``server/cadlink/fusion/addin_update.py``), and that resolves Fusion's AddIns
 directory from the user's home. Before the sandbox, a test run on a developer's
 Mac took the installer's operation lock inside the real AddIns directory on
 every start, and a test started from the checkout that manages the installed
@@ -21,7 +21,7 @@ from types import ModuleType
 
 import pytest
 
-from server.cadlink import addin_update
+from server.cadlink.fusion import addin_update
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

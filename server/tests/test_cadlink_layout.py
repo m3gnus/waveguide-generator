@@ -8,17 +8,7 @@ import pytest
 
 _CADLINK = Path(__file__).resolve().parents[1] / "cadlink"
 _INTERPRETATION = _CADLINK / "interpretation"
-# The pure modules stay at the root until the interpretation package move.
-_PURE_PATHS = (
-    sorted(_INTERPRETATION.rglob("*.py"))
-    if _INTERPRETATION.is_dir()
-    else [
-        _CADLINK / f"{module}.py"
-        for module in (
-            "frame_infer", "solver_frame", "domain_interpretation", "domain_decision", "cut_recovery"
-        )
-    ]
-)
+_PURE_PATHS = sorted(_INTERPRETATION.rglob("*.py"))
 
 
 @pytest.mark.parametrize("path", _PURE_PATHS, ids=lambda path: path.stem)

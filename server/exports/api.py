@@ -31,7 +31,7 @@ from server.preview.translate import design_to_mesher_config
 from server.workspace.api import WorkspaceState, _path_segments, _portable_path_key
 
 from .cad_launch import focus_cad
-from server.cadlink.fusion_status import ADDIN_OUTDATED_MESSAGE, read_fusion_status
+from server.cadlink.fusion.fusion_status import ADDIN_OUTDATED_MESSAGE, read_fusion_status
 
 from .cad_handoff import UPDATE_TARGET_REQUIRED, publish_fusion_handoff
 from .core import _refuse_ath_step, build_profiles, build_step, build_step_solid, build_stl

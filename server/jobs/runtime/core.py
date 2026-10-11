@@ -26,12 +26,12 @@ import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Mapping, Sequence
 import uuid
 
-from server.cadlink.ingest import get_ingestion_record
-from server.cadlink.domain_decision import (
+from server.cadlink.intake.ingest import get_ingestion_record
+from server.cadlink.interpretation.domain_decision import (
     decision_summary,
 )
 from server.cadlink.operations import REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED
-from server.cadlink.solver_frame import REASON as FRAME_CONFIRMATION_REQUIRED
+from server.cadlink.interpretation.solver_frame import REASON as FRAME_CONFIRMATION_REQUIRED
 from server.cadlink.intake.readings import record_frame_refusal
 from server.cadlink.store import CadLinkStore
 from server.design.defaults import default_sweep_start_hz

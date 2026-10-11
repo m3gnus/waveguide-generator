@@ -63,7 +63,7 @@ def read_native_source(directory):
             raise ValueError(f"tampered or stale native source member {name}")
     recipe = manifest["recipe"]
     if ASSEMBLY_FEATURE in manifest["required_features"]:
-        from .native_assembly import read_assembly
+        from server.cadlink.intake.native_assembly import read_assembly
 
         return manifest, read_assembly(manifest), None, _digest(raw)
     contour = SourceContour.from_dict(recipe["contour"])
@@ -150,7 +150,7 @@ def read_native_source(directory):
 def ingest_native_source(directory, *, store, data_dir, sizes):
     """Publish one immutable native ingestion accepted by the imported job route."""
     from server.jobs.models import ImportedMeshSizes
-    from server.cadlink.ingest import solve_model_sha256
+    from server.cadlink.intake.ingest import solve_model_sha256
     from server.mesh.artifact import mesh_text_sha256
 
     manifest, contour, drive, manifest_hash = read_native_source(directory)
@@ -260,7 +260,7 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
         request = {"manifest": imported_manifest, "sizes": sizes}
         (stage / "request.json").write_bytes(_canonical(request))
         run = subprocess.run(
-            [sys.executable, "-m", "server.cadlink.native_source", str(stage)],
+            [sys.executable, "-m", "server.cadlink.intake.native_source", str(stage)],
             capture_output=True,
             text=True,
         )
@@ -678,7 +678,7 @@ def _verify_recipe_faces(stage, gmsh):
         raise ValueError("native STEP face coverage is stale")
     mapped = dict(zip(ids, faces))
     if ASSEMBLY_FEATURE in manifest["required_features"]:
-        from .native_assembly import verify_faces
+        from server.cadlink.intake.native_assembly import verify_faces
 
         verify_faces(gmsh, manifest, contour, mapped)
         return

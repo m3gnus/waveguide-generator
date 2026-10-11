@@ -20,10 +20,10 @@ from typing import Any
 
 
 from server.cadlink.identity import mint_id
-from server.cadlink.ingest import ingest_bundle
-from server.cadlink.isolated import inspect_returned_step
-from server.cadlink.isolation import ChildRefusal
-from server.cadlink.step_evidence import ReturnedStepError
+from server.cadlink.intake.ingest import ingest_bundle
+from server.cadlink.intake.isolated import inspect_returned_step
+from server.cadlink.intake.isolation import ChildRefusal
+from server.cadlink.intake.step_evidence import ReturnedStepError
 from server.cadlink.store import CadLinkStore
 from server.platform.staging import publish_staging_directory
 from server.contracts.canonical import canonical_ascii_strict_bytes as _canonical  # noqa: F401 (golden-fixture helper site)
@@ -38,7 +38,7 @@ class OnshapeReturnError(ReturnedStepError):
 
     A subclass of the shared returned-STEP error so that code catching either
     the general case or the Onshape case sees the same failures. The general
-    one is raised by ``server/cadlink/step_evidence.py``, which no longer knows
+    one is raised by ``server/cadlink/intake/step_evidence.py``, which no longer knows
     or cares which CAD tool the bytes came from.
     """
 
@@ -167,7 +167,7 @@ def source_contract_from_export(manifest: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-# The OCC observation itself lives in ``server/cadlink/step_evidence.py`` so the
+# The OCC observation itself lives in ``server/cadlink/intake/step_evidence.py`` so the
 # inspect child can import it without the store, the registry, or the ingest
 # pipeline coming along.
 

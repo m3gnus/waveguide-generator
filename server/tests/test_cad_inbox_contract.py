@@ -17,10 +17,12 @@ from typing import Any
 
 import pytest
 
-from server.cadlink import job_shims, preparation, solve_command
-from server.cadlink.delivery_status import RECENT_REFUSALS, DeliveryStatus, delivery_status
+from server.cadlink.joblane import job_shims
+from server.cadlink.joblane import preparation
+from server.cadlink.intake import solve_command
+from server.cadlink.joblane.delivery_status import RECENT_REFUSALS, DeliveryStatus, delivery_status
 from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT
-from server.cadlink.solve_command import collect_solve_deliveries
+from server.cadlink.intake.solve_command import collect_solve_deliveries
 from server.tests.test_cad_inbox_stall import FIXTURES, V4_NO_KIND, V4_SNAPSHOT, V4_SOLVE, app_for, drop, fixture
 from server.tests.test_cad_preparation import _write_return
 from server.tests.cad_file_harness import _snapshot_digest, wg

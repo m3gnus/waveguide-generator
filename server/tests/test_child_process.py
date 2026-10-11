@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from server.cadlink import isolation
+from server.cadlink.intake import isolation
 from server.platform import child_process, process_tree
 from server.solver import bempp_process
 

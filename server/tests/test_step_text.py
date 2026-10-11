@@ -17,7 +17,7 @@ from server.cadlink.limits import (
     MAX_STEP_RECORDS,
     MAX_STEP_RECORD_BYTES,
 )
-from server.cadlink.step_text import (
+from server.cadlink.intake.step_text import (
     StepBudgetExceeded,
     StepTextError,
     decode_step_string,

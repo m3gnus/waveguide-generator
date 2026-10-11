@@ -1,6 +1,6 @@
 """A model already cut in CAD is recovered as the reduced domain of the whole speaker.
 
-Stage 3, branch 2 of the CAD Link simplification (``server/cadlink/cut_recovery.py``,
+Stage 3, branch 2 of the CAD Link simplification (``server/cadlink/interpretation/cut_recovery.py``,
 ``server.mesh.imported.reflect_triangle_mesh``). A cut the geometry shows is
 recovered when every flip condition holds and refused otherwise, naming the
 condition; a cut that kept the negative side is reflected at mesh level onto
@@ -21,10 +21,10 @@ from typing import Any
 import numpy as np
 import pytest
 
-from server.cadlink import cut_recovery as cr
-from server.cadlink import domain_decision as dd
-from server.cadlink.domain_interpretation import Observations, PlaneObservation
-from server.cadlink.frame_infer import parse_tagged_msh
+from server.cadlink.interpretation import cut_recovery as cr
+from server.cadlink.interpretation import domain_decision as dd
+from server.cadlink.interpretation.domain_interpretation import Observations, PlaneObservation
+from server.cadlink.interpretation.frame_infer import parse_tagged_msh
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 from server.mesh.imported import (
     ImportedMeshError,
@@ -413,7 +413,7 @@ def test_sources_keep_identity_tag_area_channel_and_excitation_through_the_refle
         assert abs(vector[0]) < 1e-9 and abs(vector[1]) < 1e-9
         assert np.all(points[np.unique(triangles[tags == tag])][:, 0] >= 0.0)
     # Each channel drives its own source, once, on the solve every engine gets.
-    from server.cadlink.domain_interpretation import excitation_problem
+    from server.cadlink.interpretation.domain_interpretation import excitation_problem
 
     channels = [{"id": f"drive-{sid}", "source_ids": [sid], "motion": "normal"} for sid in ("mid", "tweeter")]
     assert excitation_problem(record, channels) is None
@@ -654,7 +654,7 @@ def test_a_rim_on_another_plane_blocks_unless_it_is_a_cut_judged_too() -> None:
 def test_provenance_never_overrides_a_front_back_cut_or_resets_the_confirmed_frame(tmp_path: Path) -> None:
     """Review finding 1: a negative y0 cut facing -y is refused with and without provenance."""
 
-    from server.cadlink.ingest import IngestRefusal
+    from server.cadlink.intake.ingest import IngestRefusal
     from test_cadlink_domain_automatic import provenance
 
     box = dict(x_side=0, y_side=-1, discs=((15.0, 0.0, 10.0),))
@@ -680,7 +680,7 @@ def test_a_cut_model_confirmed_to_face_another_way_is_never_mirrored_by_resettin
 ) -> None:
     """The plane contains the confirmed axis, but a mirror would need +z: refused, frame kept."""
 
-    from server.cadlink.ingest import IngestRefusal
+    from server.cadlink.intake.ingest import IngestRefusal
     from test_cadlink_domain_automatic import provenance
 
     record = _ingest(_box_bundle(tmp_path, "facing-x"), tmp_path / "data", solver_frame="-y")
@@ -848,7 +848,7 @@ def test_an_acronym_prefixed_side_name_refuses_the_reduction(tmp_path: Path, nam
 def test_a_declared_half_with_a_side_identified_source_is_refused(tmp_path: Path) -> None:
     """Review S3-2b, finding 2: a declaration never overrides the source-identity condition."""
 
-    from server.cadlink.ingest import IngestRefusal
+    from server.cadlink.intake.ingest import IngestRefusal
 
     def bundle(name: str, source: str) -> Path:
         return _bundle(

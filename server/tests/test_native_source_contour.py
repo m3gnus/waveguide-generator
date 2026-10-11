@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from hornlab_mesher.contour_artifact import export_contour
 from hornlab_mesher.source_contour import ContourDrive, cone, dome, flat
-from server.cadlink.native_source import (
+from server.cadlink.intake.native_source import (
     ingest_native_source,
     read_native_source,
 )

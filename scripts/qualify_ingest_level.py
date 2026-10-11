@@ -272,7 +272,7 @@ def _run_ingest_level(
     # verify it, so this return will be either corrected or refused at ingest.
     # Both are recorded; only a quarter that still arrives inverted stays a
     # DEFECT row, and a corrected one is judged like any other quarter.
-    from server.cadlink.ingest import IngestRefusal
+    from server.cadlink.intake.ingest import IngestRefusal
 
     rear = fixtures.linked_return(workspace, "rearcap", source_shape=1)
     rear_full = _ingest(opened, rear, root / "data-rearcap", symmetry_mode="full")

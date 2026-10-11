@@ -20,10 +20,10 @@ from typing import Any
 
 import pytest
 
-from server.cadlink import ingest as ingest_module
-from server.cadlink import preparation
-from server.cadlink.preparation import PreparationInput, operation_summary, prepare_operation
-from server.cadlink.solver_frame import CONTRACT
+from server.cadlink.intake import ingest as ingest_module
+from server.cadlink.joblane import preparation
+from server.cadlink.joblane.preparation import PreparationInput, operation_summary, prepare_operation
+from server.cadlink.interpretation.solver_frame import CONTRACT
 from server.cadlink.intake.readings import confirm_frame
 
 from cad_backends import Harness, backend_fixture, old_only
@@ -587,7 +587,7 @@ def test_a_preparation_resumes_only_in_the_same_complete_frame_not_the_same_axis
     """Two preparations along +x with a different resolved up are different
     frames (contract v2 fixes the roll): neither resumes the other."""
 
-    from server.cadlink.solver_frame import FrameResolution, record_solver_frame, frame_spec
+    from server.cadlink.interpretation.solver_frame import FrameResolution, record_solver_frame, frame_spec
 
     def resolution(document_up: str | None) -> FrameResolution:
         return FrameResolution(
@@ -639,7 +639,7 @@ def test_the_mesh_cache_key_holds_the_complete_frame_transform() -> None:
 
     from types import SimpleNamespace
 
-    from server.cadlink.solver_frame import frame_spec
+    from server.cadlink.interpretation.solver_frame import frame_spec
 
     bundle = SimpleNamespace(artifact_sha256="sha256:a", manifest_sha256="sha256:m")
     manifest = {"instances": [], "coordinate_system": {}, "sources": []}
@@ -867,7 +867,7 @@ def test_an_unreadable_retained_manifest_is_replaced_and_still_never_read_as_lin
     submitted on a guessed frame.
     """
 
-    from server.cadlink.ingest import retained_snapshot_path
+    from server.cadlink.intake.ingest import retained_snapshot_path
 
     harness, mesher = real
     step = b"STEP authored"
@@ -891,7 +891,7 @@ def test_an_unreadable_retained_manifest_is_replaced_and_still_never_read_as_lin
 def test_an_unreadable_retained_manifest_with_the_return_gone_waits(real) -> None:
     """Nothing to replace it with: the snapshot waits rather than being guessed at."""
 
-    from server.cadlink.ingest import retained_snapshot_path
+    from server.cadlink.intake.ingest import retained_snapshot_path
 
     harness, mesher = real
     step = b"STEP authored"
@@ -913,7 +913,7 @@ def test_an_unreadable_retained_manifest_with_the_return_gone_waits(real) -> Non
 
 
 def _suggest(harness: Harness, record: dict[str, Any], axis: str, status: str = "automatic") -> None:
-    from server.cadlink.frame_infer import ALGORITHM_VERSION
+    from server.cadlink.interpretation.frame_infer import ALGORITHM_VERSION
 
     harness.store.record_frame_suggestion(
         str(record["manifest_sha256"]), ALGORITHM_VERSION,

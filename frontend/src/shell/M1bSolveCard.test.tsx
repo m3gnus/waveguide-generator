@@ -9,7 +9,7 @@
  * The operation store, the frame store, the submission path, the Solve card
  * and the Results panel are the real ones; only the HTTP edge and the dock are
  * stood in for, with the production response shapes (`GET/PUT
- * /api/cadlink/solver-frame` as server/cadlink/solver_frame.py answers).
+ * /api/cadlink/solver-frame` as server/cadlink/interpretation/solver_frame.py answers).
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';

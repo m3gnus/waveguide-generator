@@ -92,14 +92,14 @@ import time
 from types import ModuleType
 from typing import Any
 
-from server.cadlink.fusion_status import (
+from server.cadlink.fusion.fusion_status import (
     FUSION_CLOSED,
     FUSION_RUNNING,
     FUSION_UNKNOWN,
     fusion_process_state,
     read_fusion_status,
 )
-from server.cadlink.fusion_status import select_heartbeat
+from server.cadlink.fusion.fusion_status import select_heartbeat
 from server.cadlink.usage import cadlink_in_use
 from server.platform.paths import app_root, resolve_data_dir
 from server.platform.warmup import DRAIN_TIMEOUT_SECONDS, BackgroundWarmup

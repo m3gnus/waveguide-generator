@@ -22,7 +22,7 @@ from server.cadlink.api import (
     fusion_status,
 )
 from server.cadlink.identity import design_hash
-from server.cadlink.fusion_status import (
+from server.cadlink.fusion.fusion_status import (
     FUSION_STATUS_FILENAME,
     FUSION_STATUS_TTL,
     fusion_process_running,
@@ -168,8 +168,8 @@ def test_process_probe_is_non_activating_and_platform_specific(monkeypatch) -> N
         calls.append((list(command), kwargs))
         return SimpleNamespace(returncode=0, stdout=b"")
 
-    monkeypatch.setattr("server.cadlink.fusion_status.shutil.which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr("server.cadlink.fusion_status.subprocess.run", fake_run)
+    monkeypatch.setattr("server.cadlink.fusion.fusion_status.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("server.cadlink.fusion.fusion_status.subprocess.run", fake_run)
     assert fusion_process_running(system="Darwin") is True
     assert calls[0][0] == ["/usr/bin/pgrep", "-x", "Autodesk Fusion"]
     assert "creationflags" not in calls[0][1]
@@ -860,7 +860,7 @@ def test_return_request_resolves_the_selected_same_design_instance(
 ) -> None:
     from fastapi import HTTPException
     from server.cadlink.api import FusionReturnRequest, request_fusion_return
-    from server.cadlink.fusion_return import RETURN_REQUESTS_DIRECTORY
+    from server.cadlink.fusion.fusion_return import RETURN_REQUESTS_DIRECTORY
 
     _write_status(tmp_path, updated_at=datetime.now(timezone.utc), links=[
         _link(instanceId="instance-a"), _link(instanceId="instance-b"),
@@ -944,7 +944,7 @@ def test_a_return_request_is_refused_before_anything_is_published(
 
     from fastapi import HTTPException
     from server.cadlink.api import FusionReturnRequest, request_fusion_return
-    from server.cadlink.fusion_status import ADDIN_OUTDATED_MESSAGE
+    from server.cadlink.fusion.fusion_status import ADDIN_OUTDATED_MESSAGE
 
     _write_status(
         tmp_path,
@@ -1201,7 +1201,7 @@ def test_observation_freshness_names_agree_with_the_frontend() -> None:
     the tests above and in ``CadLinkPanel.test.tsx``.
     """
 
-    from server.cadlink import fusion_status as module
+    from server.cadlink.fusion import fusion_status as module
 
     source = (
         Path(__file__).resolve().parents[2]

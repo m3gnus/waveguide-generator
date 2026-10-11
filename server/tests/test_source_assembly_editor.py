@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from server.app import create_app
-from server.cadlink.native_source import read_native_source
+from server.cadlink.intake.native_source import read_native_source
 from server.cadlink.store import CadLinkStore
 from server.source_editor import canonical_document, create_router
 from server.tests.test_shared_source_assembly import case, request

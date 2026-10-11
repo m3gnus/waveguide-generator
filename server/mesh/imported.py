@@ -2824,10 +2824,10 @@ def build_imported_mesh(
     if anchor_id is None and len(instances) == 1:
         anchor_id = instances[0]["instance_id"]
     # A return with no WG instance has no throat frame of its own: it is meshed
-    # in the solver frame its project confirmed (server/cadlink/solver_frame.py),
+    # in the solver frame its project confirmed (server/cadlink/interpretation/solver_frame.py),
     # the assembly frame as modelled (+z) until then. The one matrix producer is
     # ``spec_matrix``, which the preview reads as well.
-    from server.cadlink.solver_frame import AS_MODELLED, spec_axis, spec_matrix
+    from server.cadlink.interpretation.solver_frame import AS_MODELLED, spec_axis, spec_matrix
 
     solver_frame = options.get("solver_frame")
     if solver_frame is not None and anchor_id is not None:
@@ -3971,7 +3971,7 @@ def build_imported_mesh(
     # refused: the full domain is always solvable and always right, it just
     # costs the 2-4x the reduction was worth. Refusing instead would strand the
     # user in CAD with nothing to try, so the return solves and the finding
-    # says what was given up and why (``server/cadlink/ingest.py``).
+    # says what was given up and why (``server/cadlink/intake/ingest.py``).
     verification = result.get("symmetry_verification")
     if (
         symmetry_mode == "auto"

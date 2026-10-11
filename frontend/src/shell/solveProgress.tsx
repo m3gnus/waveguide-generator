@@ -84,7 +84,7 @@ export interface OperationProgressLike {
   reason: string | null;
 }
 
-/** `server/cadlink/preparation.py`'s own stages, past "received": the
+/** `server/cadlink/joblane/preparation.py`'s own stages, past "received": the
  * snapshot is validated, then meshed, then ready to submit. Mapped onto the
  * same words a job uses once it exists, so `operationStageWord` and
  * `solveStageWord` are one monotonic sequence read end to end: Received

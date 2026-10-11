@@ -14,8 +14,8 @@ from typing import Any
 
 import pytest
 
-from server.cadlink import ingest as ingest_module
-from server.cadlink.isolation import ChildRefusal
+from server.cadlink.intake import ingest as ingest_module
+from server.cadlink.intake.isolation import ChildRefusal
 
 from cad_backends import BACKENDS, Harness, backend_fixture
 from test_cad_preparation import Refused, _manifest, _revision, _setup

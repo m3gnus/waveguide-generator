@@ -17,9 +17,9 @@ from typing import Any
 import numpy as np
 import pytest
 
-from server.cadlink.frame_infer import infer_record_frame, survey_mesh_from_record
-from server.cadlink.ingest import ingest_bundle
-from server.cadlink.solver_frame import (
+from server.cadlink.interpretation.frame_infer import infer_record_frame, survey_mesh_from_record
+from server.cadlink.intake.ingest import ingest_bundle
+from server.cadlink.interpretation.solver_frame import (
     CONTRACT,
     frame_spec,
     spec_matrix,

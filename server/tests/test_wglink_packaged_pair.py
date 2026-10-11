@@ -19,9 +19,10 @@ import zipfile
 import pytest
 
 from scripts import build_wglink_package
-from server.cadlink import ingest, solve_command
-from server.cadlink.ingest import IngestRefusal
-from server.cadlink.fusion_delivery import capabilities
+from server.cadlink.intake import ingest
+from server.cadlink.intake import solve_command
+from server.cadlink.intake.ingest import IngestRefusal
+from server.cadlink.fusion.fusion_delivery import capabilities
 from server.cadlink.ipc import ipc_folder
 from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import read_wgreturn, source_physical_name, validate_manifest
@@ -495,10 +496,10 @@ def test_the_loader_refuses_a_foreign_protocol_module(tmp_path: Path, monkeypatc
 
 def test_pinned_addin_file_exchange_in_a_separate_process(packaged: Path, tmp_path: Path):
     """The exact shipped add-in exchanges files even with a stale endpoint."""
-    from server.cadlink.fusion_delivery import advertise_fusion_delivery
-    from server.cadlink.fusion_return import publish_return_request
-    from server.cadlink.fusion_outcomes import settle_from_heartbeat
-    from server.cadlink.fusion_status import select_heartbeat
+    from server.cadlink.fusion.fusion_delivery import advertise_fusion_delivery
+    from server.cadlink.fusion.fusion_return import publish_return_request
+    from server.cadlink.fusion.fusion_outcomes import settle_from_heartbeat
+    from server.cadlink.fusion.fusion_status import select_heartbeat
     from server.exports.cad_handoff import publish_fusion_handoff
     from server.tests.test_cad_fusion_operations import _result
 

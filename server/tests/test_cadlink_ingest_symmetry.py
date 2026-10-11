@@ -19,8 +19,8 @@ from typing import Any
 import numpy as np
 import pytest
 
-from server.cadlink.ingest import build_deferred_viewport, ingest_bundle, solve_model_sha256
-from server.cadlink.isolated import _inject_mesh_child_fault
+from server.cadlink.intake.ingest import build_deferred_viewport, ingest_bundle, solve_model_sha256
+from server.cadlink.intake.isolated import _inject_mesh_child_fault
 from server.cadlink.store import CadLinkStore
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 
@@ -418,7 +418,7 @@ def test_symmetric_return_is_cut_to_a_quarter_with_tags_and_areas_intact(
     )
     # The imported path reports the ceiling it was held to, with provenance.
     # The mesh is built in the isolated CAD child, whose environment is an
-    # allowlist with no WG2_* variables (server/cadlink/isolation.py), so the
+    # allowlist with no WG2_* variables (server/cadlink/intake/isolation.py), so the
     # child resolves the ceiling from this host with no override in force.
     from server.mesh.builder import resolve_dense_solver_memory_limit
 
@@ -1137,7 +1137,7 @@ def test_forcing_the_full_domain_on_a_declared_half_is_refused(tmp_path: Path) -
     """There is no other half to restore, so 'full' would solve a different model."""
 
     pytest.importorskip("gmsh")
-    from server.cadlink.ingest import IngestRefusal
+    from server.cadlink.intake.ingest import IngestRefusal
 
     with pytest.raises(IngestRefusal, match="full domain cannot be forced"):
         _ingest(
@@ -1158,7 +1158,7 @@ def test_a_leaking_declared_half_is_refused_instead_of_solved_whole(
     """
 
     pytest.importorskip("gmsh")
-    from server.cadlink.ingest import IngestRefusal
+    from server.cadlink.intake.ingest import IngestRefusal
 
     bundle = _reduced_bundle(tmp_path, "half-leaking")
     with _inject_mesh_child_fault("leaking-reduced-domain"):
@@ -1177,7 +1177,7 @@ def test_a_capped_declared_half_is_refused_because_a_cap_is_a_wall(
     """
 
     pytest.importorskip("gmsh")
-    from server.cadlink.ingest import IngestRefusal
+    from server.cadlink.intake.ingest import IngestRefusal
 
     bundle = _horn_bundle(tmp_path, "half-capped")
     assembly = bundle / "assembly.step"
@@ -1583,7 +1583,7 @@ def test_an_inverted_declared_quarter_is_refused_instead_of_solved(
     """A declared quarter has no whole model to fall back to, so it is refused."""
 
     pytest.importorskip("gmsh")
-    from server.cadlink.ingest import IngestRefusal
+    from server.cadlink.intake.ingest import IngestRefusal
 
     bundle = _reduced_bundle(tmp_path, "quarter-inverted", planes=("x0", "y0"))
     with _inject_mesh_child_fault("inverted-reduced-domain"):

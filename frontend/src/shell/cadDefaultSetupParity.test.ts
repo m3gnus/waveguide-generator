@@ -16,7 +16,7 @@ import { buildCadProjectSetup } from './cadSetupPublisher';
 /**
  * WG's default settings are stated once, in shared/solve-defaults.json. A
  * first-time model Fusion sends is solved by the backend with them
- * (server/cadlink/default_setup.py); a first-time model solved here starts
+ * (server/cadlink/joblane/default_setup.py); a first-time model solved here starts
  * from them. These fixtures are what the backend builds -- its own test,
  * server/tests/test_cad_default_setup.py, checks it against the same files --
  * so an untouched rail must record exactly the same setup.

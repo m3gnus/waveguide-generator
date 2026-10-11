@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from server.cadlink import usage, solve_command
+from server.cadlink import usage
+from server.cadlink.intake import solve_command
 from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT
 from server.cadlink.store import CadLinkStore
 
@@ -135,7 +136,7 @@ def test_direct_operation_and_conflicting_delivery_grant_nothing(tmp_path):
 
 def test_install_endpoint_records_choice_before_deferred_or_failed_activation(tmp_path, monkeypatch):
     from server.cadlink.api import post_install_addin
-    from server.cadlink import addin_update
+    from server.cadlink.fusion import addin_update
     def activate(data):
         assert usage.read_usage(data)["reason"] == "install-action"
         return "pending", "Close Fusion to finish installing WGLink."

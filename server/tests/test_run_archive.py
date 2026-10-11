@@ -414,7 +414,7 @@ def test_the_stored_bundle_copy_leaves_the_captured_document_behind(tmp_path: Pa
     read the user's own bundle instead.
     """
 
-    from server.cadlink.ingest import _stage_bundle_cas, cad_document_member
+    from server.cadlink.intake.ingest import _stage_bundle_cas, cad_document_member
     from server.cadlink.wgreturn import read_wgreturn
     from server.tests.test_cadlink_wgreturn import _manifest, write_bundle
 

@@ -67,7 +67,7 @@ os.environ[DATA_DIR_ENV] = str(SANDBOX_DATA_DIR)
 # Start collection on the product default; HBB tests select the rollback explicitly.
 os.environ.pop("WG2_BEAT_PROVIDER", None)
 # Server startup brings Fusion's WGLink up to this build and installs it where
-# it is missing (server/cadlink/addin_update.py). A test run must never touch
+# it is missing (server/cadlink/fusion/addin_update.py). A test run must never touch
 # the add-in of the person running it, so the startup refresh is off here;
 # tests of the refresh call it with an explicit add-ins folder.
 os.environ["WG2_WGLINK_REFRESH"] = "0"
@@ -117,7 +117,7 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 # -- The WGLink add-in installed on this machine ------------------------------
 #
-# The add-in reconciliation (``server/cadlink/addin_update.py``) resolves
+# The add-in reconciliation (``server/cadlink/fusion/addin_update.py``) resolves
 # Fusion's AddIns directory from the user's home, takes the installer's
 # operation lock inside it, and updates or installs WGLink there. The switch
 # above turns it off for starts in this process, but not everything that runs

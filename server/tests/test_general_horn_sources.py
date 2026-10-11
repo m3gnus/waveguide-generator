@@ -12,7 +12,7 @@ import pytest
 
 from hornlab_mesher.general_horn import FEATURE
 from server.cadlink.store import CadLinkStore
-from server.cadlink.native_source import read_native_source
+from server.cadlink.intake.native_source import read_native_source
 from server.contracts.source_contour import validate_contour_request
 from server.solver.imported import imported_anchor_frame
 from server.source_editor import create_router

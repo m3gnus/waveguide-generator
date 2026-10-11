@@ -23,8 +23,8 @@ import time
 
 import pytest
 
-from server.cadlink import isolation
-from server.cadlink.isolation import (
+from server.cadlink.intake import isolation
+from server.cadlink.intake.isolation import (
     ChildBudget,
     ChildRefusal,
     child_environment,
@@ -127,7 +127,7 @@ def test_staging_is_destroyed_when_the_invocation_ends(step_file: Path) -> None:
 def test_mesher_child_enables_parallel_occ_only_on_qualified_platforms(
     monkeypatch, platform: str, qualified: frozenset[str], enabled: bool
 ) -> None:
-    from server.cadlink import child_main
+    from server.cadlink.intake import child_main
 
     monkeypatch.setattr(child_main, "_OCC_PARALLEL_QUALIFIED_PLATFORMS", qualified)
 
@@ -162,7 +162,7 @@ def test_the_shipped_mesher_child_never_enables_parallel_occ(
     only by the qualification follow-up (a real-STEP serial/parallel test
     through this child on hosted Windows, ubuntu and macOS)."""
 
-    from server.cadlink import child_main
+    from server.cadlink.intake import child_main
 
     assert child_main._OCC_PARALLEL_QUALIFIED_PLATFORMS == frozenset()
 
@@ -400,7 +400,7 @@ def test_windows_kill_on_job_close_removes_the_tree_when_the_parent_dies(
     probe = "\n".join(
         [
             "import sys",
-            "from server.cadlink.isolation import ChildBudget, isolated_step_task",
+            "from server.cadlink.intake.isolation import ChildBudget, isolated_step_task",
             "with isolated_step_task(",
             "    'mesh',",
             "    {'misbehaviour': 'hang', 'child_marker': sys.argv[2], "
@@ -692,7 +692,7 @@ def test_python_level_network_access_is_refused_inside_the_child(
     repo_root = Path(__file__).resolve().parents[2]
     probe = (
         "import sys, socket\n"
-        "import server.cadlink.child_main  # noqa: F401 - imported for its confinement\n"
+        "import server.cadlink.intake.child_main  # noqa: F401 - imported for its confinement\n"
         "try:\n"
         "    socket.create_connection(('127.0.0.1', 9), timeout=0.2)\n"
         "except OSError as exc:\n"
@@ -1143,7 +1143,7 @@ def test_numpy_values_cross_the_boundary_as_plain_json(tmp_path: Path) -> None:
 
     import numpy as np
 
-    from server.cadlink import child_main
+    from server.cadlink.intake import child_main
 
     result = tmp_path / "result.json"
     child_main._write_result(
@@ -1181,7 +1181,7 @@ def test_a_child_exits_when_its_parent_goes_away() -> None:
         "import subprocess, sys\n"
         "child = subprocess.Popen(\n"
         "    [sys.executable, '-s', '-B', '-c',\n"
-        "     'import server.cadlink.child_main as m; import time;"
+        "     'import server.cadlink.intake.child_main as m; import time;"
         " m._watch_parent(); time.sleep(120)'],\n"
         "    start_new_session=True,\n"
         "    stdout=subprocess.DEVNULL,\n"

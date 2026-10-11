@@ -31,14 +31,14 @@ to run with only the standard library, bypassing the contracts package initializ
 | `scripts/verify_model_identity.py:125` | `canonical_bytes` | `canonical_ascii_strict_json` |
 | `server/cadlink/intake/returns_folder.py:174` | `return_inventory [1]` | `canonical_ascii_strict_json` |
 | `server/cadlink/intake/returns_folder.py:182` | `return_inventory [2]` | `canonical_ascii_strict_json` |
-| `server/cadlink/domain_decision.py:65` | `_canonical` | `canonical_normalized_bytes` |
-| `server/cadlink/fusion_outcomes.py:192` | `_log_last_request` | `canonical_ascii_json` |
-| `server/cadlink/fusion_status.py:345` | `_fingerprint_hash` | `canonical_ascii_json` |
-| `server/cadlink/ingest.py:19` | `_canonical` | `canonical_normalized_bytes` |
-| `server/cadlink/native_source.py:16` | `_canonical` | `canonical_ascii_strict_bytes` |
+| `server/cadlink/interpretation/domain_decision.py:65` | `_canonical` | `canonical_normalized_bytes` |
+| `server/cadlink/fusion/fusion_outcomes.py:192` | `_log_last_request` | `canonical_ascii_json` |
+| `server/cadlink/fusion/fusion_status.py:345` | `_fingerprint_hash` | `canonical_ascii_json` |
+| `server/cadlink/intake/ingest.py:19` | `_canonical` | `canonical_normalized_bytes` |
+| `server/cadlink/intake/native_source.py:16` | `_canonical` | `canonical_ascii_strict_bytes` |
 | `server/cadlink/onshape/return_leg.py:21` | `_canonical` | `canonical_ascii_strict_bytes` |
 | `server/cadlink/operations.py:14` | `canonical_json` | `canonical_utf8_strict_json` |
-| `server/cadlink/step_evidence.py:21` | `_canonical` | `canonical_ascii_strict_bytes` |
+| `server/cadlink/intake/step_evidence.py:21` | `_canonical` | `canonical_ascii_strict_bytes` |
 | `server/charts/api.py:157` | `_key` | `canonical_ascii_json` |
 | `server/contracts/source_contour.py:48` | `validate_contour_request` | `canonical_ascii_strict_json` |
 | `server/design/textcfg.py:75` | `_semantic_fingerprint` | `canonical_ascii_json` |

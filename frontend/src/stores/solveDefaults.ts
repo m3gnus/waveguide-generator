@@ -3,7 +3,7 @@
  *
  * That file is the one statement of them: the initial solve settings here
  * (parametric and CAD share them) and the backend's default CAD setup
- * (`server/cadlink/default_setup.py`), which a first-time model sent from
+ * (`server/cadlink/joblane/default_setup.py`), which a first-time model sent from
  * Fusion is solved with, both read it. Change a default there, not here.
  */
 import defaults from '../../../shared/solve-defaults.json';
@@ -42,7 +42,7 @@ export const DEFAULT_POLAR_UI: Readonly<DefaultPolarUi> = Object.freeze({
 /**
  * How many frequencies a default sweep has: `ceil(log2(end / start) *
  * pointsPerOctave) + 1` (50 Hz-20 kHz at 4 per octave: 36). The backend's
- * `sweep_points` (server/cadlink/default_setup.py) states the same rule; the
+ * `sweep_points` (server/cadlink/joblane/default_setup.py) states the same rule; the
  * cases in server/tests/fixtures/cad_default_setup/sweep_points.json hold
  * both to it. The tolerance keeps a whole number of octaves from rounding up.
  */

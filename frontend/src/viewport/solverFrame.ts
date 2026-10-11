@@ -4,7 +4,7 @@ import type { ParsedMSH } from './mshParser';
  * radiates along, taken to solver +Z. Under contract v2 (every new
  * preparation) the frame also fixes the roll: solver +Y is the model's up, so
  * the horizontal polar plane holds the forward axis. The matrices are the
- * server's (`server/cadlink/solver_frame.py`); `solverFrame.v2.fixture.json`
+ * server's (`server/cadlink/interpretation/solver_frame.py`); `solverFrame.v2.fixture.json`
  * pins v2 with no stated document up, and `solverFrame.fixture.json` the v1
  * matrices historical records keep, on both sides. This module only applies
  * the matrices the server hands out, never makes its own. */

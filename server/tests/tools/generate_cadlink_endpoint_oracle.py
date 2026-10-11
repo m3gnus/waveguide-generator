@@ -306,7 +306,7 @@ def main() -> None:
                 and name != "automatic-without-feature"
                 or name == "onshape-linked"
             ):
-                from server.cadlink.ingest import IngestRefusal, ingest_bundle
+                from server.cadlink.intake.ingest import IngestRefusal, ingest_bundle
                 from server.cadlink.store import CadLinkStore
                 from server.mesh.gmsh_worker import _run_in_gmsh_session
 

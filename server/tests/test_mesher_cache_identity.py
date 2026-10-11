@@ -106,7 +106,7 @@ def test_preview_cache_rebuilds_on_same_version_revision_change(monkeypatch, rev
     "_cache_key", "_cache_lookup_key", "_viewport_cache_lookup_key",
 ])
 def test_imported_cache_misses_on_same_version_revision_change(monkeypatch, revision, key_name):
-    from server.cadlink import ingest
+    from server.cadlink.intake import ingest
     from server.mesh.cache import SolverMeshArtifactCache
 
     monkeypatch.setattr(ingest, "_package_version", lambda _name: "same-version")

@@ -10,7 +10,7 @@ import numpy as np
 
 from server.cadlink.wgreturn import cut_provenance, declared_domain_planes, domain_kind
 
-from server.cadlink.solver_frame import (
+from server.cadlink.interpretation.solver_frame import (
     AS_MODELLED,
     AXES,
     CONTRACT,
@@ -34,7 +34,7 @@ from server.cadlink.solver_frame import (
     spec_matrix,
 )
 
-from server.cadlink.domain_interpretation import (
+from server.cadlink.interpretation.domain_interpretation import (
     DECLARATION,
     DomainPlan,
     DomainReadingError,
@@ -46,8 +46,8 @@ from server.cadlink.domain_interpretation import (
     SUPPORTED_PLANES,
     USER,
     USER_LINEAGE,
-    _ORIGIN_PLANE,
-    _export_frame,
+    ORIGIN_PLANE,
+    export_frame,
     plane_words,
     record_key,
 )
@@ -149,7 +149,7 @@ def resolve_for_manifest(
 
 
 def _algorithm_version() -> str:
-    from server.cadlink.frame_infer import ALGORITHM_VERSION
+    from server.cadlink.interpretation.frame_infer import ALGORITHM_VERSION
 
     return ALGORITHM_VERSION
 
@@ -375,7 +375,7 @@ def _snapshot(record: Mapping[str, Any]) -> str:
 
 
 def _cached_suggestion(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, Any] | None:
-    from server.cadlink.frame_infer import ALGORITHM_VERSION
+    from server.cadlink.interpretation.frame_infer import ALGORITHM_VERSION
 
     snapshot = _snapshot(record)
     if not snapshot:
@@ -398,7 +398,7 @@ def ensure_frame_suggestion(
         return None
     from server.mesh.artifact import read_verified_import_mesh
 
-    from server.cadlink.frame_infer import STATUS_UNAVAILABLE, infer_record_frame, unavailable
+    from server.cadlink.interpretation.frame_infer import STATUS_UNAVAILABLE, infer_record_frame, unavailable
 
     cached = _cached_suggestion(store, record)
     if cached is not None:
@@ -546,7 +546,7 @@ def frame_preview(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, A
 
 
 def _is_unlinked(manifest: Mapping[str, Any]) -> bool:
-    from server.cadlink.solver_frame import is_unlinked_manifest
+    from server.cadlink.interpretation.solver_frame import is_unlinked_manifest
 
     return is_unlinked_manifest(manifest)
 
@@ -561,7 +561,7 @@ def _manifest_context(manifest: Mapping[str, Any]) -> tuple[tuple[str, ...], str
             if isinstance(item, Mapping) and item.get("object_id")
         )
     )
-    return body_ids, _export_frame(manifest)
+    return body_ids, export_frame(manifest)
 
 
 def _remembered_applies(
@@ -582,7 +582,7 @@ def _remembered_applies(
 def reading_key(store: CadLinkStore, manifest: Mapping[str, Any], manifest_sha256: str) -> str:
     """Where a lineage's reading is remembered: its project, or this exact snapshot."""
 
-    from server.cadlink.solver_frame import confirmation_key
+    from server.cadlink.interpretation.solver_frame import confirmation_key
 
     return confirmation_key(snapshot_project(store, manifest), manifest_sha256)
 
@@ -687,7 +687,7 @@ def _usable_provenance(
     coordinates this STEP is not written in, so it is not used.
     """
 
-    frame = _export_frame(manifest)
+    frame = export_frame(manifest)
     usable: list[dict[str, Any]] = []
     ignored: list[dict[str, Any]] = []
     for entry in cut_provenance(manifest):
@@ -715,7 +715,7 @@ def _provenance_refusals(
                 (
                     plane,
                     f"{name} cuts this model on {plane_words(plane)} "
-                    f"(the {_ORIGIN_PLANE[plane]} plane), which WG cannot mirror yet. Cut it on "
+                    f"(the {ORIGIN_PLANE[plane]} plane), which WG cannot mirror yet. Cut it on "
                     "the YZ or XZ origin plane instead, or send the whole model.",
                 )
             )

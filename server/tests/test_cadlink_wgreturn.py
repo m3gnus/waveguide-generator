@@ -11,7 +11,7 @@ import re
 
 import pytest
 
-from server.cadlink.fusion_status import FUSION_STATUS_FILENAME, read_fusion_status
+from server.cadlink.fusion.fusion_status import FUSION_STATUS_FILENAME, read_fusion_status
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES
 from server.cadlink.wgreturn import (
     WgReturnError,
@@ -702,7 +702,7 @@ def test_the_degradation_reaches_ingestion_findings_not_just_the_bundle() -> Non
     surfacing it as a finding is the part that actually closes the gap.
     """
 
-    from server.cadlink import ingest
+    from server.cadlink.intake import ingest
 
     source = Path(ingest.__file__).read_text(encoding="utf-8")
     assert "stale-detection-unavailable" in source

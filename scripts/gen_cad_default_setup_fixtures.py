@@ -20,8 +20,8 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from server.cadlink.default_setup import default_setup  # noqa: E402
-from server.cadlink.setup import setup_content  # noqa: E402
+from server.cadlink.joblane.default_setup import default_setup  # noqa: E402
+from server.cadlink.joblane.setup import setup_content  # noqa: E402
 
 
 FIXTURES = _ROOT / "server" / "tests" / "fixtures" / "cad_default_setup"

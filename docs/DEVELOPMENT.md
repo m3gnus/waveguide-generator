@@ -97,7 +97,10 @@ imports. Higher layers may import lower ones. Jobs and CAD Link share an
 orchestration layer; the engine registry sits above the solver adapters it
 selects. API routers stay with their owning packages, with app and CLI assembly
 above them. Tests are excluded from layer coverage, but a separate contract
-keeps `server/contracts/` independent of every other server package.
+keeps `server/contracts/` independent of every other server package. CAD Link
+contracts enforce the four lanes, keep interpretation free of persistence and
+lane imports (including indirect imports), and prevent preparation from importing
+job admission shims. See [Server layout](architecture/CAD-OPERATIONS.md#server-layout).
 
 Each current upward import is an exact, commented `ignore_imports` edge. New
 edges fail, and an exception whose import disappears fails too: remove it as

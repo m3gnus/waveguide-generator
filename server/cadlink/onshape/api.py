@@ -24,7 +24,7 @@ from fastapi import APIRouter, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from server.cadlink.identity import SaveIdentity, design_hash
-from server.cadlink.ingest import IngestRefusal
+from server.cadlink.intake.ingest import IngestRefusal
 from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
 from server.mesh.gmsh_worker import run_on_gmsh_worker

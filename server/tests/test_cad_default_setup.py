@@ -1,7 +1,7 @@
 """WG's default CAD setup: one statement, shared with the frontend.
 
 A first-time model Fusion sends is solved with WG's default settings
-(server/cadlink/default_setup.py). Those defaults live once, in
+(server/cadlink/joblane/default_setup.py). Those defaults live once, in
 shared/solve-defaults.json, which the frontend's initial settings read too; the
 fixtures under fixtures/cad_default_setup pin that the backend builds exactly
 the setup a first-time manual Solve in WG records for the same model
@@ -15,14 +15,14 @@ from pathlib import Path
 
 import pytest
 
-from server.cadlink.default_setup import (
+from server.cadlink.joblane.default_setup import (
     SOLVE_DEFAULTS_PATH,
     default_setup,
     solve_defaults,
     sweep_points,
     unsized_sources,
 )
-from server.cadlink.setup import DEFAULTS_ORIGIN, setup_content, validate_setup
+from server.cadlink.joblane.setup import DEFAULTS_ORIGIN, setup_content, validate_setup
 from server.jobs.models import SolveOptions
 
 
@@ -68,7 +68,7 @@ def test_the_lf_mf_hf_chain_crosses_at_the_role_defaults() -> None:
 
 
 def test_the_shipped_defaults_file_passes_the_shape_check() -> None:
-    from server.cadlink.default_setup import _check_shape
+    from server.cadlink.joblane.default_setup import _check_shape
 
     _check_shape(json.loads(SOLVE_DEFAULTS_PATH.read_text(encoding="utf-8")))
 
@@ -84,7 +84,7 @@ def test_the_shipped_defaults_file_passes_the_shape_check() -> None:
 def test_a_damaged_defaults_file_is_reported_as_damaged(
     monkeypatch, tmp_path: Path, content: str | None, problem: str
 ) -> None:
-    from server.cadlink import default_setup as module
+    from server.cadlink.joblane import default_setup as module
 
     if content is None:
         data = json.loads(SOLVE_DEFAULTS_PATH.read_text(encoding="utf-8"))
@@ -145,7 +145,7 @@ def test_a_source_with_no_suggested_mesh_size_is_named_not_guessed() -> None:
 def test_a_role_default_outside_the_sweep_falls_back_inside_it(monkeypatch) -> None:
     defaults = json.loads(json.dumps(solve_defaults()))
     defaults["sweep"]["start_hz"] = 2000
-    monkeypatch.setattr("server.cadlink.default_setup.solve_defaults", lambda: defaults)
+    monkeypatch.setattr("server.cadlink.joblane.default_setup.solve_defaults", lambda: defaults)
     manifest = {"sources": [
         {"id": "lf", "role": "lf", "suggested_resolution_mm": 10, "default_drive_channel_id": "drive-lf"},
         {"id": "hf", "role": " HF ", "suggested_resolution_mm": 3, "default_drive_channel_id": "drive-hf"},

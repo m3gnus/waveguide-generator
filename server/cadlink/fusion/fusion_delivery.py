@@ -37,7 +37,7 @@ from typing import Any, Callable, Literal, Mapping
 from server.platform.exclusive_rename import take_by_rename
 from server.platform.private_paths import ensure_private_directory
 
-from .ipc import IPC_SUBDIRECTORY, ipc_folder
+from server.cadlink.ipc import IPC_SUBDIRECTORY, ipc_folder
 
 
 CAPABILITIES_FILENAME = "wg-capabilities.json"

@@ -142,14 +142,14 @@ export interface FusionRecoveryRequired {
   phase: string | null;
 }
 
-/** How Fusion's own registry lists WGLink, read-only (server/cadlink/addin_update.py). */
+/** How Fusion's own registry lists WGLink, read-only (server/cadlink/fusion/addin_update.py). */
 export interface WgLinkRegistration {
   /** `unregistered`, `registered`, or a problem: `manual`, `duplicate`, `elsewhere`. */
   state: string;
   detail: string;
 }
 
-/** What WG last decided about Fusion's WGLink: its activation (server/cadlink/addin_update.py). */
+/** What WG last decided about Fusion's WGLink: its activation (server/cadlink/fusion/addin_update.py). */
 export interface WgLinkRefreshReport {
   /** `pending` until Fusion closes; `installed`, `updated` or `replaced` once activated;
    * `awaiting-startup`, `superseded`, `failed`, or a verdict that changed nothing. */
@@ -208,7 +208,7 @@ export interface FusionCadStatus {
    * revision. Absent only from a status this build did not produce. */
   observationFreshness?: CadObservationFreshness | null;
   /** False when WGLink runs no automatic coordination and this is the status it
-   * last reported, at `observedAt` (server/cadlink/fusion_status.py). */
+   * last reported, at `observedAt` (server/cadlink/fusion/fusion_status.py). */
   statusObserved?: boolean;
   observedAt?: string | null;
   /** How long WG treats an observation as current (server FUSION_STATUS_TTL). */

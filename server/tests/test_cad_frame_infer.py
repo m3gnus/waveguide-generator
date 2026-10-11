@@ -15,8 +15,8 @@ import json
 import numpy as np
 import pytest
 
-from server.cadlink import frame_infer
-from server.cadlink.frame_infer import (
+from server.cadlink.interpretation import frame_infer
+from server.cadlink.interpretation.frame_infer import (
     ALGORITHM_VERSION,
     STATUS_ASK,
     STATUS_AUTOMATIC,
@@ -244,7 +244,7 @@ def _record(fixture: fx.FixtureMesh, solver_from_assembly: np.ndarray, planes: l
 
 
 def _solver_matrix(axis: str) -> np.ndarray:
-    from server.cadlink.solver_frame import frame_spec, spec_matrix
+    from server.cadlink.interpretation.solver_frame import frame_spec, spec_matrix
 
     return spec_matrix(frame_spec(axis, {}))
 

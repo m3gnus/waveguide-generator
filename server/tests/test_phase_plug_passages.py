@@ -15,7 +15,7 @@ import pytest
 from hornlab_mesher.assembly_artifact import export_assembly
 from hornlab_mesher.passage_mesh import certify_passage_mesh
 from hornlab_mesher.phase_plug import PhasePlug
-from server.cadlink.native_source import ingest_native_source, read_native_source
+from server.cadlink.intake.native_source import ingest_native_source, read_native_source
 from server.cadlink.store import CadLinkStore
 from server.contracts.source_contour import validate_contour_request
 from server.jobs.runtime import ImportedSolveRefusal, JobRuntime

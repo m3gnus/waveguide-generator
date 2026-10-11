@@ -5,8 +5,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 from server.app import create_app
-from server.cadlink import job_shims, preparation
-from server.cadlink.delivery_status import delivery_status
+from server.cadlink.joblane import job_shims
+from server.cadlink.joblane import preparation
+from server.cadlink.joblane.delivery_status import delivery_status
 from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT, normalize_request, request_digest
 from server.tests.test_app_batch_e import TestClient
 

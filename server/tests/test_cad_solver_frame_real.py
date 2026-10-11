@@ -16,8 +16,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from server.cadlink.ingest import IngestRefusal, ingest_bundle
-from server.cadlink.solver_frame import (
+from server.cadlink.intake.ingest import IngestRefusal, ingest_bundle
+from server.cadlink.interpretation.solver_frame import (
     CONTRACT,
     frame_spec,
     spec_matrix,

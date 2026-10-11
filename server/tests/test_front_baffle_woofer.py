@@ -13,7 +13,7 @@ import pytest
 from hornlab_mesher.front_baffle import FrontBaffle
 from hornlab_mesher.source_contour import ContourDrive, cone, flat, digest
 from hornlab_mesher.woofer_artifact import export_woofer
-from server.cadlink.native_source import ingest_native_source, read_native_source
+from server.cadlink.intake.native_source import ingest_native_source, read_native_source
 from server.cadlink.store import CadLinkStore
 from server.contracts.source_contour import validate_contour_request
 from server.solver import metal

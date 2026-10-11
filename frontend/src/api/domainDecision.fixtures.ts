@@ -1,5 +1,5 @@
 /**
- * Domain decisions in the shapes `server/cadlink/domain_decision.py` seals
+ * Domain decisions in the shapes `server/cadlink/interpretation/domain_decision.py` seals
  * (`_decide`) and a job records (`decision_summary`), for the frontend tests.
  */
 import type { DomainDecision, DomainDecisionCut, DomainDecisionSummary } from './domainDecision';

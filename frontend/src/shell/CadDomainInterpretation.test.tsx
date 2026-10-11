@@ -1,7 +1,7 @@
 /**
  * PLAN.md M1c-auto: the model card states how WG read the model's domain, in
  * one line, and offers Change. No question, no dropdown. The response shapes
- * are the ones `server/cadlink/domain_interpretation.py` records and
+ * are the ones `server/cadlink/interpretation/domain_interpretation.py` records and
  * `GET/PUT /api/cadlink/domain-interpretation` answers.
  */
 import { act } from 'react';

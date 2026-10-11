@@ -9,7 +9,7 @@ import { importedMeshStore } from '../../viewport/importedMeshStore';
  *
  * A CAD solve does not solve the ingestion on screen: the backend prepares
  * the return again, in the solver frame and domain chosen at Solve
- * (`server/cadlink/preparation.py`), and the run names that preparation. When
+ * (`server/cadlink/joblane/preparation.py`), and the run names that preparation. When
  * Solve confirmed an axis other than the one the screen was meshed along --
  * "Prepared along +z; Solve prepares it again along -y" -- the run's solve
  * model differs from the one on screen, and Results rightly called it a

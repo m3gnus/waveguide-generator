@@ -15,11 +15,11 @@ from typing import Any
 import pytest
 
 from server.cadlink.intake import readings
-from server.cadlink import preparation
+from server.cadlink.joblane import preparation
 from server.jobs import cad_preparation as job_preparation
 from server.jobs.cad_intent import intent_of
-from server.cadlink.frame_infer import ALGORITHM_VERSION
-from server.cadlink.solver_frame import (
+from server.cadlink.interpretation.frame_infer import ALGORITHM_VERSION
+from server.cadlink.interpretation.solver_frame import (
     record_confirmation_key,
 )
 from server.cadlink.intake.readings import (
@@ -28,7 +28,7 @@ from server.cadlink.intake.readings import (
     record_solved_frame_provenance,
 )
 
-from server.cadlink import ingest as ingest_module
+from server.cadlink.intake import ingest as ingest_module
 
 from cad_backends import BACKENDS, Harness, backend_fixture, old_only
 from test_cad_preparation import _accept
@@ -149,7 +149,7 @@ def test_a_solve_without_a_confident_axis_still_stops_with_the_reason(real, monk
 
 
 def test_a_confident_axis_the_snapshot_does_not_allow_is_not_used() -> None:
-    from server.cadlink.solver_frame import automatic_solve_axis
+    from server.cadlink.interpretation.solver_frame import automatic_solve_axis
 
     confident = {"status": "automatic", "axis": "+x"}
     assert automatic_solve_axis(confident, ("+z",)) is None  # a declared half: only as modelled
@@ -308,7 +308,7 @@ def test_the_jobs_second_mesh_is_bounded_when_the_two_sides_disagree(tmp_path, m
 def test_the_operations_automatic_axis_is_derived_from_the_jobs_own_record(real, monkeypatch) -> None:
     """One read: were the frame confirmed meanwhile, both say so, never one each."""
 
-    from server.cadlink import preparation as prep
+    from server.cadlink.joblane import preparation as prep
 
     harness, _mesher = real
     _verdict(monkeypatch, status="automatic", axis="+x")

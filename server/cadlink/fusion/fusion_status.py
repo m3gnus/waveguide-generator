@@ -23,9 +23,9 @@ from typing import Any, Mapping
 
 from server.contracts.canonical import canonical_ascii_json
 
-from server.cadlink.fusion_delivery import DELIVERY_VERSION, addin_delivery_version
+from server.cadlink.fusion.fusion_delivery import DELIVERY_VERSION, addin_delivery_version
 
-from .ipc import IPC_SUBDIRECTORY
+from server.cadlink.ipc import IPC_SUBDIRECTORY
 from server.platform.process import background_process_kwargs
 
 

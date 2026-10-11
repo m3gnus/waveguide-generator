@@ -1244,7 +1244,7 @@ class CadSolveAgainRequest(JobModel):
     @field_validator("frame_axis")
     @classmethod
     def known_axis(cls, value: str | None) -> str | None:
-        from server.cadlink.solver_frame import AXES as SOLVER_FRAME_AXES
+        from server.cadlink.interpretation.solver_frame import AXES as SOLVER_FRAME_AXES
 
         if value is not None and value not in SOLVER_FRAME_AXES:
             raise ValueError(f"frame_axis must be one of {', '.join(SOLVER_FRAME_AXES)}")
@@ -1372,7 +1372,7 @@ class CadSource(JobModel):
     return_state_hash: str | None
     identity: CadIdentityProvenance | None = None
     #: The domain decision the run was submitted and solved under, as the job
-    #: recorded it (``server/cadlink/domain_decision.py:decision_summary``):
+    #: recorded it (``server/cadlink/interpretation/domain_decision.py:decision_summary``):
     #: what was read, the planes solved, any reflection, and the frame. Null
     #: for a run saved before decisions existed.
     domain_decision: dict[str, Any] | None = None

@@ -11,8 +11,8 @@ import pytest
 from server.cadlink.intake import returns_folder
 from server.cadlink.operations import request_digest
 from server.cadlink.receipts import receipt_page, record_refusal
-from server.cadlink.receipts_api import list_receipts, router
-from server.cadlink.solve_command import collect_solve_deliveries
+from server.cadlink.intake.receipts_api import list_receipts, router
+from server.cadlink.intake.solve_command import collect_solve_deliveries
 from server.cadlink.store import CadLinkStore, STORE_FORMAT_VERSION
 
 
@@ -253,7 +253,7 @@ def bad_delivery(tmp_path):
 
 
 def reset_collector(monkeypatch):
-    from server.cadlink import solve_command as commands
+    from server.cadlink.intake import solve_command as commands
     for name in ('_refused_claims', '_unreadable_reported'):
         monkeypatch.setattr(commands, name, set())
     for name in ('_pending_refusal_acks', '_ack_failures', '_admission_waits', '_unreadable_waits', '_retention_waits'):

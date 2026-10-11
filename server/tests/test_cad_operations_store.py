@@ -16,7 +16,7 @@ import pytest
 
 from server.cadlink import store as store_module
 from server.cadlink.operations import fusion_mutation_precheck, request_digest
-from server.cadlink.solve_command import (
+from server.cadlink.intake.solve_command import (
     SOLVE_REQUEST_FILENAME,
     PendingSolveCommand,
     collect_solve_deliveries,
@@ -258,7 +258,7 @@ def test_operations_expose_monotonic_acceptance_sequence_when_timestamps_tie(
     listed = store.list_operations()
     assert [row["operation_id"] for row in listed[:2]] == ["cmd-b", "cmd-a"]
 
-    from server.cadlink.preparation import operation_summary
+    from server.cadlink.joblane.preparation import operation_summary
 
     assert operation_summary(first)["acceptedSeq"] == first["accepted_seq"]
 

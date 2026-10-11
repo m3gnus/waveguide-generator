@@ -16,7 +16,7 @@ export interface SolverFrameAxisOption {
   previewFromRecord: RowMajorMatrix;
 }
 
-/** The automatic answer to "which way does it radiate" (`server/cadlink/frame_infer.py`).
+/** The automatic answer to "which way does it radiate" (`server/cadlink/interpretation/frame_infer.py`).
  * Only `reason` is for people; `reasonCode` is bookkeeping and never shown. */
 export interface SolverFrameSuggestion {
   status: 'automatic' | 'ask' | 'unavailable';
