@@ -13,6 +13,7 @@ import signal
 import socket
 import subprocess
 import sys
+from types import SimpleNamespace
 
 from fastapi import FastAPI, Request
 import pytest
@@ -26,12 +27,15 @@ from server.engines.registry import EngineInfo, EngineRegistry
 from server.jobs.api import create_jobs_router
 from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
-from server.platform import backend_owner
+from server.platform import backend_owner, process_tree
 from server.platform.backend_owner import (
     BackendDataDirMismatch, BackendSpawnError, BackendStartTimeout, discover_backend,
 )
 from server.platform.instance import InstanceLock
 from server.tests.test_cli_solve import MESH, TinyEngine, _design, _registry, _request
+from server.tests.backend_breakaway import (
+    WINDOWS_BREAKAWAY_REFUSAL, backend_spawn_refusal_message, require_backend_breakaway,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -211,6 +215,7 @@ def _serve():
 
 
 def test_no_backend_concurrent_clients_ensure_starts_exactly_one(tmp_path, monkeypatch):
+    require_backend_breakaway()
     data_dir = tmp_path / "data"
     design = _design(tmp_path)
     processes = []
@@ -250,6 +255,28 @@ def test_no_backend_concurrent_clients_ensure_starts_exactly_one(tmp_path, monke
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+
+
+def test_cli_reports_windows_breakaway_refusal_without_starting_backend(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    args = _args(_design(tmp_path), data_dir)
+    def refuse():
+        raise OSError(WINDOWS_BREAKAWAY_REFUSAL)
+    def forbidden(*args, **kwargs):
+        pytest.fail("a refused job must not create a backend process")
+    monkeypatch.setattr(backend_owner, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", refuse)
+    monkeypatch.setattr(backend_owner.subprocess, "Popen", forbidden)
+    monkeypatch.setattr(cli, "discover_backend", lambda root: None)
+    monkeypatch.setattr(backend_owner, "_discover", lambda root: None)
+    result, messages, stderr = asyncio.run(_solve(args))
+    expected = backend_spawn_refusal_message(sys.executable)
+    assert result == 5
+    assert messages[-1]["status"] == "refused"
+    assert messages[-1]["error"]["code"] == "backend_spawn_failed"
+    assert messages[-1]["error"]["message"] == expected
+    assert stderr == f"Waveguide Generator backend unavailable: {expected}\n"
+    assert not (data_dir / "logs" / backend_owner.LOG_FILENAME).exists()
 
 
 @pytest.mark.parametrize("error,code,name", [

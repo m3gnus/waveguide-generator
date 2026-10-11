@@ -17,6 +17,11 @@ from launchers import backend_start, ensure_backend as entry
 from launchers.statusapp.controller import StatusController
 from server.platform import backend_owner, process_tree
 from server.platform.paths import migrate_legacy_data_dir, resolve_data_dir, default_runs_dir
+from server.tests import backend_breakaway
+from server.tests.backend_breakaway import (
+    WINDOWS_BREAKAWAY_REFUSAL, backend_breakaway_permitted,
+    backend_spawn_refusal_message, require_backend_breakaway,
+)
 
 
 def isolate_home(tmp_path, monkeypatch):
@@ -112,6 +117,7 @@ def test_default_admission_runs_supported_app_with_gui_workspace_defaults(tmp_pa
 
 def test_started_default_backend_health_workspace_and_migration_equal_gui(tmp_path, monkeypatch, capsys):
     """Real supported serve.py through both starts, with only provisioning disabled."""
+    require_backend_breakaway()
     isolate_home(tmp_path, monkeypatch)
     root = resolve_data_dir()
     processes = []
@@ -217,8 +223,9 @@ def test_windows_breakaway_policy_queries_job(tmp_path, monkeypatch, member, fla
     kernel = SimpleNamespace(GetCurrentProcess=lambda: 42, IsProcessInJob=in_job, QueryInformationJobObject=query)
     monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: kernel, raising=False)
     if expected is None:
-        with pytest.raises(OSError, match="does not allow backend breakaway"):
+        with pytest.raises(OSError) as error:
             process_tree.windows_backend_breakaway_flags()
+        assert str(error.value) == WINDOWS_BREAKAWAY_REFUSAL
     else:
         assert process_tree.windows_backend_breakaway_flags() == expected
 
@@ -251,10 +258,95 @@ def test_windows_spawn_requests_breakaway_and_checks_child_before_job(tmp_path, 
     assert calls == [("detached", 42)]
 
 
+@pytest.mark.parametrize("platform,flags", [("darwin", None), ("linux", None),
+                                           ("win32", 0), ("win32", 0x01000000)])
+def test_breakaway_gate_allows_posix_and_granted_windows_jobs(monkeypatch, platform, flags):
+    calls = []
+    def probe():
+        calls.append(True)
+        assert flags is not None, "POSIX must not query Windows jobs"
+        return flags
+    monkeypatch.setattr(backend_breakaway, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", probe)
+    assert backend_breakaway_permitted()
+    require_backend_breakaway()
+    assert len(calls) == (2 if platform == "win32" else 0)
+
+
+def test_breakaway_gate_skips_only_the_exact_windows_refusal(monkeypatch):
+    def refuse():
+        raise OSError(WINDOWS_BREAKAWAY_REFUSAL)
+    monkeypatch.setattr(backend_breakaway, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", refuse)
+    assert not backend_breakaway_permitted()
+    with pytest.raises(pytest.skip.Exception) as skipped:
+        require_backend_breakaway()
+    assert "runner's Windows job forbids backend breakaway" in str(skipped.value)
+
+
+@pytest.mark.parametrize("message", [
+    "Could not check the caller's Windows job; cannot detach the backend",
+    "Could not query the caller's Windows job; cannot detach the backend",
+])
+def test_breakaway_gate_does_not_hide_job_query_errors(monkeypatch, message):
+    error = OSError(message)
+    def refuse():
+        raise error
+    monkeypatch.setattr(backend_breakaway, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", refuse)
+    with pytest.raises(OSError) as raised:
+        require_backend_breakaway()
+    assert raised.value is error
+
+
+@pytest.mark.parametrize("launcher", [False, True])
+def test_windows_breakaway_refusal_prevents_backend_creation(tmp_path, monkeypatch, capsys, launcher):
+    def refuse():
+        raise OSError(WINDOWS_BREAKAWAY_REFUSAL)
+    monkeypatch.setattr(backend_owner, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", refuse)
+    _assert_breakaway_refusal(tmp_path, monkeypatch, capsys, launcher=launcher)
+
+
+def _assert_breakaway_refusal(tmp_path, monkeypatch, capsys, *, launcher):
+    argv = [sys.executable, "-c", "pass"]
+    def forbidden(*args, **kwargs):
+        pytest.fail("a refused job must not create a backend process")
+    monkeypatch.setattr(backend_owner.subprocess, "Popen", forbidden)
+    monkeypatch.setattr(backend_owner, "_discover", lambda *args: None)
+    if launcher:
+        monkeypatch.setattr(entry, "backend_argv", lambda **kwargs: argv)
+        monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
+        assert entry.main(["--data-dir", str(tmp_path)]) == 5
+        result = capsys.readouterr()
+        assert result.err == ""
+        assert len(result.out.splitlines()) == 1
+        assert json.loads(result.out) == {
+            "ok": False,
+            "error": {"type": "BackendSpawnError", "message": backend_spawn_refusal_message(argv[0])},
+        }
+    else:
+        with pytest.raises(backend_owner.BackendSpawnError) as error:
+            backend_owner.ensure_backend(tmp_path, argv, timeout=1)
+        assert str(error.value) == backend_spawn_refusal_message(argv[0])
+        assert str(error.value.__cause__) == WINDOWS_BREAKAWAY_REFUSAL
+    assert not (tmp_path / "logs").exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires the current Windows Job Object")
+def test_installed_launcher_refuses_when_runner_job_forbids_breakaway(tmp_path, monkeypatch, capsys):
+    if backend_breakaway_permitted():
+        pytest.skip("this runner permits backend breakaway; granted startup tests cover it")
+    _assert_breakaway_refusal(tmp_path, monkeypatch, capsys, launcher=True)
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="requires Windows Job Objects and CREATE_BREAKAWAY_FROM_JOB")
 @pytest.mark.parametrize("allow_breakaway", [False, True])
 def test_windows_backend_survives_kill_on_close_caller_job(tmp_path, allow_breakaway):
     """Run the real owner spawn in a caller held by our kill-on-close job."""
+    if allow_breakaway:
+        # A breakaway-capable inner job cannot release a forbidding runner job.
+        require_backend_breakaway()
     record = tmp_path / "child.json"
     ready = tmp_path / "ready"
     script = (
@@ -284,8 +376,9 @@ def test_windows_backend_survives_kill_on_close_caller_job(tmp_path, allow_break
             time.sleep(.01)
         answer = json.loads(record.read_text())
         if not allow_breakaway:
-            assert "breakaway" in answer["error"]
+            assert answer == {"error": backend_spawn_refusal_message(sys.executable)}
         else:
+            assert "error" not in answer, answer
             pid = answer["pid"]
         job.close()
         job = None

@@ -24,6 +24,7 @@ from server.platform.backend_owner import (
     ensure_backend,
 )
 from server.platform.instance import LOCK_FILENAME, InstanceLock, pid_is_running, read_lock_info
+from server.tests.backend_breakaway import require_backend_breakaway
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -230,6 +231,7 @@ def test_discover_running_backend(data_dir: Path, fake) -> None:
 
 
 def test_data_dir_mismatch_waits_until_deadline(data_dir: Path, tmp_path: Path, fake) -> None:
+    require_backend_breakaway()
     owner = fake.start(fake(reported=str(tmp_path / "elsewhere")))
     _wait_until(
         lambda: (info := read_lock_info(data_dir / "locks" / LOCK_FILENAME)) and info.port > 1,
@@ -245,6 +247,7 @@ def test_data_dir_mismatch_waits_until_deadline(data_dir: Path, tmp_path: Path, 
 
 
 def test_unrelated_pid_on_metadata_port_times_out(data_dir: Path, tmp_path: Path, fake) -> None:
+    require_backend_breakaway()
     unrelated = fake.start(fake(reported=str(tmp_path / "elsewhere")))
     _wait_until(
         lambda: (info := read_lock_info(data_dir / "locks" / LOCK_FILENAME)) and info.port > 1,
@@ -286,6 +289,7 @@ def test_ensure_returns_running_backend_without_spawning(data_dir: Path, fake) -
 
 
 def test_ensure_starts_when_lock_is_stale(data_dir: Path, fake) -> None:
+    require_backend_breakaway()
     (data_dir / "locks" / LOCK_FILENAME).write_text(json.dumps({"pid": 1, "port": 1}) + "\n")
     handle = ensure_backend(data_dir, fake(), timeout=10)
     assert handle.pid != os.getpid()
@@ -296,6 +300,7 @@ def test_ensure_starts_when_lock_is_stale(data_dir: Path, fake) -> None:
 
 
 def test_concurrent_clients_start_exactly_one_backend(data_dir: Path, fake, monkeypatch) -> None:
+    require_backend_breakaway()
     monkeypatch.setenv("FAKE_STARTUP_DELAY", "0.5")
     clients = [
         fake.start(
@@ -315,6 +320,7 @@ def test_concurrent_clients_start_exactly_one_backend(data_dir: Path, fake, monk
 
 
 def test_spawn_that_never_becomes_healthy_times_out(data_dir: Path, fake) -> None:
+    require_backend_breakaway()
     started = time.monotonic()
     with pytest.raises(BackendStartTimeout, match="Terminated and waited for.*child pid"):
         ensure_backend(data_dir, fake("hang"), timeout=0.8)
@@ -329,6 +335,7 @@ def test_spawn_that_never_becomes_healthy_times_out(data_dir: Path, fake) -> Non
 
 
 def test_spawn_failure_reports_exit_code_and_log_tail(data_dir: Path, fake) -> None:
+    require_backend_breakaway()
     with pytest.raises(BackendSpawnError, match="exited with code 1.*") as error:
         ensure_backend(data_dir, fake("fail"), timeout=10)
     assert "intentional startup failure" in str(error.value)
@@ -338,6 +345,7 @@ def test_spawn_failure_reports_exit_code_and_log_tail(data_dir: Path, fake) -> N
 
 
 def test_spawn_exiting_2_adopts_delayed_owner(data_dir: Path, fake) -> None:
+    require_backend_breakaway()
     # Delay is injectable in the fake; exceed the removed five-second grace.
     owner = fake.start(fake(delay=5.3))
     _wait_until(lambda: read_lock_info(data_dir / "locks" / LOCK_FILENAME))
@@ -459,6 +467,7 @@ def test_timeout_kills_child_ignoring_termination(data_dir: Path, fake, monkeypa
 
 
 def test_transient_folder_mismatch_does_not_abort_adoption(data_dir: Path, fake, monkeypatch) -> None:
+    require_backend_breakaway()
     owner = fake.start(fake("hold"))
     _wait_until(lambda: read_lock_info(data_dir / "locks" / LOCK_FILENAME))
     calls = []
@@ -482,6 +491,7 @@ def test_transient_folder_mismatch_does_not_abort_adoption(data_dir: Path, fake,
 def test_lock_loser_waits_to_deadline_and_reports_conflict(
     data_dir: Path, fake, monkeypatch, matching_pid: bool
 ) -> None:
+    require_backend_breakaway()
     lock = InstanceLock(data_dir / "locks")
     info = lock.acquire(4000)
     monkeypatch.setattr(
