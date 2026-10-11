@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -139,6 +140,7 @@ def test_health_and_placeholder_shell(tmp_path: Path) -> None:
     assert health.json()["version"] == VERSION
     assert health.json()["uptime"] >= 0
     assert health.json()["data_dir"] == str(tmp_path.absolute())
+    assert health.json()["pid"] == os.getpid()
 
     shell = client.get("/")
     assert shell.status_code == 200

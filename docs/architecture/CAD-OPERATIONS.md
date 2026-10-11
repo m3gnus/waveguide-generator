@@ -1008,6 +1008,18 @@ need.
     12 (`HIGHEST_READABLE_FORMAT`), and needs a restorable snapshot
     (`docs/reference/UPDATE-TRANSACTION-CONTRACT.md` §6).
 
+## Backend ownership
+
+One backend owns a data folder: the process holding the instance lock on
+`<data dir>/locks/server.pid`. `server/platform/backend_owner.py` is how a client (the
+CLI, the add-in launcher) reaches it. `discover_backend` trusts a recorded owner only
+if the lock is really held and `GET /health` on its port reports the same data folder
+and the same pid; anything else is a refusal with a reason, never a fresh private data
+folder. `ensure_backend` serialises start-up on `<data dir>/locks/backend-start.lock`,
+re-discovers under it, then spawns the supported backend detached with its output in
+`logs/backend-start.log`. A spawn that exits 2 lost the instance-lock race and its
+winner is adopted. Two clients starting at once therefore get one backend.
+
 ## Solve-command delivery
 
 A WG-bound Fusion request reaches WG as its own file:

@@ -903,6 +903,9 @@ def create_app(
             "commit": BUILD_IDENTITY["commit"],
             "uptime": max(0.0, time.monotonic() - started),
             "data_dir": str(resolved_data_dir),
+            # Lets a client check that the port answers as the process that holds
+            # the instance lock (server/platform/backend_owner.py).
+            "pid": os.getpid(),
         }
 
     @application.get("/api/capabilities")
