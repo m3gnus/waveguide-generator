@@ -54,6 +54,7 @@ import {
   type ParameterTab,
 } from './parameterRegistry';
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
+import { useCadFeedbackError } from '../shell/cadSetupPublisher';
 import { fusionWorkflowView, onshapeWorkflowView } from '../shell/CadLinkPanel';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 import {
@@ -644,6 +645,7 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
     cadLinkCoordinatorBridge.getSnapshot,
     cadLinkCoordinatorBridge.getSnapshot,
   );
+  const error = useCadFeedbackError(cadCoordinator.error);
   const onshape = preferences.cadApplication === 'onshape';
   const workflow = onshape
     ? onshapeWorkflowView(cadCoordinator.onshapeStatus)
@@ -706,7 +708,7 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
       driftedParameters={cadCoordinator.fusionStatus?.link?.driftedParameters}
     />
     {workflow.action && <button className="primary linked-design-action" disabled={cadCoordinator.sendingToFusion} onClick={send}>{cadCoordinator.sendingToFusion ? 'Sending…' : actionLabel}</button>}
-    {cadCoordinator.error && <div className="field-error" role="alert">{cadCoordinator.error}</div>}
+    {error && <div className="field-error" role="alert">{error}</div>}
     {cadCoordinator.status && <p className="section-note" role="status">{cadCoordinator.status}</p>}
   </Section>;
 }
@@ -1051,6 +1053,7 @@ function CadMeshDetail() {
     cadLinkCoordinatorBridge.getSnapshot,
     cadLinkCoordinatorBridge.getSnapshot,
   );
+  const error = useCadFeedbackError(cadCoordinator.error);
   const driftSources = new Set([...state.areaDriftSourceIds, ...(state.ingestRecord?.role_findings ?? [])
     .filter((finding) => String(finding.kind).includes('area-drift'))
     .map((finding) => String(finding.source_id))]);
@@ -1069,7 +1072,7 @@ function CadMeshDetail() {
       {driftSources.has(source.id) && <ToggleRow id={`drift-${source.id}`} label={CAD_CONTROLS.areaDrift.label} revealId={CAD_CONTROLS.areaDrift.reveal.id} help="Explicitly accept the source-area mismatch and re-ingest. The override is recorded as a finding on the prepared model." checked={state.areaDriftOverrides.includes(source.id)} onChange={(checked) => state.setAreaDriftOverride(source.id, checked)}/>}
     </div>)}
     {state.ingestStaleReason && <div className="field-error" role="status">{state.ingestStaleReason} Rebuild the mesh before solving.</div>}
-    {cadCoordinator.error && <div className="field-error" role="alert">{cadCoordinator.error}</div>}
+    {error && <div className="field-error" role="alert">{error}</div>}
     {cadCoordinator.status && <p className="section-note" role="status">{cadCoordinator.status}</p>}
   </>;
 }

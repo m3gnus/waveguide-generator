@@ -282,6 +282,11 @@ export function startCadSetupPublisher(
 /** Save feedback remains available when the CAD coordinator is absent. */
 export const useCadSetupPublisherStore = create<{ error: string | null }>(() => ({ error: null }));
 
+/** All CAD feedback surfaces give action errors precedence over setup-save failures. */
+export function useCadFeedbackError(coordinatorError: string | null): string | null {
+  return useCadSetupPublisherStore((state) => coordinatorError ?? state.error);
+}
+
 export function CadSetupPublisher() {
   useEffect(() => startCadSetupPublisher({
     onSaveState: (state) => useCadSetupPublisherStore.setState({

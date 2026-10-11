@@ -1,9 +1,9 @@
-import { act } from 'react';
+import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadDeliveryStatus, CadOperationSummary } from '../api/cadOperations';
-import { jobsSocket, type CadOperationListener } from '../api/jobsSocket';
-import { resetCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
+import { jobsSocket, JobsSocketManager, type CadOperationListener, type JobsWebSocketLike } from '../api/jobsSocket';
+import { resetCadDeliveryHealthStore, useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import { Shell } from './Shell';
 import type { FusionCadStatus } from '../api/cadlink';
 import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
@@ -14,9 +14,11 @@ import { AttentionNotices, cadSourceLine } from './TopBar';
 import { PanelVisibilityContext, type PanelVisibility } from './panelVisibility';
 import { bindWorkspaceNavigation, publishVisiblePanels, resetWorkspaceNavigationForTests } from './workspaceNavigation';
 
-vi.mock('./CadLinkCoordinator', async (original) => ({
-  ...await original<typeof import('./CadLinkCoordinator')>(), CadLinkCoordinator: () => null,
-}));
+const app = vi.hoisted(() => ({ coordinatorMounted: false }));
+vi.mock('./CadLinkCoordinator', async (original) => {
+  const actual = await original<typeof import('./CadLinkCoordinator')>();
+  return { ...actual, CadLinkCoordinator: () => app.coordinatorMounted ? createElement(actual.CadLinkCoordinator) : null };
+});
 vi.mock('./JobsCoordinator', async (original) => ({
   ...await original<typeof import('./JobsCoordinator')>(), JobsCoordinator: () => null,
 }));
@@ -89,6 +91,7 @@ describe('the CAD Link panel section', () => {
     vi.useFakeTimers();
     resetCadOperationsStore();
     vi.spyOn(jobsSocket, 'subscribeCadOperations').mockImplementation((next) => { listener = next; return vi.fn(); });
+    app.coordinatorMounted = false;
     reads = 0;
     listed = [];
     answer = status();
@@ -128,12 +131,12 @@ describe('the CAD Link panel section', () => {
     expect(host.textContent).toEqual(text ? expect.stringContaining(text) : '');
     expect(useCadOperationsStore.getState().deliveryStatus).toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(10 * WAITING_READ_MS); });
-    expect(reads).toBe(1);
+    expect(reads).toBe(2);
     await act(async () => {
       listener.deliveryStatus!(status({ declined: 'Restart is approved.' }));
     });
     expect(host.textContent).toContain('Restart is approved.');
-    expect(reads).toBe(1);
+    expect(reads).toBe(2);
   });
 
   it('recovers waiting intake without the coordinator and stops its clock when the request is taken', async () => {
@@ -158,10 +161,11 @@ describe('the CAD Link panel section', () => {
     expect(useCadOperationsStore.getState().operations).toEqual({});
   });
 
-  it('reads once while nothing waits, and not on a clock', async () => {
+  it('reads on mount and panel reveal, and not on an idle clock', async () => {
     await mount();
     await act(async () => { await vi.advanceTimersByTimeAsync(10 * WAITING_READ_MS); });
-    expect(reads).toBe(1);
+    // Initial visibility queues one follow-up to the shell's in-flight mount read.
+    expect(reads).toBe(2);
     expect(host.textContent).toBe('');
   });
 
@@ -190,7 +194,7 @@ describe('the CAD Link panel section', () => {
     });
     expect(host.textContent).toContain('has not finished a pass since');
     // The push was enough: no clock was needed to learn it.
-    expect(reads).toBe(1);
+    expect(reads).toBe(2);
   });
 
   it('reads again when the CAD Link panel comes into view (N1)', async () => {
@@ -215,6 +219,46 @@ describe('the CAD Link panel section', () => {
     });
     expect(reads).toBe(atMount + 1);
     expect(host.textContent).toContain('No CAD Link folder is selected.');
+  });
+
+  it('counts a jobs-channel refusal once in the unseen badge with the coordinator mounted', async () => {
+    app.coordinatorMounted = true;
+    const socket: JobsWebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send() {}, close() {},
+    };
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    vi.mocked(jobsSocket.subscribeCadOperations).mockImplementation((next) => manager.subscribeCadOperations(next));
+    manager.start();
+    try {
+      await act(async () => {
+        root.render(<><Shell/><AttentionNotices/></>);
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      expect(jobsSocket.subscribeCadOperations).toHaveBeenCalledTimes(2);
+      const refusal = { operationId: 'refused', file: 'refused.json', reason: 'It does not name its kind.', at: '2026-09-21T12:00:01Z' };
+      const message = (value: unknown) => socket.onmessage?.({ data: JSON.stringify(value) });
+      await act(async () => {
+        message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+        message({ v: 1, kind: 'cadInboxRefusal', refusal });
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      expect(useCadOperationsStore.getState().refusals).toEqual([refusal]);
+      expect(useCadDeliveryHealthStore.getState().refusals).toEqual([refusal]);
+      expect(useCadDeliveryHealthStore.getState().unseenRefusals).toBe(1);
+      expect(host.querySelectorAll('.attention-refused')).toHaveLength(1);
+      expect(host.querySelector('.attention-refused')?.textContent).toBe('A CAD request was refused · Show');
+      await act(async () => {
+        // Reconnection can replay both the push and the server's retained list.
+        message({ v: 1, kind: 'cadInboxRefusal', refusal });
+        message({ v: 1, kind: 'cadDeliveryStatus', status: status({ recentRefusals: [refusal] }) });
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      expect(useCadDeliveryHealthStore.getState().refusals).toEqual([refusal]);
+      expect(useCadDeliveryHealthStore.getState().unseenRefusals).toBe(1);
+    } finally {
+      manager.stop();
+    }
   });
 
   it('lists refusals the server kept for a page that connected late', async () => {

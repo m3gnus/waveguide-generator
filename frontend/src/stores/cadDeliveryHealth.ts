@@ -39,6 +39,7 @@ export function connectCadDeliveryHealth(): () => void {
   let loadRevision = 0;
   const changedDuringLoad = new Set<string>();
   let reading = false;
+  let readAgain = false;
   let statusRevision = 0;
   // Only intake state is retained here; operation cards and recovery stay with their owners.
   const intake = new Map<string, Pick<CadOperationSummary, 'state' | 'attemptGeneration' | 'updatedAt'>>();
@@ -55,13 +56,17 @@ export function connectCadDeliveryHealth(): () => void {
   };
   let timer: ReturnType<typeof setInterval> | null = null;
   const read = () => {
-    if (reading) return;
+    if (!active) return;
+    if (reading) { readAgain = true; return; }
     reading = true;
     const started = statusRevision;
     void getDeliveryStatus().then((status) => {
       // A push received during this read is newer than its snapshot.
       if (active && started === statusRevision) useCadDeliveryHealthStore.getState().setStatus(status);
-    }).catch(() => undefined).finally(() => { reading = false; });
+    }).catch(() => undefined).finally(() => {
+      reading = false;
+      if (readAgain) { readAgain = false; read(); }
+    });
   };
   const updateWaiting = () => {
     const waiting = [...intake.values()].some((item) => item.state === 'received');

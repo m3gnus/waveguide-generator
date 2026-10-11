@@ -6,6 +6,7 @@ import type { CadRealizedDimensions, CadReturnBundle, CadReturnIngestRecord } fr
 import { sharedDelayMode } from '../results/crossoverSpec';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
+import { CadSetupPublisher, useCadSetupPublisherStore } from '../shell/cadSetupPublisher';
 import { buildParameterPaletteEntries } from '../shell/TopBar';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 import { channelDriverPresent, channelDriverWire, driverEditedKeys, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
@@ -131,6 +132,7 @@ describe('ParamPanel inventory UX', () => {
     resetCadPreparationStore();
     resetSolveOptionsStore();
     resetDriverLibraryStore();
+    useCadSetupPublisherStore.setState({ error: null });
     workspaceModeStore.setMode('parametric');
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     host = document.createElement('div');
@@ -142,6 +144,7 @@ describe('ParamPanel inventory UX', () => {
     act(() => root.unmount());
     host.remove();
     queryClient.clear();
+    useCadSetupPublisherStore.setState({ error: null });
     workspaceModeStore.setMode('parametric');
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -471,6 +474,44 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('historical, not current dimensions');
     expect(host.querySelector('.realized-dimension-list.stale')).not.toBeNull();
     expect(host.textContent).toContain('190mm');
+  });
+
+  it('shows a publisher failure in the CAD mesh alert without the coordinator mounted', async () => {
+    vi.useFakeTimers();
+    const save = vi.fn(async () => { throw new Error('offline'); });
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => String(input).endsWith('/project-setups')
+      ? save() : Promise.resolve(new Response('{}', { status: 404 }))));
+    try {
+      act(() => {
+        useCadReturnStore.getState().selectBundle(cadBundle, 'wgl_settings');
+        setCadReady();
+        workspaceModeStore.setMode('cad');
+        root.render(withQueryClient(<><CadSetupPublisher/><ParamPanel tab="simulation" /></>));
+      });
+      expect(cadLinkCoordinatorBridge.getSnapshot().error).toBeNull();
+      const alert = () => host.querySelector('[data-section="Mesh detail"] [role="alert"]');
+      expect(alert()).toBeNull();
+      act(() => useCadReturnStore.getState().setRigidSize(6));
+      await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+      expect(save).toHaveBeenCalledTimes(3);
+      expect(alert()?.textContent).toBe('Settings not saved. Edit a setting to retry.');
+      expect(cadLinkCoordinatorBridge.getSnapshot().error).toBeNull();
+      // The shared selector preserves action-error precedence at both settings sites.
+      const snapshot = { ...cadLinkCoordinatorBridge.getSnapshot(), error: 'CAD action failed.' };
+      vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue(snapshot);
+      act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+      expect(alert()?.textContent).toBe('CAD action failed.');
+      act(() => {
+        root.render(withQueryClient(<ParamPanel tab="geometry" />));
+      });
+      const linkedAlert = () => host.querySelector('[data-section="Linked design"] [role="alert"]');
+      expect(linkedAlert()?.textContent).toBe('CAD action failed.');
+      vi.mocked(cadLinkCoordinatorBridge.getSnapshot).mockReturnValue({ ...snapshot, error: null });
+      act(() => root.render(withQueryClient(<ParamPanel tab="geometry" />)));
+      expect(linkedAlert()?.textContent).toBe('Settings not saved. Edit a setting to retry.');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('renders every moved CAD control in the Simulation rail and submits its visible crossover state', () => {
