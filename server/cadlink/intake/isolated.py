@@ -267,6 +267,27 @@ def build_fem_region_mesh_isolated(
             if not isinstance(result, dict) or artifact is None:
                 raise ChildRefusal(MESH_STAGE, "the FEM region child staged no mesh")
             result["msh_text"] = artifact.read_text(encoding="utf-8")
+            # Read only the verified mesh here; STEP/OCC and meshing stay in
+            # the resource-limited child. Areas describe the retained triangles.
+            from server.mesh.fem_regions import read_fem_region_domain
+            import numpy as np
+
+            domain = read_fem_region_domain(result["msh_text"], str(region["region_id"]))
+            groups = {}
+            for name, triangles in domain.surfaces.items():
+                physical = result["physical_names"][name]
+                corners = domain.points_mm[triangles]
+                area = 0.5 * np.linalg.norm(
+                    np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]),
+                    axis=1,
+                ).sum()
+                groups[physical["group_id"]] = {
+                    "kind": physical["kind"],
+                    "area_mm2": float(area),
+                    "face_count": len(physical["entities"]),
+                    "triangle_count": int(len(triangles)),
+                }
+            result["stats"]["surface_groups"] = groups
             return result
     except ChildRefusal as exc:
         _reraise_typed(exc)

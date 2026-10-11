@@ -19,10 +19,12 @@ from typing import Any
 from server.contracts.canonical import canonical_normalized_bytes as _canonical
 
 from server.cadlink.intake.isolated import (
+    build_fem_region_mesh_isolated,
     build_imported_mesh_isolated,
     build_imported_viewport_mesh_isolated,
 )
 from server.cadlink.intake.isolation import ChildRefusal
+from server.cadlink.build_flags import fem_regions_enabled
 from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
 from server.cadlink.store import CadLinkStore
 from server.design.textcfg import parse
@@ -33,7 +35,7 @@ from server.mesh.imported import (
     validate_imported_sizes,
     verify_artifact_reduced_orientation,
 )
-from server.mesh.artifact import mesh_text_sha256
+from server.mesh.artifact import mesh_text_sha256, read_verified_import_mesh
 from server.integration.mesher_identity import mesher_identity
 from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
@@ -185,6 +187,13 @@ def solve_model_sha256(record: Mapping[str, Any]) -> str:
     }
     if record.get("native_source") is not None:
         solve_model["native_source"] = record["native_source"]
+    if record.get("fem_regions"):
+        solve_model["fem_regions"] = [
+            {key: region[key] for key in (
+                "region_id", "mesh_content_sha256", "medium", "surface_groups",
+            )}
+            for region in record["fem_regions"]
+        ]
     return "sha256:" + hashlib.sha256(_canonical(solve_model)).hexdigest()
 
 
@@ -939,14 +948,19 @@ def _load_cached_mesh(mesh_path: Path, metadata_path: Path) -> dict[str, Any] | 
         return None
 
 
-def _write_cache(mesh_path: Path, metadata_path: Path, result: Mapping[str, Any]) -> None:
+def _write_cache(
+    mesh_path: Path, metadata_path: Path, result: Mapping[str, Any], *, exact_bytes: bool = False,
+) -> None:
     mesh_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = publish_staging_directory(mesh_path.parent, ".wg2-import-mesh-")
     try:
         staged_mesh = temporary / mesh_path.name
         staged_meta = temporary / metadata_path.name
         msh_text = str(result["msh_text"])
-        staged_mesh.write_text(msh_text, encoding="utf-8")
+        if exact_bytes:
+            staged_mesh.write_bytes(msh_text.encode("utf-8"))
+        else:
+            staged_mesh.write_text(msh_text, encoding="utf-8")
         sidecar = {
             key: value
             for key, value in result.items()
@@ -1662,6 +1676,7 @@ def ingest_bundle(
         else built["normalisation"]
     )
     mesh_content_sha256 = mesh_text_sha256(str(built["msh_text"]))
+    fem_regions = _mesh_fem_regions(bundle, imports_root)
     # The one domain decision (``domain_decision.py``): made here, once, on the
     # mesh this snapshot is solved with; the model card, the Solve card's plan,
     # the preparation, every submission and the job all read it.
@@ -2030,6 +2045,8 @@ def ingest_bundle(
         # Cross-ingestion run matching must cover the prepared solver input,
         # including the domain and source interpretation. The viewport's
         # centre/area fingerprint is deliberately insufficient for this.
+        if fem_regions:
+            record["fem_regions"] = fem_regions
         record["solve_model_sha256"] = solve_model_sha256(record)
         record["report_sha256"] = "sha256:" + hashlib.sha256(_canonical(record)).hexdigest()
         return _canonical(record).decode("utf-8")
@@ -2050,6 +2067,59 @@ def ingest_bundle(
     except Exception:  # noqa: BLE001 - memory for the next version, never this one's outcome
         logger.warning("Could not remember the domain reading of %s", published.get("ingest_id"), exc_info=True)
     return published
+
+
+def _mesh_fem_regions(bundle: WgReturnBundle, imports_root: Path) -> list[dict[str, Any]]:
+    """Mesh every declared member after the exterior, retaining verified inputs."""
+
+    regions = bundle.manifest["scope"].get("fem_regions", [])
+    if not regions:
+        return []
+    if not fem_regions_enabled():
+        raise IngestRefusal(
+            "stage 7 meshing",
+            "This return declares FEM regions; this Waveguide Generator has FEM regions turned off.",
+        )
+    records = []
+    for region in regions:
+        member = bundle.manifest["files"][region["file"]]
+        try:
+            built = build_fem_region_mesh_isolated(
+                bundle.members[region["file"]], region,
+                expected_sha256=member["sha256"],
+                expected_size_bytes=member["size_bytes"],
+            )
+        except Exception as exc:
+            # Typed face-matching errors already name the group. Child crashes
+            # and timeouts also block ingestion, with the region added here.
+            raise IngestRefusal(
+                "stage 7 meshing", f"FEM region {region['name']!r}: {exc}",
+            ) from exc
+        digest = mesh_text_sha256(built["msh_text"])
+        lookup_key = hashlib.sha256(_canonical({
+            "pipeline_contract": "wg-import-fem-v1",
+            "region": region, "member": member, "mesher": mesher_identity(),
+        })).hexdigest()
+        # Bind the path to output bytes as well as inputs: a later meshing run
+        # cannot overwrite the artifact named by an immutable older record.
+        key = hashlib.sha256(_canonical({"lookup_key": lookup_key, "sha256": digest})).hexdigest()
+        path = imports_root / "meshes" / key / "fem" / f"{region['region_id']}.msh"
+        _write_cache(path, path.with_suffix(".json"), built, exact_bytes=True)
+        retained = {
+            **region,
+            "member_sha256": member["sha256"],
+            "member_size_bytes": member["size_bytes"],
+            "mesh_store_path": str(path),
+            "mesh_cache_key": key,
+            "mesh_lookup_key": lookup_key,
+            "mesh_content_sha256": digest,
+            "mesh_size_bytes": len(built["msh_text"].encode("utf-8")),
+            "stats": built["stats"],
+            "physical_names": built["physical_names"],
+        }
+        read_verified_import_mesh(retained)
+        records.append(retained)
+    return records
 
 
 def _fem_region_evidence(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:

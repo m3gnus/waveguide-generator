@@ -354,6 +354,12 @@ def test_ingest_retains_declared_fem_region_evidence(monkeypatch, tmp_path: Path
     source_id = manifest["sources"][0]["id"]
     monkeypatch.setattr("server.cadlink.intake.ingest.build_imported_mesh_isolated",
                         lambda *_args, **_kwargs: _built_for_source(source_id))
+    monkeypatch.setattr("server.cadlink.intake.ingest.build_fem_region_mesh_isolated",
+                        lambda *_args, **_kwargs: {
+                            "msh_text": "$MeshFormat\n4.1 0 8\n$EndMeshFormat\n",
+                            "stats": {"tetrahedra": 1, "nodes": 4, "surface_groups": {}},
+                            "physical_names": {},
+                        })
     store = CadLinkStore(tmp_path / "cadlink.db")
     try:
         record = ingest_bundle(bundle, {

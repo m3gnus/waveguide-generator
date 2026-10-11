@@ -1,0 +1,217 @@
+"""Declared regions through real intake, isolated meshing and verified storage."""
+
+from copy import deepcopy
+import hashlib
+import json
+from pathlib import Path
+import sqlite3
+
+import pytest
+
+from server.cadlink.intake import ingest
+from server.cadlink.store import CadLinkStore
+from server.mesh.artifact import ImportedMeshArtifactError, read_verified_fem_region_mesh
+from server.mesh.fem_regions import read_fem_region_domain
+from server.tests.test_cadlink_wgreturn import _manifest, write_bundle
+from server.tests.test_fem_regions import CONE, _face, _region, _write_step
+
+
+def _bundle(root, *, regions=None):
+    root.mkdir(parents=True)
+    step = _write_step(root / "box.step").read_bytes()
+    manifest = _manifest(step)
+    manifest["instances"] = []
+    manifest["sources"] = []
+    manifest["coordinate_system"]["solver_anchor_instance_id"] = None
+    manifest["assembly"]["bbox_mm"] = [[0, 0, 0], [40, 30, 20]]
+    manifest["scope"]["included"] = [{
+        "object_id": "box", "name": "Box", "body_kind": "solid", "visible": True,
+        "external_reference": "local",
+    }]
+    manifest["required_features"].append("fem-regions-v1")
+    manifest["scope"]["fem_regions"] = regions if regions is not None else [_region()]
+    for region in manifest["scope"]["fem_regions"]:
+        manifest["files"][region["file"]] = {
+            "sha256": "sha256:" + hashlib.sha256(step).hexdigest(), "size_bytes": len(step),
+            "media_type": "model/step", "purpose": "fem-region",
+        }
+    bundle = write_bundle(root, manifest, step=step)
+    for region in manifest["scope"]["fem_regions"]:
+        path = bundle / region["file"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(step)
+    return bundle
+
+
+def _ingest(bundle, root):
+    store = CadLinkStore(root / "cadlink.db")
+    try:
+        return ingest.ingest_bundle(bundle, {
+            "rigid_size_mm": 12, "transition_mm": 12,
+            "source_size_mm": {
+                source["id"]: 8 for source in json.loads((bundle / "wgreturn.json").read_text())["sources"]
+            },
+        }, [], store, root / "data", defer_viewport=True)
+    finally:
+        store.close()
+
+
+@pytest.fixture(autouse=True)
+def enabled(monkeypatch):
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+
+
+def test_real_ingest_meshes_every_region_and_retains_verified_artifacts(tmp_path, monkeypatch):
+    second = _region(region_id="front-chamber", name="Front chamber", object_id="air-2",
+                     file="fem-regions/front-chamber.step", mesh_size_mm=10)
+    bundle = _bundle(tmp_path / "returns", regions=[_region(), second])
+    calls = []
+    exterior = ingest.build_imported_mesh_isolated
+    region_mesh = ingest.build_fem_region_mesh_isolated
+
+    def exterior_call(*args, **kwargs):
+        calls.append("exterior")
+        return exterior(*args, **kwargs)
+
+    def region_call(path, region, **kwargs):
+        calls.append(region["region_id"])
+        member = json.loads((bundle / "wgreturn.json").read_text())["files"][region["file"]]
+        assert kwargs == {"expected_sha256": member["sha256"], "expected_size_bytes": member["size_bytes"]}
+        return region_mesh(path, region, **kwargs)
+
+    monkeypatch.setattr(ingest, "build_imported_mesh_isolated", exterior_call)
+    monkeypatch.setattr(ingest, "build_fem_region_mesh_isolated", region_call)
+    record = _ingest(bundle, tmp_path)
+    assert calls == ["exterior", "rear-chamber", "front-chamber"]
+    assert len(record["fem_regions"]) == 2
+    for region in record["fem_regions"]:
+        text = read_verified_fem_region_mesh(record, region["region_id"])
+        domain = read_fem_region_domain(text, region["region_id"])
+        assert region["stats"]["tetrahedra"] == len(domain.tetrahedra) > 0
+        assert region["stats"]["nodes"] == len(domain.points_mm) > 0
+        assert Path(region["mesh_store_path"]).as_posix().endswith(f"fem/{region['region_id']}.msh")
+        assert len(region["mesh_lookup_key"]) == len(region["mesh_cache_key"]) == 64
+        assert region["mesh_size_bytes"] == len(text.encode())
+        groups = region["stats"]["surface_groups"]
+        assert groups["cone"]["area_mm2"] == pytest.approx(1200)
+        assert groups["port"]["area_mm2"] == pytest.approx(600)
+        assert groups["walls"]["area_mm2"] == pytest.approx(3400)
+        assert groups["cone"]["face_count"] == groups["port"]["face_count"] == 1
+        assert groups["walls"]["face_count"] == 4
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    try:
+        retained = json.loads(store.get_ingest(record["ingest_id"])["record_json"])
+    finally:
+        store.close()
+    assert retained["fem_regions"] == record["fem_regions"]
+    corrupted = deepcopy(record)
+    corrupted["fem_regions"][0]["mesh_size_bytes"] += 1
+    with pytest.raises(ImportedMeshArtifactError, match="size mismatch"):
+        read_verified_fem_region_mesh(corrupted, "rear-chamber")
+    path = Path(record["fem_regions"][0]["mesh_store_path"])
+    path.write_text(path.read_text().replace("4.1", "4.2", 1))
+    with pytest.raises(ImportedMeshArtifactError, match="digest mismatch"):
+        read_verified_fem_region_mesh(record, "rear-chamber")
+    path.unlink()
+    with pytest.raises(ImportedMeshArtifactError, match="unavailable"):
+        read_verified_fem_region_mesh(record, "rear-chamber")
+    with pytest.raises(ImportedMeshArtifactError, match="no unique FEM region"):
+        read_verified_fem_region_mesh(record, "absent")
+    changed_medium = deepcopy(record)
+    changed_medium["fem_regions"][0]["medium"]["density_kg_per_m3"] = 1.3
+    assert ingest.solve_model_sha256(changed_medium) != record["solve_model_sha256"]
+
+
+@pytest.mark.parametrize("failure", ["lost", "shared", "two-solids"])
+def test_region_geometry_refusals_block_ingest_and_name_region_and_group(tmp_path, failure):
+    region = _region()
+    if failure == "lost":
+        region["surface_groups"][0]["faces"] = [
+            _face(1200, (20, 15, 5), [0, 0, 1], (0, 0, 5), (40, 30, 5)),
+        ]
+    elif failure == "shared":
+        region["surface_groups"][1]["faces"] = [CONE]
+    bundle = _bundle(tmp_path / "returns", regions=[region])
+    if failure == "two-solids":
+        path = bundle / region["file"]
+        _write_step(path, boxes=((0, 0, 0), (100, 0, 0)))
+        manifest_path = bundle / "wgreturn.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["files"][region["file"]].update(
+            sha256="sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(), size_bytes=path.stat().st_size,
+        )
+        manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ingest.IngestRefusal, match="Rear chamber") as caught:
+        _ingest(bundle, tmp_path)
+    assert caught.value.stage == "stage 7 meshing"
+    if failure != "two-solids":
+        assert "Cone" in str(caught.value)
+    with sqlite3.connect(tmp_path / "cadlink.db") as db:
+        assert db.execute("SELECT count(*) FROM ingests").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("mutation", ["size", "digest"])
+def test_region_member_changed_after_admission_refuses_in_child(tmp_path, monkeypatch, mutation):
+    bundle = _bundle(tmp_path / "returns")
+    original = ingest.build_imported_mesh_isolated
+
+    def mutate_after_exterior(*args, **kwargs):
+        built = original(*args, **kwargs)
+        path = bundle / "fem-regions/rear-chamber.step"
+        raw = path.read_bytes()
+        path.write_bytes(raw + b" " if mutation == "size" else raw.replace(b"ISO", b"BAD", 1))
+        return built
+
+    monkeypatch.setattr(ingest, "build_imported_mesh_isolated", mutate_after_exterior)
+    with pytest.raises(ingest.IngestRefusal, match="Rear chamber"):
+        _ingest(bundle, tmp_path)
+
+
+def test_no_regions_ingest_is_identical_with_flag_on_or_off(tmp_path, monkeypatch):
+    from server.tests.test_cadlink_ingest import _built_for_source
+
+    bundle = _bundle(tmp_path / "returns", regions=[])
+    path = bundle / "wgreturn.json"
+    manifest = json.loads(path.read_text())
+    manifest["required_features"].remove("fem-regions-v1")
+    del manifest["scope"]["fem_regions"]
+    source = _manifest(b"STEP")["sources"][0]
+    source["instance_id"] = None
+    source["selectors"] = {"appearance_labels": ["HF"]}
+    manifest["sources"] = [source]
+    path.write_text(json.dumps(manifest))
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("a return without regions must not run a region child")
+
+    monkeypatch.setattr(ingest, "build_fem_region_mesh_isolated", unexpected)
+    monkeypatch.setattr(ingest, "build_imported_mesh_isolated",
+                        lambda *args, **kwargs: _built_for_source(source["id"]))
+    _ingest(bundle, tmp_path)  # Prime the exterior cache for both comparisons.
+    enabled = _ingest(bundle, tmp_path)
+    monkeypatch.delenv("WG2_FEM_REGIONS")
+    disabled = _ingest(bundle, tmp_path)
+    assert "fem_regions" not in enabled
+    assert "fem_regions" not in disabled
+    for record in (enabled, disabled):
+        for key in ("ingest_id", "created_at", "report_sha256"):
+            record.pop(key)
+    assert enabled == disabled
+
+
+def test_ingest_forwards_user_region_and_group_sizes_without_limits(tmp_path, monkeypatch):
+    region = _region(mesh_size_mm=0.001)
+    region["surface_groups"][0]["mesh_size_mm"] = 0.0001
+    bundle = _bundle(tmp_path / "returns", regions=[region])
+    seen = []
+
+    def mesh(_path, declared, **kwargs):
+        seen.append(declared)
+        return {"msh_text": "$MeshFormat\n4.1 0 8\n$EndMeshFormat\n",
+                "stats": {"tetrahedra": 1, "nodes": 4, "surface_groups": {}}, "physical_names": {}}
+
+    monkeypatch.setattr(ingest, "build_fem_region_mesh_isolated", mesh)
+    record = _ingest(bundle, tmp_path)
+    assert seen == [region]
+    assert record["fem_regions"][0]["mesh_size_mm"] == 0.001
+    assert record["fem_regions"][0]["surface_groups"][0]["mesh_size_mm"] == 0.0001

@@ -297,7 +297,36 @@ export interface CadViewportMeshMetadata {
   reason?: string;
 }
 
+export interface CadFemSurfaceGroupStats {
+  kind: 'moving' | 'interface' | 'plane-wave-termination' | 'rigid';
+  area_mm2: number;
+  face_count: number;
+  triangle_count: number;
+}
+
+export interface CadFemRegion {
+  region_id: string;
+  name: string;
+  object_id: string;
+  file: string;
+  mesh_size_mm: number;
+  medium: { sound_speed_m_per_s: number; density_kg_per_m3: number; bulk_loss_factor: number };
+  surface_groups: Array<{
+    group_id: string;
+    name: string;
+    kind: CadFemSurfaceGroupStats['kind'];
+    mesh_size_mm: number;
+    drive_channel_id?: string;
+  }>;
+  mesh_cache_key: string;
+  mesh_lookup_key: string;
+  mesh_content_sha256: string;
+  mesh_size_bytes: number;
+  stats: { tetrahedra: number; nodes: number; surface_groups: Record<string, CadFemSurfaceGroupStats> };
+}
+
 export interface CadReturnIngestRecord {
+  fem_regions?: CadFemRegion[];
   producer?: string;
   native_source?: {
     required_features: string[];

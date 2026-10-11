@@ -886,6 +886,16 @@ export function CadLinkPanel() {
         onClick={() => { void cadWorkspaceView.ingest(); }}
       >{ingesting ? 'Preparing…' : record ? 'Prepare again' : 'Prepare simulation'}</button>}
       {record && <ChecksSection record={record}/>}
+      {!!record?.fem_regions?.length && <section className="cad-fem-regions" aria-label="FEM regions">
+        <h4>FEM regions <ExperimentalBadge/></h4>
+        {record.fem_regions.map((region) => <div key={region.region_id}>
+          <b>{region.name}</b>
+          <p className="cad-detail">{region.stats.tetrahedra.toLocaleString()} tetrahedra · {region.stats.nodes.toLocaleString()} nodes · {region.mesh_size_mm} mm region size</p>
+          {region.surface_groups.map((group) => <div className="cad-row" key={group.group_id}>
+            <b>{group.name}</b><span>{group.kind.replaceAll('-', ' ')}</span>
+          </div>)}
+        </div>)}
+      </section>}
       {/* The one Solve card: what Solve uses -- the model, which way it
           radiates, the settings -- any request for this snapshot that waits,
           and Solve itself (PLAN.md M1b). */}

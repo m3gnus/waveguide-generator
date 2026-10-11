@@ -917,6 +917,36 @@ describe('CadLinkPanel', () => {
     expect(badge?.getAttribute('title')).toContain('not yet acoustically qualified');
   });
 
+  it('lists retained FEM regions with group kinds, mesh counts and an Experimental badge', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    expect(host.querySelector('.cad-fem-regions')).toBeNull();
+    await act(async () => useCadReturnStore.setState({ ingestRecord: {
+      ...record,
+      fem_regions: [{
+        region_id: 'rear-chamber', name: 'Rear chamber', object_id: 'air', file: 'fem-regions/air.step',
+        mesh_size_mm: 8, medium: { sound_speed_m_per_s: 343, density_kg_per_m3: 1.21, bulk_loss_factor: 0 },
+        mesh_cache_key: 'key', mesh_lookup_key: 'lookup', mesh_content_sha256: 'sha256:mesh', mesh_size_bytes: 500,
+        surface_groups: [
+          { group_id: 'cone', name: 'Cone', kind: 'moving', mesh_size_mm: 4 },
+          { group_id: 'port', name: 'Port', kind: 'interface', mesh_size_mm: 4 },
+          { group_id: 'end', name: 'End', kind: 'plane-wave-termination', mesh_size_mm: 8 },
+          { group_id: 'wall', name: 'Wall', kind: 'rigid', mesh_size_mm: 8 },
+        ],
+        stats: { tetrahedra: 1234, nodes: 456, surface_groups: {} },
+      }],
+    } }));
+    const regions = host.querySelector('.cad-fem-regions')!;
+    expect(regions.querySelector('.experimental-badge')?.textContent).toBe('Experimental');
+    expect(regions.textContent).toContain('Rear chamber');
+    expect(regions.textContent).toContain('1,234 tetrahedra · 456 nodes · 8 mm region size');
+    for (const kind of ['moving', 'interface', 'plane wave termination', 'rigid']) {
+      expect(regions.textContent).toContain(kind);
+    }
+    await act(async () => useCadReturnStore.setState({ ingestRecord: { ...record, fem_regions: [] } }));
+    expect(host.querySelector('.cad-fem-regions')).toBeNull();
+  });
+
   it('tries the full-domain viewport artifact before silently falling back on 404', async () => {
     const requests: string[] = [];
     const notices: string[] = [];
