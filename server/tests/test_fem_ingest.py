@@ -11,7 +11,7 @@ import pytest
 from server.cadlink.intake import ingest
 from server.cadlink.store import CadLinkStore
 from server.mesh.artifact import ImportedMeshArtifactError, read_verified_fem_region_mesh
-from server.mesh.fem_regions import read_fem_region_domain
+from server.mesh.fem_regions import physical_name, read_fem_region_domain
 from server.tests.test_cadlink_wgreturn import _manifest, write_bundle
 from server.tests.test_fem_regions import CONE, _face, _region, _write_step
 
@@ -76,6 +76,7 @@ def test_real_ingest_meshes_every_region_and_retains_verified_artifacts(tmp_path
     def region_call(path, region, **kwargs):
         calls.append(region["region_id"])
         member = json.loads((bundle / "wgreturn.json").read_text())["files"][region["file"]]
+        assert kwargs.pop("deadline") > ingest.time.monotonic()
         assert kwargs == {"expected_sha256": member["sha256"], "expected_size_bytes": member["size_bytes"]}
         return region_mesh(path, region, **kwargs)
 
@@ -89,15 +90,15 @@ def test_real_ingest_meshes_every_region_and_retains_verified_artifacts(tmp_path
         domain = read_fem_region_domain(text, region["region_id"])
         assert region["stats"]["tetrahedra"] == len(domain.tetrahedra) > 0
         assert region["stats"]["nodes"] == len(domain.points_mm) > 0
-        assert Path(region["mesh_store_path"]).as_posix().endswith(f"fem/{region['region_id']}.msh")
+        assert Path(region["mesh_store_path"]).as_posix().endswith(f"fem/region-{region['region_id']}.msh")
         assert len(region["mesh_lookup_key"]) == len(region["mesh_cache_key"]) == 64
         assert region["mesh_size_bytes"] == len(text.encode())
         groups = region["stats"]["surface_groups"]
         assert groups["cone"]["area_mm2"] == pytest.approx(1200)
         assert groups["port"]["area_mm2"] == pytest.approx(600)
-        assert groups["walls"]["area_mm2"] == pytest.approx(3400)
+        assert groups["_walls"]["area_mm2"] == pytest.approx(3400)
         assert groups["cone"]["face_count"] == groups["port"]["face_count"] == 1
-        assert groups["walls"]["face_count"] == 4
+        assert groups["_walls"]["face_count"] == 4
     store = CadLinkStore(tmp_path / "cadlink.db")
     try:
         retained = json.loads(store.get_ingest(record["ingest_id"])["record_json"])
@@ -215,3 +216,100 @@ def test_ingest_forwards_user_region_and_group_sizes_without_limits(tmp_path, mo
     assert seen == [region]
     assert record["fem_regions"][0]["mesh_size_mm"] == 0.001
     assert record["fem_regions"][0]["surface_groups"][0]["mesh_size_mm"] == 0.0001
+
+
+@pytest.mark.parametrize("kind", ["rigid", "moving"])
+def test_ingest_user_walls_preserves_declared_group_and_unclaimed_boundary(tmp_path, kind):
+    region = _region()
+    region["surface_groups"][0].update(group_id="walls", name="User walls", kind=kind)
+    if kind == "rigid":
+        region["surface_groups"][0].pop("drive_channel_id")
+        # Keep an actual diaphragm in this interior-only return.
+        region["surface_groups"][1].update(kind="moving", drive_channel_id="drive-LF")
+    record = _ingest(_bundle(tmp_path / "returns", regions=[region]), tmp_path)
+    retained = record["fem_regions"][0]
+    groups = retained["stats"]["surface_groups"]
+    assert groups["walls"]["kind"] == kind
+    assert groups["walls"]["triangle_count"] > 0
+    assert groups["_walls"]["kind"] == "rigid"
+    assert groups["_walls"]["triangle_count"] > 0
+    assert groups["walls"]["area_mm2"] == pytest.approx(1200)
+    assert groups["_walls"]["area_mm2"] == pytest.approx(3400)
+    assert sum(group["area_mm2"] for group in groups.values()) == pytest.approx(5200)
+    domain = read_fem_region_domain(read_verified_fem_region_mesh(record, region["region_id"]), region["region_id"])
+    assert physical_name(region["region_id"], "walls", kind) in domain.surfaces
+    assert physical_name(region["region_id"], "_walls", "rigid") in domain.surfaces
+
+
+@pytest.mark.parametrize("region_id", ["con", "nul", "aux", "prn", "com1", "lpt1"])
+def test_reserved_device_region_ids_use_safe_mesh_filenames(tmp_path, monkeypatch, region_id):
+    from types import SimpleNamespace
+
+    region = _region(region_id=region_id)
+    bundle = SimpleNamespace(manifest={"scope": {"fem_regions": [region]},
+                                      "files": {region["file"]: {"sha256": "sha256:step", "size_bytes": 1}}},
+                             members={region["file"]: tmp_path / "air.step"})
+    monkeypatch.setattr(ingest, "build_fem_region_mesh_isolated", lambda *args, **kwargs:
+                        {"msh_text": "mesh", "stats": {}, "physical_names": {}})
+    (retained,) = ingest._mesh_fem_regions(bundle, tmp_path)
+    assert retained["region_id"] == region_id
+    assert Path(retained["mesh_store_path"]).name == f"region-{region_id}.msh"
+    assert read_verified_fem_region_mesh({"fem_regions": [retained]}, region_id) == "mesh"
+
+
+@pytest.mark.parametrize("failure", ["publish", "verify"])
+def test_artifact_failures_refuse_by_region(tmp_path, monkeypatch, failure):
+    from types import SimpleNamespace
+
+    region = _region()
+    bundle = SimpleNamespace(manifest={"scope": {"fem_regions": [region]},
+                                      "files": {region["file"]: {"sha256": "sha256:step", "size_bytes": 1}}},
+                             members={region["file"]: tmp_path / "air.step"})
+    monkeypatch.setattr(ingest, "build_fem_region_mesh_isolated", lambda *args, **kwargs:
+                        {"msh_text": "mesh", "stats": {}, "physical_names": {}})
+
+    def fail(*args, **kwargs):
+        raise OSError("artifact failure")
+
+    monkeypatch.setattr(ingest, "_write_cache" if failure == "publish" else "read_verified_import_mesh", fail)
+    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*publish and verify.*artifact failure") as caught:
+        ingest._mesh_fem_regions(bundle, tmp_path)
+    assert caught.value.stage == "stage 7 meshing"
+
+
+@pytest.mark.parametrize("exhaustion", ["before-next", "during-child", "during-publish"])
+def test_one_total_budget_covers_all_regions_and_publication(tmp_path, monkeypatch, exhaustion):
+    from types import SimpleNamespace
+
+    regions = [_region(), _region(region_id="front", name="Front chamber", file="fem-regions/front.step")]
+    bundle = SimpleNamespace(manifest={"scope": {"fem_regions": regions}, "files": {
+        region["file"]: {"sha256": "sha256:step", "size_bytes": 1} for region in regions}},
+        members={region["file"]: tmp_path / "air.step" for region in regions})
+    now = [0.0]
+    monkeypatch.setattr(ingest.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(ingest, "FEM_REGIONS_WALL_TIME_S", 10.0)
+    called = []
+
+    def mesh(*args, **kwargs):
+        called.append(kwargs["deadline"])
+        now[0] += 6.0 if exhaustion == "during-child" else 1.0
+        return {"msh_text": "mesh", "stats": {}, "physical_names": {}}
+
+    monkeypatch.setattr(ingest, "build_fem_region_mesh_isolated", mesh)
+    original = ingest._write_cache
+
+    def publish(*args, **kwargs):
+        original(*args, **kwargs)
+        if exhaustion == "during-publish":
+            now[0] = 11.0
+
+    monkeypatch.setattr(ingest, "_write_cache", publish)
+    # Cross the deadline on the check before the second child, while the first
+    # child and its publication are still within budget.
+    if exhaustion == "before-next":
+        values = iter([0.0, 0.0, 1.0, 2.0, 11.0])
+        monkeypatch.setattr(ingest.time, "monotonic", lambda: next(values))
+    label = "Rear chamber" if exhaustion == "during-publish" else "Front chamber"
+    with pytest.raises(ingest.IngestRefusal, match=f"{label}.*total FEM regions wall-clock budget"):
+        ingest._mesh_fem_regions(bundle, tmp_path)
+    assert called == ([10.0, 10.0] if exhaustion == "during-child" else [10.0])

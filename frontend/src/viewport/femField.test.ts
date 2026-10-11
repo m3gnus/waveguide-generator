@@ -5,6 +5,7 @@ import {
   elementMeanSlice,
   femFieldColors,
   femSurfaceKind,
+  FEM_ROLE_COLORS,
   sliceFemField,
   type FemFieldDomain,
   type FemFieldPayload,
@@ -153,6 +154,8 @@ describe('colours, kinds and payload', () => {
   it('reads the kind from the physical name', () => {
     expect(femSurfaceKind('wg-fem-v1|region=a|group=port|kind=interface')).toBe('interface');
     expect(femSurfaceKind('wg-fem-v1|region=a|group=end|kind=plane-wave-termination')).toBe('plane-wave-termination');
+    expect(femSurfaceKind('wg-fem-v1|region=a|group=_walls|kind=rigid')).toBe('rigid');
+    expect(femSurfaceKind('wg-fem-v1|region=a|group=walls|kind=moving')).toBe('moving');
     expect(femSurfaceKind('wg-fem-v1|region=a|volume')).toBe('rigid');
     expect(femSurfaceKind('wg-import-v1|rigid')).toBe('rigid');
   });
@@ -172,13 +175,17 @@ describe('colours, kinds and payload', () => {
       frequency_hz: 1000,
       points_mm: encode(domain.points),
       tetrahedra: encode(domain.tetrahedra),
-      surfaces: [{ name: domain.surfaces[0].name, triangles: encode(domain.surfaces[0].triangles) }],
+      surfaces: [
+        { name: 'wg-fem-v1|region=cube|group=walls|kind=moving', triangles: encode(domain.surfaces[0].triangles) },
+        { name: 'wg-fem-v1|region=cube|group=_walls|kind=rigid', triangles: encode(domain.surfaces[0].triangles) },
+      ],
       pressure_real: encode(values.real),
       pressure_imag: encode(values.imag),
     };
     const decoded = decodeFemFieldPayload(payload);
     expect(Array.from(decoded.domain.tetrahedra)).toEqual(TETS.flat());
-    expect(decoded.domain.surfaces[0].kind).toBe('moving');
+    expect(decoded.domain.surfaces.map((surface) => surface.kind)).toEqual(['moving', 'rigid']);
+    expect(FEM_ROLE_COLORS[decoded.domain.surfaces[1].kind].fill).toBe('#cfcfcf');
     expect(Array.from(decoded.values.imag)).toEqual(Array.from(values.imag));
     expect(() => decodeFemFieldPayload({ ...payload, pressure_real: encode(new Float32Array(3)) })).toThrow('one value per vertex');
     expect(() => decodeFemFieldPayload({ ...payload, tetrahedra: encode(Uint32Array.from([0, 1, 2, 99])) })).toThrow('missing vertex');

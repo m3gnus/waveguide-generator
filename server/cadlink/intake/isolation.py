@@ -31,7 +31,7 @@ any of them are.
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import logging
@@ -43,6 +43,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from typing import Any, Iterator, Mapping, Sequence
 
 from server.cadlink.build_flags import FEM_REGIONS_ENV
@@ -546,6 +547,7 @@ def isolated_step_task(
     *,
     step_path: str | Path,
     budget: ChildBudget,
+    deadline: float | None = None,
     allowed_artifacts: Sequence[str] = (),
     stage: str,
     entrypoint: str = CHILD_ENTRYPOINT,
@@ -563,7 +565,15 @@ def isolated_step_task(
     if not source.is_file() or source.is_symlink():
         raise ChildRefusal(stage, f"the STEP to inspect is not a regular file: {source}")
 
-    acquired = _CHILD_SLOT.acquire(timeout=budget.wall_time_s)
+    def remaining_budget() -> ChildBudget:
+        if deadline is None:
+            return budget
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ChildRefusal(stage, "the total FEM regions wall-clock budget was exhausted")
+        return replace(budget, wall_time_s=min(budget.wall_time_s, remaining))
+
+    acquired = _CHILD_SLOT.acquire(timeout=remaining_budget().wall_time_s)
     if not acquired:
         raise ChildRefusal(
             stage,
@@ -597,6 +607,7 @@ def isolated_step_task(
             # child runs as the same user -- but it turns an accidental
             # in-place edit into an error instead of a silent mutation.
             child_source.chmod(0o400)
+        budget = remaining_budget()
         envelope = {
             "protocol": PROTOCOL_VERSION,
             "task": task,
@@ -622,6 +633,7 @@ def isolated_step_task(
             staging=staging,
             out_dir=out_dir,
             budget=budget,
+            deadline=deadline,
             allowed_artifacts=allowed_artifacts,
             stage=stage,
             entrypoint=entrypoint,
@@ -642,6 +654,7 @@ def _run_child(
     allowed_artifacts: Sequence[str],
     stage: str,
     entrypoint: str,
+    deadline: float | None = None,
 ) -> ChildOutcome:
     command = child_command(entrypoint)
     popen_kwargs: dict[str, Any] = {
@@ -712,6 +725,12 @@ def _run_child(
             process.stdin.close()
         except (BrokenPipeError, OSError):
             pass
+        if deadline is not None:
+            # Starting and feeding the child also consume the shared deadline.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ChildRefusal(stage, "the total FEM regions wall-clock budget was exhausted")
+            budget = replace(budget, wall_time_s=min(budget.wall_time_s, remaining))
         killed_for = _supervise(process, budget, job=job, group=process_group)
     finally:
         # Do this even after a clean exit. The root may have returned a valid

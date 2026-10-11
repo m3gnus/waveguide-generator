@@ -17,7 +17,7 @@ seal the chamber, so either refuses by group name rather than becoming a wall.
 Physical names are ``wg-fem-v1|region=<id>|group=<id>|kind=<kind>`` for
 surfaces and ``wg-fem-v1|region=<id>|volume`` for the air, so a mesh read back
 later names its own boundary conditions. Every boundary surface no group
-claims joins ``group=walls|kind=rigid``. The file is Gmsh 4.1 ASCII with
+claims joins ``group=_walls|kind=rigid``. The file is Gmsh 4.1 ASCII with
 first-order tetrahedra and tagged boundary triangles -- what the coupled BEAT
 contract and Boundary Lab expect of a FEM volume.
 """
@@ -30,8 +30,12 @@ from pathlib import Path
 import tempfile
 from typing import Any, Mapping, Sequence
 
+from server.platform.temp_session import temporary_directory_root
+
 FEM_TAG_NAMESPACE = "wg-fem-v1"
-WALLS_GROUP_ID = "walls"
+# The protocol permits letters, digits and hyphens, so this cannot collide
+# with a CAD-declared group (including a user group called "walls").
+WALLS_GROUP_ID = "_walls"
 # A local size blends back to the region size over this many region sizes.
 SIZE_BLEND_FACTOR = 3.0
 # Acceptance of a face description against an imported surface. Areas and
@@ -207,7 +211,9 @@ def _size_fields(gmsh: Any, region_size: float, groups: Sequence[tuple[list[int]
     return len(fields)
 
 
-def build_fem_region_mesh(step_path: str | Path, region: Mapping[str, Any]) -> dict[str, Any]:
+def build_fem_region_mesh(
+    step_path: str | Path, region: Mapping[str, Any], *, scratch_dir: str | Path | None = None,
+) -> dict[str, Any]:
     """Mesh one validated ``scope.fem_regions[]`` record in the open session.
 
     The STEP is in millimetres of the export frame, the same frame as the face
@@ -288,7 +294,7 @@ def build_fem_region_mesh(step_path: str | Path, region: Mapping[str, Any]) -> d
         gmsh.option.setNumber("Mesh.MshFileVersion", 4.1)
         gmsh.option.setNumber("Mesh.Binary", 0)
         gmsh.option.setNumber("Mesh.SaveAll", 0)
-        with tempfile.TemporaryDirectory(prefix="wg-fem-") as folder:
+        with tempfile.TemporaryDirectory(prefix="wg-fem-", dir=scratch_dir or temporary_directory_root()) as folder:
             target = Path(folder) / "region.msh"
             gmsh.write(str(target))
             msh_text = target.read_text(encoding="utf-8")
@@ -329,13 +335,15 @@ class FemRegionDomain:
         return found
 
 
-def read_fem_region_domain(msh_text: str, region_id: str) -> FemRegionDomain:
+def read_fem_region_domain(
+    msh_text: str, region_id: str, *, scratch_dir: str | Path | None = None,
+) -> FemRegionDomain:
     """Parse a region mesh written by :func:`build_fem_region_mesh`."""
 
     import meshio
     import numpy as np
 
-    with tempfile.TemporaryDirectory(prefix="wg-fem-read-") as folder:
+    with tempfile.TemporaryDirectory(prefix="wg-fem-read-", dir=scratch_dir or temporary_directory_root()) as folder:
         path = Path(folder) / "region.msh"
         path.write_text(msh_text, encoding="utf-8")
         mesh = meshio.read(path, file_format="gmsh")
@@ -345,22 +353,97 @@ def read_fem_region_domain(msh_text: str, region_id: str) -> FemRegionDomain:
     physical = mesh.cell_data.get("gmsh:physical") or []
     tetrahedra = []
     surfaces: dict[str, list[Any]] = {}
-    for block, tags in zip(mesh.cells, physical):
+    for index, block in enumerate(mesh.cells):
         if block.type == "tetra":
             tetrahedra.append(np.asarray(block.data, dtype=np.int64))
         elif block.type == "triangle":
+            if index >= len(physical) or len(physical[index]) != len(block.data):
+                raise FemRegionMeshError(
+                    f"FEM region {region_id!r} has boundary triangles with no group tags."
+                )
+            tags = physical[index]
             for tag in np.unique(tags):
                 name = names_by_tag.get((2, int(tag)))
-                if name is None:
-                    continue
+                fields = parse_physical_name(name) if name is not None else None
+                if fields is None or fields.get("region") != region_id or "group" not in fields:
+                    raise FemRegionMeshError(
+                        f"FEM region {region_id!r} boundary group tag {int(tag)} has no valid physical name."
+                    )
                 surfaces.setdefault(name, []).append(
                     np.asarray(block.data[np.asarray(tags) == tag], dtype=np.int64)
                 )
     if not tetrahedra:
         raise FemRegionMeshError(f"FEM region {region_id!r} mesh holds no tetrahedra.")
-    return FemRegionDomain(
+    domain = FemRegionDomain(
         region_id=region_id,
         points_mm=np.asarray(mesh.points, dtype=np.float64),
         tetrahedra=np.concatenate(tetrahedra),
         surfaces={name: np.concatenate(blocks) for name, blocks in surfaces.items()},
     )
+
+    _validate_boundary_coverage(domain)
+    return domain
+
+
+def _validate_boundary_coverage(domain: FemRegionDomain) -> None:
+    """Require exactly one named triangle for every exterior tetrahedral facet."""
+
+    import numpy as np
+
+    tets = domain.tetrahedra
+    facets = np.concatenate([tets[:, [0, 1, 2]], tets[:, [0, 1, 3]],
+                             tets[:, [0, 2, 3]], tets[:, [1, 2, 3]]])
+    unique, counts = np.unique(np.sort(facets, axis=1), axis=0, return_counts=True)
+    boundary = unique[counts == 1]
+    triangles = (np.concatenate(list(domain.surfaces.values())) if domain.surfaces
+                 else np.empty((0, 3), dtype=np.int64))
+    named, named_counts = np.unique(np.sort(triangles, axis=1), axis=0, return_counts=True)
+    if np.any(named_counts != 1) or not np.array_equal(named, boundary):
+        groups = ", ".join(repr(fields["group"]) for fields in domain.groups().values()) or "<none>"
+        raise FemRegionMeshError(
+            f"FEM region {domain.region_id!r}, surface groups {groups}: named surface "
+            "triangles do not cover the whole region boundary exactly once."
+        )
+
+
+def fem_region_mesh_stats(
+    built: Mapping[str, Any], region: Mapping[str, Any], *, scratch_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Validate the retained mesh and measure it inside the supervised child."""
+
+    import numpy as np
+
+    region_id = str(region["region_id"])
+    try:
+        domain = read_fem_region_domain(built["msh_text"], region_id, scratch_dir=scratch_dir)
+    except FemRegionMeshError as exc:
+        labels = ", ".join(
+            f"{group.get('name', group['group_id'])!r} ({group['group_id']!r})"
+            for group in region.get("surface_groups") or ()
+        )
+        raise FemRegionMeshError(f"FEM region {region_id!r}, declared surface groups {labels}: {exc}") from exc
+    groups: dict[str, dict[str, Any]] = {}
+    for name, triangles in domain.surfaces.items():
+        physical = built["physical_names"][name]
+        group_id = physical["group_id"]
+        if group_id in groups:
+            raise FemRegionMeshError(f"FEM region {region_id!r}, group {group_id!r}: duplicate mesh group.")
+        corners = domain.points_mm[triangles]
+        area = 0.5 * np.linalg.norm(
+            np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]), axis=1,
+        ).sum()
+        groups[group_id] = {
+            "kind": parse_physical_name(name)["kind"],
+            "area_mm2": float(area),
+            "face_count": len(physical["entities"]),
+            "triangle_count": int(len(triangles)),
+        }
+    for group in region.get("surface_groups") or ():
+        found = groups.get(group["group_id"])
+        if found is None or found["triangle_count"] <= 0 or found["kind"] != group["kind"]:
+            raise FemRegionMeshError(
+                f"FEM region {region_id!r}, surface group {group.get('name', group['group_id'])!r} "
+                f"({group['group_id']!r}): mesh must retain triangles of declared kind {group['kind']!r}."
+            )
+    return {**built["stats"], "tetrahedra": int(len(domain.tetrahedra)),
+            "nodes": int(len(domain.points_mm)), "surface_groups": groups}

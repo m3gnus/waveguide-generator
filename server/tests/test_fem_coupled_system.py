@@ -22,7 +22,7 @@ contract = pytest.importorskip("beat_engine.beat_contract")
 
 CONE = "wg-fem-v1|region=rear-chamber|group=cone|kind=moving"
 PORT = "wg-fem-v1|region=rear-chamber|group=port|kind=interface"
-WALLS = "wg-fem-v1|region=rear-chamber|group=walls|kind=rigid"
+WALLS = "wg-fem-v1|region=rear-chamber|group=_walls|kind=rigid"
 
 
 @pytest.fixture(scope="module")
@@ -75,7 +75,9 @@ def test_a_coupled_chamber_passes_beats_contract(chamber):
     assert system["regions"][1]["loss_model"] == {"bulk_loss_factor": 0.0}
     # The cone's two faces are one source, driven by one port.
     (component,) = system["components"]
-    assert component["boundary_ids"] == ["boundary:exterior:0", "boundary:fem:rear-chamber:cone"]
+    exterior_cone = next(boundary["id"] for boundary in system["boundaries"]
+                         if boundary["name"] == CONE and boundary["region_id"] == "region:exterior-air")
+    assert component["boundary_ids"] == [exterior_cone, "boundary:fem:rear-chamber:cone"]
     assert system["excitation_ports"] == [{
         "id": "port:drive-LF", "name": "drive-LF",
         "component_id": "component:drive-LF", "kind": "normal_velocity",
@@ -132,3 +134,21 @@ def test_refusals_name_what_to_fix(chamber):
 def test_open_edges_counts_a_missing_face():
     triangles = np.array([[0, 1, 2], [0, 2, 3]])
     assert open_edges(triangles) == 4
+
+
+@pytest.mark.parametrize("kind", ["rigid", "moving"])
+def test_user_walls_and_synthetic_walls_compile_as_separate_boundaries(tmp_path, kind):
+    region = _region()
+    region["surface_groups"][1]["kind"] = "moving"
+    region["surface_groups"][1]["drive_channel_id"] = "drive-LF"
+    region["surface_groups"][0].update(group_id="walls", kind=kind)
+    built = _mesh(_write_step(tmp_path / "air.step"), region)
+    domain = read_fem_region_domain(built["msh_text"], region["region_id"])
+    system = build_coupled_system(None, [FemRegionInput(region, domain)])
+    contract.validate_compiled_system(system)
+    boundaries = {boundary["id"]: boundary for boundary in system["boundaries"]}
+    assert boundaries["boundary:fem:rear-chamber:walls"]["kind"] == kind
+    assert boundaries["boundary:fem:rear-chamber:_walls"]["kind"] == "rigid"
+    driven = system["components"][0]["boundary_ids"]
+    assert ("boundary:fem:rear-chamber:walls" in driven) == (kind == "moving")
+    assert "boundary:fem:rear-chamber:_walls" not in driven

@@ -23,7 +23,7 @@ from server.cadlink.intake.isolated import (
     build_imported_mesh_isolated,
     build_imported_viewport_mesh_isolated,
 )
-from server.cadlink.intake.isolation import ChildRefusal
+from server.cadlink.intake.isolation import ChildRefusal, MESH_BUDGET
 from server.cadlink.build_flags import fem_regions_enabled
 from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
 from server.cadlink.store import CadLinkStore
@@ -2069,6 +2069,11 @@ def ingest_bundle(
     return published
 
 
+# One aggregate budget for all region children, queueing, staging and publication.
+# Density and region count remain entirely user-selected.
+FEM_REGIONS_WALL_TIME_S = MESH_BUDGET.wall_time_s
+
+
 def _mesh_fem_regions(bundle: WgReturnBundle, imports_root: Path) -> list[dict[str, Any]]:
     """Mesh every declared member after the exterior, retaining verified inputs."""
 
@@ -2081,13 +2086,23 @@ def _mesh_fem_regions(bundle: WgReturnBundle, imports_root: Path) -> list[dict[s
             "This return declares FEM regions; this Waveguide Generator has FEM regions turned off.",
         )
     records = []
+    deadline = time.monotonic() + FEM_REGIONS_WALL_TIME_S
+
+    def check_deadline(region: Mapping[str, Any]) -> None:
+        if time.monotonic() >= deadline:
+            raise IngestRefusal(
+                "stage 7 meshing", f"FEM region {region['name']!r}: the total FEM regions "
+                "wall-clock budget was exhausted.",
+            )
     for region in regions:
+        check_deadline(region)
         member = bundle.manifest["files"][region["file"]]
         try:
             built = build_fem_region_mesh_isolated(
                 bundle.members[region["file"]], region,
                 expected_sha256=member["sha256"],
                 expected_size_bytes=member["size_bytes"],
+                deadline=deadline,
             )
         except Exception as exc:
             # Typed face-matching errors already name the group. Child crashes
@@ -2095,6 +2110,7 @@ def _mesh_fem_regions(bundle: WgReturnBundle, imports_root: Path) -> list[dict[s
             raise IngestRefusal(
                 "stage 7 meshing", f"FEM region {region['name']!r}: {exc}",
             ) from exc
+        check_deadline(region)
         digest = mesh_text_sha256(built["msh_text"])
         lookup_key = hashlib.sha256(_canonical({
             "pipeline_contract": "wg-import-fem-v1",
@@ -2103,21 +2119,28 @@ def _mesh_fem_regions(bundle: WgReturnBundle, imports_root: Path) -> list[dict[s
         # Bind the path to output bytes as well as inputs: a later meshing run
         # cannot overwrite the artifact named by an immutable older record.
         key = hashlib.sha256(_canonical({"lookup_key": lookup_key, "sha256": digest})).hexdigest()
-        path = imports_root / "meshes" / key / "fem" / f"{region['region_id']}.msh"
-        _write_cache(path, path.with_suffix(".json"), built, exact_bytes=True)
-        retained = {
-            **region,
-            "member_sha256": member["sha256"],
-            "member_size_bytes": member["size_bytes"],
-            "mesh_store_path": str(path),
-            "mesh_cache_key": key,
-            "mesh_lookup_key": lookup_key,
-            "mesh_content_sha256": digest,
-            "mesh_size_bytes": len(built["msh_text"].encode("utf-8")),
-            "stats": built["stats"],
-            "physical_names": built["physical_names"],
-        }
-        read_verified_import_mesh(retained)
+        path = imports_root / "meshes" / key / "fem" / f"region-{region['region_id']}.msh"
+        try:
+            _write_cache(path, path.with_suffix(".json"), built, exact_bytes=True)
+            retained = {
+                **region,
+                "member_sha256": member["sha256"],
+                "member_size_bytes": member["size_bytes"],
+                "mesh_store_path": str(path),
+                "mesh_cache_key": key,
+                "mesh_lookup_key": lookup_key,
+                "mesh_content_sha256": digest,
+                "mesh_size_bytes": len(built["msh_text"].encode("utf-8")),
+                "stats": built["stats"],
+                "physical_names": built["physical_names"],
+            }
+            read_verified_import_mesh(retained)
+        except Exception as exc:
+            raise IngestRefusal(
+                "stage 7 meshing", f"FEM region {region['name']!r}: could not publish "
+                f"and verify its mesh artifact: {exc}",
+            ) from exc
+        check_deadline(region)
         records.append(retained)
     return records
 

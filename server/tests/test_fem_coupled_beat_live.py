@@ -130,7 +130,7 @@ def test_an_open_box_radiates_the_pistons_monopole(worker, box):
     domain = read_fem_region_domain(_mesh(step, region)["msh_text"], "rear-chamber")
     cone = "wg-fem-v1|region=rear-chamber|group=cone|kind=moving"
     port = "wg-fem-v1|region=rear-chamber|group=port|kind=interface"
-    walls = "wg-fem-v1|region=rear-chamber|group=walls|kind=rigid"
+    walls = "wg-fem-v1|region=rear-chamber|group=_walls|kind=rigid"
     exterior = ExteriorSurface(
         points_mm=domain.points_mm,
         groups={"outside": np.concatenate([domain.surfaces[walls], domain.surfaces[cone]]),

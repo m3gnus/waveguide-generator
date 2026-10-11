@@ -352,7 +352,7 @@ def _task_fem_region(
     """Tetrahedralise one declared FEM region (``fem-regions-v1``)."""
 
     from server.cadlink.intake.step_text import scan_step_text
-    from server.mesh.fem_regions import build_fem_region_mesh
+    from server.mesh.fem_regions import build_fem_region_mesh, fem_region_mesh_stats
 
     payload = envelope.get("payload")
     payload = payload if isinstance(payload, dict) else {}
@@ -360,7 +360,9 @@ def _task_fem_region(
     if not isinstance(region, dict):
         raise ChildTaskError("the FEM region task received no region record")
     text_evidence = scan_step_text(source)
-    built = build_fem_region_mesh(source, region)
+    scratch = out_dir.parent / "tmp"
+    built = build_fem_region_mesh(source, region, scratch_dir=scratch)
+    built["stats"] = fem_region_mesh_stats(built, region, scratch_dir=scratch)
     msh_text = built.pop("msh_text")
     built["step_text"] = text_evidence.as_dict()
     return {"built": built}, {"fem.msh": _stage(out_dir, "fem.msh", msh_text)}

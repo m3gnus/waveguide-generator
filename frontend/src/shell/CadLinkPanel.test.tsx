@@ -931,9 +931,15 @@ describe('CadLinkPanel', () => {
           { group_id: 'cone', name: 'Cone', kind: 'moving', mesh_size_mm: 4 },
           { group_id: 'port', name: 'Port', kind: 'interface', mesh_size_mm: 4 },
           { group_id: 'end', name: 'End', kind: 'plane-wave-termination', mesh_size_mm: 8 },
-          { group_id: 'wall', name: 'Wall', kind: 'rigid', mesh_size_mm: 8 },
+          { group_id: 'walls', name: 'Walls', kind: 'rigid', mesh_size_mm: 8 },
         ],
-        stats: { tetrahedra: 1234, nodes: 456, surface_groups: {} },
+        stats: { tetrahedra: 1234, nodes: 456, surface_groups: {
+          cone: { kind: 'moving', triangle_count: 210, area_mm2: 1200, face_count: 1 },
+          port: { kind: 'interface', triangle_count: 100, area_mm2: 600, face_count: 1 },
+          end: { kind: 'plane-wave-termination', triangle_count: 120, area_mm2: 800, face_count: 1 },
+          walls: { kind: 'rigid', triangle_count: 130, area_mm2: 1000, face_count: 1 },
+          _walls: { kind: 'rigid', triangle_count: 400, area_mm2: 3400, face_count: 4 },
+        } },
       }],
     } }));
     const regions = host.querySelector('.cad-fem-regions')!;
@@ -943,6 +949,12 @@ describe('CadLinkPanel', () => {
     for (const kind of ['moving', 'interface', 'plane wave termination', 'rigid']) {
       expect(regions.textContent).toContain(kind);
     }
+    expect(regions.textContent).toContain('moving · 210 triangles · 1,200 mm²');
+    expect(regions.textContent).toContain('interface · 100 triangles · 600 mm²');
+    expect(regions.textContent).toContain('plane wave termination · 120 triangles · 800 mm²');
+    expect(regions.textContent).toContain('rigid · 130 triangles · 1,000 mm²');
+    expect(regions.textContent).toContain('Unclaimed walls');
+    expect(regions.textContent).toContain('rigid · 400 triangles · 3,400 mm²');
     await act(async () => useCadReturnStore.setState({ ingestRecord: { ...record, fem_regions: [] } }));
     expect(host.querySelector('.cad-fem-regions')).toBeNull();
   });

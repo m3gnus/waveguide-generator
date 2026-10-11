@@ -89,8 +89,15 @@ whose only driver is a FEM diaphragm is drivable without painted sources.
 WG names its physical groups as follows:
 
 - each grouped surface: `wg-fem-v1|region=<id>|group=<id>|kind=<kind>`;
-- the unclaimed walls: `group=walls|kind=rigid`;
+- the unclaimed walls: `group=_walls|kind=rigid` (the underscore is outside the protocol id pattern, so user groups cannot collide);
 - the air volume: `wg-fem-v1|region=<id>|volume`.
+
+Region artifacts are stored as `fem/region-<id>.msh`, retaining the declared id
+in the record while avoiding reserved device filenames. The supervised child
+measures group areas and triangle counts, checks every declared kind, and
+requires named triangles to cover the complete tetrahedral boundary exactly
+once. All regions in one ingest share a 600-second wall-clock budget; region
+count and mesh density remain user-selected.
 
 ## 3. Slices
 

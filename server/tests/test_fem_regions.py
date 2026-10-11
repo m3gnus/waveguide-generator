@@ -93,7 +93,7 @@ def test_a_box_meshes_with_its_groups_and_walls(tmp_path):
         "wg-fem-v1|region=rear-chamber|volume",
         "wg-fem-v1|region=rear-chamber|group=cone|kind=moving",
         "wg-fem-v1|region=rear-chamber|group=port|kind=interface",
-        "wg-fem-v1|region=rear-chamber|group=walls|kind=rigid",
+        "wg-fem-v1|region=rear-chamber|group=_walls|kind=rigid",
     }
     assert names["wg-fem-v1|region=rear-chamber|group=cone|kind=moving"]["drive_channel_id"] == "drive-LF"
     assert built["stats"]["boundary_surfaces"] == 6
@@ -186,3 +186,193 @@ def test_fem_regions_are_advertised_only_to_an_opted_in_build(monkeypatch):
     assert "femRegions" not in capabilities()
     monkeypatch.setenv(FEM_REGIONS_ENV, "1")
     assert capabilities()["femRegions"] == 1
+
+
+@pytest.mark.parametrize("kind", ["rigid", "moving"])
+def test_user_walls_group_keeps_all_boundary_triangles_and_separate_stats(tmp_path, kind):
+    from server.mesh.fem_regions import fem_region_mesh_stats
+
+    region = _region()
+    region["surface_groups"][0].update(group_id="walls", name="User walls", kind=kind)
+    if kind == "rigid":
+        region["surface_groups"][0].pop("drive_channel_id")
+    built = _mesh(_write_step(tmp_path / "air.step"), region)
+    stats = fem_region_mesh_stats(built, region)
+    assert stats["surface_groups"]["walls"]["kind"] == kind
+    assert stats["surface_groups"]["walls"]["triangle_count"] > 0
+    assert stats["surface_groups"]["walls"]["area_mm2"] == pytest.approx(1200)
+    assert stats["surface_groups"]["_walls"]["kind"] == "rigid"
+    assert stats["surface_groups"]["_walls"]["triangle_count"] > 0
+    assert stats["surface_groups"]["_walls"]["area_mm2"] == pytest.approx(3400)
+    assert sum(group["area_mm2"] for group in stats["surface_groups"].values()) == pytest.approx(5200)
+
+
+@pytest.mark.parametrize("damage", ["missing-name", "missing-triangles", "duplicate-triangles"])
+def test_reader_refuses_incomplete_or_duplicate_boundary_coverage(tmp_path, damage):
+    import meshio
+
+    region = _region()
+    built = _mesh(_write_step(tmp_path / "air.step"), region)
+    path = tmp_path / "damaged.msh"
+    path.write_text(built["msh_text"])
+    mesh = meshio.read(path)
+    name = physical_name(region["region_id"], "_walls", "rigid")
+    tag = mesh.field_data[name][0]
+    if damage == "missing-name":
+        del mesh.field_data[name]
+    else:
+        for block, physical in zip(mesh.cells, mesh.cell_data["gmsh:physical"]):
+            if block.type == "triangle" and np.all(physical == tag):
+                if damage == "missing-triangles":
+                    block.data = block.data[:-1]
+                else:
+                    block.data = np.concatenate([block.data, block.data[:1]])
+                break
+        # Rebuild matching cell data for meshio's writer.
+        for index, block in enumerate(mesh.cells):
+            for arrays in mesh.cell_data.values():
+                old = arrays[index]
+                arrays[index] = np.resize(old, len(block.data))
+    meshio.write(path, mesh, file_format="gmsh22", binary=False)
+    with pytest.raises(FemRegionMeshError, match="rear-chamber.*(group tag|surface groups)"):
+        read_fem_region_domain(path.read_text(), region["region_id"])
+
+
+@pytest.mark.parametrize("damage", ["missing", "empty", "wrong-kind"])
+def test_stats_require_each_declared_group_and_kind(tmp_path, monkeypatch, damage):
+    from server.mesh import fem_regions
+
+    region = _region()
+    built = _mesh(_write_step(tmp_path / "air.step"), region)
+    domain = read_fem_region_domain(built["msh_text"], region["region_id"])
+    name = physical_name(region["region_id"], "cone", "moving")
+    surfaces = dict(domain.surfaces)
+    if damage == "missing":
+        del surfaces[name]
+    elif damage == "empty":
+        surfaces[name] = surfaces[name][:0]
+    else:
+        wrong = physical_name(region["region_id"], "cone", "rigid")
+        surfaces[wrong] = surfaces.pop(name)
+        built["physical_names"][wrong] = built["physical_names"].pop(name)
+    monkeypatch.setattr(fem_regions, "read_fem_region_domain", lambda *args, **kwargs:
+                        fem_regions.FemRegionDomain(domain.region_id, domain.points_mm, domain.tetrahedra, surfaces))
+    with pytest.raises(FemRegionMeshError, match="rear-chamber.*Cone.*declared kind 'moving'"):
+        fem_regions.fem_region_mesh_stats(built, region)
+
+
+def test_mesh_scratch_uses_session_or_explicit_child_tree(tmp_path, monkeypatch):
+    from server.mesh import fem_regions
+    from server.platform import temp_session
+
+    session = temp_session.TemporarySession.create(tmp_path)
+    step = _write_step(tmp_path / "air.step")
+    seen = []
+    original = fem_regions.tempfile.TemporaryDirectory
+
+    def record(*args, **kwargs):
+        seen.append(Path(kwargs["dir"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(fem_regions.tempfile, "TemporaryDirectory", record)
+    session.activate()
+    try:
+        built = _mesh(step, _region())
+        read_fem_region_domain(built["msh_text"], "rear-chamber")
+        child = session.path / "staging" / "tmp"
+        child.mkdir(parents=True)
+        fem_regions.fem_region_mesh_stats(built, _region(), scratch_dir=child)
+        assert seen == [session.path, session.path, child]
+    finally:
+        session.close(remove=True)
+
+
+def test_parent_accepts_child_stats_without_parsing_mesh(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from server.cadlink.intake import isolated
+    from server.mesh import fem_regions
+
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    artifact = tmp_path / "fem.msh"
+    artifact.write_text("verified mesh")
+    stats = {"tetrahedra": 42, "nodes": 24, "surface_groups": {"_walls": {"triangle_count": 12}}}
+
+    @contextmanager
+    def task(*args, **kwargs):
+        yield SimpleNamespace(result={"built": {"stats": stats}}, artifacts={"fem.msh": artifact})
+
+    monkeypatch.setattr(isolated, "isolated_step_task", task)
+    monkeypatch.setattr(fem_regions, "read_fem_region_domain", lambda *args, **kwargs:
+                        pytest.fail("parent must not parse the FEM mesh"))
+    result = isolated.build_fem_region_mesh_isolated(tmp_path / "air.step", _region())
+    assert result["stats"] == stats
+    assert result["msh_text"] == "verified mesh"
+
+
+def test_shared_deadline_covers_child_slot_wait_and_staging(tmp_path, monkeypatch):
+    from server.cadlink.intake import isolation
+
+    source = tmp_path / "air.step"
+    source.write_text("STEP")
+    now = [1.0]
+    monkeypatch.setattr(isolation.time, "monotonic", lambda: now[0])
+    seen = []
+
+    class Slot:
+        def acquire(self, timeout):
+            seen.append(timeout)
+            now[0] = 4.0  # The queue used three seconds of the shared budget.
+            return True
+        def release(self):
+            seen.append("released")
+
+    def run(envelope, **kwargs):
+        assert envelope["limits"]["wall_time_s"] == 6.0
+        assert kwargs["budget"].wall_time_s == 6.0
+        return isolation.ChildOutcome({}, {}, "")
+
+    monkeypatch.setattr(isolation, "_CHILD_SLOT", Slot())
+    monkeypatch.setattr(isolation, "_run_child", run)
+    with isolation.isolated_step_task("fem_region", {}, step_path=source,
+                                      budget=isolation.MESH_BUDGET, deadline=10.0, stage="mesh"):
+        pass
+    assert seen == [9.0, "released"]
+    now[0] = 11.0
+    with pytest.raises(isolation.ChildRefusal, match="total FEM regions wall-clock budget"):
+        with isolation.isolated_step_task("fem_region", {}, step_path=source,
+                                          budget=isolation.MESH_BUDGET, deadline=10.0, stage="mesh"):
+            pytest.fail("an expired budget cannot start a child")
+
+
+@pytest.mark.parametrize("after_spawn", [7.0, 11.0])
+def test_child_startup_consumes_shared_deadline_and_still_cleans_up(tmp_path, monkeypatch, after_spawn):
+    from types import SimpleNamespace
+    from server.cadlink.intake import isolation
+
+    source = tmp_path / "air.step"
+    source.write_text("STEP")
+    now = [1.0]
+    monkeypatch.setattr(isolation, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    start = isolation.start_child_process
+    observed = []
+
+    def spawn(*args, **kwargs):
+        process = start(*args, **kwargs)
+        now[0] = after_spawn
+        return process
+
+    def supervise(process, budget, **kwargs):
+        observed.append(budget.wall_time_s)
+        return "test deadline refusal"
+
+    monkeypatch.setattr(isolation, "start_child_process", spawn)
+    monkeypatch.setattr(isolation, "_supervise", supervise)
+    message = "total FEM regions wall-clock budget" if after_spawn > 10.0 else "test deadline refusal"
+    with pytest.raises(isolation.ChildRefusal, match=message):
+        with isolation.isolated_step_task(
+            "fem_region", {}, step_path=source, budget=isolation.MESH_BUDGET, deadline=10.0,
+            stage="mesh", entrypoint="server.tests.isolation_doubles",
+        ):
+            pytest.fail("deadline refusal must not publish a result")
+    assert observed == ([] if after_spawn > 10.0 else [3.0])

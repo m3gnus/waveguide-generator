@@ -891,8 +891,9 @@ export function CadLinkPanel() {
         {record.fem_regions.map((region) => <div key={region.region_id}>
           <b>{region.name}</b>
           <p className="cad-detail">{region.stats.tetrahedra.toLocaleString()} tetrahedra · {region.stats.nodes.toLocaleString()} nodes · {region.mesh_size_mm} mm region size</p>
-          {region.surface_groups.map((group) => <div className="cad-row" key={group.group_id}>
-            <b>{group.name}</b><span>{group.kind.replaceAll('-', ' ')}</span>
+          {Object.entries(region.stats.surface_groups).map(([groupId, stats]) => <div className="cad-row" key={groupId}>
+            <b>{region.surface_groups.find((group) => group.group_id === groupId)?.name ?? (groupId === '_walls' ? 'Unclaimed walls' : groupId)}</b>
+            <span>{stats.kind.replaceAll('-', ' ')} · {stats.triangle_count.toLocaleString()} triangles · {stats.area_mm2.toLocaleString(undefined, { maximumFractionDigits: 2 })} mm²</span>
           </div>)}
         </div>)}
       </section>}
