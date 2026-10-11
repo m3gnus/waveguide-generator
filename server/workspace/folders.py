@@ -15,6 +15,7 @@ from server.platform.paths import same_folder, validate_folder_root
 log = logging.getLogger(__name__)
 NAMES = {"runs": ("workspace_settings.json", "workspacePath"),
          "cadlink": ("cadlink_settings.json", "cadLinkPath")}
+RUNS_SELECTED_KEY = "workspacePathSelected"
 
 
 def read_settings(path: Path) -> dict[str, Any]:
@@ -46,7 +47,8 @@ def read_folder_settings(data_dir: Path) -> tuple[dict[str, dict[str, Any]], boo
 class FolderRoot:
     def __init__(self, data_dir: Path, *, default_root: Path, legacy_runs: Path,
                  writer: Callable[[Path, dict[str, Any]], None], system: str | None = None,
-                 create_implicit_runs: bool = False, settings_read_failed: bool = False) -> None:
+                 create_implicit_runs: bool = False, settings_read_failed: bool = False,
+                 explicit_runs: bool = False) -> None:
         self.data_dir = data_dir
         self.settings_path = data_dir / "folders.json"
         self.default_root = default_root
@@ -101,11 +103,13 @@ class FolderRoot:
                 if selected is not None and str(selected) != str(self.root / name):
                     self.overrides[name] = selected
         self._cleanup_overrides()
-        # Keep the pre-publication distinction for this start: writing a
-        # rollback mirror does not turn 0.3.5's implicit default into a choice.
+        # Legacy mirrors have no marker: their path was a choice or adoption.
+        # New implicit mirrors retain the distinction across backend restarts.
+        recorded_runs = ((mirrors["runs"] is not None or valid)
+                         and settings["workspace_settings.json"].get(RUNS_SELECTED_KEY) is not False)
+        self.runs_selected = explicit_runs or recorded_runs
         self.implicit_runs_path = (legacy_runs if not self.read_only
-                                   and not self.settings_path.exists()
-                                   and mirrors["runs"] is None
+                                   and not recorded_runs
                                    and self.effective("runs") == legacy_runs else None)
         if self.read_only:
             self.notice = ("Folder settings could not be read; folder changes are disabled for this start." if failed else
@@ -162,6 +166,14 @@ class FolderRoot:
             if (name != "cadlink" or self.effective(name).is_dir()
                     or name in self.overrides or stored_path(payload.get(key)) is not None):
                 payload[key] = str(self.effective(name))
+            if name == "runs":
+                # Older WG and WGLink ignore this extra key and still read the
+                # effective path. Older WG's chooser replaces the mirror, so a
+                # later explicit choice (even the same path) drops the marker.
+                if self.runs_selected:
+                    payload.pop(RUNS_SELECTED_KEY, None)
+                else:
+                    payload[RUNS_SELECTED_KEY] = False
             if payload != settings[file]:
                 self.writer(self.data_dir / file, payload)
         payload = {**self._extra, "schemaVersion": 1, "rootPath": str(self.root)}
@@ -181,6 +193,8 @@ class FolderRoot:
         if not chosen.is_dir():
             raise ValueError(f"Selected path is not a directory: {chosen}")
         previous, previous_overrides = self.root, dict(self.overrides)
+        previous_selected, previous_implicit = self.runs_selected, self.implicit_runs_path
+        self.runs_selected = True
         self.implicit_runs_path = None
         self.root = chosen
         self._cleanup_overrides(selected=True)
@@ -189,6 +203,7 @@ class FolderRoot:
             self.persist()
         except OSError:
             self.root, self.overrides = previous, previous_overrides
+            self.runs_selected, self.implicit_runs_path = previous_selected, previous_implicit
             self._recover_mirror_choices()
             raise
         self.on_change()
@@ -200,13 +215,16 @@ class FolderRoot:
         if not chosen.is_dir():
             raise ValueError(f"Selected path is not a directory: {chosen}")
         previous_overrides = dict(self.overrides)
+        previous_selected, previous_implicit = self.runs_selected, self.implicit_runs_path
         if name == "runs":
+            self.runs_selected = True
             self.implicit_runs_path = None
         self.overrides[name] = chosen
         try:
             self.persist()
         except OSError:
             self.overrides = previous_overrides
+            self.runs_selected, self.implicit_runs_path = previous_selected, previous_implicit
             self._recover_mirror_choices()
             raise
         self.on_change()
@@ -215,6 +233,10 @@ class FolderRoot:
         settings, failed = read_folder_settings(self.data_dir)
         self.read_only |= failed
         mirrors = {name: stored_path(settings[file].get(key)) for name, (file, key) in NAMES.items()}
+        if mirrors["runs"] is not None:
+            self.runs_selected = settings["workspace_settings.json"].get(RUNS_SELECTED_KEY) is not False
+            if self.runs_selected:
+                self.implicit_runs_path = None
         paired = self._paired_root(mirrors["runs"], mirrors["cadlink"])
         if paired is not None and all(mirrors.values()):
             self.root = paired

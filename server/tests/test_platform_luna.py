@@ -316,6 +316,10 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
 
     paths = ensure_data_layout(tmp_path)
     monkeypatch.delenv(DATA_DIR_ENV, raising=False)
+    monkeypatch.setenv("XDG_DOCUMENTS_DIR", str(tmp_path / "Documents"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(app_module, "legacy_default_runs_dir", default_runs_dir)
+    monkeypatch.setattr(app_module, "LEGACY_WORKSPACE_DIR", tmp_path / "unused-output")
     config_kwargs: dict[str, Any] = {}
     app_kwargs: dict[str, Any] = {}
     listener_closed = False
@@ -392,7 +396,8 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     # Runs default beside the user's documents, not inside the checkout: an
     # install directory does not survive a reinstall and is not anywhere a
     # user looks for their own output.
-    assert app_kwargs["workspace_dir"] == default_runs_dir()
+    application = app_module.create_app(**app_kwargs)
+    assert application.state.workspace.path() == default_runs_dir()
     assert listener_closed is True
     assert lock_released is True
     assert console_shutdown_complete is not None

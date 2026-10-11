@@ -54,6 +54,15 @@ published atomically, last:
 - `cadlink_settings.json` / `cadLinkPath`: effective WGLink folder, with
   `captureDocument` and `captureMode` preserved during migration and root changes.
 
+An implicit Runs default also records `workspacePathSelected: false` in its
+mirror. Publishing a rollback path does not count as a user choice in
+`/api/workspace/path`, including after a restart. A chosen root, chosen Runs
+folder, adopted legacy workspace, or explicit `workspace_dir` counts as selected.
+Their mirrors omit the marker, matching legacy selections. Older WG and WGLink
+ignore the extra key and still read the same destination. An older WG's chooser
+replaces the mirror without the marker, so even choosing the same path during a
+rollback is recognized as an explicit choice on the next start.
+
 No-op starts do not rewrite these files. An interrupted migration is rerun from
 the durable mirrors. An interrupted root change is recovered conservatively:
 any changed mirror is kept with its recorded spelling. If both mirrors already

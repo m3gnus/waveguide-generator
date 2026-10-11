@@ -105,7 +105,8 @@ def run_workspace_startup(application) -> None:
 def assert_isolated(application, probe, data: Path) -> None:
     expected = data / "workspace"
     assert application.state.workspace.path() == expected
-    assert application.state.workspace.selected_path() == expected
+    # A data-root override isolates output; it is not a runs-folder choice.
+    assert application.state.workspace.selected_path() is None
     assert expected.is_dir()
     assert not (probe.home / "Documents").exists()
     assert probe.repaired == [(data, expected)]
@@ -212,7 +213,7 @@ def test_launcher_startup_preserves_data_override_intent(
         assert workspace.default_path == expected
         assert workspace.path() == expected
         assert workspace.selected_path() == (
-            isolated_startup.legacy if isolated_startup.legacy.exists() else isolated_startup.documents
+            isolated_startup.legacy if isolated_startup.legacy.exists() else None
         )
         assert isolated_startup.repaired == [(resolve_data_dir(), expected)]
 

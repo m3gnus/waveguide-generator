@@ -574,6 +574,9 @@ class WorkspaceState:
 
     def selected_path(self) -> Path | None:
         if self.folders is not None:
+            if not isinstance(self, CadWorkspaceState) and not self.folders.runs_selected:
+                self._selected = None
+                return None
             path = self.folders.effective("cadlink" if isinstance(self, CadWorkspaceState) else "runs")
             self._selected = path
             return path if path.is_dir() else None
@@ -1478,6 +1481,7 @@ def mount_workspace(
     legacy_defaults: Sequence[Path] = (),
     default_root: Path | None = None,
     create_implicit_runs: bool = False,
+    explicit_runs: bool = False,
 ) -> WorkspaceState:
     data_dir = Path(application.state.data_dir)
     settings, failed = read_folder_settings(data_dir)
@@ -1499,6 +1503,7 @@ def mount_workspace(
         legacy_runs=state.default_path,
         writer=_write_json_atomic,
         create_implicit_runs=create_implicit_runs,
+        explicit_runs=explicit_runs,
         settings_read_failed=failed,
     )
 

@@ -63,6 +63,61 @@ def test_fresh_install(tmp_path, isolated):
     assert read_settings(f.data_dir / 'cadlink_settings.json').get('cadLinkPath') == (None if isolated else str(root / 'cadlink'))
 
 
+@pytest.mark.parametrize('isolated', [False, True])
+def test_implicit_runs_mirror_never_becomes_a_selection_on_restart(tmp_path, isolated):
+    app, root = setup(tmp_path, isolated=isolated)
+    runs = app.state.workspace.path()
+    expected = {'path': str(runs), 'selected': False}
+    for _ in range(3):
+        assert asyncio.run(endpoint(app, '/api/workspace/path')()) == expected
+        assert app.state.workspace.selected_path() is None
+        mirror = read_settings(app.state.workspace.settings_path)
+        assert mirror['workspacePath'] == str(runs)
+        assert mirror['workspacePathSelected'] is False
+        before = {p.name: p.read_bytes() for p in app.state.folders.data_dir.glob('*.json')}
+        app, _ = setup(tmp_path, isolated=isolated)
+        assert {p.name: p.read_bytes() for p in app.state.folders.data_dir.glob('*.json')} == before
+    # Released WG reads workspacePath and ignores additional mirror keys.
+    rollback = api.WorkspaceState(app.state.folders.data_dir, default_path=root / 'unused', allow_adoption=False)
+    assert rollback.path() == runs
+
+
+@pytest.mark.parametrize('choice', ['root', 'runs', 'older-same', 'older-different'])
+def test_explicit_choice_replaces_implicit_runs_marker(tmp_path, choice):
+    app, root = setup(tmp_path)
+    runs = app.state.workspace.path()
+    sentinel = runs / 'sentinel'
+    sentinel.write_text('keep')
+    if choice == 'root':
+        app.state.folders.select(root)
+    elif choice == 'runs':
+        app.state.workspace.select(runs)
+    else:
+        if choice == 'older-different':
+            runs = tmp_path / 'older-runs'
+            runs.mkdir()
+        # This is the exact mirror shape written by 0.3.5's chooser, including
+        # re-selecting the unchanged implicit path after a rollback.
+        write(app.state.folders.data_dir, 'workspace_settings.json', {'schemaVersion': 1, 'workspacePath': str(runs)})
+    app, _ = setup(tmp_path)
+    assert asyncio.run(endpoint(app, '/api/workspace/path')()) == {'path': str(runs), 'selected': True}
+    assert read_settings(app.state.workspace.settings_path).get('workspacePathSelected') is not False
+    assert sentinel.read_text() == 'keep'
+
+
+def test_explicit_workspace_dir_is_selected_across_restarts(tmp_path):
+    from server.app import create_app
+
+    data, runs = tmp_path / 'data', tmp_path / 'explicit-runs'
+    app = create_app(data_dir=data, workspace_dir=runs, solver_warmup=False)
+    sentinel = runs / 'sentinel'
+    sentinel.write_text('keep')
+    for _ in range(2):
+        assert asyncio.run(endpoint(app, '/api/workspace/path')()) == {'path': str(runs), 'selected': True}
+        app = create_app(data_dir=data, solver_warmup=False)
+    assert sentinel.read_text() == 'keep'
+
+
 @pytest.mark.parametrize('cad_evidence', [False, True])
 def test_legacy_only_settings(tmp_path, cad_evidence):
     selected = tmp_path / 'old'
@@ -85,6 +140,8 @@ def test_populated_legacy_default_is_adopted_first(tmp_path):
     api.mount_workspace(app, default_root=tmp_path / 'root', default_path=tmp_path / 'root' / 'runs', legacy_defaults=(legacy,))
     assert app.state.folders.overrides == {'runs': legacy, 'cadlink': legacy}
     assert (legacy / 'previous-run').is_dir()
+    assert app.state.workspace.selected_path() == legacy
+    assert read_settings(data / 'workspace_settings.json').get('workspacePathSelected') is not False
 
 
 @pytest.mark.parametrize('exists', [False, True])
@@ -739,6 +796,8 @@ def test_override_read_failure_keeps_the_last_readable_selection(tmp_path, monke
         f.set_override('runs', chosen)
     assert f.read_only
     assert f.effective('runs') == root / 'runs'
+    assert not f.runs_selected
+    assert app.state.workspace.selected_path() is None
     assert {p.name: p.read_bytes() for p in f.data_dir.iterdir()} == before
 
 

@@ -612,6 +612,7 @@ def create_app(
         legacy_defaults=legacy_workspace_dirs,
         default_root=default_folder_root(resolved_data_dir, isolated=isolated_data_dir),
         create_implicit_runs=isolated_data_dir or workspace_dir is not None,
+        explicit_runs=workspace_dir is not None,
     )
     application.add_exception_handler(RequestValidationError, _request_validation_error)
     extra_ws_origins = parse_extra_websocket_origins(
