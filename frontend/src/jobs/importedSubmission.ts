@@ -101,11 +101,10 @@ export function importedSubmissionBlocker(
   if (directivityError) return directivityError;
   if (!state.ingestRecord) return 'Ingest a CAD return before solving.';
   if (state.needsIngest) return state.ingestStaleReason ?? 'Sizing or source selection changed. Re-ingest before solving.';
-  if (femRegions.length > 0 && !state.exteriorOnly) {
-    return 'This return includes FEM regions. Explicitly choose an exterior-only solve to ignore them.';
-  }
-  if (requiredFem && !state.exteriorOnly) {
-    return 'This return includes FEM air volumes. Explicitly choose an exterior-only Phase 2 solve.';
+  if ((femRegions.length > 0 || requiredFem) && !state.exteriorOnly) {
+    const declared = requiredFem && femRegions.length > 0 ? 'required FEM air volumes and FEM regions'
+      : femRegions.length > 0 ? 'FEM regions' : 'required FEM air volumes';
+    return `This return includes ${declared}. Choose exterior-only to solve without the FEM air, or wait for coupled FEM solving.`;
   }
   if (rangeInvalid || listInvalid) return 'Enter a valid explicit frequency sweep.';
   if (!state.driveChannels.length) return 'At least one drive channel is required.';

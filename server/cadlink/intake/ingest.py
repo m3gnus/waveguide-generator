@@ -23,6 +23,7 @@ from server.cadlink.intake.isolated import (
     build_imported_viewport_mesh_isolated,
 )
 from server.cadlink.intake.isolation import ChildRefusal
+from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
 from server.cadlink.store import CadLinkStore
 from server.design.textcfg import parse
 from server.exports.geometry_identity import geometry_hash_for_design
@@ -1959,24 +1960,7 @@ def ingest_bundle(
                     for instance in manifest["instances"]
                 ],
                 "fem_air_volumes": manifest["scope"]["fem_air_volumes"],
-                "fem_regions": [
-                    {
-                        "region_id": region["region_id"],
-                        "name": region["name"],
-                        "file": region["file"],
-                        "sha256": manifest["files"][region["file"]]["sha256"],
-                        "surface_groups": [
-                            {
-                                "group_id": group["group_id"],
-                                "name": group["name"],
-                                "kind": group["kind"],
-                                "face_count": len(group["faces"]),
-                            }
-                            for group in region["surface_groups"]
-                        ],
-                    }
-                    for region in manifest["scope"].get("fem_regions", [])
-                ],
+                "fem_regions": _fem_region_evidence(manifest),
             },
             "identity": instance_identity_inventory(
                 manifest, selected_instance_id=resolved_instance_id
@@ -2066,6 +2050,63 @@ def ingest_bundle(
     except Exception:  # noqa: BLE001 - memory for the next version, never this one's outcome
         logger.warning("Could not remember the domain reading of %s", published.get("ingest_id"), exc_info=True)
     return published
+
+
+def _fem_region_evidence(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "region_id": region["region_id"],
+            "name": region["name"],
+            "file": region["file"],
+            "sha256": manifest["files"][region["file"]]["sha256"],
+            "surface_groups": [
+                {
+                    "group_id": group["group_id"],
+                    "name": group["name"],
+                    "kind": group["kind"],
+                    "face_count": len(group["faces"]),
+                }
+                for group in region["surface_groups"]
+            ],
+        }
+        for region in manifest["scope"].get("fem_regions", [])
+    ]
+
+
+def current_fem_evidence(record: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Derive missing region evidence from the sealed return's verified manifest.
+
+    The digest binds these bytes to the manifest validated during ingestion,
+    without reapplying today's feature admission flag to an accepted return.
+    Persisted ingestion records remain immutable.
+    """
+
+    evidence = record.get("evidence")
+    evidence = evidence if isinstance(evidence, Mapping) else {}
+    if "fem_regions" in evidence:
+        return evidence
+    try:
+        bundle_path = Path(record["bundle_store_path"])
+        manifest_path = bundle_path / "wgreturn.json"
+        if bundle_path.is_symlink() or manifest_path.is_symlink():
+            raise ValueError("retained manifest is a symlink")
+        with manifest_path.open("rb") as handle:
+            raw_manifest = handle.read(MAX_WGRETURN_JSON_BYTES + 1)
+        if len(raw_manifest) > MAX_WGRETURN_JSON_BYTES:
+            raise ValueError("retained manifest exceeds the size limit")
+        digest = "sha256:" + hashlib.sha256(raw_manifest).hexdigest()
+        if digest != record.get("manifest_sha256"):
+            raise ValueError("retained manifest digest mismatch")
+        manifest = json.loads(raw_manifest)
+        if not isinstance(manifest, Mapping) or not isinstance(manifest.get("scope"), Mapping):
+            raise ValueError("retained manifest has no scope")
+        regions = _fem_region_evidence(manifest)
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        raise IngestRefusal(
+            "FEM evidence",
+            "The retained return manifest cannot be verified; re-ingest this return before solving.",
+        ) from exc
+    return {**evidence, "fem_regions": regions}
 
 
 def get_ingestion_record(store: CadLinkStore, ingest_id: str) -> dict[str, Any] | None:
@@ -2219,6 +2260,7 @@ __all__ = [
     "IngestRefusal",
     "build_deferred_viewport",
     "compute_freshness",
+    "current_fem_evidence",
     "current_viewport_record",
     "deferred_viewport_lookup_key",
     "evaluate_instance_freshness",

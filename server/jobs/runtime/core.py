@@ -26,7 +26,7 @@ import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Mapping, Sequence
 import uuid
 
-from server.cadlink.intake.ingest import get_ingestion_record
+from server.cadlink.intake.ingest import IngestRefusal, current_fem_evidence, get_ingestion_record
 from server.cadlink.interpretation.domain_decision import (
     decision_summary,
 )
@@ -659,6 +659,33 @@ def _refuse_removed_solver(request: SolveRequest) -> None:
         raise RemovedSolverError(
             "Axisymmetric solving has been removed. Choose Full 3D and a supported engine to run a new solve."
         )
+
+
+def _refuse_imported_fem(
+    geometry: ImportedGeometrySource, record: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Apply the same FEM eligibility rule at submission and recovered execution."""
+
+    try:
+        evidence = current_fem_evidence(record)
+    except IngestRefusal as exc:
+        raise ImportedSolveRefusal("ingest_record_incomplete", str(exc)) from exc
+    volumes = evidence.get("fem_air_volumes") or []
+    regions = evidence.get("fem_regions") or []
+    required_fem = any(
+        not isinstance(volume, Mapping) or volume.get("required", True)
+        for volume in volumes
+    )
+    if (required_fem or regions) and not geometry.exterior_only:
+        declared = "required FEM air volumes and FEM regions" if required_fem and regions else (
+            "FEM regions" if regions else "required FEM air volumes"
+        )
+        raise ImportedSolveRefusal(
+            "fem_required",
+            f"The CAD return declares {declared}. Choose exterior-only to solve "
+            "without the FEM air, or wait for coupled FEM solving.",
+        )
+    return evidence
 
 
 async def _accuracy_engine(request: SolveRequest, registry: EngineRegistry) -> tuple[SolveRequest, str | None]:
@@ -2191,23 +2218,10 @@ class JobRuntime:
                 "imported_infinite_baffle_unsupported",
                 "imported geometry supports free-space solves only; infinite baffle is unavailable",
             )
-        evidence = record.get("evidence")
-        evidence = evidence if isinstance(evidence, Mapping) else {}
-        fem_volumes = evidence.get("fem_air_volumes") or []
-        fem_regions = evidence.get("fem_regions") or []
-        required_fem = [
-            volume
-            for volume in fem_volumes
-            if not isinstance(volume, Mapping) or volume.get("required", True)
-        ]
-        if (required_fem or fem_regions) and not geometry.exterior_only:
-            raise ImportedSolveRefusal(
-                "fem_required",
-                ("the CAD return declares FEM regions; set exterior_only=true "
-                 if fem_regions else
-                 "the CAD return declares required FEM air volumes; set exterior_only=true ")
-                + "to explicitly exclude them from this Phase 2 solve",
-            )
+        record = {
+            **record,
+            "evidence": await asyncio.to_thread(_refuse_imported_fem, geometry, record),
+        }
 
         symmetry_metadata = _imported_symmetry_metadata(
             record, request.options.symmetry, _ground_plane_axis(request)
@@ -3477,6 +3491,12 @@ class JobRuntime:
                         "ingest_not_found",
                         f"ingestion record {request.geometry.ingest_id!r} disappeared before execution",
                     )
+                imported_record = {
+                    **imported_record,
+                    "evidence": await asyncio.to_thread(
+                        _refuse_imported_fem, request.geometry, imported_record
+                    ),
+                }
                 job_msh_text = await asyncio.to_thread(
                     self.store.get_mesh_artifact, job_id
                 )
@@ -3885,7 +3905,8 @@ class JobRuntime:
         self._check_cancelled(job_id)
         outcome_metadata = outcome.results.setdefault("metadata", {})
         if isinstance(request.geometry, ImportedGeometrySource) and imported_record is not None:
-            evidence = imported_record.get("evidence") or {}
+            evidence = imported_record.get("evidence")
+            evidence = evidence if isinstance(evidence, Mapping) else {}
             fem_regions = evidence.get("fem_regions") or []
             if fem_regions and request.geometry.exterior_only:
                 # The runtime owns this note for every imported engine, using
@@ -3895,7 +3916,10 @@ class JobRuntime:
                     "excluded": True,
                     "declared_volume_count": len(evidence.get("fem_air_volumes") or []),
                     "declared_region_count": len(fem_regions),
-                    "region_ids": [region["region_id"] for region in fem_regions],
+                    "region_ids": [
+                        region["region_id"] for region in fem_regions
+                        if isinstance(region, Mapping) and region.get("region_id")
+                    ],
                     "reason": "Phase 2 exterior_only override",
                 }
         outcome_metadata.setdefault("solve_path", "full-3d")

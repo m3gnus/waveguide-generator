@@ -68,6 +68,7 @@ from server.cadlink.fusion.fusion_return import publish_return_request
 from server.cadlink.intake.ingest import (
     IngestRefusal,
     build_deferred_viewport,
+    current_fem_evidence,
     current_viewport_record,
     deferred_viewport_lookup_key,
     get_ingestion_record,
@@ -1136,7 +1137,11 @@ async def get_ingest(ingest_id: str, request: Request) -> dict[str, Any]:
     record = await asyncio.to_thread(get_ingestion_record, store, ingest_id)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Unknown ingestion record {ingest_id}")
-    return record
+    try:
+        evidence = await asyncio.to_thread(current_fem_evidence, record)
+    except IngestRefusal as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {**record, "evidence": evidence}
 
 
 @router.get("/ingest/{ingest_id}/mesh", response_class=PlainTextResponse)

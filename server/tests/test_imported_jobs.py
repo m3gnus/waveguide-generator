@@ -780,7 +780,7 @@ def _record(mesh_path: Path, *, findings: list[dict[str, Any]] | None = None) ->
                 }
             },
         },
-        "evidence": {"fem_air_volumes": []},
+        "evidence": {"fem_air_volumes": [], "fem_regions": []},
         "findings": findings or [],
     }
 
@@ -1535,10 +1535,11 @@ def test_skipped_sources_must_be_optional(tmp_path: Path, required: bool) -> Non
 
 
 @pytest.mark.parametrize("evidence", [
-    {"fem_air_volumes": [{"file": "fem/air.step"}]},
+    {"fem_air_volumes": [{"file": "fem/air.step"}], "fem_regions": []},
     {"fem_air_volumes": [], "fem_regions": [{"region_id": "rear-chamber"}]},
     {"fem_air_volumes": [{"required": False}], "fem_regions": [{"region_id": "rear-chamber"}]},
-], ids=["required-volume", "region-only", "region-with-optional-volume"])
+    {"fem_air_volumes": [{"required": True}], "fem_regions": [{"region_id": "rear-chamber"}]},
+], ids=["required-volume", "region-only", "region-with-optional-volume", "region-with-required-volume"])
 def test_required_fem_volume_needs_exterior_only_override(tmp_path: Path, evidence) -> None:
     async def scenario() -> None:
         runtime, ingest_id, _ = await _runtime_fixture(
@@ -1551,6 +1552,9 @@ def test_required_fem_volume_needs_exterior_only_override(tmp_path: Path, eviden
             assert caught.value.reason_code == "fem_required"
             if evidence.get("fem_regions"):
                 assert "FEM regions" in str(caught.value)
+            if any(volume.get("required", True) for volume in evidence.get("fem_air_volumes", [])):
+                assert "required FEM air volumes" in str(caught.value)
+            assert "Choose exterior-only to solve without the FEM air, or wait for coupled FEM solving." in str(caught.value)
             request = _request(ingest_id, exterior_only=True)
             assert await runtime.submit(request)
         finally:
@@ -1559,7 +1563,99 @@ def test_required_fem_volume_needs_exterior_only_override(tmp_path: Path, eviden
     asyncio.run(scenario())
 
 
-def test_exterior_only_result_records_ignored_fem_regions(tmp_path: Path) -> None:
+def _legacy_fem_record_changes(tmp_path: Path, monkeypatch) -> dict[str, Any]:
+    from server.cadlink.intake.ingest import retain_snapshot
+    from server.cadlink.wgreturn import read_wgreturn
+    from server.tests.test_fem_regions_gate import _fem_bundle
+
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    original = _fem_bundle(tmp_path / "returns")
+    bundle = read_wgreturn(original)
+    retained = retain_snapshot(original, tmp_path / "data")
+    return {
+        "evidence": {"fem_air_volumes": []},
+        "bundle_store_path": retained["retained_path"],
+        "manifest_sha256": bundle.manifest_sha256,
+    }
+
+
+@pytest.mark.parametrize("exterior_only", [False, True])
+def test_legacy_fem_record_without_retained_manifest_refuses_submission(
+    tmp_path: Path, exterior_only,
+) -> None:
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, {
+            "evidence": {"fem_air_volumes": []},
+        })
+        try:
+            with pytest.raises(ImportedSolveRefusal) as caught:
+                await runtime.submit(_request(ingest_id, exterior_only=exterior_only))
+            assert caught.value.reason_code == "ingest_record_incomplete"
+            assert "re-ingest this return" in str(caught.value)
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["recorded-regions", "retained-manifest"])
+def test_recovered_fem_job_is_refused_before_engine_fetch(tmp_path: Path, monkeypatch, legacy) -> None:
+    calls = []
+
+    class UnreachableRegistry(_PausedRegistry):
+        async def get_engine(self, name):
+            calls.append(name)
+            raise AssertionError("a recovered FEM refusal must precede engine fetch")
+
+    async def scenario() -> None:
+        changes = _legacy_fem_record_changes(tmp_path, monkeypatch) if legacy else {
+            "evidence": {"fem_air_volumes": [], "fem_regions": [{"region_id": "rear-chamber"}]},
+        }
+        runtime, ingest_id, record = await _runtime_fixture(tmp_path, changes)
+        request = _request(ingest_id, manifest_sha256=record["manifest_sha256"])
+        try:
+            with pytest.raises(ImportedSolveRefusal) as submitted:
+                await runtime.submit(request)
+            assert submitted.value.reason_code == "fem_required"
+        finally:
+            await runtime.shutdown()
+
+        # Bypass submission as a persisted queued row from the earlier build does.
+        recovered = JobRuntime(
+            JobStore(tmp_path / "jobs.db"),
+            engine_registry=UnreachableRegistry(),
+            cadlink_store=CadLinkStore(tmp_path / "cadlink.db"),
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        recovered.store.initialize()
+        recovered.store.create_job({
+            "id": "fem-queued", "status": "queued", "created_at": now,
+            "updated_at": now, "queued_at": now,
+            "config_json": request.model_dump(mode="json"), "config_summary_json": {},
+            "task_metadata": {"symmetry": {"resolved_quadrants": 1234}},
+            "progress": 0, "has_results": False, "has_mesh_artifact": False,
+            "stage": "queued", "stage_message": "Queued",
+        }, initial_event=("queued", {"status": "queued"}))
+        try:
+            await recovered.start()
+            await recovered.wait_idle()
+            row = recovered.store.get_job_row("fem-queued")
+            assert row["status"] == "error"
+            assert row["error_message"] == str(submitted.value)
+            assert row["has_results"] is False
+            assert calls == []
+            events = recovered.store.replay_events(0)
+            failed = [event for event in events if event["type"] == "failed"]
+            assert len(failed) == 1
+            assert failed[0]["payload"]["message"] == str(submitted.value)
+        finally:
+            await recovered.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["recorded-regions", "retained-manifest"])
+def test_exterior_only_result_records_ignored_fem_regions(tmp_path: Path, monkeypatch, legacy) -> None:
     class ExteriorEngine:
         name = "metal"
 
@@ -1572,12 +1668,13 @@ def test_exterior_only_result_records_ignored_fem_regions(tmp_path: Path) -> Non
             })
 
     async def scenario() -> None:
-        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, {
+        changes = _legacy_fem_record_changes(tmp_path, monkeypatch) if legacy else {
             "evidence": {"fem_air_volumes": [], "fem_regions": [{"region_id": "rear-chamber"}]},
-        })
+        }
+        runtime, ingest_id, record = await _runtime_fixture(tmp_path, changes)
         runtime.engine_registry = _AlwaysRegistry(ExteriorEngine())
         try:
-            job_id = await runtime.submit(_request(ingest_id, exterior_only=True))
+            job_id = await runtime.submit(_request(ingest_id, exterior_only=True, manifest_sha256=record["manifest_sha256"]))
             await runtime.wait_idle()
             row = runtime.store.get_job_row(job_id)
             assert row["status"] == "complete", row.get("error_message")
@@ -1587,6 +1684,42 @@ def test_exterior_only_result_records_ignored_fem_regions(tmp_path: Path) -> Non
                 "excluded": True, "declared_volume_count": 0, "declared_region_count": 1,
                 "region_ids": ["rear-chamber"], "reason": "Phase 2 exterior_only override",
             }
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("evidence", [None, "invalid", ["invalid"], {
+    "fem_air_volumes": [], "fem_regions": [{}, None, "invalid", {"region_id": "rear-chamber"}],
+}], ids=["null", "string", "list", "missing-region-id"])
+def test_malformed_fem_evidence_does_not_crash_result_metadata(tmp_path: Path, evidence) -> None:
+    class ExteriorEngine:
+        name = "metal"
+
+        async def run(self, *_args, imported_record, **_kwargs):
+            # Exercise the metadata seam after a full solve with malformed evidence.
+            imported_record["evidence"] = evidence
+            return EngineRunResult(results={
+                "frequencies": [], "metadata": {}, "channels": {
+                    "left": {"frequencies": [], "metadata": {"drive_channel_id": "left"}},
+                    "right": {"frequencies": [], "metadata": {"drive_channel_id": "right"}},
+                }, "channel_order": ["left", "right"],
+            })
+
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path)
+        runtime.engine_registry = _AlwaysRegistry(ExteriorEngine())
+        try:
+            job_id = await runtime.submit(_request(ingest_id, exterior_only=True))
+            await runtime.wait_idle()
+            row = runtime.store.get_job_row(job_id)
+            assert row["status"] == "complete", row.get("error_message")
+            metadata = (await runtime.get_results(job_id))["metadata"]
+            if isinstance(evidence, dict):
+                assert metadata["fem_exclusion"]["region_ids"] == ["rear-chamber"]
+            else:
+                assert "fem_exclusion" not in metadata
         finally:
             await runtime.shutdown()
 

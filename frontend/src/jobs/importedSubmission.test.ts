@@ -26,13 +26,14 @@ const record = {
 describe('imported solve submission wire', () => {
   beforeEach(() => { resetCadReturnStore(); resetSolveOptionsStore(); });
 
-  it.each([{ volumes: [] }, { volumes: [{ required: false }] }])('requires explicit exterior-only selection for regions with volumes $volumes', ({ volumes }) => {
+  it.each([{ volumes: [] }, { volumes: [{ required: false }] }, { volumes: [{ required: true }] }])('requires explicit exterior-only selection for regions with volumes $volumes', ({ volumes }) => {
     useCadReturnStore.setState({
       selectedBundle: bundle, needsIngest: false, exteriorOnly: false,
       ingestRecord: { ...record, evidence: { fem_air_volumes: volumes, fem_regions: [{ region_id: 'rear-chamber' }] } },
       driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
     });
-    expect(importedSubmissionBlocker()).toBe('This return includes FEM regions. Explicitly choose an exterior-only solve to ignore them.');
+    const declared = volumes.some((volume) => volume.required) ? 'required FEM air volumes and FEM regions' : 'FEM regions';
+    expect(importedSubmissionBlocker()).toBe(`This return includes ${declared}. Choose exterior-only to solve without the FEM air, or wait for coupled FEM solving.`);
     useCadReturnStore.getState().setExteriorOnly(true);
     expect(importedSubmissionBlocker()).toBeNull();
     expect(buildImportedSubmission().geometry.exterior_only).toBe(true);

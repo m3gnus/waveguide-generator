@@ -1210,16 +1210,68 @@ def test_endpoint_error_mapping_and_workspace_guards(monkeypatch, tmp_path: Path
 def test_get_ingest_reads_store_off_event_loop(monkeypatch, tmp_path: Path) -> None:
     app = create_app(data_dir=tmp_path / "data")
     ingest_id = "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C"
-    expected = {"ingest_id": ingest_id}
+    expected = {"ingest_id": ingest_id, "evidence": {"fem_regions": []}}
     calls = []
 
     async def fake_to_thread(function, *args):
         calls.append((function, args))
+        if function.__name__ == "current_fem_evidence":
+            return function(*args)
         return expected
 
     monkeypatch.setattr("server.cadlink.api.asyncio.to_thread", fake_to_thread)
     assert asyncio.run(get_ingest(ingest_id, SimpleNamespace(app=app))) == expected
     assert calls
+
+
+@pytest.mark.parametrize("manifest_state", ["verified", "missing", "changed", "unlinked"])
+def test_legacy_ingest_api_derives_fem_evidence_from_verified_manifest(
+    tmp_path: Path, monkeypatch, manifest_state,
+) -> None:
+    from server.cadlink.intake.ingest import current_fem_evidence, retain_snapshot
+    from server.cadlink.wgreturn import read_wgreturn
+    from server.tests.test_fem_regions_gate import _fem_bundle
+
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    original = _fem_bundle(tmp_path / "returns")
+    bundle = read_wgreturn(original)
+    retained = retain_snapshot(original, tmp_path / "data")
+    manifest_path = Path(retained["retained_path"]) / "wgreturn.json"
+    record = {
+        "bundle_store_path": retained["retained_path"],
+        "manifest_sha256": bundle.manifest_sha256,
+        "evidence": {"fem_air_volumes": [], "instances": []},
+    }
+    expected = current_fem_evidence(record)
+    if manifest_state == "missing":
+        manifest_path.unlink()
+    elif manifest_state == "changed":
+        manifest_path.write_text(manifest_path.read_text() + " ")
+    elif manifest_state == "unlinked":
+        record.pop("bundle_store_path")
+    # Accepted evidence remains readable even after the intake feature is disabled.
+    monkeypatch.delenv("WG2_FEM_REGIONS")
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    row = store.allocate_ingest(
+        manifest_sha256=bundle.manifest_sha256,
+        artifact_sha256=bundle.artifact_sha256,
+        record_builder=lambda ingest_id, _now: json.dumps({**record, "ingest_id": ingest_id}),
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=store)))
+    try:
+        if manifest_state == "verified":
+            served = asyncio.run(get_ingest(row["ingest_id"], request))
+            assert served["evidence"] == expected
+            assert served["evidence"]["fem_regions"][0]["region_id"] == "rear-chamber"
+        else:
+            with pytest.raises(HTTPException) as refused:
+                asyncio.run(get_ingest(row["ingest_id"], request))
+            assert refused.value.status_code == 409
+            assert "re-ingest this return" in refused.value.detail
+        persisted = json.loads(store.get_ingest(row["ingest_id"])["record_json"])
+        assert "fem_regions" not in persisted["evidence"]
+    finally:
+        store.close()
 
 
 def test_viewport_mesh_endpoint_distinguishes_absence_and_corruption(
