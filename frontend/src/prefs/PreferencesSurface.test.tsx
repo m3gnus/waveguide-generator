@@ -113,9 +113,11 @@ describe('preferences surfaces', () => {
 
   it('keeps the startup fallback when themes arrive after Preferences opens', async () => {
     await initializeChartThemeDefault();
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      themes: [{ name: 'vellum', label: 'Vellum (paper)' }], default: 'vellum',
-    }))));
+    // Each request gets its own Response: the surface also asks for the WG
+    // root folder, and a shared body can be read only once.
+    vi.stubGlobal('fetch', vi.fn((url: string) => Promise.resolve(String(url).startsWith('/api/themes')
+      ? new Response(JSON.stringify({ themes: [{ name: 'vellum', label: 'Vellum (paper)' }], default: 'vellum' }))
+      : new Response(JSON.stringify({ detail: 'not served in this test' }), { status: 404 }))));
     await act(async () => { root.render(<ResultsPreferencesSurface/>); });
     const select = host.querySelector<HTMLSelectElement>('[aria-label="Chart theme"]')!;
     expect(select.value).toBe(MATCH_INTERFACE_THEME);

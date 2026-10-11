@@ -536,7 +536,7 @@ ZMA and VituixCAD project exports require driver-modelled electrical impedance.
 The `.vxp` export includes the FRD and ZMA files its project references.
 
 To save the retained solve mesh as a Gmsh `.msh` file, enable **Settings → Jobs →
-Auto-save solve mesh to Workspace**. It saves available job meshes in the Workspace
+Auto-save solve mesh to Workspace**. It saves available job meshes in the Runs
 folder automatically. The run archive also includes the exact retained solve mesh.
 
 ### WG root folder
