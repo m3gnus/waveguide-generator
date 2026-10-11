@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 import os
 from pathlib import Path
 import sys
@@ -31,7 +32,10 @@ def render() -> str:
     previous = os.environ.get(ONSHAPE_ENV)
     os.environ[ONSHAPE_ENV] = "1"
     try:
-        schema = create_app(data_dir=REPO_ROOT / ".openapi-contract-data").openapi()
+        # A throwaway data folder: building the app publishes folder settings,
+        # which must never land in the working tree.
+        with tempfile.TemporaryDirectory(prefix="wg-openapi-") as data_dir:
+            schema = create_app(data_dir=Path(data_dir)).openapi()
     finally:
         if previous is None:
             os.environ.pop(ONSHAPE_ENV, None)

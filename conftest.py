@@ -399,3 +399,21 @@ def _beat_provider_is_explicit() -> Iterator[None]:
     with pytest.MonkeyPatch.context() as patcher:
         patcher.delenv("WG2_BEAT_PROVIDER", raising=False)
         yield
+
+
+@pytest.fixture
+def real_windows_documents():
+    """Opt in only when the known-folder transport itself is under test."""
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _no_test_uses_real_windows_documents(request):
+    if "real_windows_documents" in request.fixturenames:
+        yield
+        return
+    from server.platform import paths
+
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(paths, "windows_documents_dir", lambda: None)
+        yield

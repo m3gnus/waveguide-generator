@@ -50,7 +50,7 @@ from server.platform.instance import (  # noqa: E402
     watch_directory_entries,
 )
 from server.platform.logging_setup import flush_logs, setup_logging  # noqa: E402
-from server.platform.paths import DATA_DIR_ENV, app_root, default_runs_dir, ensure_data_layout  # noqa: E402
+from server.platform.paths import DATA_DIR_ENV, app_root, ensure_data_layout  # noqa: E402
 from server.platform.shutdown_backstop import ShutdownBackstop, lingering_threads  # noqa: E402
 from server.platform.temp_session import (  # noqa: E402
     TemporarySession,
@@ -779,10 +779,9 @@ def main(argv: list[str] | None = None) -> int:
         backstop.activate()
         app = create_app(
             data_dir=paths.root,
-            # Let the app use <data_dir>/workspace for an operator's override.
-            # The resolved default data root is also passed explicitly above,
-            # so ordinary starts must still opt into the Documents default.
-            workspace_dir=None if isolated_data_dir else default_runs_dir(),
+            # Preserve <data_dir>/workspace for data overrides; ordinary starts
+            # check the 0.3.5 Documents spelling before using the new default.
+            workspace_dir=None,
             adopt_legacy_workspace=not isolated_data_dir,
             solver_warmup=_solver_warmup_enabled(),
             update_request_path=(

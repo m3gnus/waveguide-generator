@@ -13754,6 +13754,102 @@
         ]
       }
     },
+    "/api/folders/open": {
+      "post": {
+        "operationId": "root_open_api_folders_open_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Root Open Api Folders Open Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Root Open",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/folders/path": {
+      "get": {
+        "operationId": "root_path_api_folders_path_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Root Path Api Folders Path Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Root Path",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/folders/select": {
+      "post": {
+        "operationId": "root_select_api_folders_select_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SelectWorkspaceRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Root Select Api Folders Select Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Root Select",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
     "/api/integration/v1/design-schema": {
       "get": {
         "operationId": "design_schema_api_integration_v1_design_schema_get",

@@ -544,7 +544,8 @@ folder automatically. The run archive also includes the exact retained solve mes
 Choose **Settings → WG root folder**, or use the same chooser in Results & export
 preferences. The default is `Documents/Waveguide Generator`, with the **WGLink
 folder** in `cadlink/` and the **Runs folder** in `runs/`. With an explicit data
-folder override, the default is `<data>/workspace-root`.
+folder override, the root is `<data>/workspace-root` and the Runs folder
+stays at `<data>/workspace` as a preserved override.
 
 Changing the root moves no files. Earlier choices that differ from its children
 are kept as read-only overrides, marked “kept from an earlier setup”. These

@@ -27,8 +27,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.datastructures import UploadFile
 
-from server.platform.paths import data_paths, proposed_cadlink_dir, default_folder_root, validate_windows_file_path
-from server.workspace.folders import FolderRoot
+from server.platform.paths import data_paths, proposed_cadlink_dir, default_folder_root
+from server.workspace.folders import FolderRoot, read_folder_settings, read_settings
 from server.platform.process import background_process_kwargs
 from server.platform.acl_repair import Outcome, repair_path
 from server.platform.staging import publish_staging_directory
@@ -508,10 +508,11 @@ class WorkspaceState:
         *,
         default_path: Path | None = None,
         legacy_defaults: Sequence[Path] = (),
+        allow_adoption: bool = True,
     ) -> None:
         paths = data_paths(data_dir)
         self.default_path = (
-            Path(default_path).expanduser().resolve()
+            Path(default_path).expanduser().absolute()
             if default_path is not None
             else paths.workspace.resolve()
         )
@@ -522,7 +523,8 @@ class WorkspaceState:
         self.folders: FolderRoot | None = None
         self._selected: Path | None = None
         self._loaded = False
-        self._adopt_legacy_default()
+        if allow_adoption:
+            self._adopt_legacy_default()
 
     def _adopt_legacy_default(self) -> None:
         """Keep an install writing where it already writes.
@@ -553,6 +555,11 @@ class WorkspaceState:
             return
 
     def path(self) -> Path:
+        if self.folders is not None:
+            path = self.folders.effective("runs")
+            if not path.is_dir():
+                raise WorkspaceUnavailableError(path)
+            return path
         if not self._loaded:
             self._load()
         if self._selected is not None:
@@ -564,6 +571,10 @@ class WorkspaceState:
         return path
 
     def selected_path(self) -> Path | None:
+        if self.folders is not None:
+            path = self.folders.effective("cadlink" if isinstance(self, CadWorkspaceState) else "runs")
+            self._selected = path
+            return path if path.is_dir() else None
         if not self._loaded:
             self._load()
         if self._selected is not None and not self._selected.is_dir():
@@ -710,7 +721,7 @@ class CadWorkspaceState(WorkspaceState):
     #: add-in that predates this key keeps working unchanged.
     CAPTURE_MODE_KEY = "captureMode"
 
-    def __init__(self, data_dir: Path, *, proposed_path: Path | None = None) -> None:
+    def __init__(self, data_dir: Path, *, proposed_path: Path | None = None, allow_adoption: bool = True) -> None:
         super().__init__(data_dir, default_path=data_paths(data_dir).root / "cadlink")
         self.proposed_path = (
             Path(proposed_path).expanduser()
@@ -722,7 +733,8 @@ class CadWorkspaceState(WorkspaceState):
         self.legacy_settings_path = (
             data_paths(data_dir).root / "workspace_settings.json"
         ).resolve()
-        self._migrate_legacy_selection()
+        if allow_adoption:
+            self._migrate_legacy_selection()
 
     def _migrate_legacy_selection(self) -> None:
         """Adopt a proven legacy CAD exchange exactly once.
@@ -833,6 +845,8 @@ class CadWorkspaceState(WorkspaceState):
     def set_capture_mode(self, mode: CaptureMode) -> None:
         """Choose whether returns carry a CAD document, and where it is filed."""
 
+        if self.folders is not None and self.folders.read_only:
+            raise ValueError("Folder settings are read-only; restore access before changing capture settings.")
         if mode not in CAPTURE_MODES:
             raise ValueError(f"Unknown capture mode: {mode}")
         if not self._loaded:
@@ -848,6 +862,7 @@ class CadWorkspaceState(WorkspaceState):
         """
 
         payload: dict[str, Any] = {
+            **read_settings(self.settings_path),
             "schemaVersion": 1,
             # Written together and always: the add-in reads only the boolean,
             # so it must never be absent just because WG learned a third mode.
@@ -989,9 +1004,6 @@ def _write_export_sync(
             label = f"members[{index}].relative_path"
             segments = _path_segments(relative_path, label)
             destination = export_directory.joinpath(*segments).resolve()
-            validate_windows_file_path(destination)
-            staging_parent = export_directory if export_directory == workspace_root else export_directory.parent
-            validate_windows_file_path(staging_parent / (".wg2-export-staging-" + "0" * 12) / Path(*segments))
             _strictly_inside(destination, workspace_root, label)
             if destination == export_directory or export_directory not in destination.parents:
                 raise ValueError(f"{label} resolves outside the export subdirectory")
@@ -1445,7 +1457,8 @@ def create_folder_root_router(folders: FolderRoot) -> APIRouter:
     @router.post("/open")
     async def root_open() -> dict[str, Any]:
         try:
-            folders.root.mkdir(parents=True, exist_ok=True)
+            if not folders.root.is_dir():
+                raise OSError(f"Selected root folder is unavailable: {folders.root}")
             subprocess.Popen(open_folder_command(folders.root), **background_process_kwargs())
         except OSError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1460,18 +1473,29 @@ def mount_workspace(
     default_path: Path | None = None,
     legacy_defaults: Sequence[Path] = (),
     default_root: Path | None = None,
+    create_implicit_runs: bool = False,
 ) -> WorkspaceState:
+    data_dir = Path(application.state.data_dir)
+    settings, failed = read_folder_settings(data_dir)
+    version = settings["folders.json"].get("schemaVersion")
+    unsupported = "schemaVersion" in settings["folders.json"] and (type(version) is not int or version != 1)
+    root = settings["folders.json"].get("rootPath")
+    recorded_root = isinstance(root, str) and Path(root).is_absolute()
+    allow_adoption = not (failed or unsupported or recorded_root)
     state = WorkspaceState(
-        Path(application.state.data_dir),
+        data_dir,
         default_path=default_path,
         legacy_defaults=legacy_defaults,
+        allow_adoption=allow_adoption,
     )
-    cad_state = CadWorkspaceState(Path(application.state.data_dir))
+    cad_state = CadWorkspaceState(data_dir, allow_adoption=allow_adoption)
     folders = FolderRoot(
         Path(application.state.data_dir),
         default_root=default_root or default_folder_root(Path(application.state.data_dir)),
         legacy_runs=state.default_path,
         writer=_write_json_atomic,
+        create_implicit_runs=create_implicit_runs,
+        settings_read_failed=failed,
     )
 
     def refresh() -> None:

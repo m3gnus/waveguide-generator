@@ -2,7 +2,9 @@
 
 Settings and Results & export preferences offer one **WG root folder**. The
 normal default is `Documents/Waveguide Generator`; an explicit `--data-dir` or
-`WG2_DATA_DIR` override defaults to `<data>/workspace-root`.
+`WG2_DATA_DIR` override uses `<data>/workspace-root` as root, while preserving
+the 0.3.5 implicit Runs folder at `<data>/workspace` as an override. Explicit
+`create_app(workspace_dir=…)` defaults are preserved too.
 
 | Folder | Default contents |
 | --- | --- |
@@ -30,12 +32,20 @@ first runs the existing legacy adoption checks: a populated old run-export
 folder can be adopted, and a legacy shared folder with `wglink/` or `wgreturn/`
 evidence can be adopted for CAD exchange.
 
-If neither folder was chosen, the default root is used. If the two effective
+If neither folder was chosen and no existing default holds runs, a fresh
+ordinary install creates the default root and its children. An isolated data
+override retains its implicit Runs folder and leaves CAD exchange unchosen
+until a root is explicitly selected. Existing 0.3.5 defaults are retained
+before considering the new default, including `%USERPROFILE%/Documents` on
+Windows even when the known-folder API now returns redirected Documents.
+An empty existing default retains its spelling too. If
+the two effective
 choices are `X/runs` and `X/cadlink`, `X` becomes the root without overrides.
 Otherwise the default root is used, and differing effective choices are kept as
 overrides. Missing selected folders remain recorded, with the existing
 unavailable-folder refusal; their contents are never replaced with a different
-folder silently.
+folder silently. Startup and Open never create adopted roots, their children
+or overrides. Only a fresh default or an explicit choice creates folders.
 
 Both compatibility mirrors are written atomically before `folders.json` is
 published atomically, last:
@@ -46,7 +56,9 @@ published atomically, last:
 
 No-op starts do not rewrite these files. An interrupted migration is rerun from
 the durable mirrors. An interrupted root change is recovered conservatively:
-any changed mirror is kept as an override, so neither folder loses its contents.
+any changed mirror is kept with its recorded spelling. If both mirrors already
+name children of the same recorded parent, that parent becomes the root;
+otherwise they remain overrides. Neither folder loses its contents.
 
 ## Rollback and recovery
 
@@ -57,7 +69,11 @@ starts see the adopted configuration and do not repeat the drift notice.
 
 Broken schema-1 configuration is reconstructed from mirrors. An unsupported
 schema is never overwritten: this version works from mirrors and disables root
-editing until WG is updated. The mirror key meanings stay compatible with the
+editing until WG is updated. Permission or I/O errors reading any of the three
+settings files disable all folder and capture publication for that start,
+with a logged reason; readable settings still supply effective paths. Unknown
+schema-1 keys and override names are preserved and ignored. The mirror key
+meanings stay compatible with the
 WGLink add-in's direct settings-file reader.
 
 ## Windows
@@ -66,10 +82,15 @@ Documents is resolved with `SHGetKnownFolderPath(FOLDERID_Documents)`, including
 OneDrive redirection; failure falls back to `%USERPROFILE%/Documents`. Comparisons
 use case-insensitive normalized spelling and existing filesystem identity.
 Mirrors retain the chosen spelling, including drive mappings and symlink aliases,
-rather than converting choices to resolved UNC paths.
+rather than converting choices to resolved UNC paths. A shared filesystem
+identity is insufficient to infer a shared root: the two recorded parent
+strings must match. Spelling-only mirror changes after rollback are adopted.
+Choosing a root clears overrides that identify its children; startup preserves
+alias spellings.
 
 Root selection reserves 180 UTF-16 characters below `runs/` for project/run names,
 export filenames and staging components within MAX_PATH. Longer roots are
 refused with a shorter-path message. This is headroom, not a bound on arbitrary
-user-supplied names. Export/archive publication also checks the concrete member
-and staging paths before writing, refusing long Windows paths without truncation.
+user-supplied names. One-off export destinations retain the 0.3.5 path
+acceptance behavior and are
+not subject to this root headroom check.

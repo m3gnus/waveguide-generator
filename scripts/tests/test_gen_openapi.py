@@ -19,6 +19,9 @@ def test_committed_openapi_matches_the_live_application() -> None:
     assert "/api/integration/v1/parameters" in schema["paths"]
     assert "/api/integration/v1/design-schema" in schema["paths"]
     assert {
+        "/api/folders/path",
+        "/api/folders/select",
+        "/api/folders/open",
         "/api/cadlink/projects/{lineage_id}/documents",
         "/api/cadlink/projects/{lineage_id}/documents/{return_state_hash}",
         "/api/cadlink/projects/{lineage_id}/reveal",

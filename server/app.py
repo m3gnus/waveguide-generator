@@ -49,7 +49,7 @@ from server.platform.acl_migration import (
     legacy_acl_repair_feedback,
     repair_legacy_acls,
 )
-from server.platform.paths import DATA_DIR_ENV, app_root, default_runs_dir, default_folder_root, resolve_data_dir
+from server.platform.paths import DATA_DIR_ENV, app_root, default_runs_dir, legacy_default_runs_dir, default_folder_root, resolve_data_dir
 from shared.build_identity import build_identity, build_label
 from server.preview.service import mount_preview
 from server.settings import SettingsStore, mount_settings
@@ -580,7 +580,7 @@ def create_app(
         if adopt_legacy_workspace is None else not adopt_legacy_workspace
     )
     if workspace_dir is not None:
-        resolved_workspace_dir = Path(workspace_dir).expanduser().resolve()
+        resolved_workspace_dir = Path(workspace_dir).expanduser().absolute()
         # Only the checkout's ``output`` is a former *export* destination. The
         # data directory's ``workspace`` is v1 task scratch -- one UUID folder
         # per migrated job, holding manifests and raw results -- and adopting
@@ -595,7 +595,9 @@ def create_app(
         )
         legacy_workspace_dirs: tuple[Path, ...] = (LEGACY_WORKSPACE_DIR,) if adopt else ()
     elif not isolated_data_dir:
-        resolved_workspace_dir = default_runs_dir()
+        old_default = legacy_default_runs_dir()
+        # Even an empty existing 0.3.5 default is evidence of its spelling.
+        resolved_workspace_dir = old_default if old_default.is_dir() else default_runs_dir()
         legacy_workspace_dirs = (LEGACY_WORKSPACE_DIR,)
     else:
         # Argument and environment overrides isolate implicit output as well
@@ -609,6 +611,7 @@ def create_app(
         default_path=resolved_workspace_dir,
         legacy_defaults=legacy_workspace_dirs,
         default_root=default_folder_root(resolved_data_dir, isolated=isolated_data_dir),
+        create_implicit_runs=isolated_data_dir or workspace_dir is not None,
     )
     application.add_exception_handler(RequestValidationError, _request_validation_error)
     extra_ws_origins = parse_extra_websocket_origins(

@@ -103,7 +103,7 @@ def run_workspace_startup(application) -> None:
 
 
 def assert_isolated(application, probe, data: Path) -> None:
-    expected = data / "workspace-root" / "runs"
+    expected = data / "workspace"
     assert application.state.workspace.path() == expected
     assert application.state.workspace.selected_path() == expected
     assert expected.is_dir()
@@ -144,7 +144,7 @@ def test_data_override_with_explicit_workspace_default_skips_legacy_adoption(
         monkeypatch.delenv(DATA_DIR_ENV)
     else:
         monkeypatch.setenv(DATA_DIR_ENV, str(data))
-    expected = data / "workspace-root" / "runs"
+    expected = data / "exports"
     with forbid_access(isolated_startup.home / "Documents", isolated_startup.legacy):
         application = app_module.create_app(
             workspace_dir=expected, **({"data_dir": data} if source == "argument" else {}),

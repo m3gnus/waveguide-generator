@@ -222,7 +222,7 @@ function CadFolderSettings() {
   };
 
   return <div className="cad-setup-folder" aria-busy={busy}>
-    <p className={`workspace-settings-path ${path ? '' : 'not-selected'}`} title={path ?? undefined}>{path ?? 'No WGLink folder selected'}</p>
+    <p className={`workspace-settings-path ${path ? '' : 'not-selected'}`} title={path ?? undefined}>{path ?? 'WGLink folder unavailable'}</p>
     <p className="cad-settings-note">WG creates <code>wglink</code> and <code>wgreturn</code> inside the WGLink folder. Choose the WG root folder below to change the default location.</p>
     <div className="settings-theme-options">
       <button disabled={!path || busy} onClick={() => void open()}>Open WGLink folder</button>

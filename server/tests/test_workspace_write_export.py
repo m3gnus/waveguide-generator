@@ -1131,10 +1131,10 @@ def test_v1_task_scratch_is_never_adopted_as_an_export_folder(
         data_dir=data, workspace_dir=documents, solver_warmup=False
     )
 
-    expected = data / "workspace-root" / "runs"
+    expected = documents.absolute()
     assert application.state.workspace.selected_path() == expected
     assert application.state.workspace.path() == expected
-    assert application.state.folders.overrides == {}
+    assert application.state.folders.overrides == {"runs": expected}
     assert (scratch / "task.manifest.json").read_text() == "{}"
 
 

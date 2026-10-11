@@ -83,6 +83,18 @@ describe('SettingsDialog', () => {
     expect(section.textContent).toContain('/chosen/workspace');
   });
 
+  it('reports an unavailable WGLink folder without asking for an initial selection', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/cad-workspace/path') {
+        return new Response(JSON.stringify({ path: null, selected: false }), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    }));
+    await act(async () => { host.querySelector<HTMLButtonElement>('#open-settings')!.click(); });
+    expect(host.textContent).toContain('WGLink folder unavailable');
+    expect(host.textContent).not.toContain('No WGLink folder selected');
+  });
+
   it('reports fresh Windows repairs and unresolved earlier items honestly', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);

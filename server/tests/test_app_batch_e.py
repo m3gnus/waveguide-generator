@@ -195,7 +195,7 @@ def test_explicit_workspace_default_is_separate_from_internal_data(
     response = client.get("/api/workspace/path")
 
     assert response.status_code == 200
-    assert response.json() == {"path": str(workspace_dir.resolve()), "selected": False}
+    assert response.json() == {"path": str(workspace_dir.absolute()), "selected": True}
     assert workspace_dir.is_dir()
     assert not (data_dir / "workspace").exists()
 

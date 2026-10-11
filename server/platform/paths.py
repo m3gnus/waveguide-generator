@@ -183,6 +183,22 @@ def default_runs_dir(**kwargs: object) -> Path:
     return documents_root(**kwargs) / RUNS_SUBDIRECTORY  # type: ignore[arg-type]
 
 
+def legacy_default_runs_dir(
+    *, system: str | None = None, environ: Mapping[str, str] | None = None,
+    home: str | os.PathLike[str] | None = None,
+) -> Path:
+    """The 0.3.5 implicit runs spelling, before known-folder redirection."""
+    env = os.environ if environ is None else environ
+    home_dir = Path(home) if home is not None else Path.home()
+    if (system or platform.system()) == "Windows":
+        profile = env.get("USERPROFILE")
+        documents = (Path(profile) if profile else home_dir) / "Documents"
+    else:
+        configured = env.get("XDG_DOCUMENTS_DIR")
+        documents = Path(configured) if configured else home_dir / "Documents"
+    return (documents / DOCUMENTS_DIRECTORY).expanduser().absolute() / RUNS_SUBDIRECTORY
+
+
 def proposed_cadlink_dir(**kwargs: object) -> Path:
     """Default CAD exchange folder beneath the user-visible root."""
 
@@ -271,10 +287,3 @@ def validate_folder_root(path: str | os.PathLike[str], *, system: str | None = N
             raise ValueError("The WG root folder path is too long for Windows run files. "
                              "Choose a shorter path (at most 74 characters) to leave room "
                              "for project names, run names and exports.")
-
-
-def validate_windows_file_path(path: str | os.PathLike[str], *, system: str | None = None) -> None:
-    """Refuse a concrete run/member path before creating any files on Windows."""
-    if (system or platform.system()) == "Windows" and len(str(path).encode("utf-16-le")) // 2 >= 260:
-        raise ValueError("The run file path is too long for Windows. Choose a shorter "
-                         "WG root folder or shorter project and run names.")
