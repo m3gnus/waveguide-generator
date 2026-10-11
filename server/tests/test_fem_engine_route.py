@@ -39,8 +39,8 @@ def region_input(region_id="air", channel="fem", *, interface=False):
     return FemRegionInput(record, FemRegionDomain(region_id, points, np.array([[0, 1, 2, 3]]), groups))
 
 
-def compiled(*, coupled=True, **options):
-    region = region_input(interface=coupled)
+def compiled(*, coupled=True, fem_channel="fem", **options):
+    region = region_input(interface=coupled, channel=fem_channel)
     exterior = None
     if coupled:
         exterior = ExteriorSurface(region.domain.points_mm, region.domain.surfaces, {
@@ -66,7 +66,11 @@ def test_coupled_wire_passes_pinned_engine_contract():
     assert request.wire["compiled_system"]["contract_version"] == 2
     assert list(request.channel_ports) == ["exterior", "fem"]
     assert [o["quantity"] for o in request.wire["outputs"]] == ["exterior_pressure"] * 3 + ["fem_nodal_pressure"]
-    assert request.wire["solver_options"]["precision"] == "float64"
+    options = request.wire["solver_options"]
+    assert options["precision"] == "float64"
+    assert options["regular_quadrature_mode"] == "fixed"
+    assert options["quadrature_order"] == options["singular_order"] == 4
+    assert options["validation_diagnostics"] is False
 
 
 @pytest.mark.parametrize("options,message", [
@@ -272,7 +276,7 @@ def test_auto_dispatch_skips_gpu_for_fem(monkeypatch, tmp_path, accuracy):
     path = tmp_path / "exterior.msh"
     path.write_text(MESH)
     record = _record(path)
-    record["fem_regions"] = [region_input().record]
+    record["fem_regions"] = [region_input(channel="left").record]
     record["symmetry"] = {"applied": {"cut_planes": [], "quadrants": 1234}}
     infos = [EngineInfo(name=name, version=None, available=True, reason="fixture", geometry_sources=("imported",),
                        imported_features=features, symmetry_domains=("full",))
@@ -350,7 +354,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
 
     monkeypatch.setenv("WG2_FEM_REGIONS", "1")
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
-    built = compiled()
+    built = compiled(fem_channel="exterior")
     built = replace(built, wire={**built.wire, "frequencies_hz": [100., 500., 1000.]})
     monkeypatch.setattr(coupled_request, "build_imported_coupled_request", lambda *a, **k: built)
     def mutate(raw):
@@ -359,6 +363,21 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
         raw.clear()
         raw.update(coupled_result(wire, wire["frequencies_hz"][index]))
     runtime.mutate = mutate
+    import threading
+    from server.solver import combine
+    original_pack, original_serialize = np.savez_compressed, combine.serialize_channel_bases
+    worker_operations = []
+    loop_thread = None
+    def pack(*args, **kwargs):
+        assert threading.get_ident() != loop_thread
+        worker_operations.append("basis-npz" if isinstance(args[0], BytesIO) else "field-npz")
+        return original_pack(*args, **kwargs)
+    def serialize(*args, **kwargs):
+        assert threading.get_ident() != loop_thread
+        worker_operations.append("basis")
+        return original_serialize(*args, **kwargs)
+    monkeypatch.setattr(np, "savez_compressed", pack)
+    monkeypatch.setattr(combine, "serialize_channel_bases", serialize)
     exterior_runs = []
     class Engine:
         name = "beat-cpu"
@@ -372,8 +391,10 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
         async def get_engine(self, name):
             return Engine()
     async def scenario():
+        nonlocal loop_thread
+        loop_thread = threading.get_ident()
         job_runtime, ingest_id, record = await _runtime_fixture(tmp_path, {
-            "fem_regions": [region_input().record],
+            "fem_regions": [region_input(channel="exterior").record],
             "evidence": {"fem_air_volumes": [], "fem_regions": [{"region_id": "air"}]},
             "symmetry": {"cut_planes": []},
         })
@@ -387,10 +408,10 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
             assert row["status"] == "complete", row["error_message"]
             assert row["task_metadata"]["has_fem_field_artifact"]
             envelope = RESULT_ENVELOPE_ADAPTER.validate_python(job_runtime.store.get_results(first))
-            assert envelope.channel_order == ["exterior", "fem"]
+            assert envelope.channel_order == ["exterior"]
             with np.load(BytesIO(job_runtime.store.get_fem_field(first)), allow_pickle=False) as field:
                 assert field["schema"].item() == "wg-fem-field-store-v1"
-                assert field["pressure"].shape == (3, 2, 4)
+                assert field["pressure"].shape == (3, 1, 4)
                 np.testing.assert_array_equal(field["tetrahedra_0"], [[0, 1, 2, 3]])
             assert not exterior_runs
             override = request.model_copy(deep=True)
@@ -401,6 +422,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
             assert job_runtime.store.get_fem_field(second) is None
             assert exterior_runs == [True]
             assert len(runtime.requests) == 1
+            assert worker_operations == ["field-npz", "basis", "basis-npz"]
         finally:
             await job_runtime.shutdown()
     asyncio.run(scenario())
@@ -454,13 +476,14 @@ def test_imported_builder_reads_verified_artifacts_and_reassigns_painted_channel
                               painted: {"kind": "moving", "drive_channel_id": "old-channel"}}
     record = {"fem_regions": [{**region.record, **fem}], "coupled_exterior": ext,
               "normalisation": {"assembly_frame_is_solver_frame": True}}
+    record["fem_regions"][0]["surface_groups"][0]["drive_channel_id"] = "new-channel"
     geometry = SimpleNamespace(drive_channels=[SimpleNamespace(id="new-channel", source_ids=["source"])])
     context = SolverContext(design=None, frequency_range=(100., 1000.), num_frequencies=2)
     built = build_imported_coupled_request(record, geometry, context, frequencies_hz=[100.])
-    assert list(built.channel_ports) == ["fem", "new-channel"]
-    # Skipping the painted patch makes it rigid, rather than silently driving its old channel.
-    skipped = build_imported_coupled_request(record, SimpleNamespace(drive_channels=[]), context, frequencies_hz=[100.])
-    assert list(skipped.channel_ports) == ["fem"]
+    assert list(built.channel_ports) == ["new-channel"]
+    # Skipping the front cannot silently turn its rear diaphragm into a separate driver.
+    with pytest.raises(ValueError, match="FEM diaphragm.*new-channel.*setup channels"):
+        build_imported_coupled_request(record, SimpleNamespace(drive_channels=[]), context, frequencies_hz=[100.])
     (tmp_path / "air.msh").write_text("corrupt")
     with pytest.raises(ImportedMeshArtifactError, match="digest mismatch"):
         build_imported_coupled_request(record, geometry, context, frequencies_hz=[100.])
@@ -525,3 +548,170 @@ def test_fake_host_worker_contract_negotiation_without_sockets(tmp_path, monkeyp
         assert any(e["type"] == "closed" and e["terminal"] for e in recorded_events(key))
     finally:
         owned.shutdown()
+
+
+def admission(request, regions, *, sources=("source-a", "source-b", "source-c")):
+    from server.jobs.runtime.imported_refusals import _imported_request_refusal
+    return _imported_request_refusal(request, {
+        "fem_regions": [r.record for r in regions],
+        "source_tags": {s: i + 101 for i, s in enumerate(sources)},
+        "domain_interpretation": {"observations": {"rigid_rims": []}},
+    })
+
+
+@pytest.fixture
+def fem_admission(monkeypatch):
+    from server.tests.test_imported_jobs import _request
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    return _request("wgi_" + "0" * 26)
+
+
+@pytest.mark.parametrize("same_region", [False, True])
+def test_admission_refuses_multiple_fem_diaphragms_on_one_channel(fem_admission, same_region):
+    regions = [region_input("front", "left"), region_input("rear", "left")]
+    if same_region:
+        regions = regions[:1]
+        regions[0].record["surface_groups"].append({
+            "group_id": "second", "kind": "moving", "drive_channel_id": "left"})
+    code, message = admission(fem_admission, regions)
+    assert code == "fem_multiple_diaphragms_unsupported"
+    assert "left" in message and "front/cone" in message
+    assert ("front/second" if same_region else "rear/cone") in message
+    assert "more than one FEM diaphragm on one drive channel is not supported yet" in message
+
+
+def test_painted_front_and_one_fem_rear_share_one_ideal_port(fem_admission, monkeypatch):
+    # Admission proceeds beyond the cheap drive checks; avoid unrelated mesh/frame checks.
+    from server.jobs.runtime import imported_refusals
+    monkeypatch.setattr(imported_refusals, "_imported_open_half_refusal", lambda *args: None)
+    assert admission(fem_admission, [region_input("rear", "left")]) is None
+    request = compiled()
+    exterior_groups = request.wire["compiled_system"]["components"]
+    assert len(exterior_groups) == 2
+    region = region_input(interface=True, channel="exterior")
+    exterior = ExteriorSurface(region.domain.points_mm, region.domain.surfaces, {
+        name: {"kind": "interface" if "kind=interface" in name else "moving" if "kind=rigid" in name else "rigid",
+               **({"drive_channel_id": "exterior"} if "kind=rigid" in name else {})}
+        for name in region.domain.surfaces})
+    shared = build_coupled_request(exterior, [region], layout=request.layout, frame=FRAME, frequencies_hz=[100.])
+    assert list(shared.channel_ports) == ["exterior"]
+    assert len(shared.wire["compiled_system"]["components"][0]["boundary_ids"]) == 2
+
+
+def test_runtime_builder_backstop_refuses_two_fem_diaphragms():
+    request = compiled(coupled=False)
+    with pytest.raises(ValueError, match="more than one FEM diaphragm"):
+        build_coupled_request(None, [region_input("front", "left"), region_input("rear", "left")],
+                              layout=request.layout, frame=FRAME, frequencies_hz=[100.])
+
+
+@pytest.mark.parametrize("channels", [[], [{"id": "renamed", "source_ids": ["source-a", "source-b", "source-c"]}]])
+def test_fem_channel_must_follow_painted_setup(fem_admission, channels):
+    from server.jobs.models import DriveChannel
+    fem_admission.geometry.drive_channels = [DriveChannel.model_validate(c) for c in channels]
+    code, message = admission(fem_admission, [region_input("rear", "left")])
+    assert code == "fem_channel_mismatch"
+    assert "rear/cone" in message and "left" in message and "setup channels" in message
+    if channels:
+        assert "renamed" in message
+
+
+def test_fem_only_design_retains_its_channels(fem_admission, monkeypatch):
+    from server.jobs.runtime import imported_refusals
+    monkeypatch.setattr(imported_refusals, "_imported_open_half_refusal", lambda *args: None)
+    fem_admission.geometry.drive_channels = []
+    assert admission(fem_admission, [region_input("rear", "standalone")], sources=()) is None
+
+
+@pytest.mark.parametrize("fem_channel", ["system", "left"])
+def test_admission_refuses_combine_collision_before_engine_selection(fem_admission, fem_channel):
+    import asyncio
+    from server.jobs.models import ChannelCombineSpec
+    from server.jobs.runtime import resolve_imported_submission, ImportedSolveRefusal
+    fem_admission.geometry.combine = ChannelCombineSpec.model_validate({
+        "id": fem_channel, "members": ["left", "right"], "crossovers_hz": [500.]})
+    class NoEngine:
+        async def capabilities(self):
+            raise AssertionError("must refuse before selecting an engine")
+    record = {"fem_regions": [region_input("rear", fem_channel).record],
+              "source_tags": {"source-a": 101, "source-b": 102, "source-c": 103}}
+    with pytest.raises(ImportedSolveRefusal, match="fem_combine_channel_collision.*" + fem_channel):
+        asyncio.run(resolve_imported_submission(fem_admission, NoEngine(), imported_record=record))
+
+
+@pytest.mark.parametrize("driven,code", [(False, "fem_no_driven_surface"), (True, "fem_missing_channels")])
+def test_cheap_admission_checks_driven_surface_and_missing_channels(fem_admission, driven, code):
+    region = region_input("rear", "left")
+    if not driven:
+        region.record["surface_groups"] = []
+    refusal = admission(fem_admission, [region], sources=())
+    assert refusal[0] == code
+    assert ("right" if driven else "no driven surface") in refusal[1]
+
+
+@pytest.mark.parametrize("change", ["driver", "weights", "axial", "cardioid"])
+def test_stricter_fem_drive_limit_is_explicit(fem_admission, change):
+    channel = fem_admission.geometry.drive_channels[0]
+    if change == "driver":
+        channel.driver = object()
+    elif change == "weights":
+        channel.patch_weights = {"source-a": 1.}
+    elif change == "axial":
+        channel.motion = "axial"
+    else:
+        fem_admission.geometry.passive_cardioid_rear_volume_l = 10.
+    refusal = admission(fem_admission, [region_input("rear", "left")])
+    assert refusal[0] == "fem_drive_unsupported"
+    assert "The contract-2 coupled route supports ideal normal-velocity drives only" in refusal[1]
+
+
+@pytest.mark.parametrize("channel_index", [0, 1])
+def test_any_exterior_transducer_is_refused_in_coupled_mode(fem_admission, channel_index):
+    channel = fem_admission.geometry.drive_channels[channel_index]
+    channel.exterior_transducer = object()
+    refusal = admission(fem_admission, [region_input("rear", "left")])
+    assert refusal[0] == "fem_transducer_unsupported"
+    assert channel.id in refusal[1]
+    assert "The contract-2 coupled route supports ideal normal-velocity drives only" in refusal[1]
+
+
+def test_admission_names_mixed_media(fem_admission):
+    regions = [region_input("front", "left"), region_input("rear", "right")]
+    regions[1].record["medium"]["sound_speed_m_per_s"] = 340.
+    assert admission(fem_admission, regions)[0] == "fem_mixed_media"
+
+
+@pytest.mark.parametrize("operation", ["replace", "compress"])
+def test_streamed_field_publication_failure_is_atomic(tmp_path, monkeypatch, operation):
+    from server.jobs import store as stores
+    from server.tests.test_jobs_store import _job
+    store = stores.JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("one"))
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+    monkeypatch.setattr(stores.os if operation == "replace" else np,
+                        "replace" if operation == "replace" else "savez_compressed", fail)
+    with pytest.raises(OSError, match="disk full"):
+        store.store_fem_field_arrays("one", {"pressure": np.array([[[1 + 2j]]])})
+    assert not store.get_job_row("one")["task_metadata"].get("has_fem_field_artifact")
+    assert list(store._fem_field_path("one").parent.iterdir()) == []
+
+
+def test_fem_without_setup_channels_or_diaphragms_has_named_refusal(fem_admission):
+    fem_admission.geometry.drive_channels = []
+    region = region_input()
+    region.record["surface_groups"] = []
+    assert admission(fem_admission, [region], sources=())[0] == "fem_no_driven_surface"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_registry_uses_shared_fem_flag_helper(monkeypatch, enabled):
+    from server.engines.registry import _beat_engine_info
+    from server.platform import feature_flags
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    monkeypatch.setenv("WG2_FEM_REGIONS", "0" if enabled else "1")
+    monkeypatch.setattr(feature_flags, "fem_regions_enabled", lambda: enabled)
+    info = _beat_engine_info("cpu", {"available": True, "state": "ready"})
+    assert ("fem-regions" in info.imported_features) is enabled

@@ -60,8 +60,10 @@ Two existing tools set the shape of the work:
    matches no surface, or more than one, in WG. A lost diaphragm would solve
    to silence, and a lost interface would seal the chamber.
 5. **The engine is the official BEAT worker,** through the contract-2
-   `compiled_system` that Boundary Lab also uses. Both faces of one diaphragm
-   belong to one ideal velocity source per drive channel.
+   `compiled_system` that Boundary Lab also uses. One painted exterior front and one FEM rear diaphragm may share
+   one ideal velocity source per drive channel. Two FEM moving groups on the
+   same channel are refused in 0.3.6 because positive FEM load weights would
+   make both chambers breathe rather than move as a piston.
 6. **The display slices exactly.** Boundary Lab samples a grid and locates
    points in tetrahedra. WG cuts each crossed tetrahedron and interpolates
    along its edges, which is exact for P1 elements and leaves no gaps. Smooth
@@ -244,11 +246,28 @@ in Accurate. Explicit exterior-only solves retain the original surface and
 solver route. Legacy required `fem_air_volumes` remain refused unless explicitly
 excluded. Ideal normal-velocity FEM diaphragms use their declared channel ids;
 a diaphragm with no painted exterior source still produces its own channel.
-Reduced domains, ground planes, HBB and other backends refuse. Electrodynamic
-and axial/weighted drives and the passive-cardioid campaign are not represented
-by this ideal-source route and refuse rather than losing their physics.
+Reduced domains, ground planes, HBB and other backends refuse.
 
-`JobStore.store_fem_field` publishes `fem-field.npz` atomically in the job's
+**0.3.6 limitation:** the contract-2 coupled route supports ideal normal-velocity
+drives only. Any `exterior_transducer`, legacy driver, patch weights, axial
+motion or passive-cardioid campaign refuses, including painted exterior
+transducers on channels separate from the FEM diaphragm. Painted ideal exterior
+sources keep working; painted electrodynamic exterior transducers require an
+explicit exterior-only solve until a coupled electrodynamic route is supported.
+With painted sources present, each FEM diaphragm channel must exist in the
+setup; renaming, regrouping or skipping the front source cannot silently create
+a separate rear driver. Designs without painted sources retain FEM-only channel
+ids. Combine output ids must differ from all compiled drive channel ids.
+
+The coupled route shares the exterior route's fixed regular quadrature and
+order 4 regular/singular integration. Native `validation_diagnostics` is
+explicitly false for production jobs: its additional validation matrices are
+costly and belong to qualification requests; result identity, precision and
+field layout checks remain enabled.
+
+`JobStore.store_fem_field_arrays` streams compression from the stacked pressure
+array into staging on a worker thread, alongside channel-basis serialization.
+`JobStore.store_fem_field` also accepts existing packed bytes. Both publish `fem-field.npz` atomically in the job's
 field artifact directory. `get_fem_field` reads its bytes. The existing
 `task_metadata_json` carries `has_fem_field_artifact` and
 `fem_field_artifact_bytes`; neither database schema changes. Failure,

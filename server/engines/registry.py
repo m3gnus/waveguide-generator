@@ -361,6 +361,8 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
 
     from server.solver import beat_cpu_runtime
 
+    from server.platform.feature_flags import fem_regions_enabled
+
     name = beat_engine_name(backend)
     state = status.get("state")
     runtime_state = ("ready" if status.get("available") else
@@ -390,7 +392,7 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
         # No ground plane: the BEAT adapter does not translate one yet.
         mountings=("free-standing",),
         geometry_sources=beat_geometry_sources(backend),
-        imported_features=(("exterior-transducers", "fem-regions") if backend == "cpu" and os.environ.get("WG2_FEM_REGIONS", "").strip() == "1"
+        imported_features=(("exterior-transducers", "fem-regions") if backend == "cpu" and fem_regions_enabled()
                            else ("exterior-transducers",))
         if backend in {"cpu", "metal"} else (),
         symmetry_domains=_symmetry_domains(name),

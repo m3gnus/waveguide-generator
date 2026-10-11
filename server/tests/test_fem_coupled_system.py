@@ -140,7 +140,7 @@ def test_open_edges_counts_a_missing_face():
 def test_user_walls_and_synthetic_walls_compile_as_separate_boundaries(tmp_path, kind):
     region = _region()
     region["surface_groups"][1]["kind"] = "moving"
-    region["surface_groups"][1]["drive_channel_id"] = "drive-LF"
+    region["surface_groups"][1]["drive_channel_id"] = "drive-port"
     region["surface_groups"][0].update(group_id="walls", kind=kind)
     built = _mesh(_write_step(tmp_path / "air.step"), region)
     domain = read_fem_region_domain(built["msh_text"], region["region_id"])

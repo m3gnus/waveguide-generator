@@ -3793,7 +3793,6 @@ class JobRuntime:
 
     async def _run_coupled_regions(self, job_id, request, record, stage_cb):
         """Run declared air automatically; the ordinary job lifecycle owns persistence."""
-        from io import BytesIO
         import numpy as np
         from server.solver.base import EngineRunResult
         from server.solver.context import SolverContext
@@ -3821,26 +3820,29 @@ class JobRuntime:
                 "solve", .45 + .4 * (i + 1) / total, f"Solving FEM at {freq:g} Hz"))
         results = coupled_envelope(sweep, compiled, context=context, geometry=request.geometry,
                                    record=record, config=response_config(compiled, context), started=started)
-        arrays = {"schema": np.asarray("wg-fem-field-store-v1"),
-                  "phasor_convention": np.asarray(compiled.wire["solver_options"]["phasor_convention"]),
-                  "drive_normalization": np.asarray("unit_acceleration_m_per_s2"),
-                  "experimental": np.asarray(True),
-                  "frequencies_hz": next(iter(sweep.channels.values())).frequencies_hz,
-                  "channel_ids": np.asarray(list(compiled.channel_ports)),
-                  "region_ids": np.asarray([r.domain.region_id for r in compiled.regions]),
-                  "pressure": sweep.nodal_pressure}
-        for index, region in enumerate(compiled.regions):
-            arrays[f"points_mm_{index}"] = region.domain.points_mm
-            arrays[f"tetrahedra_{index}"] = region.domain.tetrahedra
-            names = list(region.domain.surfaces)
-            arrays[f"surface_names_{index}"] = np.asarray(names)
-            for j, name in enumerate(names):
-                arrays[f"surface_triangles_{index}_{j}"] = region.domain.surfaces[name]
-        buffer = BytesIO()
-        np.savez_compressed(buffer, **arrays)
-        self._check_cancelled(job_id)
-        await asyncio.to_thread(self.store.store_fem_field, job_id, buffer.getvalue())
-        return EngineRunResult(results=results, channel_bases=serialize_channel_bases(sweep.channels),
+
+        def pack_and_publish():
+            arrays = {"schema": np.asarray("wg-fem-field-store-v1"),
+                      "phasor_convention": np.asarray(compiled.wire["solver_options"]["phasor_convention"]),
+                      "drive_normalization": np.asarray("unit_acceleration_m_per_s2"),
+                      "experimental": np.asarray(True),
+                      "frequencies_hz": next(iter(sweep.channels.values())).frequencies_hz,
+                      "channel_ids": np.asarray(list(compiled.channel_ports)),
+                      "region_ids": np.asarray([r.domain.region_id for r in compiled.regions]),
+                      "pressure": sweep.nodal_pressure}
+            for index, region in enumerate(compiled.regions):
+                arrays[f"points_mm_{index}"] = region.domain.points_mm
+                arrays[f"tetrahedra_{index}"] = region.domain.tetrahedra
+                names = list(region.domain.surfaces)
+                arrays[f"surface_names_{index}"] = np.asarray(names)
+                for j, name in enumerate(names):
+                    arrays[f"surface_triangles_{index}_{j}"] = region.domain.surfaces[name]
+            self._check_cancelled(job_id)
+            self.store.store_fem_field_arrays(job_id, arrays)
+            return serialize_channel_bases(sweep.channels)
+
+        channel_bases = await asyncio.to_thread(pack_and_publish)
+        return EngineRunResult(results=results, channel_bases=channel_bases,
                                field_trace_unavailable_reason="coupled_exterior_traces_unavailable")
 
     async def _run_real_engine(

@@ -27,6 +27,11 @@ from .observations import ObservationLayout, build_observations
 from .results import result_outputs
 
 
+REGULAR_QUADRATURE_MODE = "fixed"
+QUADRATURE_ORDER = 4
+SINGULAR_ORDER = 4
+
+
 @dataclass(frozen=True)
 class SourceBasis:
     source_id: str
@@ -116,7 +121,7 @@ def build_request(
     engine_id: str = "beat-cpu", backend: str | None = None, precision: str = "float32",
     symmetry: str = "full", ground: GroundPlane | None = None, mesh_scale_to_m: float = 1.,
     sound_speed_m_per_s: float = 343., density_kg_per_m3: float = 1.2041,
-    quadrature_order: int = 4, singular_order: int = 4, surface_traces: bool = False,
+    quadrature_order: int = QUADRATURE_ORDER, singular_order: int = SINGULAR_ORDER, surface_traces: bool = False,
     cancel_path: Path | None = None, ground_plane_min_clearance_m: float = 0.,
 ) -> CompiledRequest:
     """Build independent unit-velocity bases; WG channels sum their named ports.
@@ -224,7 +229,7 @@ def build_request(
                "phasor_convention": SOLVER_TIME_CONVENTION,
                # Fixed order 4 on every backend: BEAT's CPU "wavelength" mode picks one
                # 3-point rule from a mesh percentile, 3-4 dB wrong on graded meshes.
-               "regular_quadrature_mode": "fixed",
+               "regular_quadrature_mode": REGULAR_QUADRATURE_MODE,
                "quadrature_order": quadrature_order, "singular_order": singular_order}
     if mode == "ground":  # The adapter sends the clearance only with a ground plane
         options["ground_plane_min_clearance_m"] = ground_plane_min_clearance_m

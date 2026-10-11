@@ -311,12 +311,10 @@ def _imported_request_refusal(
 ) -> tuple[str, str] | None:
     """A refusal no engine can lift: the request asks what imported geometry never does."""
 
-    if not request.geometry.drive_channels and not (
-            record and not request.geometry.exterior_only
-            and any(g.get("kind") == "moving" for r in record.get("fem_regions", ())
-                    for g in r.get("surface_groups", ()))):
+    coupled_regions = bool(record and record.get("fem_regions") and not request.geometry.exterior_only)
+    if not request.geometry.drive_channels and not coupled_regions:
         return "drive_source_coverage", "The return has no driven exterior source or FEM diaphragm"
-    if record and record.get("fem_regions") and not request.geometry.exterior_only:
+    if coupled_regions:
         from server.cadlink.build_flags import fem_regions_enabled
         from server.solver.beat_runtime.provider import official_selected
 
@@ -328,21 +326,23 @@ def _imported_request_refusal(
             return "fem_domain_unsupported", "FEM regions require a full domain"
         if request.options.ground_plane.enabled or record.get("infinite_baffle"):
             return "fem_domain_unsupported", "FEM regions require free space without a ground plane"
-        moving = {g.get("drive_channel_id") for r in record["fem_regions"]
-                  for g in r.get("surface_groups", ()) if g.get("kind") == "moving"}
+        ideal_message = "The contract-2 coupled route supports ideal normal-velocity drives only"
         for channel in request.geometry.drive_channels:
             if channel.exterior_transducer is not None:
-                if channel.id in moving:
-                    return "fem_transducer_unsupported", (
-                        f"FEM diaphragm channel {channel.id!r} also carries an exterior_transducer; "
-                        "electrodynamic FEM diaphragms await F10")
                 return "fem_transducer_unsupported", (
-                    "The contract-2 FEM route supports ideal velocity drives only; "
-                    f"channel {channel.id!r} carries an exterior_transducer")
+                    f"{ideal_message}; channel {channel.id!r} carries an exterior_transducer (F10)")
             if channel.motion != "normal" or channel.driver is not None or channel.patch_weights is not None:
-                return "fem_drive_unsupported", "FEM regions currently require ideal normal-velocity drives"
+                return "fem_drive_unsupported", f"{ideal_message}; channel {channel.id!r} is unsupported"
         if request.geometry.passive_cardioid_enabled:
-            return "fem_drive_unsupported", "FEM regions do not yet support passive-cardioid synthesis"
+            return "fem_drive_unsupported", f"{ideal_message}; passive-cardioid synthesis is unsupported"
+        from server.solver.coupled_admission import fem_drive_problem, painted_source_ids
+
+        problem = fem_drive_problem(record["fem_regions"],
+            {c.id: c.source_ids for c in request.geometry.drive_channels},
+            painted_sources=painted_source_ids(record),
+            combine_id=request.geometry.combine.id if request.geometry.combine else None)
+        if problem:
+            return problem
     mismatch = _imported_decision_refusal(record)
     if mismatch is not None:
         return mismatch

@@ -549,6 +549,8 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
     from server.solver.coupled_system import solve_kind
     from server.solver.official_beat import engine_version
 
+    if geometry.combine is not None and geometry.combine.id in request.channel_ports:
+        raise ValueError(f"Combine id {geometry.combine.id!r} collides with a compiled drive channel id")
     channels = {}
     formulation = solve_kind(request.wire["compiled_system"])
     solver_engine = {"provider": "official", "engine": "beat-cpu", "package": "beat-engine",

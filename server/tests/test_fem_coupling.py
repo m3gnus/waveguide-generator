@@ -481,6 +481,9 @@ def test_every_interface_region_is_meshed_in_the_same_child(tmp_path):
         file="fem-regions/front-chamber.step",
     )
     for group in second["surface_groups"]:
+        if group.get("drive_channel_id"):
+            # Two diaphragms on one channel are refused; this is a second driver.
+            group["drive_channel_id"] = "drive-lf-2"
         for face in group["faces"]:
             face["centroid_mm"][0] += 100
             for corner in face["bbox_mm"]:

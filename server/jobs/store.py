@@ -2362,6 +2362,15 @@ class JobStore:
 
     def store_fem_field(self, job_id: str, payload: bytes) -> bool:
         """Publish a lossless file sidecar; advertise it in existing task metadata."""
+        return self._publish_fem_field(job_id, lambda stream: stream.write(payload))
+
+    def store_fem_field_arrays(self, job_id: str, arrays: Mapping[str, Any]) -> bool:
+        """Compress directly into atomic staging without an in-memory ZIP copy."""
+        import numpy as np
+
+        return self._publish_fem_field(job_id, lambda stream: np.savez_compressed(stream, **arrays))
+
+    def _publish_fem_field(self, job_id: str, write) -> bool:
         with self._lock, self._transaction() as conn:
             if not self._job_exists(conn, job_id):
                 return False
@@ -2370,7 +2379,8 @@ class JobStore:
             fd, name = tempfile.mkstemp(prefix=".fem-", dir=path.parent)
             try:
                 with os.fdopen(fd, "wb") as stream:
-                    stream.write(payload)
+                    write(stream)
+                    size_bytes = stream.tell()
                     stream.flush()
                     os.fsync(stream.fileno())
                 os.replace(name, path)
@@ -2378,7 +2388,7 @@ class JobStore:
                     """UPDATE simulation_jobs SET task_metadata_json = json_set(
                        COALESCE(task_metadata_json, '{}'),
                        '$.has_fem_field_artifact', json('true'), '$.fem_field_artifact_bytes', ?),
-                       updated_at = ? WHERE id = ?""", (len(payload), _now_iso(), job_id))
+                       updated_at = ? WHERE id = ?""", (size_bytes, _now_iso(), job_id))
             except BaseException:
                 path.unlink(missing_ok=True)
                 raise

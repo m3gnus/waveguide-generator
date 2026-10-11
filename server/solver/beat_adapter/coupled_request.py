@@ -14,7 +14,7 @@ from server.solver.coupled_system import ExteriorSurface, FemRegionInput, build_
 from server.solver.imported import imported_anchor_frame, imported_domain_planes
 
 from .observations import ObservationLayout
-from .request import _layout
+from .request import QUADRATURE_ORDER, REGULAR_QUADRATURE_MODE, SINGULAR_ORDER, _layout
 
 
 @dataclass(frozen=True)
@@ -56,12 +56,25 @@ def build_coupled_request(
             "excitation_port_ids": [p["id"] for p in system["excitation_ports"]],
             "outputs": outputs,
             "solver_options": {"precision": precision, "bem_backend": backend, "symmetry": "off",
-                               "phasor_convention": SOLVER_TIME_CONVENTION}}
+                               "phasor_convention": SOLVER_TIME_CONVENTION,
+                               "regular_quadrature_mode": REGULAR_QUADRATURE_MODE,
+                               "quadrature_order": QUADRATURE_ORDER, "singular_order": SINGULAR_ORDER,
+                               # Native validation diagnostics add costly matrices; qualification
+                               # requests opt in separately, ordinary jobs retain field checks.
+                               "validation_diagnostics": False}}
     return CoupledRequest(wire, layout, frame, tuple(regions), channels)
 
 
 def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any, *,
                                    frequencies_hz: Sequence[float]) -> CoupledRequest:
+    from server.solver.coupled_admission import fem_drive_problem, painted_source_ids
+
+    problem = fem_drive_problem(record.get("fem_regions", ()),
+        {c.id: c.source_ids for c in geometry.drive_channels},
+        painted_sources=painted_source_ids(record),
+        combine_id=getattr(getattr(geometry, "combine", None), "id", None))
+    if problem:
+        raise ValueError(f"{problem[0]}: {problem[1]}")
     if imported_domain_planes(record) or bool(record.get("infinite_baffle")):
         raise ValueError("FEM regions require a full free-space domain")
     regions = tuple(FemRegionInput(
@@ -105,4 +118,6 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
     missing = {c.id for c in geometry.drive_channels} - set(request.channel_ports)
     if missing:
         raise ValueError(f"Coupled exterior has no moving surface for channels {sorted(missing)}")
+    if getattr(geometry, "combine", None) is not None and geometry.combine.id in request.channel_ports:
+        raise ValueError(f"Combine id {geometry.combine.id!r} collides with a compiled drive channel id")
     return request
