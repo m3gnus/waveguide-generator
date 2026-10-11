@@ -33,13 +33,14 @@ FAKE_BACKEND = textwrap.dedent(
     from http.server import BaseHTTPRequestHandler, HTTPServer
     from pathlib import Path
 
-    sys.path.insert(0, sys.argv[1])
-    from server.platform.instance import InstanceAlreadyRunning, InstanceLock
-
     data_dir, pids, mode = Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]
     reported, delay = sys.argv[5], float(sys.argv[6])
+    # Record the spawn before any server import: that import can take seconds
+    # on hosted Windows runners, longer than a test waits for the owner.
     with open(pids, "a") as handle:
         handle.write(str(os.getpid()) + "\\n")
+    sys.path.insert(0, sys.argv[1])
+    from server.platform.instance import InstanceAlreadyRunning, InstanceLock
     if mode == "hang-ignore-term" and os.name == "posix":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
     if mode in ("hang", "hang-ignore-term"):
@@ -343,9 +344,11 @@ def test_spawn_exiting_2_adopts_delayed_owner(data_dir: Path, fake) -> None:
     assert discover_backend(data_dir) is None
     handle = ensure_backend(data_dir, fake(), timeout=10)
     assert handle.pid == owner.pid
+    # ensure_backend returns once the owner is healthy; our spawned child may
+    # still be starting. It must lose the lock and exit 2 without owning.
+    assert fake.processes[-1].wait(timeout=30) == 2
     assert fake.spawns() == 2
     assert fake.owners() == [str(owner.pid)]
-    assert fake.processes[-1].wait(timeout=2) == 2
 
 
 def test_probe_loop_never_contends_with_instance_lock(data_dir: Path, monkeypatch) -> None:
