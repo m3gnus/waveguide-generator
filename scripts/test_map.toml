@@ -53,6 +53,7 @@
 ]
 "server/solver/" = [
     "server/tests/test_axial_source_axes.py",
+    "server/tests/test_fem*.py",
     "server/tests/test_cad_frame_infer_real.py",
     "server/tests/test_solver*.py",
     "server/tests/test_bempp*.py",
