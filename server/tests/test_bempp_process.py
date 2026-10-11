@@ -10,6 +10,7 @@ import time
 
 import pytest
 
+from server.platform import child_process
 from server.solver import bempp_process
 from server.solver.bempp_process import _WARMUP_JOB_ID, BemppProcessHost
 from server.solver.context import SolverContext
@@ -90,7 +91,7 @@ def test_worker_entry_holds_running_exclusion_after_stderr_before_session(monkey
 
     calls = []
     connection = object()
-    monkeypatch.setattr(bempp_process, "_send_stderr_to", lambda path: calls.append(("stderr", path)))
+    monkeypatch.setattr(child_process, "send_stderr_to", lambda path: calls.append(("stderr", path)))
     monkeypatch.setattr(running_exclusion, "hold_running_exclusion", lambda: calls.append("hold"))
     monkeypatch.setattr(temp_session, "adopt_parent_session", lambda root: calls.append(("adopt", root)))
 
@@ -113,7 +114,7 @@ def test_worker_entry_running_exclusion_refusal_prevents_session_and_target(monk
         calls.append("hold")
         raise refusal
 
-    monkeypatch.setattr(bempp_process, "_send_stderr_to", lambda path: calls.append(("stderr", path)))
+    monkeypatch.setattr(child_process, "send_stderr_to", lambda path: calls.append(("stderr", path)))
     monkeypatch.setattr(running_exclusion, "hold_running_exclusion", hold)
     monkeypatch.setattr(temp_session, "adopt_parent_session", lambda root: calls.append("adopt"))
 
@@ -481,7 +482,7 @@ def test_the_worker_leaves_when_its_parent_is_force_killed(
     # os._exit is the point of the watchdog -- it does not wait for native code
     # to unwind -- so it has to be intercepted rather than allowed to run here.
     exits: list[int] = []
-    monkeypatch.setattr(bempp_process.os, "_exit", exits.append)
+    monkeypatch.setattr(child_process.os, "_exit", exits.append)
 
     try:
         bempp_process._exit_when_parent_does()

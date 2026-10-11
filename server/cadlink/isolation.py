@@ -38,13 +38,11 @@ import logging
 import os
 from pathlib import Path
 import platform
-import signal
 import stat
 import subprocess
 import sys
 import tempfile
 import threading
-import time
 from typing import Any, Iterator, Mapping, Sequence
 
 from server.cadlink.limits import (
@@ -60,7 +58,13 @@ from server.cadlink.limits import (
 )
 from server.platform.job_start import ContainedStartError, JobStart, windows_job_start
 from server.platform.paths import app_root
-from server.platform.process_tree import cancel_blocked_reads
+from server.platform.process_tree import create_windows_job
+from server.platform import child_process, process_tree
+from server.platform.child_process import (
+    posix_process_group as _posix_process_group,
+    process_group_rss_bytes,
+    windows_creation_flags as _windows_creation_flags,
+)
 from server.platform.temp_session import remove_tree, temporary_directory_root
 
 
@@ -236,180 +240,36 @@ def child_command(entrypoint: str = CHILD_ENTRYPOINT, *, root: Path = _REPO_ROOT
     return [sys.executable, "-s", "-B", "-c", _BOOTSTRAP, str(root), entrypoint]
 
 
-def describe_exit(returncode: int | None) -> str:
-    """Say how a child exited, in words a reader can look up."""
+_EXIT_WORDING = child_process.ExitWording(
+    unknown="with no recorded code",
+    signal="on signal {name} ({code})",
+    unknown_signal="on signal {number} ({code})",
+    code="with code {code}",
+    status="with code 0x{code:08X}",
+    status_on_all_platforms=True,
+)
 
-    if returncode is None:
-        return "with no recorded code"
-    if returncode < 0:
-        try:
-            name = signal.Signals(-returncode).name
-        except ValueError:
-            name = str(-returncode)
-        return f"on signal {name} ({returncode})"
-    if returncode >= 0x80000000:
-        # A Windows NTSTATUS, such as 0xC0000005 for an access violation.
-        return f"with code 0x{returncode:08X}"
-    return f"with code {returncode}"
+
+def describe_exit(returncode: int | None) -> str:
+    return child_process.describe_exit(returncode, wording=_EXIT_WORDING)
 
 
 # -- process-tree control --------------------------------------------------
 
 
-def _posix_process_group(process: subprocess.Popen[bytes]) -> int | None:
-    try:
-        return os.getpgid(process.pid)
-    except (OSError, AttributeError):
-        return None
-
-
-def _process_group_alive(group: int) -> bool:
-    try:
-        os.killpg(group, 0)
-    except ProcessLookupError:
-        return False
-    except (PermissionError, OSError):
-        # A permission failure still proves that the group exists.
-        return True
-    return True
-
-
-def _wait_for_tree_exit(
-    process: subprocess.Popen[bytes], group: int | None, timeout: float
-) -> bool:
-    deadline = time.monotonic() + timeout
-    while True:
-        # poll() also reaps the direct child. Without that, its zombie keeps
-        # the process group looking alive even after every process was stopped.
-        process.poll()
-        alive = _process_group_alive(group) if group is not None else process.poll() is None
-        if not alive:
-            return True
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(0.02)
-
-
 def terminate_process_tree(
     process: subprocess.Popen[bytes], job: Any = None, *, group: int | None = None
 ) -> None:
-    """Stop the child and everything it started.
-
-    A child that spawned helpers and then hung must not leave them holding the
-    STEP or the CPU.  On POSIX the child owns a fresh session, so its process
-    group is exactly the tree and ``killpg`` reaches all of it; on Windows the
-    job object terminates its members in one call.
-    """
-
-    if job is not None:
-        with contextlib.suppress(Exception):
-            job.terminate()
-    resolved_group = (
-        group if group is not None else (_posix_process_group(process) if os.name == "posix" else None)
+    child_process.terminate_process_tree(
+        process, job, group=group, grace_seconds=_TERMINATE_GRACE_S
     )
-    if resolved_group is not None and resolved_group != os.getpgid(0):
-        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-            os.killpg(resolved_group, signal.SIGTERM)
-    elif process.poll() is None:
-        with contextlib.suppress(Exception):
-            process.terminate()
-    if _wait_for_tree_exit(process, resolved_group, _TERMINATE_GRACE_S):
-        return
-    if resolved_group is not None and resolved_group != os.getpgid(0):
-        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-            os.killpg(resolved_group, signal.SIGKILL)
-    with contextlib.suppress(Exception):
-        process.kill()
-    _wait_for_tree_exit(process, resolved_group, _TERMINATE_GRACE_S)
 
 
-def process_group_rss_bytes(group: int) -> int | None:
-    """Sum resident memory over one process group, or ``None`` if unknown.
-
-    ``RLIMIT_AS`` is not usable for this.  A plain Python process with gmsh
-    imported reserves roughly 435 GB of address space on macOS against 52 MB
-    resident, so an address-space cap set at the gate's resident figure would
-    refuse every legitimate import.  ``ps`` reports the number the gate
-    actually names, on both macOS and Linux, so the parent samples it.
-    """
-
-    try:
-        completed = subprocess.run(
-            ["ps", "-A", "-o", "pgid=,rss="],
-            capture_output=True,
-            text=True,
-            timeout=5.0,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if completed.returncode != 0:
-        return None
-    total = 0
-    seen = False
-    for line in completed.stdout.splitlines():
-        fields = line.split()
-        if len(fields) < 2:
-            continue
-        try:
-            if int(fields[0]) != group:
-                continue
-            total += int(fields[1]) * 1024
-        except ValueError:
-            continue
-        seen = True
-    return total if seen else None
-
-
-class _BoundedDrain:
-    """Keep only the tail of a child's native chatter.
-
-    Native stderr is diagnostic text, never a verdict, and a child that prints
-    forever must not be able to grow the *parent*.  So the pipe is drained on a
-    thread into a fixed-size tail.
-    """
-
+class _BoundedDrain(child_process.PipeDrain):
     def __init__(self, stream: Any, limit: int = MAX_RETAINED_STDERR_BYTES) -> None:
-        self._stream = stream
-        self._limit = limit
-        self._tail = bytearray()
-        self._truncated = False
-        self._lock = threading.Lock()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def _run(self) -> None:
-        # read1 returns whatever one read of the pipe brings. A buffered
-        # read(n) keeps reading until it has n bytes, holding what it already
-        # got in the reader's own buffer, so a cancelled read would take that
-        # tail -- the diagnostic -- with it.
-        read = getattr(self._stream, "read1", None) or self._stream.read
-        try:
-            with contextlib.suppress(Exception):
-                while True:
-                    chunk = read(8192)
-                    if not chunk:
-                        return
-                    with self._lock:
-                        self._tail += chunk
-                        if len(self._tail) > self._limit:
-                            del self._tail[: len(self._tail) - self._limit]
-                            self._truncated = True
-        finally:
-            # Only this thread closes the stream: a close from another thread
-            # blocks behind a read in progress, for as long as that read lasts.
-            with contextlib.suppress(Exception):
-                self._stream.close()
-
-    def text(self) -> str:
-        self._thread.join(timeout=1.0)
-        # A process outside the tree that still holds the pipe would keep the
-        # read blocked for good; cancel it so the thread ends and closes it.
-        cancel_blocked_reads([self._thread])
-        with self._lock:
-            body = bytes(self._tail).decode("utf-8", errors="replace")
-            prefix = "...(earlier output discarded)...\n" if self._truncated else ""
-        return prefix + body
+        super().__init__(
+            stream, limit, truncation_prefix="...(earlier output discarded)...\n"
+        )
 
 
 # -- result and artifact verification --------------------------------------
@@ -972,104 +832,51 @@ def _verified_answer(
 
 
 def _supervise(
-    process: subprocess.Popen[bytes],
-    budget: ChildBudget,
-    *,
-    job: Any = None,
-    group: int | None = None,
+    process: subprocess.Popen[bytes], budget: ChildBudget, *,
+    job: Any = None, group: int | None = None,
 ) -> str | None:
-    """Poll the deadline and the resident memory; return why it was killed."""
+    def resolve_group() -> None:
+        nonlocal group
+        if group is None and os.name == "posix":
+            group = _posix_process_group(process)
 
-    deadline = time.monotonic() + budget.wall_time_s
-    if group is None and os.name == "posix":
-        group = _posix_process_group(process)
-    while True:
-        try:
-            process.wait(timeout=_WATCHDOG_INTERVAL_S)
-            return None
-        except subprocess.TimeoutExpired:
-            pass
-        if time.monotonic() >= deadline:
-            terminate_process_tree(process, job, group=group)
-            return (
-                f"the isolated CAD child exceeded its {budget.wall_time_s:g} second "
-                "deadline and was stopped with its descendants"
-            )
+    def resource_check() -> str | None:
         if group is not None:
             resident = process_group_rss_bytes(group)
             if resident is not None and resident > budget.memory_bytes:
-                terminate_process_tree(process, job, group=group)
                 return (
                     f"the isolated CAD child reached {resident:,} bytes resident, over "
                     f"its {budget.memory_bytes:,} byte budget, and was stopped"
                 )
+        return None
+
+    return child_process.supervise(
+        process, wall_time_s=budget.wall_time_s, interval_s=_WATCHDOG_INTERVAL_S,
+        stop=lambda: terminate_process_tree(process, job, group=group),
+        resource_check=resource_check,
+        before_wait=resolve_group,
+        timeout_reason=(
+            f"the isolated CAD child exceeded its {budget.wall_time_s:g} second "
+            "deadline and was stopped with its descendants"
+        ),
+    )
 
 
 # -- Windows job objects ---------------------------------------------------
 
 
+_configure_windows_job_api = process_tree._declare_job_api
+
+
 def start_child_process(
     command: list[str], popen_kwargs: dict[str, Any], *, stage: str
 ) -> subprocess.Popen[bytes]:
-    """Launch one child, retrying once when Windows forbids job breakaway.
-
-    A parent that is itself inside a job object -- hosted CI runners are, and
-    that is where this path is naturally exercised -- refuses
-    ``CREATE_BREAKAWAY_FROM_JOB`` with ``ERROR_ACCESS_DENIED``. Losing the
-    breakaway costs a nested job, not the boundary, so it is worth one retry
-    rather than refusing every import.
-
-    Tests must launch children through this rather than calling ``Popen`` with
-    ``_windows_creation_flags()`` themselves: a test that reimplements the first
-    attempt without the retry passes on a developer machine and fails on any
-    runner that is inside a job.
-    """
-
     try:
-        return subprocess.Popen(command, **popen_kwargs)  # noqa: S603
+        return child_process.start_popen(command, popen_kwargs, retry_windows=True)
     except OSError as exc:
-        if os.name != "nt" or "creationflags" not in popen_kwargs:
-            raise ChildRefusal(
-                stage, f"could not start the isolated CAD child: {exc}"
-            ) from exc
-        popen_kwargs["creationflags"] = _windows_creation_flags(breakaway=False)
-        try:
-            return subprocess.Popen(command, **popen_kwargs)  # noqa: S603
-        except OSError as retry_exc:
-            raise ChildRefusal(
-                stage, f"could not start the isolated CAD child: {retry_exc}"
-            ) from retry_exc
-
-
-def _windows_creation_flags(*, breakaway: bool = True) -> int:
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    if breakaway:
-        # Without breakaway, a child of an already-jobbed parent (a CI agent,
-        # say) cannot be put in a job of its own. Some jobs forbid breakaway,
-        # which is why the caller retries without it rather than refusing.
-        flags |= 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
-    return flags
-
-
-class _WindowsJob:
-    """A job object holding the child and everything it starts.
-
-    Windows has no ``killpg``.  The job object is the equivalent and is
-    strictly better: the memory limit is enforced by the kernel at commit time
-    rather than sampled, and ``KILL_ON_JOB_CLOSE`` means the tree dies with the
-    parent even if the parent dies without running any cleanup at all.
-    """
-
-    def __init__(self, handle: Any, kernel32: Any) -> None:
-        self._handle = handle
-        self._kernel32 = kernel32
-
-    def terminate(self) -> None:
-        self._kernel32.TerminateJobObject(self._handle, 1)
-
-    def close(self) -> None:
-        self._kernel32.CloseHandle(self._handle)
+        raise ChildRefusal(
+            stage, f"could not start the isolated CAD child: {exc}"
+        ) from exc
 
 
 def _required_windows_job(
@@ -1094,108 +901,11 @@ def _required_windows_job(
     return job
 
 
-def _configure_windows_job_api(kernel32: Any, ctypes: Any, wintypes: Any) -> None:
-    """Declare the pointer-sized Win32 ABI used by the job wrapper.
-
-    ``ctypes`` otherwise assumes ``c_int`` for every argument and return value.
-    That is not a safe approximation for ``HANDLE`` on 64-bit Windows: it can
-    truncate both the job returned by ``CreateJobObjectW`` and the process
-    handle passed to ``AssignProcessToJobObject``.
-    """
-
-    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
-    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
-    kernel32.SetInformationJobObject.argtypes = [
-        wintypes.HANDLE,
-        ctypes.c_int,
-        ctypes.c_void_p,
-        wintypes.DWORD,
-    ]
-    kernel32.SetInformationJobObject.restype = wintypes.BOOL
-    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
-    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
-    kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
-    kernel32.TerminateJobObject.restype = wintypes.BOOL
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.CloseHandle.restype = wintypes.BOOL
-
-
 def _assign_windows_job(process: subprocess.Popen[bytes] | int, budget: ChildBudget) -> Any:
-    """Create a memory-capped, kill-on-close job and put the child in it.
-
-    ``process`` is the child or its process handle; a suspended child has only
-    the handle ``CreateProcess`` returned (``server/platform/job_start.py``).
-    """
-
-    try:
-        import ctypes
-        from ctypes import wintypes
-    except ImportError as exc:  # pragma: no cover - Windows only
-        raise RuntimeError("Windows job-object support is unavailable") from exc
-
-    class _IoCounters(ctypes.Structure):
-        _fields_ = [
-            ("ReadOperationCount", ctypes.c_ulonglong),
-            ("WriteOperationCount", ctypes.c_ulonglong),
-            ("OtherOperationCount", ctypes.c_ulonglong),
-            ("ReadTransferCount", ctypes.c_ulonglong),
-            ("WriteTransferCount", ctypes.c_ulonglong),
-            ("OtherTransferCount", ctypes.c_ulonglong),
-        ]
-
-    class _BasicLimits(ctypes.Structure):
-        _fields_ = [
-            ("PerProcessUserTimeLimit", ctypes.c_longlong),
-            ("PerJobUserTimeLimit", ctypes.c_longlong),
-            ("LimitFlags", wintypes.DWORD),
-            ("MinimumWorkingSetSize", ctypes.c_size_t),
-            ("MaximumWorkingSetSize", ctypes.c_size_t),
-            ("ActiveProcessLimit", wintypes.DWORD),
-            ("Affinity", ctypes.POINTER(ctypes.c_ulong)),
-            ("PriorityClass", wintypes.DWORD),
-            ("SchedulingClass", wintypes.DWORD),
-        ]
-
-    class _ExtendedLimits(ctypes.Structure):
-        _fields_ = [
-            ("BasicLimitInformation", _BasicLimits),
-            ("IoInfo", _IoCounters),
-            ("ProcessMemoryLimit", ctypes.c_size_t),
-            ("JobMemoryLimit", ctypes.c_size_t),
-            ("PeakProcessMemoryUsed", ctypes.c_size_t),
-            ("PeakJobMemoryUsed", ctypes.c_size_t),
-        ]
-
-    limit_job_memory = 0x00000200
-    limit_process_memory = 0x00000100
-    limit_kill_on_job_close = 0x00002000
-    limit_active_process = 0x00000008
-    extended_limit_information = 9
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
-    _configure_windows_job_api(kernel32, ctypes, wintypes)
-    handle = kernel32.CreateJobObjectW(None, None)
-    if not handle:
-        raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
-    limits = _ExtendedLimits()
-    limits.BasicLimitInformation.LimitFlags = (
-        limit_job_memory | limit_process_memory | limit_kill_on_job_close | limit_active_process
+    return create_windows_job(
+        process, memory_bytes=budget.memory_bytes, active_process_limit=32,
+        suppress_errors=False, error_before_close=True,
     )
-    limits.BasicLimitInformation.ActiveProcessLimit = 32
-    limits.ProcessMemoryLimit = budget.memory_bytes
-    limits.JobMemoryLimit = budget.memory_bytes
-    if not kernel32.SetInformationJobObject(
-        handle, extended_limit_information, ctypes.byref(limits), ctypes.sizeof(limits)
-    ):
-        error = ctypes.get_last_error()
-        kernel32.CloseHandle(handle)
-        raise OSError(error, "SetInformationJobObject failed")
-    process_handle = process if isinstance(process, int) else int(process._handle)  # type: ignore[attr-defined]
-    if not kernel32.AssignProcessToJobObject(handle, process_handle):
-        error = ctypes.get_last_error()
-        kernel32.CloseHandle(handle)
-        raise OSError(error, "AssignProcessToJobObject failed")
-    return _WindowsJob(handle, kernel32)
 
 
 __all__ = [

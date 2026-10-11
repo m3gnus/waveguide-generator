@@ -1,9 +1,8 @@
 """Kill a ``multiprocessing`` child *and everything it started*.
 
-``server/cadlink/isolation.py`` already solves this for ``subprocess.Popen``
-children, but it is welded to that module's ``ChildBudget`` and STEP refusal
-vocabulary. The BEMPP worker is a ``multiprocessing.Process``, and it needs the
-containment for a different reason: once the native sweep is allowed to split
+The shared child-process runner uses this module for Windows jobs and POSIX
+containment. Both ``subprocess.Popen`` and ``multiprocessing.Process`` children
+need the same tree ownership: once the native sweep is allowed to split
 across worker processes, ``Process.terminate()`` reaches only the direct child
 and leaves its sweep workers running -- orphans that keep burning every core
 the user just pressed Stop to reclaim.
@@ -103,15 +102,22 @@ def adopt_process_group() -> int | None:
 class WindowsJob:
     """A job object holding one child process and everything it starts."""
 
-    def __init__(self, handle: Any, kernel32: Any) -> None:
+    def __init__(self, handle: Any, kernel32: Any, *, suppress_errors: bool = True) -> None:
         self._handle = handle
         self._kernel32 = kernel32
+        self._suppress_errors = suppress_errors
 
     def terminate(self) -> None:
+        if not self._suppress_errors:
+            self._kernel32.TerminateJobObject(self._handle, 1)
+            return
         with contextlib.suppress(Exception):
             self._kernel32.TerminateJobObject(self._handle, 1)
 
     def close(self) -> None:
+        if not self._suppress_errors:
+            self._kernel32.CloseHandle(self._handle)
+            return
         with contextlib.suppress(Exception):
             self._kernel32.CloseHandle(self._handle)
 
@@ -132,28 +138,10 @@ def confine_to_windows_job(
     if os.name != "nt":
         return None
     try:
-        import ctypes
-        from ctypes import wintypes
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        _declare_job_api(kernel32, ctypes, wintypes)
-
-        job = _create_kill_on_close_job(kernel32, ctypes, wintypes)
-
-        # PROCESS_SET_QUOTA | PROCESS_TERMINATE
-        handle = kernel32.OpenProcess(0x0100 | 0x0001, False, int(pid))
-        if not handle:
-            kernel32.CloseHandle(job)
-            raise OSError(ctypes.get_last_error(), "OpenProcess failed")
-        try:
-            if not kernel32.AssignProcessToJobObject(job, handle):
-                kernel32.CloseHandle(job)
-                raise OSError(
-                    ctypes.get_last_error(), "AssignProcessToJobObject failed"
-                )
-        finally:
-            kernel32.CloseHandle(handle)
-        return WindowsJob(job, kernel32)
+        return create_windows_job(
+            pid, by_pid=True, suppress_errors=True, error_before_close=False,
+            creation_error_before_close=True, suppress_creation_errors=True,
+        )
     except Exception as exc:  # pragma: no cover - Windows-only failure paths
         logger.warning(
             "Could not confine %s in a Windows job object: %s. What happens "
@@ -164,12 +152,88 @@ def confine_to_windows_job(
         return None
 
 
+def create_windows_job(
+    process: Any, *, memory_bytes: int | None = None,
+    active_process_limit: int | None = None, by_pid: bool = False,
+    suppress_errors: bool = False, error_before_close: bool = True,
+    creation_error_before_close: bool | None = None,
+    suppress_creation_errors: bool = False,
+) -> WindowsJob:
+    """Create and assign one kill-on-close job with optional kernel limits.
+
+    CAD supplies a process handle and resource caps; reusable workers supply
+    a pid and request best-effort cleanup. Creation and assignment have
+    separate error policies to preserve each wrapper's Win32 diagnostics.
+    Only a process handle opened here is closed after assignment.
+    """
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except ImportError as exc:  # pragma: no cover - Windows only
+        if by_pid:
+            raise
+        raise RuntimeError("Windows job-object support is unavailable") from exc
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    _declare_job_api(kernel32, ctypes, wintypes)
+    handle = _create_windows_job(
+        kernel32, ctypes, wintypes,
+        memory_bytes=memory_bytes, active_process_limit=active_process_limit,
+        error_before_close=(
+            error_before_close if creation_error_before_close is None
+            else creation_error_before_close
+        ),
+        suppress_errors=suppress_creation_errors,
+    )
+    process_handle = process if isinstance(process, int) else int(process._handle)
+    if by_pid:
+        process_handle = kernel32.OpenProcess(0x0100 | 0x0001, False, int(process))
+        if not process_handle:
+            kernel32.CloseHandle(handle)
+            raise OSError(ctypes.get_last_error(), "OpenProcess failed")
+    try:
+        if not kernel32.AssignProcessToJobObject(handle, process_handle):
+            error = ctypes.get_last_error() if error_before_close else None
+            kernel32.CloseHandle(handle)
+            raise OSError(error if error_before_close else ctypes.get_last_error(),
+                          "AssignProcessToJobObject failed")
+    finally:
+        if by_pid:
+            kernel32.CloseHandle(process_handle)
+    return WindowsJob(handle, kernel32, suppress_errors=suppress_errors)
+
+
 def _create_kill_on_close_job(kernel32: Any, ctypes: Any, wintypes: Any) -> Any:
     """Create a job with kill-on-close as its only limit."""
+    return _create_windows_job(kernel32, ctypes, wintypes, suppress_errors=True)
+
+
+def _create_windows_job(
+    kernel32: Any, ctypes: Any, wintypes: Any, *,
+    memory_bytes: int | None = None, active_process_limit: int | None = None,
+    error_before_close: bool = True, suppress_errors: bool = False,
+) -> Any:
+    """Create the job handle using explicit resource and failure policies.
+
+    No resource caps means kill-on-close is the only limit. The caller owns
+    the returned handle and decides how to assign it and transfer ownership.
+    """
+
+    class _IoCounters(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_ulonglong),
+            ("WriteOperationCount", ctypes.c_ulonglong),
+            ("OtherOperationCount", ctypes.c_ulonglong),
+            ("ReadTransferCount", ctypes.c_ulonglong),
+            ("WriteTransferCount", ctypes.c_ulonglong),
+            ("OtherTransferCount", ctypes.c_ulonglong),
+        ]
+
     class _BasicLimits(ctypes.Structure):
         _fields_ = [
-            ("PerProcessUserTimeLimit", ctypes.c_int64),
-            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
             ("LimitFlags", wintypes.DWORD),
             ("MinimumWorkingSetSize", ctypes.c_size_t),
             ("MaximumWorkingSetSize", ctypes.c_size_t),
@@ -177,16 +241,6 @@ def _create_kill_on_close_job(kernel32: Any, ctypes: Any, wintypes: Any) -> Any:
             ("Affinity", ctypes.POINTER(ctypes.c_ulong)),
             ("PriorityClass", wintypes.DWORD),
             ("SchedulingClass", wintypes.DWORD),
-        ]
-
-    class _IoCounters(ctypes.Structure):
-        _fields_ = [
-            ("ReadOperationCount", ctypes.c_uint64),
-            ("WriteOperationCount", ctypes.c_uint64),
-            ("OtherOperationCount", ctypes.c_uint64),
-            ("ReadTransferCount", ctypes.c_uint64),
-            ("WriteTransferCount", ctypes.c_uint64),
-            ("OtherTransferCount", ctypes.c_uint64),
         ]
 
     class _ExtendedLimits(ctypes.Structure):
@@ -199,24 +253,37 @@ def _create_kill_on_close_job(kernel32: Any, ctypes: Any, wintypes: Any) -> Any:
             ("PeakJobMemoryUsed", ctypes.c_size_t),
         ]
 
+    limit_job_memory = 0x00000200
+    limit_process_memory = 0x00000100
+    limit_active_process = 0x00000008
+
+    handle = kernel32.CreateJobObjectW(None, None)
+    if not handle:
+        raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
     limits = _ExtendedLimits()
     limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-    job = kernel32.CreateJobObjectW(None, None)
-    if not job:
-        raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
+    if memory_bytes is not None:
+        limits.BasicLimitInformation.LimitFlags |= limit_job_memory | limit_process_memory
+        limits.ProcessMemoryLimit = memory_bytes
+        limits.JobMemoryLimit = memory_bytes
+    if active_process_limit is not None:
+        limits.BasicLimitInformation.LimitFlags |= limit_active_process
+        limits.BasicLimitInformation.ActiveProcessLimit = active_process_limit
     try:
         if not kernel32.SetInformationJobObject(
-            job,
-            _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-            ctypes.byref(limits),
-            ctypes.sizeof(limits),
+            handle, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(limits), ctypes.sizeof(limits)
         ):
-            raise OSError(ctypes.get_last_error(), "SetInformationJobObject failed")
+            error = ctypes.get_last_error() if error_before_close else None
+            if not suppress_errors:
+                kernel32.CloseHandle(handle)
+            raise OSError(error if error_before_close else ctypes.get_last_error(),
+                          "SetInformationJobObject failed")
     except Exception:
-        with contextlib.suppress(Exception):
-            kernel32.CloseHandle(job)
+        if suppress_errors:
+            with contextlib.suppress(Exception):
+                kernel32.CloseHandle(handle)
         raise
-    return job
+    return handle
 
 
 def confine_to_job_owned_by(process_handle: int, *, subject: str) -> WindowsJob | None:
@@ -235,6 +302,7 @@ def confine_to_job_owned_by(process_handle: int, *, subject: str) -> WindowsJob 
 
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         _declare_job_api(kernel32, ctypes, wintypes)
+        _declare_job_owner_api(kernel32, ctypes, wintypes)
         job = _create_kill_on_close_job(kernel32, ctypes, wintypes)
         if not kernel32.AssignProcessToJobObject(job, process_handle):
             raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject failed")
@@ -368,13 +436,6 @@ def _declare_job_api(kernel32: Any, ctypes: Any, wintypes: Any) -> None:
         wintypes.DWORD,
     ]
     kernel32.SetInformationJobObject.restype = wintypes.BOOL
-    kernel32.GetCurrentProcess.argtypes = []
-    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
-    kernel32.DuplicateHandle.argtypes = [
-        wintypes.HANDLE, wintypes.HANDLE, wintypes.HANDLE,
-        ctypes.POINTER(wintypes.HANDLE), wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
-    ]
-    kernel32.DuplicateHandle.restype = wintypes.BOOL
     kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     kernel32.OpenProcess.restype = wintypes.HANDLE
     kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
@@ -383,6 +444,18 @@ def _declare_job_api(kernel32: Any, ctypes: Any, wintypes: Any) -> None:
     kernel32.TerminateJobObject.restype = wintypes.BOOL
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel32.CloseHandle.restype = wintypes.BOOL
+
+
+def _declare_job_owner_api(kernel32: Any, ctypes: Any, wintypes: Any) -> None:
+    """Declare the ABI for transferring a job handle into its owner."""
+
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.DuplicateHandle.argtypes = [
+        wintypes.HANDLE, wintypes.HANDLE, wintypes.HANDLE,
+        ctypes.POINTER(wintypes.HANDLE), wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
+    ]
+    kernel32.DuplicateHandle.restype = wintypes.BOOL
 
 
 def resolve_process_group(pid: int) -> int | None:
@@ -465,6 +538,7 @@ __all__ = [
     "cancel_blocked_reads",
     "confine_to_windows_job",
     "confine_to_job_owned_by",
+    "create_windows_job",
     "kill_own_process_group",
     "kill_process_group",
     "popen_in_windows_job",

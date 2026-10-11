@@ -45,20 +45,17 @@ import asyncio
 import logging
 import multiprocessing
 from multiprocessing.connection import Connection
-import os
-import signal
-import sys
-import tempfile
 import threading
 import time
 import traceback
 from typing import Any, Callable, Mapping
 import uuid
 
+from server.platform import child_process
+from server.platform.child_process import close_quietly as _close_quietly
 from server.platform.job_start import ContainedStartError, start_in_windows_job
 from server.platform.process_tree import (
     adopt_process_group,
-    kill_own_process_group,
     confine_to_windows_job,
     kill_process_group,
 )
@@ -154,44 +151,25 @@ _NTSTATUS_NAMES = {
 }
 
 
-def _describe_exit(exitcode: int | None, *, windows: bool | None = None) -> str:
-    """Say in plain words how a worker process ended."""
+_EXIT_WORDING = child_process.ExitWording(
+    unknown="its exit status could not be read",
+    signal="it was stopped by signal {name} ({number})",
+    unknown_signal="it was stopped by signal {number}",
+    code="it ended with exit code {code}",
+    status="it ended with status 0x{code:08X}",
+    status_names=_NTSTATUS_NAMES,
+)
 
-    if windows is None:
-        windows = os.name == "nt"
-    if exitcode is None:
-        return "its exit status could not be read"
-    if exitcode < 0:
-        try:
-            name = signal.Signals(-exitcode).name
-        except ValueError:
-            return f"it was stopped by signal {-exitcode}"
-        return f"it was stopped by signal {name} ({-exitcode})"
-    if windows and exitcode >= 0x80000000:
-        status = f"0x{exitcode:08X}"
-        name = _NTSTATUS_NAMES.get(exitcode)
-        return f"it ended with status {status}" + (f" ({name})" if name else "")
-    return f"it ended with exit code {exitcode}"
+
+def _describe_exit(exitcode: int | None, *, windows: bool | None = None) -> str:
+    return child_process.describe_exit(exitcode, wording=_EXIT_WORDING, windows=windows)
 
 
 def _stderr_excerpt(raw: bytes, *, truncated: bool = False) -> str:
-    """The last meaningful lines of a worker's stderr, bounded for a job record."""
-
-    lines = raw.decode("utf-8", "replace").splitlines()
-    if truncated and lines:
-        # The bounded buffer may have cut its first line in half.
-        lines = lines[1:]
-    lines = [line.rstrip() for line in lines if line.strip()]
-    lines = lines[-_STDERR_MESSAGE_LINES:]
-    lines = [
-        line if len(line) <= _STDERR_MESSAGE_LINE_CHARS
-        else line[: _STDERR_MESSAGE_LINE_CHARS - 3] + "..."
-        for line in lines
-    ]
-    text = "\n".join(lines)
-    if len(text) > _STDERR_MESSAGE_CHARS:
-        text = "..." + text[-(_STDERR_MESSAGE_CHARS - 3):]
-    return text
+    return child_process.stderr_excerpt(
+        raw, truncated=truncated, lines_limit=_STDERR_MESSAGE_LINES,
+        line_chars=_STDERR_MESSAGE_LINE_CHARS, chars_limit=_STDERR_MESSAGE_CHARS,
+    )
 
 
 def _worker_death_message(exitcode: int | None, stderr_tail: str) -> str:
@@ -211,132 +189,16 @@ def _worker_death_message(exitcode: int | None, stderr_tail: str) -> str:
     return message
 
 
-class _WorkerStderr:
-    """The parent's side of the worker's redirected stderr file."""
-
+class _WorkerStderr(child_process.FileStderr):
     def __init__(self, path: str) -> None:
-        self.path = path
-        self._offset = 0
-        self._tail = bytearray()
-        self._truncated = False
-        self._lock = threading.Lock()
-
-    def drain(self) -> None:
-        """Forward what the worker wrote since the last call; keep the tail.
-
-        Never raises: this is diagnostics, and a solve must not fail over it.
-        """
-
-        with self._lock:
-            try:
-                size = os.stat(self.path).st_size
-                if size < self._offset:
-                    self._offset = 0
-                if size == self._offset:
-                    return
-                start = max(self._offset, size - _STDERR_FILE_CAP_BYTES)
-                with open(self.path, "rb") as handle:
-                    handle.seek(start)
-                    data = handle.read(size - start)
-                self._offset = start + len(data)
-                if self._offset >= _STDERR_FILE_CAP_BYTES:
-                    # Anything the worker writes between the read and this
-                    # truncation is lost; only a flood gets here.
-                    with open(self.path, "r+b") as handle:
-                        handle.truncate(0)
-                    self._offset = 0
-            except OSError:
-                return
-            self._tail += data
-            if len(self._tail) > _STDERR_TAIL_BYTES:
-                del self._tail[: len(self._tail) - _STDERR_TAIL_BYTES]
-                self._truncated = True
-            stream = sys.stderr
-            if stream is not None:
-                try:
-                    stream.write(data.decode("utf-8", "replace"))
-                    stream.flush()
-                except (OSError, ValueError):
-                    pass
-
-    def clear_tail(self) -> None:
-        """Start a new job's tail; earlier output is not this job's cause."""
-
-        self.drain()
-        with self._lock:
-            self._tail.clear()
-            self._truncated = False
-
-    def excerpt(self) -> str:
-        self.drain()
-        with self._lock:
-            return _stderr_excerpt(bytes(self._tail), truncated=self._truncated)
-
-    def discard(self) -> None:
-        """Forward the rest and remove the file. Call once the worker is gone."""
-
-        self.drain()
-        try:
-            os.remove(self.path)
-        except OSError:
-            # Still open in a process that has not quite exited (Windows).
-            # It lives in the session directory, which goes with the session.
-            pass
+        super().__init__(
+            path, tail_bytes=_STDERR_TAIL_BYTES, file_cap_bytes=_STDERR_FILE_CAP_BYTES,
+            excerpt=_stderr_excerpt,
+        )
 
 
 def _new_stderr_file() -> str | None:
-    try:
-        from server.platform.temp_session import temporary_directory_root
-
-        handle, path = tempfile.mkstemp(
-            prefix="wg2-bempp-stderr-", suffix=".log", dir=temporary_directory_root()
-        )
-    except OSError:
-        return None
-    os.close(handle)
-    return path
-
-
-def _send_stderr_to(path: str | None) -> None:
-    """In the worker: point file descriptor 2 -- native code's stderr as well
-    as Python's -- at ``path``.
-
-    A failure leaves stderr where it was: the capture is diagnostic, and a
-    worker that cannot redirect can still solve.
-    """
-
-    if not path:
-        return
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0))
-    except OSError:
-        return
-    try:
-        if sys.stderr is not None:
-            try:
-                sys.stderr.flush()
-            except (OSError, ValueError):
-                pass
-        # Inheritable, so a split sweep's own workers write here too.
-        os.dup2(fd, 2)
-        if os.name == "nt":
-            # Native code that asks the OS for its stderr handle instead of
-            # using the C runtime's descriptor 2 must find the file as well.
-            import ctypes
-            import msvcrt
-
-            ctypes.windll.kernel32.SetStdHandle(
-                ctypes.c_uint32(-12 & 0xFFFFFFFF), ctypes.c_void_p(msvcrt.get_osfhandle(2))
-            )
-        # On a Windows console, Python's stderr writes to the console directly,
-        # not through descriptor 2; under pythonw there is no stderr at all.
-        sys.stderr = os.fdopen(
-            2, "w", encoding="utf-8", errors="backslashreplace", buffering=1, closefd=False
-        )
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
+    return child_process.new_stderr_file(prefix="wg2-bempp-stderr-", suffix=".log")
 
 
 def _poll_and_recv(connection: Connection) -> tuple[Any, ...] | None:
@@ -355,14 +217,6 @@ def _poll_and_drain(
     if stderr is not None:
         stderr.drain()
     return _poll_and_recv(connection)
-
-
-def _close_quietly(connection: Connection | None) -> None:
-    if connection is not None:
-        try:
-            connection.close()
-        except OSError:
-            pass
 
 
 def _group_in(event: Any) -> tuple[bool, int | None]:
@@ -384,13 +238,7 @@ def _worker_death_error(
     ``_terminate_sync`` uses that announcement, not the reaped pid.
     """
 
-    exitcode: int | None = None
-    if process is not None:
-        try:
-            process.join(_DEATH_JOIN_SECONDS)
-            exitcode = process.exitcode
-        except (AssertionError, OSError, ValueError):
-            exitcode = None
+    exitcode = child_process.worker_exitcode(process, join_seconds=_DEATH_JOIN_SECONDS)
     excerpt = stderr.excerpt() if stderr is not None else ""
     return BemppWorkerError(_worker_death_message(exitcode, excerpt))
 
@@ -416,55 +264,9 @@ def _warm_this_process() -> dict[str, Any]:
 
 
 def _exit_when_parent_does() -> None:
-    """Leave with the app, even from inside a native block.
-
-    A launcher force-killed with TerminateProcess (or SIGKILL) runs no atexit
-    hook and no lifespan shutdown, so nothing tells this worker to stop. It
-    would find out at its next ``recv()`` -- but a worker in the middle of its
-    warmup does not reach one until the warmup ends. Measured on the reference
-    Windows VM with the server detached from the measuring process tree: the
-    child kept burning CPU for **22.8 s** after the parent was killed. An
-    earlier measurement of 0.16 s was wrong; it was the harness's own job
-    object tearing the tree down, not this process noticing anything.
-
-    Before the boot prewarm this only stranded a worker that was mid-solve, so
-    it was at least finishing work somebody asked for. Now a worker exists from
-    startup, so a force-kill of a session that never solved could leave one
-    warming for nothing.
-
-    Waiting on the parent's sentinel from a thread is not blocked by whatever
-    the main thread is doing in native code, and ``os._exit`` does not wait for
-    it either. Returns without arming when there is no parent process, which is
-    how the tests drive this loop in-process.
-
-    Leaving is no longer enough on POSIX. Now that the sweep may split, this
-    process has children of its own, and ``os._exit`` does not terminate them;
-    they survive as orphans burning every core the launcher's death was
-    supposed to free. ``kill_own_process_group`` closes that, and only for a
-    session this process actually claimed. Windows needs nothing here: the
-    parent's job object is ``KILL_ON_JOB_CLOSE``, so the tree dies with it.
-    """
-
-    parent = multiprocessing.parent_process()
-    if parent is None:
-        return
-
-    def wait_and_exit() -> None:
-        from multiprocessing.connection import wait
-
-        wait([parent.sentinel])
-        # Take the sweep's workers with us. ``os._exit`` runs no multiprocessing
-        # cleanup, so without this they outlive the launcher -- and since this
-        # process claimed its own session, the launcher's own group kill cannot
-        # reach them either. No-op unless this process really did adopt a
-        # session, so it cannot fire inside a test or on Windows, where the
-        # parent's job object already tears the tree down.
-        kill_own_process_group()
-        os._exit(_PARENT_GONE_EXIT_CODE)
-
-    threading.Thread(
-        target=wait_and_exit, name="wg2-bempp-parent-watch", daemon=True
-    ).start()
+    child_process.exit_when_parent_does(
+        exit_code=_PARENT_GONE_EXIT_CODE, thread_name="wg2-bempp-parent-watch"
+    )
 
 
 def _solve_payload(
@@ -521,7 +323,7 @@ def _start_in_parent_session(
     from server.platform.running_exclusion import hold_running_exclusion
     from server.platform.temp_session import adopt_parent_session
 
-    _send_stderr_to(stderr_path)
+    child_process.send_stderr_to(stderr_path)
     hold_running_exclusion()
     adopt_parent_session(session_root)
     target(connection)
@@ -688,12 +490,7 @@ class BemppProcessHost:
             if stderr is not None:
                 stderr.discard()
             return
-        if process.is_alive():
-            process.terminate()
-            process.join(_JOIN_SECONDS)
-        if process.is_alive() and hasattr(process, "kill"):
-            process.kill()
-            process.join(_JOIN_SECONDS)
+        child_process.terminate_worker(process, join_seconds=_JOIN_SECONDS)
         group = (
             self._announced_group(connection)
             if job is None and connection is not None
@@ -704,13 +501,9 @@ class BemppProcessHost:
         # The direct child is gone, but a parallel sweep's workers are not its
         # children by then -- they are siblings under the same job/group.
         # Reaching them is what keeps Stop honest once workers > 1.
-        if job is not None:
-            job.terminate()
-            job.close()
-        elif group is not None:
-            kill_process_group(group)
-        if not process.is_alive():
-            process.join()
+        child_process.finish_worker_tree(
+            process, job, group, kill_group=kill_process_group
+        )
         if stderr is not None:
             stderr.discard()
 
