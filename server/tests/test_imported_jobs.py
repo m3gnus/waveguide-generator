@@ -2214,7 +2214,7 @@ def test_a_job_queued_with_an_inverted_reduced_mesh_never_reaches_an_engine(
         try:
             with monkeypatch.context() as earlier_build:
                 earlier_build.setattr(
-                    "server.jobs.runtime._refuse_inverted_reduced_mesh",
+                    "server.jobs.runtime.core._refuse_inverted_reduced_mesh",
                     lambda *_args, **_kwargs: None,
                     raising=False,
                 )

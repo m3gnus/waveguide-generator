@@ -179,7 +179,7 @@ def test_retry_of_a_stored_job_is_refused_when_the_engine_cannot_do_it(
                 mesh_stats={"vertex_count": 3, "triangle_count": 1},
             )
 
-    monkeypatch.setattr("server.jobs.runtime.get_engine", lambda name: FakeEngine())
+    monkeypatch.setattr("server.jobs.runtime.core.get_engine", lambda name: FakeEngine())
     beat_ib = registry.EngineInfo(
         "beat-cpu", True, "ok", "1", mountings=("free-standing", "infinite-baffle")
     )

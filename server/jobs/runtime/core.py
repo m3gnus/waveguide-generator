@@ -19,7 +19,6 @@ from datetime import datetime
 import importlib.metadata
 import inspect
 import json
-import logging
 import math
 import os
 from pathlib import Path
@@ -29,18 +28,7 @@ import uuid
 
 from server.cadlink.ingest import get_ingestion_record
 from server.cadlink.domain_decision import (
-    MISMATCH_CODE as DOMAIN_DECISION_MISMATCH,
-    decision_mismatch_message,
-    decision_problem,
-    decision_refusal,
     decision_summary,
-    job_decision_problem,
-)
-from server.cadlink.domain_interpretation import (
-    cut_shaped_open_rim,
-    has_rigid_rim_observations,
-    observe_record_mesh,
-    open_half_refusal_message,
 )
 from server.cadlink.operations import REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED
 from server.cadlink.solver_frame import REASON as FRAME_CONFIRMATION_REQUIRED, record_frame_refusal
@@ -50,10 +38,8 @@ from server.design.schema import DesignConfig, Expr
 from server.design.textcfg import parse
 from server.engines.registry import (
     SELECTABLE_ENGINE_NAMES,
-    EngineInfo,
     EngineRegistry,
     create_engine as get_engine,
-    engine_supports_symmetry,
     full3d_engine_order,
     resolve_legacy_beat_engine,
 )
@@ -73,8 +59,6 @@ from server.jobs.cad_intent import (
 from server.jobs.design_availability import resolve_job_design
 from server.jobs.retention import MAX_RETAINED_RESULTS, RESULT_RETENTION_DAYS
 from server.jobs.models import (
-    PORT_APERTURE_NAME_GROUPS,
-    CadIdentityProvenance,
     ChannelCombineSpec,
     FieldPlaneRequest,
     ImportedGeometrySource,
@@ -91,9 +75,7 @@ from server.mesh.imported import verify_artifact_reduced_orientation
 from server.solver.imported import (
     AXIAL_CONTRACT_VERSION,
     ImportedMeshArtifactError,
-    ImportedSymmetryUnsupportedError,
     imported_domain_planes,
-    imported_symmetry_from_cut_planes,
     read_verified_import_mesh,
     verify_record_mesh_text,
 )
@@ -108,12 +90,49 @@ from server.solver.formulation import bem_formulation
 from server.solver.metal_permit import MetalPermit, process_metal_permit
 from server.solver.base import is_full3d_solver_port, run_full3d_solver_port
 
+from . import logger
+from .provisional import (
+    _extend_provisional_results,
+    _copy_provisional_result,
+    merge_provisional_results,
+)
+from .imported_refusals import (
+    ImportedSolveRefusal,
+    _imported_decision_refusal,
+    _imported_job_decision_refusal,
+    _imported_side_identity_refusal,
+    _imported_open_half_refusal,
+    _IMPORTED_GEOMETRY,
+    _imported_features_needed,
+    _engines_able_to_take,
+    _imported_request_refusal,
+    ImportedEngineVerdict,
+    imported_engine_verdict,
+    _BEAT_ACCELERATORS,
+    _BEAT_FAST_IMPORTED_EXPLICIT,
+    _imported_capabilities,
+    _imported_capable_if_picked,
+    _imported_accuracy,
+)
+from .cad_lane import (
+    _ImportedSubmission,
+    _ComposedJob,
+    _cad_authored_project,
+    _imported_record_sources,
+    _cad_identity_provenance,
+    _validate_passive_cardioid_topology,
+    _imported_symmetry_metadata,
+    _validate_imported_polar_grid,
+)
+from .events import (
+    EventBroker,
+)
+
 if TYPE_CHECKING:
     from server.jobs.cad_preparation import CadPreparationHost
     from server.updates.restart import RestartApproval
 
 
-logger = logging.getLogger(__name__)
 MAX_LOG_LINES = 200
 MAX_LOG_CHARS = 32_000
 MAX_LOG_EVENT_CHARS = 2_000
@@ -245,168 +264,6 @@ def _solver_plan_adjustments(
     if not isinstance(adjustments, list):
         return []
     return [item for item in adjustments if isinstance(item, Mapping)]
-
-
-def _sort_provisional_frequencies(result: dict[str, Any]) -> None:
-    """Keep accumulated chart rows ascending while deltas arrive out of order."""
-
-    frequencies = result.get("frequencies")
-    if isinstance(frequencies, list) and len(frequencies) > 1:
-        order = sorted(range(len(frequencies)), key=frequencies.__getitem__)
-        if order != list(range(len(frequencies))):
-            count = len(frequencies)
-            result["frequencies"] = [frequencies[index] for index in order]
-            if isinstance(result.get("frequency_status"), list):
-                result["frequency_status"] = [result["frequency_status"][index] for index in order]
-            for block_name in ("directivity", "directivity_phase"):
-                block = result.get(block_name)
-                if not isinstance(block, dict):
-                    continue
-                for plane, rows in block.items():
-                    if isinstance(rows, list) and len(rows) == count:
-                        block[plane] = [rows[index] for index in order]
-            for block_name in ("spl_on_axis", "impedance", "di"):
-                block = result.get(block_name)
-                if not isinstance(block, dict):
-                    continue
-                for key, values in block.items():
-                    if isinstance(values, list) and len(values) == count:
-                        block[key] = [values[index] for index in order]
-    channels = result.get("channels")
-    if isinstance(channels, dict):
-        for channel in channels.values():
-            if isinstance(channel, dict):
-                _sort_provisional_frequencies(channel)
-
-
-def _extend_provisional_results(
-    current: dict[str, Any], delta: Mapping[str, Any]
-) -> dict[str, Any]:
-    """Extend the runtime-owned accumulator without recopying prior rows."""
-
-    def append_list(container: dict[str, Any], source: Mapping[str, Any], key: str) -> None:
-        incoming = source.get(key)
-        if not isinstance(incoming, list):
-            return
-        existing = container.get(key)
-        if isinstance(existing, list):
-            existing.extend(copy.deepcopy(incoming))
-        else:
-            container[key] = copy.deepcopy(incoming)
-
-    if isinstance(delta.get("frequency_status"), list):
-        for key in ("frequencies", "frequency_status", "directivity", "directivity_phase",
-                    "spl_on_axis", "impedance", "di", "balloon", "beam_shape"):
-            current.pop(key, None)
-        for key in ("balloon", "beam_shape"):
-            if key in delta:
-                current[key] = copy.deepcopy(delta[key])
-    append_list(current, delta, "frequencies")
-    append_list(current, delta, "frequency_status")
-    for block_name in ("directivity", "directivity_phase"):
-        incoming_block = delta.get(block_name)
-        if not isinstance(incoming_block, Mapping):
-            continue
-        block = current.get(block_name)
-        block = block if isinstance(block, dict) else {}
-        for plane, rows in incoming_block.items():
-            if not isinstance(rows, list):
-                continue
-            existing = block.get(str(plane))
-            if isinstance(existing, list):
-                existing.extend(copy.deepcopy(rows))
-            else:
-                block[str(plane)] = copy.deepcopy(rows)
-        current[block_name] = block
-
-    for block_name in ("spl_on_axis", "impedance", "di"):
-        incoming_block = delta.get(block_name)
-        if not isinstance(incoming_block, Mapping):
-            continue
-        block = current.get(block_name)
-        block = block if isinstance(block, dict) else {}
-        for key in incoming_block:
-            append_list(block, incoming_block, str(key))
-        current[block_name] = block
-
-    incoming_channels = delta.get("channels")
-    if isinstance(incoming_channels, Mapping):
-        channels = current.get("channels")
-        channels = channels if isinstance(channels, dict) else {}
-        for channel_id, channel_delta in incoming_channels.items():
-            if not isinstance(channel_delta, Mapping):
-                continue
-            existing = channels.get(str(channel_id))
-            channel = existing if isinstance(existing, dict) else {}
-            channels[str(channel_id)] = _extend_provisional_results(
-                channel, channel_delta
-            )
-        current["channels"] = channels
-
-    if isinstance(delta.get("channel_order"), list):
-        current["channel_order"] = copy.deepcopy(delta["channel_order"])
-    if isinstance(delta.get("metadata"), Mapping):
-        prior_metadata = current.get("metadata")
-        current["metadata"] = {
-            **(
-                dict(prior_metadata)
-                if isinstance(prior_metadata, Mapping)
-                else {}
-            ),
-            **copy.deepcopy(dict(delta["metadata"])),
-        }
-    _sort_provisional_frequencies(current)
-    return current
-
-
-def _unshare_provisional_rows(result: dict[str, Any]) -> None:
-    """Give every list the accumulator appends to an object of its own."""
-
-    if isinstance(result.get("frequency_status"), list):
-        result["frequency_status"] = list(result["frequency_status"])
-    if isinstance(result.get("frequencies"), list):
-        result["frequencies"] = list(result["frequencies"])
-    for block_name in ("directivity", "directivity_phase", "spl_on_axis", "impedance", "di"):
-        block = result.get(block_name)
-        if isinstance(block, dict):
-            result[block_name] = {
-                key: list(values) if isinstance(values, list) else values
-                for key, values in block.items()
-            }
-    channels = result.get("channels")
-    if isinstance(channels, dict):
-        unshared: dict[Any, Any] = {}
-        for channel_id, channel in channels.items():
-            if isinstance(channel, dict):
-                channel = dict(channel)
-                _unshare_provisional_rows(channel)
-            unshared[channel_id] = channel
-        result["channels"] = unshared
-
-
-def _copy_provisional_result(result: Mapping[str, Any]) -> dict[str, Any]:
-    """Deep-copy a result into an accumulator whose appended lists share nothing.
-
-    ``build_solver_response`` hands one ``frequencies`` list to the top level
-    and to ``spl_on_axis``, ``impedance`` and ``di``. ``copy.deepcopy`` keeps
-    that sharing, so every later frequency was appended once per reference: a
-    streamed multi-channel Metal channel read seven frequencies against three
-    directivity rows after three frames.
-    """
-
-    snapshot = copy.deepcopy(dict(result))
-    _unshare_provisional_rows(snapshot)
-    return snapshot
-
-
-def merge_provisional_results(
-    current: Mapping[str, Any] | None, delta: Mapping[str, Any]
-) -> dict[str, Any]:
-    """Append one frequency-shaped result delta without mutating either input."""
-
-    if current is None:
-        return _copy_provisional_result(delta)
-    return _extend_provisional_results(_copy_provisional_result(current), delta)
 
 
 def _failure_message(exc: BaseException) -> str:
@@ -694,21 +551,6 @@ class SymmetryValidationError(ValueError):
     """The requested solve domain requires a mirror plane the geometry lacks."""
 
 
-class ImportedSolveRefusal(ValueError):
-    """A typed imported-geometry eligibility refusal at the runtime boundary."""
-
-    def __init__(
-        self,
-        reason_code: str,
-        message: str,
-        *,
-        details: Mapping[str, Any] | None = None,
-    ) -> None:
-        self.reason_code = reason_code
-        self.details = dict(details or {})
-        super().__init__(f"{reason_code}: {message}")
-
-
 def _refuse_inverted_reduced_mesh(record: Mapping[str, Any], msh_text: str) -> None:
     """Refuse a reduced mesh wound against the model it mirrors.
 
@@ -746,127 +588,6 @@ def _refuse_inverted_reduced_mesh(record: Mapping[str, Any], msh_text: str) -> N
                 "component_count": int(orientation["component_count"]),
             },
         )
-
-
-def _imported_decision_refusal(record: Mapping[str, Any] | None) -> tuple[str, str] | None:
-    """Refuse a record whose sealed domain decision does not describe it.
-
-    Ingest decides a snapshot's domain once (``server/cadlink/domain_decision.py``)
-    and every submission solves exactly that decision: the planes it mirrors,
-    the mesh and observations it was made on, its frame. A record from an
-    earlier build carries none and is judged as before.
-    """
-
-    if record is None:
-        return None
-    problem = decision_problem(record)
-    if problem is None:
-        return None
-    return DOMAIN_DECISION_MISMATCH, decision_mismatch_message(problem)
-
-
-def _imported_job_decision_refusal(
-    task_metadata: Mapping[str, Any] | None, record: Mapping[str, Any] | None
-) -> tuple[str, str] | None:
-    """Refuse a saved job whose decision is not its ingestion record's.
-
-    Execution, a restart and a retry solve the job's record again; the record
-    must still carry the very decision the job was submitted and recorded
-    under. A job saved before decisions existed is judged by its record alone.
-    """
-
-    if record is None:
-        return None
-    problem = job_decision_problem(task_metadata, record)
-    if problem is None:
-        return None
-    return DOMAIN_DECISION_MISMATCH, decision_mismatch_message(problem)
-
-
-SIDE_IDENTIFIED_SOURCE_CODE = "imported_side_identified_source"
-
-
-def _imported_side_identity_refusal(record: Mapping[str, Any] | None) -> tuple[str, str] | None:
-    """Refuse mirroring a model already cut in CAD that has a left/right-named source.
-
-    Ingest refuses it (``cut_recovery.side_of_source``); this re-reads the
-    stored record at every plan, submission and execution, so a record
-    prepared before that check -- or under a looser reading of the names --
-    cannot bypass it. Planes WG cut itself are not judged: its mirror test is
-    per source identity, so no source is mirrored onto another there.
-    """
-
-    if record is None:
-        return None
-    planes = set(imported_domain_planes(record))
-    symmetry = record.get("symmetry")
-    wg_cut = set((symmetry or {}).get("cut_planes") or []) if isinstance(symmetry, Mapping) else set()
-    precut = sorted(planes - wg_cut)
-    if not precut:
-        return None
-    from server.cadlink.cut_recovery import side_of_source
-
-    for source in record.get("sources") or ():
-        side = side_of_source(source) if isinstance(source, Mapping) else None
-        if side is not None:
-            return (
-                SIDE_IDENTIFIED_SOURCE_CODE,
-                f"WG will not solve this CAD return mirrored on {', '.join(precut)}: source "
-                f"{source.get('id')} is identified as the {side} one, so its mirror image would "
-                "stand in for the other side's own source. Send the whole model, or rename the "
-                "source if it is not one side's own driver, and send it again.",
-            )
-    return None
-
-
-def _imported_open_half_refusal(
-    record: Mapping[str, Any] | None, msh_text: str | None = None
-) -> tuple[str, str] | None:
-    """Reject an observed CAD cut that would otherwise become a full free-space solve.
-
-    The ingestion detector counts a rim from at least three free mesh edges on
-    one origin plane. A spanning rigid-shell rim and one-sided, uncapped geometry
-    identify a missing half independently of the source position. A record's
-    domain decision states this refusal; the saved observations are judged
-    again as well, so no decision can make the check weaker. Older records are
-    judged from their verified prepared mesh before they can run.
-    """
-
-    if record is None or imported_domain_planes(record):
-        return None
-    acoustic_domain = str(
-        record.get("acoustic_domain") or record.get("sim_type") or "free-space"
-    ).strip().lower()
-    if bool(record.get("infinite_baffle")) or acoustic_domain not in {
-        "free-space", "free_space", "freestanding",
-    }:
-        return None
-    decided = decision_refusal(record)
-    if decided is not None:
-        return decided
-    interpretation = record.get("domain_interpretation")
-    if not has_rigid_rim_observations(interpretation):
-        # Callers pass the mesh text they already verified against the record.
-        try:
-            verified = msh_text if msh_text is not None else read_verified_import_mesh(record)
-        except ImportedMeshArtifactError:
-            return (
-                "ingest_domain_observations_unavailable",
-                "This CAD return was prepared by an earlier WG and its prepared mesh "
-                "is unavailable for the open-shell check. Send the model again before solving.",
-            )
-        derived = observe_record_mesh(record, verified)
-        if derived is None:
-            return (
-                "ingest_domain_observations_unavailable",
-                "This CAD return was prepared by an earlier WG and its prepared mesh "
-                "cannot be read for the open-shell check. Send the model again before solving.",
-            )
-        interpretation = {"observations": derived.to_json()}
-    open_rim = cut_shaped_open_rim(interpretation)
-    if open_rim is None:
-        return None
-    return "imported_open_half_shell", open_half_refusal_message(*open_rim)
 
 
 @dataclass(frozen=True)
@@ -1249,312 +970,6 @@ async def resolve_submission(
 
 
 #: The geometry source an engine must declare to be offered imported geometry.
-_IMPORTED_GEOMETRY = "imported"
-
-#: The ingestion-resolved domains, as a refusal names them.
-_IMPORTED_DOMAIN_LABELS = {
-    1234: "full domain",
-    14: "x0 half (mirrored on x = 0)",
-    12: "y-only half (mirrored on y = 0)",
-    1: "x0+y0 quarter (mirrored on x = 0 and y = 0)",
-}
-
-#: Imported features a request can use, as a refusal names them.
-_IMPORTED_FEATURE_LABELS = {"passive-cardioid": "the passive-cardioid radiation campaign",
-                            "exterior-transducers": "coupled exterior transducers"}
-
-
-def _imported_features_needed(geometry: ImportedGeometrySource) -> set[str]:
-    features = {"passive-cardioid"} if geometry.passive_cardioid_enabled else set()
-    if any(channel.exterior_transducer is not None for channel in geometry.drive_channels):
-        features.add("exterior-transducers")
-    return features
-
-
-def _imported_capability_blocker(
-    info: EngineInfo, resolved_quadrants: Any, needed_features: set[str]
-) -> tuple[str, str] | None:
-    """Why a declaring engine still cannot take this return, from its declaration."""
-
-    if resolved_quadrants is not None and not engine_supports_symmetry(
-        info, int(resolved_quadrants)
-    ):
-        domain = _IMPORTED_DOMAIN_LABELS.get(
-            int(resolved_quadrants), f"quadrants {resolved_quadrants}"
-        )
-        return (
-            "imported_symmetry_unsupported_by_engine",
-            f"it cannot mirror this return's {domain}; it solves "
-            f"{', '.join(info.symmetry_domains) or 'no reduced domain'}",
-        )
-    missing = sorted(needed_features - set(info.imported_features))
-    if missing:
-        return (
-            "imported_feature_unsupported_by_engine",
-            "it does not implement "
-            + ", ".join(_IMPORTED_FEATURE_LABELS.get(item, item) for item in missing)
-            + " for imported geometry",
-        )
-    return None
-
-
-async def _imported_preflight_refusal(
-    adapter: Any,
-    record: Mapping[str, Any] | None,
-    msh_text: str | None,
-    drive_channels: Sequence[Any] | None = None,
-) -> str | None:
-    """An adapter's own verdict on the record and mesh, when it has one.
-
-    An adapter is told the drive channels only when one is axial: whether an
-    engine can take an axial source depends on its resolved axis.
-    """
-
-    preflight = getattr(adapter, "imported_preflight", None)
-    if not callable(preflight) or record is None or msh_text is None:
-        return None
-    if drive_channels and any(
-        getattr(channel, "motion", "normal") == "axial" for channel in drive_channels
-    ):
-        refusal = await asyncio.to_thread(
-            preflight, record, msh_text, drive_channels=list(drive_channels)
-        )
-    else:
-        refusal = await asyncio.to_thread(preflight, record, msh_text)
-    return refusal if isinstance(refusal, str) and refusal else None
-
-
-async def _engines_able_to_take(
-    declared: Mapping[str, EngineInfo],
-    order: tuple[str, ...],
-    *,
-    exclude: str,
-    resolved_quadrants: Any,
-    needed_features: set[str],
-    engine_registry: EngineRegistry,
-    imported_record: Mapping[str, Any] | None,
-    imported_msh_text: str | None,
-    drive_channels: Sequence[Any] | None = None,
-) -> list[str]:
-    """The engines, other than ``exclude``, that would take this return here.
-
-    Each engine's own ``imported_engine_verdict`` -- the one the selector
-    shows, its adapter's preflight included -- so a refusal never names an
-    engine that would refuse the record in turn. It runs only on the refusal
-    path, and solves nothing.
-    """
-
-    able: list[str] = []
-    for name in order:
-        info = declared.get(name)
-        if name == exclude or info is None:
-            continue
-        verdict = await imported_engine_verdict(
-            info,
-            resolved_quadrants=resolved_quadrants,
-            needed_features=needed_features,
-            engine_registry=engine_registry,
-            imported_record=imported_record,
-            imported_msh_text=imported_msh_text,
-            drive_channels=drive_channels,
-        )
-        if verdict.solves:
-            able.append(name)
-    return able
-
-
-def _imported_axial_refusal(
-    request: SolveRequest, record: Mapping[str, Any] | None, msh_text: str | None
-) -> tuple[str, str] | None:
-    """An axial source no engine can drive: no outward axis, or off the mirror."""
-
-    geometry = request.geometry
-    if (
-        record is None
-        or msh_text is None
-        or not isinstance(geometry, ImportedGeometrySource)
-        or not any(channel.motion == "axial" for channel in geometry.drive_channels)
-    ):
-        return None
-    if any(channel.exterior_transducer is not None for channel in geometry.drive_channels):
-        return None  # Explicit global axes are validated by the opt-in adapter.
-    from server.solver.imported import prepare_axial_drive
-
-    try:
-        prepare_axial_drive(record, msh_text, geometry.drive_channels)
-    except ValueError as exc:
-        return "imported_axial_source_unresolvable", str(exc)
-    return None
-
-
-def _imported_request_refusal(
-    request: SolveRequest, record: Mapping[str, Any] | None = None,
-    msh_text: str | None = None,
-) -> tuple[str, str] | None:
-    """A refusal no engine can lift: the request asks what imported geometry never does."""
-
-    mismatch = _imported_decision_refusal(record)
-    if mismatch is not None:
-        return mismatch
-    sided = _imported_side_identity_refusal(record)
-    if sided is not None:
-        return sided
-    open_half = _imported_open_half_refusal(record, msh_text)
-    if open_half is not None:
-        return open_half
-    axial = _imported_axial_refusal(request, record, msh_text)
-    if axial is not None:
-        return axial
-    if request.options.ground_plane.enabled:
-        return (
-            "imported_ground_plane_unsupported",
-            "A rigid ground plane is not available for imported CAD geometry on "
-            "any engine: the returned mesh is solved as it arrived, and no engine "
-            "here stands it above a floor. Turn the ground plane off to solve "
-            "this return.",
-        )
-    return None
-
-
-@dataclass(frozen=True)
-class ImportedEngineVerdict:
-    """Whether one engine can solve one imported request on this host, and why not.
-
-    ``stage`` names the first check that refused: ``declaration`` (the engine
-    does not declare imported geometry), ``capability`` (its declared symmetry
-    domains or imported features exclude this return), ``availability`` (it is
-    not available here), ``adapter`` (the snapshot said available but the
-    adapter would not construct), ``preflight`` (its adapter refused this
-    record) or ``request`` (the request asks for something no engine does).
-    """
-
-    name: str
-    label: str
-    solves: bool
-    stage: str | None = None
-    code: str | None = None
-    reason: str | None = None
-
-
-async def imported_engine_verdict(
-    info: EngineInfo,
-    *,
-    resolved_quadrants: Any,
-    needed_features: set[str],
-    engine_registry: EngineRegistry,
-    imported_record: Mapping[str, Any] | None,
-    imported_msh_text: str | None,
-    drive_channels: Sequence[Any] | None = None,
-) -> ImportedEngineVerdict:
-    """One engine's verdict on one imported request: the one capability function.
-
-    ``resolve_imported_submission`` walks it to choose an engine and the
-    imported plan asks it of every engine for the solver selector, so the list
-    the user picks from and the submission that follows cannot disagree.
-    """
-
-    label = info.display_label()
-    if _IMPORTED_GEOMETRY not in info.geometry_sources:
-        return ImportedEngineVerdict(
-            info.name,
-            label,
-            False,
-            "declaration",
-            "imported_engine_unsupported",
-            "does not solve imported CAD geometry",
-        )
-    blocker = _imported_capability_blocker(info, resolved_quadrants, needed_features)
-    if blocker is not None:
-        code, reason = blocker
-        return ImportedEngineVerdict(info.name, label, False, "capability", code, reason)
-    if not info.available:
-        return ImportedEngineVerdict(
-            info.name,
-            label,
-            False,
-            "availability",
-            "engine_unavailable",
-            f"unavailable ({info.reason})",
-        )
-    adapter = await engine_registry.get_engine(info.name)
-    if adapter is None:
-        unavailable_reason = await engine_registry.unavailable_reason(info.name)
-        return ImportedEngineVerdict(
-            info.name,
-            label,
-            False,
-            "adapter",
-            "engine_unavailable",
-            unavailable_reason or "No capability reason was reported.",
-        )
-    refusal = await _imported_preflight_refusal(
-        adapter, imported_record, imported_msh_text, drive_channels
-    )
-    if refusal is not None:
-        return ImportedEngineVerdict(
-            info.name,
-            label,
-            False,
-            "preflight",
-            "imported_return_unsupported_by_engine",
-            refusal,
-        )
-    return ImportedEngineVerdict(info.name, label, True)
-
-
-_BEAT_ACCELERATORS = frozenset({"beat-cuda", "beat-rocm", "beat-metal"})
-
-#: Accelerators whose imported path an explicit pick may use in Fast as well as
-#: Accurate. beat-metal is the one qualified on Apple Silicon; CUDA and ROCm
-#: stay Accurate-only until they have been run on that hardware.
-_BEAT_FAST_IMPORTED_EXPLICIT = frozenset({"beat-metal"})
-
-
-def _imported_capabilities(
-    capabilities: tuple[EngineInfo, ...] | list[EngineInfo],
-    accuracy: str,
-    engine: str = "auto",
-) -> dict[str, EngineInfo]:
-    """Expose imported BEAT accelerators for the request that may use them.
-
-    Accurate exposes every accelerator. An explicitly named ``beat-metal`` is
-    exposed in Fast too: Fast and Accurate run the identical BEAT computation.
-    AUTO and the legacy ``beat`` family never gain a Fast accelerator, so their
-    resolution is unchanged.
-    """
-
-    def exposed(info: EngineInfo) -> bool:
-        if info.name not in _BEAT_ACCELERATORS or "imported" in info.geometry_sources:
-            return False
-        return accuracy == "accurate" or (
-            info.name == engine and engine in _BEAT_FAST_IMPORTED_EXPLICIT
-        )
-
-    return {
-        info.name: replace(info, geometry_sources=(*info.geometry_sources, "imported"))
-        if exposed(info) else info
-        for info in capabilities
-    }
-
-
-def _imported_capable_if_picked(
-    capabilities: tuple[EngineInfo, ...] | list[EngineInfo], accuracy: str, name: str
-) -> bool:
-    """Whether ``name`` would declare imported geometry if it were the pick."""
-
-    info = _imported_capabilities(capabilities, accuracy, name).get(name)
-    return info is not None and _IMPORTED_GEOMETRY in info.geometry_sources
-
-
-def _imported_accuracy(request: SolveRequest) -> str:
-    """The choice relevant to imported capability declarations, after explicit precedence."""
-
-    engine = request.options.engine
-    if engine != "auto" and engine != "beat" and not engine.startswith("beat-"):
-        return "fast"
-    return request.options.accuracy
-
-
 async def resolve_imported_submission(
     request: SolveRequest,
     engine_registry: EngineRegistry,
@@ -1896,34 +1311,6 @@ async def plan_imported_submission(
     }
 
 
-@dataclass(frozen=True)
-class _ImportedSubmission:
-    record: dict[str, Any]
-    msh_text: str
-    mesh_stats: dict[str, Any]
-    symmetry_metadata: dict[str, Any]
-    anchor_design_id: str | None
-    anchor_lineage_id: str | None
-    archive_stem: str | None
-    document: dict[str, Any]
-    identity: dict[str, Any] | None
-    anchor_snapshot: dict[str, Any] | None
-
-
-@dataclass(frozen=True)
-class _ComposedJob:
-    """A request that passed every submission check, with what its job stores of it."""
-
-    #: The request after engine resolution: what the job's ``config_json`` holds.
-    request: SolveRequest
-    config_summary: dict[str, Any]
-    script_snapshot: dict[str, Any] | None
-    task_metadata: dict[str, Any]
-    mesh_stats: dict[str, Any] | None
-    mesh_artifact: str | None
-    imported: _ImportedSubmission | None
-
-
 class _CadLanePort:
     """The runtime as the CAD preparation lane sees it (``cad_preparation.CadJobPort``)."""
 
@@ -1967,359 +1354,6 @@ class _CadLanePort:
         self, job_id: str, request: SolveRequest, cad_provenance: Mapping[str, Any]
     ) -> str:
         return await self._runtime._bind_cad_job(job_id, request, cad_provenance)
-
-
-async def _cad_authored_project(
-    store: Any, record: Mapping[str, Any]
-) -> tuple[str | None, str | None]:
-    """The project of a return with no design to anchor to.
-
-    Geometry authored in CAD has no WG design behind it, so its project is the
-    Fusion document, claimed during ingestion. Without this the run carried no
-    lineage at all and dropped out of the project history it belongs to, and
-    its archive folder was derived a second time from the run's own label.
-    """
-
-    project = record.get("project")
-    project = project if isinstance(project, Mapping) else {}
-    lineage_id = str(project.get("lineage_id") or "") or None
-    archive_stem = str(project.get("archive_stem") or "") or None
-    if lineage_id is not None:
-        return lineage_id, archive_stem
-    # Returns ingested before projects existed carry no project block. The
-    # claim is keyed on the document, so the document can still find it.
-    native_id = str((record.get("document") or {}).get("native_id") or "")
-    if not native_id:
-        return None, None
-    names = await asyncio.to_thread(store.get_lineage_for_cad_document, native_id)
-    if not names:
-        return None, None
-    return (
-        str(names.get("lineage_id") or "") or None,
-        str(names.get("archive_stem") or "")
-        or str(names.get("document_name") or "")
-        or None,
-    )
-
-
-def _imported_record_sources(record: Mapping[str, Any]) -> list[dict[str, Any]]:
-    sources = record.get("sources")
-    if not isinstance(sources, list) or not all(
-        isinstance(source, Mapping) for source in sources
-    ):
-        raise ImportedSolveRefusal(
-            "ingest_record_incomplete",
-            "the ingestion record has no authoritative source inventory; re-ingest the CAD return",
-        )
-    return [dict(source) for source in sources]
-
-
-def _cad_identity_provenance(
-    record: Mapping[str, Any], geometry: ImportedGeometrySource
-) -> dict[str, Any] | None:
-    """Resolve submitted drive addresses against the immutable CAD graph.
-
-    Old ingestion rows did not retain this graph and remain solvable, but a row
-    that claims to carry identity must be internally complete.  In particular,
-    WG never substitutes a design ID, body fingerprint, name, or source order
-    for the CAD-authored placement ID.
-    """
-
-    raw_identity = record.get("identity")
-    if raw_identity is None:
-        return None
-    if not isinstance(raw_identity, Mapping):
-        raise ImportedSolveRefusal(
-            "cad_identity_invalid",
-            "the ingestion record's CAD identity graph is unreadable; re-ingest the CAD return",
-        )
-    version = raw_identity.get("schema_version")
-    if version not in {None, 1}:
-        raise ImportedSolveRefusal(
-            "cad_identity_unsupported",
-            f"the ingestion record uses unsupported CAD identity schema {version!r}; upgrade WG",
-        )
-    raw_instances = raw_identity.get("instances")
-    if not isinstance(raw_instances, list) or not all(
-        isinstance(instance, Mapping) for instance in raw_instances
-    ):
-        raise ImportedSolveRefusal(
-            "cad_identity_invalid",
-            "the ingestion record has no authoritative CAD instance inventory; re-ingest the CAD return",
-        )
-
-    instance_ids = [str(instance.get("instance_id") or "") for instance in raw_instances]
-    if any(not instance_id for instance_id in instance_ids) or len(set(instance_ids)) != len(instance_ids):
-        raise ImportedSolveRefusal(
-            "cad_identity_invalid",
-            "the ingestion record's CAD instance IDs are empty or duplicated; re-ingest the CAD return",
-        )
-    known_instances = set(instance_ids)
-    for address in ("selected_instance_id", "solver_anchor_instance_id"):
-        value = raw_identity.get(address)
-        if value is not None and str(value) not in known_instances:
-            raise ImportedSolveRefusal(
-                "cad_identity_invalid",
-                f"the ingestion record's {address} does not address one retained instance; re-ingest the CAD return",
-            )
-
-    sources = _imported_record_sources(record)
-    source_by_id = {str(source.get("id") or ""): source for source in sources}
-    inventory_owner: dict[str, str] = {}
-    for instance in raw_instances:
-        instance_id = str(instance["instance_id"])
-        inventory_sources = instance.get("source_ids")
-        if not isinstance(inventory_sources, list):
-            raise ImportedSolveRefusal(
-                "cad_identity_invalid",
-                "the ingestion record's CAD source inventory is unreadable; re-ingest the CAD return",
-            )
-        for raw_source_id in inventory_sources:
-            source_id = str(raw_source_id)
-            if source_id not in source_by_id or source_id in inventory_owner:
-                raise ImportedSolveRefusal(
-                    "cad_identity_invalid",
-                    "the ingestion record's CAD sources are unknown or assigned to multiple instances; re-ingest the CAD return",
-                )
-            inventory_owner[source_id] = instance_id
-
-    drive_channels: list[dict[str, Any]] = []
-    for channel in geometry.drive_channels:
-        owners: set[str] = set()
-        for source_id in channel.source_ids:
-            source = source_by_id[source_id]
-            declared_owner = source.get("instance_id")
-            declared_owner = str(declared_owner) if declared_owner is not None else None
-            inventory_instance = inventory_owner.get(source_id)
-            if declared_owner is not None and declared_owner not in known_instances:
-                raise ImportedSolveRefusal(
-                    "cad_identity_invalid",
-                    f"source {source_id!r} names unknown CAD instance {declared_owner!r}; re-ingest the CAD return",
-                )
-            if declared_owner != inventory_instance and (
-                declared_owner is not None or inventory_instance is not None
-            ):
-                raise ImportedSolveRefusal(
-                    "cad_identity_invalid",
-                    f"source {source_id!r} contradicts the retained CAD instance inventory; re-ingest the CAD return",
-                )
-            owner = inventory_instance
-            if owner is not None:
-                owners.add(owner)
-        drive_channels.append(
-            {
-                "drive_channel_id": channel.id,
-                "source_ids": list(channel.source_ids),
-                "instance_ids": sorted(owners),
-            }
-        )
-
-    payload = {
-        "schema_version": 1,
-        "ingest_id": geometry.ingest_id,
-        "selected_instance_id": raw_identity.get("selected_instance_id"),
-        "solver_anchor_instance_id": raw_identity.get("solver_anchor_instance_id"),
-        "instances": [dict(instance) for instance in raw_instances],
-        "drive_channels": drive_channels,
-    }
-    try:
-        return CadIdentityProvenance.model_validate(payload).model_dump(mode="json")
-    except Exception as exc:
-        raise ImportedSolveRefusal(
-            "cad_identity_invalid",
-            "the ingestion record's CAD identity graph is incomplete; re-ingest the CAD return",
-            details={"validation_error": str(exc)},
-        ) from exc
-
-
-def _validate_passive_cardioid_topology(
-    geometry: ImportedGeometrySource,
-    record: Mapping[str, Any],
-) -> None:
-    """Reject a cardioid topology that the late solver backstop cannot couple."""
-
-    if not geometry.passive_cardioid_enabled:
-        return
-    source_tags = record.get("source_tags")
-    if not isinstance(source_tags, Mapping):
-        raise ImportedSolveRefusal(
-            "passive_cardioid_topology",
-            "passive cardioid requires an ingestion source tag map",
-        )
-    by_upper = {
-        str(source_id).strip().upper(): str(source_id)
-        for source_id in source_tags
-    }
-    port_source_ids: list[str] = []
-    for group in PORT_APERTURE_NAME_GROUPS:
-        port_source_ids = [by_upper[name] for name in group if name in by_upper]
-        if port_source_ids:
-            break
-    if not port_source_ids:
-        raise ImportedSolveRefusal(
-            "passive_cardioid_topology",
-            "passive cardioid requires PASSIVE_CARDIOID or PORT_EXIT aperture sources",
-        )
-
-    mf_source_ids = [
-        str(source.get("id") or "")
-        for source in record.get("sources") or []
-        if isinstance(source, Mapping)
-        and str(source.get("role") or "").strip().upper() == "MF"
-        and str(source.get("id") or "") in source_tags
-    ]
-    if not mf_source_ids and "MF" in by_upper:
-        mf_source_ids = [by_upper["MF"]]
-    if len(mf_source_ids) != 1:
-        raise ImportedSolveRefusal(
-            "passive_cardioid_topology",
-            "passive cardioid requires exactly one MF diaphragm source",
-        )
-    if not geometry.passive_cardioid_coupled:
-        return
-
-    mf_source_id = mf_source_ids[0]
-    mf_channels = [
-        channel
-        for channel in geometry.drive_channels
-        if mf_source_id in channel.source_ids
-    ]
-    if len(mf_channels) != 1 or mf_channels[0].driver is None:
-        raise ImportedSolveRefusal(
-            "passive_cardioid_topology",
-            "coupled passive cardioid requires the MF diaphragm's drive channel "
-            "to carry one driver model",
-        )
-    port_channels = [
-        channel
-        for channel in geometry.drive_channels
-        if set(port_source_ids).issubset(set(channel.source_ids))
-    ]
-    if len(port_channels) != 1:
-        raise ImportedSolveRefusal(
-            "passive_cardioid_topology",
-            "coupled passive cardioid requires all PORT_EXIT patches in one drive channel",
-        )
-
-
-def _imported_symmetry_metadata(
-    record: Mapping[str, Any], requested: str, ground_axis: str | None = None
-) -> dict[str, Any]:
-    """Resolve the domain the ingestion artifact actually describes.
-
-    The planes read here are the **domain** planes -- what the solver must
-    mirror -- not the subset WG's own cutter removed during preparation. A
-    return the CAD author cut before exporting has nothing left for the cutter
-    to take, so its ``cut_planes`` are empty while its domain is a half or a
-    quarter; reading the cut list would resolve it to ``full`` and solve an open
-    shell. Older records carry only ``cut_planes``, where the two are the same
-    list.
-    """
-
-    cut_planes = list(imported_domain_planes(record))
-    try:
-        resolved = imported_symmetry_from_cut_planes(cut_planes)
-    except ImportedSymmetryUnsupportedError as exc:
-        raise ImportedSolveRefusal(
-            "imported_symmetry_unsupported",
-            str(exc),
-            details={"cut_planes": cut_planes},
-        ) from exc
-    if requested not in {"auto", resolved.mode}:
-        raise ImportedSolveRefusal(
-            "imported_symmetry_mismatch",
-            f"requested symmetry {requested!r} does not match the ingestion artifact's "
-            f"actual cut planes {cut_planes} ({resolved.mode})",
-            details={"requested": requested, "resolved": resolved.mode, "cut_planes": cut_planes},
-        )
-    # A reduced mesh is cut *on* its mirror plane and touches it; a model above
-    # a rigid ground plane must not reach it. The two cannot name the same
-    # plane. The design path subtracts the blocked plane before meshing
-    # (``restrict_for_ground_plane``), but an imported mesh already exists and
-    # cannot be re-cut, so the conflict is refused with the plane named instead
-    # of being handed to an engine that would mirror into the floor.
-    if ground_axis is not None and resolved.native_plane:
-        from server.solver.ground_plane import GroundPlane
-
-        blocked = GroundPlane(axis=ground_axis, height_m=0.0).blocked_symmetry_plane
-        mirrored = set(str(resolved.native_plane).split("+"))
-        if blocked in mirrored:
-            raise ImportedSolveRefusal(
-                "imported_symmetry_ground_plane_conflict",
-                f"this CAD return is a {resolved.mode} domain mirrored on {blocked}, "
-                f"and a {ground_axis}-axis ground plane bounds that same plane. A "
-                "reduced domain touches its mirror plane and a grounded model must "
-                "stand clear of the floor, so the two cannot be combined. Turn the "
-                "ground plane off, or return the model whole from CAD.",
-                details={
-                    "resolved": resolved.mode,
-                    "native_symmetry_plane": resolved.native_plane,
-                    "ground_axis": ground_axis,
-                    "blocked_symmetry_plane": blocked,
-                    "cut_planes": cut_planes,
-                },
-            )
-    return {
-        "requested": requested,
-        "resolved": resolved.mode,
-        "resolved_quadrants": resolved.quadrants,
-        "native_symmetry_plane": resolved.native_plane,
-        "cut_planes": cut_planes,
-        "source": "cad-ingestion-domain-planes",
-    }
-
-
-def _validate_imported_polar_grid(
-    geometry: ImportedGeometrySource,
-    request: SolveRequest,
-    record: Mapping[str, Any],
-) -> None:
-    del geometry
-    derivation = record.get("polar_grid_derivation")
-    derivation = derivation if isinstance(derivation, Mapping) else {}
-    axes = derivation.get("axes")
-    if not isinstance(axes, Mapping) or set(axes) != {
-        "horizontal",
-        "vertical",
-        "diagonal",
-    }:
-        raise ImportedSolveRefusal(
-            "ingest_record_incomplete",
-            "ingestion polar derivation must contain horizontal, vertical, and diagonal axes; re-ingest the CAD return",
-        )
-    requested_start, requested_end, _count = request.options.polar_config.angle_range
-    enabled_axes = set(request.options.polar_config.enabled_axes)
-    for axis_name, raw_axis in axes.items():
-        if not isinstance(raw_axis, Mapping):
-            raise ImportedSolveRefusal(
-                "ingest_record_incomplete",
-                f"ingestion polar derivation axis {axis_name!r} is invalid; re-ingest the CAD return",
-            )
-        minimum = float(raw_axis.get("minimum_deg", -180.0))
-        maximum = float(raw_axis.get("maximum_deg", 180.0))
-        pinned = minimum <= -180.0 and maximum >= 180.0
-        if pinned and axis_name not in enabled_axes:
-            raise ImportedSolveRefusal(
-                "polar_grid_narrowing",
-                f"polar request disables pinned axis {axis_name!r}; ingestion requires it enabled over [-180, 180] degrees",
-                details={
-                    "axis": str(axis_name),
-                    "required": [minimum, maximum],
-                    "enabled_axes": sorted(enabled_axes),
-                },
-            )
-        if requested_start > minimum or requested_end < maximum:
-            raise ImportedSolveRefusal(
-                "polar_grid_narrowing",
-                f"polar request narrows pinned axis {axis_name!r}: ingestion requires "
-                f"[{minimum:g}, {maximum:g}] degrees but request gives "
-                f"[{requested_start:g}, {requested_end:g}]",
-                details={
-                    "axis": str(axis_name),
-                    "required": [minimum, maximum],
-                    "requested": [requested_start, requested_end],
-                },
-            )
 
 
 class _CancelledAtCheckpoint(RuntimeError):
@@ -2393,36 +1427,6 @@ class _JobMutationTurnstile:
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     users: int = 0
-
-
-class EventBroker:
-    """Fan durable lifecycle events and ephemeral result deltas to subscribers."""
-
-    def __init__(self, *, queue_size: int = 256) -> None:
-        self.queue_size = max(1, queue_size)
-        self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
-
-    def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=self.queue_size)
-        self._subscribers.add(queue)
-        return queue
-
-    def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
-        self._subscribers.discard(queue)
-
-    def publish(self, event: Mapping[str, Any]) -> None:
-        message = dict(event)
-        for queue in tuple(self._subscribers):
-            try:
-                queue.put_nowait(message)
-            except asyncio.QueueFull:
-                # A hole forces the client reconciliation rule. Drop the oldest
-                # buffered event so the subscriber can observe the cursor gap.
-                try:
-                    queue.get_nowait()
-                    queue.put_nowait(message)
-                except (asyncio.QueueEmpty, asyncio.QueueFull):
-                    pass
 
 
 class JobRuntime:

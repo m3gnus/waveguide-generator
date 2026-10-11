@@ -920,7 +920,7 @@ def test_auto_skips_a_backend_that_cannot_solve_the_resolved_symmetry(
 
     if symmetry == "auto":
         monkeypatch.setattr(
-            "server.jobs.runtime.resolve_symmetry",
+            "server.jobs.runtime.core.resolve_symmetry",
             lambda _design: SymmetryResolution(
                 quadrants=12,
                 xz=True,
@@ -1106,7 +1106,7 @@ def test_real_runtime_seam_persists_artifact_stats_results_and_stages(
                 mesh_stats={"vertex_count": 3, "triangle_count": 1},
             )
 
-    monkeypatch.setattr("server.jobs.runtime.get_engine", lambda name: FakeMetal())
+    monkeypatch.setattr("server.jobs.runtime.core.get_engine", lambda name: FakeMetal())
     request = SolveRequest.model_validate(
         {
             "design": {"formula": "OSSE", "simulation": {"f1": 500, "f2": 501, "num_frequencies": 1}},
@@ -1294,7 +1294,7 @@ def test_real_runtime_persists_mesh_before_a_native_solve_failure(
             await artifact_cb("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", {"triangle_count": 7})
             raise RuntimeError("native solve failed")
 
-    monkeypatch.setattr("server.jobs.runtime.get_engine", lambda name: FailingMetal())
+    monkeypatch.setattr("server.jobs.runtime.core.get_engine", lambda name: FailingMetal())
     request = SolveRequest.model_validate(
         {
             "design": {"formula": "OSSE", "simulation": {"f1": 500, "f2": 501}},

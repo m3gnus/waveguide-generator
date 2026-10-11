@@ -61,7 +61,7 @@ class _FakeEngine:
 
 
 def _runtime(tmp_path: Path, monkeypatch) -> tuple[JobRuntime, JobStore]:
-    monkeypatch.setattr("server.jobs.runtime.get_engine", lambda name: _FakeEngine())
+    monkeypatch.setattr("server.jobs.runtime.core.get_engine", lambda name: _FakeEngine())
     metal = registry.EngineInfo(
         "metal", True, "ok", "1", mountings=("free-standing", "infinite-baffle")
     )

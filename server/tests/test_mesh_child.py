@@ -807,7 +807,7 @@ def test_app_shutdown_does_not_respawn_the_mesh_child(
     """Use the app's handlers and real runtime: cooperative cancel precedes task cancel."""
     import server.app as app_module
     import server.mesh.child as child_module
-    import server.jobs.runtime as runtime_module
+    import server.jobs.runtime.core as runtime_module
     from server.engines.registry import EngineInfo, EngineRegistry
     from server.jobs.models import SolveRequest
     from server.solver.base import EngineRunResult
