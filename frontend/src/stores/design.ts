@@ -75,7 +75,7 @@ export interface DesignDocument {
   length_mode: 'profile' | 'total' | null;
   coverage_mode: string | null;
 
-  cross_section: { exponent: number; aspect_ratio: number };
+  cross_section?: { exponent: number; aspect_ratio: number };
 
   // Family scalar union from OSSEConfig, ROSSEConfig and ICWConfig.
   R?: number;
@@ -262,6 +262,15 @@ export const seedDesign: DesignDocument = {
   ...structuredClone(common),
 };
 
+/** Native formulas own their circular outline; accept only inert legacy defaults. */
+export function normalizeNativeCrossSection(design: DesignDocument): void {
+  if (!isNativeFamily(design.formula)) return;
+  if (design.cross_section && (design.cross_section.exponent !== 2 || design.cross_section.aspect_ratio !== 1)) {
+    throw new Error(`${design.formula} requires cross_section exponent=2 and aspect_ratio=1.`);
+  }
+  delete design.cross_section;
+}
+
 export function designForFamily(family: DesignFamily): DesignDocument {
   const shared = structuredClone(common);
   if (isNativeFamily(family)) {
@@ -270,6 +279,7 @@ export function designForFamily(family: DesignFamily): DesignDocument {
       source: { ...shared.source, shape: 2 },
       mesh: { ...shared.mesh, wall_thickness: family === 'OSSE-ROUNDOVER' ? 5 : 0 },
     };
+    normalizeNativeCrossSection(native);
     if (family === 'SOURCE-DISK') {
       native.source_body = { radius_mm: 18, outer_radius_mm: 22, depth_mm: 8 };
       native.mesh.size_mm = 3;
@@ -926,7 +936,9 @@ export function recordCommittedAthPolars(polarConfig: unknown): void {
  *   FreeformConfig forbid it) and is dropped for every other family.
  */
 export function serializeDesign(design: DesignDocument): Record<string, unknown> {
-  const { quadrants, enclosure, mesh, _expressions, _absent, ...root } = structuredClone(design);
+  const normalized = structuredClone(design);
+  normalizeNativeCrossSection(normalized);
+  const { quadrants, enclosure, mesh, _expressions, _absent, ...root } = normalized;
   const wireEnclosure = {
     depth: enclosure.depth,
     ...(enclosure.depth_margin_mm !== undefined ? { depth_margin_mm: enclosure.depth_margin_mm } : {}),

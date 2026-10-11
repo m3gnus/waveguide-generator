@@ -24,6 +24,25 @@ describe('native formula editing and persistence', () => {
       .every((field) => field.id.startsWith('simulation.') || field.kind === 'indicator')).toBe(true);
     expect(wire).not.toHaveProperty('guiding_curve');
     expect(wire).not.toHaveProperty('text_import_version');
+    expect(design).not.toHaveProperty('cross_section');
+    expect(wire).not.toHaveProperty('cross_section');
+  });
+
+  it.each(NATIVE_FAMILIES)('omits inert legacy cross-section defaults for %s', (family) => {
+    const design = designForFamily(family);
+    design.cross_section = { exponent: 2, aspect_ratio: 1 };
+    expect(serializeDesign(design)).not.toHaveProperty('cross_section');
+    const restored = hydrateDesignDocument({ ...serializeDesign(design), cross_section: design.cross_section });
+    expect(restored).not.toHaveProperty('cross_section');
+    expect(serializeDesign(restored)).toEqual(serializeDesign(designForFamily(family)));
+  });
+
+  it.each(NATIVE_FAMILIES)('refuses unsupported cross-section intent for %s', (family) => {
+    for (const cross_section of [{ exponent: 4, aspect_ratio: 1 }, { exponent: 2, aspect_ratio: 1.5 }]) {
+      const design = { ...designForFamily(family), cross_section };
+      expect(() => serializeDesign(design)).toThrow('requires cross_section exponent=2 and aspect_ratio=1');
+      expect(() => hydrateDesignDocument({ formula: family, cross_section })).toThrow('requires cross_section exponent=2 and aspect_ratio=1');
+    }
   });
 
   it.each(NATIVE_FAMILIES)('restores %s from autosave', (family) => {
@@ -57,6 +76,7 @@ describe('native formula editing and persistence', () => {
     legacy.morph.target_shape = 2;
     legacy.enclosure.depth = 250;
     legacy.throat_ext_length = 10;
+    legacy.cross_section = { exponent: 4, aspect_ratio: 1.5 };
     legacy.text_import_version = 'ath-2026-08c-v1';
     for (const family of NATIVE_FAMILIES) {
       const native = mergeDesignForFamily(legacy, family);

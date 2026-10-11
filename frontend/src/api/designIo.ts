@@ -2,6 +2,7 @@ import {
   NATIVE_FAMILIES,
   designForFamily,
   decodeQuadrants,
+  normalizeNativeCrossSection,
   serializeDesign,
   type CrossSectionStation,
   type DesignDocument,
@@ -242,6 +243,7 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
     throw new Error(`Unsupported design formula: ${String(unwrapped.formula)}`);
   }
   const document = merge(designForFamily(formula), unwrapped);
+  normalizeNativeCrossSection(document);
   if (formula === 'OSSE' || formula === 'R-OSSE') {
     for (const key of ['s1', 's2']) if (!(key in wire)) absent.push(key);
   }

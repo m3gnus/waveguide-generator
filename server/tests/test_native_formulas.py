@@ -243,6 +243,24 @@ def test_frontend_family_defaults_validate_and_round_trip(formula: str) -> None:
     assert resolve_geometry(design_to_mesher_config(design)) is not None
 
 
+@pytest.mark.parametrize("formula", FAMILIES)
+@pytest.mark.parametrize("section", [{"exponent": 4}, {"aspect_ratio": 1.5}])
+def test_native_formulas_refuse_nondefault_cross_sections(formula: str, section: dict) -> None:
+    with pytest.raises(ValidationError, match=f"{formula} does not support cross_section"):
+        DesignConfig.model_validate({**design_payload(formula), "cross_section": section})
+
+
+@pytest.mark.parametrize("formula", FAMILIES)
+def test_native_circular_defaults_do_not_change_wire_or_mesher_config(formula: str) -> None:
+    payload = design_payload(formula)
+    design = DesignConfig.model_validate(payload)
+    explicit = DesignConfig.model_validate({**payload, "cross_section": {"exponent": 2, "aspect_ratio": 1}})
+    assert "cross_section" not in explicit.model_dump(mode="json")
+    assert design_to_mesher_config(explicit) == design_to_mesher_config(design)
+    assert "cross_section" not in design_to_mesher_config(explicit)
+    assert parse(serialize(explicit)).design == design
+
+
 @pytest.mark.parametrize("formula", ["OSSE", "R-OSSE", "ICW", "FREEFORM"])
 @pytest.mark.parametrize("field", ["size_mm", "mouth_roundover_radius_mm"])
 def test_legacy_designs_refuse_native_mesh_controls(formula: str, field: str) -> None:
