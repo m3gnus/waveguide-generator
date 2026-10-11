@@ -263,6 +263,8 @@ def test_v2_defaults_compose_without_changing_native_or_saved_v1(stamp, wall, or
         if stamp in (None, 'ath-2026-09a-v2'):
             assert float(config['profile']['L']) == 120
             assert config['scale'] == 1.5
+        else:
+            assert 'scale' not in config
         assert float(config['mesh']['wallThickness']) == wall
         for key, value in [('throatResolution', 3), ('mouthResolution', 7), ('rearResolution', 9)]:
             assert float(config['mesh'][key]) == value * wall / 5

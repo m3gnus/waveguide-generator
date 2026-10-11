@@ -170,3 +170,21 @@ def test_realized_edge_guard_keeps_v2_millimetres_and_legacy_scaling(monkeypatch
         result = mesh_builder._build_sync(design.model_dump(mode='json'))
         assert result['stats']['max_edge_guard_mm'] == guard
         assert result['stats']['max_edge_mm'] == pytest.approx(edge_mm, abs=1e-12)
+
+
+def test_v2_source_radius_and_vertical_offset_stay_authored_as_in_ath() -> None:
+    # ATH V2026-09a, sv_0p7.cfg (Scale 0.7, Source.Radius 40, Mesh.VerticalOffset 30):
+    # its bem_mesh.geo points on the throat axis (sv_0p7-axis.csv) put the
+    # spherical cap's apex at z = 40 - sqrt(40^2 - (0.7 * 12.7)^2) and its centre
+    # 40 mm below that, on the axis at y = 30. ATH keeps both values as written.
+    axis = np.loadtxt(FIXTURES / 'sv_0p7-axis.csv', delimiter=';')
+    assert np.all(axis[:, 1] == 30)
+    sagitta = 40 - np.sqrt(40 ** 2 - (0.7 * 12.7) ** 2)
+    assert np.any(np.abs(axis[:, 2] - sagitta) < 2e-3)
+    assert np.any(np.abs(axis[:, 2] - (sagitta - 40)) < 2e-3)
+    parsed = parse((FIXTURES / 'sv_0p7.cfg').read_text())
+    config = design_to_mesher_config(parsed.design)
+    assert config['scale'] == 0.7
+    assert float(config['source']['sourceRadius']) == 40
+    assert float(config['mesh']['verticalOffset']) == 30
+    assert float(config['mesh']['wallThickness']) == 5

@@ -103,7 +103,7 @@
       "step": 0.001,
       "precision": 3,
       "options": [],
-      "description": "Shrinks or enlarges the waveguide below and above 1, including the source radius. Native designs also scale wall thickness and horn mesh sizes; ATH imports keep them as written, matching ATH V2026-08c. Enclosure dimensions are not scaled."
+      "description": "Shrinks or enlarges the waveguide below and above 1. Native designs and saved older ATH imports also scale the source radius, wall thickness and horn mesh sizes. Current ATH imports scale the finished horn as ATH does and keep the source radius, vertical offset, wall thickness and mesh sizes as written. Enclosure dimensions are not scaled."
     },
     {
       "id": "rosse.R",
@@ -616,7 +616,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Adds a half-sine bulge in millimetres to the radius, peaking halfway and vanishing at both ends. It spans the whole driver-to-mouth path, including any extension and slot, and applies to the circular arc too. Scale does not multiply it."
+      "description": "Adds a half-sine bulge in millimetres to the radius, peaking halfway and vanishing at both ends. It spans the whole driver-to-mouth path, including any extension and slot, and applies to the circular arc too. In native designs Scale does not multiply it; current ATH imports scale the finished horn, this bulge included."
     },
     {
       "id": "icw.r0",
