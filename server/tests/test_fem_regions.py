@@ -310,7 +310,8 @@ def test_parent_accepts_child_stats_without_parsing_mesh(tmp_path, monkeypatch):
     assert result["msh_text"] == "verified mesh"
 
 
-def test_shared_deadline_covers_child_slot_wait_and_staging(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_member", [False, True])
+def test_shared_deadline_covers_child_slot_wait_and_staging(tmp_path, monkeypatch, with_member):
     from server.cadlink.intake import isolation
 
     source = tmp_path / "air.step"
@@ -327,15 +328,32 @@ def test_shared_deadline_covers_child_slot_wait_and_staging(tmp_path, monkeypatc
         def release(self):
             seen.append("released")
 
+    original_stage = isolation._stage_step_input
+
+    def stage(*args, **kwargs):
+        result = original_stage(*args, **kwargs)
+        if "FEM region" in kwargs["stage"]:
+            now[0] += 2.0
+        return result
+
+    monkeypatch.setattr(isolation, "_stage_step_input", stage)
+
     def run(envelope, **kwargs):
-        assert envelope["limits"]["wall_time_s"] == 6.0
-        assert kwargs["budget"].wall_time_s == 6.0
+        remaining = 4.0 if with_member else 6.0
+        assert envelope["limits"]["wall_time_s"] == remaining
+        assert kwargs["budget"].wall_time_s == remaining
+        assert kwargs["deadline"] == 10.0
+        if with_member:
+            member = envelope["additional_sources"]["rear-chamber"]
+            assert Path(member["path"]).read_text() == "STEP"
+            assert member["size_bytes"] == 4
         return isolation.ChildOutcome({}, {}, "")
 
     monkeypatch.setattr(isolation, "_CHILD_SLOT", Slot())
     monkeypatch.setattr(isolation, "_run_child", run)
     with isolation.isolated_step_task("fem_region", {}, step_path=source,
-                                      budget=isolation.MESH_BUDGET, deadline=10.0, stage="mesh"):
+                                      budget=isolation.MESH_BUDGET, deadline=10.0, stage="mesh",
+                                      additional_steps={"rear-chamber": {"path": str(source)}} if with_member else None):
         pass
     assert seen == [9.0, "released"]
     now[0] = 11.0

@@ -9,13 +9,14 @@ budget.  A process can be, so external STEP gets a process.
 
 The harness is deliberately dumb about geometry.  It knows how to start a
 child that cannot see credentials or the data directory, feed it exactly one
-checksum-verified STEP, stop it when it misbehaves, and refuse everything it
+checksum-verified STEP inputs, stop it when it misbehaves, and refuse everything it
 sends back that is not a small, well-named, correctly-sized artifact.  What
 the child does with the STEP lives in :mod:`server.cadlink.intake.child_main`.
 
 Layout of one invocation::
 
-    <root>/input/source.step      read-only copy, checksum verified both ends
+    <root>/input/source.step      read-only assembly, checksum verified both ends
+    <root>/input/region-N.step    optional read-only FEM members, verified both ends
     <root>/staging/result.json    the child's one structured answer
     <root>/staging/out/           the only place a child may leave a file
     <root>/staging/tmp/           child scratch: cwd, TMPDIR and HOME point here
@@ -553,6 +554,7 @@ def isolated_step_task(
     entrypoint: str = CHILD_ENTRYPOINT,
     expected_sha256: str | None = None,
     expected_size_bytes: int | None = None,
+    additional_steps: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> Iterator[ChildOutcome]:
     """Run one task in a fresh child and yield its verified answer.
 
@@ -607,6 +609,20 @@ def isolated_step_task(
             # child runs as the same user -- but it turns an accidental
             # in-place edit into an error instead of a silent mutation.
             child_source.chmod(0o400)
+        extra_sources = {}
+        for index, (name, member) in enumerate((additional_steps or {}).items()):
+            member_path = Path(member["path"])
+            if not member_path.is_file() or member_path.is_symlink():
+                raise ChildRefusal(stage, f"FEM region {name!r}: the STEP is missing or is a symlink")
+            destination = staged_input / f"region-{index}.step"
+            digest, size = _stage_step_input(
+                member_path, destination, stage=f"{stage}: FEM region {name!r}",
+                expected_sha256=member.get("sha256"),
+                expected_size_bytes=member.get("size_bytes"),
+            )
+            with contextlib.suppress(OSError):
+                destination.chmod(0o400)
+            extra_sources[name] = {"path": str(destination), "sha256": digest, "size_bytes": size}
         budget = remaining_budget()
         envelope = {
             "protocol": PROTOCOL_VERSION,
@@ -627,6 +643,9 @@ def isolated_step_task(
             },
             "payload": dict(payload),
         }
+
+        if extra_sources:
+            envelope["additional_sources"] = extra_sources
 
         outcome = _run_child(
             envelope,

@@ -1,8 +1,9 @@
 # Coupled FEM/BEM solves of CAD Link geometry
 
 Status: proposed, 2026-10-11. Slices F1 to F5 are implemented on topic
-branches and tested; F6 onwards are open. Nothing is routed to a solver yet,
-and `femRegions` is advertised only when `WG2_FEM_REGIONS=1`.
+branches and tested. F6 ingest and F7 geometry preparation are implemented;
+engine routing and live F7 acoustic qualification remain pending. Nothing is
+routed to a solver yet, and `femRegions` is advertised only when `WG2_FEM_REGIONS=1`.
 
 The same flag gates bundle admission and the isolated `fem_region` task. When
 unset, WG refuses `fem-regions-v1` as an unknown required feature before STEP
@@ -109,7 +110,7 @@ count and mesh density remain user-selected.
 | F4 | waveguide-generator | done | coupled `compiled_system` builder, validated by `beat_engine.beat_contract` |
 | F5 | waveguide-generator | done | frontend exact slice, element mode, ghost, role colours, `wg-fem-field-v1` decoder, `FemFieldView` |
 | F6 | waveguide-generator | open | ingest: mesh each region in the child at stage 7, retain region meshes, record `evidence.fem_regions`, list regions in the CAD Link panel |
-| F7 | waveguide-generator | open | exterior closure: mesh the exterior with each interface patch conforming to the FEM interface, by fragmenting the shell with the region's interface face so OCC shares the rim |
+| F7 | waveguide-generator | preparation implemented; live qualification pending | exterior closure: mesh the exterior with each interface patch conforming to the FEM interface, by fragmenting the shell with the region's interface face so OCC shares the rim |
 | F8 | waveguide-generator | open | engine route: a coupled job through the official BEAT worker (`coupled_fem_bem_lem` / `interior_fem`), outputs mapped to the multi-channel result contract, the `fem_required` refusal lifted for declared regions, `femRegions` advertised by default |
 | F9 | waveguide-generator | open | result route `/api/results/{id}/fem-field`, then mount `FemFieldView` with the field-plane gizmo, a frequency slider, system or channel response, phase animation, and a combined interior and exterior plane |
 | F10 | both | open | electrodynamic drivers on FEM diaphragms (voltage ports, T/S parameters), aligned with [DRIVER-REAR-LOAD](DRIVER-REAR-LOAD.md)'s meshed front chambers |
@@ -131,3 +132,88 @@ F6 to F9 must land in order. F10 and F11 can follow F8.
    the FEM facets as authoritative.
 4. Should `femRegions` ship enabled in the release that includes F8, or only
    after F11's validation?
+
+## F7 preparation and F8 artifact contract
+
+F7 retains the existing exterior-only mesh at the record's top-level
+`mesh_store_path`, with its existing cache, tags and digest. It does not replace
+that mesh. Returns without regions take the same preparation path and produce
+the same mesh bytes with the FEM flag on or off.
+
+A return with interface groups additionally retains `record.coupled_exterior`:
+
+- `mesh_store_path`, `mesh_cache_key`, `mesh_lookup_key`,
+  `mesh_content_sha256` and `mesh_size_bytes` bind an immutable, independently
+  verified `coupled/exterior.msh` artifact;
+- `physical_names` maps surface names to their tags, entities, boundary `kind`
+  and, for moving exterior patches, `drive_channel_id`;
+- `normalisation_matrix` is the complete exterior solver transform, including
+  vertical recentring; `stats.open_edges` is zero.
+
+F8 reads this surface with `read_verified_coupled_exterior_mesh(record)` and
+`read_coupled_exterior(text)`. The latter returns points in **millimetres** and
+triangle groups, suitable for `ExteriorSurface(points, groups,
+record["coupled_exterior"]["physical_names"])`. The original top-level mesh
+continues to serve explicit exterior-only solves and existing viewport loading.
+The solve-model digest includes the coupled surface digest as well as every
+region mesh digest, medium and group declaration. No API or database schema
+changes are needed.
+
+For interface regions, `record.fem_regions[]` retains the F6 artifact fields
+and the same complete `normalisation_matrix`. Their FEM meshes are extracted
+from the coupled child, rather than independently meshed. Regions without an
+interface continue through the F6 child and retain its mesh contract.
+
+The isolated `coupled_mesh` task stages the assembly and every participating
+region STEP as read-only inputs, verifies each member's size and digest on
+both sides of the process boundary, and scans each STEP under existing budgets.
+The child replays the exterior's winning OCC healing recipe and verifies its
+geometry fingerprint. Region faces are matched in the export frame before
+applying the same rigid rotation, translation and recentring operations as the
+assembly. A missing recipe, fingerprint mismatch or transform mismatch refuses.
+
+BooleanFragments supplies surface ancestry, including split region faces.
+Painted assembly faces are copied as explicit fragment tools to preserve their
+ancestry when OCC otherwise omits constituent-face maps. The exterior skin is
+the boundary of material plus declared air: material/air interior faces are
+excluded, exposed interface faces are included under their FEM physical names,
+and free assembly wall sheets are retained. Thus an aperture's OCC face is
+shared by the FEM boundary and the BEM skin; its rim is joined to the material
+by fragmentation. A buried interface, missing shared face, overlapping regions,
+uncovered undeclared air face, open/nonmanifold skin or wrong interface winding
+is a blocking stage-7 refusal naming the participating region and interface
+group. The implicit `walls` group id may be declared only as rigid; declared
+rigid walls merge with unclaimed walls rather than losing triangles. No independent interface triangulation or coordinate welding is used.
+
+The child generates 2D once, then generates 3D with only air volumes visible.
+It explicitly checks that no material volume gained tetrahedra. Extracted
+meshes use first-order tagged Gmsh 2.2 ASCII with compact vertex arrays; retained
+F6 meshes remain Gmsh 4.1. FEM triangles point away from their tetrahedra; each
+connected exterior skin points into exterior air. Interface winding must agree
+on both sides, with the same triangles and coordinates. Region and group sizes
+are forwarded without mesh-size limits; existing child resource budgets apply.
+
+Any declared region under an applied or declared reduced domain, or a requested
+infinite baffle/ground plane, refuses in ingest. A finite, explicitly modelled
+baffle is supported. F8 must also refuse reduced domains and ground planes at
+job admission, since a later solve setup can introduce them after ingest.
+
+Qualification covers synthetic ported and finite-baffle boxes, closure,
+interface topology and winding, the compiled-system contract, verified storage,
+painted source ancestry, multiple interface regions, rotated/translated/recentred
+frames, flag-off admission and named refusals.
+The acoustic qualification remains opt-in and is run **through the compute
+broker**, on CPU float64:
+
+```bash
+WG2_RUN_LIVE=1 WG2_FEM_REGIONS=1 python scripts/run_tests.py \
+  server/tests/test_fem_coupled_beat_live.py::test_f7_open_box_radiates_the_pistons_monopole \
+  -m live -q
+```
+
+Use the pinned verification environment and its qualified BEAT/Julia runtime.
+For a manually provisioned runtime, the existing `WG2_TEST_BEAT_JULIA` and
+`WG2_TEST_BEAT_DEPOT` overrides still apply. The test checks both observation
+points against the monopole within 5%, confirms interface normal signs are +1,
+and requires interior peak pressure between 1 and 100 Pa at 100 Hz for a
+1 m/s diaphragm. This live test has not been run as part of F7 production.

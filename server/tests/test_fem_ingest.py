@@ -16,6 +16,13 @@ from server.tests.test_cadlink_wgreturn import _manifest, write_bundle
 from server.tests.test_fem_regions import CONE, _face, _region, _write_step
 
 
+def _interior_region(**overrides):
+    # F6 coverage: no interface with the exterior, so keep the independent child.
+    region = deepcopy(_region(**overrides))
+    region["surface_groups"][1]["kind"] = "plane-wave-termination"
+    return region
+
+
 def _bundle(root, *, regions=None):
     root.mkdir(parents=True)
     step = _write_step(root / "box.step").read_bytes()
@@ -29,7 +36,7 @@ def _bundle(root, *, regions=None):
         "external_reference": "local",
     }]
     manifest["required_features"].append("fem-regions-v1")
-    manifest["scope"]["fem_regions"] = regions if regions is not None else [_region()]
+    manifest["scope"]["fem_regions"] = regions if regions is not None else [_interior_region()]
     for region in manifest["scope"]["fem_regions"]:
         manifest["files"][region["file"]] = {
             "sha256": "sha256:" + hashlib.sha256(step).hexdigest(), "size_bytes": len(step),
@@ -62,9 +69,9 @@ def enabled(monkeypatch):
 
 
 def test_real_ingest_meshes_every_region_and_retains_verified_artifacts(tmp_path, monkeypatch):
-    second = _region(region_id="front-chamber", name="Front chamber", object_id="air-2",
+    second = _interior_region(region_id="front-chamber", name="Front chamber", object_id="air-2",
                      file="fem-regions/front-chamber.step", mesh_size_mm=10)
-    bundle = _bundle(tmp_path / "returns", regions=[_region(), second])
+    bundle = _bundle(tmp_path / "returns", regions=[_interior_region(), second])
     calls = []
     exterior = ingest.build_imported_mesh_isolated
     region_mesh = ingest.build_fem_region_mesh_isolated
@@ -125,7 +132,7 @@ def test_real_ingest_meshes_every_region_and_retains_verified_artifacts(tmp_path
 
 @pytest.mark.parametrize("failure", ["lost", "shared", "two-solids"])
 def test_region_geometry_refusals_block_ingest_and_name_region_and_group(tmp_path, failure):
-    region = _region()
+    region = _interior_region()
     if failure == "lost":
         region["surface_groups"][0]["faces"] = [
             _face(1200, (20, 15, 5), [0, 0, 1], (0, 0, 5), (40, 30, 5)),
@@ -201,7 +208,7 @@ def test_no_regions_ingest_is_identical_with_flag_on_or_off(tmp_path, monkeypatc
 
 
 def test_ingest_forwards_user_region_and_group_sizes_without_limits(tmp_path, monkeypatch):
-    region = _region(mesh_size_mm=0.001)
+    region = _interior_region(mesh_size_mm=0.001)
     region["surface_groups"][0]["mesh_size_mm"] = 0.0001
     bundle = _bundle(tmp_path / "returns", regions=[region])
     seen = []
@@ -220,7 +227,7 @@ def test_ingest_forwards_user_region_and_group_sizes_without_limits(tmp_path, mo
 
 @pytest.mark.parametrize("kind", ["rigid", "moving"])
 def test_ingest_user_walls_preserves_declared_group_and_unclaimed_boundary(tmp_path, kind):
-    region = _region()
+    region = _interior_region()
     region["surface_groups"][0].update(group_id="walls", name="User walls", kind=kind)
     if kind == "rigid":
         region["surface_groups"][0].pop("drive_channel_id")

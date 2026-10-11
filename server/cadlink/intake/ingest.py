@@ -19,6 +19,7 @@ from typing import Any
 from server.contracts.canonical import canonical_normalized_bytes as _canonical
 
 from server.cadlink.intake.isolated import (
+    build_coupled_mesh_isolated,
     build_fem_region_mesh_isolated,
     build_imported_mesh_isolated,
     build_imported_viewport_mesh_isolated,
@@ -194,6 +195,8 @@ def solve_model_sha256(record: Mapping[str, Any]) -> str:
             )}
             for region in record["fem_regions"]
         ]
+    if record.get("coupled_exterior"):
+        solve_model["coupled_exterior_sha256"] = record["coupled_exterior"]["mesh_content_sha256"]
     return "sha256:" + hashlib.sha256(_canonical(solve_model)).hexdigest()
 
 
@@ -1418,6 +1421,7 @@ def ingest_bundle(
     # is part of the mesh cache key -- the same STEP declared differently is a
     # different solve.
     options["declared_cut_planes"] = list(declared_domain_planes(manifest))
+    _refuse_fem_domain(manifest, options, options["declared_cut_planes"])
     # M1c-auto: the evidence for this snapshot's domain (domain_interpretation).
     # A reading that changes what is solved enters the cache key; with no
     # evidence the key is exactly what it was before.
@@ -1676,7 +1680,11 @@ def ingest_bundle(
         else built["normalisation"]
     )
     mesh_content_sha256 = mesh_text_sha256(str(built["msh_text"]))
-    fem_regions = _mesh_fem_regions(bundle, imports_root)
+    fem_deadline = time.monotonic() + FEM_REGIONS_WALL_TIME_S
+    coupled_exterior, coupled_regions = _mesh_coupled_regions(
+        bundle, imports_root, built, normalized_mesh, options, applied_planes, deadline=fem_deadline,
+    )
+    fem_regions = _mesh_fem_regions(bundle, imports_root, coupled_regions, deadline=fem_deadline)
     # The one domain decision (``domain_decision.py``): made here, once, on the
     # mesh this snapshot is solved with; the model card, the Solve card's plan,
     # the preparation, every submission and the job all read it.
@@ -2047,6 +2055,8 @@ def ingest_bundle(
         # centre/area fingerprint is deliberately insufficient for this.
         if fem_regions:
             record["fem_regions"] = fem_regions
+        if coupled_exterior is not None:
+            record["coupled_exterior"] = coupled_exterior
         record["solve_model_sha256"] = solve_model_sha256(record)
         record["report_sha256"] = "sha256:" + hashlib.sha256(_canonical(record)).hexdigest()
         return _canonical(record).decode("utf-8")
@@ -2074,7 +2084,113 @@ def ingest_bundle(
 FEM_REGIONS_WALL_TIME_S = MESH_BUDGET.wall_time_s
 
 
-def _mesh_fem_regions(bundle: WgReturnBundle, imports_root: Path) -> list[dict[str, Any]]:
+def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], planes: Any) -> str:
+    """Refuse known unsupported FEM domains before exterior meshing."""
+    regions = manifest["scope"].get("fem_regions", [])
+    if not regions:
+        return ""
+    labels = "; ".join(
+        f"FEM region {region['name']!r}" + "".join(
+            f", group {group['name']!r}" for group in region["surface_groups"]
+            if group["kind"] == "interface"
+        ) for region in regions
+    )
+    ground = options.get("ground_plane")
+    if planes:
+        raise IngestRefusal("stage 7 meshing", f"{labels}: FEM regions under a reduced domain are unsupported in 0.3.6.")
+    if (options.get("infinite_baffle") or options.get("acoustic_domain") == "infinite-baffle"
+            or (isinstance(ground, Mapping) and ground.get("enabled"))):
+        raise IngestRefusal("stage 7 meshing", f"{labels}: FEM regions with an infinite baffle are unsupported in 0.3.6.")
+    return labels
+
+
+def _mesh_coupled_regions(
+    bundle: WgReturnBundle, imports_root: Path, exterior: Mapping[str, Any],
+    sizes: Mapping[str, Any], options: Mapping[str, Any], applied_planes: Any,
+    *, deadline: float | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Retain a separate closed surface for F8; the exterior-only mesh is unchanged."""
+    regions = bundle.manifest["scope"].get("fem_regions", [])
+    if not regions:
+        return None, {}
+    labels = _refuse_fem_domain(bundle.manifest, options, (
+        *applied_planes, *declared_domain_planes(bundle.manifest),
+        *imported_domain_planes({"symmetry": exterior.get("symmetry")}),
+    ))
+    interfaces = [region for region in regions
+                  if any(group["kind"] == "interface" for group in region["surface_groups"])]
+    if not interfaces:
+        return None, {}
+    if deadline is None:
+        deadline = time.monotonic() + FEM_REGIONS_WALL_TIME_S
+
+    def check_deadline() -> None:
+        if time.monotonic() >= deadline:
+            raise IngestRefusal(
+                "stage 7 meshing", f"{labels}: the total FEM regions wall-clock budget was exhausted.",
+            )
+
+    check_deadline()
+    from server.cadlink.wglink_protocol import source_physical_name
+
+    recipe = exterior.get("viewport_recipe")
+    if not isinstance(recipe, Mapping):
+        raise IngestRefusal("stage 7 meshing", f"{labels}: normalisation mismatch: exterior replay recipe is missing.")
+    names = {}
+    allocation = exterior["tag_allocation"]
+    source_by_id = {source["id"]: source for source in bundle.manifest["sources"]}
+    for raw_tag, indices in recipe["groups_by_tag"].items():
+        tag = int(raw_tag)
+        entry = allocation["tag_map"][str(tag)]
+        source_id = entry.get("source_id")
+        if source_id is None or not indices:
+            continue
+        source = source_by_id[source_id]
+        name = source_physical_name(tag, source_id, source.get("instance_id"), source["role"])
+        names[name] = {"indices": indices, "size_mm": sizes["source_size_mm"][source_id],
+                       "kind": {"kind": "moving", "drive_channel_id": source["default_drive_channel_id"]}}
+    members = {region["region_id"]: {
+        "path": str(bundle.members[region["file"]]), **bundle.manifest["files"][region["file"]],
+    } for region in interfaces}
+    try:
+        coupled = build_coupled_mesh_isolated(
+            bundle.assembly_path, interfaces, members=members, recipe=recipe,
+            expected_geometry_hash=exterior["transformed_geometry_hash"],
+            normalisation_matrix=exterior["normalisation"]["matrix"], sizes=sizes, exterior_names=names,
+            expected_sha256=bundle.artifact_sha256, expected_size_bytes=bundle.artifact_size_bytes,
+            deadline=deadline,
+        )
+    except Exception as exc:
+        raise IngestRefusal("stage 7 meshing", f"{labels}: {exc}") from exc
+    check_deadline()
+    built = coupled["exterior"]
+    digest = mesh_text_sha256(built["msh_text"])
+    lookup_key = hashlib.sha256(_canonical({
+        "pipeline_contract": "wg-import-coupled-v1", "assembly": bundle.artifact_sha256,
+        "regions": interfaces, "members": {r["file"]: bundle.manifest["files"][r["file"]] for r in interfaces},
+        "recipe": recipe, "sizes": sizes, "names": names, "mesher": mesher_identity(),
+    })).hexdigest()
+    key = hashlib.sha256(_canonical({"lookup_key": lookup_key, "sha256": digest})).hexdigest()
+    path = imports_root / "meshes" / key / "coupled" / "exterior.msh"
+    try:
+        _write_cache(path, path.with_suffix(".json"), built, exact_bytes=True)
+        retained = {"mesh_store_path": str(path), "mesh_cache_key": key, "mesh_lookup_key": lookup_key,
+                    "mesh_content_sha256": digest, "mesh_size_bytes": len(built["msh_text"].encode("utf-8")),
+                    "stats": built["stats"], "physical_names": built["physical_names"],
+                    "normalisation_matrix": built["normalisation_matrix"]}
+        read_verified_import_mesh(retained)
+    except Exception as exc:
+        raise IngestRefusal(
+            "stage 7 meshing", f"{labels}: could not publish and verify the coupled exterior mesh artifact: {exc}",
+        ) from exc
+    check_deadline()
+    return retained, coupled["regions"]
+
+
+def _mesh_fem_regions(
+    bundle: WgReturnBundle, imports_root: Path, coupled: Mapping[str, Any] | None = None,
+    *, deadline: float | None = None,
+) -> list[dict[str, Any]]:
     """Mesh every declared member after the exterior, retaining verified inputs."""
 
     regions = bundle.manifest["scope"].get("fem_regions", [])
@@ -2086,7 +2202,8 @@ def _mesh_fem_regions(bundle: WgReturnBundle, imports_root: Path) -> list[dict[s
             "This return declares FEM regions; this Waveguide Generator has FEM regions turned off.",
         )
     records = []
-    deadline = time.monotonic() + FEM_REGIONS_WALL_TIME_S
+    if deadline is None:
+        deadline = time.monotonic() + FEM_REGIONS_WALL_TIME_S
 
     def check_deadline(region: Mapping[str, Any]) -> None:
         if time.monotonic() >= deadline:
@@ -2098,12 +2215,14 @@ def _mesh_fem_regions(bundle: WgReturnBundle, imports_root: Path) -> list[dict[s
         check_deadline(region)
         member = bundle.manifest["files"][region["file"]]
         try:
-            built = build_fem_region_mesh_isolated(
-                bundle.members[region["file"]], region,
-                expected_sha256=member["sha256"],
-                expected_size_bytes=member["size_bytes"],
-                deadline=deadline,
-            )
+            built = (coupled or {}).get(region["region_id"])
+            if built is None:
+                built = build_fem_region_mesh_isolated(
+                    bundle.members[region["file"]], region,
+                    expected_sha256=member["sha256"],
+                    expected_size_bytes=member["size_bytes"],
+                    deadline=deadline,
+                )
         except Exception as exc:
             # Typed face-matching errors already name the group. Child crashes
             # and timeouts also block ingestion, with the region added here.
@@ -2115,6 +2234,7 @@ def _mesh_fem_regions(bundle: WgReturnBundle, imports_root: Path) -> list[dict[s
         lookup_key = hashlib.sha256(_canonical({
             "pipeline_contract": "wg-import-fem-v1",
             "region": region, "member": member, "mesher": mesher_identity(),
+            **({"coupled_sha256": digest} if region["region_id"] in (coupled or {}) else {}),
         })).hexdigest()
         # Bind the path to output bytes as well as inputs: a later meshing run
         # cannot overwrite the artifact named by an immutable older record.
@@ -2133,6 +2253,7 @@ def _mesh_fem_regions(bundle: WgReturnBundle, imports_root: Path) -> list[dict[s
                 "mesh_size_bytes": len(built["msh_text"].encode("utf-8")),
                 "stats": built["stats"],
                 "physical_names": built["physical_names"],
+                **({"normalisation_matrix": built["normalisation_matrix"]} if "normalisation_matrix" in built else {}),
             }
             read_verified_import_mesh(retained)
         except Exception as exc:

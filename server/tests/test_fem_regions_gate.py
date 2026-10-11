@@ -118,14 +118,15 @@ def test_child_receives_only_the_explicit_fem_opt_in(tmp_path, system):
     assert env[FEM_REGIONS_ENV] == "1"
 
 
-def test_flag_off_child_and_default_imports_never_load_fem_dependencies(tmp_path, monkeypatch):
+@pytest.mark.parametrize("task", ["fem_region", "coupled_mesh"])
+def test_flag_off_child_and_default_imports_never_load_fem_dependencies(tmp_path, monkeypatch, task):
     monkeypatch.delenv(FEM_REGIONS_ENV, raising=False)
     result_path = tmp_path / "result.json"
     # A clean interpreter catches imports even when another test already used FEM.
     script = """
 import builtins, io, json, sys
 original_import = builtins.__import__
-blocked = ('gmsh', 'meshio', 'beat_engine', 'server.mesh.fem_regions', 'server.solver.coupled_system')
+blocked = ('gmsh', 'meshio', 'beat_engine', 'server.mesh.fem_regions', 'server.mesh.fem_coupling', 'server.solver.coupled_system')
 def guarded_import(name, *args, **kwargs):
     assert not any(name == module or name.startswith(module + '.') for module in blocked), name
     return original_import(name, *args, **kwargs)
@@ -134,15 +135,15 @@ from server.cadlink.fusion.fusion_delivery import capabilities
 from server.cadlink.wgreturn import validate_manifest
 from server.cadlink.intake import isolated, child_main
 assert 'femRegions' not in capabilities()
-envelope = {'protocol': 1, 'task': 'fem_region', 'result_path': sys.argv[1]}
+envelope = {'protocol': 1, 'task': sys.argv[2], 'result_path': sys.argv[1]}
 sys.stdin = io.TextIOWrapper(io.BytesIO(json.dumps(envelope).encode()))
 assert child_main.main([]) == 1
 result = json.load(open(sys.argv[1]))
-assert result['error']['message'] == "unknown isolated CAD task 'fem_region'", result
+assert result['error']['message'] == f"unknown isolated CAD task {sys.argv[2]!r}", result
 assert not any(module in sys.modules for module in blocked)
 """
     completed = subprocess.run(
-        [sys.executable, "-B", "-c", script, str(result_path)],
+        [sys.executable, "-B", "-c", script, str(result_path), task],
         cwd=Path(__file__).resolve().parents[2], env=dict(os.environ),
         capture_output=True, text=True, timeout=30,
     )

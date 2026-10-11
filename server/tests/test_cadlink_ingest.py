@@ -360,6 +360,10 @@ def test_ingest_retains_declared_fem_region_evidence(monkeypatch, tmp_path: Path
                             "stats": {"tetrahedra": 1, "nodes": 4, "surface_groups": {}},
                             "physical_names": {},
                         })
+    # This contract fixture has placeholder STEP/mesh bytes. Real coupled
+    # closure and artifact verification are covered in test_fem_coupling.
+    monkeypatch.setattr("server.cadlink.intake.ingest._mesh_coupled_regions",
+                        lambda *_args, **_kwargs: (None, {}))
     store = CadLinkStore(tmp_path / "cadlink.db")
     try:
         record = ingest_bundle(bundle, {

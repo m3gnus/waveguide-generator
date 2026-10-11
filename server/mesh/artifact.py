@@ -66,6 +66,14 @@ def read_verified_fem_region_mesh(record: Mapping[str, Any], region_id: str) -> 
     return read_verified_import_mesh(regions[0])
 
 
+
+def read_verified_coupled_exterior_mesh(record: Mapping[str, Any]) -> str:
+    """F8's closed skin, verified independently of the exterior-only artifact."""
+    exterior = record.get("coupled_exterior")
+    if not isinstance(exterior, Mapping) or not isinstance(exterior.get("mesh_size_bytes"), int):
+        raise ImportedMeshArtifactError("ingestion has no verified coupled exterior; re-ingest the CAD return")
+    return read_verified_import_mesh(exterior)
+
 def read_verified_import_viewport_mesh(record: Mapping[str, Any]) -> str:
     """Read and verify the optional full-domain CAD display artifact."""
 
@@ -99,6 +107,7 @@ __all__ = [
     "ImportedMeshArtifactError",
     "mesh_text_sha256",
     "read_verified_import_mesh",
+    "read_verified_coupled_exterior_mesh",
     "read_verified_fem_region_mesh",
     "read_verified_import_viewport_mesh",
     "verify_record_mesh_text",

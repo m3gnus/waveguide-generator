@@ -1,7 +1,7 @@
 """The disposable child that is allowed to touch untrusted STEP.
 
 Run as ``__main__`` by :mod:`server.cadlink.intake.isolation` (its ``child_command``),
-once per artifact, never reused.  It reads one
+once per task, never reused.  It reads one
 JSON envelope from stdin, does exactly one task, writes one JSON result into
 its staging directory, and exits.
 
@@ -368,11 +368,46 @@ def _task_fem_region(
     return {"built": built}, {"fem.msh": _stage(out_dir, "fem.msh", msh_text)}
 
 
+
+def _task_coupled_mesh(
+    envelope: dict[str, Any], source: Path, out_dir: Path
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Close and conform the exterior to every declared interface region."""
+    from server.cadlink.intake.step_text import scan_step_text
+    from server.mesh.fem_coupling import build_coupled_mesh
+    from server.mesh.fem_regions import FemRegionMeshError
+
+    payload = envelope.get("payload") or {}
+    regions = payload.get("regions") or []
+    sources = envelope.get("additional_sources") or {}
+    inputs = []
+    scan_step_text(source)
+    for region in regions:
+        try:
+            member = sources.get(region["region_id"])
+            path = _verified_source({"source": member})
+            scan_step_text(path)
+            inputs.append((path, region))
+        except Exception as exc:
+            raise FemRegionMeshError(f"FEM region {region['name']!r}: {exc}") from exc
+    built = build_coupled_mesh(
+        source, inputs, recipe=payload["recipe"],
+        expected_geometry_hash=payload["expected_geometry_hash"],
+        normalisation_matrix=payload["normalisation_matrix"], sizes=payload["sizes"],
+        exterior_names=payload["exterior_names"], scratch_dir=out_dir.parent / "tmp",
+    )
+    artifacts = {"coupled.msh": _stage(out_dir, "coupled.msh", built["exterior"].pop("msh_text"))}
+    for region in regions:
+        name = f"region-{region['region_id']}.msh"
+        artifacts[name] = _stage(out_dir, name, built["regions"][region["region_id"]].pop("msh_text"))
+    return {"built": built}, artifacts
+
 _TASKS = {
     "inspect": _task_inspect,
     "mesh": _task_mesh,
     "viewport": _task_viewport,
     "fem_region": _task_fem_region,
+    "coupled_mesh": _task_coupled_mesh,
 }
 
 #: Tasks that need a gmsh session opened around them. In the server this was
@@ -466,7 +501,7 @@ def main(argv: list[str] | None = None) -> int:
         task_name = str(envelope.get("task") or "")
         out_dir = Path(str(envelope.get("out_dir")))
         handler = _TASKS.get(task_name)
-        if task_name == "fem_region" and not fem_regions_enabled():
+        if task_name in {"fem_region", "coupled_mesh"} and not fem_regions_enabled():
             handler = None
         if handler is None:
             raise ChildTaskError(f"unknown isolated CAD task {task_name!r}")

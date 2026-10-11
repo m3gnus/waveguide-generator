@@ -1,12 +1,12 @@
-"""The two isolated CAD tasks, as ordinary functions the parent can call.
+"""Isolated CAD tasks, as ordinary functions the parent can call.
 
 :mod:`server.cadlink.intake.isolation` knows how to run *a* child.  This module knows
-the two the gate actually names -- inspect and mesh -- and what each one is
-allowed to send back.  Callers see plain functions that either return a result
+the intake tasks -- inspection, exterior meshing, viewport replay and FEM
+meshing -- and what each one is allowed to send back.  Callers see plain functions that either return a result
 or raise; the process boundary is an implementation detail of how the answer
 was obtained, not something an ingest stage has to reason about.
 
-Both entry points are for **external** STEP: bytes that came back from
+These entry points are for **external** STEP: bytes that came back from
 Onshape, Fusion, or a user's own CAD tool.  WG-generated STEP that has never
 crossed an external editor still goes down the in-process export path, which
 is unchanged.
@@ -275,7 +275,42 @@ def build_fem_region_mesh_isolated(
         raise
 
 
+
+def build_coupled_mesh_isolated(
+    assembly_path: str | Path, regions: list[Mapping[str, Any]],
+    *, members: Mapping[str, Mapping[str, Any]], recipe: Mapping[str, Any],
+    expected_geometry_hash: str, normalisation_matrix: Any,
+    sizes: Mapping[str, Any], exterior_names: Mapping[str, Mapping[str, Any]],
+    expected_sha256: str | None = None, expected_size_bytes: int | None = None,
+    deadline: float | None = None,
+) -> dict[str, Any]:
+    """Stage and verify all STEP members inside the existing mesh confinement."""
+    if not fem_regions_enabled():
+        raise ChildRefusal(MESH_STAGE, "declared FEM regions are disabled")
+    allowed = ("coupled.msh", *(f"region-{region['region_id']}.msh" for region in regions))
+    try:
+        with isolated_step_task(
+            "coupled_mesh", {"regions": [dict(region) for region in regions],
+                             "recipe": dict(recipe), "expected_geometry_hash": expected_geometry_hash,
+                             "normalisation_matrix": normalisation_matrix, "sizes": dict(sizes),
+                             "exterior_names": dict(exterior_names)},
+            step_path=assembly_path, budget=MESH_BUDGET, deadline=deadline, allowed_artifacts=allowed,
+            stage=MESH_STAGE, expected_sha256=expected_sha256,
+            expected_size_bytes=expected_size_bytes, additional_steps=members,
+        ) as outcome:
+            built = outcome.result.get("built")
+            if not isinstance(built, dict) or not isinstance(built.get("regions"), dict):
+                raise ChildRefusal(MESH_STAGE, "the coupled mesh child returned no meshes")
+            built["exterior"]["msh_text"] = outcome.artifacts["coupled.msh"].read_text(encoding="utf-8")
+            for region in regions:
+                built["regions"][region["region_id"]]["msh_text"] = outcome.artifacts[f"region-{region['region_id']}.msh"].read_text(encoding="utf-8")
+            return built
+    except ChildRefusal as exc:
+        _reraise_typed(exc)
+        raise
+
 __all__ = [
+    "build_coupled_mesh_isolated",
     "FEM_REGION_ARTIFACTS",
     "build_fem_region_mesh_isolated",
     "INSPECT_STAGE",

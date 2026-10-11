@@ -149,3 +149,27 @@ def test_an_open_box_radiates_the_pistons_monopole(worker, box):
     inside = np.abs(results[(100.0, "p")].ravel())
     # A 40 mm duct moved at 1 m/s: rho * omega * L * v is about 30 Pa.
     assert inside.max() < 100.0
+
+
+def test_f7_open_box_radiates_the_pistons_monopole(worker, tmp_path, monkeypatch):
+    """Qualify the real isolated F7 skin, including the material wall thickness."""
+    from server.tests.test_fem_coupling import _coupled, _coupling_bundle, _system
+
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    bundle, manifest, region = _coupling_bundle(tmp_path / "returns")
+    region["mesh_size_mm"] = 6.0
+    for group in region["surface_groups"]:
+        group["mesh_size_mm"] = 6.0
+    built = _coupled(bundle, manifest, region)
+    system, _domain = _system(built, region)
+    assert set(system["interfaces"][0]["topology"]["normal_sign"]) == {1}
+    results = _solve(worker, system, [100.0], [
+        {"id": "p", "quantity": "fem_nodal_pressure", "target_ids": [], "options": {}},
+        {"id": "far", "quantity": "exterior_pressure", "target_ids": [],
+         "options": {"points_m": [[2.0, 0.015, 0.01], [0.02, 0.015, 2.0]]}},
+    ])
+    monopole = RHO * 2 * math.pi * 100.0 * AREA_M2 / (4 * math.pi * 2.0)
+    far = np.abs(results[(100.0, "far")].ravel())
+    assert far == pytest.approx([monopole, monopole], rel=0.05)
+    inside = np.abs(results[(100.0, "p")].ravel())
+    assert 1.0 < inside.max() < 100.0
