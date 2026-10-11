@@ -12460,6 +12460,7 @@
     },
     "/api/cadlink/recovery-notices": {
       "get": {
+        "description": "List notices after fresh evidence may settle, claim, or bind mutations.",
         "operationId": "get_recovery_notices_api_cadlink_recovery_notices_get",
         "responses": {
           "200": {
@@ -12503,6 +12504,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "404": {
+            "description": "No accepted Fusion mutation has this id"
           },
           "422": {
             "content": {

@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createCadRecoveryNoticesStore, connectCadRecoveryNotices, type CadRecoveryNotice } from './cadRecoveryNotices';
 import { useCadDeliveryHealthStore } from './cadDeliveryHealth';
 import type { JobsSocketManager } from '../api/jobsSocket';
+import { createCadConnectionStore, type CadConnectionStatus } from './cadConnection';
+import { useCadOperationsStore } from './cadOperations';
 
 const notice = (overrides: Partial<CadRecoveryNotice> = {}): CadRecoveryNotice => ({
   id: 'mutation', kind: 'update_link', document_id: 'fusion:active', document_name: 'Document',
@@ -12,6 +14,7 @@ const deferred = <T>() => { let resolve!: (value: T) => void; let reject!: (erro
 
 describe('recovery notices without the coordinator', () => {
   beforeEach(() => useCadDeliveryHealthStore.setState({ recoveryError: null }));
+  afterEach(() => vi.useRealTimers());
   it('restores notices on reload and evidence alone removes them', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => json({ notices: [notice()] }));
     const first = createCadRecoveryNoticesStore();
@@ -95,5 +98,59 @@ describe('recovery notices without the coordinator', () => {
     stop(); handlers.resync?.();
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it('refreshes status-file changes and held-status expiry, coalesces bursts, and never polls idle', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-10-11T12:00:00Z');
+    let handlers!: Parameters<JobsSocketManager['subscribeCadOperations']>[0];
+    const manager = { subscribeCadOperations: vi.fn((value) => { handlers = value; return vi.fn(); }) } as Pick<JobsSocketManager, 'subscribeCadOperations'>;
+    const connection = createCadConnectionStore();
+    const store = createCadRecoveryNoticesStore();
+    const response = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(json({ notices: [notice()] }))
+      .mockImplementationOnce(() => response.promise).mockResolvedValue(json({ notices: [] }));
+    const stop = connectCadRecoveryNotices(manager, store, fetcher, connection);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    onTestFinished(() => { stop(); connection.invalidate(); });
+    // The existing add-in status event wakes a read without an operation event.
+    handlers.addinStatusChanged?.(); handlers.addinStatusChanged?.(); handlers.addinStatusChanged?.();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    response.resolve(json({ notices: [notice({ active_document: false })] }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(store.getState().notices).toEqual({});
+    const status = { state: 'not_linked', running: true, link: null, documentId: 'other', updatedAt: new Date().toISOString(), statusTtlSeconds: 20 } as CadConnectionStatus;
+    await connection.read(async () => status);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fetcher).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fetcher).toHaveBeenCalledTimes(5);
+    stop();
+    handlers.addinStatusChanged?.(); connection.invalidate();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(5);
+  });
+  it('alone owns health recovery feedback while mounted despite legacy success and failure', async () => {
+    const manager = { subscribeCadOperations: vi.fn(() => vi.fn()) } as Pick<JobsSocketManager, 'subscribeCadOperations'>;
+    const store = createCadRecoveryNoticesStore();
+    const stop = connectCadRecoveryNotices(manager, store, async () => json({ notices: [] }));
+    try {
+      await vi.waitFor(() => expect(store.getState().notices).toEqual({}));
+      await expect(store.getState().load(async () => { throw new Error('notice read failed'); })).rejects.toThrow();
+      const error = store.getState().recoveryError;
+      useCadOperationsStore.getState().setRecoveryError(null);
+      expect(useCadDeliveryHealthStore.getState().recoveryError).toBe(error);
+      useCadOperationsStore.getState().setRecoveryError('legacy failure');
+      expect(useCadDeliveryHealthStore.getState().recoveryError).toBe(error);
+      await store.getState().load(async () => json({ notices: [] }));
+      useCadOperationsStore.getState().setRecoveryError('late legacy failure');
+      expect(useCadDeliveryHealthStore.getState().recoveryError).toBeNull();
+    } finally { stop(); }
+    useCadOperationsStore.getState().setRecoveryError('legacy owner restored');
+    expect(useCadDeliveryHealthStore.getState().recoveryError).toBe('legacy owner restored');
+    useCadOperationsStore.getState().setRecoveryError(null);
   });
 });

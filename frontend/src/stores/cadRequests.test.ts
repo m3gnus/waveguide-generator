@@ -33,6 +33,15 @@ describe('request selector and named actions with no coordinator', () => {
     expect(selectCadRequests({ jobs: [], notices: {}, recoveryOperations: { mutation: stale }, record: null }).earlier).toEqual([]);
     expect(selectCadRequests({ jobs: [], recoveryOperations: { mutation: stale }, record: null }).earlier).toHaveLength(1);
   });
+  it('keeps operations before jobs and each parent input order for equal createdAt', () => {
+    const tied = { ...notice, created_at: operation('job').createdAt!, sequence: 90 };
+    const requests = selectCadRequests({ jobs: [cadJobFixture(operation('z-job')), cadJobFixture(operation('a-job'))],
+      notices: { z: { ...tied, id: 'z-notice' }, a: { ...tied, id: 'a-notice', sequence: 1 } }, record: null });
+    expect(requests.earlier.map((item) => item.id)).toEqual(['z-notice', 'a-notice', 'z-job', 'a-job']);
+    const compatibility = selectCadRequests({ jobs: [cadJobFixture(operation('a-job'))],
+      recoveryOperations: { recovery: { ...operation('z-recovery'), kind: 'update_link', state: 'recovery_required' } }, record: null });
+    expect(compatibility.earlier.map((item) => item.id)).toEqual(['z-recovery', 'a-job']);
+  });
   it('selects the latest child once and excludes completed jobs', () => {
     const parent = cadJobFixture(operation('parent'));
     const child = cadJobFixture(operation('child'), { parent_job_id: parent.id });
@@ -50,7 +59,9 @@ describe('request selector and named actions with no coordinator', () => {
     const clear = actions.clearAll(requests);
     const single = actions.dismiss(requests[1]);
     // A fresh binding changes the selector, not the named job already pressed.
-    selectCadRequests({ jobs: [cadJobFixture(operation('new-job'))], notices: {}, record: null });
+    const rebound = selectCadRequests({ jobs: [cadJobFixture(operation('new-job'))], notices: {}, record: null });
+    expect(rebound.earlier.map((item) => item.id)).toEqual(['new-job']);
+    expect(rebound.current).toEqual([]);
     await Promise.all([clear, single]);
     await actions.clearAll(requests);
     expect(dismissJob).toHaveBeenCalledOnce();

@@ -832,7 +832,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Recovery Notices */
+        /**
+         * Get Recovery Notices
+         * @description List notices after fresh evidence may settle, claim, or bind mutations.
+         */
         get: operations["get_recovery_notices_api_cadlink_recovery_notices_get"];
         put?: never;
         post?: never;
@@ -7280,6 +7283,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RecoveryDismissalResponse"];
                 };
+            };
+            /** @description No accepted Fusion mutation has this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -45,7 +45,7 @@ def _remember_recovery_document(store: CadLinkStore, row: Mapping[str, Any],
     """An Insert learns its document from the mark before that report is lost."""
     document = _document(heartbeat)
     document_id = _operation_id(document.get("id"))
-    expected = _operation_id(_target(row).get("document_id"))
+    expected = recovery_document_id(store, row)
     if (_applying(heartbeat) != row["operation_id"] or not document_id
             or (expected is not None and expected != document_id)):
         return
@@ -101,12 +101,28 @@ def _target(row: Mapping[str, Any]) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
+def recovery_document_id(store: CadLinkStore, row: Mapping[str, Any]) -> str | None:
+    """The declared destination, or the document a new Insert first marked."""
+    target = _target(row)
+    if row.get("kind") == UPDATE_LINK:
+        return _operation_id(target.get("document_id"))
+    destination = _object(target.get("destination")) or {}
+    if destination.get("kind") == "document":
+        return _operation_id(destination.get("value"))
+    with store._lock:
+        conn = store._connect()
+        conn.execute(RECOVERY_NOTICE_SCHEMA)
+        saved = conn.execute("SELECT document_id FROM cad_recovery_notices WHERE notice_id = ?",
+                             (row["operation_id"],)).fetchone()
+    return _operation_id(saved["document_id"]) if saved is not None else None
+
+
 def _document(heartbeat: Mapping[str, Any]) -> Mapping[str, Any]:
     return _object(heartbeat.get("document")) or {}
 
 
 def _evidence(
-    heartbeat: Mapping[str, Any], row: Mapping[str, Any]
+    store: CadLinkStore, heartbeat: Mapping[str, Any], row: Mapping[str, Any]
 ) -> tuple[str, str] | None:
     if row.get("kind") not in MUTATING_KINDS:
         return None
@@ -115,10 +131,10 @@ def _evidence(
     if expected_export_id is None:
         return None
     document = _document(heartbeat)
-    if row.get("kind") == UPDATE_LINK:
-        expected_document_id = _operation_id(_target(row).get("document_id"))
-        if expected_document_id is None or document.get("id") != expected_document_id:
-            return None
+    expected_document_id = recovery_document_id(store, row)
+    if (expected_document_id is not None and document.get("id") != expected_document_id
+            or row.get("kind") == UPDATE_LINK and expected_document_id is None):
+        return None
     links = document.get("links")
     if not isinstance(links, list):
         return None
@@ -310,7 +326,7 @@ def settle_from_heartbeat(
         operation_id = str(row["operation_id"])
         if row.get("kind") in MUTATING_KINDS:
             _remember_recovery_document(store, row, heartbeat)
-        evidence = _evidence(heartbeat, row)
+        evidence = _evidence(store, heartbeat, row)
         if evidence is not None:
             value = _record(
                 store,
@@ -328,7 +344,9 @@ def settle_from_heartbeat(
             # Only exact document evidence (handled above) settles recovery.
             # Notice dismissal hides feedback without claiming a repair.
             continue
-        if _applying(heartbeat) == operation_id and row["kind"] in MUTATING_KINDS:
+        expected_document_id = recovery_document_id(store, row) if row["kind"] in MUTATING_KINDS else None
+        document_matches = expected_document_id is None or _document(heartbeat).get("id") == expected_document_id
+        if _applying(heartbeat) == operation_id and row["kind"] in MUTATING_KINDS and document_matches:
             value = _record(
                 store,
                 row,
@@ -341,7 +359,7 @@ def settle_from_heartbeat(
         recent = _recent(heartbeat, row)
         if recent in ("superseded", "discarded"):
             value = _record_adapter_outcome(store, row, recent)
-        elif recent == "reconciled" and row["kind"] in MUTATING_KINDS and _export_id(row):
+        elif recent == "reconciled" and row["kind"] in MUTATING_KINDS and _export_id(row) and document_matches:
             value = _record_adapter_outcome(
                 store, row, "reconciled", evidence=(operation_id, str(_export_id(row)))
             )

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import subprocess
 import sys
+from unittest.mock import Mock
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
 
 from server.cadlink.fusion_outcomes import settle_from_heartbeat
 from server.cadlink.operations import request_digest
@@ -91,14 +95,128 @@ def test_dismissal_is_idempotent_durable_and_does_not_claim_repair(tmp_path):
 
 def test_dismissal_before_binding_cannot_be_revived(tmp_path):
     store = CadLinkStore.for_data_dir(tmp_path)
+    accept(store, kind="insert_link")
     dismiss_recovery_notice(store, "mutation")
-    accept(store)
     report(tmp_path)
     assert recovery_notices(store, tmp_path).notices == []
     store.close()
     store = CadLinkStore.for_data_dir(tmp_path)
     assert recovery_notices(store, tmp_path).notices == []
     store.close()
+
+
+@pytest.mark.parametrize("destination", ["document", "new_document"])
+def test_insert_binding_and_settlement_stay_in_the_persisted_document(tmp_path, destination):
+    store = CadLinkStore.for_data_dir(tmp_path)
+    target = {"export_id": "export", "destination": {
+        "kind": destination, "value": "fusion:active" if destination == "document" else "mutation"}}
+    store.accept_operation("mutation", "insert_link", request_digest("insert_link", target, {}), target, {})
+    if destination == "document":
+        # The first matching mark in a foreign document cannot bind this Insert.
+        report(tmp_path, document_id="fusion:other")
+        recovery_notices(store, tmp_path)
+        saved = store._connect().execute("SELECT document_id FROM cad_recovery_notices WHERE notice_id = 'mutation'").fetchone()
+        assert saved is None or saved["document_id"] != "fusion:other"
+        assert store.get_operation("mutation")["state"] != "recovery_required"
+    report(tmp_path)
+    assert recovery_notices(store, tmp_path).notices[0].document_id == "fusion:active"
+    store.close()
+    store = CadLinkStore.for_data_dir(tmp_path)
+    # Even exact operation/export ids in another document cannot hide recovery.
+    foreign = report(tmp_path, document_id="fusion:other", links=[{"operationId": "mutation", "exportId": "export"}])
+    foreign["document"]["name"] = "Foreign document"
+    (tmp_path / "ipc" / "wglink" / ".fusion-status.json").write_text(json.dumps(foreign))
+    notice, = recovery_notices(store, tmp_path).notices
+    assert notice.document_id == "fusion:active" and not notice.active_document
+    assert notice.document_name == "Active document"
+    assert store.get_operation("mutation")["state"] == "recovery_required"
+    report(tmp_path, applying=None, links=[{"operationId": "mutation", "exportId": "export"}])
+    assert recovery_notices(store, tmp_path).notices == []
+    assert store.get_operation("mutation")["state"] == "accepted"
+    store.close()
+
+
+def test_command_driven_last_report_stays_loud_but_never_settles_or_claims(tmp_path):
+    store = CadLinkStore.for_data_dir(tmp_path)
+    accept(store)
+    report(tmp_path)
+    assert recovery_notices(store, tmp_path).notices[0].active_document
+    accept(store, operation_id="pending")
+    value = report(tmp_path, links=[{"operationId": "mutation", "exportId": "export"}])
+    value["diagnostics"] = {"activation": {"automaticCoordination": False}}
+    value["updatedAt"] = "2020-01-01T00:00:00Z"
+    marker = tmp_path / "ipc" / "wglink" / ".fusion-status.json"
+    marker.write_text(json.dumps(value))
+    assert recovery_notices(store, tmp_path).notices[0].active_document
+    assert store.get_operation("mutation")["state"] == "recovery_required"
+    assert store.get_operation("pending")["state"] == "received"
+    value["updatedAt"] = "2999-01-01T00:00:00Z"
+    marker.write_text(json.dumps(value))
+    assert not recovery_notices(store, tmp_path).notices[0].active_document
+    value["document"]["links"] = []
+    value["updatedAt"] = (datetime.now(timezone.utc) + timedelta(seconds=5)).isoformat()
+    marker.write_text(json.dumps(value))
+    assert not recovery_notices(store, tmp_path).notices[0].active_document
+    store.close()
+
+
+@pytest.mark.parametrize("applying", [None, "later-operation"])
+def test_historical_recovery_is_quiet_when_its_mark_is_gone(tmp_path, applying):
+    store = CadLinkStore.for_data_dir(tmp_path)
+    accept(store)
+    report(tmp_path)
+    assert recovery_notices(store, tmp_path).notices[0].active_document
+    report(tmp_path, applying=applying)
+    notice, = recovery_notices(store, tmp_path).notices
+    assert notice.document_id == "fusion:active" and not notice.active_document
+    assert store.get_operation("mutation")["state"] == "recovery_required"
+    store.close()
+
+
+def test_dismissal_flushes_the_committed_tombstone_before_success(tmp_path, monkeypatch):
+    store = CadLinkStore.for_data_dir(tmp_path)
+    accept(store)
+    def flush():
+        assert not store._connect().in_transaction
+        assert store._connect().execute("SELECT dismissed_at FROM cad_recovery_notices").fetchone()[0]
+        raise OSError("checkpoint failed")
+    durable = Mock(side_effect=flush)
+    monkeypatch.setattr(store, "make_durable", durable)
+    with pytest.raises(OSError, match="checkpoint failed"):
+        dismiss_recovery_notice(store, "mutation")
+    durable.assert_called_once()
+    durable.side_effect = None
+    assert dismiss_recovery_notice(store, "mutation").dismissed
+    assert durable.call_count == 2
+    store.close()
+
+
+@pytest.mark.parametrize("notice_id", ["unknown", "return"])
+def test_dismissal_rejects_ids_without_an_accepted_mutation(tmp_path, notice_id):
+    store = CadLinkStore.for_data_dir(tmp_path)
+    target = {"document_id": "fusion:active", "design_id": "design", "instance_id": "instance",
+              "expected_baseline": {"kind": "document_signature_hash", "value": "sha256:baseline"}}
+    store.accept_operation("return", "request_return", request_digest("request_return", target, {}), target, {})
+    recovery_notices(store, tmp_path)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=store)))
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(post_dismiss_recovery_notice(notice_id, request))
+    assert error.value.status_code == 404
+    assert store._connect().execute("SELECT COUNT(*) FROM cad_recovery_notices").fetchone()[0] == 0
+    store.close()
+
+
+def test_evidence_request_directories_match_the_delivery_channels(tmp_path):
+    import ast
+    from server.cadlink.fusion_outcomes import _visible_request
+    # Read the constants without importing their live-dependent publisher.
+    source = Path(__file__).parents[1] / "cadlink" / "fusion_delivery.py"
+    channels = {node.targets[0].id: ast.literal_eval(node.value.args[0])
+                for node in ast.parse(source.read_text()).body
+                if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in {"HANDOFFS", "RETURN_REQUESTS"}}
+    for kind, channel in (("insert_link", "HANDOFFS"), ("update_link", "HANDOFFS"), ("request_return", "RETURN_REQUESTS")):
+        assert _visible_request(tmp_path, {"kind": kind, "operation_id": "named"}) == tmp_path / channels[channel] / "named.json"
 
 
 def test_only_active_document_notices_are_loud_and_stale_status_is_quiet(tmp_path):

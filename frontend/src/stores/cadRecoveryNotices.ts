@@ -7,6 +7,8 @@ import { jsonRequest, type CadReturnIngestRecord } from '../api/cadlink';
 import { jobsSocket, type JobItem, type JobsSocketManager } from '../api/jobsSocket';
 import { cadJobSummary, latestCadJobs, dismissCadJob } from '../jobs/cadSolve';
 import { useCadDeliveryHealthStore } from './cadDeliveryHealth';
+import { useCadConnectionStore, type CadConnectionStore } from './cadConnection';
+import { claimCadRecoveryError } from './cadOperations';
 
 export type CadRecoveryNotice = components['schemas']['RecoveryNotice'];
 type NoticePage = components['schemas']['RecoveryNoticesResponse'];
@@ -79,7 +81,10 @@ export function connectCadRecoveryNotices(
   manager: Pick<JobsSocketManager, 'subscribeCadOperations'> = jobsSocket,
   store = cadRecoveryNoticesStore,
   fetcher: typeof fetch = fetch,
+  connection: Pick<CadConnectionStore, 'subscribe'> = useCadConnectionStore,
 ): () => void {
+  const releaseRecoveryError = claimCadRecoveryError();
+  useCadDeliveryHealthStore.setState({ recoveryError: store.getState().recoveryError });
   let active = true;
   let reading = false;
   let again = false;
@@ -95,9 +100,18 @@ export function connectCadRecoveryNotices(
   const unsubscribe = manager.subscribeCadOperations({
     operation: (operation) => { if (operation.kind === 'insert_link' || operation.kind === 'update_link') read(); },
     resync: read,
+    addinStatusChanged: read,
+  });
+  // The existing connection owner ages its held report once at expiry. This
+  // also wakes document/evidence changes without introducing an idle poller.
+  const stopConnection = connection.subscribe((state, previous) => {
+    if (state.fusionStatus !== previous.fusionStatus) read();
   });
   read();
-  return () => { active = false; unsubscribe(); };
+  return () => {
+    if (!active) return;
+    active = false; unsubscribe(); stopConnection(); releaseRecoveryError();
+  };
 }
 
 export type CadRequest = {
@@ -146,9 +160,10 @@ export function selectCadRequests({ jobs, notices, record, recoveryOperations = 
   Object.values(notices ?? {}).forEach((notice) => recovery.set(notice.id, {
     id: notice.id, source: 'recovery', notice, operation: recoverySummary(notice), onScreen: notice.active_document, openable: false,
   }));
-  requests.push(...recovery.values());
-  requests.sort((a, b) => (a.operation.createdAt ?? '').localeCompare(b.operation.createdAt ?? '')
-    || (a.operation.acceptedSeq ?? 0) - (b.operation.acceptedSeq ?? 0) || a.id.localeCompare(b.id));
+  // Preserve the parent's stable input order on timestamp ties: operations
+  // (now notices) preceded jobs, and each owner's order stays intact.
+  requests.unshift(...recovery.values());
+  requests.sort((a, b) => (a.operation.createdAt ?? '').localeCompare(b.operation.createdAt ?? ''));
   return { current: requests.filter((item) => item.onScreen), earlier: requests.filter((item) => !item.onScreen) };
 }
 

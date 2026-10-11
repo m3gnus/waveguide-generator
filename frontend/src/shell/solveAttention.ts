@@ -79,6 +79,11 @@ export const solveAttention = {
     operationArms.set(operationId, navigationGeneration());
     setReadyRun(null);
   },
+  /** Capture before submission awaits; bind the server's mutation id later. */
+  captureOperationArm(): (operationId: string) => void {
+    const submitted = navigationGeneration();
+    return (operationId) => { operationArms.set(operationId, submitted); };
+  },
   /** First sight of an operation that has not been armed by a command here --
    * a request Fusion sent. Its arrival is when the user asked for it. */
   noticeOperation(operationId: string): void {
@@ -201,8 +206,8 @@ export function useRecoveryNoticeAttention(notices: Record<string, import('../st
   useEffect(() => {
     let front = false;
     for (const notice of Object.values(notices)) {
-      // Reuse an arm from the original Insert/Update press if there is one.
-      solveAttention.noticeOperation(notice.id);
+      // Only the original submission can arm a mutation. Discovery after
+      // navigation (or reload) must never create a new navigation intention.
       const key = `${notice.sequence}:${notice.active_document}`;
       const previous = seen.current.get(notice.id);
       seen.current.set(notice.id, key);

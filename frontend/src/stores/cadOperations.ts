@@ -65,6 +65,15 @@ function listingReplaces(listed: CadOperationSummary, held: CadOperationSummary)
 let loadGeneration = 0;
 const appliedDuringLoad = new Set<string>();
 
+let recoveryNoticeOwners = 0;
+/** S5-7 removes this legacy mirror. While the notice reader is mounted it
+ * alone writes recovery feedback into delivery health. */
+export function claimCadRecoveryError(): () => void {
+  recoveryNoticeOwners += 1;
+  let held = true;
+  return () => { if (held) { held = false; recoveryNoticeOwners -= 1; } };
+}
+
 const refusalKey = (refusal: CadInboxRefusal) => `${refusal.at}|${refusal.file}|${refusal.operationId ?? ''}`;
 
 export const useCadOperationsStore = create<CadOperationsState>((set, get) => ({
@@ -79,7 +88,7 @@ export const useCadOperationsStore = create<CadOperationsState>((set, get) => ({
   },
   recoveryError: null,
   setRecoveryError: (message) => {
-    useCadDeliveryHealthStore.setState({ recoveryError: message });
+    if (recoveryNoticeOwners === 0) useCadDeliveryHealthStore.setState({ recoveryError: message });
     if (get().recoveryError !== message) set({ recoveryError: message });
   },
   addinStatusRevision: 0,

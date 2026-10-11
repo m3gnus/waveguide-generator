@@ -14,6 +14,7 @@ import type { PolarConfig } from '../stores/solveOptions';
 import type { CadLinkClassification, DesignIdentity } from '../stores/document';
 import { writeToOutputFolder, type OutputFolderWrite } from './workspace';
 import type { ConfirmReplacements } from './exportDestination';
+import { solveAttention } from '../shell/solveAttention';
 
 export interface MigrationApplication {
   name: string;
@@ -153,6 +154,7 @@ export async function sendDesignToCad(
   polarConfig?: unknown,
   solveSettings: WgSolveSettings | null = wgSolveSettingsFromStore(),
 ): Promise<WgLinkExportResponse> {
+  const bindAttention = solveAttention.captureOperationArm();
   // No save gate here. The server commits the design on screen into the
   // CAD-link registry as part of the export, so an unsaved or edited design
   // sends like any other; `identity` is the optimistic-concurrency token when
@@ -185,6 +187,7 @@ export async function sendDesignToCad(
   });
   if (!response.ok) throw new Error(await errorMessage(response));
   const result = await response.json() as WgLinkExportResponse;
+  if (result.cadHandoffRequestId) bindAttention(result.cadHandoffRequestId);
   if (result.cadHandoff === 'failed') {
     throw new Error(`The CAD bundle was exported, but WG could not notify Fusion. Open it from ${result.bundlePath}.`);
   }

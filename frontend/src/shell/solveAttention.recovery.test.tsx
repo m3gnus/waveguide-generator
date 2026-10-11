@@ -1,7 +1,8 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from 'zustand';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { hydrateDesignDocument, sendDesignToCad } from '../api/designIo';
 import { createCadRecoveryNoticesStore, type CadRecoveryNotice, type CadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { resetSolveAttentionForTests, solveAttention, useRecoveryNoticeAttention } from './solveAttention';
@@ -35,8 +36,31 @@ describe('recovery attention without the coordinator', () => {
   const arrive = (item: CadRecoveryNotice) => act(() => store.setState({ notices: { [item.id]: item } }));
 
   it('fronts a newly actionable active-document recovery only once', () => {
+    solveAttention.armOperation('mutation');
     arrive(notice()); arrive(notice());
     expect(activations).toEqual(['cadlink']);
+  });
+  it('keeps an unarmed recovery discoverable after navigation without arming at discovery', () => {
+    act(() => workspaceNavigation.navigate('geometry')); activations.length = 0;
+    arrive(notice());
+    expect(activations).toEqual([]);
+    expect(host.textContent).toContain('Recovery notices (1)');
+  });
+  it.each([false, true])('captures submission navigation before awaiting the mutation id (navigate=%s)', async (navigate) => {
+    let complete!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => { complete = resolve; });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({ selected: true })))
+      .mockImplementationOnce(() => response);
+    // Exercise the submission boundary; no test pre-arming.
+    const sending = sendDesignToCad(hydrateDesignDocument({ formula: 'OSSE' }), 1, 'horn', null, fetcher, 'press');
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    if (navigate) act(() => workspaceNavigation.navigate('geometry'));
+    activations.length = 0;
+    complete(new Response(JSON.stringify({ cadHandoffRequestId: 'mutation', cadHandoff: 'published' })));
+    await sending;
+    arrive(notice());
+    expect(activations).toEqual(navigate ? [] : ['cadlink']);
+    expect(host.textContent).toContain('Recovery notices (1)');
   });
   it('keeps recovery changes discoverable after navigation without yanking the user', () => {
     solveAttention.armOperation('mutation');
@@ -52,6 +76,7 @@ describe('recovery attention without the coordinator', () => {
     expect(host.querySelector('button')).toBeNull();
   });
   it('keeps earlier-document recovery quiet but discoverable, then fronts when active', () => {
+    solveAttention.armOperation('mutation');
     arrive(notice({ active_document: false }));
     expect(activations).toEqual([]);
     expect(host.textContent).toContain('Recovery notices (1)');
