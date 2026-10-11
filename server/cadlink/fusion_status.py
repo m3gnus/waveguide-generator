@@ -23,6 +23,7 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import unicodedata
 from typing import Any, Mapping
 
 from server.cadlink.fusion_delivery import DELIVERY_VERSION, addin_delivery_version
@@ -215,6 +216,16 @@ def _timestamp(value: object) -> datetime | None:
 
 def _string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _link_name(value: object) -> str | None:
+    """Optional WGLink display label, never a document or link identity."""
+
+    if not isinstance(value, str):
+        return None
+    if any(unicodedata.category(char) == "Cc" for char in value):
+        return None
+    return value.strip()[:120] or None
 
 
 #: How far in the future ``updatedAt`` may be. A minute of clock skew is much
@@ -495,6 +506,7 @@ def _link_payload(value: object) -> dict[str, Any] | None:
         "editVersion": _string(value.get("editVersion")),
         "designHash": _string(value.get("designHash")),
         "designName": _string(value.get("designName")),
+        "linkName": _link_name(value.get("linkName")),
         "formula": _string(value.get("formula")),
         "configPresent": value.get("configPresent") is True,
         "parameterCount": max(0, parameter_count),

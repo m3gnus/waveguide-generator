@@ -1279,3 +1279,50 @@ def test_non_string_revision_tokens_are_never_compared_as_equal(tmp_path: Path) 
     assert status["documentChangeDetectable"] is False
     assert status["link"]["geometryRevisionToken"] is None
     assert status["link"]["measuredRevisionToken"] is None
+
+
+@pytest.mark.parametrize(
+    ("raw_name", "expected"),
+    [
+        ("Upper horn", "Upper horn"),
+        ("  Upper horn  ", "Upper horn"),
+        ("A" * 121, "A" * 120),
+        (None, None),
+        ("", None),
+        ("   ", None),
+        (42, None),
+        (True, None),
+        (["name"], None),
+        ({"name": "label"}, None),
+        ("bad\nname", None),
+        ("bad\rname", None),
+        ("bad\tname", None),
+        ("bad\x00name", None),
+        ("bad\x7fname", None),
+        ("bad\x85name", None),
+    ],
+)
+def test_link_name_projection_is_display_only_and_validated(
+    tmp_path: Path, raw_name: object, expected: str | None,
+) -> None:
+    workspace = tmp_path / "workspace"
+    _write_status(workspace, links=[_link(linkName=raw_name)])
+
+    status = _read(workspace)
+
+    assert status["link"]["linkName"] == expected
+    assert status["matchingLinks"][0]["linkName"] == expected
+    assert status["link"]["designName"] == "Tritonia-V"
+    assert status["link"]["instanceId"] == "instance-a"
+    assert status["state"] == "current"
+
+
+def test_link_name_missing_keeps_older_addins_compatible(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    _write_status(workspace, links=[_link()])
+
+    status = _read(workspace)
+
+    assert status["link"]["linkName"] is None
+    assert status["matchingLinks"][0]["linkName"] is None
+    assert status["state"] == "current"

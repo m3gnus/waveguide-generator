@@ -12,6 +12,7 @@ import { backendLimitation, symmetryDomainLimitation } from './backendSupport';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { CadCrossover } from './CrossoverSection';
 import { useCadPreparationStore } from '../stores/cadPreparation';
+import { useCadConnectionStore } from '../stores/cadConnection';
 import {
   assignableChannelIds,
   channelAcceptsDriver,
@@ -56,6 +57,7 @@ import {
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
 import { useCadFeedbackError } from '../shell/cadSetupPublisher';
 import { fusionWorkflowView, onshapeWorkflowView } from '../shell/CadLinkPanel';
+import { fusionLinkDisplayName } from '../shell/cadWorkflowView';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 import {
   CAD_CARDIOID_FIELD_CONTROLS,
@@ -653,6 +655,7 @@ export function requestParameterReveal(detail: RevealRequest): void {
 
 function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
   const preferences = usePreferences();
+  const observedFusionStatus = useCadConnectionStore((state) => state.fusionStatus);
   const cadCoordinator = useSyncExternalStore(
     cadLinkCoordinatorBridge.subscribe,
     cadLinkCoordinatorBridge.getSnapshot,
@@ -677,6 +680,10 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
     ? workflow.action === 'update' ? 'Send WG changes to Onshape' : 'Create in Onshape'
     : workflow.action === 'update' ? 'Send WG changes to Fusion' : 'Open in Fusion 360';
   const matchingFusionLinks = cadCoordinator.fusionStatus?.matchingLinks ?? [];
+  // The observation service is mounted in S5-7. Until then, the coordinator's
+  // additive status field supplies the same display label today.
+  const fusionDisplayStatus = observedFusionStatus ?? cadCoordinator.fusionStatus;
+  const fusionLinkName = fusionDisplayStatus?.link ? fusionLinkDisplayName(fusionDisplayStatus.link) : null;
   const matchingOnshapeLinks = cadCoordinator.onshapeStatus?.matchingLinks ?? [];
   return <Section
     title={CAD_CONTROLS.linkedDesign.section}
@@ -686,7 +693,7 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
   >
     <div className={`linked-design-card cad-connection-${workflow.state}`}>
       <span className="cad-connection-dot" aria-hidden="true"/>
-      <div><b>{workflow.headline}</b><span>{workflow.detail}</span></div>
+      <div><b>{workflow.headline}</b>{!onshape && fusionLinkName && <span>Fusion link: {fusionLinkName}</span>}<span>{workflow.detail}</span></div>
     </div>
     {!onshape && matchingFusionLinks.length > 1 && <label className="field-row linked-instance-selection">
       <span>Managed Fusion instance</span>
@@ -696,9 +703,12 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
         onChange={(event) => cadCoordinator.selectFusionInstance(event.target.value)}
       >
         <option value="" disabled>Choose an instance</option>
-        {matchingFusionLinks.map((link) => <option value={link.instanceId} key={link.instanceId}>
-          {link.designName ? `${link.designName} · ` : ''}{link.instanceId}
-        </option>)}
+        {matchingFusionLinks.map((link) => {
+          const name = fusionLinkDisplayName(observedFusionStatus?.matchingLinks?.find((item) => item.instanceId === link.instanceId) ?? link);
+          return <option value={link.instanceId} key={link.instanceId}>
+            {name ? `${name} · ` : ''}{link.instanceId}
+          </option>;
+        })}
       </select>
       <small>Body freshness and update/return actions are scoped to this instance ID. Placements of the same design are never merged.</small>
     </label>}

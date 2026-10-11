@@ -1,5 +1,10 @@
-import type { FusionCadStatus, WgLinkRefreshReport } from '../api/cadlink';
+import type { FusionCadLink, FusionCadStatus, WgLinkRefreshReport } from '../api/cadlink';
 import type { OnshapeStatus } from '../api/onshape';
+
+/** A link's optional user label is distinct from its document and identity. */
+export function fusionLinkDisplayName(link: FusionCadLink & { linkName?: string | null }): string | null {
+  return link.linkName?.trim() || link.designName || null;
+}
 
 /** Shared by the CAD Link panel, the rail card, and the coordinator's send
  * path, so every surface derives the same outbound action from one status. */
