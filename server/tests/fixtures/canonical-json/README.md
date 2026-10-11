@@ -50,7 +50,7 @@ to run with only the standard library, bypassing the contracts package initializ
 | `server/mesh/builder.py:815` | `_solver_mesh_cache_key` | `canonical_ascii_strict_json` |
 | `server/mesh/imported.py:1733` | `_geometry_fingerprint` | `canonical_ascii_strict_json` |
 | `server/preview/core.py:861` | `PreviewProtocol._compute_frame` | `canonical_ascii_strict_json` |
-| `server/solver/beat_runtime/registry.py:54` | `key_id` | `canonical_ascii_strict_json` |
+| `server/solver/beat_runtime/registry.py` | `key_id` | inline (BEAT host import set; same bytes as `canonical_ascii_strict_json`) |
 | `server/solver/combine.py:97` | `serialize_channel_bases` | `canonical_ascii_json` |
 | `server/solver/field_plane.py:860` | `FieldPlaneService._synthesis_revision` | `canonical_ascii_strict_json` |
 | `server/solver/symmetry.py:161` | `_resolution_cache_key` | `canonical_ascii_string_json` |

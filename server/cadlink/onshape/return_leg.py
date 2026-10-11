@@ -18,7 +18,6 @@ from pathlib import Path
 import shutil
 from typing import Any
 
-from server.contracts.canonical import canonical_ascii_strict_bytes as _canonical  # noqa: F401 (compatibility alias)
 
 from server.cadlink.identity import mint_id
 from server.cadlink.ingest import ingest_bundle
@@ -27,6 +26,7 @@ from server.cadlink.isolation import ChildRefusal
 from server.cadlink.step_evidence import ReturnedStepError
 from server.cadlink.store import CadLinkStore
 from server.platform.staging import publish_staging_directory
+from server.contracts.canonical import canonical_ascii_strict_bytes as _canonical  # noqa: F401 (golden-fixture helper site)
 
 
 RETURN_SUBDIRECTORY = Path("cadlink") / "onshape" / "wgreturn"
