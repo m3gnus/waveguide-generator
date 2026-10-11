@@ -1959,6 +1959,24 @@ def ingest_bundle(
                     for instance in manifest["instances"]
                 ],
                 "fem_air_volumes": manifest["scope"]["fem_air_volumes"],
+                "fem_regions": [
+                    {
+                        "region_id": region["region_id"],
+                        "name": region["name"],
+                        "file": region["file"],
+                        "sha256": manifest["files"][region["file"]]["sha256"],
+                        "surface_groups": [
+                            {
+                                "group_id": group["group_id"],
+                                "name": group["name"],
+                                "kind": group["kind"],
+                                "face_count": len(group["faces"]),
+                            }
+                            for group in region["surface_groups"]
+                        ],
+                    }
+                    for region in manifest["scope"].get("fem_regions", [])
+                ],
             },
             "identity": instance_identity_inventory(
                 manifest, selected_instance_id=resolved_instance_id

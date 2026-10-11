@@ -337,6 +337,44 @@ def _built_for_source(source_id: str) -> dict:
     }
 
 
+def test_ingest_retains_declared_fem_region_evidence(monkeypatch, tmp_path: Path) -> None:
+    from server.tests.test_fem_regions_gate import _fem_bundle
+
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    bundle = _fem_bundle(tmp_path / "returns")
+    path = bundle / "wgreturn.json"
+    manifest = json.loads(path.read_text())
+    face = {"area_mm2": 100.0, "centroid_mm": [0.0, 0.0, 0.0],
+            "normal": [0.0, 0.0, 1.0], "bbox_mm": [[0.0, 0.0, 0.0], [10.0, 10.0, 0.0]]}
+    manifest["scope"]["fem_regions"][0]["surface_groups"] = [
+        {"group_id": "port", "name": "Port", "kind": "interface", "mesh_size_mm": 4.0, "faces": [face]},
+        {"group_id": "walls", "name": "Walls", "kind": "rigid", "mesh_size_mm": 8.0, "faces": [face, face]},
+    ]
+    path.write_text(json.dumps(manifest))
+    source_id = manifest["sources"][0]["id"]
+    monkeypatch.setattr("server.cadlink.intake.ingest.build_imported_mesh_isolated",
+                        lambda *_args, **_kwargs: _built_for_source(source_id))
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    try:
+        record = ingest_bundle(bundle, {
+            "rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {source_id: 8},
+        }, [], store, tmp_path / "data", expected_design_id=manifest["instances"][0]["design_id"])
+        expected = [{
+            "region_id": "rear-chamber", "name": "Rear chamber",
+            "file": "fem-regions/rear-chamber.step",
+            "sha256": manifest["files"]["fem-regions/rear-chamber.step"]["sha256"],
+            "surface_groups": [
+                {"group_id": "port", "name": "Port", "kind": "interface", "face_count": 1},
+                {"group_id": "walls", "name": "Walls", "kind": "rigid", "face_count": 2},
+            ],
+        }]
+        assert record["evidence"]["fem_regions"] == expected
+        stored = json.loads(store.get_ingest(record["ingest_id"])["record_json"])
+        assert stored["evidence"]["fem_regions"] == expected
+    finally:
+        store.close()
+
+
 def test_a_real_source_identity_bundle_survives_into_the_ingest_record(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

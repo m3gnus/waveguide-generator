@@ -276,12 +276,18 @@ def _portable_member_name(raw: str, path: str) -> tuple[str, tuple[str, ...]]:
 def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     """Validate the unchanged WG ingress contract through the shared profile."""
     features = manifest.get("required_features")
+    scope = manifest.get("scope")
     if (
         not fem_regions_enabled()
-        and isinstance(features, list)
-        and protocol.FEM_REGIONS_FEATURE in features
+        and (
+            (isinstance(features, list) and protocol.FEM_REGIONS_FEATURE in features)
+            or (isinstance(scope, Mapping) and "fem_regions" in scope)
+        )
     ):
-        _fail("$.required_features", f"unknown required feature(s): {protocol.FEM_REGIONS_FEATURE}")
+        _fail(
+            "$.scope.fem_regions",
+            "This return declares FEM regions; this Waveguide Generator has FEM regions turned off.",
+        )
     try:
         protocol.validate_structure(manifest, protocol.WG_INGRESS)
     except protocol.ProtocolValidationError as exc:

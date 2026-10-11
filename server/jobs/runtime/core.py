@@ -2191,21 +2191,22 @@ class JobRuntime:
                 "imported_infinite_baffle_unsupported",
                 "imported geometry supports free-space solves only; infinite baffle is unavailable",
             )
-        fem_volumes = (
-            (record.get("evidence") or {}).get("fem_air_volumes")
-            if isinstance(record.get("evidence"), Mapping)
-            else []
-        ) or []
+        evidence = record.get("evidence")
+        evidence = evidence if isinstance(evidence, Mapping) else {}
+        fem_volumes = evidence.get("fem_air_volumes") or []
+        fem_regions = evidence.get("fem_regions") or []
         required_fem = [
             volume
             for volume in fem_volumes
             if not isinstance(volume, Mapping) or volume.get("required", True)
         ]
-        if required_fem and not geometry.exterior_only:
+        if (required_fem or fem_regions) and not geometry.exterior_only:
             raise ImportedSolveRefusal(
                 "fem_required",
-                "the CAD return declares required FEM air volumes; set exterior_only=true "
-                "to explicitly exclude them from this Phase 2 solve",
+                ("the CAD return declares FEM regions; set exterior_only=true "
+                 if fem_regions else
+                 "the CAD return declares required FEM air volumes; set exterior_only=true ")
+                + "to explicitly exclude them from this Phase 2 solve",
             )
 
         symmetry_metadata = _imported_symmetry_metadata(
@@ -3883,6 +3884,20 @@ class JobRuntime:
 
         self._check_cancelled(job_id)
         outcome_metadata = outcome.results.setdefault("metadata", {})
+        if isinstance(request.geometry, ImportedGeometrySource) and imported_record is not None:
+            evidence = imported_record.get("evidence") or {}
+            fem_regions = evidence.get("fem_regions") or []
+            if fem_regions and request.geometry.exterior_only:
+                # The runtime owns this note for every imported engine, using
+                # the same exclusion metadata as legacy FEM air volumes.
+                outcome_metadata["exterior_only"] = True
+                outcome_metadata["fem_exclusion"] = {
+                    "excluded": True,
+                    "declared_volume_count": len(evidence.get("fem_air_volumes") or []),
+                    "declared_region_count": len(fem_regions),
+                    "region_ids": [region["region_id"] for region in fem_regions],
+                    "reason": "Phase 2 exterior_only override",
+                }
         outcome_metadata.setdefault("solve_path", "full-3d")
         outcome_metadata["solve_wall_time_seconds"] = time.perf_counter() - solve_started
         if outcome.msh_text and not artifact_persisted:

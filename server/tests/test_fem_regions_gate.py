@@ -65,7 +65,7 @@ def _fem_bundle(root: Path) -> Path:
 def test_bundle_is_refused_off_and_accepted_only_with_the_flag(tmp_path, monkeypatch):
     bundle = _fem_bundle(tmp_path)
     monkeypatch.delenv(FEM_REGIONS_ENV, raising=False)
-    with pytest.raises(WgReturnError, match=r"\$\.required_features: unknown required feature\(s\): fem-regions-v1"):
+    with pytest.raises(WgReturnError, match="This return declares FEM regions; this Waveguide Generator has FEM regions turned off\\."):
         read_wgreturn(bundle)
 
     monkeypatch.setenv(FEM_REGIONS_ENV, "1")
@@ -74,18 +74,27 @@ def test_bundle_is_refused_off_and_accepted_only_with_the_flag(tmp_path, monkeyp
     assert "fem-regions/rear-chamber.step" in accepted.members
 
 
-def test_ingest_refuses_fem_before_inspection_or_meshing(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_feature", [True, False], ids=["declared-feature", "scope-only"])
+def test_ingest_refuses_fem_before_inspection_or_meshing(tmp_path, monkeypatch, with_feature):
     from server.cadlink.intake import ingest, isolated
 
-    monkeypatch.delenv(FEM_REGIONS_ENV, raising=False)
+    bundle = _fem_bundle(tmp_path)
+    monkeypatch.setenv(FEM_REGIONS_ENV, "1")
+    read_wgreturn(bundle)  # Accepted at Send; the restarted receiver disables FEM.
+    if not with_feature:
+        path = bundle / "wgreturn.json"
+        manifest = json.loads(path.read_text())
+        manifest["required_features"].remove("fem-regions-v1")
+        path.write_text(json.dumps(manifest))
+    monkeypatch.delenv(FEM_REGIONS_ENV)
 
     def unexpected(*_args, **_kwargs):
         pytest.fail("flag-off FEM intake must not inspect or mesh geometry")
 
     monkeypatch.setattr(isolated, "inspect_returned_step", unexpected)
     monkeypatch.setattr(ingest, "build_imported_mesh_isolated", unexpected)
-    with pytest.raises(ingest.IngestRefusal, match="unknown required feature") as caught:
-        ingest.ingest_bundle(_fem_bundle(tmp_path), {}, [], None, tmp_path)
+    with pytest.raises(ingest.IngestRefusal, match="This return declares FEM regions; this Waveguide Generator has FEM regions turned off\\.") as caught:
+        ingest.ingest_bundle(bundle, {}, [], None, tmp_path)
     assert caught.value.stage == "stage 1 bundle validation"
 
 

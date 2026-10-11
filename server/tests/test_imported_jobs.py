@@ -1534,18 +1534,59 @@ def test_skipped_sources_must_be_optional(tmp_path: Path, required: bool) -> Non
     asyncio.run(scenario())
 
 
-def test_required_fem_volume_needs_exterior_only_override(tmp_path: Path) -> None:
+@pytest.mark.parametrize("evidence", [
+    {"fem_air_volumes": [{"file": "fem/air.step"}]},
+    {"fem_air_volumes": [], "fem_regions": [{"region_id": "rear-chamber"}]},
+    {"fem_air_volumes": [{"required": False}], "fem_regions": [{"region_id": "rear-chamber"}]},
+], ids=["required-volume", "region-only", "region-with-optional-volume"])
+def test_required_fem_volume_needs_exterior_only_override(tmp_path: Path, evidence) -> None:
     async def scenario() -> None:
         runtime, ingest_id, _ = await _runtime_fixture(
             tmp_path,
-            {"evidence": {"fem_air_volumes": [{"file": "fem/air.step"}]}},
+            {"evidence": evidence},
         )
         try:
             with pytest.raises(ImportedSolveRefusal) as caught:
                 await runtime.submit(_request(ingest_id))
             assert caught.value.reason_code == "fem_required"
+            if evidence.get("fem_regions"):
+                assert "FEM regions" in str(caught.value)
             request = _request(ingest_id, exterior_only=True)
             assert await runtime.submit(request)
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_exterior_only_result_records_ignored_fem_regions(tmp_path: Path) -> None:
+    class ExteriorEngine:
+        name = "metal"
+
+        async def run(self, *_args, **_kwargs):
+            return EngineRunResult(results={
+                "frequencies": [], "metadata": {}, "channels": {
+                    "left": {"frequencies": [], "metadata": {"drive_channel_id": "left"}},
+                    "right": {"frequencies": [], "metadata": {"drive_channel_id": "right"}},
+                }, "channel_order": ["left", "right"],
+            })
+
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, {
+            "evidence": {"fem_air_volumes": [], "fem_regions": [{"region_id": "rear-chamber"}]},
+        })
+        runtime.engine_registry = _AlwaysRegistry(ExteriorEngine())
+        try:
+            job_id = await runtime.submit(_request(ingest_id, exterior_only=True))
+            await runtime.wait_idle()
+            row = runtime.store.get_job_row(job_id)
+            assert row["status"] == "complete", row.get("error_message")
+            metadata = (await runtime.get_results(job_id))["metadata"]
+            assert metadata["exterior_only"] is True
+            assert metadata["fem_exclusion"] == {
+                "excluded": True, "declared_volume_count": 0, "declared_region_count": 1,
+                "region_ids": ["rear-chamber"], "reason": "Phase 2 exterior_only override",
+            }
         finally:
             await runtime.shutdown()
 

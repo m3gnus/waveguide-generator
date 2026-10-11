@@ -1216,6 +1216,26 @@ describe('ParamPanel inventory UX', () => {
     }
   });
 
+  it('offers explicit exterior-only selection for a return with regions and no FEM air volumes', () => {
+    act(() => {
+      setCadReady();
+      useCadReturnStore.setState({
+        ingestRecord: { ...cadRecord, evidence: { fem_air_volumes: [], fem_regions: [{ region_id: 'rear-chamber' }] } },
+        exteriorOnly: false,
+      });
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const toggle = host.querySelector<HTMLInputElement>('#cad-exterior-only');
+    expect(toggle).not.toBeNull();
+    expect(toggle!.checked).toBe(false);
+    expect(importedSubmissionBlocker()).toContain('FEM regions');
+    act(() => toggle!.click());
+    expect(useCadReturnStore.getState().exteriorOnly).toBe(true);
+    expect(importedSubmissionBlocker()).toBeNull();
+    expect(buildImportedSubmission().geometry.exterior_only).toBe(true);
+  });
+
   it('renders every moved CAD control in the Simulation rail and submits its visible crossover state', () => {
     const ingest = vi.spyOn(cadWorkspace.getSnapshot(), 'ingest').mockResolvedValue(undefined);
     act(() => {

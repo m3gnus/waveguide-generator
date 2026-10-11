@@ -91,6 +91,7 @@ export function importedSubmissionBlocker(
   const listInvalid = solveStore.frequencyMode === 'list'
     && parseFrequencyList(solveStore.frequencyListText).frequencies === null;
   const femVolumes = state.ingestRecord?.evidence?.fem_air_volumes ?? [];
+  const femRegions = state.ingestRecord?.evidence?.fem_regions ?? [];
   const requiredFem = femVolumes.some((volume) => (
     !volume
     || typeof volume !== 'object'
@@ -100,6 +101,9 @@ export function importedSubmissionBlocker(
   if (directivityError) return directivityError;
   if (!state.ingestRecord) return 'Ingest a CAD return before solving.';
   if (state.needsIngest) return state.ingestStaleReason ?? 'Sizing or source selection changed. Re-ingest before solving.';
+  if (femRegions.length > 0 && !state.exteriorOnly) {
+    return 'This return includes FEM regions. Explicitly choose an exterior-only solve to ignore them.';
+  }
   if (requiredFem && !state.exteriorOnly) {
     return 'This return includes FEM air volumes. Explicitly choose an exterior-only Phase 2 solve.';
   }

@@ -321,7 +321,7 @@ export interface CadReturnIngestRecord {
     skipped?: Array<{ object_id?: string; name?: string; kind?: string; severity?: string; reason?: string; [key: string]: unknown }>;
     [key: string]: unknown;
   };
-  evidence?: { instances?: unknown[]; fem_air_volumes?: unknown[]; [key: string]: unknown };
+  evidence?: { instances?: unknown[]; fem_air_volumes?: unknown[]; fem_regions?: unknown[]; [key: string]: unknown };
   identity?: {
     schema_version: 1;
     selected_instance_id: string | null;
