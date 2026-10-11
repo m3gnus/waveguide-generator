@@ -1,4 +1,4 @@
-"""Settle WG-produced Fusion operations from a live version-3 heartbeat."""
+"""Settle WG-produced Fusion operations from version-3 document evidence."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import logging
 from pathlib import Path
 from typing import Any, Mapping
 
-from .fusion_delivery import DELIVERY_VERSION, HANDOFFS, RETURN_REQUESTS, addin_delivery_version
 from .operations import (
     ACCEPTED,
     CANCELLED,
@@ -19,16 +18,44 @@ from .operations import (
     REJECTED,
     REQUEST_RETURN,
     STAGE_EXECUTING,
-    STATES,
-    TERMINAL_STATES,
     UPDATE_LINK,
 )
 from .store import CadLinkStore
+from .wglink_protocol import FUSION_REQUEST_DELIVERY_VERSION
 
 
 logger = logging.getLogger(__name__)
 FUSION_KINDS = frozenset({REQUEST_RETURN, INSERT_LINK, UPDATE_LINK})
 _last_request_seen: dict[str, str] = {}
+
+
+# Additive recovery metadata, ignored by older readers; no user_version change.
+RECOVERY_NOTICE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS cad_recovery_notices (
+  notice_id TEXT PRIMARY KEY,
+  document_id TEXT,
+  document_name TEXT,
+  dismissed_at TEXT
+)
+"""
+
+
+def _remember_recovery_document(store: CadLinkStore, row: Mapping[str, Any],
+                                heartbeat: Mapping[str, Any]) -> None:
+    """An Insert learns its document from the mark before that report is lost."""
+    document = _document(heartbeat)
+    document_id = _operation_id(document.get("id"))
+    expected = _operation_id(_target(row).get("document_id"))
+    if (_applying(heartbeat) != row["operation_id"] or not document_id
+            or (expected is not None and expected != document_id)):
+        return
+    with store._lock, store._transaction() as conn:
+        conn.execute(RECOVERY_NOTICE_SCHEMA)
+        conn.execute("INSERT INTO cad_recovery_notices(notice_id, document_id, document_name) "
+                     "VALUES (?, ?, ?) ON CONFLICT(notice_id) DO UPDATE SET "
+                     "document_id = COALESCE(cad_recovery_notices.document_id, excluded.document_id), "
+                     "document_name = COALESCE(excluded.document_name, cad_recovery_notices.document_name)",
+                     (row["operation_id"], document_id, _operation_id(document.get("name"))))
 
 
 def _object(value: object) -> Mapping[str, Any] | None:
@@ -159,7 +186,7 @@ def _log_last_request(heartbeat: Mapping[str, Any], ipc: Path) -> None:
 
 
 def _visible_request(ipc: Path, row: Mapping[str, Any]) -> Path:
-    directory = RETURN_REQUESTS.directory if row["kind"] == REQUEST_RETURN else HANDOFFS.directory
+    directory = ".fusion-return-requests" if row["kind"] == REQUEST_RETURN else ".fusion-handoffs"
     return ipc / directory / f"{row['operation_id']}.json"
 
 
@@ -255,23 +282,34 @@ def settle_from_heartbeat(
     ipc: Path,
     *,
     only_operation_id: str | None = None,
+    mutations_only: bool = False,
 ) -> int:
     """Record evidence and adapter outcomes without inferring a missed result."""
 
-    if (addin_delivery_version(heartbeat) or 0) < DELIVERY_VERSION:
+    # Read-model code must also work after removal of the live transport.
+    # Delivery schema 3 is the file protocol, independent of its publisher.
+    version = heartbeat.get("deliveryVersion")
+    if type(version) is not int or version < FUSION_REQUEST_DELIVERY_VERSION:
         return 0
     _log_last_request(heartbeat, ipc)
     changed = 0
-    rows = [
-        row
-        for row in store.list_operations(states=STATES - TERMINAL_STATES, limit=1000)
-        if row.get("kind") in FUSION_KINDS
-        and (only_operation_id is None or row.get("operation_id") == only_operation_id)
-        and row.get("state") not in TERMINAL_STATES
-    ]
+    store.initialize()
+    kinds = (INSERT_LINK, UPDATE_LINK) if mutations_only else (INSERT_LINK, UPDATE_LINK, REQUEST_RETURN)
+    with store._lock:
+        # Recovery must remain reachable beyond a bounded recent listing.
+        rows = [dict(row) for row in store._connect().execute(
+            f"SELECT * FROM cad_operations WHERE kind IN ({', '.join('?' for _ in kinds)}) "
+            "AND state NOT IN (?, ?, ?) "
+            + ("AND operation_id = ? " if only_operation_id is not None else "")
+            + "ORDER BY rowid",
+            (*kinds, ACCEPTED, REJECTED, CANCELLED)
+            + ((only_operation_id,) if only_operation_id is not None else ()),
+        ).fetchall()]
     for initial in rows:
         row = initial
         operation_id = str(row["operation_id"])
+        if row.get("kind") in MUTATING_KINDS:
+            _remember_recovery_document(store, row, heartbeat)
         evidence = _evidence(heartbeat, row)
         if evidence is not None:
             value = _record(
@@ -287,8 +325,8 @@ def settle_from_heartbeat(
             changed += value is not None
             continue
         if row["state"] == RECOVERY_REQUIRED:
-            # Only exact document evidence (handled above) or the user's
-            # dismissal may settle this state.
+            # Only exact document evidence (handled above) settles recovery.
+            # Notice dismissal hides feedback without claiming a repair.
             continue
         if _applying(heartbeat) == operation_id and row["kind"] in MUTATING_KINDS:
             value = _record(

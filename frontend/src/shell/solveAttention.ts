@@ -192,3 +192,23 @@ export function useJobAttention(jobs: JobItem[]): void {
     if (front && workspaceModeStore.getSnapshot().mode === 'cad') workspaceNavigation.activate('cadlink');
   }, [jobs]);
 }
+
+/** Recovery notices have their own observer, built beside the legacy operation
+ * observer. Returned notices stay discoverable when automatic fronting is
+ * fenced by explicit navigation, or the user is outside CAD mode. */
+export function useRecoveryNoticeAttention(notices: Record<string, import('../stores/cadRecoveryNotices').CadRecoveryNotice>): number {
+  const seen = useRef(new Map<string, string>());
+  useEffect(() => {
+    let front = false;
+    for (const notice of Object.values(notices)) {
+      // Reuse an arm from the original Insert/Update press if there is one.
+      solveAttention.noticeOperation(notice.id);
+      const key = `${notice.sequence}:${notice.active_document}`;
+      const previous = seen.current.get(notice.id);
+      seen.current.set(notice.id, key);
+      if (key !== previous && notice.active_document && solveAttention.operationArmed(notice.id)) front = true;
+    }
+    if (front && workspaceModeStore.getSnapshot().mode === 'cad') workspaceNavigation.activate('cadlink');
+  }, [notices]);
+  return Object.keys(notices).length;
+}

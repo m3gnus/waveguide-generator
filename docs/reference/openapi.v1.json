@@ -8891,6 +8891,106 @@
         "title": "RadiationImpedanceTermination",
         "type": "object"
       },
+      "RecoveryDismissalResponse": {
+        "properties": {
+          "dismissed": {
+            "default": true,
+            "title": "Dismissed",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "repaired": {
+            "default": false,
+            "title": "Repaired",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "RecoveryDismissalResponse",
+        "type": "object"
+      },
+      "RecoveryNotice": {
+        "properties": {
+          "active_document": {
+            "title": "Active Document",
+            "type": "boolean"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "document_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Name"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "insert_link",
+              "update_link"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "document_id",
+          "document_name",
+          "created_at",
+          "sequence",
+          "active_document"
+        ],
+        "title": "RecoveryNotice",
+        "type": "object"
+      },
+      "RecoveryNoticesResponse": {
+        "properties": {
+          "notices": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryNotice"
+            },
+            "title": "Notices",
+            "type": "array"
+          }
+        },
+        "required": [
+          "notices"
+        ],
+        "title": "RecoveryNoticesResponse",
+        "type": "object"
+      },
       "RegistrationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -12353,6 +12453,69 @@
           }
         },
         "summary": "List Receipts",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/recovery-notices": {
+      "get": {
+        "operationId": "get_recovery_notices_api_cadlink_recovery_notices_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryNoticesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Recovery Notices",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/recovery-notices/{notice_id}/dismiss": {
+      "post": {
+        "operationId": "post_dismiss_recovery_notice_api_cadlink_recovery_notices__notice_id__dismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "notice_id",
+            "required": true,
+            "schema": {
+              "title": "Notice Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryDismissalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Dismiss Recovery Notice",
         "tags": [
           "cadlink"
         ]

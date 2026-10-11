@@ -3,6 +3,7 @@ import { getIngest, type CadReturnFinding, type CadReturnIngestRecord } from '..
 import type { CadOperationSummary } from '../api/cadOperations';
 import { listCadProjects } from '../api/cadProjects';
 import { pendingCadOperations, useCadOperationsStore } from '../stores/cadOperations';
+import { selectCadRequests } from '../stores/cadRecoveryNotices';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { openCadProject } from './CadProjectPanel';
 import { approveCadJob, cadJobSummaries, dismissCadJob, useCadJobs } from '../jobs/cadSolve';
@@ -512,22 +513,14 @@ export function OnScreenSolveStatus({ record }: { record: CadReturnIngestRecord 
 export function CadOperationsSection({ record, solves = true }: { record: CadReturnIngestRecord | null; solves?: boolean }) {
   const operations = useCadOperationsStore((state) => state.operations);
   const jobs = useCadJobs();
-  const combined = {
-    ...Object.fromEntries(Object.entries(operations).filter(([, operation]) => operation.kind !== 'prepare_and_solve')),
-    ...cadJobSummaries(jobs),
-  };
   const coordinator = useSyncExternalStore(
     cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
   );
-  const pending = pendingCadOperations(combined)
-    .filter((operation) => operation.kind === 'prepare_and_solve'
-      || (operation.state === 'recovery_required'
-        && (operation.kind === 'insert_link' || operation.kind === 'update_link')));
-  if (!pending.length) return null;
-  const reportedRecovery = coordinator.fusionStatus?.recoveryRequired?.operationId ?? null;
-  const current = pending.filter((operation) => aboutWhatIsOnScreen(operation, record, reportedRecovery)
-    && (solves || operation.kind !== 'prepare_and_solve'));
-  const earlier = pending.filter((operation) => !aboutWhatIsOnScreen(operation, record, reportedRecovery));
+  const selected = selectCadRequests({ jobs, recoveryOperations: operations, record,
+    reportedRecovery: coordinator.fusionStatus?.recoveryRequired?.operationId ?? null });
+  const current = selected.current.map((item) => item.operation)
+    .filter((operation) => solves || operation.kind !== 'prepare_and_solve');
+  const earlier = selected.earlier.map((item) => item.operation);
   if (!current.length && !earlier.length) return null;
   return <div className="cad-operations">
     {current.map((operation) => operation.kind === 'prepare_and_solve'

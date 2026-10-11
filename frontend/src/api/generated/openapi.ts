@@ -825,6 +825,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cadlink/recovery-notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Recovery Notices */
+        get: operations["get_recovery_notices_api_cadlink_recovery_notices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cadlink/recovery-notices/{notice_id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Dismiss Recovery Notice */
+        post: operations["post_dismiss_recovery_notice_api_cadlink_recovery_notices__notice_id__dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cadlink/request-fusion-return": {
         parameters: {
             query?: never;
@@ -5073,6 +5107,46 @@ export interface components {
             /** Real */
             real: number[][];
         };
+        /** RecoveryDismissalResponse */
+        RecoveryDismissalResponse: {
+            /**
+             * Dismissed
+             * @default true
+             */
+            dismissed?: boolean;
+            /** Id */
+            id: string;
+            /**
+             * Repaired
+             * @default false
+             */
+            repaired?: boolean;
+        };
+        /** RecoveryNotice */
+        RecoveryNotice: {
+            /** Active Document */
+            active_document: boolean;
+            /** Created At */
+            created_at: string;
+            /** Document Id */
+            document_id: string | null;
+            /** Document Name */
+            document_name: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "insert_link" | "update_link";
+            /** Sequence */
+            sequence: number;
+        };
+        /** RecoveryNoticesResponse */
+        RecoveryNoticesResponse: {
+            /** Notices */
+            notices: components["schemas"]["RecoveryNotice"][];
+        };
         /** RegistrationRequest */
         RegistrationRequest: {
             /** Adaptersessionid */
@@ -7154,6 +7228,57 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_recovery_notices_api_cadlink_recovery_notices_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryNoticesResponse"];
+                };
+            };
+        };
+    };
+    post_dismiss_recovery_notice_api_cadlink_recovery_notices__notice_id__dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                notice_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryDismissalResponse"];
                 };
             };
             /** @description Validation Error */
