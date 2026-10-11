@@ -51,7 +51,7 @@ describe('Send receipt cursor source, without a coordinator', () => {
     const reloaded = createCadReceiptsStore(sessionStorage, () => NOW + 3600_000);
     const retry = vi.fn().mockResolvedValue(answer([receipt(51)]));
     await reloaded.getState().load(retry);
-    expect(retry).toHaveBeenCalledWith('/api/cadlink/receipts?after=50&limit=50');
+    expect(retry).toHaveBeenCalledWith('/api/cadlink/receipts?after=50&limit=50', { signal: expect.any(AbortSignal) });
     expect(Object.keys(reloaded.getState().receipts)).toHaveLength(51);
     expect(reloaded.getState().recoveryError).toBeNull();
   });
@@ -130,7 +130,7 @@ describe('Send receipt cursor source, without a coordinator', () => {
     ]);
     socket.listener.resync();
     await flush();
-    expect(fetcher).toHaveBeenLastCalledWith('/api/cadlink/receipts?after=2&limit=50');
+    expect(fetcher).toHaveBeenLastCalledWith('/api/cadlink/receipts?after=2&limit=50', { signal: expect.any(AbortSignal) });
     stop();
     expect(socket.unsubscribe).toHaveBeenCalledOnce();
   });
@@ -208,6 +208,32 @@ describe('Send receipt cursor source, without a coordinator', () => {
 describe('receipt review regressions', () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW); sessionStorage.clear(); resetCadDeliveryHealthStore(); });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it.each(['fetch', 'body'])('bounds a hung receipt %s read, permits retry and fences its late page', async (phase) => {
+    const store = createCadReceiptsStore(sessionStorage, () => NOW);
+    let release!: () => void;
+    const late = answer([receipt(99)]);
+    const hung = phase === 'fetch'
+      ? new Promise<Response>((resolve) => { release = () => resolve(late); })
+      : Promise.resolve({ ok: true, json: () => new Promise((resolve) => {
+          release = () => resolve({ feed_id: 'feed-a', receipts: [receipt(99)], cursor: 99, has_more: false });
+        }) } as Response);
+    const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(() => hung).mockResolvedValueOnce(answer([receipt(1)]));
+    const read = store.getState().load(fetcher);
+    expect(store.getState().load(fetcher)).toBe(read);
+    const outcome = read.catch((error: Error) => error);
+    await flush(); await vi.advanceTimersByTimeAsync(3_000);
+    expect(await Promise.race([outcome, Promise.resolve('still waiting')])).toBeInstanceOf(Error);
+    expect(store.getState().recoveryError).toMatch(/timed out/i);
+    expect(fetcher.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    await store.getState().load(fetcher);
+    expect(store.getState().cursor).toBe(1);
+    expect(store.getState().recoveryError).toBeNull();
+    release(); await flush();
+    expect(store.getState().cursor).toBe(1);
+    expect(Object.keys(store.getState().receipts)).toEqual(['send:1']);
+    expect(store.getState().recoveryError).toBeNull();
+  });
 
   it('does not let a transient receipt block later Sends and bounds retries across pushes and reloads', async () => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
@@ -294,6 +320,6 @@ describe('receipt review regressions', () => {
     expect(Object.keys(store.getState().receipts)).toEqual(['send:4']);
     expect(Object.values(store.getState().feedback)).toHaveLength(3);
     expect(store.getState().recoveryError).toBeNull();
-    expect(fetcher.mock.calls[1]).toEqual(['/api/cadlink/receipts?after=2&limit=50']);
+    expect(fetcher.mock.calls[1]).toEqual(['/api/cadlink/receipts?after=2&limit=50', { signal: expect.any(AbortSignal) }]);
   });
 });

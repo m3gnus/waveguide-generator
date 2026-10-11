@@ -42,6 +42,8 @@ export interface CadReceiptsState {
   frontedBundles: Array<{ path: string; manifest: string | null }>;
   feedback: Record<string, ReceiptFeedback>;
   recoveryError: string | null;
+  /** Last complete HTTP read in this window; persisted cursors alone are not fresh evidence. */
+  loadedAt: number | null;
   merge(page: ReceiptPage): void;
   markFronted(id: string, receipt?: CadReceipt): void;
   report(id: string, feedback: ReceiptFeedback): void;
@@ -51,6 +53,7 @@ export type CadReceiptsStore = StoreApi<CadReceiptsState>;
 const KEY = 'wg2.cad.receipts.v2';
 const HISTORY_LIMIT = 20;
 export const RECEIPT_FIRST_CONNECTION_MS = 10 * 60_000;
+export const RECEIPT_READ_TIMEOUT_MS = 3_000;
 const RETRY_MS = [5_000, 30_000, 120_000];
 function windowStorage(): Storage | null {
   try { return typeof sessionStorage === 'undefined' ? null : sessionStorage; } catch { return null; }
@@ -98,7 +101,7 @@ export function createCadReceiptsStore(storage = windowStorage(), now = Date.now
     return { feedId: id, cursor: saved.cursor ?? 0, since: saved.since ?? now() - RECEIPT_FIRST_CONNECTION_MS,
       frontedBundles: saved.frontedBundles ?? [], receipts: saved.receipts ?? {}, fronted: saved.fronted ?? [], feedback: saved.feedback ?? {},
       newestSequence: saved.newestSequence ?? 0, newestSentAt: saved.newestSentAt ?? 0,
-      intakeRefusals: saved.intakeRefusals ?? [], displayRetries: saved.displayRetries ?? {}, recoveryError: null };
+      intakeRefusals: saved.intakeRefusals ?? [], displayRetries: saved.displayRetries ?? {}, recoveryError: null, loadedAt: null };
   };
   let loading: Promise<void> | null = null;
   const store = createStore<CadReceiptsState>((set, get) => ({
@@ -151,35 +154,49 @@ export function createCadReceiptsStore(storage = windowStorage(), now = Date.now
     },
     load: (fetcher = fetch) => {
       if (loading) return loading;
-      loading = (async () => {
-        try {
-          for (;;) {
-            const after = get().cursor;
-            const response = await fetcher(`/api/cadlink/receipts?after=${after}&limit=50`);
-            if (!response.ok) throw new Error(`Send receipt feed failed (${response.status})`);
-            const page = await response.json() as ReceiptPage;
-            if (typeof page.feed_id !== 'string' || !page.feed_id
-              || !Array.isArray(page.receipts) || !Number.isSafeInteger(page.cursor) || page.cursor < 0
-              || typeof page.has_more !== 'boolean') throw new Error('Invalid Send receipt page');
-            if (get().feedId && get().feedId !== page.feed_id) {
-              set(initial(page.feed_id));
-              continue; // That page used the previous database's cursor. Read this feed's cursor instead.
-            }
-            if (page.cursor < after || (page.has_more && page.cursor <= after)) throw new Error('Invalid Send receipt page');
-            const valid: CadReceipt[] = [];
-            page.receipts.forEach((item, index) => {
-              if (isReceipt(item) && item.cursor <= page.cursor) valid.push(item);
-              else get().report(`invalid:${page.feed_id}:${page.cursor}:${index}`, {
-                outcome: 'display_failed', message: 'WG skipped an invalid Send receipt in the feed.' });
-            });
-            get().merge({ ...page, receipts: valid.sort((a, b) => a.cursor - b.cursor) });
-            if (!page.has_more) return;
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout>;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error('Send receipt feed timed out'));
+          controller.abort();
+        }, RECEIPT_READ_TIMEOUT_MS);
+      });
+      set({ loadedAt: null });
+      const read = (async () => {
+        for (;;) {
+          const after = get().cursor;
+          const response = await fetcher(`/api/cadlink/receipts?after=${after}&limit=50`, { signal: controller.signal });
+          controller.signal.throwIfAborted();
+          if (!response.ok) throw new Error(`Send receipt feed failed (${response.status})`);
+          const page = await response.json() as ReceiptPage;
+          controller.signal.throwIfAborted();
+          if (typeof page.feed_id !== 'string' || !page.feed_id
+            || !Array.isArray(page.receipts) || !Number.isSafeInteger(page.cursor) || page.cursor < 0
+            || typeof page.has_more !== 'boolean') throw new Error('Invalid Send receipt page');
+          if (get().feedId && get().feedId !== page.feed_id) {
+            set(initial(page.feed_id));
+            continue; // That page used the previous database's cursor. Read this feed's cursor instead.
           }
-        } catch (error) {
-          set({ recoveryError: error instanceof Error ? error.message : String(error) });
-          throw error;
+          if (page.cursor < after || (page.has_more && page.cursor <= after)) throw new Error('Invalid Send receipt page');
+          const valid: CadReceipt[] = [];
+          page.receipts.forEach((item, index) => {
+            if (isReceipt(item) && item.cursor <= page.cursor) valid.push(item);
+            else get().report(`invalid:${page.feed_id}:${page.cursor}:${index}`, {
+              outcome: 'display_failed', message: 'WG skipped an invalid Send receipt in the feed.' });
+          });
+          get().merge({ ...page, receipts: valid.sort((a, b) => a.cursor - b.cursor) });
+          if (!page.has_more) return;
         }
-      })().finally(() => { loading = null; });
+      })();
+      // Race the whole paged read, including response bodies. Abort is advisory:
+      // the checks above also fence transports that settle after the deadline.
+      loading = Promise.race([read, timeout]).then(() => {
+        set({ loadedAt: Date.now(), recoveryError: null });
+      }).catch((error) => {
+        set({ loadedAt: null, recoveryError: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }).finally(() => { clearTimeout(timer); loading = null; });
       return loading;
     },
   }));

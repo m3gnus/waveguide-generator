@@ -21,6 +21,8 @@ import { importedMeshStore } from '../../viewport/importedMeshStore';
 export interface RefreshOptions {
   background?: boolean;
   autoOpenNew?: boolean;
+  /** List for manual use, but keep new revisions eligible until Send owners are known. */
+  deferNewArrivals?: boolean;
 }
 
 /** A step abandoned because newer user intent replaced what it was working on.
@@ -76,8 +78,13 @@ export interface CadReturnArrivalReaderIntegration {
   refusedForeignReturn: Ref<boolean>;
   returnListRequest: Ref<number>;
   seenReturnRevisions: Ref<Map<string, string> | null>;
+  deferredArrivalRevisions: Ref<Map<string, string>>;
   /** The explicit waiter owns selection, including after its poll settles. */
   awaitingReturn(): boolean;
+  /** Receipt display chooses the Send before discovery may choose an initial model. */
+  awaitingReceiptDisplay(): boolean;
+  /** Recheck after the listing await: a push may have invalidated the feed meanwhile. */
+  sendOwnersKnown(): boolean;
   ownsReturn(bundle: CadReturnBundle): boolean;
   setError(value: string | null): void;
   setStatus(value: string | null): void;
@@ -94,7 +101,7 @@ export async function refreshCadReturnArrivals(
   const {
     autoIngestSelected, cadFolderConfigured, enterCadWorkspace, manualSelectionAt, noteCadActivity,
     projectOpenPending, refreshChannelDriverBases, refusedForeignReturn, returnListRequest,
-    seenReturnRevisions, awaitingReturn, ownsReturn,
+    seenReturnRevisions, deferredArrivalRevisions, awaitingReturn, awaitingReceiptDisplay, sendOwnersKnown, ownsReturn,
     setError, setStatus, setBundles, setLoading,
   } = integration;
   const background = options.background === true;
@@ -126,13 +133,30 @@ export async function refreshCadReturnArrivals(
       || previous.size !== next.size
       || [...next].some(([path, modifiedAt]) => previous.get(path) !== modifiedAt);
     if (listingChanged || response.cadFolderConfigured !== wasConfigured) noteCadActivity();
-    const available = response.items.filter((item) => !ownsReturn(item));
-    const arrived = options.autoOpenNew && !awaitingReturn()
-      ? newestReturnArrival(available, previous) : null;
+    let arrivalPrevious = previous;
+    const deferNewArrivals = options.deferNewArrivals || !sendOwnersKnown();
+    if (deferNewArrivals) {
+      deferredArrivalRevisions.current.forEach((_, path) => {
+        if (!next.has(path)) deferredArrivalRevisions.current.delete(path);
+      });
+      response.items.forEach((item) => {
+        if (newestReturnArrival([item], previous)) deferredArrivalRevisions.current.set(item.bundlePath, item.modifiedAt);
+      });
+    } else if (deferredArrivalRevisions.current.size) {
+      const deferredPrevious = new Map(previous);
+      deferredArrivalRevisions.current.forEach((revision, path) => {
+        if (next.get(path) === revision) deferredPrevious.delete(path);
+      });
+      arrivalPrevious = deferredPrevious;
+      deferredArrivalRevisions.current.clear();
+    }
+    const arrived = options.autoOpenNew && !deferNewArrivals && !awaitingReturn()
+      ? newestReturnArrival(response.items.filter((item) => !ownsReturn(item)), arrivalPrevious) : null;
     seenReturnRevisions.current = next;
     const currentDesignId = useDocumentStore.getState().identity?.designId;
-    const initial = previous === null && !awaitingReturn()
-      ? available.find((item) => (
+    const initial = previous === null && !awaitingReturn() && !awaitingReceiptDisplay()
+      && !useCadReturnStore.getState().selectedBundle
+      ? response.items.find((item) => (
           item.readable && (
             currentDesignId
               ? returnBelongsToProject(item, currentDesignId)
@@ -484,7 +508,8 @@ export function createCadReturnArrivalReader(
     manualSelectionAt: { current: null }, noteCadActivity: noop,
     projectOpenPending: { current: false }, refreshChannelDriverBases: async () => undefined,
     refusedForeignReturn: { current: false }, returnListRequest: { current: 0 },
-    seenReturnRevisions: { current: null }, awaitingReturn: () => false, ownsReturn: () => false,
+    seenReturnRevisions: { current: null }, deferredArrivalRevisions: { current: new Map() },
+    awaitingReturn: () => false, awaitingReceiptDisplay: () => false, sendOwnersKnown: () => true, ownsReturn: () => false,
     setError: noop, setStatus: noop, setBundles: noop, setLoading: noop,
     ...overrides,
   };

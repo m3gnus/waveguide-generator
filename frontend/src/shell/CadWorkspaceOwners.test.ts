@@ -37,7 +37,7 @@ beforeEach(() => {
   resetCadDeliveryHealthStore();
   cadRecoveryNoticesStore.setState({ notices: {}, recoveryError: null });
   cadReceiptsStore.setState({ feedId: null, cursor: 0, since: Date.now() - 600_000, receipts: {}, fronted: [], frontedBundles: [],
-    feedback: {}, newestSequence: 0, newestSentAt: 0, intakeRefusals: [], displayRetries: {}, recoveryError: null });
+    feedback: {}, newestSequence: 0, newestSentAt: 0, intakeRefusals: [], displayRetries: {}, recoveryError: null, loadedAt: null });
   returns = []; receipts = []; channels = [];
   vi.spyOn(jobsSocket, 'subscribeCadOperations').mockImplementation((listener) => { channels.push(listener); return () => undefined; });
   vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
@@ -200,6 +200,64 @@ it.each(['pending reload', 'invalidated status'])('one Send has one ingest owner
   expect(cadWorkspace.getSnapshot().status).not.toMatch(/superseded|Discarded/);
 });
 
+it('pending Send on reload keeps its ingest when discovery lists an older matching return (rows 1, 5)', async () => {
+  const older = { ...bundle, bundlePath: 'wgreturn/older.wgreturn', name: 'older.wgreturn',
+    designIds: ['wgd_open'], modifiedAt: new Date(Date.now() - 600_000).toISOString() };
+  returns = [older, { ...bundle, designIds: ['wgd_open'], modifiedAt: new Date().toISOString() }];
+  receipts = [sendReceipt()];
+  cadReceiptsStore.setState({ feedId: 'cutover', cursor: 1, receipts: { 'receipt-1': receipts[0] } });
+  const base = fetcher.getMockImplementation()!;
+  const ingest = deferred<Response>(); const feed = deferred<Response>();
+  fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/ingest' ? ingest.promise
+    : String(input).includes('/receipts?') ? feed.promise : base(input, init));
+  stop = mountCadWorkspaceOwners(); await flush();
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
+  feed.resolve(json({ feed_id: 'cutover', receipts, cursor: 1, has_more: false })); await flush();
+  expect(cadWorkspace.getSnapshot().bundles).toHaveLength(2);
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
+  ingest.resolve(json(record)); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
+  expect(cadReceiptsStore.getState().feedback['receipt-1'].outcome).toBe('accepted');
+  expect(cadWorkspace.getSnapshot().status).toBe('Received Speaker from Fusion 360.');
+});
+
+it.each(['reload', 'project open'])('fronted Send remains eligible for initial selection on %s (rows 1, 5)', async (scenario) => {
+  returns = [{ ...bundle, designIds: ['wgd_open'], modifiedAt: new Date(Date.now() - 600_000).toISOString() }];
+  cadReceiptsStore.setState({ feedId: 'cutover', frontedBundles: [{ path: bundle.bundlePath, manifest: record.manifest_sha256 }] });
+  stop = mountCadWorkspaceOwners(); await flush();
+  if (scenario === 'project open') {
+    useDesignStore.getState().replaceDesign(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
+    await flush();
+  }
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  if (scenario === 'project open') expect(cadWorkspace.getSnapshot().status).toContain('Selected the latest matching return');
+});
+
+it.each(['pending', 'in flight'])('discovery waits for a %s receipt display before choosing an initial model (rows 1, 5)', async (phase) => {
+  returns = [{ ...bundle, bundlePath: 'wgreturn/older.wgreturn', designIds: ['wgd_open'],
+    modifiedAt: new Date(Date.now() - 600_000).toISOString() },
+    { ...bundle, designIds: ['wgd_open'], modifiedAt: new Date().toISOString() }];
+  receipts = [sendReceipt()];
+  cadReceiptsStore.setState({ feedId: 'cutover', cursor: 1, receipts: { 'receipt-1': receipts[0] } });
+  const base = fetcher.getMockImplementation()!;
+  const listing = deferred<Response>(); const feed = deferred<Response>();
+  let listings = 0;
+  fetcher.mockImplementation((input, init) => String(input).includes('/receipts?') ? feed.promise
+    : String(input).endsWith('/returns') && ++listings === 1 ? listing.promise : base(input, init));
+  stop = mountCadWorkspaceOwners(); await flush();
+  if (phase === 'in flight') cadReceiptsStore.getState().markFronted('receipt-1');
+  feed.resolve(json({ feed_id: 'cutover', receipts: [], cursor: 1, has_more: false })); await flush();
+  expect(cadWorkspace.getSnapshot().bundles).toHaveLength(2);
+  expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  listing.resolve(json({ items: returns, cadFolderConfigured: true })); await flush();
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(cadReceiptsStore.getState().feedback['receipt-1'].outcome).toBe('accepted');
+});
+
 it.each(['mount', 'listing', 'ingest', 'mesh'])('Onshape gates Fusion receipts at %s (rows 1, 5)', async (phase) => {
   const selected = { ...bundle, bundlePath: 'onshape/speaker', bundleOrigin: 'onshape' as const };
   const setOnshape = () => { preferencesStore.update({ cadApplication: 'onshape' }); };
@@ -346,6 +404,83 @@ it('lists models for manual use when the receipt feed fails and never auto-inges
   channels.forEach((channel) => channel.resync()); await flush();
   expect(calls('/api/cadlink/ingest')).toHaveLength(1);
   expect(cadWorkspace.getSnapshot().status).toBe('Received Speaker from Fusion 360.');
+});
+
+it.each(['mount', 'background poll', 'manual Refresh', 'project open'])('hung receipt feed cannot stall discovery on %s (rows 1, 5, 10)', async (entry) => {
+  const base = fetcher.getMockImplementation()!;
+  if (entry !== 'mount') { stop = mountCadWorkspaceOwners(); await flush(); }
+  returns = [{ ...bundle, designIds: ['wgd_open'], modifiedAt: new Date().toISOString() }];
+  fetcher.mockImplementation((input, init) => String(input).includes('/receipts?')
+    ? new Promise<Response>(() => undefined) : base(input, init));
+  const before = calls('/api/cadlink/returns').length;
+  let refreshed = false;
+  if (entry === 'mount') stop = mountCadWorkspaceOwners();
+  else {
+    // A receipt invalidation read is shared by every discovery entry point.
+    void cadReceiptsStore.getState().load().catch(() => undefined);
+    if (entry === 'manual Refresh') void cadWorkspace.getSnapshot().refresh({ autoOpenNew: true }).then(() => { refreshed = true; });
+    if (entry === 'project open') useDesignStore.getState().replaceDesign(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
+  }
+  await flush(); await vi.advanceTimersByTimeAsync(6_000);
+  expect(calls('/api/cadlink/returns').length).toBeGreaterThan(before);
+  expect(cadWorkspace.getSnapshot().bundles).toHaveLength(1);
+  expect(cadWorkspace.getSnapshot().loading).toBe(false);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  if (entry === 'manual Refresh') expect(refreshed).toBe(true);
+  // Release the shared slot before teardown; later reads use a healthy transport.
+  fetcher.mockImplementation(base);
+  await vi.advanceTimersByTimeAsync(3_000);
+});
+
+it('listing polls reuse fresh receipt evidence, while pushes and stale evidence trigger reads (rows 7, 10)', async () => {
+  stop = mountCadWorkspaceOwners(); await flush();
+  const receiptReads = () => fetcher.mock.calls.filter(([input]) => String(input).includes('/receipts?')).length;
+  const before = receiptReads(); const listings = calls('/api/cadlink/returns').length;
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(calls('/api/cadlink/returns').length).toBeGreaterThan(listings);
+  expect(receiptReads()).toBe(before);
+  channels.forEach((channel) => channel.operation({ kind: 'receive_snapshot' } as never)); await flush();
+  expect(receiptReads()).toBe(before + 1);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(receiptReads()).toBeGreaterThan(before + 1);
+});
+
+it('receipt push invalidation fences an already running discovery listing (rows 1, 5, 7)', async () => {
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => String(input).endsWith('/fusion-status')
+    ? Promise.resolve(json(status({ addinInboxTransfer: false }))) : base(input, init));
+  stop = mountCadWorkspaceOwners(); await flush();
+  const listing = deferred<Response>(); const feed = deferred<Response>();
+  let listings = 0;
+  fetcher.mockImplementation((input, init) => String(input).endsWith('/returns') && ++listings === 1 ? listing.promise
+    : String(input).includes('/receipts?') ? feed.promise : base(input, init));
+  await vi.advanceTimersByTimeAsync(2_500);
+  returns = [{ ...bundle, modifiedAt: new Date().toISOString() }]; receipts = [sendReceipt()];
+  channels.forEach((channel) => channel.operation({ kind: 'receive_snapshot' } as never)); await flush();
+  listing.resolve(json({ items: returns, cadFolderConfigured: true })); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  feed.resolve(json({ feed_id: 'cutover', receipts, cursor: 1, has_more: false })); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(cadReceiptsStore.getState().feedback['receipt-1'].outcome).toBe('accepted');
+});
+
+it('a legacy arrival listed during a feed outage still auto-opens after receipt evidence recovers (rows 5, 7)', async () => {
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => String(input).includes('/receipts?') ? Promise.reject(new Error('offline'))
+    : String(input).endsWith('/fusion-status') ? Promise.resolve(json(status({ addinInboxTransfer: false }))) : base(input, init));
+  stop = mountCadWorkspaceOwners(); await flush();
+  returns = [{ ...bundle, modifiedAt: new Date().toISOString() }];
+  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true }); await flush();
+  expect(cadWorkspace.getSnapshot().bundles).toHaveLength(1);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(65_000);
+  fetcher.mockImplementation((input, init) => String(input).endsWith('/fusion-status')
+    ? Promise.resolve(json(status({ addinInboxTransfer: false }))) : base(input, init));
+  channels.forEach((channel) => channel.resync()); await flush();
+  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true }); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
+  expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
 });
 
 it('coalesces a delayed initial hello with mount status and discovery reads still in flight (row 10)', async () => {

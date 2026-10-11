@@ -47,6 +47,7 @@ export function mountCadWorkspaceOwners(): () => void {
   let designId = useDocumentStore.getState().identity?.designId;
   let connectionRequested = false;
   const claimedReturns = new Set<string>();
+  let receiptDisplaysInFlight = 0;
   const fusionActive = () => mounted.current && preferencesStore.getSnapshot().cadApplication === 'fusion360';
   let activityRevision = 0;
   const activityListeners = new Set<() => void>();
@@ -80,6 +81,9 @@ export function mountCadWorkspaceOwners(): () => void {
     returnListRequest, seenReturnRevisions, autoIngestSelected, enterCadWorkspace,
     refreshChannelDriverBases, noteCadActivity,
     awaitingReturn: () => waiter.getState().pullingFromFusion,
+    awaitingReceiptDisplay: () => receiptDisplaysInFlight > 0
+      || Object.keys(cadReceiptsStore.getState().receipts).length > 0,
+    sendOwnersKnown: () => cadReceiptsStore.getState().loadedAt !== null,
     ownsReturn: (bundle) => Boolean((bundle.requestId && claimedReturns.has(bundle.requestId))
       || Object.values(cadReceiptsStore.getState().receipts).some((receipt) => receipt.bundle_path === bundle.bundlePath)
       || cadReceiptsStore.getState().frontedBundles.some((entry) => entry.path === bundle.bundlePath)),
@@ -95,10 +99,16 @@ export function mountCadWorkspaceOwners(): () => void {
     // A failed feed read still lists files for manual use, but cannot auto-ingest a Send.
     let sendOwnersKnown = true;
     try {
-      const read = firstReturnRead ? startupReceipts : cadReceiptsStore.getState().load();
+      const state = cadReceiptsStore.getState();
+      // Pushes invalidate loadedAt by starting a read. Background listings can
+      // reuse a complete read briefly; explicit Refresh still rechecks the feed.
+      const fresh = state.loadedAt !== null && Date.now() - state.loadedAt < 30_000;
+      const read = firstReturnRead ? startupReceipts
+        : options?.background && fresh ? null : state.load();
       firstReturnRead = false; await read;
     } catch { sendOwnersKnown = false; }
-    if (fusionActive()) await arrivals.refresh(sendOwnersKnown ? options : { ...options, autoOpenNew: false });
+    if (fusionActive()) await arrivals.refresh(sendOwnersKnown ? options
+      : { ...options, autoOpenNew: false, deferNewArrivals: true });
   };
   const actions = createCadArrivalActions({
     mounted, ingestRequest, ingestAbortController, manualSelectionAt, refusedForeignReturn, restoringCadProject,
@@ -213,7 +223,12 @@ export function mountCadWorkspaceOwners(): () => void {
   const display = createReceiptDisplay({ enterCadWorkspace, reportViewportNotice, isActive: fusionActive,
     refuseAutomaticRestore: () => { refusedForeignReturn.current = true; },
     showIngestedMesh: showIngestedMeshInViewport, manualSelectionAt: () => manualSelectionAt.current });
-  let stopDisplay = connectCadReceiptDisplay(display, cadReceiptsStore, fusionActive);
+  const displayReceipt: typeof display = async (receipt) => {
+    receiptDisplaysInFlight += 1;
+    try { return await display(receipt); }
+    finally { receiptDisplaysInFlight -= 1; }
+  };
+  let stopDisplay = connectCadReceiptDisplay(displayReceipt, cadReceiptsStore, fusionActive);
   let application = preferencesStore.getSnapshot().cadApplication;
   const settleModels = () => solvedCadModels.settle(jobsSocket.getSnapshot().jobs, {
     showIngestedMesh: showIngestedMeshInViewport, reportViewportNotice,
@@ -223,7 +238,7 @@ export function mountCadWorkspaceOwners(): () => void {
     if (nextApplication !== application) {
       application = nextApplication;
       actions.supersedePreparation(); waiter.supersede(); arrivals.cancel();
-      stopDisplay(); stopDisplay = connectCadReceiptDisplay(display, cadReceiptsStore, fusionActive);
+      stopDisplay(); stopDisplay = connectCadReceiptDisplay(displayReceipt, cadReceiptsStore, fusionActive);
       if (!fusionActive()) publish({ loading: false });
     }
     changed();
