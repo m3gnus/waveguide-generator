@@ -102,4 +102,27 @@ describe('full DesignConfig client store', () => {
     expect(serializeDesign(designForFamily('OSSE'))).not.toHaveProperty('text_import_version');
     expect(() => hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'future-v2' })).toThrow('Unsupported text import geometry version');
   });
+
+  it('retains ATH v2 lip, rear, sampling and NAC controls through editing and undo', () => {
+    const wire = {
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2',
+      ath_axial_sampling_rule: 'ath-v2025-06', ath_nac_present: true, ath_nac: 10,
+      mesh: { ath_roundover: { radius: 42, segments: 6 }, ath_rear_shape: 3,
+        ath_rear_front_offset: 40, ath_rear_step: 50 },
+    };
+    useDesignStore.getState().loadDesign(hydrateDesignDocument(wire));
+    useDesignStore.getState().updateValue('L', 137);
+    useDesignStore.getState().undo();
+    useDesignStore.getState().redo();
+    const saved = serializeDesign(useDesignStore.getState().design);
+    expect(saved).toMatchObject(wire);
+    expect(serializeDesign(hydrateDesignDocument(saved))).toEqual(saved);
+  });
+
+  it('preserves native log interpretation in the expression sidecar', () => {
+    const wire = { formula: 'OSSE', a: { raw: '35+log(10)+ln(e)', value: 37, dialect: 'wg-v1' } };
+    const document = hydrateDesignDocument(wire);
+    expect(document.a).toBe(37);
+    expect(serializeDesign(document).a).toEqual(wire.a);
+  });
 });

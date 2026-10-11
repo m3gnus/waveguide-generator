@@ -202,11 +202,12 @@ function unwrapExpressions(value: unknown, path = '', expressions: Record<string
   }
   if (typeof value !== 'object') return value;
   const record = value as Record<string, unknown>;
-  if ('value' in record && Object.keys(record).every((key) => key === 'value' || key === 'raw')) {
+  if ('value' in record && Object.keys(record).every((key) => key === 'value' || key === 'raw' || key === 'dialect')) {
     if (typeof record.raw === 'string') {
       expressions[path] = {
         value: typeof record.value === 'number' ? record.value : null,
         raw: record.raw,
+        ...(record.dialect === 'wg-v1' ? { dialect: 'wg-v1' as const } : {}),
       };
     }
     return record.value ?? null;
@@ -229,7 +230,7 @@ function merge<T>(base: T, incoming: unknown): T {
 
 /** Convert schema-wire Expr objects into the store's evaluated document shape. */
 export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocument {
-  if (wire.text_import_version != null && wire.text_import_version !== 'ath-2026-08c-v1') {
+  if (wire.text_import_version != null && !['ath-2026-08c-v1', 'ath-2026-09a-v2'].includes(String(wire.text_import_version))) {
     throw new Error(`Unsupported text import geometry version: ${String(wire.text_import_version)}`);
   }
   const expressions: Record<string, ExprNumber> = {};

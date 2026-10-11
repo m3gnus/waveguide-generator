@@ -1293,6 +1293,15 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       {workspaceMode === 'cad' && tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.linkedDesign.section) && <LinkedDesignCard forceOpen={searching}/>}
       {workspaceMode === 'parametric' && !searching && tab === 'geometry' && modelTypeSection}
       {workspaceMode === 'parametric' && tab === 'geometry' && <LiveDimensions />}
+      {workspaceMode === 'parametric' && tab === 'geometry' && design.text_import_version === 'ath-2026-09a-v2' && <Section title="Imported ATH values" description="Geometry controls retained from the imported configuration." forceOpen>
+        {design.mesh.ath_roundover && <div className="passthrough-row"><span>Mesh.Roundover</span><b>{design.mesh.ath_roundover.radius} mm · {design.mesh.ath_roundover.segments} segments</b></div>}
+        {design.mesh.ath_rear_shape != null && <div className="passthrough-row"><span>Mesh.RearShape</span><b>{design.mesh.ath_rear_shape === 3 ? '3 (Opus)' : '1 (full rear)'}</b></div>}
+        {design.mesh.ath_rear_shape === 3 && <>
+          <div className="passthrough-row"><span>Mesh.RearShape.FrontOffset</span><b>{design.mesh.ath_rear_front_offset ?? 40} mm</b></div>
+          <div className="passthrough-row"><span>Mesh.RearShape.Step</span><b>{design.mesh.ath_rear_step ?? 25} mm</b></div>
+        </>}
+        {design.ath_nac_present && <div className="passthrough-row"><span>NAC</span><b>{design.ath_nac ?? 'Present'} · preserves angular samples</b></div>}
+      </Section>}
       {!searching && tab === 'geometry' && <SourceContourEditor />}
       {!searching && tab === 'geometry' && <SourceAssemblyLauncher />}
       {workspaceMode === 'parametric' ? definitions.map((definition) => <div key={definition.title}>

@@ -13,6 +13,7 @@ export type DesignValue = number | string | boolean | null | FreeformPoint[] | C
 export interface ExprNumber {
   value: number | null;
   raw?: string | null;
+  dialect?: 'ath' | 'wg-v1';
 }
 
 export interface ConfigBlock {
@@ -58,7 +59,10 @@ export interface CornerGrid {
 export interface DesignDocument {
   formula: DesignFamily;
   /** Persisted geometry interpretation for imported ATH documents. */
-  text_import_version?: 'ath-2026-08c-v1';
+  text_import_version?: 'ath-2026-08c-v1' | 'ath-2026-09a-v2';
+  ath_axial_sampling_rule?: 'ath-v2025-06' | 'ath-v2025-12+';
+  ath_nac_present?: boolean;
+  ath_nac?: number;
   s1?: number;
   s2?: number;
   scale: number;
@@ -144,6 +148,10 @@ export interface DesignDocument {
     baffle_margin: number;
   };
   mesh: {
+    ath_roundover?: { radius: number; segments: number };
+    ath_rear_shape?: 1 | 3;
+    ath_rear_front_offset?: number;
+    ath_rear_step?: number;
     angular_segments: number;
     corner_segments: number;
     throat_segments: number;

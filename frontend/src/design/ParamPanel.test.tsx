@@ -151,6 +151,24 @@ describe('ParamPanel inventory UX', () => {
     vi.unstubAllGlobals();
   });
 
+  it('shows imported ATH lip, Opus rear and NAC values as read-only geometry', () => {
+    act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', ath_nac_present: true, ath_nac: 10,
+      mesh: { ath_roundover: { radius: 42, segments: 6 }, ath_rear_shape: 3,
+        ath_rear_front_offset: 40, ath_rear_step: 50 },
+    })));
+    expect(host.textContent).toContain('Imported ATH values');
+    expect(host.textContent).toContain('42 mm · 6 segments');
+    expect(host.textContent).toContain('3 (Opus)');
+    expect(host.textContent).toContain('Mesh.RearShape.FrontOffset');
+    expect(host.textContent).toContain('50 mm');
+    expect(host.textContent).toContain('10 · preserves angular samples');
+    for (const label of ['Mesh.Roundover', 'Mesh.RearShape', 'NAC']) {
+      const row = [...host.querySelectorAll('.passthrough-row')].find((item) => item.querySelector('span')?.textContent === label)!;
+      expect(row.querySelector('input, select, button')).toBeNull();
+    }
+  });
+
   it.each(['beat-cpu', 'beat-cuda'])('disables the unsupported XZ half domain for %s', (name) => {
     act(() => {
       useSolveOptionsStore.getState().setEngine(name);
