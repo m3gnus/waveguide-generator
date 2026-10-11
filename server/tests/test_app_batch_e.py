@@ -241,6 +241,8 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
             "assembly_device",
             "opencl_unavailable_reason",
             "opencl_retry_pending",
+            "runtime_state",
+            "runtime_preparable",
         }
         for engine in engines
     )

@@ -615,6 +615,8 @@ def test_capability_probe_runs_off_thread_and_is_cached(
                     "assembly_device": None,
                     "opencl_unavailable_reason": None,
                     "opencl_retry_pending": False,
+                    "runtime_state": None,
+                    "runtime_preparable": False,
                 }
             ],
             "engineSelection": {

@@ -20,8 +20,8 @@ is that record, matched against the backend and the package content fingerprint
 it was recorded for. Not the install path: a second install of the same package,
 such as a source checkout's virtual environment beside the packaged
 application, is proved by the same record (see ``_proves_cpu_runtime``).
-Anything else is reported unavailable with the reason and the command that
-fixes it.
+Anything else is reported unavailable with a readable reason. The interface
+offers explicit preparation and retry through this same lifecycle.
 
 **Provisioning.** ``scripts/bootstrap.py`` covers the source install, where an
 installer run is the natural place to spend the download. The packaged
@@ -60,7 +60,7 @@ step, and its constraints come from where it runs:
   prepared *in addition to* the accelerator. Against an older pinned package
   the old skip is kept, because there the two backends share one record and
   preparing this one would cost the other; see ``_provision_worker``.
-* It does not retry a failure. A recorded failure for this same build is
+* At launch it does not retry a failure. An explicit UI request can retry. A recorded failure for this same build is
   reported, not re-run, so a metered or offline machine pays the attempt once
   and reads why instead of re-downloading on every launch.
 * ``WG2_SKIP_BEAT_CPU_PROVISION=1`` switches it off entirely.
@@ -150,6 +150,8 @@ _prepare_gpu = False
 _gpu_stage_backend: str | None = None
 _gpu_stage_step: str | None = None
 _runtimes_prepared = False
+_requested_backend: str | None = None
+_preparation_errors: dict[str, str] = {}
 _readiness_listeners: list[Any] = []
 
 
@@ -436,8 +438,7 @@ def cpu_runtime_readiness(package: Any, *, production: bool = False) -> CpuRunti
         from .beat_runtime.readiness import backend_readiness
 
         verdict = backend_readiness(CPU_BACKEND)
-        remedy = "" if verdict.ready else f" Run: {provision_command(production=production)}"
-        return CpuRuntimeReadiness(verdict.ready, verdict.state, verdict.reason + remedy)
+        return CpuRuntimeReadiness(verdict.ready, verdict.state, verdict.reason)
 
     provision = _import("hornlab_beat_bem.provision")
     runtime = _import("hornlab_beat_bem.runtime")
@@ -479,8 +480,7 @@ def cpu_runtime_readiness(package: Any, *, production: bool = False) -> CpuRunti
             False,
             "fingerprint-unavailable",
             "The BEAT CPU package identity could not be verified, so a recorded "
-            "provisioning result is not trusted. Run: "
-            f"{provision_command(production=production)} --force",
+            "provisioning result is not trusted. Prepare the runtime again.",
         )
 
     step = None if production and official_selected() else cpu_provisioning_step()
@@ -521,7 +521,7 @@ def cpu_runtime_readiness(package: Any, *, production: bool = False) -> CpuRunti
             False,
             "julia-gone",
             "The BEAT CPU runtime was provisioned, but the Julia it recorded is "
-            f"no longer on disk. Provision it again: {provision_command(production=production)}",
+            "no longer on disk. Prepare the runtime again.",
         )
     if status == "failed" and _matches_cpu_request(state, project, fingerprint):
         return CpuRuntimeReadiness(
@@ -529,15 +529,14 @@ def cpu_runtime_readiness(package: Any, *, production: bool = False) -> CpuRunti
             "failed",
             "BEAT CPU runtime provisioning failed here: "
             f"{state.get('error') or 'no reason was recorded'}. It is not "
-            f"retried automatically. Retry with: {provision_command(production=production)} --force",
+            "retried automatically. Use Retry to prepare it again.",
         )
     if status == "in_progress" and _matches_cpu_request(state, project, fingerprint):
         return CpuRuntimeReadiness(
             False,
             "interrupted",
             "An earlier BEAT CPU runtime provisioning did not finish (it stopped "
-            f"at step: {state.get('step', 'unknown')}). Run it again: "
-            f"{provision_command(production=production)}",
+            f"at step: {state.get('step', 'unknown')}). Prepare it again.",
         )
 
     if (
@@ -576,7 +575,7 @@ def cpu_runtime_readiness(package: Any, *, production: bool = False) -> CpuRunti
             False,
             "no-julia",
             "No Julia executable was found and the BEAT CPU runtime has not been "
-            f"provisioned here. Run: {provision_command(production=production)} -- it downloads a "
+            "provisioned here. Preparation downloads a "
             "portable Julia, instantiates the CPU project, and proves it with a "
             f"1 kHz solve.{additive}",
         )
@@ -586,11 +585,11 @@ def cpu_runtime_readiness(package: Any, *, production: bool = False) -> CpuRunti
         f"Julia is present ({julia}) but the BEAT CPU runtime has not been "
         "instantiated and probed here, and a Julia executable alone is not "
         "evidence that a solve would run -- an uninstantiated or offline depot "
-        f"fails at the first solve instead. Run: {provision_command(production=production)}{additive}",
+        f"fails at the first solve instead. Prepare the runtime here.{additive}",
     )
 
 
-def _provision_worker() -> None:
+def _provision_worker(*, backend: str | None = None) -> None:
     """Decide on the hardware, then prepare the CPU and GPU runtimes in turn.
 
     The hardware inventory is *here* rather than in the caller because
@@ -607,15 +606,18 @@ def _provision_worker() -> None:
         with _provision_lock:
             prepare_cpu, prepare_gpu = _prepare_cpu, _prepare_gpu
         gpu = _gpu_backend_present(provision)
+        if backend in GPU_BACKENDS and gpu != backend:
+            _remember_preparation_failure(backend, f"No supported {backend} device was detected.")
+            return
         if prepare_gpu:
             if gpu is None:
                 log.info("BEAT GPU check: no supported GPU found; no GPU runtime prepared")
             else:
                 log.info("BEAT GPU check: %s hardware found", gpu)
         if prepare_cpu:
-            _prepare_cpu_runtime(provision, gpu)
+            _prepare_cpu_runtime(provision, gpu, retry=backend is not None)
         if prepare_gpu and gpu is not None:
-            _prepare_gpu_runtime(provision, gpu)
+            _prepare_gpu_runtime(provision, gpu, retry=backend is not None)
     finally:
         with _provision_lock:
             _provision_step = None
@@ -625,7 +627,7 @@ def _provision_worker() -> None:
         _notify_readiness_listeners()
 
 
-def _prepare_cpu_runtime(provision: Any, gpu: str | None) -> None:
+def _prepare_cpu_runtime(provision: Any, gpu: str | None, *, retry: bool = False) -> None:
     """Run ``provision_cpu``, unless that would cost a GPU runtime its record."""
 
     if gpu is not None and not records_state_per_backend(provision):
@@ -654,15 +656,17 @@ def _prepare_cpu_runtime(provision: Any, gpu: str | None) -> None:
     _mark_runtimes_prepared()
     _record_step("starting")
     try:
-        state = provision.provision_cpu(status_cb=_provision_status)
+        state = provision.provision_cpu(status_cb=_provision_status, **({"force": True} if retry else {}))
     except Exception as exc:  # noqa: BLE001 - provisioning is never fatal here
         # provision_cpu records and returns its own failures, so reaching
         # this means something outside its contract broke. The final
         # notification still lets the registry publish the terminal state.
+        _remember_preparation_failure(CPU_BACKEND, str(exc))
         log.warning("BEAT CPU runtime provisioning could not run: %s", exc)
         return
     finally:
         _record_step(None)
+    _remember_preparation_result(CPU_BACKEND, state)
     status = str(state.get("status") or "unknown")
     if status == "ready":
         log.info("BEAT CPU runtime is ready")
@@ -674,12 +678,12 @@ def _prepare_cpu_runtime(provision: Any, gpu: str | None) -> None:
         )
 
 
-def _prepare_gpu_runtime(provision: Any, backend: str) -> None:
+def _prepare_gpu_runtime(provision: Any, backend: str, *, retry: bool = False) -> None:
     """Run ``provision_gpu`` for the detected backend, once per build."""
 
     global _gpu_stage_backend, _gpu_stage_step
     runtime = _import("hornlab_beat_bem.runtime")
-    if runtime is None or _gpu_runtime_settled(provision, runtime, backend):
+    if runtime is None or not retry and _gpu_runtime_settled(provision, runtime, backend):
         return
     _mark_runtimes_prepared()
     with _provision_lock:
@@ -697,10 +701,12 @@ def _prepare_gpu_runtime(provision: Any, backend: str) -> None:
         log.info("BEAT %s runtime provisioning: %s", backend, message)
 
     try:
-        state = provision.provision_gpu(backend=backend, status_cb=status)
+        state = provision.provision_gpu(backend=backend, status_cb=status, **({"force": True} if retry else {}))
     except Exception as exc:  # noqa: BLE001 - provisioning is never fatal here
+        _remember_preparation_failure(backend, str(exc))
         log.warning("BEAT %s runtime provisioning could not run: %s", backend, exc)
         return
+    _remember_preparation_result(backend, state)
     result = str(state.get("status") or "unknown")
     if result == "ready":
         log.info("BEAT %s runtime is ready", backend)
@@ -783,15 +789,15 @@ def _gpu_backend_present(provision: Any) -> str | None:
         return None
 
 
-def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | None:
+def _start_official_provisioning(env: Mapping[str, str], *, backend: str | None = None) -> threading.Thread | None:
     """Prepare WG-owned CPU/GPU records using the existing launcher lifecycle."""
     from .beat_runtime import hardware, readiness
 
-    global _preparation_in_flight, _provision_thread, _official_cpu_stage_pending
+    global _preparation_in_flight, _provision_thread, _official_cpu_stage_pending, _requested_backend
     verdict = readiness.backend_readiness(CPU_BACKEND, environ=env)
     if verdict.state == "package-unusable":
         return None
-    prepare_cpu = not verdict.ready and verdict.state != "failed"
+    prepare_cpu = backend == CPU_BACKEND if backend is not None else not verdict.ready and verdict.state != "failed"
     prepare_gpu = False
     if str(env.get(SKIP_GPU_PROVISION_ENV_VAR, "")).strip() != "1":
         try:
@@ -800,6 +806,8 @@ def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | N
                               hardware.gpu_hardware(environ=env, probe_nvidia=False).values())
         except Exception:
             log.info("BEAT GPU hardware inventory failed; skipping GPU preparation", exc_info=True)
+    if backend is not None:
+        prepare_gpu = backend in GPU_BACKENDS
     if not prepare_cpu and not prepare_gpu:
         return None
     snapshot = dict(env)
@@ -812,8 +820,11 @@ def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | N
                 _mark_runtimes_prepared()
                 _record_step("starting")
                 try:
-                    readiness.provision_cpu(environ=snapshot, status_cb=_provision_status, step_cb=_record_step)
-                except Exception:
+                    result = readiness.provision_cpu(environ=snapshot, status_cb=_provision_status, step_cb=_record_step,
+                                                     **({"retry": True} if backend is not None else {}))
+                    _remember_preparation_result(CPU_BACKEND, result)
+                except Exception as exc:
+                    _remember_preparation_failure(CPU_BACKEND, str(exc))
                     log.warning("WG-owned BEAT CPU preparation could not run", exc_info=True)
                 finally:
                     with _provision_lock:
@@ -821,14 +832,19 @@ def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | N
                     _record_step(None)
             try:
                 inventory = hardware.gpu_hardware(environ=snapshot) if prepare_gpu else {}
-                gpu_backend = hardware.detect_gpu_backend(inventory=inventory) if prepare_gpu else None
-            except Exception:
+                gpu_backend = (backend if backend in GPU_BACKENDS else hardware.detect_gpu_backend(inventory=inventory)) if prepare_gpu else None
+            except Exception as exc:
+                if backend is not None:
+                    _remember_preparation_failure(backend, str(exc))
                 log.info("BEAT GPU hardware inventory failed; assuming none", exc_info=True)
                 gpu_backend = None
             if gpu_backend is not None:
                 facts = inventory[gpu_backend]
                 verdict = readiness.backend_readiness(gpu_backend, environ=snapshot, hardware_facts=facts)
-                if verdict.ready or verdict.state in {"failed", "no-device", "package-unusable"}:
+                if backend is None and (verdict.ready or verdict.state in {"failed", "no-device", "package-unusable"}):
+                    return
+                if not facts["available"]:
+                    _remember_preparation_failure(gpu_backend, str(facts["reason"]))
                     return
                 _mark_runtimes_prepared()
                 with _provision_lock:
@@ -849,9 +865,13 @@ def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | N
                     if changed:
                         _notify_readiness_listeners()
 
-                getattr(readiness, f"provision_{gpu_backend}")(
-                    environ=snapshot, status_cb=status, step_cb=step_changed, hardware_facts=facts)
-        except Exception:
+                result = getattr(readiness, f"provision_{gpu_backend}")(
+                    environ=snapshot, status_cb=status, step_cb=step_changed, hardware_facts=facts,
+                    **({"retry": True} if backend is not None else {}))
+                _remember_preparation_result(gpu_backend, result)
+        except Exception as exc:
+            if backend is not None:
+                _remember_preparation_failure(backend, str(exc))
             log.warning("WG-owned BEAT preparation could not run", exc_info=True)
         finally:
             with _provision_lock:
@@ -861,10 +881,117 @@ def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | N
 
     with _provision_lock:
         if _provision_thread is not None and _provision_thread.is_alive():
+            if backend is not None:
+                raise RuntimePreparationConflict("A BEAT runtime preparation is already running.")
             return _provision_thread
+        if backend is not None:
+            _begin_requested_preparation(backend)
+        else:
+            _requested_backend = None
         _preparation_in_flight = True
         _official_cpu_stage_pending = prepare_cpu
         _provision_thread = threading.Thread(target=worker, name=PROVISION_THREAD_NAME, daemon=True)
+        _provision_thread.start()
+        started = _provision_thread
+    _notify_readiness_listeners()
+    return started
+
+
+class RuntimePreparationConflict(RuntimeError):
+    """Another preparation owns the shared runtime lifecycle."""
+
+
+def _remember_preparation_failure(backend: str, reason: str) -> None:
+    with _provision_lock:
+        _preparation_errors[backend] = reason
+
+
+def _remember_preparation_result(backend: str, result: Mapping[str, Any]) -> None:
+    if result.get("status") != "ready":
+        _remember_preparation_failure(backend, str(result.get("error") or result.get("reason") or "Preparation did not complete."))
+    else:
+        with _provision_lock:
+            _preparation_errors.pop(backend, None)
+
+
+def _begin_requested_preparation(backend: str) -> None:
+    # Caller owns _provision_lock; the worker cannot publish before admission.
+    global _requested_backend
+    _requested_backend = backend
+    _preparation_errors.pop(backend, None)
+
+
+def preparation_enabled(backend: str, *, environ: Mapping[str, str] | None = None) -> bool:
+    env = os.environ if environ is None else environ
+    return (platform.system() in PROVISION_SYSTEMS
+            and str(env.get(SKIP_PROVISION_ENV_VAR, "")).strip() != "1"
+            and (backend == CPU_BACKEND or str(env.get(SKIP_GPU_PROVISION_ENV_VAR, "")).strip() != "1"))
+
+
+def runtime_preparation_status(backend: str) -> tuple[str | None, str | None]:
+    """Overlay current work and unexpected failures on persisted readiness."""
+    with _provision_lock:
+        active = _preparation_in_flight
+        requested = _requested_backend
+        error = _preparation_errors.get(backend)
+        cpu = _official_cpu_stage_pending or _provision_step is not None
+        gpu = _gpu_stage_backend
+        step = _provision_step if backend == CPU_BACKEND else _gpu_stage_step
+    if active and (requested == backend or backend == CPU_BACKEND and cpu or gpu == backend):
+        return "preparing", f"Preparing BEAT {backend} runtime (step: {step or 'starting'})."
+    if error:
+        return "failed", f"BEAT {backend} preparation failed: {error}"
+    return None, None
+
+
+def start_runtime_preparation(backend: str) -> threading.Thread:
+    """Explicit user request; use the launch worker, including its safety gates."""
+    global _provision_thread, _preparation_in_flight, _prepare_cpu, _prepare_gpu
+    if backend not in (CPU_BACKEND, *GPU_BACKENDS):
+        raise ValueError(f"Unknown BEAT runtime: {backend}")
+    with _provision_lock:
+        if _preparation_in_flight or _provision_thread is not None and _provision_thread.is_alive():
+            raise RuntimePreparationConflict("A BEAT runtime preparation is already running.")
+    if not preparation_enabled(backend):
+        raise ValueError("BEAT preparation is disabled by this installation's platform or provisioning settings.")
+    if official_selected():
+        from .beat_runtime import hardware, locks, readiness
+
+        if locks.provisioning_active():
+            raise RuntimePreparationConflict("Another process is preparing a BEAT runtime.")
+        options = {} if backend == CPU_BACKEND else {
+            "hardware_facts": hardware.gpu_hardware(only=backend, probe_nvidia=False)[backend]}
+        verdict = readiness.backend_readiness(backend, **options)
+        if verdict.state == "provisioning":
+            raise RuntimePreparationConflict(verdict.reason)
+        if verdict.ready or verdict.state in {"no-device", "package-unusable", "unsupported", "identity-unavailable", "detection-failed"}:
+            raise ValueError(verdict.reason)
+        started = _start_official_provisioning(os.environ, backend=backend)
+        if started is None:
+            raise ValueError("The BEAT package cannot prepare this runtime.")
+        return started
+    package = _import("hornlab_beat_bem")
+    provision = _import("hornlab_beat_bem.provision")
+    if package is None or provision is None or not hasattr(provision, "provision_cpu"):
+        raise ValueError("The installed BEAT package cannot prepare runtimes. Update Waveguide Generator.")
+    if not records_state_per_backend(provision):
+        raise ValueError("Update Waveguide Generator before preparing runtimes with shared CPU/GPU records.")
+    if backend != CPU_BACKEND and not _gpu_preparation_wanted(provision, os.environ):
+        raise ValueError("The installed BEAT package cannot prepare GPU runtimes.")
+    if backend == CPU_BACKEND:
+        verdict = cpu_runtime_readiness(package)
+        if verdict.state == "provisioning":
+            raise RuntimePreparationConflict(verdict.reason)
+        if verdict.ready or verdict.state in {"no-project", "package-unusable", "package-too-old"}:
+            raise ValueError(verdict.reason)
+    with _provision_lock:
+        if _provision_thread is not None and _provision_thread.is_alive():
+            raise RuntimePreparationConflict("A BEAT runtime preparation is already running.")
+        _begin_requested_preparation(backend)
+        _prepare_cpu, _prepare_gpu = backend == CPU_BACKEND, backend in GPU_BACKENDS
+        _preparation_in_flight = True
+        _provision_thread = threading.Thread(target=lambda: _provision_worker(backend=backend),
+                                             name=PROVISION_THREAD_NAME, daemon=True)
         _provision_thread.start()
         started = _provision_thread
     _notify_readiness_listeners()
@@ -882,7 +1009,7 @@ def start_cpu_provisioning(
     """
 
     global _preparation_in_flight, _provision_thread, _provision_step
-    global _prepare_cpu, _prepare_gpu
+    global _prepare_cpu, _prepare_gpu, _requested_backend
 
     env = os.environ if environ is None else environ
     if str(env.get(SKIP_PROVISION_ENV_VAR, "")).strip() == "1":
@@ -921,7 +1048,7 @@ def start_cpu_provisioning(
     elif readiness.state in {"provisioning", "failed", "no-project", "package-unusable"}:
         # A failure is reported, not repeated: re-downloading a portable Julia
         # on every launch of a machine that is offline or out of disk is worse
-        # than one honest unavailable row carrying the retry command.
+        # than one honest unavailable row offering an explicit Retry action.
         log.info("Not provisioning the BEAT CPU runtime: %s", readiness.reason)
         prepare_cpu = False
     prepare_gpu = _gpu_preparation_wanted(provision, env)
@@ -932,6 +1059,7 @@ def start_cpu_provisioning(
     with _provision_lock:
         if _provision_thread is not None and _provision_thread.is_alive():
             return _provision_thread
+        _requested_backend = None
         _prepare_cpu, _prepare_gpu = prepare_cpu, prepare_gpu
         _provision_step = None
         _preparation_in_flight = True
@@ -972,4 +1100,8 @@ __all__ = [
     "records_state_per_backend",
     "runtimes_prepared_this_process",
     "start_cpu_provisioning",
+    "start_runtime_preparation",
+    "runtime_preparation_status",
+    "preparation_enabled",
+    "RuntimePreparationConflict",
 ]

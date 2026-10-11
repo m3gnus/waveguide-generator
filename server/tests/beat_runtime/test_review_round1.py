@@ -24,6 +24,7 @@ def selected(monkeypatch, tmp_path):
     monkeypatch.setenv(provider.PROVIDER_ENV, "official")
     monkeypatch.setenv(paths.RUNTIME_DIR_ENV, str(tmp_path / "data"))
     for name, value in (("_provision_thread", None), ("_provision_step", None),
+                        ("_requested_backend", None), ("_preparation_errors", {}),
                         ("_preparation_in_flight", False), ("_official_cpu_stage_pending", False), ("_gpu_stage_backend", None),
                         ("_gpu_stage_step", None), ("_runtimes_prepared", False)):
         monkeypatch.setattr(facade, name, value)

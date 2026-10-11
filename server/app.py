@@ -922,6 +922,9 @@ def create_app(
         resolution = await asyncio.to_thread(resolve_symmetry, design)
         return resolution.as_dict()
 
+    from server.engines.runtime_api import mount_runtime_preparation
+
+    mount_runtime_preparation(application)
     mount_solver_mesh(application)
     mount_preview(application, extra_ws_origins=extra_ws_origins)
     mount_design_io(application)

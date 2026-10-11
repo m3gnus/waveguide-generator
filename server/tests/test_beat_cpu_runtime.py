@@ -43,6 +43,8 @@ def _no_leaked_provisioning():
     beat_cpu_runtime._provision_thread = None
     beat_cpu_runtime._provision_step = None
     beat_cpu_runtime._preparation_in_flight = False
+    beat_cpu_runtime._requested_backend = None
+    beat_cpu_runtime._preparation_errors.clear()
 
 
 def _cpu_project(tmp_path: Path) -> Path:
@@ -152,7 +154,7 @@ def _ready_state(project: Path, julia: Path, fingerprint: str = "abc123") -> dic
     }
 
 
-def test_no_julia_at_all_is_reported_with_the_command_that_fixes_it(
+def test_no_julia_at_all_is_reported_with_preparation_guidance(
     tmp_path, monkeypatch
 ) -> None:
     package = _install_stub_package(
@@ -164,7 +166,8 @@ def test_no_julia_at_all_is_reported_with_the_command_that_fixes_it(
     assert readiness.ready is False
     assert readiness.state == "no-julia"
     assert "No Julia executable was found" in readiness.reason
-    assert "hornlab_beat_bem.provision --backend cpu" in readiness.reason
+    assert "Run:" not in readiness.reason
+    assert "repar" in readiness.reason
 
 
 def test_a_discovered_julia_is_not_by_itself_a_usable_cpu_backend(
@@ -191,7 +194,8 @@ def test_a_discovered_julia_is_not_by_itself_a_usable_cpu_backend(
     assert readiness.state == "unprovisioned"
     assert str(julia) in readiness.reason
     assert "not been instantiated and probed" in readiness.reason
-    assert "hornlab_beat_bem.provision --backend cpu" in readiness.reason
+    assert "Run:" not in readiness.reason
+    assert "repar" in readiness.reason
 
 
 def test_a_provisioned_and_probed_runtime_is_available(tmp_path, monkeypatch) -> None:
@@ -335,7 +339,8 @@ def test_a_recorded_failure_is_reported_verbatim_with_a_retry(
     assert readiness.ready is False
     assert readiness.state == "failed"
     assert "SHA-256 mismatch" in readiness.reason
-    assert "--force" in readiness.reason
+    assert "Use Retry" in readiness.reason
+    assert "Run:" not in readiness.reason
 
 
 def test_a_fingerprint_exception_fails_closed_for_a_ready_record(tmp_path, monkeypatch):
@@ -1483,3 +1488,53 @@ def _hbb_rollback_provider():
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("WG2_BEAT_PROVIDER", "hbb")
         yield
+
+
+@pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm"])
+def test_explicit_rollback_preparation_retries_only_named_runtime(tmp_path, monkeypatch, backend):
+    monkeypatch.delenv(beat_cpu_runtime.SKIP_PROVISION_ENV_VAR, raising=False)
+    monkeypatch.delenv(beat_cpu_runtime.SKIP_GPU_PROVISION_ENV_VAR, raising=False)
+    calls = []
+
+    def provision_cpu(*, status_cb, force=False):
+        calls.append(("cpu", force))
+        return {"status": "ready"}
+
+    def provision_gpu(*, backend, status_cb, force=False):
+        calls.append((backend, force))
+        return {"status": "ready"}
+
+    _gpu_host(tmp_path, monkeypatch, cpu_ready=backend != "cpu", gpu=backend if backend != "cpu" else "metal",
+              provision_cpu=provision_cpu, provision_gpu=provision_gpu,
+              gpu_states={backend: {"status": "failed", "backend": backend}})
+    thread = beat_cpu_runtime.start_runtime_preparation(backend)
+    thread.join(2)
+    assert not thread.is_alive()
+    assert calls == [(backend, True)]
+
+
+def test_explicit_rollback_preparation_refuses_shared_records(tmp_path, monkeypatch):
+    monkeypatch.delenv(beat_cpu_runtime.SKIP_PROVISION_ENV_VAR, raising=False)
+    _install_stub_package(monkeypatch, project=_cpu_project(tmp_path), state=None,
+                          provision_cpu=lambda **options: pytest.fail("Must not provision shared records"))
+    with pytest.raises(ValueError, match="shared CPU/GPU records"):
+        beat_cpu_runtime.start_runtime_preparation("cpu")
+
+
+
+def test_rollback_cpu_registry_state_uses_its_own_readiness(tmp_path, monkeypatch):
+    from server.engines.registry import _beat_engine_info
+
+    project = _cpu_project(tmp_path)
+    state = {"status": "failed", "backend": "cpu", "project": str(project),
+             "package_fingerprint": "abc123", "error": "Network unavailable"}
+    package = _install_stub_package(monkeypatch, project=project, state=state, backend_states={"cpu": state})
+    monkeypatch.setattr(beat, "_load_api", lambda: package)
+    monkeypatch.setattr(beat, "_package_backend_statuses", lambda: {
+        "cpu": {"available": True, "state": "ready", "reason": "Julia found"},
+    })
+    statuses = beat.beat_backend_statuses()
+    row = _beat_engine_info("cpu", statuses["cpu"])
+    assert not row.available
+    assert row.runtime_state == "failed"
+    assert "Network unavailable" in row.reason

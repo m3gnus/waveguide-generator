@@ -466,6 +466,7 @@ def beat_backend_statuses() -> dict[str, dict[str, Any]]:
                 "available": available,
                 "reason": reason,
                 "version": entry.get("version"),
+                "state": entry.get("state") if backend != BEAT_CPU_BACKEND else None,
                 "backend": backend,
                 "surface_traces": surface_traces,
             }

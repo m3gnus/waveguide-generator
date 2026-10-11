@@ -1786,6 +1786,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runtimes/beat/{backend}/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Prepare Runtime */
+        post: operations["prepare_runtime_api_runtimes_beat__backend__prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -5084,6 +5101,20 @@ export interface components {
             wg_version: string;
         } & {
             [key: string]: unknown;
+        };
+        /** RuntimePreparationResponse */
+        RuntimePreparationResponse: {
+            /**
+             * Backend
+             * @enum {string}
+             */
+            backend: "cpu" | "metal" | "cuda" | "rocm";
+            /**
+             * State
+             * @default preparing
+             * @constant
+             */
+            state?: "preparing";
         };
         /**
          * SaveIdentity
@@ -8812,6 +8843,51 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FieldPlaneStringErrorResponse"];
+                };
+            };
+        };
+    };
+    prepare_runtime_api_runtimes_beat__backend__prepare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                backend: "cpu" | "metal" | "cuda" | "rocm";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimePreparationResponse"];
+                };
+            };
+            /** @description Runtime preparation is unavailable or disabled. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A BEAT runtime preparation is already running. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -130,6 +130,8 @@ class EngineInfo:
     assembly_backend: str | None = None
     assembly_device: dict[str, Any] | None = None
     opencl_unavailable_reason: str | None = None
+    runtime_state: Literal["unprepared", "preparing", "failed", "ready", "unavailable"] | None = None
+    runtime_preparable: bool = False
 
     def display_label(self) -> str:
         return self.label or self.name
@@ -375,12 +377,41 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
 
     from server.solver.beat_runtime.provider import official_selected
 
+    from server.solver import beat_cpu_runtime
+
     name = beat_engine_name(backend)
+    state = status.get("state")
+    if state is None and backend == "cpu" and not official_selected():
+        from server.solver.beat import _load_api
+
+        state = beat_cpu_runtime.cpu_runtime_readiness(_load_api()).state
+    runtime_state = ("ready" if status.get("available") else
+                     "preparing" if state in {"provisioning", "pending", "preparing"} else
+                     "failed" if state == "failed" else
+                     "unprepared" if state in {"unprepared", "unprovisioned", "stale", "no-julia", "julia-gone", "interrupted", "fingerprint-unavailable"} else
+                     "unavailable")
+    overlay, reason = beat_cpu_runtime.runtime_preparation_status(backend)
+    if overlay == "failed" and status.get("available"):
+        # A later manual preparation can supersede an unexpected local error.
+        overlay, reason = None, None
+    runtime_state = overlay or runtime_state
+    preparable = runtime_state in {"unprepared", "failed"} and state not in {
+        "no-device", "package-unusable", "package-too-old", "no-project", "unsupported", "identity-unavailable", "detection-failed",
+    }
+    if preparable and not beat_cpu_runtime.preparation_enabled(backend):
+        preparable = False
+        reason = (reason or str(status.get("reason") or "")) + " Preparation is disabled by this installation's platform or provisioning settings."
+    if preparable and not official_selected():
+        provision = beat_cpu_runtime._import("hornlab_beat_bem.provision")
+        preparable = provision is not None and beat_cpu_runtime.records_state_per_backend(provision)
+        if not preparable:
+            reason = (reason or str(status.get("reason") or "")) + " Update Waveguide Generator before preparing runtimes with shared CPU/GPU records."
     return EngineInfo(
         name=name,
         label=BEAT_BACKEND_LABELS.get(backend, name),
-        available=bool(status.get("available")),
-        reason=str(status.get("reason") or f"{name} capability probe returned no reason"),
+        available=bool(status.get("available")) and runtime_state not in {"preparing", "failed"},
+        reason=reason or str(status.get("reason") or f"{name} capability probe returned no reason"),
+        runtime_state=runtime_state, runtime_preparable=preparable,
         version=str(status["version"]) if status.get("version") is not None else None,
         formulations=("full-3d",),
         # No ground plane: the BEAT adapter does not translate one yet.
@@ -406,7 +437,7 @@ def _hint_statuses(readiness: Any, hardware: Any, engine_version: Callable[[], A
 
 
 def _with_gpu_remedies(statuses: dict[str, dict[str, Any]], *, in_flight: bool) -> dict[str, dict[str, Any]]:
-    """Name the packaged-safe provisioning command on an unprovisioned GPU row."""
+    """Mark GPU readiness pending while launch preparation owns detection."""
     from server.solver import beat_cpu_runtime
 
     for backend in beat_cpu_runtime.GPU_BACKENDS:
@@ -415,8 +446,7 @@ def _with_gpu_remedies(statuses: dict[str, dict[str, Any]], *, in_flight: bool) 
             continue
         if in_flight:
             row.update(state="pending", reason=f"BEAT {backend} readiness is pending GPU detection.")
-        else:
-            row["reason"] = f"{row['reason']} Run: {beat_cpu_runtime.provision_command(backend=backend)}"
+
     return statuses
 
 
@@ -1139,6 +1169,8 @@ class EngineRegistry:
                                     "version": self.official_runtime_statuses[beat_engine_backend(item.name)].get("version")
                                     if selected else getattr(package, "__version__", item.version),
                                     "surface_traces": True if selected else _package_retains_surface_traces(package),
+                                    "state": self.official_runtime_statuses[beat_engine_backend(item.name)].get("state") if selected else
+                                    None if item.name == "beat-cpu" else item.runtime_state,
                                 })
                                 if item.name in updates
                                 else item

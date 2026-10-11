@@ -92,6 +92,8 @@ def test_default_preparation_ignores_existing_hbb_state(tmp_path, monkeypatch):
     env = {"HORNLAB_BEAT_RUNTIME_DIR": str(legacy), "WG2_BEAT_RUNTIME_DIR": str(tmp_path / "official")}
     expected = paths.runtime_dir(environ=env)
     monkeypatch.setattr(beat_cpu_runtime, "_provision_thread", None)
+    monkeypatch.setattr(beat_cpu_runtime, "_requested_backend", None)
+    monkeypatch.setattr(beat_cpu_runtime, "_preparation_errors", {})
     monkeypatch.setattr(beat_cpu_runtime, "_preparation_in_flight", False)
     monkeypatch.setattr(beat_cpu_runtime, "_runtimes_prepared", False)
     monkeypatch.setattr(beat_cpu_runtime, "_import", lambda name: pytest.fail(f"HBB import: {name}"))
@@ -112,6 +114,7 @@ def test_default_preparation_ignores_existing_hbb_state(tmp_path, monkeypatch):
         prepared.append(root)
         root.mkdir(parents=True)
         (root / "state-cpu.json").write_text('{"status": "in_progress"}')
+        return {"status": "ready"}
     monkeypatch.setattr(readiness, "provision_cpu", provision)
     original_open = Path.open
     def guarded_open(path, *args, **kwargs):

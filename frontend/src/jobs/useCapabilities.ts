@@ -69,7 +69,7 @@ export interface CapabilitiesSnapshot {
   error: string | null;
   isLoading: boolean;
   qualificationRefreshNeeded: boolean;
-  refreshCapabilities: () => void;
+  refreshCapabilities: () => Promise<void>;
 }
 
 const subscribeConnection = (listener: () => void) => jobsSocket.subscribe(listener);
@@ -128,11 +128,11 @@ export function useCapabilities(): CapabilitiesSnapshot {
       Math.max(0, ceiling - (Date.now() - pollingClock.started)));
     return () => clearTimeout(timer);
   }, [pending, ceiling, generation, pollingClock]);
-  const refreshCapabilities = useCallback(() => {
+  const refreshCapabilities = useCallback(async () => {
     pollingClock.started = Date.now();
     pollingClock.generation += 1;
     for (const listener of pollingClock.listeners) listener();
-    void client.refetchQueries({ queryKey: CAPABILITIES_QUERY_KEY });
+    await client.refetchQueries({ queryKey: CAPABILITIES_QUERY_KEY });
   }, [client, pollingClock]);
   const onshapeOffered = data === undefined ? null : data.onshape === true;
   useEffect(() => {

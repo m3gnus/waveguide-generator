@@ -15,6 +15,8 @@ export interface EngineCapability {
   available: boolean;
   reason: string | null;
   version: string | null;
+  runtime_state?: 'unprepared' | 'preparing' | 'failed' | 'ready' | 'unavailable' | null;
+  runtime_preparable?: boolean;
   fast_paths: string[];
   /** Server-owned retry lifecycle; absent on older servers. */
   opencl_retry_pending?: boolean;
@@ -206,6 +208,13 @@ export async function getCapabilities(fetcher: typeof fetch = fetch, signal?: Ab
     clearTimeout(timeout);
     signal?.removeEventListener('abort', cancel);
   }
+}
+
+export async function prepareBeatRuntime(engine: string, fetcher: typeof fetch = fetch): Promise<void> {
+  const response = await fetcher(`/api/runtimes/beat/${encodeURIComponent(engine.replace(/^beat-/, ''))}/prepare`, {
+    method: 'POST',
+  });
+  if (!response.ok) throw new Error(await detail(response));
 }
 
 interface EngineModePlan {

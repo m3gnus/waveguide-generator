@@ -10,6 +10,12 @@ def test_committed_openapi_matches_the_live_application() -> None:
     assert gen_openapi.OUTPUT.read_text(encoding="utf-8") == rendered
     schema = json.loads(rendered)
     assert "/api/solve" in schema["paths"]
+    preparation = schema["paths"]["/api/runtimes/beat/{backend}/prepare"]["post"]
+    assert {"202", "400", "409"} <= set(preparation["responses"])
+    assert preparation["parameters"][0]["schema"]["enum"] == ["cpu", "metal", "cuda", "rocm"]
+    assert preparation["responses"]["202"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/RuntimePreparationResponse"
+    }
     assert "/api/integration/v1/parameters" in schema["paths"]
     assert "/api/integration/v1/design-schema" in schema["paths"]
     assert {

@@ -141,7 +141,7 @@ def _prove_backend_readiness(
         return BackendReadiness(False, "identity-unavailable", f"BEAT {backend} identity unavailable: {exc}")
     matches = record is not None and all(record.get(key) == value for key, value in expected.items())
     if matches and record["status"] == "failed":
-        return BackendReadiness(False, "failed", f"BEAT {backend} provisioning failed: {record['error'] or 'unknown error'}. Retry with --force.")
+        return BackendReadiness(False, "failed", f"BEAT {backend} provisioning failed: {record['error'] or 'unknown error'}. Use Retry to prepare it again.")
     if matches and record["status"] == "in_progress":
         return BackendReadiness(False, "interrupted", f"BEAT {backend} provisioning stopped at {record['step']}; provision again.")
     if not expected["julia_executable"]:

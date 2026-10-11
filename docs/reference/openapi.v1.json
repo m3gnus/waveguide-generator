@@ -9073,6 +9073,31 @@
         "title": "ResultProvenance",
         "type": "object"
       },
+      "RuntimePreparationResponse": {
+        "properties": {
+          "backend": {
+            "enum": [
+              "cpu",
+              "metal",
+              "cuda",
+              "rocm"
+            ],
+            "title": "Backend",
+            "type": "string"
+          },
+          "state": {
+            "const": "preparing",
+            "default": "preparing",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend"
+        ],
+        "title": "RuntimePreparationResponse",
+        "type": "object"
+      },
       "SaveIdentity": {
         "additionalProperties": false,
         "description": "The optimistic-concurrency token sent back by an open editor.",
@@ -14640,6 +14665,57 @@
           }
         },
         "summary": "Field Plane"
+      }
+    },
+    "/api/runtimes/beat/{backend}/prepare": {
+      "post": {
+        "operationId": "prepare_runtime_api_runtimes_beat__backend__prepare_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "backend",
+            "required": true,
+            "schema": {
+              "enum": [
+                "cpu",
+                "metal",
+                "cuda",
+                "rocm"
+              ],
+              "title": "Backend",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimePreparationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "Runtime preparation is unavailable or disabled."
+          },
+          "409": {
+            "description": "A BEAT runtime preparation is already running."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prepare Runtime"
       }
     },
     "/api/settings": {

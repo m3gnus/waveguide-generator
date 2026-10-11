@@ -122,7 +122,8 @@ def test_every_backend_including_cpu_reaches_the_engine_capabilities(monkeypatch
     assert "beat-cpu" in engines, sorted(engines)
     cpu_row = engines["beat-cpu"]
     assert cpu_row.available is False
-    assert cpu_row.reason == "cpu probe said so", "the row must carry its own reason"
+    assert cpu_row.reason.startswith("cpu probe said so"), "the row must carry its own reason"
+    assert cpu_row.runtime_preparable is False  # suite opts out of preparation
     assert engines["beat-metal"].available is True, "the other rows are unaffected"
 
 
