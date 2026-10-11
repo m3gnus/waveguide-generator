@@ -12,6 +12,7 @@ import errno
 import os
 import platform
 import struct
+import time
 
 
 class BSDInfo(C.Structure):
@@ -32,6 +33,7 @@ class TaskInfo(C.Structure):
 
 
 P_WEXIT = 0x2000  # extern_proc.p_flag: exit has begun
+EXIT_WAIT_S = 0.5  # bound on waiting for a begun exit to finish
 
 
 def parse_snapshot(raw):
@@ -102,7 +104,8 @@ class DarwinProcesses:
     def read_owned(self, select, remember=None):
         # Exit can expose ancestry briefly after task information disappears.
         # Retry the complete transaction, never substitute zero for live RSS.
-        for attempt in range(3):
+        attempt, deadline = 0, None
+        while True:
             rows = self.ancestry()
             selected = select(rows)
             # Fresh ancestry establishes ownership independently of RSS. Keep
@@ -118,24 +121,34 @@ class DarwinProcesses:
                 except OSError as exc:
                     errors[pid] = exc
             after = self.ancestry()
-            live_errors = {}
+            live_errors, exiting_errors = {}, {}
             for pid in selected:
                 current = after.get(pid)
                 if current is None or current['start'] != rows[pid]['start']:
                     del rows[pid]
                 elif pid in errors and current.get('exiting'):
-                    # Exit has begun, so libproc no longer finds the task
-                    # (ESRCH) while the snapshot still lists it. It holds no
-                    # memory the tree keeps; its descendants are still read.
-                    rows[pid]['rss'] = 0
+                    # Exit has begun (P_WEXIT): libproc may already refuse the
+                    # task while its memory is not yet released. Never count
+                    # that as zero; wait below for it to finish exiting.
+                    exiting_errors[pid] = errors[pid]
                 elif pid in errors:
                     live_errors[pid] = errors[pid]
                 elif current['ppid'] != rows[pid]['ppid']:
                     live_errors[pid] = OSError(errno.EAGAIN, f'Owned PID {pid} reparented during RSS read')
                 else:
                     rows[pid]['rss'] = values[pid]
-            if not live_errors:
+            if not live_errors and not exiting_errors:
                 return rows
-            if attempt == 2:
-                raise next(iter(live_errors.values()))
-        raise AssertionError('Unreachable')
+            if live_errors:
+                attempt += 1
+                if attempt == 3:
+                    raise next(iter(live_errors.values()))
+                continue
+            # Only processes whose exit has begun refused: their exit finishes
+            # within milliseconds. Retry the whole transaction until they are
+            # zombies or gone, bounded, and refuse if they are not.
+            now = time.monotonic()
+            deadline = now + EXIT_WAIT_S if deadline is None else deadline
+            if now >= deadline:
+                raise next(iter(exiting_errors.values()))
+            time.sleep(0.002)

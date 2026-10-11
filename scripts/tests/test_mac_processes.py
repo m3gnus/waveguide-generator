@@ -213,16 +213,39 @@ def exiting(start=1, parent=1):
     return dict(row(start, parent), exiting=True)
 
 
-def test_exiting_parent_waives_only_its_own_rss_and_keeps_live_child():
-    snapshot = {2: exiting(), 3: row(parent=2)}
-    native = reader([snapshot, snapshot], lambda pid: (_ for _ in ()).throw(
-        OSError(errno.ESRCH, 'gone')) if pid == 2 else 700)
+def test_exiting_process_is_waited_for_until_it_is_gone_and_never_counted_as_zero():
+    exit_begun = {2: exiting(), 3: row(parent=2)}
+    finished = {3: row(parent=2)}
+    calls = []
+
+    def rss(pid):
+        calls.append(pid)
+        if pid == 2:
+            raise OSError(errno.ESRCH, 'gone')
+        return 700
+
+    native = reader([exit_begun, exit_begun, exit_begun, exit_begun, finished, finished], rss)
     rows = native.read_owned(lambda rows: set(rows))
-    assert rows[2]['rss'] == 0 and rows[3]['rss'] == 700
+    assert rows == {3: dict(row(parent=2), rss=700)}
+    assert calls.count(3) == 3  # the live child was read in every transaction
+
+
+def test_live_to_exiting_transition_refuses_after_bounded_wait(monkeypatch):
+    import scripts.beat_conformance.mac_processes as mp
+    monkeypatch.setattr(mp, 'EXIT_WAIT_S', 0.01)
+    native = reader([{2: row()}, {2: exiting()}] * 1000, denied)
+    with pytest.raises(OSError, match='denied'):
+        native.read_owned(lambda rows: set(rows))
 
 
 def test_unreadable_live_child_of_exiting_parent_still_refuses():
     snapshot = {2: exiting(), 3: row(parent=2)}
-    native = reader([snapshot] * 6, denied)
-    with pytest.raises(OSError, match='denied'):
+
+    def rss(pid):
+        if pid == 3:
+            raise OSError(errno.EPERM, 'child denied')
+        return 500
+
+    native = reader([snapshot] * 6, rss)
+    with pytest.raises(OSError, match='child denied'):
         native.read_owned(lambda rows: set(rows))
