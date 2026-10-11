@@ -5,6 +5,7 @@ import { EXPORT_FORMATS, GROUP_DELAY_UNITS, IMPEDANCE_DISPLAYS, MAP_REFERENCES, 
 import { SMOOTHING_MODES, type SmoothingMode } from '../results/smoothing';
 import { Icon } from '../shell/icons';
 import { AnchoredPanel } from './AnchoredPanel';
+import { loadChartThemes, type ChartTheme } from './chartThemes';
 
 interface PreferencesSurfaceProps {
   expanded?: boolean;
@@ -17,30 +18,13 @@ interface PreferencesSurfaceProps {
 /** Without an anchor the panel still opens, pinned to the top-left corner. */
 const NO_ANCHOR: RefObject<HTMLElement | null> = { current: null };
 
-interface ChartTheme {
-  id: string;
-  label: string;
-  default?: boolean;
-}
-
 function useThemes(): ChartTheme[] {
-  const [themes, setThemes] = useState<ChartTheme[]>([{ id: 'hornlab', label: 'hornlab' }]);
+  const [themes, setThemes] = useState<ChartTheme[]>([]);
   useEffect(() => {
     let live = true;
-    void fetch('/api/themes').then(async (response) => {
-      if (!response.ok) return;
-      const body = await response.json() as { themes?: Array<string | { id?: string; name?: string; label?: string; default?: boolean }>; default?: string };
-      const available = (body.themes ?? []).map((item): ChartTheme => {
-        if (typeof item === 'string') return { id: item, label: item };
-        const id = item.id ?? item.name ?? '';
-        return { id, label: item.label ?? id, default: item.default };
-      }).filter((item) => item.id);
-      if (live && available.length) {
-        setThemes(available);
-        const defaultId = body.default ?? available.find((item) => item.default)?.id;
-        if (defaultId && available.some((item) => item.id === defaultId)) preferencesStore.setChartThemeDefault(defaultId);
-      }
-    }).catch(() => undefined);
+    void loadChartThemes().then(({ themes: available }) => {
+      if (live) setThemes(available);
+    });
     return () => { live = false; };
   }, []);
   return themes;

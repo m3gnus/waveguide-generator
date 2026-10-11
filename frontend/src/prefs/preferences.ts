@@ -524,15 +524,17 @@ export function loadPreferences(raw: string | null): Preferences {
   return readPreferences(raw).value;
 }
 
-function serialize(value: Preferences): string {
-  return JSON.stringify({ version: STORAGE_VERSION, preferences: value });
+function serialize(value: Preferences, chartThemeStored: boolean): string {
+  const { chartTheme: _default, ...withoutTheme } = value;
+  return JSON.stringify({ version: STORAGE_VERSION, preferences: chartThemeStored ? value : withoutTheme });
 }
 
 function load(): Preferences {
-  const { value, migrated } = readPreferences(durableSettings.get('preferences'));
+  const raw = durableSettings.get('preferences');
+  const { value, migrated } = readPreferences(raw);
   // Persist a migrated layout straight away, so resetting the panel selection
   // happens once rather than on every reload.
-  if (migrated) durableSettings.set('preferences', serialize(value));
+  if (migrated) durableSettings.set('preferences', serialize(value, hasChartThemePreference(raw)));
   return value;
 }
 
@@ -586,7 +588,7 @@ class PreferenceStore {
   update(patch: Partial<Preferences>): void {
     if (patch.chartTheme) this.chartThemeStored = true;
     this.value = normalize({ ...this.value, ...patch });
-    durableSettings.set('preferences', serialize(this.value));
+    durableSettings.set('preferences', serialize(this.value, this.chartThemeStored));
     this.listeners.forEach((listener) => listener());
   }
   /**

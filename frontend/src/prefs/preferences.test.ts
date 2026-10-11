@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
-import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, loadPreferences, MAP_REFERENCES, preferencesStore, readPreferences, runDisplayName, STORAGE_VERSION } from './preferences';
+import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, loadPreferences, MAP_REFERENCES, MATCH_INTERFACE_THEME, preferencesStore, readPreferences, runDisplayName, STORAGE_VERSION } from './preferences';
 
 function job(id: string, rating: number | null, created: string, completed = created): JobItem {
   return { id, run_number: 1, parent_job_id: null, rating, created_at: created, completed_at: completed, label: id, status: 'complete', progress: 1, stage: null, stage_message: null, queued_at: created, started_at: created, config_summary: {}, solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: false, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null, design_revision: 0, polar_grid: {}, exported_files: [], auto_export_completed_at: null, auto_export_formats: {}, raw_results_file: null, mesh_artifact_file: null, log_tail: [] };
@@ -18,6 +18,48 @@ describe('client preferences', () => {
     expect(preferencesStore.getSnapshot().chartTheme).toBe('console');
     preferencesStore.adoptDurable(null);
     expect(preferencesStore.getSnapshot().chartTheme).toBe('vellum');
+  });
+
+  it('does not save the server default when another preference changes', () => {
+    preferencesStore.setChartThemeDefault('vellum');
+    preferencesStore.update({ smoothing: '1/3' });
+    const stored = localStorage.getItem('waveguide-v2-g3-preferences');
+    expect(JSON.parse(stored!).preferences).not.toHaveProperty('chartTheme');
+    preferencesStore.resetForTests();
+    preferencesStore.adoptDurable(stored);
+    preferencesStore.setChartThemeDefault('console');
+    expect(preferencesStore.getSnapshot()).toMatchObject({ chartTheme: 'console', smoothing: '1/3' });
+  });
+
+  it('does not save the startup fallback when another preference changes', () => {
+    preferencesStore.update({ minRating: 2 });
+    expect(JSON.parse(localStorage.getItem('waveguide-v2-g3-preferences')!).preferences).not.toHaveProperty('chartTheme');
+  });
+
+  it.each(['console', 'vellum', MATCH_INTERFACE_THEME])('persists the explicit theme %s across unrelated edits and reloads', (chartTheme) => {
+    preferencesStore.setChartThemeDefault('vellum');
+    preferencesStore.update({ chartTheme });
+    preferencesStore.update({ minRating: 2 });
+    const stored = localStorage.getItem('waveguide-v2-g3-preferences');
+    expect(JSON.parse(stored!).preferences.chartTheme).toBe(chartTheme);
+    preferencesStore.resetForTests();
+    preferencesStore.adoptDurable(stored);
+    preferencesStore.setChartThemeDefault('paper');
+    expect(preferencesStore.getSnapshot()).toMatchObject({ chartTheme, minRating: 2 });
+  });
+
+  it.each([undefined, 'hornlab', 'vellum'])('preserves whether a theme was stored when migrating %s on startup', async (chartTheme) => {
+    localStorage.setItem('waveguide-v2-g3-preferences', JSON.stringify({
+      version: 8, preferences: { smoothing: '1/3', chartTheme },
+    }));
+    vi.resetModules();
+    const { preferencesStore: reloaded } = await import('./preferences');
+    const stored = JSON.parse(localStorage.getItem('waveguide-v2-g3-preferences')!);
+    expect(stored.version).toBe(STORAGE_VERSION);
+    if (chartTheme === undefined) expect(stored.preferences).not.toHaveProperty('chartTheme');
+    else expect(stored.preferences.chartTheme).toBe(chartTheme === 'hornlab' ? MATCH_INTERFACE_THEME : chartTheme);
+    reloaded.setChartThemeDefault('console');
+    expect(reloaded.getSnapshot().chartTheme).toBe(chartTheme === undefined ? 'console' : chartTheme === 'hornlab' ? MATCH_INTERFACE_THEME : chartTheme);
   });
 
   it('persists the complete format selection and clamps the run sequence', () => {

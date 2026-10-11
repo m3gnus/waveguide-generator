@@ -9,6 +9,7 @@ import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from './PreferencesSurface';
 import { MATCH_INTERFACE_THEME, preferencesStore, STORAGE_VERSION } from './preferences';
+import { initializeChartThemeDefault } from './chartThemes';
 
 function readyCadRecord(ingestId: string): CadReturnIngestRecord {
   return {
@@ -71,10 +72,12 @@ describe('preferences surfaces', () => {
   });
 
   it.each(['top-level', 'theme flag'])('labels themes and selects the %s server default without a saved choice', async (source) => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       themes: [{ name: 'console', label: 'Console (dark)' }, { name: 'vellum', label: 'Vellum (paper)', default: source === 'theme flag' }],
       ...(source === 'top-level' ? { default: 'vellum' } : {}),
     }))));
+    await initializeChartThemeDefault();
+    expect(preferencesStore.getSnapshot().chartTheme).toBe('vellum');
     await act(async () => { root.render(<ResultsPreferencesSurface/>); });
     const select = host.querySelector<HTMLSelectElement>('[aria-label="Chart theme"]')!;
     expect(select.value).toBe('vellum');
@@ -89,9 +92,10 @@ describe('preferences surfaces', () => {
 
   it.each(['console', MATCH_INTERFACE_THEME, 'unavailable-theme'])('preserves the saved theme %s when themes arrive', async (chartTheme) => {
     preferencesStore.adoptDurable(JSON.stringify({ version: STORAGE_VERSION, preferences: { chartTheme } }));
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       themes: [{ id: 'console', label: 'Console' }, { name: 'vellum', label: 'Vellum' }], default: 'vellum',
     }))));
+    await initializeChartThemeDefault();
     await act(async () => { root.render(<ResultsPreferencesSurface/>); });
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Chart theme"]')!.value).toBe(chartTheme);
     expect(preferencesStore.getSnapshot().chartTheme).toBe(chartTheme);
@@ -105,6 +109,26 @@ describe('preferences surfaces', () => {
     act(() => { select.value = MATCH_INTERFACE_THEME; select.dispatchEvent(new Event('change', { bubbles: true })); });
     await act(async () => { respond(new Response(JSON.stringify({ themes: ['console', 'vellum'], default: 'vellum' }))); });
     expect(select.value).toBe(MATCH_INTERFACE_THEME);
+  });
+
+  it('keeps the startup fallback when themes arrive after Preferences opens', async () => {
+    await initializeChartThemeDefault();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      themes: [{ name: 'vellum', label: 'Vellum (paper)' }], default: 'vellum',
+    }))));
+    await act(async () => { root.render(<ResultsPreferencesSurface/>); });
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="Chart theme"]')!;
+    expect(select.value).toBe(MATCH_INTERFACE_THEME);
+    expect(preferencesStore.getSnapshot().chartTheme).toBe(MATCH_INTERFACE_THEME);
+    expect([...select.options].map((option) => option.textContent)).toContain('Vellum (paper)');
+  });
+
+  it('offers Match interface without a legacy theme when the server is offline', async () => {
+    await act(async () => { root.render(<ResultsPreferencesSurface/>); });
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="Chart theme"]')!;
+    expect([...select.options].map((option) => [option.value, option.textContent])).toEqual([
+      [MATCH_INTERFACE_THEME, 'Match interface'],
+    ]);
   });
 
   it('disables automatic formats while export is off without changing manual formats or saved choices', async () => {
