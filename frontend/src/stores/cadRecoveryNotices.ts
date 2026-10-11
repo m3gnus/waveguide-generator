@@ -86,6 +86,8 @@ export function connectCadRecoveryNotices(
 ): () => void {
   useCadDeliveryHealthStore.setState({ recoveryError: store.getState().recoveryError });
   let active = true;
+  let startup = true;
+  void Promise.resolve().then(() => { startup = false; });
   let reading = false;
   let again = false;
   const read = () => {
@@ -99,7 +101,7 @@ export function connectCadRecoveryNotices(
   };
   const unsubscribe = manager.subscribeCadOperations({
     operation: (operation) => { if (operation.kind === 'insert_link' || operation.kind === 'update_link') read(); },
-    resync: read,
+    resync: () => { const coalesced = startup && reading; startup = false; if (!coalesced) read(); },
     addinStatusChanged: read,
   });
   // The existing connection owner ages its held report once at expiry. This

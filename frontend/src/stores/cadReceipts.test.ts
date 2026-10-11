@@ -103,6 +103,16 @@ describe('Send receipt cursor source, without a coordinator', () => {
     expect(store.getState().receipts).toEqual({});
   });
 
+  it('persists fronted source identities after removing their pending receipts (row 1)', () => {
+    const store = createCadReceiptsStore(sessionStorage, () => NOW);
+    const item = receipt(1);
+    store.getState().merge({ feed_id: 'feed-a', receipts: [item], cursor: 1, has_more: false });
+    store.getState().markFronted(item.receipt_id);
+    expect(store.getState().receipts).toEqual({});
+    const reloaded = createCadReceiptsStore(sessionStorage, () => NOW);
+    expect(reloaded.getState().frontedBundles).toEqual([{ path: item.bundle_path, manifest: item.manifest_sha256 }]);
+  });
+
   it('coalesces reconnects and pushes while reading and resyncs from the HTTP cursor', async () => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
     const socket = channel();

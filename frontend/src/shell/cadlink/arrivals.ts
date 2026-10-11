@@ -112,7 +112,8 @@ export async function refreshCadReturnArrivals(
   if (!background) { setLoading(true); setError(null); }
   try {
     const response = await listReturns(fetcher);
-    if (request !== returnListRequest.current
+    if (preferencesStore.getSnapshot().cadApplication !== 'fusion360'
+      || request !== returnListRequest.current
       || !useCadReturnStore.getState().isCurrentSelectionIntent(selection)
       || !isCurrentDocumentLoad(documentLoad)) return;
     setBundles(response.items);

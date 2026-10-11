@@ -159,6 +159,21 @@ describe('Bring in geometry without a mounted coordinator (row 25)', () => {
     setItems([{ ...returned, designIds: ['wgd_foreign'] }]); await waiter.refresh();
     expect((await first).message).toContain('another CAD-linked project'); expect(arrival).not.toHaveBeenCalled();
   });
+  it('requires fresh reconciliation evidence for a pull that is still pending (row 6)', async () => {
+    const { waiter, fetcher } = setup(); const pull = waiter.pullFromFusion().catch(() => undefined); await flush();
+    fetcher.mockRejectedValue(new Error('offline'));
+    expect(await waiter.reconcile(['pull-1'])).toEqual(new Set());
+    waiter.supersede(); await pull;
+  });
+
+  it('keeps settled reconciliation evidence when the reconnect feed resolves after the pull (row 25)', async () => {
+    const { waiter, setItems } = setup(); const pull = waiter.pullFromFusion(); await flush();
+    const ids = waiter.awaitedRequestIds();
+    setItems([returned]); await waiter.refresh(); await pull;
+    expect(await waiter.reconcile(ids)).toEqual(new Set(['pull-1']));
+    expect(await waiter.reconcile(ids)).toEqual(new Set(['pull-1']));
+  });
+
   it('can find the exact awaited return after reconnect without any event or operation store', async () => {
     const { waiter, setItems } = setup(); const first = waiter.pullFromFusion(); await flush();
     expect(waiter.awaitedRequestIds()).toEqual(['pull-1']); setItems([returned]);

@@ -158,6 +158,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
         if (!contextCurrent()) { returned = null; error = undefined; }
         // Clear before selection, callbacks and promise settlement. Reentrant
         // manual picks and duplicate reads cannot settle this operation twice.
+        if (operation.requestId) reconciled.add(operation.requestId);
         pending = null; commandAbort.abort(); reading = null; readingAbort?.abort(); readingAbort = null;
         clearTimers(); stops.forEach((stop) => stop());
         store.setState({ pullingFromFusion: false, requestId: null });
@@ -225,7 +226,9 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
   return Object.assign(store, {
     pullFromFusion, refresh,
     async reconcile(ids: readonly string[]): Promise<ReadonlySet<string>> {
-      ids.forEach((id) => reconciled.delete(id));
+      // Pending work still owes fresh evidence; a settled local waiter has no
+      // reader left to recreate its outcome after the reconnect feed finishes.
+      ids.forEach((id) => { if (pending?.requestId === id) reconciled.delete(id); });
       await refresh();
       return new Set(ids.filter((id) => reconciled.has(id)));
     },

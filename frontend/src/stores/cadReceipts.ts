@@ -38,6 +38,8 @@ export interface CadReceiptsState {
   retryDisplay(id: string): void;
   receipts: Record<string, CadReceipt>;
   fronted: string[];
+  /** Source identities remain owned after a receipt leaves the pending queue. */
+  frontedBundles: Array<{ path: string; manifest: string | null }>;
   feedback: Record<string, ReceiptFeedback>;
   recoveryError: string | null;
   merge(page: ReceiptPage): void;
@@ -94,7 +96,7 @@ export function createCadReceiptsStore(storage = windowStorage(), now = Date.now
   const initial = (id: string | null) => {
     const saved = restore(id);
     return { feedId: id, cursor: saved.cursor ?? 0, since: saved.since ?? now() - RECEIPT_FIRST_CONNECTION_MS,
-      receipts: saved.receipts ?? {}, fronted: saved.fronted ?? [], feedback: saved.feedback ?? {},
+      frontedBundles: saved.frontedBundles ?? [], receipts: saved.receipts ?? {}, fronted: saved.fronted ?? [], feedback: saved.feedback ?? {},
       newestSequence: saved.newestSequence ?? 0, newestSentAt: saved.newestSentAt ?? 0,
       intakeRefusals: saved.intakeRefusals ?? [], displayRetries: saved.displayRetries ?? {}, recoveryError: null };
   };
@@ -131,6 +133,8 @@ export function createCadReceiptsStore(storage = windowStorage(), now = Date.now
         return true;
       }).slice(-HISTORY_LIMIT);
       set({ receipts, fronted, displayRetries,
+        frontedBundles: item?.bundle_path ? [...state.frontedBundles.filter((entry) => entry.path !== item.bundle_path),
+          { path: item.bundle_path, manifest: item.manifest_sha256 }].slice(-HISTORY_LIMIT) : state.frontedBundles,
         newestSequence: item && item.outcome !== 'refused' ? Math.max(state.newestSequence, item.send_sequence ?? 0) : state.newestSequence,
         newestSentAt: item && item.outcome !== 'refused' ? Math.max(state.newestSentAt, Date.parse(item.sent_at)) : state.newestSentAt });
     },
@@ -182,7 +186,7 @@ export function createCadReceiptsStore(storage = windowStorage(), now = Date.now
   store.subscribe((state) => {
     try {
       storage?.setItem(`${KEY}:${state.feedId ?? 'pending'}`, JSON.stringify({ feedId: state.feedId,
-        cursor: state.cursor, since: state.since, receipts: state.receipts, fronted: state.fronted, feedback: state.feedback,
+        frontedBundles: state.frontedBundles, cursor: state.cursor, since: state.since, receipts: state.receipts, fronted: state.fronted, feedback: state.feedback,
         newestSequence: state.newestSequence, newestSentAt: state.newestSentAt,
         intakeRefusals: state.intakeRefusals, displayRetries: state.displayRetries }));
       if (state.feedId) storage?.setItem(`${KEY}:active`, state.feedId);
@@ -202,6 +206,8 @@ export function useCadReceiptsStore<T>(selector: (state: CadReceiptsState) => T)
 export function connectCadReceipts(manager: Pick<JobsSocketManager, 'subscribeCadOperations'> = jobsSocket,
   store = cadReceiptsStore, fetcher: typeof fetch = fetch): () => void {
   let active = true;
+  let startup = true;
+  void Promise.resolve().then(() => { startup = false; });
   let reading = false;
   let again = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -221,7 +227,7 @@ export function connectCadReceipts(manager: Pick<JobsSocketManager, 'subscribeCa
   const unsubscribe = manager.subscribeCadOperations({
     operation: (operation) => { if (operation.kind === 'receive_snapshot') read(); },
     refusal: (refusal) => { useCadDeliveryHealthStore.getState().mergeRefusals([refusal]); read(); },
-    resync: () => read(),
+    resync: () => { const coalesced = startup && reading; startup = false; if (!coalesced) read(); },
   });
   read();
   return () => { active = false; unsubscribe(); if (timer !== null) clearTimeout(timer); };
@@ -231,13 +237,13 @@ export function connectCadReceipts(manager: Pick<JobsSocketManager, 'subscribeCa
  * stop later Sends. Completed receipts are removed from the pending queue.
  */
 export function connectCadReceiptDisplay(display: (receipt: CadReceipt) => Promise<boolean>,
-  store = cadReceiptsStore): () => void {
+  store = cadReceiptsStore, enabled: () => boolean = () => true): () => void {
   let active = true;
   let draining = false;
   let again = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const drain = async () => {
-    if (!active) return;
+    if (!active || !enabled()) return;
     if (draining) { again = true; return; }
     draining = true;
     if (timer !== null) clearTimeout(timer);
@@ -248,7 +254,7 @@ export function connectCadReceiptDisplay(display: (receipt: CadReceipt) => Promi
       const batch = Object.values(store.getState().receipts).sort((a, b) => a.cursor - b.cursor);
       for (const next of batch) {
         const state = store.getState();
-        if (!active || state.feedId !== feedId) break;
+        if (!active || !enabled() || state.feedId !== feedId) break;
         if (!state.receipts[next.receipt_id] || state.fronted.includes(next.receipt_id)
           || (state.displayRetries[next.receipt_id]?.nextAt ?? 0) > Date.now()) continue;
         let completed = true;
@@ -261,7 +267,7 @@ export function connectCadReceiptDisplay(display: (receipt: CadReceipt) => Promi
               message: error instanceof Error ? error.message : String(error) });
           }
         }
-        if (active && store.getState().feedId === feedId) {
+        if (active && enabled() && store.getState().feedId === feedId) {
           if (completed) {
             if (store.getState().receipts[next.receipt_id]) store.getState().markFronted(next.receipt_id, next);
           }

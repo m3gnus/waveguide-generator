@@ -36,6 +36,17 @@ describe('delivery-health reads in flight', () => {
   });
   const respond = (index: number, value: CadDeliveryStatus) => answers[index](new Response(JSON.stringify(value)));
 
+  it('projects restored and pushed outbound activity through the existing operations listing (row 10)', async () => {
+    disconnect();
+    const mutation = { operationId: 'update', kind: 'update_link', state: 'processing', attemptGeneration: 1, updatedAt: null } as CadOperationSummary;
+    vi.stubGlobal('fetch', vi.fn(async (input) => new Response(JSON.stringify(String(input).endsWith('/operations')
+      ? { operations: [mutation] } : status(null)))));
+    disconnect = connectCadDeliveryHealth(); await flush();
+    expect(useCadDeliveryHealthStore.getState().outboundOperations.update.state).toBe('processing');
+    listener.operation({ ...mutation, state: 'accepted' });
+    expect(useCadDeliveryHealthStore.getState().outboundOperations.update.state).toBe('accepted');
+  });
+
   it('coalesces requests into one follow-up read when waiting ends during a read', async () => {
     await flush();
     const waiting = { operationId: 'waiting', state: 'received', attemptGeneration: 0, updatedAt: null } as CadOperationSummary;

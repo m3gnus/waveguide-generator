@@ -116,6 +116,16 @@ describe('CAD observation scheduler without the coordinator', () => {
     await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual(ended);
   });
 
+  it.each(['listing change', 'Send'])('on: %s resets the quiet clock without changing context (row 10)', async () => {
+    activity.coordination = 'on'; activity.workspaceMode = 'parametric'; activity.activityRevision = 0;
+    readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false }));
+    await mount(); await vi.advanceTimersByTimeAsync(60_000); const quiet = reads();
+    change({ activityRevision: 1 });
+    await vi.advanceTimersByTimeAsync(2_500); expect(reads()).toEqual(quiet.map((count) => count + 1));
+    await vi.advanceTimersByTimeAsync(27_500); const quietAgain = reads();
+    await vi.advanceTimersByTimeAsync(29_999); expect(reads()).toEqual(quietAgain);
+  });
+
   it('on: quiet observations widen to 30 seconds and focus immediately wakes them', async () => {
     activity.coordination = 'on'; activity.workspaceMode = 'parametric';
     readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false }));

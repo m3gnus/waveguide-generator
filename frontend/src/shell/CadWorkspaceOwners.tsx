@@ -4,6 +4,7 @@ import { getOnshapeConnection, getOnshapeStatus } from '../api/onshape';
 import { cadCoordinationStore } from '../api/cadCoordination';
 import { jobsSocket } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
+import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { cadReceiptsStore, connectCadReceipts, connectCadReceiptDisplay } from '../stores/cadReceipts';
 import { cadRecoveryNoticesStore, connectCadRecoveryNotices } from '../stores/cadRecoveryNotices';
@@ -46,8 +47,11 @@ export function mountCadWorkspaceOwners(): () => void {
   let designId = useDocumentStore.getState().identity?.designId;
   let connectionRequested = false;
   const claimedReturns = new Set<string>();
+  const fusionActive = () => mounted.current && preferencesStore.getSnapshot().cadApplication === 'fusion360';
+  let activityRevision = 0;
   const activityListeners = new Set<() => void>();
   const changed = () => activityListeners.forEach((listener) => listener());
+  const noteCadActivity = () => { activityRevision += 1; changed(); };
   const publish = (patch: Partial<typeof emptyCadWorkspace>) => {
     if (mounted.current) cadWorkspace.setState(patch);
   };
@@ -74,12 +78,28 @@ export function mountCadWorkspaceOwners(): () => void {
   const arrivals = createCadReturnArrivalReader({
     cadFolderConfigured, manualSelectionAt, projectOpenPending, refusedForeignReturn,
     returnListRequest, seenReturnRevisions, autoIngestSelected, enterCadWorkspace,
-    refreshChannelDriverBases, noteCadActivity: changed,
+    refreshChannelDriverBases, noteCadActivity,
     awaitingReturn: () => waiter.getState().pullingFromFusion,
-    ownsReturn: (bundle) => Boolean(bundle.requestId && claimedReturns.has(bundle.requestId)),
+    ownsReturn: (bundle) => Boolean((bundle.requestId && claimedReturns.has(bundle.requestId))
+      || Object.values(cadReceiptsStore.getState().receipts).some((receipt) => receipt.bundle_path === bundle.bundlePath)
+      || cadReceiptsStore.getState().frontedBundles.some((entry) => entry.path === bundle.bundlePath)),
     setError: reportError, setStatus: reportStatus,
     setBundles: (bundles) => publish({ bundles }), setLoading: (loading) => publish({ loading }),
   });
+  let firstReturnRead = true;
+  const startupReceipts = cadReceiptsStore.getState().load();
+  void startupReceipts.catch(() => undefined);
+  const refreshReturns = async (options?: Parameters<typeof arrivals.refresh>[0]) => {
+    if (!fusionActive()) { publish({ loading: false }); return; }
+    // Discover the Send identities before any folder entry can be selected.
+    // A failed feed read still lists files for manual use, but cannot auto-ingest a Send.
+    let sendOwnersKnown = true;
+    try {
+      const read = firstReturnRead ? startupReceipts : cadReceiptsStore.getState().load();
+      firstReturnRead = false; await read;
+    } catch { sendOwnersKnown = false; }
+    if (fusionActive()) await arrivals.refresh(sendOwnersKnown ? options : { ...options, autoOpenNew: false });
+  };
   const actions = createCadArrivalActions({
     mounted, ingestRequest, ingestAbortController, manualSelectionAt, refusedForeignReturn, restoringCadProject,
     autoIngestSelected, enterCadWorkspace, rereadDrivers, fusionInstanceId: () => useCadConnectionStore.getState().fusionStatus?.link?.instanceId ?? null,
@@ -89,11 +109,11 @@ export function mountCadWorkspaceOwners(): () => void {
     setBundles: (bundles) => publish({ bundles }), reportViewportNotice,
   });
   const outbound = createCadOutboundController({
-    selectedInstanceId: () => fusionInstance, noteCadActivity: changed,
-    refresh: () => arrivals.refresh(),
+    selectedInstanceId: () => fusionInstance, noteCadActivity,
+    refresh: () => refreshReturns(),
   });
   const waiter = createCadReturnWaiter({
-    selectedInstanceId: () => fusionInstance, noteCadActivity: changed,
+    selectedInstanceId: () => fusionInstance, noteCadActivity,
     onArrival: (bundle) => {
       if (bundle.requestId) claimedReturns.add(bundle.requestId);
       // Automatic continuity is shared with receipts; this callback selects
@@ -110,30 +130,39 @@ export function mountCadWorkspaceOwners(): () => void {
     actions.selectBundleAs(bundle, project);
   };
   const observation = connectCadObservation({
+    observeOperation: outbound.observeOperation,
     getActivity: () => ({
+      activityRevision,
       cadApplication: preferencesStore.getSnapshot().cadApplication,
       cadFolderConfigured: cadFolderConfigured.current,
       coordination: cadCoordinationStore.getSnapshot(), workspaceMode: workspaceModeStore.getSnapshot().mode,
       // No progress, receipt cursor or mesh generation in the context key.
       observationKey: JSON.stringify([useDocumentStore.getState().identity, useDesignStore.getState().designRevision,
         documentSettingsSignature(), useCadReturnStore.getState().selectedBundle?.bundlePath, fusionInstance]),
-      requests: waiter.awaitedRequestIds().map((id) => ({ id, state: 'processing' })),
+      requests: [
+        ...Object.entries(outbound.getState().requests).map(([id, state]) => ({ id, state })),
+        ...waiter.awaitedRequestIds().map((id) => ({ id, state: 'processing' })),
+      ],
       awaitingReturn: waiter.getState().pullingFromFusion,
     }),
     subscribeActivity: (listener) => { activityListeners.add(listener); return () => { activityListeners.delete(listener); }; },
     readFusionStatus: () => getFusionCadStatus(useDesignStore.getState().design, useDocumentStore.getState().identity,
       useCadReturnStore.getState().selectedBundle?.bundlePath ?? null, fetch, fusionInstance),
-    reloadReturns: () => arrivals.refresh({ background: true,
+    reloadReturns: () => refreshReturns({ background: true,
       autoOpenNew: useCadConnectionStore.getState().fusionStatus?.addinInboxTransfer !== true }),
     reloadReceipts: async (ids) => {
       await cadReceiptsStore.getState().load();
-      return waiter.reconcile(ids);
+      const pulls = await waiter.reconcile(ids);
+      const outboundIds = ids.filter((id) => !pulls.has(id) && Object.hasOwn(outbound.getState().requests, id));
+      const sends = await outbound.reconcile(outboundIds);
+      return new Set([...pulls, ...sends]);
     },
   });
   const pullAndSolve = async (): Promise<'solving' | 'blocked' | 'failed'> => {
     solveAttention.armSolve();
     try {
       const returned = await waiter.pullFromFusion();
+      reportStatus('Received the current Fusion geometry. Preparing the simulation…');
       const choice = useCadReturnStore.getState().captureModelChoice();
       const prepared = await preparation;
       const selected = useCadReturnStore.getState();
@@ -141,6 +170,7 @@ export function mountCadWorkspaceOwners(): () => void {
         || !selected.isCurrentModelChoice(choice) || selected.selectedBundle?.bundlePath !== returned.bundlePath) {
         throw new SupersededError('A newer model selection superseded this geometry request.');
       }
+      reportStatus('Prepared. Submitting the solve…');
       const outcome = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
       if (outcome === 'busy') {
         reportStatus('Prepared the Fusion geometry. A solve is already running — press Solve when it finishes.');
@@ -150,15 +180,17 @@ export function mountCadWorkspaceOwners(): () => void {
       return 'solving';
     } catch (error) {
       if (error instanceof SupersededError) return 'blocked';
+      reportStatus(null);
       reportError(error instanceof Error ? error.message : String(error));
       return useCadReturnStore.getState().ingestRecord ? 'blocked' : 'failed';
     }
   };
   const refresh = async (options?: Parameters<typeof arrivals.refresh>[0]) => {
     observation.refresh({ returns: false });
-    await Promise.allSettled([arrivals.refresh(options), refreshOnshapeStatus(), cadRecoveryNoticesStore.getState().load(), waiter.refresh()]);
+    await Promise.allSettled([refreshReturns(options), refreshOnshapeStatus(), cadRecoveryNoticesStore.getState().load(), waiter.refresh()]);
   };
   cadWorkspace.setState({ ...emptyCadWorkspace,
+    loading: fusionActive() && document.visibilityState !== 'hidden',
     refresh, refreshOnshapeStatus, selectBundle,
     returnFromOnshape: actions.returnFromOnshape,
     ingest: async () => { await actions.ingestSelected().catch(() => undefined); }, ingestSelected: actions.ingestSelected,
@@ -178,13 +210,22 @@ export function mountCadWorkspaceOwners(): () => void {
       onshapeInstance = id; actions.supersedePreparation(); publish({ onshapeStatus: null }); void refreshOnshapeStatus();
     },
   });
-  const display = createReceiptDisplay({ enterCadWorkspace, reportViewportNotice, isActive: () => mounted.current,
+  const display = createReceiptDisplay({ enterCadWorkspace, reportViewportNotice, isActive: fusionActive,
     refuseAutomaticRestore: () => { refusedForeignReturn.current = true; },
     showIngestedMesh: showIngestedMeshInViewport, manualSelectionAt: () => manualSelectionAt.current });
+  let stopDisplay = connectCadReceiptDisplay(display, cadReceiptsStore, fusionActive);
+  let application = preferencesStore.getSnapshot().cadApplication;
   const settleModels = () => solvedCadModels.settle(jobsSocket.getSnapshot().jobs, {
     showIngestedMesh: showIngestedMeshInViewport, reportViewportNotice,
   });
   const subscribeContext = () => {
+    const nextApplication = preferencesStore.getSnapshot().cadApplication;
+    if (nextApplication !== application) {
+      application = nextApplication;
+      actions.supersedePreparation(); waiter.supersede(); arrivals.cancel();
+      stopDisplay(); stopDisplay = connectCadReceiptDisplay(display, cadReceiptsStore, fusionActive);
+      if (!fusionActive()) publish({ loading: false });
+    }
     changed();
     if (preferencesStore.getSnapshot().cadApplication === 'onshape') void refreshOnshapeStatus();
   };
@@ -200,12 +241,15 @@ export function mountCadWorkspaceOwners(): () => void {
     context = next; subscribeContext();
   };
   const stops = [
-    outbound.subscribe((state, previous) => publish({ sendingToFusion: state.sendingToFusion,
+    outbound.subscribe((state, previous) => { changed(); publish({ sendingToFusion: state.sendingToFusion,
       pendingFusionConflict: state.pendingFusionConflict,
       ...(state.error !== previous.error ? { error: state.error } : {}),
-      ...(state.status !== previous.status ? { status: state.status } : {}) })),
+      ...(state.status !== previous.status ? { status: state.status } : {}) }); }),
     waiter.subscribe((state, previous) => {
+      claimedReturns.clear();
       if (state.requestId) claimedReturns.add(state.requestId);
+      const selectedRequest = useCadReturnStore.getState().selectedBundle?.requestId;
+      if (selectedRequest) claimedReturns.add(selectedRequest);
       publish({ pullingFromFusion: state.pullingFromFusion, errorDiagnostics: state.errorDiagnostics,
         ...(state.error !== previous.error ? { error: state.error } : {}),
         ...(state.status !== previous.status ? { status: state.status } : {}) }); changed();
@@ -217,9 +261,12 @@ export function mountCadWorkspaceOwners(): () => void {
       if (feedback) publish(feedback.outcome === 'accepted' || feedback.outcome === 'superseded'
         ? { status: feedback.message } : { error: feedback.message });
     }),
-    connectCadReceiptDisplay(display), connectCadReceipts(), connectCadRecoveryNotices(),
+    () => stopDisplay(), connectCadReceipts(),
+    useCadDeliveryHealthStore.subscribe((state, previous) => {
+      if (state.outboundOperations !== previous.outboundOperations) Object.values(state.outboundOperations).forEach(outbound.observeOperation);
+    }), connectCadRecoveryNotices(),
     observeCadProjectLoads({ enterCadWorkspace, manualSelectionAt, projectOpenPending, refusedForeignReturn,
-      returnListRequest, seenReturnRevisions, refreshRef: { current: arrivals.refresh }, selectBundleRef: { current: selectBundle },
+      returnListRequest, seenReturnRevisions, refreshRef: { current: refreshReturns }, selectBundleRef: { current: selectBundle },
       setError: reportError, setStatus: reportStatus }),
     observeRememberedCadProject({ restoringCadProject, refusedForeignReturn, selectBundle, reportStatus }),
     jobsSocket.subscribe(settleModels), solvedCadModels.subscribe(settleModels),
@@ -229,6 +276,7 @@ export function mountCadWorkspaceOwners(): () => void {
     cadCoordinationStore.subscribe(changed), cadWorkspaceSelection.subscribe(() => observation.refresh()),
     subscribeRevision((event) => { if (event.reason !== 'load') actions.supersedePreparation(); }),
   ];
+  Object.values(useCadDeliveryHealthStore.getState().outboundOperations).forEach(outbound.observeOperation);
   contextChanged(); settleModels(); void refreshOnshapeStatus();
   return () => {
     mounted.current = false;

@@ -1,3 +1,4 @@
+import type { CadOperationSummary } from '../api/cadOperations';
 import type { CadCoordination } from '../api/cadCoordination';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { useCadConnectionStore, type CadConnectionStore, type CadConnectionStatus } from '../stores/cadConnection';
@@ -13,6 +14,8 @@ const PARKED = new Set(['needs_user_input', 'recovery_required']);
 const FINISHED = new Set(['accepted', 'rejected', 'failed', 'cancelled', 'complete', 'error', 'superseded']);
 export interface CadObservedRequest { id: string; state: string }
 export interface CadObservationActivity {
+  /** Only listing changes and deliberate CAD commands reset quiet cadence. */
+  activityRevision?: number;
   cadApplication: string;
   cadFolderConfigured: boolean | null;
   coordination: CadCoordination;
@@ -26,6 +29,8 @@ export interface CadObservationActivity {
 }
 
 export interface CadObservationOptions {
+  /** Route pushed request evidence to its command owner without another socket reader. */
+  observeOperation?(operation: CadOperationSummary): void;
   getActivity(): CadObservationActivity;
   subscribeActivity(listener: () => void): () => void;
   readFusionStatus(): Promise<CadConnectionStatus>;
@@ -81,13 +86,15 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
   };
   const readStatus = () => {
     if (active && visible() && options.getActivity().cadApplication === 'fusion360') {
-      void connection.read(options.readFusionStatus);
+      return connection.read(options.readFusionStatus).then(() => undefined);
     }
+    return Promise.resolve();
   };
   const readReturns = () => {
     if (active && visible() && options.getActivity().cadApplication === 'fusion360') {
-      void options.reloadReturns().catch(() => undefined);
+      return options.reloadReturns().catch(() => undefined);
     }
+    return Promise.resolve();
   };
   const poll = (listing: boolean, tick: () => void) => {
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -144,7 +151,30 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       }, wait);
     });
   };
-  const wake = (listing = true) => { noteActivity(); if (listing) readReturns(); readStatus(); };
+  let firstWake = true;
+  let firstResync = true;
+  const startupKey = activity.observationKey;
+  let startupReads: Promise<unknown> | null = null;
+  let wakeScheduled = false;
+  let wakeListing = false;
+  const wake = (listing = true) => {
+    noteActivity();
+    wakeListing ||= listing;
+    if (wakeScheduled) return;
+    wakeScheduled = true;
+    void Promise.resolve().then(() => {
+      wakeScheduled = false;
+      if (!active) return;
+      const listingRequested = wakeListing; wakeListing = false;
+      const reads = [listingRequested ? readReturns() : Promise.resolve(), readStatus()];
+      if (firstWake) {
+        firstWake = false;
+        const batch = Promise.allSettled(reads);
+        startupReads = batch;
+        void batch.finally(() => { if (startupReads === batch) startupReads = null; });
+      }
+    });
+  };
   const invalidateDeclaration = () => {
     declaredInbox = false;
     // Fence the previous session's read, but let its held report age by its TTL.
@@ -152,9 +182,16 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     restart();
   };
   const unsubscribeChannel = manager.subscribeCadOperations({
-    operation: () => undefined, // Request state belongs to the injected receipt owner.
+    operation: (operation) => options.observeOperation?.(operation),
     addinStatusChanged: () => { invalidateDeclaration(); wake(); },
-    resync: () => { invalidateDeclaration(); recover(); wake(); },
+    resync: () => {
+      // The initial hello shares a still-running mount batch for this context.
+      // Later reconnects always fence and read again.
+      const coalesced = firstResync && startupReads !== null && options.getActivity().observationKey === startupKey;
+      firstResync = false;
+      if (!coalesced) { invalidateDeclaration(); wake(); }
+      recover();
+    },
   });
   const unsubscribeJobs = manager.subscribe(() => {
     const next = working();
@@ -162,9 +199,11 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
   });
   const unsubscribeActivity = options.subscribeActivity(() => {
     const next = options.getActivity();
+    const cadActivityChanged = next.activityRevision !== activity.activityRevision;
     const applicationChanged = next.cadApplication !== activity.cadApplication;
     const contextChanged = next.observationKey !== activity.observationKey || applicationChanged;
     const folderChanged = next.cadFolderConfigured !== activity.cadFolderConfigured;
+    const folderDiscovered = activity.cadFolderConfigured === null && folderChanged;
     const enteredCad = next.workspaceMode === 'cad' && activity.workspaceMode !== 'cad';
     const coordinationChanged = next.coordination !== activity.coordination;
     const pullChanged = next.awaitingReturn !== activity.awaitingReturn;
@@ -173,6 +212,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     const workChanged = nextWorking !== wasWorking;
     activity = next;
     wasWorking = nextWorking;
+    if (cadActivityChanged) noteActivity();
     if (contextChanged) {
       // A design/instance change invalidates its status, not the add-in's
       // transport declaration. A stalled read must not restart legacy listing
@@ -181,8 +221,8 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       if (applicationChanged) invalidateDeclaration();
       if (!(folderChanged || enteredCad || applicationChanged)) readStatus();
     }
-    if (folderChanged || enteredCad || applicationChanged) wake();
-    else if (contextChanged || coordinationChanged || modeChanged || pullChanged || workChanged) restart();
+    if ((folderChanged && !folderDiscovered) || enteredCad || applicationChanged) wake();
+    else if (contextChanged || folderChanged || coordinationChanged || modeChanged || pullChanged || workChanged) restart();
   });
   const unsubscribeConnection = connection.subscribe((state) => {
     const next = state.fusionStatus;

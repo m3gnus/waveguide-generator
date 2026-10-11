@@ -1,5 +1,6 @@
 import { createStore } from 'zustand/vanilla';
 import { getFusionCadStatus } from '../../api/cadlink';
+import { getCadOperation, type CadOperationSummary } from '../../api/cadOperations';
 import { selectCadWorkspace } from '../../api/cadWorkspace';
 import { sendDesignToCad } from '../../api/designIo';
 import { keptContentKeyOf, rememberSentCopy } from '../../design/replacementCheck';
@@ -35,6 +36,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
   const fetcher = options.fetcher ?? fetch;
   const instance = options.selectedInstanceId ?? (() => connection.getState().fusionStatus?.selectedInstanceId ?? null);
   const store = createStore(() => ({
+    requests: {} as Record<string, string>,
     sendingToFusion: false, pendingFusionConflict: false,
     error: null as string | null, status: null as string | null,
   }));
@@ -123,6 +125,11 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
           exportedIdentity = identity;
           const result = await sendDesignToCad(design, designRevision, designNameSlug(designName),
             identity, fetcher, undefined, target ?? null, polar);
+          if (active && result.cadHandoffRequestId && result.cadHandoff !== 'failed') {
+            const id = result.cadHandoffRequestId;
+            // A terminal push may have beaten the export response.
+            if (!store.getState().requests[id]) store.setState({ requests: { ...store.getState().requests, [id]: 'received' } });
+          }
           const adopt = current() && isCurrentDocumentLoad(load)
             && useDocumentStore.getState().identity === identity;
           rememberSentCopy(sentKey, result.identity?.designId, adopt);
@@ -162,6 +169,23 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
   };
   return Object.assign(store, {
     sendWgToFusion,
+    observeOperation(operation: CadOperationSummary) {
+      if (active && (operation.kind === 'insert_link' || operation.kind === 'update_link')) {
+        store.setState({ requests: { ...store.getState().requests, [operation.operationId]: operation.state } });
+      }
+    },
+    async reconcile(ids: readonly string[]): Promise<ReadonlySet<string>> {
+      const settled = new Set<string>();
+      await Promise.all(ids.map(async (id) => {
+        try {
+          const operation = await getCadOperation(id, fetcher);
+          if (operation.operationId !== id || !active) return;
+          store.setState({ requests: { ...store.getState().requests, [id]: operation.state } });
+          settled.add(id);
+        } catch { /* The exact outcome remains retryable. */ }
+      }));
+      return settled;
+    },
     confirmFusionConflict: () => sendWgToFusion({ confirmed: true }),
     cancelFusionConflict() { conflict = null; store.setState({ pendingFusionConflict: false }); },
     dispose() { active = false; generation += 1; conflict = null;

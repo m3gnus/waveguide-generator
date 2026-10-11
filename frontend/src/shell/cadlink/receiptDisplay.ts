@@ -33,6 +33,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
     store.getState().report(receipt.receipt_id, { outcome, message });
   };
   const run = async (receipt: CadReceipt): Promise<boolean> => {
+    if (display.isActive?.() === false) return false;
     if (feedId !== store.getState().feedId) {
       feedId = store.getState().feedId;
       newestSequence = store.getState().newestSequence;
@@ -70,6 +71,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       && (phase === 'listing' || (useCadReturnStore.getState().isCurrentIngestIntent(generation)
         && importedMeshStore.isCurrentGeneration(baselineViewport)));
     const superseded = () => {
+      if (display.isActive?.() === false) return false;
       if (store.getState().feedId !== receiptFeed) return true;
       report(receipt, 'superseded', `Received ${name}; your newer selection stays on screen.`);
       return true;

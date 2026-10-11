@@ -10,13 +10,14 @@ export const useCadDeliveryHealthStore = create<{
   status: CadDeliveryStatus | null;
   refusals: CadInboxRefusal[];
   unseenRefusals: number;
+  outboundOperations: Record<string, CadOperationSummary>;
   waiting: boolean;
   recoveryError: string | null;
   setStatus: (status: CadDeliveryStatus) => void;
   mergeRefusals: (refusals: CadInboxRefusal[]) => void;
   acknowledgeRefusals: () => void;
 }>((set, get) => ({
-  status: null, refusals: [], unseenRefusals: 0, waiting: false, recoveryError: null,
+  status: null, refusals: [], unseenRefusals: 0, outboundOperations: {}, waiting: false, recoveryError: null,
   setStatus: (status) => { set({ status }); get().mergeRefusals(status.recentRefusals ?? []); },
   mergeRefusals: (refusals) => {
     const known = new Set(get().refusals.map(refusalKey));
@@ -50,6 +51,11 @@ export function connectCadDeliveryHealth(): () => void {
     if (held && (operation.attemptGeneration < held.attemptGeneration
       || (operation.attemptGeneration === held.attemptGeneration
         && Date.parse(operation.updatedAt ?? '') < Date.parse(held.updatedAt ?? '')))) return;
+    if (operation.kind === 'insert_link' || operation.kind === 'update_link') {
+      useCadDeliveryHealthStore.setState({ outboundOperations: {
+        ...useCadDeliveryHealthStore.getState().outboundOperations, [operation.operationId]: operation,
+      } });
+    }
     intake.set(operation.operationId, {
       state: operation.state, attemptGeneration: operation.attemptGeneration, updatedAt: operation.updatedAt,
     });
@@ -88,6 +94,11 @@ export function connectCadDeliveryHealth(): () => void {
       operations.forEach((item) => {
         if (!changedDuringLoad.has(item.operationId)) apply(item, true);
       });
+      const outboundOperations = { ...useCadDeliveryHealthStore.getState().outboundOperations };
+      for (const id of Object.keys(outboundOperations)) {
+        if (!listedIds.has(id) && !changedDuringLoad.has(id)) delete outboundOperations[id];
+      }
+      useCadDeliveryHealthStore.setState({ outboundOperations });
       updateWaiting();
     }).catch(() => undefined);
   };
@@ -114,5 +125,5 @@ export function connectCadDeliveryHealth(): () => void {
 }
 
 export function resetCadDeliveryHealthStore(): void {
-  useCadDeliveryHealthStore.setState({ status: null, refusals: [], unseenRefusals: 0, waiting: false, recoveryError: null });
+  useCadDeliveryHealthStore.setState({ status: null, refusals: [], unseenRefusals: 0, outboundOperations: {}, waiting: false, recoveryError: null });
 }

@@ -20,7 +20,7 @@ const coordinator = vi.hoisted(() => ({
   dismissOperation: vi.fn(async (_operationId: string) => undefined),
   solveOperationWithSettings: vi.fn(async () => undefined),
   reconcileOperation: vi.fn(async () => undefined),
-  reportError: vi.fn(),
+  reportError: vi.fn(), reportStatus: vi.fn(), refresh: vi.fn(async () => undefined),
   fusionStatus: null as null | { documentName: string | null; recoveryRequired: { operationId: string; phase: string } | null },
 }));
 vi.mock('../stores/cadWorkspace', () => ({
@@ -159,6 +159,19 @@ describe('operation cards for the model on screen', () => {
     await show([solve()]);
     expect(cards()).toHaveLength(1);
     expect(earlier()).toBeNull();
+  });
+
+  it('Check Fusion again reconciles the named mutation before refreshing status and notices (row 16)', async () => {
+    coordinator.fusionStatus = { documentName: 'Speaker', recoveryRequired: { operationId: RECOVERY_ID, phase: 'applied' } };
+    vi.stubGlobal('fetch', vi.fn(async () => json({ operation: recovery({ state: 'accepted' }) })));
+    await show([recovery()]);
+    await act(async () => cadRecoveryNoticesStore.setState({ notices: { [RECOVERY_ID]: { ...cadRecoveryNoticesStore.getState().notices[RECOVERY_ID], active_document: true } } }));
+    const button = host.querySelector<HTMLButtonElement>('button[aria-label^="Check Fusion again"]')!;
+    expect(button).not.toBeNull();
+    await act(async () => { button.click(); });
+    expect(fetch).toHaveBeenCalledWith(`/api/cadlink/operations/${RECOVERY_ID}/reconcile`, { method: 'POST' });
+    expect(coordinator.refresh).toHaveBeenCalledOnce();
+    expect(vi.mocked(fetch).mock.invocationCallOrder[0]).toBeLessThan(coordinator.refresh.mock.invocationCallOrder[0]);
   });
 
   it('makes a recovery loud only while the active Fusion document reports it, and then names the document', async () => {

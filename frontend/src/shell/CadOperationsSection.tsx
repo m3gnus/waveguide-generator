@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { getIngest, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { listCadProjects } from '../api/cadProjects';
-import { isPendingCadOperation } from '../api/cadOperations';
-import { cadRecoveryNoticesStore, createCadRequestActions, selectCadRequests, useCadRecoveryNotices, type CadRequest } from '../stores/cadRecoveryNotices';
+import { isPendingCadOperation, reconcileCadOperation } from '../api/cadOperations';
+import { createCadRequestActions, selectCadRequests, useCadRecoveryNotices, type CadRequest } from '../stores/cadRecoveryNotices';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { openCadProject } from './CadProjectPanel';
 import { approveCadJob, cadJobSummaries, dismissCadJob, useCadJobs } from '../jobs/cadSolve';
@@ -395,7 +395,8 @@ function RecoveryOperationCard({ request, requestActions }: { request: CadReques
         disabled={asked !== null}
         aria-label={`Check Fusion again: ${label}`}
         onClick={() => ask('reconcile', async () => {
-          await cadRecoveryNoticesStore.getState().load();
+          await reconcileCadOperation(request.id);
+          await coordinator.refresh();
           coordinator.reportStatus('Checked Fusion recovery notices. Use Undo in Fusion or repair the link if its warning remains.');
         })}
       >Check Fusion again</button>

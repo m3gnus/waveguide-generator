@@ -126,7 +126,7 @@ describe('CadLinkPanel', () => {
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
-      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
+      if (path.endsWith('/recovery-notices')) return json({ notices: Object.values(fixtureOperations).filter((item) => item.state === 'recovery_required' && ['insert_link', 'update_link'].includes(item.kind)).map(noticeFor) });
       return json(record);
     }));
   });
@@ -424,6 +424,7 @@ describe('CadLinkPanel', () => {
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     });
 
+    expect(posted).toContainEqual({ path: '/api/cadlink/operations/op-update/reconcile', body: null });
     expect(posted).toContainEqual({ path: '/api/cadlink/recovery-notices', body: null });
     expect(operationCard('op-update')).toBeNull();
     expect(cadRecoveryNoticesStore.getState().notices['op-update']).toBeUndefined();
@@ -450,6 +451,7 @@ describe('CadLinkPanel', () => {
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     });
 
+    expect(posted).toContainEqual({ path: '/api/cadlink/operations/op-update/reconcile', body: null });
     expect(posted).toContainEqual({ path: '/api/cadlink/recovery-notices', body: null });
     expect(operationCard('op-update')).not.toBeNull();
     expect(fixtureOperations['op-update'].state).toBe('recovery_required');
