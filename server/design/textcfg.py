@@ -250,7 +250,7 @@ def _collect_function(lines: list[str], index: int, first_value: str) -> tuple[s
     return "\n".join(raw), index
 
 
-def _lex(text: str, repeats: list[str] | None = None) -> tuple[dict[str, str], dict[str, _RawBlock], list[str], dict[str, str]]:
+def _lex(text: str, repeats: list[tuple[str, _RawBlock]] | None = None) -> tuple[dict[str, str], dict[str, _RawBlock], list[str], dict[str, str]]:
     flat: dict[str, str] = {}
     blocks: dict[str, _RawBlock] = {}
     comments: list[str] = []
@@ -280,7 +280,7 @@ def _lex(text: str, repeats: list[str] | None = None) -> tuple[dict[str, str], d
                 raise TextConfigError(f"nested block {match.group(1)!r} inside {current!r}")
             current = match.group(1)
             if current in blocks and not current.startswith("_") and repeats is not None:
-                repeats.append(current)
+                repeats.append((current, blocks[current]))
             blocks[current] = _RawBlock()
             continue
         if line == "}":
@@ -746,8 +746,26 @@ _ATH_ROSSE_MEMBERS = frozenset(
 
 
 # Values at which an otherwise unsupported item changes nothing in ATH: no
-# separate axial scale (1), no mouth roundover (0), rollback switched off (0).
-_ATH_NOOP_VALUES = {"Scale.Z": 1.0, "Mesh.Roundover": 0.0, "Rollback": 0.0}
+# separate axial scale (1), single profile (1), no mouth roundover (0),
+# rollback switched off (0).
+_ATH_NOOP_VALUES = {"Scale.Z": 1.0, "HornGeometry": 1.0, "Mesh.Roundover": 0.0, "Rollback": 0.0}
+
+
+def _ath_number(raw: str) -> float | None:
+    """Evaluate a finite ATH value with the importer's profile evaluator."""
+    from hornlab_mesher.profile_common import eval_param
+
+    from .throat_stretch import text_number
+
+    try:
+        value = float(eval_param(text_number(raw)))
+    except (TypeError, ValueError, ArithmeticError, SyntaxError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _ath_rollback_disabled(flat: Mapping[str, str]) -> bool:
+    return "Rollback" in flat and _ath_number(flat["Rollback"]) == 0.0
 
 
 def _ath_name(name: str) -> str:
@@ -785,23 +803,16 @@ def _refuse_unsupported_ath_items(
     WG writes it reads back, extras included.
     """
 
-    from .throat_stretch import text_number
-
-    def number(raw: str) -> float | None:
-        # The importer's own evaluator, so `1+1` is read as 2 rather than
-        # slipping past a numeric check. Unevaluable text is None.
-        from hornlab_mesher.profile_common import eval_param
-
-        try:
-            value = float(eval_param(text_number(raw)))
-        except (TypeError, ValueError, ArithmeticError, SyntaxError):
-            return None
-        return value if math.isfinite(value) else None
-
     def noop(base: str, value: str) -> bool:
         # Defaults ATH treats as "off": the item is present and changes nothing.
         expected = _ATH_NOOP_VALUES.get(base)
-        return expected is not None and number(value) == expected
+        return expected is not None and _ath_number(value) == expected
+
+    rollback_disabled = _ath_rollback_disabled(flat)
+
+    def inactive_rollback(name: str) -> bool:
+        base = _ath_name(name)
+        return rollback_disabled and (base == "Rollback" or base.startswith("Rollback."))
 
     def live(block: _RawBlock) -> bool:
         # An empty block, or one whose members are all parked, applies nothing.
@@ -826,6 +837,8 @@ def _refuse_unsupported_ath_items(
             for key, value in blocks[section].items.items():
                 dotted.setdefault(f"{section}.{key}", value)
     for key, value in dotted.items():
+        if inactive_rollback(key):
+            continue
         reason = _ath_unsupported_reason(key)
         if reason is not None:
             if not noop(_ath_name(key), value):
@@ -836,9 +849,11 @@ def _refuse_unsupported_ath_items(
                 add(key, _UNSUPPORTED_ATH_REASONS.get(
                     member, "this enclosure member is not implemented; WG reads Depth, "
                     "EdgeRadius, EdgeType, FrontResolution, BackResolution and Spacing"))
-        elif key == "Mesh.RearShape" and number(value) != 1.0:
+        elif key == "Mesh.RearShape" and _ath_number(value) != 1.0:
             add(key, f"Mesh.RearShape = {value} is not implemented; only the full rear (1) is")
     for name, block in blocks.items():
+        if inactive_rollback(name):
+            continue
         reason = _ath_unsupported_reason(name)
         if reason is not None:
             if live(block):
@@ -857,14 +872,14 @@ def _refuse_unsupported_ath_items(
                 inner = _ath_unsupported_reason(key)
                 if inner is None and base != "OSSE":
                     inner = _ATH_ROSSE_BLOCK_ONLY.get(key)
-                if inner is not None and not noop(_ath_name(key), value):
+                if inner is not None and not noop(_ath_name(key), value) and not inactive_rollback(key):
                     add(f"{base}.{key}", inner)
         # A named in-block child (a block opened inside this one) never reaches
         # `items`; the lexer already refuses nesting.
     # The selected profile block's Throat.Profile wins over the top-level one.
     selected_items = blocks[block_name].items if block_name is not None else {}
     profile = selected_items.get("Throat.Profile", flat.get("Throat.Profile"))
-    if profile is not None and number(profile) != 1.0:
+    if profile is not None and _ath_number(profile) != 1.0:
         add("Throat.Profile", f"Throat.Profile = {profile} is not measured against ATH; only the "
             "OS-SE profile (1) is")
     if formula == "R-OSSE" and block_name is not None:
@@ -893,7 +908,7 @@ _ATH_IGNORED_WITH_NOTE = {
 }
 # ATH mesh-output switches. The mesher ignores them too; listed here so a WG
 # paired with a mesher that predates that change still accepts them.
-_ATH_MESH_OUTPUT_KEYS = frozenset({"Mesh.Algorithm", "Mesh.Binary", "Mesh.MshFileVersion"})
+_ATH_MESH_OUTPUT_KEYS = frozenset({"Mesh.Algorithm", "Mesh.Binary", "Mesh.MshFileVersion", "Mesh.Wireframe"})
 # Top-level members that ATH reads only inside the R-OSSE block.
 _ATH_BLOCK_ONLY_AT_TOP = frozenset({"arcterm", "trunc"})
 _ATH_NAMESPACES_IGNORING_UNKNOWN = ("Morph.", "MORPH.", "GCurve.", "GCURVE.")
@@ -921,16 +936,8 @@ def _refuse_unread_ath_items(
 
     from hornlab_mesher import config_parser as mesher
 
-    from .throat_stretch import text_number
-
     def parked(name: str) -> bool:
         return any(part.startswith("_") for part in name.split(":", 1)[0].split("."))
-
-    def number(raw: str) -> float | None:
-        try:
-            return float(text_number(raw))
-        except (TypeError, ValueError):
-            return None
 
     # Keys WG reads in some layout. Left over here they are keys ATH ignores in
     # this one (r0 beside an R-OSSE block, the unselected profile block...), so
@@ -967,7 +974,7 @@ def _refuse_unread_ath_items(
                 note=f"ATH reads {key} only inside the R-OSSE block, so it has no effect at top level.",
             ))
             continue
-        if key in _ATH_UNREAD_NOOP_VALUES and number(value) == _ATH_UNREAD_NOOP_VALUES[key]:
+        if key in _ATH_UNREAD_NOOP_VALUES and _ath_number(value) == _ATH_UNREAD_NOOP_VALUES[key]:
             continue
         reason = (
             _UNSUPPORTED_ATH_REASONS.get(key)
@@ -1051,7 +1058,7 @@ def _build_payload(
         if throat_profile is not None and text_number(throat_profile) != 1:
             raise TextConfigError(f"Throat.Profile = {text_number(throat_profile)} is not supported; only the OS-SE profile (1) is implemented")
     rollback = sorted(key for key in refusal_keys if key == "Rollback" or key.startswith("Rollback."))
-    if rollback:
+    if rollback and not _ath_rollback_disabled(flat):
         raise TextConfigError(f"Rollback is not supported by this mesher (saw {', '.join(rollback)})")
     if dialect == "ath" and refuse_unsupported:
         _refuse_unsupported_ath_items(flat, blocks, formula=formula, block_name=block_name)
@@ -1285,7 +1292,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
 
     if not isinstance(text, str):
         raise TypeError("text must be a string")
-    repeated: list[str] = []
+    repeated: list[tuple[str, _RawBlock]] = []
     flat, blocks, comments, raw_values = _lex(text, repeated)
     for comment in comments:
         for match in _DESIGN_FORMAT_STAMP.finditer(comment):
@@ -1312,11 +1319,23 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             raise TextConfigError(f"invalid CadLink block: {exc}") from exc
     dialect: Literal["mwg", "ath"] = "mwg" if _MWG_SNIFF.search(text) else "ath"
     if dialect == "ath" and repeated and not any(_GEOMETRY_STAMP.match(c) for c in comments):
+        from hornlab_mesher.config_parser import _ath_item_ignored
+
+        # Retain earlier copies so an empty final Mesh cannot hide populated
+        # members that ATH would merge. Only entirely empty Mesh copies are safe.
+        populated_mesh = any(block.items or block.lines for name, block in repeated if name == "Mesh")
+        repeated = [
+            (name, block) for name, block in repeated
+            if not _ath_item_ignored(name, block=True)
+            and not (name == "Mesh" and not populated_mesh
+                     and not blocks[name].items and not blocks[name].lines)
+        ]
+    if dialect == "ath" and repeated and not any(_GEOMETRY_STAMP.match(c) for c in comments):
         # ATH merges a repeated block member by member; this parser never did,
         # so the second copy silently replaced the first. WG's own files keep
         # passthrough blocks verbatim, repeats included.
         raise TextConfigError(
-            f"block {repeated[0]!r} appears more than once; ATH merges repeated "
+            f"block {repeated[0][0]!r} appears more than once; ATH merges repeated "
             "blocks member by member and this importer does not. Combine "
             "the copies into one block, or prefix a copy with '_' to park it"
         )

@@ -170,8 +170,7 @@ def test_native_files_keep_repeated_passthrough_blocks_byte_for_byte() -> None:
     parsed = parse(text)
     assert parsed.dialect == "mwg"
     assert serialize(parsed) == serialize(parse(serialize(parsed)))
-    with pytest.raises(TextConfigError, match="more than once"):
-        parse(BASE + report + report)
+    assert parse(BASE + report + report).dialect == "ath"
 
 
 def test_a_wg_stamped_file_keeps_native_passthrough_for_unsupported_keys() -> None:
@@ -219,6 +218,8 @@ def test_a_stamped_wg_file_keeps_flat_enclosure_keys_as_passthrough() -> None:
     [
         "Scale.Z = 1\n",
         "Scale.Z = 0.5+0.5\n",
+        "HornGeometry = 1\n",
+        "HornGeometry = 2-1\n",
         "Mesh.Roundover = 0\n",
         "Rollback = 0\n",
         "Mesh.RearShape = 1\n",
@@ -240,6 +241,8 @@ def test_no_op_values_of_unsupported_items_still_import(extra: str) -> None:
         ("Scale.Z = 0.5+0.5+1\n", "Scale.Z"),
         ("Scale.Z = foo\n", "Scale.Z"),
         ("Mesh.Roundover = 2*5\n", "Mesh.Roundover"),
+        ("HornGeometry = 1+1\n", "HornGeometry"),
+        ("HornGeometry = foo\n", "HornGeometry"),
     ],
 )
 def test_expression_values_are_evaluated_before_the_check(extra: str, key: str) -> None:
@@ -258,8 +261,32 @@ def test_a_stamped_file_is_not_refused_for_a_repeated_block() -> None:
     stamp = "; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\n"
     text = stamp + BASE + "Report = {\n Title = a\n}\nReport = {\n Title = b\n}\n"
     assert parse(text) is not None
+    assert parse(BASE + "Report = {\n Title = a\n}\nReport = {\n Title = b\n}\n").dialect == "ath"
+
+
+@pytest.mark.parametrize("name", ["GridExport:a", "Report", "ABEC.Project"])
+def test_repeated_ignored_blocks_import(name: str) -> None:
+    text = BASE + f"{name} = {{\n x = 1\n}}\n{name} = {{\n y = 2\n}}\n"
+    assert parse(text).dialect == "ath"
+
+
+def test_repeated_empty_mesh_blocks_import_like_the_mesher() -> None:
+    from hornlab_mesher.config_parser import parse_text_config
+
+    text = BASE + "Mesh = {\n}\nMesh = {\n ; empty\n}\n"
+    assert parse(text).dialect == "ath"
+    assert parse_text_config(text)["formula"] == "OSSE"
+
+
+@pytest.mark.parametrize("sections", [
+    "Mesh = {\n AngularSegments = 32\n}\nMesh = {\n}\n",
+    "Mesh = {\n}\nMesh = {\n AngularSegments = 32\n}\n",
+    "Mesh = {\n}\nMesh = {\n AngularSegments = 32\n}\nMesh = {\n}\n",
+    "OSSE = {\n L = 200\n}\n",
+])
+def test_repeated_blocks_that_would_lose_members_are_still_refused(sections: str) -> None:
     with pytest.raises(TextConfigError, match="more than once"):
-        parse(BASE + "Report = {\n Title = a\n}\nReport = {\n Title = b\n}\n")
+        parse(BASE + sections)
 
 
 def _corpus_files() -> list[Path]:
@@ -340,7 +367,6 @@ GAP_STUDY_KEYS = {
     "Mesh.WG": "Mesh.WG = 0\n",
     "Mesh.OpusRear": "Mesh.OpusRear = 1\n",
     "Mesh.RoundedEdge": "Mesh.RoundedEdge = 1\n",
-    "Mesh.Wireframe": "Mesh.Wireframe = 1\n",
     "Tickler": "Tickler = 1\n",
     "System4": "System4.a = 1\n",
     "Scale.Z": "Scale.Z = 2\n",
@@ -364,17 +390,40 @@ def test_every_gap_study_key_is_refused_by_name(family: str, base: str, key: str
     assert key.split(".")[-1] in str(caught.value) or key in str(caught.value)
 
 
-def test_rot_beside_r_osse_is_refused_unless_zero() -> None:
+@pytest.mark.parametrize("value", ["0", "0*1", "2-2", "sin(0)"])
+def test_rot_beside_r_osse_is_refused_unless_zero(value: str) -> None:
     with pytest.raises(TextConfigError, match="Rot"):
         parse(RBASE + "Rot = 10\n")
-    assert parse(RBASE + "Rot = 0\n").dialect == "ath"
+    assert parse(RBASE + f"Rot = {value}\n").dialect == "ath"
     assert parse(BASE + "Rot = 10\n").dialect == "ath"  # OSSE reads it
 
 
-@pytest.mark.parametrize("key", ["Mesh.Algorithm", "Mesh.Binary", "Mesh.MshFileVersion"])
+@pytest.mark.parametrize("value", ["1+1", "foo", "1/0", "1e309"])
+def test_nonzero_or_invalid_unread_expressions_are_refused_by_name(value: str) -> None:
+    with pytest.raises(TextConfigError, match="Rot"):
+        parse(RBASE + f"Rot = {value}\n")
+
+
+@pytest.mark.parametrize("key", ["Mesh.Algorithm", "Mesh.Binary", "Mesh.MshFileVersion", "Mesh.Wireframe"])
 def test_mesh_output_only_keys_import(key: str) -> None:
     assert parse(BASE + f"{key} = 2\n").dialect == "ath"
     assert parse(BASE + "Mesh = {\n" + f" {key[5:]} = 2\n" + "}\n").dialect == "ath"
+
+
+@pytest.mark.parametrize("stretch", ["", "s1 = 0.5\ns2 = 0.5\n"])
+@pytest.mark.parametrize("value", ["0", "0*1"])
+def test_disabled_rollback_members_import(value: str, stretch: str) -> None:
+    text = BASE.replace(" L = 120\n", " L = 120\n" + stretch)
+    text += f"Rollback = {value}\nRollback.Angle = 180\nRollback.StartAt = 0.8\n"
+    parsed = parse(text)
+    assert parsed.dialect == "ath"
+    assert parsed.extra_keys["Rollback.Angle"] == "180"
+
+
+@pytest.mark.parametrize("switch", ["", "Rollback = 1\n", "Rollback = 1+1\n", "Rollback = foo\n"])
+def test_rollback_members_are_refused_unless_explicitly_disabled(switch: str) -> None:
+    with pytest.raises(TextConfigError, match=r"Rollback\.Angle"):
+        parse(BASE + switch + "Rollback.Angle = 180\n")
 
 
 @pytest.mark.parametrize("key", ["Mesh.SubdomainSlices", "Mesh.InterfaceOffset"])
