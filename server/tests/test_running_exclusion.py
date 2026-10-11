@@ -114,8 +114,11 @@ def test_mutex_name_matches_launcher_and_installer_without_admission_check():
     launcher = (root / "launchers/windows/launcher.c").read_text(encoding="utf-8")
     installer = (root / "installers/windows/bundle-setup.iss").read_text(encoding="utf-8")
 
-    assert f'CreateMutexW(&sa, FALSE, L"{name}")' in launcher
-    assert f"OpenMutexW(SYNCHRONIZE, 0, '{name}')" in installer
+    # Anchor to the statements themselves, so a copy left in a comment cannot pass.
+    launcher_lines = {line.strip() for line in launcher.splitlines()}
+    installer_lines = {line.strip() for line in installer.splitlines()}
+    assert f'running = CreateMutexW(&sa, FALSE, L"{name}");' in launcher_lines
+    assert f"Handle := OpenMutexW(SYNCHRONIZE, 0, '{name}');" in installer_lines
     source = Path(running_exclusion.__file__).read_text(encoding="utf-8")
     assert "WaveguideGeneratorSetup" not in source
 

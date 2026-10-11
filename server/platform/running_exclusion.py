@@ -5,6 +5,12 @@ Holding it closes the window where a child outlives a dead server and the
 installer replaces ``app/`` under it. Only Windows ``wg-python.exe`` children
 participate; failure to obtain a handle refuses to run. This deliberately
 does not look at the installer's admission mutex.
+
+A refusal raises :class:`RunningExclusionError`. The mesher child and the
+BEMPP worker then exit with code 1. A sweep pool worker is refused in its
+initializer instead: ``concurrent.futures`` logs that, lets the worker exit
+with code 0 and marks the pool broken, so the sweep fails with
+``BrokenProcessPool`` and no frequency runs in that worker.
 """
 
 from __future__ import annotations
