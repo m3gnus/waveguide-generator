@@ -46,7 +46,7 @@ class _PeerDisconnectFilter(logging.Filter):
             return True
         record.levelno = logging.DEBUG
         record.levelname = logging.getLevelName(logging.DEBUG)
-        return logging.getLogger().isEnabledFor(logging.DEBUG)
+        return logging.getLogger("asyncio").isEnabledFor(logging.DEBUG)
 
 
 _PEER_DISCONNECT_FILTER = _PeerDisconnectFilter()

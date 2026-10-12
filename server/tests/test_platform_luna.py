@@ -260,6 +260,7 @@ def test_a_dropped_connection_is_not_an_error_in_the_log(tmp_path: Path) -> None
 
 def test_a_dropped_connection_is_kept_at_debug_when_debug_is_on(tmp_path: Path) -> None:
     paths = ensure_data_layout(tmp_path)
+    root_level = logging.getLogger().level
     logging_setup.setup_logging(paths, level=logging.DEBUG)
     logging.getLogger("asyncio").setLevel(logging.DEBUG)
     try:
@@ -270,7 +271,7 @@ def test_a_dropped_connection_is_kept_at_debug_when_debug_is_on(tmp_path: Path) 
         logging_setup.flush_logs()
     finally:
         logging.getLogger("asyncio").setLevel(logging.NOTSET)
-        logging.getLogger().setLevel(logging.INFO)
+        logging.getLogger().setLevel(root_level)
 
     text = (paths.logs / "server.log").read_text(encoding="utf-8")
     assert " DEBUG asyncio: Exception in callback _ProactorBasePipeTransport" in text
