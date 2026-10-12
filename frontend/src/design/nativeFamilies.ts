@@ -8,6 +8,7 @@ export function nativeSymmetryLimitation(formula: string, symmetry: string): str
 }
 
 export function nativeCadLimitation(formula: string): string | undefined {
+  if (formula === 'LOOKUP') return 'LOOKUP cannot be sent to CAD Link as ATH .cfg: ATH has no LOOKUP profile. Export STEP instead.';
   return (NATIVE_FAMILIES as readonly string[]).includes(formula)
     ? `${formula} cannot be sent to CAD Link. Export STEP or STL for the complete native geometry.`
     : undefined;

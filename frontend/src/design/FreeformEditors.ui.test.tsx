@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetDesignStore, useDesignStore, type CrossSectionStation, type FreeformPoint } from '../stores/design';
 import type { ParameterDefinition } from './parameterRegistry';
-import { EditablePointTable, EditableStationTable } from './FreeformEditors';
+import { EditableLookupTable, EditablePointTable, EditableStationTable } from './FreeformEditors';
 
 const pointField: ParameterDefinition = {
   id: 'freeform.pointsH', legacyKey: 'profile_h.points', section: 'Profile',
@@ -53,6 +53,40 @@ describe('FREEFORM numeric tables', () => {
     act(() => root.unmount());
     vi.restoreAllMocks();
     host.remove();
+  });
+
+  it('edits, adds, removes and pastes LOOKUP pairs without changing their units', () => {
+    act(() => useDesignStore.getState().setFamily('LOOKUP'));
+    const field: ParameterDefinition = { id: 'lookup.profile', legacyKey: 'lookupProfile', section: 'Profile', label: 'Lookup profile points', kind: 'table' };
+    const render = () => act(() => root.render(<EditableLookupTable field={field} points={useDesignStore.getState().design.lookup_profile!}/>));
+    render();
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Remove lookup point 1"]')!.disabled).toBe(true);
+    const z = inputWithLabel(host, 'Lookup point 1 z');
+    act(() => enterDraft(z, '120'));
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe('lookupProfile z values must be strictly increasing');
+    act(() => z.blur());
+    expect(useDesignStore.getState().design.lookup_profile![0][0]).toBe(0);
+    const radius = inputWithLabel(host, 'Lookup point 1 radius');
+    act(() => enterDraft(radius, '15'));
+    act(() => radius.blur());
+    expect(useDesignStore.getState().design.lookup_profile![0][1]).toBe(15);
+    render();
+    act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Add point')!.click());
+    expect(useDesignStore.getState().design.lookup_profile).toEqual([[0, 15], [60, 77.5], [120, 140]]);
+    render();
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Remove lookup point 2"]')!.click());
+    expect(useDesignStore.getState().design.lookup_profile).toHaveLength(2);
+    render();
+    const paste = host.querySelector<HTMLTextAreaElement>('[aria-label="Paste lookup points"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(paste, 'z,r\n0,18\n40,25\n100,20');
+      paste.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Import points')!.click());
+    expect(useDesignStore.getState().design.lookup_profile).toEqual([[0, 18], [40, 25], [100, 20]]);
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design.lookup_profile).toEqual([[0, 15], [120, 140]]);
   });
 
   it('explains and reverts invalid or blank point values without updating the design', () => {

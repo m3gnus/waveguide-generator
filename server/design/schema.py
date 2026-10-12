@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -860,6 +861,56 @@ class ICWConfig(DesignCommon):
     curl: Expr | None = None
 
 
+class LookupConfig(DesignCommon):
+    """Experimental precomputed whole meridian, in intrinsic millimetres."""
+
+    formula: Literal["LOOKUP"]
+    lookup_profile: list[tuple[float, float]] = Field(
+        validation_alias=AliasChoices("lookup_profile", "lookupProfile"),
+        min_length=2, description="At least two finite [z, r] pairs in mm, with strictly increasing z",
+    )
+    a0: Expr | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_coefficients(cls, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            if any(value.get(key) is not None for key in (
+                "L", "L_mm", "R", "R_mm", "n", "s", "s1", "s2", "rotation", "rot",
+                "rot_deg", "tmax", "m", "r", "b",
+            )):
+                raise ValueError("formula LOOKUP does not accept OSSE/R-OSSE profile keys")
+            ignored = [key for key in ("a", "a_deg", "k", "q", "h", "throat_adapter") if value.get(key) is not None]
+            if ignored:
+                raise ValueError("formula LOOKUP does not support " + ", ".join(ignored)
+                                 + ": the lookupProfile defines the whole meridian; build the extension or adapter into the lookupProfile instead")
+        return value
+
+    @field_validator("lookup_profile", mode="before")
+    @classmethod
+    def _lookup_table(cls, value: Any) -> Any:
+        from hornlab_mesher.profile_formulas import lookup_profile_array
+
+        # Use the pinned authority for its exact shape/finite/monotonic rules.
+        try:
+            return lookup_profile_array({"lookupProfile": value}).tolist()
+        except (ValueError, TypeError) as exc:
+            raise ValueError(str(exc)) from exc
+
+    @model_validator(mode="after")
+    def _whole_meridian(self) -> "LookupConfig":
+        for field in ("throat_ext_angle", "throat_ext_length", "slot_length"):
+            value = getattr(self, field)
+            if value is not None and value.constant_value() != 0:
+                raise ValueError(
+                    f"formula LOOKUP does not support {field}: the lookupProfile defines "
+                    "the whole meridian; build the extension or adapter into the lookupProfile instead"
+                )
+        if self.text_import_version is not None:
+            raise ValueError("LOOKUP does not accept imported ATH geometry")
+        return self
+
+
 class FreeformPoint(StrictModel):
     t: Expr
     r: Expr
@@ -1042,7 +1093,7 @@ class SourceDiskConfig(NativeDesignCommon):
     source_body: SourceBody = Field(default_factory=SourceBody)
 
 DesignVariant = Annotated[
-    OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig | NativeOSSEConfig | SourceDiskConfig,
+    OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig | LookupConfig | NativeOSSEConfig | SourceDiskConfig,
     Field(discriminator="formula"),
 ]
 
@@ -1082,6 +1133,8 @@ class DesignConfig(RootModel[DesignVariant]):
             for key in ("s1", "s2"):
                 if key not in migrated:
                     continue
+                if migrated.get("formula") == "LOOKUP" and migrated[key] is not None:
+                    raise ValueError("formula LOOKUP does not accept OSSE/R-OSSE profile keys")
                 number = coefficient(migrated[key], key) if migrated[key] is not None else 0
                 if number != 0:
                     formula = migrated.get("formula")
@@ -1114,6 +1167,7 @@ __all__ = [
     "FreeformPoint",
     "FreeformProfile",
     "ICWConfig",
+    "LookupConfig",
     "MeshConfig",
     "OSSEConfig",
     "ResolutionExpr",

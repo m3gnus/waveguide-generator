@@ -21,6 +21,7 @@ const TRACEABILITY_KEYS = {
   'R-OSSE': ['scale', 'R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
   OSSE: ['scale', 'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h'],
   ICW: ['scale', 'r0', 'a0', 'L', 'R', 'coverage_angle', 'hold_start', 'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth'],
+  LOOKUP: ['scale', 'lookupProfile', 'lookupSourceAngle'],
   FREEFORM: ['scale', 'length', 'throatRadius', 'throatAngle', 'mouthRadiusH', 'mouthAngleH', 'interiorH', 'mouthRadiusV', 'mouthAngleV', 'interiorV', 'crossSections', 'inflectionPolicy'],
   COMMON: [
     'throatExtAngle', 'throatExtLength', 'slotLength',
@@ -80,14 +81,14 @@ describe('complete parameter registry', () => {
 
   it('covers every current family-qualified traceability entry with no deferrals', () => {
     const encodedCount = Object.values(TRACEABILITY_KEYS).reduce<number>((count, keys) => count + keys.length, 0);
-    expect(encodedCount).toBe(105);
-    expect(TRACEABILITY_PARAMETER_INVENTORY).toHaveLength(105);
+    expect(encodedCount).toBe(108);
+    expect(TRACEABILITY_PARAMETER_INVENTORY).toHaveLength(108);
     expect(TRACEABILITY_PARAMETER_INVENTORY.every(traceEntryIsRegistered)).toBe(true);
 
     for (const [family, keys] of Object.entries(TRACEABILITY_KEYS)) {
       for (const key of keys) {
         expect(PARAMETER_REGISTRY.some((field) => field.legacyKey === key && (
-          family === 'COMMON' || !field.families || field.families.includes(family as 'R-OSSE' | 'OSSE' | 'ICW' | 'FREEFORM')
+          family === 'COMMON' || !field.families || field.families.includes(family as 'R-OSSE' | 'OSSE' | 'ICW' | 'FREEFORM' | 'LOOKUP')
         )), `${family}.${key}`).toBe(true);
       }
     }
@@ -311,7 +312,7 @@ describe('complete parameter registry', () => {
       kind: 'number',
       min: 2,
       max: 16,
-      families: ['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'],
+      families: ['R-OSSE', 'OSSE', 'ICW', 'FREEFORM', 'LOOKUP'],
     });
   });
 

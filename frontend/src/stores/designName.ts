@@ -63,15 +63,15 @@ export function designNameSlug(name: unknown, fallback = UNTITLED_SLUG): string 
  * a second one: "horn.cfg" typed into the name field is a filename the user
  * pasted, not a design called "horn.cfg".
  */
-export function designFilename(name: string): string {
+export function designFilename(name: string, family?: string): string {
   const stem = designNameSlug(name).replace(/\.(cfg|txt|mwg)$/i, '');
-  return `${stem || UNTITLED_SLUG}.cfg`;
+  return `${stem || UNTITLED_SLUG}.${family === 'LOOKUP' ? 'mwg' : 'cfg'}`;
 }
 
 /** The design name a picked file carries, in the file's own spelling. */
 export function designNameFromFilename(filename: string): string {
   const basename = String(filename ?? '').replace(/^.*[\\/]/, '');
-  return normalizeDesignName(basename.replace(/\.(cfg|txt|mwg)$/i, ''));
+  return normalizeDesignName(basename.replace(/\.(cfg|txt|mwg|json)$/i, ''));
 }
 
 const REPORT_BLOCK = 'Report';

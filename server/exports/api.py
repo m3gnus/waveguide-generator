@@ -538,6 +538,8 @@ def _export_wglink_sync(
 
     from server.design.native import NATIVE_FORMULAS
 
+    if request.design.formula == "LOOKUP":
+        raise HTTPException(status_code=422, detail="LOOKUP cannot be sent to CAD Link as ATH .cfg: ATH has no LOOKUP profile. Export STEP instead.")
     if request.design.formula in NATIVE_FORMULAS:
         raise HTTPException(status_code=422, detail=f"{request.design.formula} cannot be sent to CAD Link: native recipe transport is not supported. Export STEP instead.")
 

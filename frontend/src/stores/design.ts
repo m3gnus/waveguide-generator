@@ -7,11 +7,11 @@ import { DEFAULT_SWEEP } from './solveDefaults';
 import { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
 
 export { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
-export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM' | NativeFamily;
+export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM' | 'LOOKUP' | NativeFamily;
 export const isNativeFamily = (family: DesignFamily): family is NativeFamily => (NATIVE_FAMILIES as readonly string[]).includes(family);
 export type MutationReason = 'edit' | 'drag' | 'undo' | 'redo' | 'load' | 'family';
 export type DesignLoadSource = 'ordinary' | 'cad-project-switch';
-export type DesignValue = number | string | boolean | null | number[] | FreeformPoint[] | CrossSectionStation[];
+export type DesignValue = number | string | boolean | null | number[] | [number, number][] | FreeformPoint[] | CrossSectionStation[];
 
 export interface ExprNumber {
   value: number | null;
@@ -101,6 +101,7 @@ export interface DesignDocument {
   depth?: number;
   curl?: number;
   length?: number;
+  lookup_profile?: [number, number][];
   throat_profile?: number;
   rotation?: number;
   circ_arc_radius?: number;
@@ -300,6 +301,7 @@ export function designForFamily(family: DesignFamily): DesignDocument {
     if (family === 'OSSE-ROUNDOVER') native.mesh.mouth_roundover_radius_mm = 25;
     return native;
   }
+  if (family === 'LOOKUP') return { ...shared, formula: family, lookup_profile: [[0, 12.7], [120, 140]], a0: 0 };
   if (family === 'R-OSSE') return { ...structuredClone(seedDesign), formula: family };
   if (family === 'OSSE') {
     return {
@@ -347,6 +349,7 @@ const FAMILY_SPECIFIC_FIELDS = {
     'R', 'L', 'r0', 'a0', 'a', 'k', 'q', 'coverage_angle', 'hold_start',
     'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth', 'curl',
   ],
+  LOOKUP: ['lookup_profile', 'a0'],
   FREEFORM: [
     'length', 'profile_h', 'profile_v', 'cross_sections', 'inflection_policy',
     'corner_grids',
@@ -403,6 +406,7 @@ function pairedScalarCarry(
 }
 
 function compatibleFamilyValues(design: DesignDocument): CompatibleFamilyValues {
+  if (design.formula === 'LOOKUP') return {};
   if (design.formula !== 'FREEFORM') {
     return {
       throatRadius: scalarCarry(design, 'r0', design.r0),
@@ -494,6 +498,7 @@ function applyCompatibleFamilyValues(
   target: DesignDocument,
   compatible: CompatibleFamilyValues,
 ): void {
+  if (target.formula === 'LOOKUP') return;
   if (target.formula === 'FREEFORM') {
     const horizontalMouthIndex = target.profile_h!.points.length - 1;
     const verticalMouthIndex = target.profile_v!.points.length - 1;
@@ -599,6 +604,18 @@ export function mergeDesignForFamily(current: DesignDocument, family: DesignFami
 
   const next = { ...designForFamily(family), ...shared, formula: family } as DesignDocument;
   if (family === 'FREEFORM') next.cross_section = { exponent: 2, aspect_ratio: 1 };
+  if (family === 'LOOKUP') {
+    // LOOKUP starts from a conical whole meridian, not an analytic conversion.
+    next.throat_ext_angle = 0; next.throat_ext_length = 0; next.slot_length = 0;
+    next.length_mode = null; next.coverage_mode = null;
+    delete next.text_import_version; delete next.ath_axial_sampling_rule;
+    delete next.ath_nac_present; delete next.ath_nac;
+    delete next.mesh.ath_roundover; delete next.mesh.ath_rear_shape;
+    delete next.mesh.ath_rear_front_offset; delete next.mesh.ath_rear_step;
+    for (const key of Object.keys(next._expressions ?? {})) {
+      if (['throat_ext_angle', 'throat_ext_length', 'slot_length'].includes(key) || key.startsWith('mesh.ath_')) delete next._expressions![key];
+    }
+  }
   applyCompatibleFamilyValues(next, compatible);
   if (['OSSE', 'R-OSSE'].includes(current.formula) && ['OSSE', 'R-OSSE'].includes(family)) {
     for (const key of ['s1', 's2'] as const) {

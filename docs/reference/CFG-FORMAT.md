@@ -115,7 +115,7 @@ save/reopen; execution uses unambiguous `log10` and `log` names. The native
 rewrite applies only to expression fields, never filenames or passthrough text,
 and legacy axis migration evaluates expressions in the document's dialect.
 
-The root design is discriminated as `OSSE`, `R-OSSE`, `ICW`, or `FREEFORM`. Common
+The root design is discriminated as `OSSE`, `R-OSSE`, `ICW`, `FREEFORM`, `LOOKUP`, or a [bounded native family](native-formulas.md). Common
 sections cover scale, throat, morphing, mesh/sizing, sampling, enclosure, source,
 frequency, and simulation options. `MORPH`, `Mesh`, `Source`, and `Simulation` blocks
 are accepted alongside their flat dotted spellings.
@@ -246,6 +246,35 @@ a rewrite. They are removed the first time WG rewrites the design.
 
 Exporting a config from a finished run writes that run's own recorded solve
 options, never the settings currently on screen.
+
+## Experimental LOOKUP profiles
+
+`LOOKUP` stores the whole meridian as `lookup_profile` (input alias
+`lookupProfile`): at least two finite `[z_mm, r_mm]` pairs with strictly
+increasing z. Radius need not increase. Samples are linearly interpolated at
+the mesher's axial stations. The pinned mesher describes this as an experimental
+compatibility input for archived/generated configurations, rather than a stable
+public mesh-builder API.
+
+Analytic profile coefficients, guiding curves, nonzero throat extensions,
+slots and driver adapters are refused. Include extensions and adapters in the
+table itself. Optional `a0` controls the automatic source-cap angle, not the
+meridian. Scale, cross-section, morph, wall, enclosure and surface sampling
+controls retain their ordinary mesher behavior. Solve domains use the usual
+mesher symmetry checks; LOOKUP does not impose the native families' full-domain
+restriction.
+
+Native `.mwg` files store LOOKUP in the existing `WG.NativeDesign` JSON payload.
+The design serializer also exports a plain JSON copy when explicitly requested
+with a `.json` filename, and the open endpoint accepts that JSON. Existing
+pristine native text and JSON are replayed byte-for-byte. ATH `.cfg` requests
+are refused because ATH has no LOOKUP profile; CAD Link transport, which writes
+`.cfg`, is refused with the same explanation. Geometry exports remain available.
+
+Switching to LOOKUP starts a conical table from `[0, 12.7]` to `[120, 140]` mm,
+removes incompatible controls, and retains supported shared settings. Geometry
+› Profile provides a numeric table and CSV paste in mm; it preserves row order
+and requires increasing z rather than sorting pasted data.
 
 ## FREEFORM: disk representation versus typed model
 

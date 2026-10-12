@@ -34,7 +34,8 @@ import { namespaceStorage } from '../stores/durableSettings';
 import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { AdaptiveFrequencyControls, FrequencySweepControls, MeshValidationControl, DirectivityMapControls, SolveOptionsControls, ToggleRow } from './SolveOptionsSections';
-import { EditablePointTable, EditableStationTable } from './FreeformEditors';
+import { ExperimentalBadge } from './ExperimentalBadge';
+import { EditableLookupTable, EditablePointTable, EditableStationTable } from './FreeformEditors';
 import { SourceContourEditor } from './SourceContourEditor';
 import { SourceAssemblyLauncher } from './SourceAssemblyEditor';
 import { lambdaSixthHint } from './lambdaLimit';
@@ -447,6 +448,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
     </HelpTipRow>;
   }
   if (field.kind === 'table') {
+    if (field.id === 'lookup.profile') return <EditableLookupTable field={field} points={design.lookup_profile ?? []} />;
     if (field.id === 'freeform.crossSections') return <EditableStationTable field={field} stations={Array.isArray(value) ? value : []} />;
     return <EditablePointTable field={field} points={Array.isArray(value) ? value : []} />;
   }
@@ -1306,12 +1308,13 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         const family = event.target.value as DesignFamily;
         setConversionNotice(null);
         if (family === 'FREEFORM' && design.formula !== 'FREEFORM') setFreeformChoice(true);
-        else { setFamily(family); setConversionNotice(sectionResetNotice(family)); }
+        else { setFreeformChoice(false); setFamily(family); setConversionNotice(family === 'LOOKUP' ? 'LOOKUP starts with a conical table defining the whole meridian. Edit or paste [z, r] samples in Profile. Analytic coefficients, throat extensions, slots, adapters and imported ATH geometry controls were removed.' : sectionResetNotice(family)); }
       }}>
-        <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option>FREEFORM</option>
+        <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option>FREEFORM</option><option value="LOOKUP">LOOKUP (EXPERIMENTAL)</option>
         {NATIVE_FAMILIES.map((family) => <option key={family}>{family}</option>)}
       </select>
     </SelectRow>
+    {design.formula === 'LOOKUP' && <ExperimentalBadge />}
     {conversionNotice && <div className="field-warning conversion-notice" role="status">
       {conversionNotice} <button onClick={() => setConversionNotice(null)}>Dismiss</button>
     </div>}

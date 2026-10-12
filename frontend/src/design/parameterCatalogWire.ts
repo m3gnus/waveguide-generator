@@ -18,7 +18,7 @@ type FieldConditions = {
   disabled_reason?: string;
 };
 
-const ALL_FAMILIES = ['R-OSSE', 'OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES] as const;
+const ALL_FAMILIES = ['R-OSSE', 'OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES] as const;
 
 function valueAtPath(design: DesignDocument, path: string | undefined): unknown {
   if (!path) return undefined;

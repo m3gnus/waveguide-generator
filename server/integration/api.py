@@ -63,7 +63,7 @@ class ParameterDescriptor(_DiscoveryModel):
     symbol: str | None
     kind: Literal["number", "select", "indicator", "table", "text"]
     unit: str | None
-    families: list[Literal["R-OSSE", "OSSE", "ICW", "FREEFORM", "OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL", "OSSE-ROUNDOVER", "OSSE-AXIAL", "OSSE-ARC", "SOURCE-DISK"]]
+    families: list[Literal["R-OSSE", "OSSE", "ICW", "FREEFORM", "LOOKUP", "OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL", "OSSE-ROUNDOVER", "OSSE-AXIAL", "OSSE-ARC", "SOURCE-DISK"]]
     accepts_expression: bool
     writable: bool
     default_by_family: dict[str, JsonValue]
@@ -80,7 +80,7 @@ class ParameterDescriptor(_DiscoveryModel):
 class ParameterCatalog(_DiscoveryModel):
     schema_version: Literal[1]
     catalog_version: Literal[1]
-    design_families: list[Literal["R-OSSE", "OSSE", "ICW", "FREEFORM", "OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL", "OSSE-ROUNDOVER", "OSSE-AXIAL", "OSSE-ARC", "SOURCE-DISK"]]
+    design_families: list[Literal["R-OSSE", "OSSE", "ICW", "FREEFORM", "LOOKUP", "OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL", "OSSE-ROUNDOVER", "OSSE-AXIAL", "OSSE-ARC", "SOURCE-DISK"]]
     validation_authority: CatalogValidationAuthority
     parameters: list[ParameterDescriptor]
 

@@ -1424,6 +1424,15 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
 
     if not isinstance(text, str):
         raise TypeError("text must be a string")
+    if text.lstrip("\ufeff \t\r\n").startswith("{"):
+        try:
+            payload = json.loads(text.removeprefix("\ufeff"))
+            if not isinstance(payload, dict) or payload.get("formula") != "LOOKUP":
+                raise ValueError("JSON design files require a LOOKUP design")
+            design = DesignConfig.model_validate(payload)
+        except (ValueError, TypeError) as exc:
+            raise TextConfigError(f"invalid LOOKUP JSON design: {exc}") from exc
+        return ParsedDesign(design=design, dialect="mwg", source_text=text)
     repeated: list[tuple[str, _RawBlock]] = []
     flat, blocks, comments, raw_values = _lex(text.removeprefix("\ufeff"), repeated)
     for comment in comments:
@@ -1490,7 +1499,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             raise TextConfigError("WG.NativeDesign requires exactly one JSON Payload")
         try:
             payload = json.loads(native.items["Payload"])
-            if not isinstance(payload, dict) or payload.get("formula") not in NATIVE_FORMULAS:
+            if not isinstance(payload, dict) or payload.get("formula") not in NATIVE_FORMULAS | {"LOOKUP"}:
                 raise ValueError("WG.NativeDesign requires a native formula")
             for name in ("Report", "WG.Solve"):
                 if name in blocks:
@@ -1774,7 +1783,7 @@ def _serialize_canonical(
         lines.extend(cadlink.block_lines())
     from .native import NATIVE_FORMULAS
 
-    if config.formula in NATIVE_FORMULAS:
+    if config.formula in NATIVE_FORMULAS | {"LOOKUP"}:
         # JSON retains all native literal controls at full precision, including
         # independent cubic pairs. Escape semicolons for the CFG comment lexer.
         payload = config.model_dump(mode="json")

@@ -133,7 +133,7 @@ export async function serializeDesignDocument(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       design: designWireWithSolveSettings(serializeDesign(design), polarConfig, solveSettings, designName),
-      filename: designFilename(designName),
+      filename: designFilename(designName, design.formula),
     }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
@@ -239,7 +239,7 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
   const absent: string[] = [];
   const unwrapped = unwrapExpressions(wire, '', expressions, absent) as Record<string, unknown>;
   const formula = unwrapped.formula as DesignFamily;
-  if (!['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES].includes(formula)) {
+  if (!['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES].includes(formula)) {
     throw new Error(`Unsupported design formula: ${String(unwrapped.formula)}`);
   }
   const document = merge(designForFamily(formula), unwrapped);

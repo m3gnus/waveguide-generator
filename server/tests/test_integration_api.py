@@ -18,7 +18,7 @@ def test_parameter_catalog_is_versioned_unique_and_declarative() -> None:
 
     assert catalog["schema_version"] == 1
     assert catalog["catalog_version"] == 1
-    assert catalog["design_families"] == ["R-OSSE", "OSSE", "ICW", "FREEFORM",
+    assert catalog["design_families"] == ["R-OSSE", "OSSE", "ICW", "FREEFORM", "LOOKUP",
         "OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL", "OSSE-ROUNDOVER",
         "OSSE-AXIAL", "OSSE-ARC", "SOURCE-DISK"]
     ids = [field["id"] for field in catalog["parameters"]]
@@ -60,7 +60,7 @@ def test_design_schema_exposes_the_discriminated_families() -> None:
     assert schema["x-wg-schema-version"] == 1
     from server.design.native import NATIVE_FORMULAS
 
-    assert all(family in encoded for family in {"R-OSSE", "OSSE", "ICW", "FREEFORM", *NATIVE_FORMULAS})
+    assert all(family in encoded for family in {"R-OSSE", "OSSE", "ICW", "FREEFORM", "LOOKUP", *NATIVE_FORMULAS})
     assert response.headers["cache-control"] == "public, max-age=3600"
     assert response.media_type == "application/schema+json"
 
@@ -73,7 +73,7 @@ def test_design_schema_discriminator_excludes_an_invalid_design_family() -> None
     assert discriminator["propertyName"] == "formula"
     from server.design.native import NATIVE_FORMULAS
 
-    assert set(discriminator["mapping"]) == {"R-OSSE", "OSSE", "ICW", "FREEFORM", *NATIVE_FORMULAS}
+    assert set(discriminator["mapping"]) == {"R-OSSE", "OSSE", "ICW", "FREEFORM", "LOOKUP", *NATIVE_FORMULAS}
 
     invalid_design = {"formula": "UNKNOWN"}
     matched_branches = []

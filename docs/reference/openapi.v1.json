@@ -2515,6 +2515,7 @@
           "mapping": {
             "FREEFORM": "#/components/schemas/FreeformConfig",
             "ICW": "#/components/schemas/ICWConfig",
+            "LOOKUP": "#/components/schemas/LookupConfig",
             "OSSE": "#/components/schemas/OSSEConfig",
             "OSSE-ADAPTER": "#/components/schemas/NativeOSSEConfig",
             "OSSE-ADAPTER-AXIAL": "#/components/schemas/NativeOSSEConfig",
@@ -2539,6 +2540,9 @@
           },
           {
             "$ref": "#/components/schemas/FreeformConfig"
+          },
+          {
+            "$ref": "#/components/schemas/LookupConfig"
           },
           {
             "$ref": "#/components/schemas/NativeOSSEConfig"
@@ -6903,6 +6907,212 @@
         "type": "object"
       },
       "JsonValue": {},
+      "LookupConfig": {
+        "additionalProperties": false,
+        "description": "Experimental precomputed whole meridian, in intrinsic millimetres.",
+        "properties": {
+          "a0": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ath_axial_sampling_rule": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ath-v2025-06",
+                  "ath-v2025-12+"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Axial Sampling Rule"
+          },
+          "ath_nac": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Nac"
+          },
+          "ath_nac_present": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Nac Present"
+          },
+          "coverage_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Mode"
+          },
+          "cross_section": {
+            "$ref": "#/components/schemas/CrossSectionConfig"
+          },
+          "enclosure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnclosureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extra_blocks": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ConfigBlock"
+            },
+            "title": "Extra Blocks",
+            "type": "object"
+          },
+          "extra_keys": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Extra Keys",
+            "type": "object"
+          },
+          "formula": {
+            "const": "LOOKUP",
+            "title": "Formula",
+            "type": "string"
+          },
+          "length_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "profile",
+                  "total"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length Mode"
+          },
+          "lookup_profile": {
+            "description": "At least two finite [z, r] pairs in mm, with strictly increasing z",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "minItems": 2,
+            "title": "Lookup Profile",
+            "type": "array"
+          },
+          "mesh": {
+            "$ref": "#/components/schemas/MeshConfig"
+          },
+          "morph": {
+            "$ref": "#/components/schemas/MorphConfig"
+          },
+          "output": {
+            "$ref": "#/components/schemas/OutputConfig"
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "simulation": {
+            "$ref": "#/components/schemas/SimulationConfig"
+          },
+          "slot_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceConfig"
+          },
+          "text_import_version": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ath-2026-08c-v1",
+                  "ath-2026-09a-v2"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Import Version"
+          },
+          "throat_ext_angle": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "throat_ext_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "formula",
+          "lookup_profile"
+        ],
+        "title": "LookupConfig",
+        "type": "object"
+      },
       "ManualSolveOperationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -8230,6 +8440,7 @@
                 "OSSE",
                 "ICW",
                 "FREEFORM",
+                "LOOKUP",
                 "OSSE-ADAPTER",
                 "OSSE-ADAPTER-CONTROLS",
                 "OSSE-ADAPTER-AXIAL",
@@ -8325,6 +8536,7 @@
                 "OSSE",
                 "ICW",
                 "FREEFORM",
+                "LOOKUP",
                 "OSSE-ADAPTER",
                 "OSSE-ADAPTER-CONTROLS",
                 "OSSE-ADAPTER-AXIAL",

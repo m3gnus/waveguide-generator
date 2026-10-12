@@ -11,6 +11,7 @@ from server.design.schema import (
     FreeformConfig,
     FreeformProfile,
     ICWConfig,
+    LookupConfig,
     OSSEConfig,
     ROSSEConfig,
     ResolutionExpr,
@@ -220,9 +221,16 @@ def _freeform_profile(
 
 
 def _profile(
-    design: OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig, scale: float
+    design: OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig | LookupConfig, scale: float
 ) -> dict[str, Any]:
     """Port v1 ``mesher_adapter.py:200-310`` from typed v2 fields."""
+
+    if isinstance(design, LookupConfig):
+        return _clean({
+            "formula": "LOOKUP",
+            "lookupProfile": [[z * scale, r * scale] for z, r in design.lookup_profile],
+            "a0": _expr(design.a0),
+        })
 
     if isinstance(design, FreeformConfig):
         if design.corner_grids or any(

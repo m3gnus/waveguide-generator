@@ -470,3 +470,11 @@ describe('Send to CAD requests', () => {
     expect(fetcher).toHaveBeenCalledWith('/api/cad-workspace/path');
   });
 });
+
+it('downloads a LOOKUP native copy with a .mwg filename', async () => {
+  const fetcher = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ text: 'native', suggestedFilename: 'lookup.mwg' }), { status: 200 }));
+  await serializeDesignDocument(designForFamily('LOOKUP'), 'lookup', fetcher, undefined, null);
+  const request = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
+  expect(request.filename).toBe('lookup.mwg');
+  expect(request.design.lookup_profile).toEqual([[0, 12.7], [120, 140]]);
+});

@@ -33,6 +33,18 @@ def _suggested_filename(value: object = None) -> str:
     return f"{stem}.cfg"
 
 
+def _design_filename(value: object, design: DesignConfig) -> str:
+    filename = _suggested_filename(value)
+    if design.formula == "LOOKUP":
+        if value and Path(str(value)).suffix.lower() == ".cfg":
+            raise HTTPException(
+                status_code=422,
+                detail="LOOKUP cannot be exported as ATH .cfg: ATH has no LOOKUP profile. Save as .mwg or JSON instead.",
+            )
+        return str(Path(filename).with_suffix(".mwg"))
+    return filename
+
+
 def _parse_detail(exc: Exception) -> dict[str, str]:
     return {"type": "parse_error", "message": str(exc)}
 
@@ -99,7 +111,6 @@ async def save_design(
     registry = store or _DIRECT_STORE
     design_payload: object = payload.get("design", payload)
     filename = payload.get("filename") if "design" in payload else None
-    suggested_filename = _suggested_filename(filename)
     try:
         design = DesignConfig.model_validate(design_payload)
         requested = (
@@ -109,6 +120,7 @@ async def save_design(
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+    suggested_filename = _design_filename(filename, design)
     hashed = design_hash(design)
     try:
         committed = registry.save(
@@ -139,13 +151,16 @@ async def serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
 
     design_payload: object = payload.get("design", payload)
     filename = payload.get("filename") if "design" in payload else None
-    suggested_filename = _suggested_filename(filename)
     try:
         design = DesignConfig.model_validate(design_payload)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+    suggested_filename = _design_filename(filename, design)
+    json_copy = design.formula == "LOOKUP" and filename and Path(str(filename)).suffix.lower() == ".json"
+    if json_copy:
+        suggested_filename = str(Path(suggested_filename).with_suffix(".json"))
     return {
-        "text": serialize(design),
+        "text": design.model_dump_json(indent=2) + "\n" if json_copy else serialize(design),
         "suggestedFilename": suggested_filename,
     }
 

@@ -247,6 +247,28 @@ describe('ParamPanel inventory UX', () => {
     }
   });
 
+  it('switches to experimental LOOKUP and shows its whole-meridian editor', () => {
+    act(() => {
+      useDesignStore.getState().updateValue('throat_ext_length', 20);
+      const family = host.querySelector<HTMLSelectElement>('#family')!;
+      family.value = 'LOOKUP'; family.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(host.querySelector('option[value="LOOKUP"]')?.textContent).toBe('LOOKUP (EXPERIMENTAL)');
+    expect(host.querySelector('.experimental-badge')).not.toBeNull();
+    expect(host.querySelector('.conversion-notice')?.textContent).toContain('conical table');
+    expect(useDesignStore.getState().design.throat_ext_length).toBe(0);
+    const table = host.querySelector('[data-parameter-id="lookup.profile"]')!;
+    expect(table.closest('section')?.getAttribute('data-section')).toBe('Profile');
+    expect(table.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(host.querySelector('[data-parameter-id="common.throat_ext_length"]')).toBeNull();
+    expect(host.querySelector('[data-parameter-id="rosse.R"]')).toBeNull();
+    expect(host.querySelector('[data-parameter-id="guide.curve_type"]')).toBeNull();
+    expect(host.querySelector('[data-parameter-id="morph.target_shape"]')).not.toBeNull();
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design.formula).toBe('R-OSSE');
+    expect(useDesignStore.getState().design.throat_ext_length).toBe(20);
+  });
+
   it('disables base section controls only while an OSSE guiding curve is active', () => {
     act(() => useDesignStore.getState().setFamily('OSSE'));
     const sectionInput = () => host.querySelector<HTMLInputElement>('[data-parameter-id="cross_section.exponent"] input')!;
@@ -1414,7 +1436,7 @@ describe('ParamPanel inventory UX', () => {
     expect((serializeDesign(useDesignStore.getState().design).simulation as Record<string, unknown>).sim_type).toBe('freestanding');
   });
 
-  it.each(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES] as const)('renders every visible Mesh field in declared order for %s', (family) => {
+  it.each(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES] as const)('renders every visible Mesh field in declared order for %s', (family) => {
     const design = designForFamily(family);
     design.mesh.sampling_mode = 'zmap';
     design.enclosure.depth = 120;

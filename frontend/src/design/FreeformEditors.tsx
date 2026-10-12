@@ -4,6 +4,12 @@ import type { ParameterDefinition } from './parameterRegistry';
 import { HelpTipHeading } from './HelpTip';
 import { NumberField } from './NumberField';
 
+function numericCells(line: string, delimiter: string | RegExp, index: number, rejectEmpty = false): number[] {
+  const values = line.split(delimiter).map((item) => (!rejectEmpty || item.trim()) ? Number(item.trim()) : NaN);
+  if (values.some((value) => !Number.isFinite(value))) throw new Error(`Line ${index + 1} contains a non-numeric value.`);
+  return values;
+}
+
 export interface ParsedPointPaste {
   points: FreeformPoint[];
   pointsByPlane?: { H: FreeformPoint[]; V: FreeformPoint[] };
@@ -15,8 +21,7 @@ export function parsePointPaste(text: string): ParsedPointPaste {
   if (rows.length < 1) throw new Error('Paste at least one point row.');
   const compact = rows[0].includes(';');
   const parsed = rows.map((line, index) => {
-    const values = line.split(compact ? ';' : /[\s,]+/).map((item) => Number(item.trim()));
-    if (values.some((value) => !Number.isFinite(value))) throw new Error(`Line ${index + 1} contains a non-numeric value.`);
+    const values = numericCells(line, compact ? ';' : /[\s,]+/, index);
     if (compact && values.length !== 3) throw new Error(`Line ${index + 1} must contain z, H, and V.`);
     if (!compact && values.length === 4) throw new Error(`Line ${index + 1}: per-anchor strength was removed; tangent speed is now solved automatically.`);
     if (!compact && (values.length < 2 || values.length > 3)) throw new Error(`Line ${index + 1} must contain 2 or 3 columns.`);
@@ -55,6 +60,64 @@ export function parsePointPaste(text: string): ParsedPointPaste {
     points: points.map(({ z, ...point }) => ({ t: z / importedLength, ...point })),
     importedLength,
   };
+}
+
+/** LOOKUP preserves authored order and mm; it has no spline endpoints or angle column. */
+export function parseLookupPaste(text: string): [number, number][] {
+  const rows = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
+  if (/^z(?:_mm)?[\s,;]+r(?:_mm)?$/i.test(rows[0] ?? '')) rows.shift();
+  if (rows.length < 2) throw new Error('lookupProfile must be an array of at least two [z, r] pairs');
+  const pairs = rows.map((line, index): [number, number] => {
+    const values = numericCells(line, line.includes(';') ? ';' : line.includes(',') ? ',' : /\s+/, index, true);
+    if (values.length !== 2) throw new Error(`Line ${index + 1} must contain exactly z and r in mm.`);
+    return [values[0], values[1]];
+  });
+  if (pairs.some(([z], index) => index > 0 && z <= pairs[index - 1][0])) throw new Error('lookupProfile z values must be strictly increasing');
+  return pairs;
+}
+
+export function EditableLookupTable({ field, points }: { field: ParameterDefinition; points: [number, number][] }) {
+  const updateValue = useDesignStore((state) => state.updateValue);
+  const [text, setText] = useState('');
+  const parsed = useMemo(() => {
+    try { return text.trim() ? parseLookupPaste(text) : null; }
+    catch (reason) { return reason instanceof Error ? reason : new Error(String(reason)); }
+  }, [text]);
+  const write = (index: number, axis: 0 | 1, value: number) => {
+    const next = structuredClone(points);
+    next[index][axis] = value;
+    updateValue('lookup_profile', next);
+  };
+  const positionError = (index: number, z: number) =>
+    (index > 0 && z <= points[index - 1][0]) || (index < points.length - 1 && z >= points[index + 1][0])
+      ? 'lookupProfile z values must be strictly increasing' : undefined;
+  const add = () => {
+    let gap = 0;
+    for (let index = 1; index < points.length - 1; index += 1) {
+      if (points[index + 1][0] - points[index][0] > points[gap + 1][0] - points[gap][0]) gap = index;
+    }
+    const left = points[gap]; const right = points[gap + 1];
+    const pair: [number, number] = [(left[0] + right[0]) / 2, (left[1] + right[1]) / 2];
+    updateValue('lookup_profile', [...points.slice(0, gap + 1), pair, ...points.slice(gap + 1)]);
+  };
+  return <div className="editable-parameter-table" aria-label={field.label}>
+    <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{points.length} points</span></div>
+    <table><thead><tr><th>z mm</th><th>r mm</th><th /></tr></thead><tbody>
+      {points.map(([z, r], index) => <tr key={`${index}-${z}`}>
+        <td><NumberField label={`Lookup point ${index + 1} z`} value={z} step={.1} precision={4} unit="mm" validate={(value) => positionError(index, value)} onCommit={(value) => write(index, 0, value)} /></td>
+        <td><NumberField label={`Lookup point ${index + 1} radius`} value={r} step={.1} precision={4} unit="mm" onCommit={(value) => write(index, 1, value)} /></td>
+        <td><button type="button" aria-label={`Remove lookup point ${index + 1}`} disabled={points.length <= 2} onClick={() => updateValue('lookup_profile', points.filter((_point, item) => item !== index))}>−</button></td>
+      </tr>)}
+    </tbody></table>
+    <button type="button" onClick={add} disabled={points.length < 2}>Add point</button>
+    <div className="point-paste">
+      <textarea aria-label="Paste lookup points" rows={4} value={text} onChange={(event) => setText(event.target.value)} placeholder={'z_mm,r_mm\n0,12.7\n120,140'} />
+      {parsed instanceof Error && <div className="field-error" role="alert">{parsed.message}</div>}
+      <button type="button" disabled={!parsed || parsed instanceof Error} onClick={() => {
+        if (parsed && !(parsed instanceof Error)) updateValue('lookup_profile', parsed);
+      }}>Import points</button>
+    </div>
+  </div>;
 }
 
 export function normalizedImportedPoints(imported: FreeformPoint[], current: FreeformPoint[]): FreeformPoint[] {

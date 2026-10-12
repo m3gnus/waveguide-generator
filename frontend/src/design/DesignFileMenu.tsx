@@ -48,7 +48,7 @@ import {
 } from './openCadProject';
 import { sentToCadMessage } from './useSendToCad';
 
-const ACCEPT = '.cfg,.txt,.mwg,text/plain';
+const ACCEPT = '.cfg,.txt,.mwg,.json,text/plain,application/json';
 
 const CLASSIFICATION_DISPLAY: Record<CadLinkClassification, { label: string; detail: string }> = {
   current: { label: 'current', detail: 'Current: this file matches the latest saved version in this machine’s CAD-link registry.' },
@@ -391,7 +391,7 @@ export function DesignFileMenu() {
 
   return <div ref={root} className="design-file-menu">
     <button className="file-chip" title={classification ? CLASSIFICATION_DISPLAY[classification].detail : 'Design file menu'} onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-      <Icon name="folder"/><span>{designName ? <>{designName}<em>.cfg</em></> : <em>Untitled</em>}</span>
+      <Icon name="folder"/><span>{designName ? <>{designName}<em>{design.formula === 'LOOKUP' ? '.mwg' : '.cfg'}</em></> : <em>Untitled</em>}</span>
       {classification && <small
         className="cadlink-badge"
         aria-label={`CAD link: ${CLASSIFICATION_DISPLAY[classification].label}`}
@@ -414,7 +414,7 @@ export function DesignFileMenu() {
             <span>{project.filename}</span><span>v{project.editVersion} · {project.exportCount} export{project.exportCount === 1 ? '' : 's'} · {cadProjectReference(project)}</span>
           </button>)}
       </div>}
-      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportCopy()}><span>Export a copy</span><kbd>cfg</kbd></button>
+      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportCopy()}><span>Export a copy</span><kbd>{design.formula === 'LOOKUP' ? 'mwg' : 'cfg'}</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
       <div className="design-menu-divider"/>
       <button

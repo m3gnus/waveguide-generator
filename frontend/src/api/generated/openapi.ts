@@ -3096,7 +3096,7 @@ export interface components {
          * DesignConfig
          * @description Root discriminated design union, serialized as a flat API object.
          */
-        DesignConfig: components["schemas"]["OSSEConfig"] | components["schemas"]["ROSSEConfig"] | components["schemas"]["ICWConfig"] | components["schemas"]["FreeformConfig"] | components["schemas"]["NativeOSSEConfig"] | components["schemas"]["SourceDiskConfig"];
+        DesignConfig: components["schemas"]["OSSEConfig"] | components["schemas"]["ROSSEConfig"] | components["schemas"]["ICWConfig"] | components["schemas"]["FreeformConfig"] | components["schemas"]["LookupConfig"] | components["schemas"]["NativeOSSEConfig"] | components["schemas"]["SourceDiskConfig"];
         /**
          * DesignSchemaDocument
          * @description Discoverable root of WG's generated JSON Schema document.
@@ -4457,6 +4457,57 @@ export interface components {
             $ref: string;
         };
         JsonValue: unknown;
+        /**
+         * LookupConfig
+         * @description Experimental precomputed whole meridian, in intrinsic millimetres.
+         */
+        LookupConfig: {
+            a0?: components["schemas"]["Expr"] | null;
+            /** Ath Axial Sampling Rule */
+            ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Nac */
+            ath_nac?: number | null;
+            /** Ath Nac Present */
+            ath_nac_present?: boolean | null;
+            /** Coverage Mode */
+            coverage_mode?: string | null;
+            cross_section?: components["schemas"]["CrossSectionConfig"];
+            enclosure?: components["schemas"]["EnclosureConfig"] | null;
+            /** Extra Blocks */
+            extra_blocks?: {
+                [key: string]: components["schemas"]["ConfigBlock"];
+            };
+            /** Extra Keys */
+            extra_keys?: {
+                [key: string]: string;
+            };
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            formula: "LOOKUP";
+            /** Length Mode */
+            length_mode?: ("profile" | "total") | null;
+            /**
+             * Lookup Profile
+             * @description At least two finite [z, r] pairs in mm, with strictly increasing z
+             */
+            lookup_profile: [
+                number,
+                number
+            ][];
+            mesh?: components["schemas"]["MeshConfig"];
+            morph?: components["schemas"]["MorphConfig"];
+            output?: components["schemas"]["OutputConfig"];
+            scale?: components["schemas"]["Expr"] | null;
+            simulation?: components["schemas"]["SimulationConfig"];
+            slot_length?: components["schemas"]["Expr"] | null;
+            source?: components["schemas"]["SourceConfig"];
+            /** Text Import Version */
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
+            throat_ext_angle?: components["schemas"]["Expr"] | null;
+            throat_ext_length?: components["schemas"]["Expr"] | null;
+        };
         /** ManualSolveOperationRequest */
         ManualSolveOperationRequest: {
             /** Ingestid */
@@ -4780,7 +4831,7 @@ export interface components {
              */
             catalog_version: 1;
             /** Design Families */
-            design_families: ("R-OSSE" | "OSSE" | "ICW" | "FREEFORM" | "OSSE-ADAPTER" | "OSSE-ADAPTER-CONTROLS" | "OSSE-ADAPTER-AXIAL" | "OSSE-ROUNDOVER" | "OSSE-AXIAL" | "OSSE-ARC" | "SOURCE-DISK")[];
+            design_families: ("R-OSSE" | "OSSE" | "ICW" | "FREEFORM" | "LOOKUP" | "OSSE-ADAPTER" | "OSSE-ADAPTER-CONTROLS" | "OSSE-ADAPTER-AXIAL" | "OSSE-ROUNDOVER" | "OSSE-AXIAL" | "OSSE-ARC" | "SOURCE-DISK")[];
             /** Parameters */
             parameters: components["schemas"]["ParameterDescriptor"][];
             /**
@@ -4805,7 +4856,7 @@ export interface components {
             disabled_when?: components["schemas"]["CatalogCondition"] | null;
             editor_bounds: components["schemas"]["CatalogEditorBounds"] | null;
             /** Families */
-            families: ("R-OSSE" | "OSSE" | "ICW" | "FREEFORM" | "OSSE-ADAPTER" | "OSSE-ADAPTER-CONTROLS" | "OSSE-ADAPTER-AXIAL" | "OSSE-ROUNDOVER" | "OSSE-AXIAL" | "OSSE-ARC" | "SOURCE-DISK")[];
+            families: ("R-OSSE" | "OSSE" | "ICW" | "FREEFORM" | "LOOKUP" | "OSSE-ADAPTER" | "OSSE-ADAPTER-CONTROLS" | "OSSE-ADAPTER-AXIAL" | "OSSE-ROUNDOVER" | "OSSE-AXIAL" | "OSSE-ARC" | "SOURCE-DISK")[];
             /** Id */
             id: string;
             /**
