@@ -22,6 +22,10 @@ from server.mesh.fem_regions import (
     read_fem_region_domain,
     SIZE_BLEND_FACTOR,
     WALLS_GROUP_ID,
+    SYMMETRY_GROUP_ID,
+    symmetry_surfaces,
+    verify_region_symmetry,
+    fragment_fundamental_domain,
 )
 from server.mesh.imported import (
     _geometry_fingerprint,
@@ -92,16 +96,17 @@ def _outward_facets(
     return result
 
 
-def _closed(points: np.ndarray, triangles: np.ndarray) -> np.ndarray:
+def _closed(points: np.ndarray, triangles: np.ndarray, planes: Sequence[str] = ()) -> np.ndarray:
     edges = np.concatenate([triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]]])
     _keys, counts = np.unique(np.sort(edges, axis=1), axis=0, return_counts=True)
-    if not len(triangles) or np.any(counts != 2):
+    if not len(triangles) or np.any(counts > 2) or (not planes and np.any(counts != 2)):
         raise FemRegionMeshError(
             f"Coupled exterior is not closed: {open_edges(triangles)} open edges; "
             "every edge must bound exactly two triangles."
         )
     try:
-        oriented = orient_closed_surface(points, triangles, into_body=False)
+        oriented = orient_closed_surface(points, triangles, into_body=False,
+                                         symmetry_plane_axes=tuple({"x0": 0, "y0": 1}[p] for p in planes))
     except ValueError as exc:
         raise FemRegionMeshError(str(exc)) from exc
     directed = np.concatenate([oriented[:, [0, 1]], oriented[:, [1, 2]], oriented[:, [2, 0]]])
@@ -195,6 +200,7 @@ def build_coupled_mesh(
     sizes: Mapping[str, Any],
     exterior_names: Mapping[str, Mapping[str, Any]],
     scratch_dir: str | Path | None = None,
+    domain_planes: Sequence[str] = (), cut_planes: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Replay, fragment, mesh 2D once, then tetrahedralise only bounded air.
 
@@ -283,6 +289,7 @@ def build_coupled_mesh(
                 gmsh.model.occ.synchronize()
             if not np.allclose(region_applied, applied, atol=1e-12, rtol=0):
                 raise FemRegionMeshError(f"{_label(region)} normalisation mismatch.")
+            verify_region_symmetry(gmsh, region, boundary, assigned, domain_planes, cut_planes)
             region_data.append((region, volumes, boundary, assigned))
         # Copy painted assembly faces as explicit tools. Passing constituent
         # faces alongside their parent volume yields empty ancestry for some
@@ -304,12 +311,7 @@ def build_coupled_mesh(
             for tag in tags
         ]
         tools.extend((2, tag) for tags in source_copies.values() for tag in tags)
-        _entities, ancestry = gmsh.model.occ.fragment(objects, tools)
-        gmsh.model.occ.synchronize()
-        descendants = {
-            entity: {int(tag) for dim, tag in mapped if dim == entity[0]}
-            for entity, mapped in zip(objects + tools, ancestry)
-        }
+        descendants = fragment_fundamental_domain(gmsh, objects, tools, domain_planes)
         material_volumes = set().union(
             *(descendants[(3, tag)] for dim, tag in assembly if dim == 3)
         )
@@ -383,6 +385,9 @@ def build_coupled_mesh(
                 )
         for region, volumes, groups in region_volumes:
             boundary = _boundary(gmsh, volumes)
+            caps = symmetry_surfaces(gmsh, sorted(boundary), domain_planes)
+            if any(caps & tags for tags in groups.values()):
+                raise FemRegionMeshError(f"{_label(region)} declares a boundary on a symmetry plane")
             moving = set().union(*(
                 groups[physical_name(region["region_id"], g["group_id"], g["kind"])]
                 for g in region["surface_groups"] if g["kind"] == "moving"
@@ -400,10 +405,12 @@ def build_coupled_mesh(
                     f"Exterior source {source!r} is covered by {_label(region)}'s moving group; "
                     "unsupported in 0.3.6: unpaint the source; the region's diaphragm group drives it."
                 )
-            if not any(g["kind"] == "interface" for g in region["surface_groups"]):
+            if not domain_planes and not any(g["kind"] == "interface" for g in region["surface_groups"]):
                 continue
             claimed = set().union(*groups.values())
-            walls = boundary - claimed
+            if caps:
+                groups[physical_name(region["region_id"], SYMMETRY_GROUP_ID, "rigid")] = caps
+            walls = boundary - claimed - caps
             if walls:
                 groups.setdefault(
                     physical_name(region["region_id"], WALLS_GROUP_ID, "rigid"), set()
@@ -444,12 +451,19 @@ def build_coupled_mesh(
                     if g["kind"] == "interface"
                 )
             )
+            # Author-cut exteriors are open sheet roots. A sheet shared with
+            # a non-interface air boundary is a chamber wall, not a second
+            # BEM face. Volume roots already exclude it through adjacency.
+            if domain_planes:
+                exterior_surfaces -= (boundary - interfaces) & free_surfaces
             naked = {
                 tag
-                for tag in boundary - interfaces
-                if len(gmsh.model.getAdjacencies(2, tag)[0]) == 1 and tag not in exterior_surfaces
+                for tag in boundary - interfaces - caps
+                if len(gmsh.model.getAdjacencies(2, tag)[0]) == 1
+                and tag not in exterior_surfaces
+                and not (domain_planes and tag in free_surfaces)
             }
-            if naked:
+            if naked and interfaces:
                 raise FemRegionMeshError(
                     f"{_label(region)} has uncovered air boundary faces; the exterior is not closed by declared interfaces."
                 )
@@ -462,6 +476,7 @@ def build_coupled_mesh(
                 )
             exterior_groups[name] = selected
             kinds[name] = dict(exterior_names[name]["kind"])
+        exterior_surfaces -= symmetry_surfaces(gmsh, sorted(exterior_surfaces), domain_planes)
         claimed_exterior = set().union(*exterior_groups.values())
         rigid = exterior_surfaces - claimed_exterior
         if rigid:
@@ -538,7 +553,7 @@ def build_coupled_mesh(
         }
         ordered_names = sorted(exterior_blocks)
         oriented = _closed(
-            points, np.concatenate([exterior_blocks[name] for name in ordered_names])
+            points, np.concatenate([exterior_blocks[name] for name in ordered_names]), domain_planes
         )
         offset = 0
         for name in ordered_names:
@@ -561,7 +576,8 @@ def build_coupled_mesh(
             names = {}
             stats = {}
             for tag, (name, block) in enumerate(sorted(blocks.items()), 1):
-                spec = specs.get(name, {"group_id": WALLS_GROUP_ID, "kind": "rigid"})
+                spec = specs.get(name, {"group_id": (SYMMETRY_GROUP_ID if "group=_symmetry|" in name
+                                                              else WALLS_GROUP_ID), "kind": "rigid"})
                 if not len(block):
                     raise FemRegionMeshError(f"{_label(region, spec)} retained no boundary triangles.")
                 names[name] = {
@@ -624,7 +640,8 @@ def build_coupled_mesh(
                     for index, name in enumerate(sorted(exterior_blocks), 1)
                 },
                 "normalisation_matrix": total.tolist(),
-                "stats": {"triangles": len(oriented), "open_edges": 0},
+                "stats": {"triangles": len(oriented), "open_edges": open_edges(oriented),
+                          "domain_planes": list(domain_planes)},
             },
             "regions": built_regions,
         }

@@ -14,7 +14,8 @@ def open_edges(triangles: np.ndarray) -> int:
 
 
 def orient_closed_surface(
-    points: np.ndarray, triangles: np.ndarray, *, into_body: bool
+    points: np.ndarray, triangles: np.ndarray, *, into_body: bool,
+    symmetry_plane_axes: tuple[int, ...] = ()
 ) -> np.ndarray:
     """Return ``triangles`` wound consistently, every normal on one side.
 
@@ -29,6 +30,32 @@ def orient_closed_surface(
     """
 
     triangles = np.array(triangles, dtype=np.int64, copy=True)
+    if symmetry_plane_axes:
+        from server.mesh.integrity import mesh_integrity_report
+
+        report = mesh_integrity_report(points * 1e-3, triangles,
+                                       symmetry_plane_axes=symmetry_plane_axes)
+        if report["off_plane_open_edge_count"] or report["nonmanifold_edge_count"]:
+            raise ValueError("Reduced exterior has open edges away from symmetry planes or nonmanifold edges")
+        # Complete only for winding/closure checks; return the original faces.
+        # Plane vertices keep their ids, so this performs no coordinate welding.
+        if any(np.any(np.all(np.abs(points[triangles, axis]) <= 1e-5, axis=1))
+               for axis in symmetry_plane_axes):
+            raise ValueError("Reduced exterior must be open on symmetry planes, without plane caps")
+        count = len(triangles)
+        completed_points = np.asarray(points).copy()
+        completed = triangles.copy()
+        for axis in symmetry_plane_axes:
+            off_plane = np.abs(completed_points[:, axis]) > 1e-5
+            mirrored = completed_points[off_plane].copy()
+            mirrored[:, axis] *= -1
+            mapping = np.arange(len(completed_points))
+            mapping[off_plane] = len(completed_points) + np.arange(len(mirrored))
+            completed_points = np.concatenate([completed_points, mirrored])
+            completed = np.concatenate([completed, mapping[completed[:, [0, 2, 1]]]])
+        if open_edges(completed):
+            raise ValueError("Reduced exterior does not close under symmetry reflection")
+        return orient_closed_surface(completed_points, completed, into_body=into_body)[:count]
     edge_faces: dict[tuple[int, int], list[int]] = {}
     for face, (a, b, c) in enumerate(triangles.tolist()):
         for u, v in ((a, b), (b, c), (c, a)):

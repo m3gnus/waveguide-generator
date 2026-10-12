@@ -1684,7 +1684,7 @@ def ingest_bundle(
     coupled_exterior, coupled_regions = _mesh_coupled_regions(
         bundle, imports_root, built, normalized_mesh, options, applied_planes, deadline=fem_deadline,
     )
-    fem_regions = _mesh_fem_regions(bundle, imports_root, coupled_regions, deadline=fem_deadline)
+    fem_regions = _mesh_fem_regions(bundle, imports_root, coupled_regions, deadline=fem_deadline, exterior=built)
     # The one domain decision (``domain_decision.py``): made here, once, on the
     # mesh this snapshot is solved with; the model card, the Solve card's plan,
     # the preparation, every submission and the job all read it.
@@ -2109,8 +2109,8 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
             if group["kind"] == "interface"
         ) for region in regions
     )
-    if planes:
-        raise IngestRefusal("stage 7 meshing", f"{labels}: FEM regions under a reduced domain are unsupported in 0.3.6.")
+    if any(p not in {"x0", "y0"} for p in planes):
+        raise IngestRefusal("stage 7 meshing", f"{labels}: FEM symmetry supports only x0 and y0.")
     return labels
 
 
@@ -2167,6 +2167,8 @@ def _mesh_coupled_regions(
             bundle.assembly_path, regions, members=members, recipe=recipe,
             expected_geometry_hash=exterior["transformed_geometry_hash"],
             normalisation_matrix=exterior["normalisation"]["matrix"], sizes=sizes, exterior_names=names,
+            domain_planes=imported_domain_planes({"symmetry": exterior.get("symmetry")}),
+            cut_planes=tuple((exterior.get("symmetry") or {}).get("cut_planes") or ()),
             expected_sha256=bundle.artifact_sha256, expected_size_bytes=bundle.artifact_size_bytes,
             deadline=deadline,
         )
@@ -2179,6 +2181,7 @@ def _mesh_coupled_regions(
         "pipeline_contract": "wg-import-coupled-v1", "assembly": bundle.artifact_sha256,
         "regions": regions, "members": {r["file"]: bundle.manifest["files"][r["file"]] for r in regions},
         "recipe": recipe, "sizes": sizes, "names": names, "mesher": mesher_identity(),
+        "symmetry": exterior.get("symmetry"),
     })).hexdigest()
     key = hashlib.sha256(_canonical({"lookup_key": lookup_key, "sha256": digest})).hexdigest()
     path = imports_root / "meshes" / key / "coupled" / "exterior.msh"
@@ -2199,7 +2202,7 @@ def _mesh_coupled_regions(
 
 def _mesh_fem_regions(
     bundle: WgReturnBundle, imports_root: Path, coupled: Mapping[str, Any] | None = None,
-    *, deadline: float | None = None,
+    *, deadline: float | None = None, exterior: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Mesh every declared member after the exterior, retaining verified inputs."""
 
@@ -2232,6 +2235,10 @@ def _mesh_fem_regions(
                     expected_sha256=member["sha256"],
                     expected_size_bytes=member["size_bytes"],
                     deadline=deadline,
+                    **({"normalisation_matrix": exterior["normalisation"]["matrix"],
+                        "domain_planes": imported_domain_planes({"symmetry": exterior.get("symmetry")}),
+                        "cut_planes": tuple((exterior.get("symmetry") or {}).get("cut_planes") or ())}
+                       if exterior and imported_domain_planes({"symmetry": exterior.get("symmetry")}) else {}),
                 )
         except Exception as exc:
             # Typed face-matching errors already name the group. Child crashes
@@ -2244,6 +2251,7 @@ def _mesh_fem_regions(
         lookup_key = hashlib.sha256(_canonical({
             "pipeline_contract": "wg-import-fem-v1",
             "region": region, "member": member, "mesher": mesher_identity(),
+            "symmetry": (exterior or {}).get("symmetry"),
             **({"coupled_sha256": digest} if region["region_id"] in (coupled or {}) else {}),
         })).hexdigest()
         # Bind the path to output bytes as well as inputs: a later meshing run

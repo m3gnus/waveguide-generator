@@ -75,7 +75,7 @@ def test_coupled_wire_passes_pinned_engine_contract():
 
 @pytest.mark.parametrize("options,message", [
     ({"backend": "metal"}, "CPU"), ({"backend": "cuda"}, "CPU"),
-    ({"precision": "float32"}, "float64"), ({"symmetry": "yz"}, "full domain"),
+    ({"precision": "float32"}, "float64"), ({"symmetry": "xy"}, "Unsupported BEAT symmetry"),
     ({"ground": object()}, "ground plane"),
 ])
 def test_request_refusals(options, message):
@@ -245,7 +245,7 @@ def test_registry_only_offers_official_cpu_fem(monkeypatch, backend, provider, f
 
 @pytest.mark.parametrize("change,code", [
     ("provider", "fem_provider_unsupported"), ("ground", "fem_domain_unsupported"),
-    ("reduced", "fem_domain_unsupported"),
+    ("reduced", "fem_domain_unsupported"), ("reduced_transducer", "fem_domain_unsupported"),
 ])
 def test_job_refusals(monkeypatch, change, code):
     from server.jobs.runtime.imported_refusals import _imported_request_refusal
@@ -258,9 +258,15 @@ def test_job_refusals(monkeypatch, change, code):
     if change == "ground":
         request.options.ground_plane.enabled = True
     if change == "reduced":
-        request.options.symmetry = "yz"
+        record["symmetry"] = {"domain_planes": ["z0"]}
+    if change == "reduced_transducer":
+        # x0 alone is admitted; a transducer on the reduced model is not yet.
+        record["symmetry"] = {"domain_planes": ["x0"]}
+        request.geometry.drive_channels[0].exterior_transducer = object()
     refusal = _imported_request_refusal(request, record)
     assert refusal and refusal[0] == code
+    if change == "reduced_transducer":
+        assert "full model" in refusal[1]
 
 
 

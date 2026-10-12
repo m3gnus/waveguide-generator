@@ -1,7 +1,7 @@
 """Contract-2 requests for verified CAD FEM regions and their closed BEM skin."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -11,10 +11,10 @@ from server.mesh.artifact import read_verified_coupled_exterior_mesh, read_verif
 from server.mesh.fem_coupling import read_coupled_exterior
 from server.mesh.fem_regions import read_fem_region_domain
 from server.solver.coupled_system import ExteriorSurface, FemRegionInput, build_coupled_system
-from server.solver.imported import imported_anchor_frame, imported_domain_planes
+from server.solver.imported import imported_anchor_frame, imported_domain_planes, imported_symmetry_from_cut_planes
 
 from .observations import ObservationLayout
-from .request import QUADRATURE_ORDER, REGULAR_QUADRATURE_MODE, SINGULAR_ORDER, _layout
+from .request import QUADRATURE_ORDER, REGULAR_QUADRATURE_MODE, SINGULAR_ORDER, _layout, _image_frame
 
 
 @dataclass(frozen=True)
@@ -43,8 +43,10 @@ def build_coupled_request(
         raise ValueError("FEM regions require the official BEAT CPU backend")
     if precision != "float64":
         raise ValueError("FEM regions require float64 precision")
-    if symmetry not in {"full", "off"} or ground is not None:
-        raise ValueError("FEM regions require a full domain without a ground plane")
+    if ground is not None:
+        raise ValueError("FEM regions require free space without a ground plane")
+    mode, rotation, translation = _image_frame(symmetry, None)
+    axes = (0,) if mode == "x" else (0, 1) if mode == "xy" else ()
     if not regions:
         raise ValueError("A coupled request requires declared FEM regions")
     if any(isinstance(f, (bool, np.bool_)) for f in frequencies_hz):
@@ -53,9 +55,28 @@ def build_coupled_request(
     if (frequencies.ndim != 1 or not frequencies.size or not np.isfinite(frequencies).all()
             or np.any(frequencies <= 0) or len(np.unique(frequencies)) != len(frequencies)):
         raise ValueError("Frequencies must be positive, finite and distinct")
-    system = build_coupled_system(exterior, regions, transducers=transducers)
+    if transducers and axes:
+        raise ValueError("Electrodynamic transducers in FEM solves need a full model")
+
+    def image_points(points):
+        points = (np.asarray(points, dtype=float) + translation * 1000) @ rotation.T
+        tolerance = max(1e-6, float(np.linalg.norm(np.ptp(points, axis=0))) * 1e-6)
+        for axis in axes:
+            if np.min(points[:, axis]) < -tolerance:
+                raise ValueError("Mesh is outside the positive symmetry fundamental domain")
+            points[np.abs(points[:, axis]) <= tolerance, axis] = 0.
+        return points
+
+    transformed_regions = [replace(item, domain=replace(
+        item.domain, points_mm=image_points(item.domain.points_mm))) for item in regions]
+    transformed_exterior = (replace(exterior, points_mm=image_points(exterior.points_mm))
+                            if exterior is not None else None)
+    transformed_layout = replace(layout, points_m={
+        name: (points + translation) @ rotation.T for name, points in layout.points_m.items()})
+    system = build_coupled_system(transformed_exterior, transformed_regions, transducers=transducers,
+                                  symmetry_plane_axes=axes)
     channels = {port["name"]: (port["id"],) for port in system["excitation_ports"]}
-    outputs = layout.exterior_outputs() if exterior is not None else []
+    outputs = transformed_layout.exterior_outputs() if exterior is not None else []
     outputs.append({"id": "fem:pressure", "quantity": "fem_nodal_pressure",
                     "target_ids": [], "options": {}})
     if transducers:
@@ -65,7 +86,7 @@ def build_coupled_request(
             "frequencies_hz": frequencies.tolist(),
             "excitation_port_ids": [p["id"] for p in system["excitation_ports"]],
             "outputs": outputs,
-            "solver_options": {"precision": precision, "bem_backend": backend, "symmetry": "off",
+            "solver_options": {"precision": precision, "bem_backend": backend, "symmetry": mode,
                                "phasor_convention": SOLVER_TIME_CONVENTION,
                                "regular_quadrature_mode": REGULAR_QUADRATURE_MODE,
                                "quadrature_order": QUADRATURE_ORDER, "singular_order": SINGULAR_ORDER,
@@ -99,8 +120,11 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
         combine_id=getattr(getattr(geometry, "combine", None), "id", None))
     if problem:
         raise ValueError(f"{problem[0]}: {problem[1]}")
-    if imported_domain_planes(record) or bool(record.get("infinite_baffle")):
-        raise ValueError("FEM regions require a full free-space domain")
+    if bool(record.get("infinite_baffle")):
+        raise ValueError("FEM regions require free space without an infinite baffle")
+    symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
+    if symmetry.quadrants != context.quadrants:
+        raise ValueError("Stored context and ingestion record disagree on symmetry")
     regions = tuple(FemRegionInput(
         region, read_fem_region_domain(read_verified_fem_region_mesh(record, region["region_id"]),
                                       region["region_id"])) for region in record.get("fem_regions", ()))
@@ -139,6 +163,7 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
     frame = imported_anchor_frame(record)
     request = build_coupled_request(exterior, regions, layout=_layout(context, frame, "float64"),
                                     frame=frame, frequencies_hz=frequencies_hz,
+                                    symmetry=symmetry.native_plane or "full", ground=context.ground_plane,
                                     transducers={c.id: c.exterior_transducer for c in geometry.drive_channels
                                                  if getattr(c, "exterior_transducer", None) is not None},
                                     reference_voltage_rms_v=getattr(geometry, "drive_voltage_v", 2.83))

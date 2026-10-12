@@ -144,12 +144,33 @@ def load_fem_field_payload(path: Path, frequency: float | None,
                 offset += len(xyz)
             pressure = _pressure_slice(arrays.zip, frequency_index, channel_index,
                                        (len(frequencies), len(channels), offset))
+            planes = arrays["symmetry_planes"].tolist() if "symmetry_planes" in arrays else []
+            if (not isinstance(planes, list) or len(set(planes)) != len(planes)
+                    or any(p not in {"x0", "y0"} for p in planes)):
+                raise FemFieldCorrupt("Invalid FEM symmetry planes")
+            xyz = np.concatenate(points)
+            tets = np.concatenate(tetrahedra)
+            triangles = [np.frombuffer(base64.b64decode(surface["triangles"]), dtype="<u4").reshape(-1, 3)
+                         for surface in surfaces]
+            for plane in planes:
+                count = len(xyz)
+                if 2 * count > np.iinfo(np.uint32).max:
+                    raise FemFieldCorrupt("Completed FEM field exceeds the display index range")
+                reflected = xyz.copy()
+                reflected[:, {"x0": 0, "y0": 1}[plane]] *= -1
+                xyz = np.concatenate([xyz, reflected])
+                tets = np.concatenate([tets, tets[:, [1, 0, 2, 3]] + count])
+                pressure = np.concatenate([pressure, pressure])
+                triangles = [np.concatenate([block, block[:, [0, 2, 1]] + count]) for block in triangles]
+            surfaces = [{**surface, "triangles": _encode(block, "<u4")}
+                        for surface, block in zip(surfaces, triangles)
+                        if not planes or "group=_symmetry|" not in surface["name"]]
             return {
                 "schema": "wg-fem-field-v1",
                 "region_id": regions[0] if len(regions) == 1 else "all",
                 "frequency_hz": float(frequencies[frequency_index]),
-                "points_mm": _encode(np.concatenate(points), "<f4"),
-                "tetrahedra": _encode(np.concatenate(tetrahedra), "<u4"),
+                "points_mm": _encode(xyz, "<f4"),
+                "tetrahedra": _encode(tets, "<u4"),
                 "surfaces": surfaces,
                 "pressure_real": _encode(pressure.real, "<f4"),
                 "pressure_imag": _encode(pressure.imag, "<f4"),

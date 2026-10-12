@@ -3830,7 +3830,10 @@ class JobRuntime:
             raise ImportedSolveRefusal(*refusal)
         if request.options.engine != "beat-cpu":
             raise ImportedSolveRefusal("fem_backend_unsupported", "FEM regions require official BEAT CPU")
-        context = SolverContext.from_imported_request(request, quadrants=1234, source_motion="normal")
+        from server.solver.imported import imported_symmetry_from_cut_planes, imported_domain_planes
+
+        symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
+        context = SolverContext.from_imported_request(request, quadrants=symmetry.quadrants, source_motion="normal")
         started = time.time()
         compiled = await asyncio.to_thread(
             build_imported_coupled_request, record, request.geometry, context,
@@ -3852,7 +3855,8 @@ class JobRuntime:
                       "frequencies_hz": next(iter(sweep.channels.values())).frequencies_hz,
                       "channel_ids": np.asarray(list(compiled.channel_ports)),
                       "region_ids": np.asarray([r.domain.region_id for r in compiled.regions]),
-                      "pressure": sweep.nodal_pressure}
+                      "pressure": sweep.nodal_pressure,
+                      "symmetry_planes": np.asarray(imported_domain_planes(record), dtype="U2")}
             for index, region in enumerate(compiled.regions):
                 arrays[f"points_mm_{index}"] = region.domain.points_mm
                 arrays[f"tetrahedra_{index}"] = region.domain.tetrahedra

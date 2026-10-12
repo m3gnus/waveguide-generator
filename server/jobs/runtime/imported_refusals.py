@@ -344,8 +344,12 @@ def _imported_request_refusal(
             any(c.source_ids for c in request.geometry.drive_channels) or painted_source_ids(record)))
         if problem:
             return problem
-        if imported_domain_planes(record) or request.options.symmetry not in {"auto", "full"}:
-            return "fem_domain_unsupported", "FEM regions require a full domain"
+        planes = imported_domain_planes(record)
+        if any(p not in {"x0", "y0"} for p in planes):
+            return "fem_domain_unsupported", "FEM regions support only x0 and y0 symmetry planes"
+        if planes and any(c.exterior_transducer is not None for c in request.geometry.drive_channels):
+            return "fem_domain_unsupported", ("Electrodynamic transducers in FEM solves need a full model; "
+                                              "export without symmetry planes")
         if request.options.ground_plane.enabled or record.get("infinite_baffle"):
             return "fem_domain_unsupported", "FEM regions require free space without a ground plane"
         ideal_message = "FEM solves support ideal normal-velocity and electrodynamic voltage drives"

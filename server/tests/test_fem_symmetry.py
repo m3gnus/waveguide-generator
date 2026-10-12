@@ -1,0 +1,418 @@
+"""The existing exterior reduction extended to conforming FEM volumes."""
+from __future__ import annotations
+
+import base64
+from copy import deepcopy
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from server.cadlink.intake.isolated import build_coupled_mesh_isolated, build_imported_mesh_isolated
+from server.mesh.artifact import read_verified_coupled_exterior_mesh, read_verified_fem_region_mesh
+from server.mesh.fem_coupling import read_coupled_exterior
+from server.mesh.fem_regions import build_fem_region_mesh, physical_name, read_fem_region_domain
+from server.mesh.gmsh_worker import _run_in_gmsh_session
+from server.mesh.integrity import mesh_integrity_report
+from server.solver.beat_adapter.coupled_request import build_coupled_request, build_imported_coupled_request
+from server.solver.beat_adapter.request import _image_frame
+from server.solver.coupled_system import ExteriorSurface, FemRegionInput
+from server.tests.test_cadlink_wgreturn import _manifest, write_bundle
+from server.tests.test_fem_coupling import SIZES
+from server.tests.test_fem_engine_route import FRAME, compiled, events
+from server.tests.test_fem_ingest import _ingest
+from server.tests.test_fem_regions import _face, _region
+from server.tests.test_official_beat_bridge import runtime as runtime_fixture
+from server.tests.test_fem_coupled_beat_live import worker as live_worker_fixture
+
+runtime = runtime_fixture
+worker = live_worker_fixture
+
+
+@pytest.fixture(autouse=True)
+def enabled(monkeypatch):
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+
+
+def symmetry_bundle(root: Path, planes=("x0", "y0"), *, authored=False, sealed=False):
+    """A centred piston and mouth; an optional y-asymmetric rib permits x only."""
+    root.mkdir(parents=True)
+    low = np.array([-20., -15., 0.])
+    high = np.array([20., 15., 20.])
+    if authored:
+        for plane in planes:
+            low[{"x0": 0, "y0": 1}[plane]] = 0.
+    region = _region(mesh_size_mm=10.)
+    area = np.prod((high - low)[:2])
+    region["surface_groups"][0]["faces"] = [_face(area, (*((low + high)[:2] / 2), 0.),
+        [0., 0., 1.], low, [*high[:2], 0.])]
+    region["surface_groups"][1]["faces"] = [_face(area, (*((low + high)[:2] / 2), 20.),
+        [0., 0., 1.], [*low[:2], 20.], high)]
+    if sealed:
+        region["surface_groups"] = region["surface_groups"][:1]
+    for group in region["surface_groups"]:
+        group["mesh_size_mm"] = 8.
+
+    def write_geometry():
+        import gmsh
+
+        gmsh.model.add("symmetric-air")
+        gmsh.model.occ.addBox(*low, *(high - low))
+        gmsh.model.occ.synchronize()
+        gmsh.write(str(root / "air.step"))
+        gmsh.model.remove()
+        gmsh.model.add("symmetric-material")
+        material = gmsh.model.occ.addBox(-22, -17, -2, 44, 34, 22)
+        cavity = gmsh.model.occ.addBox(-20, -15, 0, 40, 30, 22)
+        material, _ = gmsh.model.occ.cut([(3, material)], [(3, cavity)])
+        if planes == ("x0",):
+            rib = gmsh.model.occ.addBox(-22, 17, -2, 44, 3, 22)
+            material, _ = gmsh.model.occ.fuse(material, [(3, rib)])
+        if authored:
+            clip_low = [-30., -30., -10.]
+            for plane in planes:
+                clip_low[{"x0": 0, "y0": 1}[plane]] = 0.
+            clip = gmsh.model.occ.addBox(*clip_low, *(np.array([30., 30., 30.]) - clip_low))
+            material, _ = gmsh.model.occ.intersect(material, [(3, clip)])
+            gmsh.model.occ.remove(material, recursive=False)
+            gmsh.model.occ.synchronize()
+            from server.mesh.fem_regions import symmetry_surfaces
+            caps = symmetry_surfaces(gmsh, [t for _, t in gmsh.model.getEntities(2)], planes)
+            gmsh.model.occ.remove([(2, t) for t in caps], recursive=True)
+        gmsh.model.occ.synchronize()
+        gmsh.write(str(root / "material.step"))
+        gmsh.model.remove()
+
+    _run_in_gmsh_session(write_geometry)
+    air = (root / "air.step").read_bytes()
+    material = (root / "material.step").read_bytes()
+    manifest = _manifest(material)
+    manifest["instances"] = []
+    manifest["sources"] = []
+    manifest["coordinate_system"]["solver_anchor_instance_id"] = None
+    manifest["assembly"]["bbox_mm"] = [[-22, -17, -2], [22, 20 if planes == ("x0",) else 17, 20]]
+    if authored:
+        manifest["required_features"].append("reduced-domain-v1")
+        manifest["assembly"]["domain"] = {"kind": "half" if len(planes) == 1 else "quarter",
+            "cut_planes": list(planes), "declared_by": "cad-author",
+            "evidence": {p: {"min_mm": 0, "max_mm": 22 if p == "x0" else 17,
+                              "tolerance_mm": .001} for p in planes}}
+        manifest["assembly"]["n_bodies_expected"] = len(_run_in_gmsh_session(_surface_count, root / "material.step"))
+        for plane in planes:
+            manifest["assembly"]["bbox_mm"][0][{"x0": 0, "y0": 1}[plane]] = 0
+    manifest["scope"]["included"] = [{"object_id": "walls", "name": "Box walls",
+        "body_kind": "surface" if authored else "solid", "visible": True, "external_reference": "local"}]
+    if authored:
+        template = manifest["scope"]["included"][0]
+        manifest["scope"]["included"] = [{**template, "object_id": f"sheet-{i}", "name": f"Box wall {i}"}
+                                         for i in range(manifest["assembly"]["n_bodies_expected"])]
+    manifest["scope"]["fem_regions"] = [region]
+    manifest["required_features"].append("fem-regions-v1")
+    manifest["files"][region["file"]] = {"sha256": "sha256:" + hashlib.sha256(air).hexdigest(),
+        "size_bytes": len(air), "media_type": "model/step", "purpose": "fem-region"}
+    bundle = write_bundle(root, manifest, step=material)
+    member = bundle / region["file"]
+    member.parent.mkdir(parents=True)
+    member.write_bytes(air)
+    return bundle, manifest, region
+
+
+def _surface_count(path):
+    import gmsh
+    gmsh.model.add("inventory")
+    roots = gmsh.model.occ.importShapes(str(path))
+    gmsh.model.remove()
+    return roots
+
+
+def mesh_pair(root, planes, *, geometry_planes=None):
+    bundle, manifest, region = symmetry_bundle(root, planes if geometry_planes is None else geometry_planes)
+    assembly = bundle / manifest["assembly"]["file"]
+    exterior = build_imported_mesh_isolated(assembly, manifest, SIZES,
+        options={"symmetry_mode": "full"}, include_viewport_mesh=False)
+    built = build_coupled_mesh_isolated(assembly, [region],
+        members={region["region_id"]: {"path": str(bundle / region["file"]),
+                                       **manifest["files"][region["file"]]}},
+        recipe=exterior["viewport_recipe"], expected_geometry_hash=exterior["transformed_geometry_hash"],
+        normalisation_matrix=exterior["normalisation"]["matrix"], sizes=SIZES, exterior_names={},
+        domain_planes=planes, cut_planes=planes)
+    return built, region
+
+
+def inputs(built, region):
+    points, groups = read_coupled_exterior(built["exterior"]["msh_text"])
+    exterior = ExteriorSurface(points, groups, built["exterior"]["physical_names"])
+    domain = read_fem_region_domain(built["regions"][region["region_id"]]["msh_text"], region["region_id"])
+    return exterior, FemRegionInput(region, domain)
+
+
+@pytest.mark.parametrize("planes,symmetry", [(("x0",), "yz"), (("x0", "y0"), "yz+xz")])
+def test_half_and_quarter_interface_is_shared_and_skin_open_only_on_planes(tmp_path, planes, symmetry):
+    from beat_engine.beat_contract import validate_solve_request
+    from server.solver.beat_adapter.results import map_coupled_sweep
+
+    built, region = mesh_pair(tmp_path / "returns", planes)
+    exterior, item = inputs(built, region)
+    report = mesh_integrity_report(exterior.points_mm * .001,
+        np.concatenate(list(exterior.groups.values())), symmetry_plane_axes=tuple({"x0": 0, "y0": 1}[p] for p in planes))
+    assert report["open_edge_count"] > 0
+    assert report["off_plane_open_edge_count"] == report["nonmanifold_edge_count"] == 0
+    cap = physical_name(region["region_id"], "_symmetry", "rigid")
+    assert cap in item.domain.surfaces and cap not in exterior.groups
+    for plane in planes:
+        assert item.domain.points_mm[:, {"x0": 0, "y0": 1}[plane]].min() >= -1e-6
+    full_request = compiled(coupled=False)
+    request = build_coupled_request(exterior, [item], layout=full_request.layout,
+        frame=FRAME, frequencies_hz=[100.], symmetry=symmetry)
+    validate_solve_request(request.wire)
+    assert request.wire["solver_options"]["symmetry"] == _image_frame(symmetry, None)[0]
+    topology = request.wire["compiled_system"]["interfaces"][0]["topology"]
+    assert topology["max_coordinate_error"] == 0
+    assert set(topology["normal_sign"]) == {1}
+    assert topology["fem_facets_on_tetra_boundary"] == len(topology["fem_face_indices"])
+    sweep = map_coupled_sweep(events(request), request)
+    assert sweep.nodal_pressure.shape == (1, 1, len(item.domain.points_mm))
+
+
+@pytest.mark.parametrize("planes", [("x0",), ("x0", "y0")])
+def test_sealed_box_cut_has_rigid_symmetry_and_correct_volume(tmp_path, planes):
+    bundle, _, region = symmetry_bundle(tmp_path / "returns", planes, sealed=True)
+    built = _run_in_gmsh_session(build_fem_region_mesh, bundle / region["file"], region,
+                                 domain_planes=planes, cut_planes=planes)
+    domain = read_fem_region_domain(built["msh_text"], region["region_id"])
+    xyz = domain.points_mm[domain.tetrahedra]
+    volume = np.abs(np.linalg.det(xyz[:, 1:] - xyz[:, :1])).sum() / 6
+    assert volume == pytest.approx(40 * 30 * 20 / 2 ** len(planes))
+    assert physical_name(region["region_id"], "_symmetry", "rigid") in domain.surfaces
+
+
+@pytest.mark.parametrize("planes", [("x0",), ("x0", "y0")])
+def test_ingest_reuses_exterior_symmetry_for_region_artifacts(tmp_path, planes):
+    bundle, _, region = symmetry_bundle(tmp_path / "returns", planes)
+    record = _ingest(bundle, tmp_path)
+    assert record["symmetry"]["domain_planes"] == list(planes)
+    points, groups = read_coupled_exterior(read_verified_coupled_exterior_mesh(record))
+    domain = read_fem_region_domain(read_verified_fem_region_mesh(record, region["region_id"]), region["region_id"])
+    assert physical_name(region["region_id"], "_symmetry", "rigid") in domain.surfaces
+    from server.solver.imported import imported_symmetry_from_cut_planes
+    quadrants = imported_symmetry_from_cut_planes(planes).quadrants
+    # Match the ordinary route's real context and observation construction.
+    from server.solver.context import SolverContext
+    from server.tests.test_imported_jobs import _request
+    job = _request(record["ingest_id"])
+    job.geometry.drive_channels = []
+    context = SolverContext.from_imported_request(job, quadrants=quadrants, source_motion="normal")
+    request = build_imported_coupled_request(record, job.geometry, context, frequencies_hz=[100.])
+    assert request.wire["solver_options"]["symmetry"] == ("x" if len(planes) == 1 else "xy")
+    assert len(points) and groups
+
+
+@pytest.mark.parametrize("planes", [("x0",), ("x0", "y0")])
+def test_author_cut_sealed_region_is_verified_without_halving_again(tmp_path, planes):
+    bundle, _, region = symmetry_bundle(tmp_path / "returns", planes, authored=True, sealed=True)
+    built = _run_in_gmsh_session(build_fem_region_mesh, bundle / region["file"], region,
+                                 domain_planes=planes)
+    domain = read_fem_region_domain(built["msh_text"], region["region_id"])
+    xyz = domain.points_mm[domain.tetrahedra]
+    assert np.abs(np.linalg.det(xyz[:, 1:] - xyz[:, :1])).sum() / 6 == pytest.approx(24000 / 2 ** len(planes))
+
+
+def test_y_only_image_rotates_fem_and_preserves_display_coordinates():
+    request = compiled(coupled=False)
+    item = request.regions[0]
+    half = build_coupled_request(None, [item], layout=request.layout, frame=FRAME,
+                                frequencies_hz=[100.], symmetry="xz")
+    mesh = half.wire["compiled_system"]["meshes"][0]["mesh_data"]["points"]
+    actual = np.frombuffer(base64.b64decode(mesh["data"]), dtype=mesh["dtype"]).reshape(mesh["shape"])
+    _, rotation, _ = _image_frame("xz", None)
+    np.testing.assert_allclose(actual, item.domain.points_mm @ rotation.T * .001)
+    assert half.regions[0] is item  # The retained display frame stays WG's frame.
+    assert half.wire["solver_options"]["symmetry"] == "x"
+
+
+def test_negative_author_region_and_asymmetric_role_refuse(tmp_path):
+    bundle, _, region = symmetry_bundle(tmp_path / "returns")
+    with pytest.raises(ValueError, match="outside the positive author-cut domain"):
+        _run_in_gmsh_session(build_fem_region_mesh, bundle / region["file"], region, domain_planes=("x0",))
+    changed = deepcopy(region)
+    changed["surface_groups"][0]["faces"][0]["centroid_mm"][0] = 5
+    with pytest.raises(ValueError, match="matches no surface"):
+        _run_in_gmsh_session(build_fem_region_mesh, bundle / region["file"], changed,
+                            domain_planes=("x0",), cut_planes=("x0",))
+    changed = deepcopy(region)
+    changed["surface_groups"][0]["faces"] = [_face(
+        600, [20, 0, 10], [1, 0, 0], [20, -15, 0], [20, 15, 20])]
+    with pytest.raises(ValueError, match="does not mirror on x0"):
+        _run_in_gmsh_session(build_fem_region_mesh, bundle / region["file"], changed,
+                            domain_planes=("x0",), cut_planes=("x0",))
+
+
+@pytest.mark.parametrize("planes", [("x0",), ("x0", "y0")])
+@pytest.mark.parametrize("sealed", [False, True], ids=["coupled", "interior"])
+def test_fake_worker_job_retains_half_field_and_displays_completed_field(tmp_path, runtime, planes, sealed):
+    import asyncio
+    from io import BytesIO
+    from server.jobs.runtime import JobRuntime
+    from server.jobs.store import JobStore
+    from server.jobs.fem_field import load_fem_field_payload
+    from server.tests.test_imported_jobs import _request
+    from server.tests.test_jobs_store import _job
+    from server.tests.beat_runtime.fake_host_worker import coupled_result
+
+    bundle, _, region = symmetry_bundle(tmp_path / "returns", planes, sealed=sealed)
+    record = _ingest(bundle, tmp_path)
+    request = _request(record["ingest_id"], drive_channels=[], mesh=SIZES)
+    request.options.engine = "beat-cpu"
+    request.options.frequencies_hz = [100.]
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("symmetric", "running"))
+    runner = JobRuntime(store)
+
+    def mutate(raw):
+        wire = runtime.requests[-1]
+        raw.clear()
+        raw.update(coupled_result(wire, 100.))
+    runtime.mutate = mutate
+    result = asyncio.run(runner._run_coupled_regions("symmetric", request, record, lambda *args: None))
+    assert result.results["channel_order"] == ["drive-lf"]
+    wire = runtime.requests[-1]
+    assert wire["solver_options"]["symmetry"] == ("x" if len(planes) == 1 else "xy")
+    with np.load(BytesIO(store.get_fem_field("symmetric")), allow_pickle=False) as arrays:
+        assert arrays["symmetry_planes"].tolist() == list(planes)
+        half_points = arrays["points_mm_0"]
+        half_tets = arrays["tetrahedra_0"]
+        half_pressure = arrays["pressure"][0, 0]
+    shown = load_fem_field_payload(store._fem_field_path("symmetric"), 100., "drive-lf")
+    xyz = np.frombuffer(base64.b64decode(shown["points_mm"]), dtype="<f4").reshape(-1, 3)
+    tets = np.frombuffer(base64.b64decode(shown["tetrahedra"]), dtype="<u4").reshape(-1, 4)
+    multiplier = 2 ** len(planes)
+    assert len(xyz) == multiplier * len(half_points)
+    assert len(tets) == multiplier * len(half_tets)
+    assert all("group=_symmetry|" not in surface["name"] for surface in shown["surfaces"])
+    real = np.frombuffer(base64.b64decode(shown["pressure_real"]), dtype="<f4")
+    imag = np.frombuffer(base64.b64decode(shown["pressure_imag"]), dtype="<f4")
+    np.testing.assert_allclose(real + 1j * imag, np.tile(half_pressure, multiplier))
+    det = np.linalg.det(xyz[tets][:, 1:] - xyz[tets][:, :1])
+    half_det = np.linalg.det(half_points[half_tets][:, 1:] - half_points[half_tets][:, :1])
+    np.testing.assert_allclose(det, np.tile(half_det, multiplier), rtol=1e-5, atol=1e-3)
+    assert np.abs(det).sum() / 6 == pytest.approx(24000, rel=1e-5)
+    for plane in planes:
+        axis = {"x0": 0, "y0": 1}[plane]
+        assert xyz[:, axis].min() < 0 < xyz[:, axis].max()
+    assert region["region_id"] == "rear-chamber"
+
+
+@pytest.mark.parametrize("planes,symmetry", [(("x0",), "yz"), (("x0", "y0"), "yz+xz"), (("y0",), "xz")])
+def test_coupled_request_matches_exterior_image_options_and_observations(tmp_path, planes, symmetry):
+    from server.solver.beat_adapter.request import build_request, SourceBasis
+
+    built, region = mesh_pair(tmp_path / "returns", planes)
+    exterior, item = inputs(built, region)
+    layout = compiled(coupled=False).layout
+    coupled = build_coupled_request(exterior, [item], layout=layout, frame=FRAME,
+                                    frequencies_hz=[100.], symmetry=symmetry)
+    name = physical_name(region["region_id"], "port", "interface")
+    source = SourceBasis("port", built["exterior"]["physical_names"][name]["tag"], port_id="port")
+    ordinary = build_request(built["exterior"]["msh_text"], sources=[source],
+        channel_ports={"drive-lf": ["port"]}, layout=layout, frame=FRAME, frequencies_hz=[100.],
+        symmetry=symmetry, precision="float64", mesh_scale_to_m=.001)
+    for key in ("symmetry", "phasor_convention", "precision", "bem_backend",
+                "regular_quadrature_mode", "quadrature_order", "singular_order"):
+        assert coupled.wire["solver_options"][key] == ordinary.wire["solver_options"][key]
+    assert coupled.wire["outputs"][:-1] == ordinary.wire["outputs"][:len(coupled.wire["outputs"]) - 1]
+
+
+@pytest.mark.parametrize("planes", [("x0",), ("x0", "y0")])
+def test_author_cut_coupled_ingest(tmp_path, planes):
+    bundle, _, region = symmetry_bundle(tmp_path / "returns", planes, authored=True)
+    record = _ingest(bundle, tmp_path)
+    assert record["symmetry"]["domain_planes"] == list(planes)
+    domain = read_fem_region_domain(read_verified_fem_region_mesh(record, region["region_id"]), region["region_id"])
+    xyz = domain.points_mm[domain.tetrahedra]
+    assert np.abs(np.linalg.det(xyz[:, 1:] - xyz[:, :1])).sum() / 6 == pytest.approx(24000 / 2 ** len(planes))
+
+
+# Only requested explicitly through the compute broker; no live worker is used
+# during ordinary targeted checks.
+@pytest.mark.live
+@pytest.mark.slow
+@pytest.mark.real_runtime
+@pytest.mark.skipif(__import__("os").environ.get("WG2_RUN_LIVE") != "1", reason="set WG2_RUN_LIVE=1")
+@pytest.mark.parametrize("planes,symmetry", [(("x0",), "yz"), (("x0", "y0"), "yz+xz")])
+def test_live_full_and_reduced_box_far_field_agree_within_one_percent(tmp_path, worker, planes, symmetry):
+    from server.solver.beat_adapter.results import map_coupled_sweep
+
+    layout = compiled(coupled=False).layout
+    requests = []
+    for label, cuts, mode in (("full", (), "full"), ("reduced", planes, symmetry)):
+        built, region = mesh_pair(tmp_path / label, cuts, geometry_planes=("x0", "y0"))
+        exterior, item = inputs(built, region)
+        requests.append(build_coupled_request(exterior, [item], layout=layout, frame=FRAME,
+                                              frequencies_hz=[100.], symmetry=mode))
+    pressures = [map_coupled_sweep(worker.submit(request.wire), request).channels["drive-lf"].pressure_complex
+                 for request in requests]
+    assert np.all(np.abs(pressures[0]) > 0)
+    np.testing.assert_allclose(pressures[1], pressures[0], rtol=.01, atol=0)
+
+
+def test_reduced_coupling_meshes_sealed_neighbour_in_the_same_session(tmp_path, monkeypatch):
+    from server.cadlink.intake import ingest
+
+    bundle, manifest, region = symmetry_bundle(tmp_path / "returns")
+    sealed = deepcopy(region)
+    sealed.update(region_id="sealed", name="Sealed neighbour", object_id="air-2",
+                  file="fem-regions/sealed.step")
+    sealed["surface_groups"] = sealed["surface_groups"][:1]
+    sealed["surface_groups"][0]["drive_channel_id"] = "drive-sealed"
+    for face in sealed["surface_groups"][0]["faces"]:
+        face["centroid_mm"][2] += 100
+        face["bbox_mm"][0][2] += 100
+        face["bbox_mm"][1][2] += 100
+
+    def write_sealed():
+        import gmsh
+        gmsh.model.add("sealed-neighbour")
+        gmsh.model.occ.addBox(-20, -15, 100, 40, 30, 20)
+        gmsh.model.occ.synchronize()
+        gmsh.write(str(bundle / sealed["file"]))
+        gmsh.model.remove()
+    _run_in_gmsh_session(write_sealed)
+    data = (bundle / sealed["file"]).read_bytes()
+    manifest["scope"]["fem_regions"].append(sealed)
+    manifest["files"][sealed["file"]] = {"sha256": "sha256:" + hashlib.sha256(data).hexdigest(),
+        "size_bytes": len(data), "media_type": "model/step", "purpose": "fem-region"}
+    (bundle / "wgreturn.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(ingest, "build_fem_region_mesh_isolated", lambda *args, **kwargs:
+                        pytest.fail("Every reduced region must come from the coupled OCC session"))
+    record = _ingest(bundle, tmp_path)
+    assert len(record["fem_regions"]) == 2
+    for name in (region["region_id"], "sealed"):
+        domain = read_fem_region_domain(read_verified_fem_region_mesh(record, name), name)
+        assert physical_name(name, "_symmetry", "rigid") in domain.surfaces
+        assert domain.points_mm[:, :2].min() >= -1e-6
+
+
+def test_request_rejects_leaks_and_exterior_plane_caps(tmp_path):
+    from dataclasses import replace
+
+    built, region = mesh_pair(tmp_path / "returns", ("x0", "y0"))
+    exterior, item = inputs(built, region)
+    layout = compiled(coupled=False).layout
+    port = physical_name(region["region_id"], "port", "interface")
+    groups = dict(exterior.groups)
+    groups[port] = groups[port][1:]
+    with pytest.raises(ValueError, match="open edges away from symmetry planes"):
+        build_coupled_request(replace(exterior, groups=groups), [item], layout=layout,
+                              frame=FRAME, frequencies_hz=[100.], symmetry="yz+xz")
+    caps = physical_name(region["region_id"], "_symmetry", "rigid")
+    # Use the FEM node order for all surfaces, preserving each interface face.
+    cap_exterior = ExteriorSurface(item.domain.points_mm, item.domain.surfaces,
+        {name: {"kind": "interface" if name == port else "rigid"} for name in item.domain.surfaces})
+    assert caps in cap_exterior.groups
+    with pytest.raises(ValueError, match="without plane caps"):
+        build_coupled_request(cap_exterior, [item], layout=layout, frame=FRAME,
+                              frequencies_hz=[100.], symmetry="yz+xz")

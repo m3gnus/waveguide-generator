@@ -242,6 +242,8 @@ def build_fem_region_mesh_isolated(
     expected_sha256: str | None = None,
     expected_size_bytes: int | None = None,
     deadline: float | None = None,
+    domain_planes: tuple[str, ...] = (), cut_planes: tuple[str, ...] = (),
+    normalisation_matrix: Any = None,
 ) -> dict[str, Any]:
     """Mesh one declared FEM region's STEP member in a fresh child.
 
@@ -255,7 +257,8 @@ def build_fem_region_mesh_isolated(
     try:
         with isolated_step_task(
             "fem_region",
-            {"region": dict(region)},
+            {"region": dict(region), "domain_planes": list(domain_planes),
+             "cut_planes": list(cut_planes), "normalisation_matrix": normalisation_matrix},
             step_path=step_path,
             budget=MESH_BUDGET,
             deadline=deadline,
@@ -283,6 +286,7 @@ def build_coupled_mesh_isolated(
     sizes: Mapping[str, Any], exterior_names: Mapping[str, Mapping[str, Any]],
     expected_sha256: str | None = None, expected_size_bytes: int | None = None,
     deadline: float | None = None,
+    domain_planes: tuple[str, ...] = (), cut_planes: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Stage and verify all STEP members inside the existing mesh confinement."""
     if not fem_regions_enabled():
@@ -293,7 +297,8 @@ def build_coupled_mesh_isolated(
             "coupled_mesh", {"regions": [dict(region) for region in regions],
                              "recipe": dict(recipe), "expected_geometry_hash": expected_geometry_hash,
                              "normalisation_matrix": normalisation_matrix, "sizes": dict(sizes),
-                             "exterior_names": dict(exterior_names)},
+                             "exterior_names": dict(exterior_names), "domain_planes": list(domain_planes),
+                             "cut_planes": list(cut_planes)},
             step_path=assembly_path, budget=MESH_BUDGET, deadline=deadline, allowed_artifacts=allowed,
             stage=MESH_STAGE, expected_sha256=expected_sha256,
             expected_size_bytes=expected_size_bytes, additional_steps=members,
@@ -303,8 +308,8 @@ def build_coupled_mesh_isolated(
                 raise ChildRefusal(MESH_STAGE, "the coupled mesh child returned no meshes")
             built["exterior"]["msh_text"] = outcome.artifacts["coupled.msh"].read_text(encoding="utf-8")
             for region in regions:
-                if not any(g["kind"] == "interface" for g in region["surface_groups"]):
-                    continue  # Interior-only regions participate in geometry checks, not this mesh.
+                if region["region_id"] not in built["regions"]:
+                    continue  # Full-domain interior-only regions use the independent mesh child.
                 built["regions"][region["region_id"]]["msh_text"] = outcome.artifacts[f"region-{region['region_id']}.msh"].read_text(encoding="utf-8")
             return built
     except ChildRefusal as exc:

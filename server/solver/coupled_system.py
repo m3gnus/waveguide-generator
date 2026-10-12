@@ -281,6 +281,7 @@ def build_coupled_system(
     transducers: Mapping[str, Any] | None = None,
     system_id: str = "wg-cad-coupled",
     name: str = "CAD Link coupled FEM/BEM system",
+    symmetry_plane_axes: tuple[int, ...] = (),
 ) -> dict[str, Any]:
     """Return BEAT's ``compiled_system`` for the exterior and FEM regions.
 
@@ -320,6 +321,7 @@ def build_coupled_system(
                 exterior.points_mm,
                 np.concatenate([block for _name, block in surfaces]),
                 into_body=EXTERIOR_NORMALS_INTO_BODY,
+                symmetry_plane_axes=symmetry_plane_axes,
             )
         except ValueError as exc:
             raise CoupledSystemError(str(exc)) from exc
@@ -330,7 +332,7 @@ def build_coupled_system(
             rows_so_far += len(block)
         surfaces = oriented
         edges = open_edges(exterior_triangles)
-        if edges:
+        if edges and not symmetry_plane_axes:
             raise CoupledSystemError(
                 f"The exterior surface has {edges} open edges; close every opening "
                 "with an interface patch before coupling."

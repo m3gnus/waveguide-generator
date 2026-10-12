@@ -321,7 +321,7 @@ def test_ingest_domain_check_uses_only_received_domain_evidence(tmp_path):
 
     _bundle, manifest, _region_record = _coupling_bundle(tmp_path / "returns")
     assert "Rear chamber" in ingest._refuse_fem_domain(manifest, {}, [])
-    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*Port.*reduced domain"):
+    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*Port.*FEM symmetry supports"):
         ingest._refuse_fem_domain(manifest, {}, ["x"])
 
 
@@ -385,7 +385,7 @@ def test_reduced_domain_refuses_before_starting_a_region_child(tmp_path, monkeyp
         pytest.fail("a reduced domain must refuse before coupled meshing")
 
     monkeypatch.setattr(ingest, "build_coupled_mesh_isolated", unexpected)
-    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*Port.*reduced domain"):
+    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*Port.*FEM symmetry supports"):
         ingest._mesh_coupled_regions(bundle, tmp_path, {}, SIZES, {}, ["x"])
 
 
@@ -692,26 +692,23 @@ def test_interface_can_use_walls_without_merging_with_implicit_walls(tmp_path):
     assert stats["_walls"]["area_mm2"] == pytest.approx(3400)
 
 
-def test_declared_reduced_domain_refuses_before_exterior_meshing(tmp_path, monkeypatch):
+def test_declared_reduced_domain_reaches_exterior_meshing(tmp_path, monkeypatch):
     from server.cadlink.intake import ingest
 
     bundle, manifest, _region_record = _coupling_bundle(tmp_path / "returns")
     manifest["required_features"].append("reduced-domain-v1")
     manifest["assembly"]["domain"] = {
-        "kind": "half",
-        "cut_planes": ["x0"],
-        "declared_by": "cad-author",
+        "kind": "half", "cut_planes": ["x0"], "declared_by": "cad-author",
         "evidence": {"x0": {"min_mm": 0, "max_mm": 40, "tolerance_mm": 0.001}},
     }
     (bundle / "wgreturn.json").write_text(json.dumps(manifest))
 
-    def unexpected(*args, **kwargs):
-        pytest.fail("declared reduced FEM domain must refuse before exterior meshing")
+    def reached(*args, **kwargs):
+        raise RuntimeError("exterior meshing reached")
 
-    monkeypatch.setattr(ingest, "build_imported_mesh_isolated", unexpected)
-    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*Port.*reduced domain") as caught:
+    monkeypatch.setattr(ingest, "build_imported_mesh_isolated", reached)
+    with pytest.raises(ingest.IngestRefusal, match="exterior meshing reached"):
         _ingest(bundle, tmp_path)
-    assert caught.value.stage == "stage 7 meshing"
 
 
 @pytest.fixture

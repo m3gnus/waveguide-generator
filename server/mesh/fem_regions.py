@@ -36,6 +36,7 @@ FEM_TAG_NAMESPACE = "wg-fem-v1"
 # The protocol permits letters, digits and hyphens, so this cannot collide
 # with a CAD-declared group (including a user group called "walls").
 WALLS_GROUP_ID = "_walls"
+SYMMETRY_GROUP_ID = "_symmetry"
 # A local size blends back to the region size over this many region sizes.
 SIZE_BLEND_FACTOR = 3.0
 # Acceptance of a face description against an imported surface. Areas and
@@ -211,8 +212,122 @@ def _size_fields(gmsh: Any, region_size: float, groups: Sequence[tuple[list[int]
     return len(fields)
 
 
+def symmetry_surfaces(gmsh: Any, tags: Sequence[int], planes: Sequence[str]) -> set[int]:
+    """Planar caps on the exterior route's active, origin-centred planes."""
+    axes = {"x0": 0, "y0": 1}
+    if any(plane not in axes for plane in planes):
+        raise FemRegionMeshError("FEM symmetry supports only x0 and y0")
+    return {tag for tag in tags if any(
+        gmsh.model.getType(2, tag) == "Plane"
+        and max(abs(gmsh.model.getBoundingBox(2, tag)[axes[plane]]),
+                abs(gmsh.model.getBoundingBox(2, tag)[axes[plane] + 3])) < 1e-5
+        for plane in planes)}
+
+
+def verify_region_symmetry(gmsh: Any, region: Mapping[str, Any], boundary: Sequence[int],
+                           assigned: Mapping[str, Sequence[int]], planes: Sequence[str],
+                           cut_planes: Sequence[str]) -> None:
+    """Reuse the exterior's trimmed OCC geometry/role mirror test before cutting."""
+    import numpy as np
+    from hornlab_mesher.step_prepare import (
+        AUTO_CUT_SPAN_REL, DEFAULT_AUTO_CUT_TOLERANCE_REL,
+        evaluate_occ_plane_symmetry, sample_occ_surface_points,
+    )
+    if not planes:
+        return
+    axes = {"x0": 0, "y0": 1}
+    if len(set(planes)) != len(planes) or any(p not in axes for p in planes):
+        raise FemRegionMeshError("FEM symmetry supports only x0, y0, or x0+y0")
+    samples = {tag: sample_occ_surface_points(tag, grid=7) for tag in boundary}
+    stacked = np.concatenate(list(samples.values()))
+    diagonal = float(np.linalg.norm(np.ptp(stacked, axis=0)))
+    roles = {tag: WALLS_GROUP_ID for tag in boundary}
+    for group, tags in assigned.items():
+        roles.update({tag: group for tag in tags})
+    bboxes = {tag: tuple(gmsh.model.getBoundingBox(2, tag)) for tag in boundary}
+    for plane in planes:
+        if plane not in cut_planes:
+            if stacked[:, axes[plane]].min() < -1e-5:
+                raise FemRegionMeshError(
+                    f"FEM region {region['region_id']!r} lies outside the positive author-cut domain on {plane}")
+            continue
+        verdict = evaluate_occ_plane_symmetry(
+            plane, samples=samples, roles=roles, bboxes=bboxes,
+            tolerance=DEFAULT_AUTO_CUT_TOLERANCE_REL * diagonal,
+            span_tolerance=AUTO_CUT_SPAN_REL * diagonal)
+        if not verdict.accepted:
+            raise FemRegionMeshError(
+                f"FEM region {region['region_id']!r} does not mirror on {plane}: {verdict.reason}")
+
+
+def fragment_fundamental_domain(gmsh: Any, objects: list[tuple[int, int]],
+                                tools: list[tuple[int, int]], planes: Sequence[str]
+                                ) -> dict[tuple[int, int], set[int]]:
+    """The exterior positive half-space box, with volume ancestry retained for FEM.
+
+    Fragment the half-space together with material, air and named surfaces once;
+    discard its outside pieces before meshing. Unlike the surface-only exterior
+    cutter, keep volume roots and their new rigid plane caps.
+    """
+    import numpy as np
+    from hornlab_mesher.step_prepare import (
+        AUTO_CUT_BOX_PAD_REL, SYMMETRY_AXIS_FOR_PLANE, _claim_evidence,
+    )
+
+    inputs = objects + tools
+    clipping = []
+    copies = {}
+    if planes:
+        bbox = gmsh.model.getBoundingBox(-1, -1)
+        lo, hi = np.array(bbox[:3]), np.array(bbox[3:])
+        pad = AUTO_CUT_BOX_PAD_REL * max(hi - lo) + 1.
+        lo, hi = lo - pad, hi + pad
+        for plane in planes:
+            lo[SYMMETRY_AXIS_FOR_PLANE[plane]] = 0.
+        # The exterior cutter guards against OCC recycling a removed parent's
+        # tag for another face. Preserve the same trimmed-geometry evidence for
+        # named FEM faces and painted source copies during volume fragmentation.
+        copies = {tag: gmsh.model.occ.copy([(2, tag)])[0][1]
+                  for dim, tag in inputs if dim == 2}
+        clipping = [(3, gmsh.model.occ.addBox(*lo.tolist(), *(hi - lo).tolist()))]
+    _out, ancestry = gmsh.model.occ.fragment(objects, tools + clipping)
+    gmsh.model.occ.synchronize()
+
+    def retained(dim: int, tag: int) -> bool:
+        center = gmsh.model.occ.getCenterOfMass(dim, tag)
+        return all(center[SYMMETRY_AXIS_FOR_PLANE[p]] >= -1e-7 for p in planes)
+
+    descendants = {
+        entity: {int(tag) for dim, tag in mapped if dim == entity[0] and retained(dim, tag)}
+        for entity, mapped in zip(inputs, ancestry)
+    }
+    if planes:
+        try:
+            for parent, copy in copies.items():
+                descendants[(2, parent)] = {
+                    child for child in descendants[(2, parent)]
+                    if _claim_evidence(copy, child, tolerance=1e-5, grid=7) != "off"
+                }
+        finally:
+            gmsh.model.occ.remove([(2, tag) for tag in copies.values()], recursive=True)
+            gmsh.model.occ.synchronize()
+        volumes = set().union(*(tags for (dim, _tag), tags in descendants.items() if dim == 3))
+        discard = [(3, tag) for _dim, tag in gmsh.model.getEntities(3) if tag not in volumes]
+        gmsh.model.occ.remove(discard, recursive=False)
+        gmsh.model.occ.synchronize()
+        surfaces = {tag for dim, tag in gmsh.model.getBoundary(
+            [(3, tag) for tag in volumes], combined=False, oriented=False) if dim == 2}
+        surfaces.update(set().union(*(tags for (dim, _tag), tags in descendants.items() if dim == 2)))
+        gmsh.model.occ.remove([(2, tag) for _dim, tag in gmsh.model.getEntities(2)
+                               if tag not in surfaces], recursive=True)
+        gmsh.model.occ.synchronize()
+    return descendants
+
+
 def build_fem_region_mesh(
     step_path: str | Path, region: Mapping[str, Any], *, scratch_dir: str | Path | None = None,
+    normalisation_matrix: Any = None, domain_planes: Sequence[str] = (),
+    cut_planes: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Mesh one validated ``scope.fem_regions[]`` record in the open session.
 
@@ -243,6 +358,22 @@ def build_fem_region_mesh(
         )
         assigned = assign_faces(region, _surface_descriptors(gmsh, boundary))
 
+        if normalisation_matrix is not None:
+            from server.mesh.imported import apply_rigid_normalisation
+            apply_rigid_normalisation(gmsh, [(3, volumes[0])], normalisation_matrix)
+        verify_region_symmetry(gmsh, region, boundary, assigned, domain_planes, cut_planes)
+        if domain_planes:
+            copies = {tag: gmsh.model.occ.copy([(2, tag)])[0][1] for tag in boundary}
+            descendants = fragment_fundamental_domain(
+                gmsh, [(3, volumes[0])], [(2, tag) for tag in copies.values()], domain_planes)
+            volumes = sorted(descendants[(3, volumes[0])])
+            assigned = {group: sorted(set().union(*(descendants[(2, copies[tag])] for tag in tags)))
+                        for group, tags in assigned.items()}
+            boundary = sorted({tag for dim, tag in gmsh.model.getBoundary(
+                [(3, tag) for tag in volumes], combined=False, oriented=False) if dim == 2})
+        caps = symmetry_surfaces(gmsh, boundary, domain_planes)
+        if any(caps.intersection(tags) for tags in assigned.values()):
+            raise FemRegionMeshError(f"FEM region {region_id!r} declares a boundary on a symmetry plane")
         names: dict[str, dict[str, Any]] = {}
         volume_name = physical_name(region_id)
         tag = gmsh.model.addPhysicalGroup(3, volumes)
@@ -253,6 +384,8 @@ def build_fem_region_mesh(
         for group in region.get("surface_groups") or ():
             group_id = str(group["group_id"])
             surfaces = assigned[group_id]
+            if not surfaces:
+                raise FemRegionMeshError(f"FEM region {region_id!r}, group {group_id!r} disappeared under symmetry")
             claimed.update(surfaces)
             name = physical_name(region_id, group_id, str(group["kind"]))
             tag = gmsh.model.addPhysicalGroup(2, surfaces)
@@ -266,7 +399,13 @@ def build_fem_region_mesh(
                 **({"drive_channel_id": group["drive_channel_id"]} if group.get("drive_channel_id") else {}),
             }
             sized.append((surfaces, float(group["mesh_size_mm"])))
-        walls = [surface for surface in boundary if surface not in claimed]
+        if caps:
+            name = physical_name(region_id, SYMMETRY_GROUP_ID, "rigid")
+            tag = gmsh.model.addPhysicalGroup(2, sorted(caps))
+            gmsh.model.setPhysicalName(2, tag, name)
+            names[name] = {"dimension": 2, "tag": tag, "entities": sorted(caps),
+                           "group_id": SYMMETRY_GROUP_ID, "kind": "rigid"}
+        walls = [surface for surface in boundary if surface not in claimed and surface not in caps]
         if walls:
             name = physical_name(region_id, WALLS_GROUP_ID, "rigid")
             tag = gmsh.model.addPhysicalGroup(2, walls)
@@ -302,6 +441,7 @@ def build_fem_region_mesh(
             "region_id": region_id,
             "msh_text": msh_text,
             "physical_names": names,
+            **({"normalisation_matrix": normalisation_matrix} if normalisation_matrix is not None else {}),
             "stats": {
                 "tetrahedra": int(tetrahedra),
                 "nodes": int(len(node_tags)),

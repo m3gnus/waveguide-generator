@@ -361,7 +361,10 @@ def _task_fem_region(
         raise ChildTaskError("the FEM region task received no region record")
     text_evidence = scan_step_text(source)
     scratch = out_dir.parent / "tmp"
-    built = build_fem_region_mesh(source, region, scratch_dir=scratch)
+    built = build_fem_region_mesh(source, region, scratch_dir=scratch,
+                                  normalisation_matrix=payload.get("normalisation_matrix"),
+                                  domain_planes=payload.get("domain_planes", ()),
+                                  cut_planes=payload.get("cut_planes", ()))
     built["stats"] = fem_region_mesh_stats(built, region, scratch_dir=scratch)
     msh_text = built.pop("msh_text")
     built["step_text"] = text_evidence.as_dict()
@@ -395,11 +398,12 @@ def _task_coupled_mesh(
         expected_geometry_hash=payload["expected_geometry_hash"],
         normalisation_matrix=payload["normalisation_matrix"], sizes=payload["sizes"],
         exterior_names=payload["exterior_names"], scratch_dir=out_dir.parent / "tmp",
+        domain_planes=payload.get("domain_planes", ()), cut_planes=payload.get("cut_planes", ()),
     )
     artifacts = {"coupled.msh": _stage(out_dir, "coupled.msh", built["exterior"].pop("msh_text"))}
     for region in regions:
-        if not any(g["kind"] == "interface" for g in region["surface_groups"]):
-            continue  # Interior-only regions were included for geometry checks.
+        if region["region_id"] not in built["regions"]:
+            continue  # Full-domain interior-only regions use the independent mesh child.
         name = f"region-{region['region_id']}.msh"
         artifacts[name] = _stage(out_dir, name, built["regions"][region["region_id"]].pop("msh_text"))
     return {"built": built}, artifacts

@@ -318,6 +318,6 @@ def solve_coupled_compiled(request, **callbacks):
     options = request.wire["solver_options"]
     if options.get("bem_backend") != "cpu" or options.get("precision") != "float64":
         raise ValueError("FEM regions require CPU float64")
-    if options.get("symmetry") != "off":
-        raise ValueError("FEM regions require a full domain without a ground plane")
+    if options.get("symmetry") not in {"off", "x", "xy"}:
+        raise ValueError("FEM regions support off, x and xy symmetry without a ground plane")
     return solve_compiled(request, _coupled=True, **callbacks)

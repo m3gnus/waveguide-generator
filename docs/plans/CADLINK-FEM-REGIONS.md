@@ -136,6 +136,70 @@ F6 to F9 must land in order. F10 and F11 can follow F8.
    remesh the interface patch and conform the FEM side? Boundary Lab treats
    the FEM facets as authoritative.
 
+## Symmetry
+
+The existing exterior contract is the symmetry authority. WGLink's
+`reduced-domain-v1` declares `assembly.domain` with `cut_planes` (`x0`, `y0`
+or both), a matching half/quarter kind and `declared_by`. An author-cut return
+is verified as an open exterior skin in that domain. For full returns, WG's
+`auto_cut_occ_geometry` mirror-tests both geometry and surface roles and
+intersects the accepted positive half-spaces. The stored
+`symmetry.domain_planes` includes author and WG cuts; `cut_planes` alone only
+lists WG cuts. Mesh verification permits free edges only on those planes.
+
+`beat_adapter/request.py::_image_frame` maps WG `yz` to BEAT `x`, `yz+xz` to
+`xy`, and rotates a WG `xz` (y-only) half to BEAT `x` by a proper rotation.
+Mesh coordinates and observation points use the same image frame. BEAT
+evaluates reflected exterior images itself; neither pressure nor SPL receives
+an additional factor of two or four. FEM previously refused any reduced domain
+in intake, job admission and `coupled_request.py`.
+
+The supplied parity research cites Boundary Lab's
+[Coupled Solver documentation](https://github.com/m3gnus/boundary-lab/blob/HEAD/docs/Coupled%20Solver.md)
+and [Interior FEM Solver documentation](https://github.com/m3gnus/boundary-lab/blob/HEAD/docs/advanced/Interior%20FEM%20Solver.md):
+both support off/x/xy, with symmetry-aware interfaces. Completion and driver
+orbit are inferred from moving-surface perimeters on the planes. A fresh
+read-only `gh api` documentation lookup was attempted for this slice but failed
+because GitHub was unreachable; these Boundary Lab findings are therefore
+from the supplied documentation summary, not independently reverified here.
+No Boundary Lab implementation was read or copied.
+
+The pinned BEAT Python contract and `julia_local/BeatEngineCompiledDriver.jl`
+support off/x/xy for `coupled_fem_bem_lem` and `interior_fem`. They snap and
+validate every FEM and BEM vertex in the positive fundamental domain. FEM
+symmetry faces require no load: rigid boundaries give natural Neumann
+conditions. Coupled interfaces retain a one-to-one facet and vertex map,
+including vertices on the planes. Electrodynamic completion is separately
+checked: factors and orbit counts are 1, 2 or 4; completion is
+`2**len(fractional_symmetry_axes)` and completion times orbit must equal the
+image count. The motion axis lies in every cutting plane. F-S2 owns those
+driver rules; F-S1 keeps ideal normal-velocity sources unchanged.
+
+FEM reuses the exterior's accepted planes and positive half-space OCC cut.
+Material, air volumes and interface faces are fragmented in one OCC session,
+then only the fundamental domain is meshed. Generated FEM plane faces are
+`group=_symmetry|kind=rigid`, distinct from `_walls`. The BEM skin excludes
+plane caps and may have open edges only on active planes. Full region geometry
+must mirror with its boundary roles before a WG cut; author-cut regions must
+already lie in the positive domain. Ground planes and infinite baffles remain
+unsupported for FEM in 0.3.6.
+
+The lossless FEM sidecar retains the solved half/quarter topology and scalar
+pressure in WG coordinates. The field response completes that topology by
+reflection for display (with reversed tetrahedron/triangle winding for each
+reflection); pressure is mirrored without rescaling. The F9 viewer thus shows
+the complete symmetric field while solves retain reduced meshes. Exterior
+results use the existing acceleration scaling and SPL convention unchanged.
+
+The opt-in full-versus-reduced CPU far-field qualification is written but must
+be run through the compute broker (complex pressure within 1% for x and xy):
+
+```bash
+WG2_RUN_LIVE=1 WG2_FEM_REGIONS=1 WG2_BEAT_PROVIDER=official python scripts/run_tests.py \
+  server/tests/test_fem_symmetry.py::test_live_full_and_reduced_box_far_field_agree_within_one_percent \
+  -m live -q
+```
+
 
 ## F7 preparation and F8 artifact contract
 
@@ -152,7 +216,8 @@ A return with interface groups additionally retains `record.coupled_exterior`:
 - `physical_names` maps surface names to their tags, entities, boundary `kind`
   and, for moving exterior patches, `drive_channel_id`;
 - `normalisation_matrix` is the complete exterior solver transform, including
-  vertical recentring; `stats.open_edges` is zero.
+  vertical recentring; `stats.open_edges` is zero in full domains and may count
+  only symmetry-plane edges in reduced domains.
 
 F8 reads this surface with `read_verified_coupled_exterior_mesh(record)` and
 `read_coupled_exterior(text)`. The latter returns points in **millimetres** and
@@ -214,11 +279,13 @@ The coupled skin uses the region/group mesh sizes and exterior rigid/source
 sizes, without the exterior-only mesh's transition grading (`transition_mm`).
 Finer region groups still blend back to their region size over three region sizes.
 
-Any declared region under an applied or declared reduced domain refuses in
-ingest. Ingest does not receive infinite-baffle or ground-plane solve settings;
+Declared regions follow the applied exterior x0/y0 reduced domain as described
+in Symmetry above. The region boundary roles must mirror on WG-cut planes;
+author-cut regions must already lie in the positive fundamental domain.
+Ingest does not receive infinite-baffle or ground-plane solve settings;
 their domain refusal is enforced at F8 job admission. A finite, explicitly
-modelled baffle is supported. F8 must also refuse reduced domains at admission,
-since a later solve setup can introduce them after ingest.
+modelled baffle is supported. The solve uses the stored mesh's symmetry,
+including the same observation frame and image mode as exterior-only solves.
 
 Plane-wave terminations are interior-only. A termination combined with a
 painted exterior source or an interface in any region is a blocking ingest
@@ -260,7 +327,8 @@ exterior sources; next to painted sources it must use one of their channels.
 `validation_diagnostics` is sent as false, which in the pinned engine also selects
 the statically condensed (Schur) solver; interior nodal pressure is still
 reconstructed.
-Reduced domains, ground planes, HBB and other backends refuse.
+Ground planes, infinite baffles, HBB and other backends refuse. The official
+CPU route accepts off/x/xy symmetry.
 
 **0.3.6 limitation:** the contract-2 coupled route supports ideal normal-velocity
 drives only. Any `exterior_transducer`, legacy driver, patch weights, axial
@@ -300,6 +368,8 @@ The NPZ is readable with `numpy.load(..., allow_pickle=False)`:
 - `frequencies_hz`: float64 frequency axis in execution order;
 - `channel_ids`: string drive-channel ids, in excitation order;
 - `region_ids`: string region ids, in compiled FEM-domain order;
+- `symmetry_planes`: optional string array of WG `x0`/`y0` planes; absent in
+  older full-domain sidecars. Display mirrors these planes in WG coordinates;
 - `pressure`: complex128, shape `(frequency, channel, total_fem_nodes)`, Pa
   per unit acceleration. Nodes concatenate in `region_ids` order;
 - `points_mm_<r>`: float64 `(node, 3)` coordinates for region index `r`;
