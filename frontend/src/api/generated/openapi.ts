@@ -3642,6 +3642,7 @@ export interface components {
             cms_m_per_n: number;
             /** Le H */
             le_h: number;
+            lumped_sealed_rear_chamber?: components["schemas"]["LumpedSealedRearChamberSpec"] | null;
             /** Mmd Kg */
             mmd_kg: number;
             /** Motion Axis */
@@ -3654,12 +3655,13 @@ export interface components {
             re_ohm: number;
             /** Rms N S Per M */
             rms_n_s_per_m: number;
+            semi_inductance?: components["schemas"]["SemiInductanceSpec"] | null;
             /**
              * Version
              * @default 1
-             * @constant
+             * @enum {integer}
              */
-            version?: 1;
+            version?: 1 | 2;
         };
         /** FemFieldPresentation */
         FemFieldPresentation: {
@@ -4608,6 +4610,19 @@ export interface components {
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
         };
+        /**
+         * LumpedSealedRearChamberSpec
+         * @description Lossless sealed compliance; Sd is derived from the moving mesh faces.
+         */
+        LumpedSealedRearChamberSpec: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled?: boolean;
+            /** Volume M3 */
+            volume_m3?: number | null;
+        };
         /** ManualSolveOperationRequest */
         ManualSolveOperationRequest: {
             /** Ingestid */
@@ -5462,6 +5477,27 @@ export interface components {
         SelectWorkspaceRequest: {
             /** Path */
             path: string;
+        };
+        /**
+         * SemiInductanceSpec
+         * @description Engine Thorborg–Futtrup model; Ke has units H/sqrt(s).
+         */
+        SemiInductanceSpec: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled?: boolean;
+            /** Ke Semi H */
+            ke_semi_h?: number | null;
+            /** Le H */
+            le_h?: number | null;
+            /** Leb H */
+            leb_h?: number | null;
+            /** Re Prime Ohm */
+            re_prime_ohm?: number | null;
+            /** Rss Ohm */
+            rss_ohm?: number | null;
         };
         /** SetupRevisionRequest */
         SetupRevisionRequest: {

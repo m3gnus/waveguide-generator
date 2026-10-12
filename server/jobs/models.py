@@ -340,9 +340,52 @@ class ParametricGeometrySource(JobModel):
         return self
 
 
+PositiveTransducerScalar = Annotated[float, Field(gt=0, strict=True, allow_inf_nan=False)]
+
+
+class SemiInductanceSpec(JobModel):
+    """Engine Thorborg–Futtrup model; Ke has units H/sqrt(s)."""
+
+    enabled: bool = Field(default=False, strict=True)
+    re_prime_ohm: PositiveTransducerScalar | None = None
+    leb_h: PositiveTransducerScalar | None = None
+    le_h: PositiveTransducerScalar | None = None
+    ke_semi_h: PositiveTransducerScalar | None = None
+    rss_ohm: PositiveTransducerScalar | None = None
+
+    @model_validator(mode="after")
+    def require_enabled_parameters(self):
+        if self.enabled and any(getattr(self, name) is None for name in type(self).model_fields if name != "enabled"):
+            raise ValueError("enabled semi_inductance requires Re′, Leb, Le, Ke and Rss")
+        return self
+
+    @model_serializer(mode="wrap")
+    def omit_absent_parameters(self, handler):
+        return {key: value for key, value in handler(self).items() if value is not None}
+
+
+class LumpedSealedRearChamberSpec(JobModel):
+    """Lossless sealed compliance; Sd is derived from the moving mesh faces."""
+
+    enabled: bool = Field(default=False, strict=True)
+    volume_m3: PositiveTransducerScalar | None = None
+
+    @model_validator(mode="after")
+    def require_enabled_volume(self):
+        if self.enabled and self.volume_m3 is None:
+            raise ValueError("enabled lumped_sealed_rear_chamber requires volume_m3")
+        return self
+
+    @model_serializer(mode="wrap")
+    def omit_absent_parameters(self, handler):
+        return {key: value for key, value in handler(self).items() if value is not None}
+
+
 class ExteriorTransducerSpec(JobModel):
     """Opt-in BEAT bare-driver coordinate; SI scalars, global axis, RMS volts."""
-    version: Literal[1] = 1
+    version: Literal[1, 2] = 1
+    semi_inductance: SemiInductanceSpec | None = None
+    lumped_sealed_rear_chamber: LumpedSealedRearChamberSpec | None = None
     re_ohm: float = Field(gt=0, strict=True, allow_inf_nan=False)
     le_h: float = Field(ge=0, strict=True, allow_inf_nan=False)
     bl_n_per_a: float = Field(gt=0, strict=True, allow_inf_nan=False)
@@ -353,8 +396,18 @@ class ExteriorTransducerSpec(JobModel):
                        Annotated[float, Field(strict=True, allow_inf_nan=False)],
                        Annotated[float, Field(strict=True, allow_inf_nan=False)]]
 
+    @model_serializer(mode="wrap")
+    def omit_absent_options(self, handler):
+        wire = handler(self)
+        for name in ("semi_inductance", "lumped_sealed_rear_chamber"):
+            if getattr(self, name) is None:
+                wire.pop(name, None)
+        return wire
+
     @model_validator(mode="after")
     def nonzero_axis(self):
+        if self.version == 1 and (self.semi_inductance is not None or self.lumped_sealed_rear_chamber is not None):
+            raise ValueError("transducer options require version 2")
         if not any(self.motion_axis):
             raise ValueError("transducer motion_axis must be nonzero")
         return self

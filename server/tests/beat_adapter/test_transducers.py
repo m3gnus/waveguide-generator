@@ -268,3 +268,80 @@ def test_installed_qualification_refuses_changed_dispatched_numerical_bytes(tmp_
     hashes.pop(required[0])
     with pytest.raises(ValueError, match="omitted required"):
         validate_installed_provenance(provenance, tmp_path)
+
+
+SEMI = dict(enabled=True, re_prime_ohm=5.5, leb_h=.0001, le_h=.002,
+            ke_semi_h=.03, rss_ohm=20.)
+
+
+def test_absent_options_keep_original_request_bytes(built):
+    import hashlib
+
+    # Frozen from the v1 builder before the optional physical models were added.
+    encoded = json.dumps(built.wire, allow_nan=False, separators=(",", ":")).encode()
+    assert hashlib.sha256(encoded).hexdigest() == "7b89d3dbb9459b295ebabaeec5b2abfeda334c0bc42aedf29f073260f38ec7c2"
+
+
+def test_optional_models_match_engine_contract(mesh, layout, official_contract):
+    compiled = t.build_transducer_request(
+        mesh, drivers=[driver(tags=(2,), semi_inductance=SEMI,
+                              lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))],
+        layout=layout, frame=FRAME, frequencies_hz=[100])
+    official_contract(compiled)
+    params = compiled.wire["compiled_system"]["components"][0]["parameters"]
+    assert params["semi_inductance"] == SEMI
+    assert params["lumped_sealed_rear_chamber"] == dict(enabled=True, volume_m3=.01, projected_area_m2=.5)
+    assert compiled.warnings == ()
+
+
+def test_disabled_models_match_engine_contract(mesh, layout, official_contract):
+    compiled = t.build_transducer_request(
+        mesh, drivers=[driver(semi_inductance=dict(enabled=False),
+                              lumped_sealed_rear_chamber=dict(enabled=False))],
+        layout=layout, frame=FRAME, frequencies_hz=[100])
+    official_contract(compiled)
+    assert compiled.warnings == ()
+
+
+@pytest.mark.parametrize("name,raw", [
+    ("semi_inductance", {**SEMI, "rss_ohm": 0}),
+    ("semi_inductance", {**SEMI, "enabled": 1}),
+    ("semi_inductance", {**SEMI, "ke_semi_h": True}),
+    ("semi_inductance", {**SEMI, "leb_h": float("inf")}),
+    ("semi_inductance", {"enabled": True}),
+    ("semi_inductance", {"enabled": False, "le_h": -1}),
+    ("lumped_sealed_rear_chamber", {"enabled": True, "volume_m3": float("nan")}),
+    ("lumped_sealed_rear_chamber", {"enabled": True, "volume_m3": True}),
+    ("lumped_sealed_rear_chamber", {"enabled": True, "volume_m3": .01, "loss_factor": .01}),
+])
+def test_refuse_invalid_optional_engine_models(mesh, layout, name, raw):
+    with pytest.raises(UnsupportedPhysics):
+        t.build_transducer_request(mesh, drivers=[driver(**{name: raw})],
+                                   layout=layout, frame=FRAME, frequencies_hz=[100])
+
+
+def test_projected_area_uses_mean_and_warns_only_above_ten_percent():
+    front = np.array([[0, 0, 0], [2, 0, 0], [0, 1, 0]], dtype=float)  # 1 m²
+    rear = front[[0, 2, 1]].copy()
+    rear[:, 0] *= .8
+    area, warning = t.projected_driver_area(np.stack([front, rear]), [0, 0, 10])
+    assert area == pytest.approx(.9)
+    assert "10%" in warning
+    area, warning = t.projected_driver_area(np.stack([front, front[[0, 2, 1]]]), [0, 0, -1])
+    assert area == 1
+    assert warning is None
+    rear[:, 0] /= .8
+    rear[:, 0] *= .95
+    assert t.projected_driver_area(np.stack([front, rear]), [0, 0, 1])[1] is None
+    with pytest.raises(UnsupportedPhysics, match="projected_area"):
+        t.projected_driver_area(np.stack([front]), [1, 0, 0])
+
+
+def test_front_rear_area_warning_is_retained(mesh, layout):
+    with pytest.warns(UserWarning, match="10%"):
+        compiled = t.build_transducer_request(
+            mesh, drivers=[driver(tags=(2, 5), axis=[1, 1, 1],
+                                  lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))],
+            layout=layout, frame=FRAME, frequencies_hz=[100])
+    assert len(compiled.warnings) == 1
+    assert "driver:" in compiled.warnings[0]

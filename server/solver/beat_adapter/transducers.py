@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import math
 from typing import Any
 from urllib.parse import quote
+import warnings
 
 import numpy as np
 
@@ -43,6 +44,8 @@ class ExteriorDriver:
     mmd_kg: float
     cms_m_per_n: float
     rms_n_s_per_m: float
+    semi_inductance: Mapping[str, Any] | None = None
+    lumped_sealed_rear_chamber: Mapping[str, Any] | None = None
 
     @property
     def component_id(self) -> str:
@@ -60,6 +63,58 @@ def _positive(value: Any, name: str, *, zero: bool = False) -> float:
     return float(value)
 
 
+SEMI_INDUCTANCE_SCALARS = ("re_prime_ohm", "leb_h", "le_h", "ke_semi_h", "rss_ohm")
+
+
+def validate_driver_option(raw: Any, name: str, scalars: Sequence[str]) -> None:
+    """Mirror the engine's strict optional model semantics, including disabled models."""
+    if not isinstance(raw, Mapping) or set(raw) - {"enabled", *scalars}:
+        raise UnsupportedPhysics(f"{name} requires an object with known parameters")
+    if not isinstance(raw.get("enabled", False), bool):
+        raise UnsupportedPhysics(f"{name}.enabled must be boolean")
+    for key in scalars:
+        if raw.get("enabled", False) or key in raw:
+            _positive(raw.get(key), f"{name}.{key}")
+
+
+def projected_driver_area(triangles_m: np.ndarray, axis: Sequence[float]) -> tuple[float, str | None]:
+    """Sd from declared moving faces, reusable for FEM/BEM diaphragms.
+
+    Sum each side's projected areas; use their mean when both sides are
+    declared. A single exterior diaphragm uses its existing projected Sd.
+    """
+    direction = np.asarray(axis, dtype=float)
+    if direction.shape != (3,) or not np.isfinite(direction).all() or not np.any(direction):
+        raise UnsupportedPhysics("moving faces require a finite nonzero motion axis")
+    direction = direction / np.max(np.abs(direction))
+    direction = direction / np.linalg.norm(direction)
+    triangles = np.asarray(triangles_m, dtype=float)
+    signed = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]) @ direction / 2
+    front, rear = float(signed[signed > 0].sum()), float(-signed[signed < 0].sum())
+    area = (front + rear) / 2 if front > 0 and rear > 0 else front + rear
+    _positive(area, "moving faces projected_area_m2")
+    warning = None
+    if front > 0 and rear > 0 and abs(front - rear) / area > 0.1:
+        warning = "Front and rear moving-face projected areas differ by more than 10%; sealed rear chamber uses their mean."
+    return area, warning
+
+
+def driver_parameters(driver: ExteriorDriver, axis: Sequence[float], *, projected_area_m2: float | None = None) -> dict[str, Any]:
+    """Common engine parameters for exterior and future coupled transducer routes."""
+    params = {**{name: _positive(getattr(driver, name), name, zero=name == "le_h") for name in DRIVER_SCALARS},
+              "motion_profile": "rigid_translation", "motion_axis": list(axis)}
+    if driver.semi_inductance is not None:
+        validate_driver_option(driver.semi_inductance, "semi_inductance", SEMI_INDUCTANCE_SCALARS)
+        params["semi_inductance"] = dict(driver.semi_inductance)
+    if driver.lumped_sealed_rear_chamber is not None:
+        chamber = dict(driver.lumped_sealed_rear_chamber)
+        validate_driver_option(chamber, "lumped_sealed_rear_chamber", ("volume_m3",))
+        if chamber.get("enabled", False):
+            chamber["projected_area_m2"] = _positive(projected_area_m2, "projected_area_m2")
+        params["lumped_sealed_rear_chamber"] = chamber
+    return params
+
+
 def outputs(layout: ObservationLayout) -> list[dict[str, Any]]:
     return layout.exterior_outputs() + [
         {"id": kind, "quantity": kind, "target_ids": [], "options": {}}
@@ -72,6 +127,7 @@ class TransducerRequest:
     wire: dict[str, Any]
     layout: ObservationLayout
     mesh: SurfaceMesh
+    warnings: tuple[str, ...] = ()
 
     @property
     def transducer_ids(self) -> tuple[str, ...]:
@@ -129,14 +185,21 @@ def build_transducer_request(
     components = system["components"][:len(ideal_sources)]
     ports = system["excitation_ports"][:len(ideal_sources)]
     offset = len(ideal_sources)
+    area_warnings = []
     for driver in drivers:
         axis = system["components"][offset]["parameters"]["motion_axis"]
         offset += len(driver.tags)
+        area = None
+        if driver.lumped_sealed_rear_chamber is not None and driver.lumped_sealed_rear_chamber.get("enabled", False):
+            selected = np.isin(prepared.mesh.tags, driver.tags)
+            area, warning = projected_driver_area(prepared.mesh.points_m[prepared.mesh.faces[selected]], axis)
+            if warning:
+                area_warnings.append(f"{driver.id}: {warning}")
+                warnings.warn(area_warnings[-1], UserWarning, stacklevel=2)
         components.append({"id": driver.component_id, "name": driver.id,
                            "kind": "electrodynamic_transducer",
                            "boundary_ids": [f"boundary:tag:{tag}" for tag in driver.tags],
-                           "parameters": {**{name: float(getattr(driver, name)) for name in DRIVER_SCALARS},
-                                          "motion_profile": "rigid_translation", "motion_axis": axis}})
+                           "parameters": driver_parameters(driver, axis, projected_area_m2=area)})
         ports.append({"id": driver.port_id, "name": driver.id,
                       "component_id": driver.component_id, "kind": "voltage"})
     requested = list(excitation_port_ids) if excitation_port_ids is not None else [d.port_id for d in drivers]
@@ -148,7 +211,7 @@ def build_transducer_request(
                             "undriven_transducer_termination": "shorted"})
     wire.update(excitation_port_ids=requested, outputs=outputs(prepared.layout))
     wire["solver_options"]["transducer_reference_voltage_v"] = voltage
-    request = TransducerRequest(wire, prepared.layout, prepared.mesh)
+    request = TransducerRequest(wire, prepared.layout, prepared.mesh, tuple(area_warnings))
     validate_transducer_request(request)
     return request
 
@@ -183,10 +246,15 @@ def validate_transducer_request(request: TransducerRequest) -> None:
         owned.update(physical)
         if component["kind"] == "electrodynamic_transducer":
             params = component["parameters"]
-            if set(params) != {*DRIVER_SCALARS, "motion_profile", "motion_axis"}:
+            if (set(params) - {*DRIVER_SCALARS, "motion_profile", "motion_axis", "semi_inductance", "lumped_sealed_rear_chamber"}
+                    or {*DRIVER_SCALARS, "motion_profile", "motion_axis"} - set(params)):
                 raise UnsupportedPhysics("WG supports explicit bare driver scalars and rigid translation only")
             for name in DRIVER_SCALARS:
                 _positive(params[name], name, zero=name == "le_h")
+            for name, scalars in (("semi_inductance", SEMI_INDUCTANCE_SCALARS),
+                                  ("lumped_sealed_rear_chamber", ("volume_m3", "projected_area_m2"))):
+                if name in params:
+                    validate_driver_option(params[name], name, scalars)
             if params["motion_profile"] != "rigid_translation":
                 raise UnsupportedPhysics("WG transducers require rigid_translation")
             component["kind"] = "ideal_velocity_source"

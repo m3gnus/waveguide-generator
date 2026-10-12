@@ -4034,6 +4034,16 @@
             "title": "Le H",
             "type": "number"
           },
+          "lumped_sealed_rear_chamber": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LumpedSealedRearChamberSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "mmd_kg": {
             "exclusiveMinimum": 0.0,
             "title": "Mmd Kg",
@@ -4066,9 +4076,22 @@
             "title": "Rms N S Per M",
             "type": "number"
           },
+          "semi_inductance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SemiInductanceSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "version": {
-            "const": 1,
             "default": 1,
+            "enum": [
+              1,
+              2
+            ],
             "title": "Version",
             "type": "integer"
           }
@@ -7358,6 +7381,31 @@
         "title": "LookupConfig",
         "type": "object"
       },
+      "LumpedSealedRearChamberSpec": {
+        "additionalProperties": false,
+        "description": "Lossless sealed compliance; Sd is derived from the moving mesh faces.",
+        "properties": {
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "volume_m3": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume M3"
+          }
+        },
+        "title": "LumpedSealedRearChamberSpec",
+        "type": "object"
+      },
       "ManualSolveOperationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -10300,6 +10348,79 @@
           "path"
         ],
         "title": "SelectWorkspaceRequest",
+        "type": "object"
+      },
+      "SemiInductanceSpec": {
+        "additionalProperties": false,
+        "description": "Engine Thorborg\u2013Futtrup model; Ke has units H/sqrt(s).",
+        "properties": {
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "ke_semi_h": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ke Semi H"
+          },
+          "le_h": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Le H"
+          },
+          "leb_h": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leb H"
+          },
+          "re_prime_ohm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Re Prime Ohm"
+          },
+          "rss_ohm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rss Ohm"
+          }
+        },
+        "title": "SemiInductanceSpec",
         "type": "object"
       },
       "SetupRevisionRequest": {

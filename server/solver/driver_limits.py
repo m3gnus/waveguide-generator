@@ -54,7 +54,8 @@ class MemberLimits:
 
     #: One-way peak cone displacement per frequency at ``drive_voltage_v``, mm.
     excursion_mm: np.ndarray | None
-    #: Real power into the driver terminals per frequency at that voltage, W.
+    #: Power used against the rating, W: real terminal power for legacy LEM,
+    #: or V²/Re (V²/Re′) for native transducer nominal Pmax ratings.
     power_w: np.ndarray | None
     xmax_mm: float | None
     #: Already multiplied by the driver count: parallel drivers share the
@@ -134,6 +135,19 @@ def _resample(values: np.ndarray | None, source_hz: np.ndarray | None, target_hz
     return np.interp(target_hz, source_hz, values)
 
 
+def transducer_power_rating_voltage(spec: Mapping[str, Any], power_w: float) -> float | None:
+    """RMS voltage for a nominal Pmax rating: sqrt(Pmax * Re or enabled Re′).
+
+    This rating is distinct from swept real terminal power. Disabled
+    semi-inductance retains the simple model's Re.
+    """
+    semi = spec.get("semi_inductance")
+    resistance = semi.get("re_prime_ohm") if isinstance(semi, Mapping) and semi.get("enabled") is True else spec.get("re_ohm")
+    resistance = _positive(resistance)
+    power = _positive(power_w)
+    return math.sqrt(power * resistance) if power is not None and resistance is not None else None
+
+
 def member_limits_from_channel(
     channel: Mapping[str, Any] | None,
     *,
@@ -191,6 +205,13 @@ def member_limits_from_channel(
         drive_voltage_v=drive_voltage,
         rg_ohm=rg_ohm,
     )
+
+    if metadata.get("beat_transducer") and rated_one is not None and drive_voltage is not None:
+        rating_voltage = transducer_power_rating_voltage(spec, rated_one)
+        if rating_voltage is not None:
+            # Feed the existing power ceiling the equivalent nominal rating
+            # fraction; real input power remains available from impedance.
+            power = np.full(target.size, rated_one * count * (drive_voltage / rating_voltage) ** 2)
 
     limits = MemberLimits(
         excursion_mm=excursion,

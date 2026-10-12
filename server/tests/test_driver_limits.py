@@ -497,3 +497,19 @@ def test_a_member_trace_stops_where_the_member_stops_playing() -> None:
     # would grant it an absurd level. It is not reported at all.
     assert np.all(np.isnan(values[freqs > 5_000.0]))
     assert {lf["limit"][i] for i in np.flatnonzero(freqs > 5_000.0)} == {None}
+
+
+@pytest.mark.parametrize("enabled,resistance", [(True, 4.), (False, 8.)])
+def test_native_pmax_uses_enabled_re_prime(enabled, resistance):
+    from server.solver.driver_limits import transducer_power_rating_voltage
+
+    spec = {"re_ohm": 8., "power_w": 100.,
+            "semi_inductance": {"enabled": enabled, "re_prime_ohm": 4.}}
+    assert transducer_power_rating_voltage(spec, 100.) == pytest.approx(np.sqrt(100 * resistance))
+    channel = {"metadata": {"beat_transducer": {"version": 1}, "driver": {
+        "spec": spec, "drive_voltage_v": 10., "electrical_impedance_ohm": {
+            "real": [20.], "imaginary": [50.], "frequencies": [100.]}}}}
+    limits = member_limits_from_channel(channel, frequencies_hz=np.array([100.]))
+    ceiling = headroom(limits, np.ones(1))
+    assert ceiling.scale[0] == pytest.approx(np.sqrt(100 * resistance) / 10.)
+    assert ceiling.reason[0] == "power"

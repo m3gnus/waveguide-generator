@@ -266,7 +266,8 @@ def test_result_phase_and_cancelled_prefix(solid, record, monkeypatch):
     assert metadata["impedance_phase_convention"] == "engineering_exp_plus_jwt"
 
 
-def test_job_persistence_and_retry_use_the_explicit_new_contract(tmp_path, solid, monkeypatch):
+@pytest.mark.parametrize("version", [1, 2])
+def test_job_persistence_and_retry_use_the_explicit_new_contract(tmp_path, solid, monkeypatch, version):
     import asyncio
     import json
     from server.engines.registry import EngineInfo
@@ -275,6 +276,12 @@ def test_job_persistence_and_retry_use_the_explicit_new_contract(tmp_path, solid
     from server.tests.test_imported_jobs import _runtime_fixture, _geometry
 
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    from server.tests.beat_adapter.test_transducers import SEMI
+
+    parameters = dict(PARAMETERS)
+    if version == 2:
+        parameters.update(version=2, motion_axis=[1., 1., 1.], semi_inductance=SEMI,
+                          lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))
 
     def native(compiled, **kwargs):
         rows = []
@@ -325,10 +332,10 @@ def test_job_persistence_and_retry_use_the_explicit_new_contract(tmp_path, solid
                 id="left",
                 source_ids=["source-a", "source-b"],
                 motion="axial",
-                exterior_transducer=PARAMETERS,
+                exterior_transducer=parameters,
             ),
             dict(
-                id="right", source_ids=["source-c"], motion="axial", exterior_transducer=PARAMETERS
+                id="right", source_ids=["source-c"], motion="axial", exterior_transducer=parameters
             ),
         ]
         submitted = SolveRequest.model_validate(
@@ -356,6 +363,7 @@ def test_job_persistence_and_retry_use_the_explicit_new_contract(tmp_path, solid
             assert persisted["channels"]["left"]["metadata"]["beat_transducer"]["version"] == 1
             item = await runtime.get_job(job_id)
             assert item["cad_setup"]["drive_channels"][0]["exterior_transducer"]["mmd_kg"] == 0.02
+            assert item["cad_setup"]["drive_channels"][0]["exterior_transducer"] == parameters
             child = await runtime.retry(job_id)
             assert child != job_id
             replay = runtime.store.get_job_row(child)
@@ -364,3 +372,68 @@ def test_job_persistence_and_retry_use_the_explicit_new_contract(tmp_path, solid
             await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("option,raw", [
+    ("semi_inductance", {"enabled": True}),
+    ("semi_inductance", {"enabled": 1}),
+    ("semi_inductance", {"enabled": False, "re_prime_ohm": True}),
+    ("semi_inductance", {"enabled": False, "le_h": float("inf")}),
+    ("semi_inductance", {"enabled": False, "rss_ohm": 0.}),
+    ("semi_inductance", {"enabled": False, "unknown": 1}),
+    ("lumped_sealed_rear_chamber", {"enabled": True}),
+    ("lumped_sealed_rear_chamber", {"enabled": False, "volume_m3": -1.}),
+    ("lumped_sealed_rear_chamber", {"enabled": True, "volume_m3": .01, "projected_area_m2": .02}),
+])
+def test_optional_spec_validation(option, raw):
+    from server.jobs.models import ExteriorTransducerSpec
+
+    with pytest.raises(ValidationError):
+        ExteriorTransducerSpec(**{**PARAMETERS, "version": 2, option: raw})
+
+
+def test_v1_exact_serialization_and_v2_driver_mapping(record):
+    import json
+    from server.jobs.models import ExteriorTransducerSpec
+    from server.tests.beat_adapter.test_transducers import SEMI
+
+    assert ExteriorTransducerSpec(**PARAMETERS).model_dump_json() == json.dumps(PARAMETERS, separators=(",", ":"))
+    options = dict(semi_inductance=SEMI, lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))
+    with pytest.raises(ValidationError, match="version 2"):
+        ExteriorTransducerSpec(**PARAMETERS, **options)
+    payload = request().model_dump(mode="json")
+    for channel in payload["geometry"]["drive_channels"]:
+        channel["exterior_transducer"].update(version=2, **options)
+    restored = SolveRequest.model_validate(payload)
+    assert restored.model_dump(mode="json") == payload
+    mapped = jobs.drivers_for(record, restored.geometry.drive_channels)
+    assert mapped[0].semi_inductance == SEMI
+    assert mapped[0].lumped_sealed_rear_chamber == options["lumped_sealed_rear_chamber"]
+
+
+def test_v2_route_retains_engine_parameters_and_area_warning(solid, record, monkeypatch):
+    from server.solver import official_beat
+    from server.tests.beat_adapter.test_transducers import SEMI
+
+    payload = request().model_dump(mode="json")
+    for channel in payload["geometry"]["drive_channels"]:
+        channel["exterior_transducer"].update(
+            version=2, motion_axis=[1., 1., 1.], semi_inductance=SEMI,
+            lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))
+    captured = []
+
+    def solve(compiled, **kwargs):
+        captured.append(compiled)
+        return TransducerSweep(tuple(parse_transducer_frequency(raw(compiled, f), compiled, f)
+                                     for f in [100., 500.]), False, 2)
+
+    monkeypatch.setattr(official_beat, "solve_transducer_compiled", solve)
+    monkeypatch.setattr(official_beat, "engine_version", lambda: "test")
+    with pytest.warns(UserWarning, match="shorted:.*10%"):
+        result = jobs.solve(solid, SolveRequest.model_validate(payload), record, backend="cpu")
+    params = captured[0].wire["compiled_system"]["components"][1]["parameters"]
+    assert params["semi_inductance"] == SEMI
+    assert params["lumped_sealed_rear_chamber"]["projected_area_m2"] == pytest.approx(1 / np.sqrt(3))
+    assert "10%" in result["channels"]["shorted"]["metadata"]["warnings"][0]
+    spec = result["channels"]["shorted"]["metadata"]["driver"]["spec"]
+    assert spec["semi_inductance"] == SEMI

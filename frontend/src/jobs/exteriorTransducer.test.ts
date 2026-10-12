@@ -67,3 +67,63 @@ it('requires clearing the mechanical coordinate before source reassignment', () 
   useCadReturnStore.getState().setSourceChannel('s', 'different');
   expect(useCadReturnStore.getState().driveChannels[0]).toEqual({ id: 'd', source_ids: ['s'], motion: 'axial', exterior_transducer: form });
 });
+
+const semi = { enabled: true, re_prime_ohm: 5.5, leb_h: .0001, le_h: .002, ke_semi_h: .03, rss_ohm: 20 };
+
+it('passes and persists v2 physical models without a user-supplied Sd', () => {
+  enable();
+  const extended = { ...form, version: 2, semi_inductance: semi,
+    lumped_sealed_rear_chamber: { enabled: true, volume_m3: .01 } };
+  useCadReturnStore.getState().setExteriorTransducer('d', extended);
+  expect(parseExteriorTransducer(JSON.parse(JSON.stringify(extended)))).toEqual(extended);
+  expect(exteriorTransducerError(extended)).toBeNull();
+  expect(buildImportedSubmission().geometry.drive_channels[0].exterior_transducer).toEqual(extended);
+  useCadReturnStore.setState({ selectedBundle: { sources: [{ id: 's', role: 'LF', required: true }] } as never });
+  const setup = buildCadProjectSetup(useCadReturnStore.getState(), useSolveOptionsStore.getState(), undefined, 'lineage')!;
+  const savedChannels = setup.setup.geometry.drive_channels as Array<{ exterior_transducer: unknown }>;
+  const saved = JSON.parse(JSON.stringify(savedChannels[0].exterior_transducer));
+  expect(parseExteriorTransducer(saved)).toEqual(extended);
+  // Switching models off retains their editable values in a setup.
+  const disabled = { ...extended, semi_inductance: { ...semi, enabled: false },
+    lumped_sealed_rear_chamber: { enabled: false, volume_m3: .01 } };
+  expect(parseExteriorTransducer(disabled)).toEqual(disabled);
+  expect(exteriorTransducerError(disabled)).toBeNull();
+  expect(parseExteriorTransducer(form)).toEqual(form);
+});
+
+it('blocks malformed, incomplete and unsupported v2 options rather than dropping them', () => {
+  enable();
+  for (const options of [
+    { semi_inductance: { enabled: true } },
+    { semi_inductance: { ...semi, enabled: 1 } },
+    { semi_inductance: { ...semi, le_h: 0 } },
+    { semi_inductance: { ...semi, ke_semi_h: -1 } },
+    { semi_inductance: { ...semi, leb_h: Infinity } },
+    { semi_inductance: { ...semi, rss_ohm: true } },
+    { semi_inductance: { ...semi, extra: 1 } },
+    { lumped_sealed_rear_chamber: { enabled: true } },
+    { lumped_sealed_rear_chamber: { enabled: true, volume_m3: 0 } },
+    { lumped_sealed_rear_chamber: { enabled: true, volume_m3: .01, projected_area_m2: .02 } },
+    { lumped_sealed_rear_chamber: null },
+  ]) {
+    const parsed = parseExteriorTransducer({ ...form, version: 2, ...options });
+    expect(exteriorTransducerError(parsed)).not.toBeNull();
+    useCadReturnStore.getState().setExteriorTransducer('d', parsed);
+    expect(() => buildImportedSubmission()).toThrow();
+  }
+});
+
+it('restores v2 driver options through the persisted CAD profile parser', () => {
+  localStorage.clear();
+  const bundle = { name: 'driver.wgreturn', bundlePath: 'wgreturn/driver.wgreturn', modifiedAt: '2026-08-11T00:00:00Z', readable: true,
+    documentName: 'Driver', requestId: null, sourceCount: 1, instanceCount: 1,
+    sources: [{ id: 's', role: 'LF', required: true, suggestedResolutionMm: 3, defaultDriveChannelId: 'd' }] };
+  useCadReturnStore.getState().selectBundle(bundle, 'driver-project');
+  const extended = { ...form, version: 2, semi_inductance: semi,
+    lumped_sealed_rear_chamber: { enabled: true, volume_m3: .01 } };
+  useCadReturnStore.getState().setExteriorTransducer('d', extended);
+  resetCadReturnStore();
+  useCadReturnStore.getState().selectBundle(bundle, 'driver-project');
+  expect(useCadReturnStore.getState().driveChannels[0].exterior_transducer).toEqual(extended);
+  localStorage.clear();
+});

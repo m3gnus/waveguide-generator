@@ -1,6 +1,7 @@
 import { registerParameterPanel } from './parameterPanelValidity';
 import { nativeCadLimitation, nativeSymmetryLimitation } from './nativeFamilies';
 import { EnclosureResolutionField } from './EnclosureResolutionField';
+import { ExteriorDriverOptions } from './ExteriorDriverOptions';
 import { EXTERIOR_FIELDS } from '../stores/exteriorTransducer';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -1050,6 +1051,8 @@ function CadDriveChannels() {
               <span>{label} ({unit}) *</span><input type="number" aria-label={`${label} for ${channel.id}`} value={channel.exterior_transducer?.[key] ?? ''}
                 onChange={event => state.setExteriorTransducer(channel.id, { ...channel.exterior_transducer!, [key]: event.target.value === '' ? undefined : Number(event.target.value) })}/>
             </label>)}</div>
+            <ExteriorDriverOptions channelId={channel.id} form={channel.exterior_transducer}
+              onChange={form => state.setExteriorTransducer(channel.id, form)}/>
             <p className="cad-driver-hint">Motion axis in the returned mesh frame:</p>
             <div className="cad-driver-grid">{['x', 'y', 'z'].map((axis, index) => <label key={axis}><span>{axis}</span>
               <input type="number" aria-label={`Motion axis ${axis} for ${channel.id}`} value={channel.exterior_transducer!.motion_axis[index]}

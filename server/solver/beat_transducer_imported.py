@@ -192,6 +192,8 @@ def package_sweep(
             f"transducer:{quote(channel.id, safe='')}"
         )
         excursion = [float(row.excursion_peak_mm[port_index, driver_index]) for row in sweep.rows]
+        if compiled.warnings:
+            response["metadata"]["warnings"] = list(compiled.warnings)
         response["impedance"] = impedance
         response["metadata"].update(
             impedance_units="ohms",
@@ -201,6 +203,8 @@ def package_sweep(
             source_normalization="native_rms_voltage",
             drive={"voltage_v": geometry.drive_voltage_v, "rg_ohm": 0.0},
             driver={
+                **({"spec": channel.exterior_transducer.model_dump(mode="json")}
+                   if channel.exterior_transducer.version == 2 else {}),
                 "label": channel.id,
                 "drive_voltage_v": geometry.drive_voltage_v,
                 "rg_ohm": 0.0,
