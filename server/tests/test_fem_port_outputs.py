@@ -50,6 +50,7 @@ def test_port_drive_basis_phase_and_linearity_at_every_observation(voltage, prec
     assert ports['reference_voltage_rms_v'] == (request.wire['solver_options']['transducer_reference_voltage_v'] if voltage else None)
     assert ports['velocity_units'] == 'm/s' and ports['pressure_units'] == 'Pa'
     assert ports['normal_orientation'] == 'bounded_region_outward'
+    assert ports['full_model_area_description'] == 'Area of this port and all its symmetry images; not the full model surface area'
     for name in request.layout.planes:
         port_sum = sum(phasors(p['radiated_pressure'][name]) for p in ports['interfaces'])
         other = phasors(ports['other_exterior_radiated_pressure'][name])

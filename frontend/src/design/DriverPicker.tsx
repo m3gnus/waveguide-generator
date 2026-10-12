@@ -1,3 +1,4 @@
+import { prefillExteriorDriver } from '../stores/exteriorTransducer';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   getDriver,
@@ -919,4 +920,17 @@ export function ChannelDriverPicker({ channel, form, roleHint }: {
     {sheetOpen && preset !== null && form
       && <DriverSheet channel={channel} form={form} onClose={() => setSheetOpen(false)}/>}
   </div>;
+}
+
+/** Use the existing library search to prefill the explicit BEAT driver options. */
+export function ExteriorDriverLibraryPicker({ channel, roleHint }: { channel: CadDriveChannel; roleHint?: string }) {
+  const info = useDriverLibraryStore((store) => store.info);
+  const load = useDriverLibraryStore((store) => store.load);
+  const counts = useMemo(() => driverKindCounts(info), [info]);
+  useEffect(() => { void load(); }, [load]);
+  return <DriverSearch channel={channel} roleHint={roleHint} counts={counts} onPick={picked => {
+    const state = useCadReturnStore.getState();
+    const form = state.driveChannels.find(c => c.id === channel.id)?.exterior_transducer;
+    if (form) state.setExteriorTransducer(channel.id, prefillExteriorDriver(form, picked.base));
+  }}/>;
 }

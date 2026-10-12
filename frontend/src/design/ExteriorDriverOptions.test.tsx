@@ -107,3 +107,17 @@ it('keeps v2 when ratings remain and returns to v1 when they are cleared', () =>
   enter('Xmax', '');
   expect(form.version).toBe(1);
 });
+
+it('stores typed Sd in m², validates positivity, and returns to v1 when cleared', () => {
+  const original = JSON.stringify(form);
+  enter('Sd', '220');
+  expect(form.sd_m2).toBe(.022);
+  expect(form.version).toBe(2);
+  expect(exteriorTransducerError(form)).toBeNull();
+  expect(host.textContent).toContain('Declared Sd controls chamber stiffness');
+  enter('Sd', '0');
+  expect(exteriorTransducerError(form)).toContain('positive Sd');
+  enter('Sd', '');
+  expect(form.version).toBe(1);
+  expect(JSON.stringify(form)).toBe(original);
+});

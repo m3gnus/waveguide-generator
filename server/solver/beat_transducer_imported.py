@@ -25,7 +25,7 @@ from typing import Any
 from .beat_adapter.mesh import read_surface
 from .beat_adapter.request import _layout
 from .beat_adapter.results import SweepResult
-from .beat_adapter.transducers import ExteriorDriver, TransducerSweep, build_transducer_request
+from .beat_adapter.transducers import ExteriorDriver, TransducerSweep, build_transducer_request, resolve_driver_sd
 
 from .context import SolverContext
 from .frequency_sweep import canonical_frequencies
@@ -82,7 +82,11 @@ def preflight(record: Mapping, msh_text: str, channels: Sequence, *, backend: st
                 raise ValueError(
                     "Every exterior solid must have outward face orientation and positive volume"
                 )
-        drivers_for(record, channels)
+        for driver in drivers_for(record, channels):
+            faces = mesh.faces[np.isin(mesh.tags, driver.tags)]
+            resolve_driver_sd({"sd_m2": driver.sd_m2,
+                               "lumped_sealed_rear_chamber": driver.lumped_sealed_rear_chamber},
+                              {"exterior": [(faces, mesh.points_m[faces])]}, driver.axis, driver.id)
     except (ValueError, KeyError, TypeError) as exc:
         return str(exc)
     return None
@@ -192,8 +196,25 @@ def package_sweep(
             f"transducer:{quote(channel.id, safe='')}"
         )
         excursion = [float(row.excursion_peak_mm[port_index, driver_index]) for row in sweep.rows]
-        if compiled.warnings:
-            response["metadata"]["warnings"] = list(compiled.warnings)
+        sd = compiled.driver_sd[channel.id]
+        response["metadata"].update(sd)
+        response["metadata"]["warnings"] = compiled.channel_warnings[channel.id]
+        area = sd["sd_m2"]
+        if area is not None:
+            matrix_id = sweep.rows[0].radiation.component_ids.index(sweep.rows[0].transducer_ids[driver_index])
+            medium = compiled.wire["compiled_system"]["regions"][0]
+            loads = np.asarray([row.radiation.values[matrix_id, matrix_id] for row in sweep.rows])
+            normalized = solver_to_engineering(loads) / (medium["density_kg_per_m3"] * medium["sound_speed_m_per_s"] * area)
+            response["acoustic_impedance"] = {
+                "frequencies": frequencies.tolist(), "real": normalized.real.tolist(),
+                "imaginary": normalized.imag.tolist()}
+            response["metadata"]["acoustic_impedance"] = {
+                "units": "Z/(rho*c*Sd)", "quantity": "normalized_acoustic_impedance",
+                "projected_area_m2": area, "sd_source": sd["sd_source"],
+                "phase_convention": ENGINEERING_PHASE_CONVENTION}
+        else:
+            response.pop("acoustic_impedance", None)
+            response["metadata"]["acoustic_impedance_note"] = "Sd not determined; enter Sd to get acoustic impedance"
         response["impedance"] = impedance
         response["metadata"].update(
             impedance_units="ohms",

@@ -4087,6 +4087,18 @@
             "title": "Rms N S Per M",
             "type": "number"
           },
+          "sd_m2": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sd M2"
+          },
           "semi_inductance": {
             "anyOf": [
               {

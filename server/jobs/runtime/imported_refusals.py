@@ -354,6 +354,16 @@ def _imported_request_refusal(
             combine_id=request.geometry.combine.id if request.geometry.combine else None)
         if problem:
             return problem
+    elif record is not None:
+        from server.solver.coupled_admission import driver_sd_problem
+
+        # Explicit exterior-only solves use the retained exterior artifact,
+        # regardless of FEM/coupled artifacts carried by the same return.
+        exterior_record = {key: value for key, value in record.items()
+                           if key not in {"fem_regions", "coupled_exterior"}}
+        problem = driver_sd_problem(exterior_record, request.geometry.drive_channels, exterior_msh_text=msh_text)
+        if problem:
+            return problem
     mismatch = _imported_decision_refusal(record)
     if mismatch is not None:
         return mismatch

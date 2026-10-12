@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
 import { FemPortsPanel, portChartOption } from './FemPortsPanel';
-import { femPortsOf, portRadiationTraces, portVelocityTraces, type FemPorts } from './femPorts';
+import { femPortsOf, pressureAt, portRadiationTraces, portVelocityTraces, type FemPorts } from './femPorts';
 import type { ResultPayload } from './types';
 import { readChartTokens } from './EChart';
 
@@ -88,7 +88,7 @@ it('decodes lossless packed pressure in frequency and observation order with gap
   const bytes = new Uint8Array(4 * 16);
   const view = new DataView(bytes.buffer);
   [1, -2, 3, -4, 5, -6, NaN, NaN].forEach((v, i) => view.setFloat64(i * 8, v, true));
-  const matrix = { encoding: 'base64' as const, dtype: 'complex128' as const, shape: [2, 2] as [number, number],
+  const matrix = { encoding: 'base64' as const, dtype: 'complex128' as const, byte_order: 'little' as const, order: 'C' as const, shape: [2, 2] as [number, number],
     content_base64: btoa(String.fromCharCode(...bytes)) };
   const ports = { ...data, total_radiated_pressure: { horizontal: matrix } };
   expect(portRadiationTraces(ports, 'horizontal', 0, 'real').at(-1)?.values).toEqual([1, 5]);
@@ -124,4 +124,40 @@ it('bounds the port disclosure in short flex docks while allowing its own scroll
   expect(rule).toContain('flex: none');
   expect(rule).toContain('max-height: min(300px, 45%)');
   expect(rule).toContain('overflow: auto');
+});
+
+
+it.each([
+  { encoding: 'hex' }, { dtype: 'complex64' }, { byte_order: 'big' }, { byte_order: undefined },
+  { order: 'F' }, { shape: [2, 3] }, { shape: [-1, 2] }, { shape: [2, 2.5] },
+  { content_base64: 'invalid!' }, { content_base64: btoa('short') },
+  { content_base64: btoa('x'.repeat(80)) },
+])('rejects the whole port block and renders a note for malformed packing %j', mutation => {
+  const packed = { encoding: 'base64', dtype: 'complex128', byte_order: 'little', order: 'C',
+    shape: [2, 2], content_base64: btoa('x'.repeat(64)), ...mutation };
+  for (const location of ['total', 'port', 'other']) {
+    const ports = structuredClone(data);
+    if (location === 'total') ports.total_radiated_pressure.horizontal = packed as never;
+    if (location === 'port') ports.interfaces[0].radiated_pressure.horizontal = packed as never;
+    if (location === 'other') ports.other_exterior_radiated_pressure!.horizontal = packed as never;
+    const invalid = { ...result, metadata: { fem_ports: ports } };
+    expect(femPortsOf(invalid)).toBeNull();
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    act(() => root.render(<FemPortsPanel result={invalid}/>));
+    expect(host.textContent).toBe('Ports could not be displayed: invalid pressure data.');
+    expect(host.querySelector('details')).toBeNull();
+    act(() => root.unmount());
+  }
+});
+
+it('guards negative and fractional frequency indices for packed pressure', () => {
+  const packed = { encoding: 'base64' as const, dtype: 'complex128' as const,
+    byte_order: 'little' as const, order: 'C' as const, shape: [2, 2] as [number, number],
+    content_base64: btoa('x'.repeat(64)) };
+  expect(pressureAt(packed, -1, 0)).toBeUndefined();
+  expect(pressureAt(packed, .5, 0)).toBeUndefined();
+  expect(pressureAt(packed, 2, 0)).toBeUndefined();
+  expect(femPortsOf({ ...result, metadata: { fem_ports: { ...data,
+    total_radiated_pressure: { horizontal: packed } } } })).not.toBeNull();
 });

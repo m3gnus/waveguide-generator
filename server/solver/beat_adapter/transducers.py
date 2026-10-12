@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 from typing import Any
 from urllib.parse import quote
@@ -45,6 +45,7 @@ class ExteriorDriver:
     rms_n_s_per_m: float
     semi_inductance: Mapping[str, Any] | None = None
     lumped_sealed_rear_chamber: Mapping[str, Any] | None = None
+    sd_m2: float | None = None
 
     @property
     def component_id(self) -> str:
@@ -111,36 +112,80 @@ def projected_driver_area(
     return area, warning
 
 
-def _moving_patches(mesh: SurfaceMesh, tags: Sequence[int]) -> list[np.ndarray]:
-    """Connected moving surfaces from the source tags (which have no side label).
+class DriverSdRequired(UnsupportedPhysics):
+    reason_code = "driver_sd_required"
 
-    Connectivity is by shared edges, across tag boundaries. Thus a surround,
-    lip or cap edge remains on its declared diaphragm patch despite a locally
-    reversed normal; disconnected front/rear patches retain separate net areas.
+    def __init__(self, channel_id: str):
+        self.message = (f"Enter Sd in the driver options for channel '{channel_id}' "
+                        "(the moving faces do not give an unambiguous projected area)")
+        super().__init__(f"{self.reason_code}: {self.message}")
+
+
+def geometric_driver_area(meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.ndarray]]],
+                          axis: Sequence[float]) -> tuple[float, bool, list[str]]:
+    """Net projection per mesh; neutral rims do not join independent skins.
+
+    Connected folds keep their signed subtraction. Only edge connectivity is
+    used: there is no normal-angle separator or inferred front/rear classifier.
     """
-    faces = mesh.faces[np.isin(mesh.tags, tags)]
-    edge_owners: dict[tuple[int, int], list[int]] = {}
-    neighbours = [set() for _ in faces]
-    for index, face in enumerate(faces):
-        for a, b in zip(face, np.roll(face, -1)):
-            edge = tuple(sorted((int(a), int(b))))
-            owners = edge_owners.setdefault(edge, [])
-            for owner in owners:
-                neighbours[index].add(owner)
-                neighbours[owner].add(index)
-            owners.append(index)
-    remaining = set(range(len(faces)))
-    patches = []
-    while remaining:
-        pending, patch = [remaining.pop()], []
-        while pending:
-            index = pending.pop()
-            patch.append(index)
-            adjacent = neighbours[index] & remaining
-            remaining.difference_update(adjacent)
-            pending.extend(adjacent)
-        patches.append(mesh.points_m[faces[patch]])
-    return patches
+    areas, ambiguous = [], False
+    for boundaries in meshes_m.values():
+        faces = np.concatenate([faces for faces, _ in boundaries])
+        triangles = np.concatenate([triangles for _, triangles in boundaries])
+        projections = _projected_face_areas(triangles, axis)
+        total = float(np.abs(projections).sum())
+        net = float(projections.sum())
+        areas.append(abs(net))
+        ambiguous |= total <= 0 or abs(net) < .2 * total
+        # Numerically neutral faces carry no projected area and cannot hide an
+        # independently tagged rear patch behind a connecting cylindrical rim.
+        remaining = set(np.flatnonzero(np.abs(projections) > total * 1e-12))
+        owners: dict[tuple[int, int], list[int]] = {}
+        neighbours = [set() for _ in faces]
+        for index in sorted(remaining):
+            for a, b in zip(faces[index], np.roll(faces[index], -1)):
+                edge = tuple(sorted((int(a), int(b))))
+                for owner in owners.setdefault(edge, []):
+                    neighbours[index].add(owner)
+                    neighbours[owner].add(index)
+                owners[edge].append(index)
+        nets = []
+        while remaining:
+            pending, patch = [remaining.pop()], []
+            while pending:
+                index = pending.pop()
+                patch.append(index)
+                adjacent = neighbours[index] & remaining
+                remaining.difference_update(adjacent)
+                pending.extend(adjacent)
+            nets.append(float(projections[patch].sum()))
+        majority = max(nets, key=abs, default=0.)
+        ambiguous |= any(value * majority < 0 and abs(value) >= .05 * abs(majority)
+                         for value in nets)
+    if not areas:
+        return 0., True, []
+    area = float(np.mean(areas))
+    notes = []
+    if len(areas) > 1 and area > 0 and (max(areas) - min(areas)) / area > .1:
+        notes.append("Moving-face projected areas in separate meshes differ by more than 10 %; Sd uses their mean.")
+    return area, bool(ambiguous), notes
+
+
+def resolve_driver_sd(raw: Mapping[str, Any], meshes_m, axis, channel_id: str
+                      ) -> tuple[float | None, dict[str, Any], list[str]]:
+    geometric, ambiguous, notes = geometric_driver_area(meshes_m, axis)
+    declared = raw.get("sd_m2")
+    area = _positive(declared, "sd_m2") if declared is not None else (None if ambiguous else geometric)
+    source = "declared" if declared is not None else ("geometry" if area is not None else None)
+    if declared is not None and abs(geometric - area) / area > .1:
+        notes.append("Declared Sd differs from the moving-face geometric projection by more than 10 %; declared Sd is used.")
+    if area is None:
+        if (raw.get("lumped_sealed_rear_chamber") or {}).get("enabled", False):
+            raise DriverSdRequired(channel_id)
+        notes.append("Sd not determined; enter Sd to get acoustic impedance")
+    metadata = {"sd_m2": area, "sd_source": source, "geometric_sd_m2": geometric,
+                "geometry_ambiguous": ambiguous}
+    return area, metadata, [f"Channel '{channel_id}': {note}" for note in notes]
 
 
 def driver_parameters(driver: ExteriorDriver, axis: Sequence[float], *, projected_area_m2: float | None = None) -> dict[str, Any]:
@@ -172,6 +217,8 @@ class TransducerRequest:
     layout: ObservationLayout
     mesh: SurfaceMesh
     warnings: tuple[str, ...] = ()
+    driver_sd: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    channel_warnings: Mapping[str, list[str]] = field(default_factory=dict)
 
     @property
     def transducer_ids(self) -> tuple[str, ...]:
@@ -230,25 +277,17 @@ def build_transducer_request(
     ports = system["excitation_ports"][:len(ideal_sources)]
     offset = len(ideal_sources)
     area_warnings = []
+    sd_metadata = {}
+    channel_warnings = {}
     for driver in drivers:
         axis = system["components"][offset]["parameters"]["motion_axis"]
         offset += len(driver.tags)
-        area = None
-        if driver.lumped_sealed_rear_chamber is not None and driver.lumped_sealed_rear_chamber.get("enabled", False):
-            patches = _moving_patches(prepared.mesh, driver.tags)
-            projections = [_signed_projected_area(patch, axis) for patch in patches]
-            triangles = np.concatenate(patches)
-            tolerance = float(np.abs(_projected_face_areas(triangles, axis)).sum()) * 1e-12
-            # A closed moving skin can connect both sides through a tagged rim.
-            # Its net projection cancels; it is not a front-only diaphragm.
-            if ((any(value > tolerance for value in projections) and any(value < -tolerance for value in projections))
-                    or abs(sum(projections)) <= tolerance):
-                raise UnsupportedPhysics(
-                    "a lumped rear chamber replaces the rear radiation; untag the rear faces or disable the chamber"
-                )
-            area, warning = projected_driver_area(triangles, axis)
-            if warning:
-                area_warnings.append(f"{driver.id}: {warning}")
+        selected = prepared.mesh.faces[np.isin(prepared.mesh.tags, driver.tags)]
+        area, sd_metadata[driver.id], notes = resolve_driver_sd(
+            {"sd_m2": driver.sd_m2, "lumped_sealed_rear_chamber": driver.lumped_sealed_rear_chamber},
+            {"exterior": [(selected, prepared.mesh.points_m[selected])]}, axis, driver.id)
+        area_warnings.extend(notes)
+        channel_warnings[driver.id] = notes
         components.append({"id": driver.component_id, "name": driver.id,
                            "kind": "electrodynamic_transducer",
                            "boundary_ids": [f"boundary:tag:{tag}" for tag in driver.tags],
@@ -264,7 +303,8 @@ def build_transducer_request(
                             "undriven_transducer_termination": "shorted"})
     wire.update(excitation_port_ids=requested, outputs=outputs(prepared.layout))
     wire["solver_options"]["transducer_reference_voltage_v"] = voltage
-    request = TransducerRequest(wire, prepared.layout, prepared.mesh, tuple(area_warnings))
+    request = TransducerRequest(wire, prepared.layout, prepared.mesh, tuple(area_warnings),
+                                sd_metadata, channel_warnings)
     validate_transducer_request(request)
     return request
 

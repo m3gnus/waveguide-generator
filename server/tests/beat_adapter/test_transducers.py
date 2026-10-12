@@ -368,7 +368,7 @@ def test_exterior_rear_radiation_refuses_lumped_chamber(make_mesh, layout, enabl
                      [[0, 1, 2], [3, 5, 4]], [2, 3])
     options = dict(enabled=enabled, volume_m3=.01)
     if enabled:
-        with pytest.raises(UnsupportedPhysics, match="a lumped rear chamber replaces the rear radiation; untag the rear faces or disable the chamber"):
+        with pytest.raises(UnsupportedPhysics, match="driver_sd_required: Enter Sd"):
             t.build_transducer_request(mesh, drivers=[driver(lumped_sealed_rear_chamber=options)],
                                        layout=layout, frame=FRAME, frequencies_hz=[100])
     else:
@@ -379,11 +379,11 @@ def test_exterior_rear_radiation_refuses_lumped_chamber(make_mesh, layout, enabl
 def test_area_warning_is_carried_once_without_python_warning(mesh, layout, monkeypatch):
     import warnings
 
-    monkeypatch.setattr(t, "projected_driver_area", lambda *args: (.5, "area warning"))
+    monkeypatch.setattr(t, "geometric_driver_area", lambda *args: (.5, False, ["area warning"]))
     with warnings.catch_warnings(record=True) as emitted:
         warnings.simplefilter("always")
         compiled = t.build_transducer_request(
             mesh, drivers=[driver(tags=(2,), lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))],
             layout=layout, frame=FRAME, frequencies_hz=[100])
-    assert compiled.warnings == ("driver: area warning",)
+    assert compiled.warnings == ("Channel 'driver': area warning",)
     assert emitted == []

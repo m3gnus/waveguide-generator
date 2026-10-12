@@ -8,8 +8,10 @@ export const SEMI_INDUCTANCE_FIELDS = [
   ['re_prime_ohm', 'Re′', 'Ω'], ['leb_h', 'Leb', 'mH'], ['le_h', 'Le', 'mH'],
   ['ke_semi_h', 'Ke', 'mH/√s'], ['rss_ohm', 'Rss', 'Ω'],
 ] as const;
+export const EXTERIOR_SD_FIELD = ['sd_m2', 'Sd', 'cm²'] as const;
 export const EXTERIOR_LIMIT_FIELDS = [['power_w', 'Rated power', 'W'], ['xmax_mm', 'Xmax', 'mm']] as const;
 export function exteriorDisplayScale(key: string): number {
+  if (key === 'sd_m2') return 10000;
   return ['le_h', 'leb_h', 'ke_semi_h', 'volume_m3'].includes(key) ? 1000 : 1;
 }
 
@@ -20,27 +22,27 @@ export function normalizeExteriorOptions(form: ExteriorTransducerForm): Exterior
     ...(semi_inductance?.enabled ? { semi_inductance } : {}),
     ...(lumped_sealed_rear_chamber?.enabled ? { lumped_sealed_rear_chamber } : {}),
     version: semi_inductance?.enabled || lumped_sealed_rear_chamber?.enabled
-      || form.power_w !== undefined || form.xmax_mm !== undefined ? 2 : 1 };
+      || form.sd_m2 !== undefined || form.power_w !== undefined || form.xmax_mm !== undefined ? 2 : 1 };
 }
 
 export type SemiInductanceForm = { enabled: boolean } & Partial<Record<typeof SEMI_INDUCTANCE_FIELDS[number][0], number>>;
 export type RearChamberForm = { enabled: boolean; volume_m3?: number };
 export type ExteriorKey = typeof EXTERIOR_FIELDS[number][0];
 export type ExteriorTransducerForm = Partial<Record<ExteriorKey, number>> & {
-  power_w?: number; xmax_mm?: number;
+  sd_m2?: number; power_w?: number; xmax_mm?: number;
   version: number; motion_axis: [number, number, number];
   semi_inductance?: SemiInductanceForm; lumped_sealed_rear_chamber?: RearChamberForm;
 };
 
 export function exteriorTransducerError(form: ExteriorTransducerForm): string | null {
-  if (![1, 2].includes(form.version) || (form.version === 1 && (form.semi_inductance || form.lumped_sealed_rear_chamber || form.power_w !== undefined || form.xmax_mm !== undefined))) return 'Unsupported exterior driver version. Clear and re-enter the driver.';
+  if (![1, 2].includes(form.version) || (form.version === 1 && (form.semi_inductance || form.lumped_sealed_rear_chamber || form.sd_m2 !== undefined || form.power_w !== undefined || form.xmax_mm !== undefined))) return 'Unsupported exterior driver version. Clear and re-enter the driver.';
   for (const [key, label] of EXTERIOR_FIELDS) {
     const value = form[key];
     if (typeof value !== 'number' || !Number.isFinite(value) || (key === 'le_h' ? value < 0 : value <= 0)) {
       return `Enter ${label.toLowerCase()} in the stated units.`;
     }
   }
-  for (const [key, label] of EXTERIOR_LIMIT_FIELDS) {
+  for (const [key, label] of [EXTERIOR_SD_FIELD, ...EXTERIOR_LIMIT_FIELDS]) {
     const value = form[key];
     if (value !== undefined && (!Number.isFinite(value) || value <= 0)) return `Enter positive ${label}.`;
   }
@@ -67,9 +69,9 @@ export function exteriorTransducerError(form: ExteriorTransducerForm): string | 
 export function parseExteriorTransducer(value: unknown): ExteriorTransducerForm {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { version: 0, motion_axis: [0, 0, 0] };
   const raw = value as Record<string, unknown>;
-  const known = new Set<string>(['version', 'motion_axis', 'semi_inductance', 'lumped_sealed_rear_chamber', ...EXTERIOR_FIELDS.map(([key]) => key), ...EXTERIOR_LIMIT_FIELDS.map(([key]) => key)]);
+  const known = new Set<string>(['sd_m2', 'version', 'motion_axis', 'semi_inductance', 'lumped_sealed_rear_chamber', ...EXTERIOR_FIELDS.map(([key]) => key), ...EXTERIOR_LIMIT_FIELDS.map(([key]) => key)]);
   if (Object.keys(raw).some(key => !known.has(key))) return { version: 0, motion_axis: [0, 0, 0] };
-  if (EXTERIOR_LIMIT_FIELDS.some(([key]) => raw[key] !== undefined && (typeof raw[key] !== 'number' || !Number.isFinite(raw[key])))) return { version: 0, motion_axis: [0, 0, 0] };
+  if ([EXTERIOR_SD_FIELD, ...EXTERIOR_LIMIT_FIELDS].some(([key]) => raw[key] !== undefined && (typeof raw[key] !== 'number' || !Number.isFinite(raw[key])))) return { version: 0, motion_axis: [0, 0, 0] };
   const options: Pick<ExteriorTransducerForm, 'semi_inductance' | 'lumped_sealed_rear_chamber'> = {};
   for (const [name, fields] of [
     ['semi_inductance', SEMI_INDUCTANCE_FIELDS.map(([key]) => key)],
@@ -86,8 +88,25 @@ export function parseExteriorTransducer(value: unknown): ExteriorTransducerForm 
     }
     options[name] = { ...nested, enabled: nested.enabled === true };
   }
-  return { ...options, ...Object.fromEntries([...EXTERIOR_FIELDS, ...EXTERIOR_LIMIT_FIELDS].flatMap(([key]) => typeof raw[key] === 'number' && Number.isFinite(raw[key]) ? [[key, raw[key]]] : [])),
+  return { ...options, ...Object.fromEntries([...EXTERIOR_FIELDS, EXTERIOR_SD_FIELD, ...EXTERIOR_LIMIT_FIELDS].flatMap(([key]) => typeof raw[key] === 'number' && Number.isFinite(raw[key]) ? [[key, raw[key]]] : [])),
     version: typeof raw.version === 'number' ? raw.version : 0,
     motion_axis: Array.isArray(raw.motion_axis) && raw.motion_axis.length === 3 && raw.motion_axis.every(v => typeof v === 'number' && Number.isFinite(v))
       ? raw.motion_axis as [number, number, number] : [0, 0, 0] };
+}
+
+/** Library fields are in datasheet units; Mms must never stand in for bare Mmd. */
+export function prefillExteriorDriver(form: ExteriorTransducerForm, values: Record<string, number | undefined>): ExteriorTransducerForm {
+  const conversions = [
+    ['sd_m2', 'sd_cm2', 10000], ['re_ohm', 're_ohm', 1], ['le_h', 'le_mh', 1000],
+    ['bl_n_per_a', 'bl_t_m', 1], ['mmd_kg', 'mmd_g', 1000],
+    ['cms_m_per_n', 'cms_m_per_n', 1], ['rms_n_s_per_m', 'rms_kg_per_s', 1],
+    ['power_w', 'power_w', 1], ['xmax_mm', 'xmax_mm', 1],
+  ] as const;
+  const filled = { ...form };
+  for (const [key, libraryKey, divisor] of conversions) {
+    const value = values[libraryKey];
+    if (filled[key] === undefined && value !== undefined && Number.isFinite(value)
+      && (key === 'le_h' ? value >= 0 : value > 0)) filled[key] = value / divisor;
+  }
+  return normalizeExteriorOptions(filled);
 }

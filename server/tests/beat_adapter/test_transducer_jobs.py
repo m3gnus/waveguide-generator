@@ -508,5 +508,83 @@ def test_job_refuses_exterior_rear_load_before_engine(piston_cube, make_mesh, re
         version=2, motion_axis=[0., 0., 1.],
         lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))
     monkeypatch.setattr(official_beat, "solve_transducer_compiled", lambda *a, **k: pytest.fail("rear load entered runtime"))
-    with pytest.raises(ValueError, match="a lumped rear chamber replaces the rear radiation; untag the rear faces or disable the chamber"):
+    with pytest.raises(ValueError, match="driver_sd_required: Enter Sd"):
         jobs.solve(piston_cube, SolveRequest.model_validate(payload), record, backend="cpu")
+
+
+@pytest.mark.parametrize('declared,chamber', [(None, False), (.6, False), (.6, True)])
+def test_declared_exterior_sd_controls_normalization_and_chamber(piston_cube, record, monkeypatch, declared, chamber):
+    from server.solver import official_beat
+    monkeypatch.setattr(official_beat, 'engine_version', lambda: '1.2.3')
+    captured = []
+
+    def solve(compiled, **kwargs):
+        captured.append(compiled)
+        return TransducerSweep(tuple(parse_transducer_frequency(raw(compiled, f), compiled, f)
+                                     for f in compiled.wire['frequencies_hz']), False, 2)
+
+    monkeypatch.setattr(official_beat, 'solve_transducer_compiled', solve)
+    payload = request().model_dump(mode='json')
+    channel = payload['geometry']['drive_channels'][0]
+    channel['source_ids'] = ['a']
+    payload['geometry']['mesh']['source_size_mm'] = {'a': 3.}
+    payload['geometry']['drive_channels'] = [channel]
+    channel['exterior_transducer'].update(version=2, motion_axis=[0., 0., 1.])
+    if declared is not None:
+        channel['exterior_transducer']['sd_m2'] = declared
+    if chamber:
+        channel['exterior_transducer']['lumped_sealed_rear_chamber'] = {'enabled': True, 'volume_m3': .01}
+    result = jobs.solve(piston_cube, SolveRequest.model_validate(payload), record, backend='cpu')
+    response = result['channels']['driver']
+    sd = declared or 1.
+    assert response['metadata']['sd_m2'] == sd
+    assert response['metadata']['sd_source'] == ('declared' if declared is not None else 'geometry')
+    assert response['acoustic_impedance']['real'][0] == pytest.approx(7 / (1.2041 * 343 * sd))
+    assert response['acoustic_impedance']['imaginary'][0] == pytest.approx(8 / (1.2041 * 343 * sd))
+    assert any('Declared Sd differs' in w for w in response['metadata']['warnings']) == (declared is not None)
+    if chamber:
+        parameters = captured[0].wire['compiled_system']['components'][0]['parameters']
+        assert parameters['lumped_sealed_rear_chamber']['projected_area_m2'] == declared
+
+
+@pytest.mark.parametrize('exterior_only', [False, True])
+def test_exterior_ambiguous_sd_admission_and_compile_match(solid, record, exterior_only):
+    from server.jobs.runtime.imported_refusals import _imported_request_refusal
+    from server.solver.beat_adapter.observations import build_observations
+    from server.solver.beat_adapter.transducers import build_transducer_request, DriverSdRequired
+    from server.tests.beat_adapter.test_transducers import FRAME
+    payload = request().model_dump(mode='json')
+    channel = payload['geometry']['drive_channels'][0]
+    channel['source_ids'] = list('abcd')  # A whole closed moving skin has zero net area.
+    payload['geometry']['drive_channels'] = [channel]
+    channel['exterior_transducer'].update(version=2, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .01})
+    job = SolveRequest.model_validate(payload)
+    job.geometry.exterior_only = exterior_only
+    admission_record = record
+    if exterior_only:
+        admission_record = {**record, 'fem_regions': [{'region_id': 'ignored', 'surface_groups': [
+            {'group_id': 'ignored', 'kind': 'moving', 'drive_channel_id': 'driver'}]}],
+            'coupled_exterior': {'mesh_size_bytes': 1}}
+    problem = _imported_request_refusal(job, admission_record, solid)
+    assert problem[0] == 'driver_sd_required'
+    with pytest.raises(DriverSdRequired) as raised:
+        build_transducer_request(solid, drivers=jobs.drivers_for(record, job.geometry.drive_channels),
+                                 layout=build_observations(sphere_grid=None), frame=FRAME, frequencies_hz=[100.])
+    assert str(raised.value) == f'{problem[0]}: {problem[1]}'
+    assert jobs.preflight(record, solid, job.geometry.drive_channels, backend='cpu') == str(raised.value)
+
+
+def test_exterior_closed_skin_without_chamber_omits_acoustic_impedance(solid, record, monkeypatch):
+    from server.solver import official_beat
+    monkeypatch.setattr(official_beat, 'engine_version', lambda: '1.2.3')
+    monkeypatch.setattr(official_beat, 'solve_transducer_compiled', lambda compiled, **kwargs:
+        TransducerSweep(tuple(parse_transducer_frequency(raw(compiled, f), compiled, f)
+                             for f in compiled.wire['frequencies_hz']), False, 2))
+    payload = request().model_dump(mode='json')
+    payload['geometry']['drive_channels'] = [payload['geometry']['drive_channels'][0]]
+    payload['geometry']['drive_channels'][0]['source_ids'] = list('abcd')
+    result = jobs.solve(solid, SolveRequest.model_validate(payload), record, backend='cpu')
+    response = result['channels']['driver']
+    assert 'acoustic_impedance' not in response
+    assert response['metadata']['sd_m2'] is None
+    assert response['metadata']['acoustic_impedance_note'] == 'Sd not determined; enter Sd to get acoustic impedance'

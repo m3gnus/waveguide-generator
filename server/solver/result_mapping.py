@@ -1406,9 +1406,19 @@ def map_coupled_transducer_response(response, sweep, request, channel, spec):
     load = sweep.generalized_load[:, index, component_index]
     area = system["metadata"]["projected_areas_m2"][channel]
     medium = request.regions[0].record["medium"]
-    normalized = load / (medium["density_kg_per_m3"] * medium["sound_speed_m_per_s"] * area)
+    sd_metadata = system["metadata"]["driver_sd"][channel]
+    response["metadata"].update(sd_metadata)
+    if area is not None:
+        normalized = load / (medium["density_kg_per_m3"] * medium["sound_speed_m_per_s"] * area)
+        response["acoustic_impedance"] = impedance(normalized)
+        response["metadata"]["acoustic_impedance"] = {
+            "units": "Z/(rho*c*Sd)", "quantity": "normalized_acoustic_impedance",
+            "projected_area_m2": area, "sd_source": sd_metadata["sd_source"],
+            "phase_convention": ENGINEERING_PHASE_CONVENTION}
+    else:
+        response.pop("acoustic_impedance", None)
+        response["metadata"]["acoustic_impedance_note"] = "Sd not determined; enter Sd to get acoustic impedance"
     response["impedance"] = electrical
-    response["acoustic_impedance"] = impedance(normalized)
     driver_spec = spec.exterior_transducer.model_dump(mode="json")
     response["metadata"].update(
         impedance_units="ohms", impedance_quantity="electrical_input_impedance",
@@ -1421,8 +1431,6 @@ def map_coupled_transducer_response(response, sweep, request, channel, spec):
                 "cone_excursion_mm": {"frequencies": frequencies, "values": excursion.tolist(),
                                       "peak_mm": float(np.max(excursion, initial=0)),
                                       "quantity": "one_way_peak_displacement"}},
-        acoustic_impedance={"units": "Z/(rho*c)", "quantity": "specific_acoustic_impedance",
-                            "projected_area_m2": area, "phase_convention": ENGINEERING_PHASE_CONVENTION},
         beat_transducer={"version": 1, "excitation_port_id": members[0],
                          "transducer_ids": [c["id"] for c in drivers],
                          "phasor_convention": SOLVER_TIME_CONVENTION, "amplitude_convention": "rms",
@@ -1508,6 +1516,7 @@ def map_coupled_port_response(response, sweep, request, channel):
                                  if output["quantity"] == "interface_radiated_pressure"},
         "radiation_symmetry": "includes_symmetry_images",
         "represented_area_scope": "fundamental_domain_patch",
+        "full_model_area_description": "Area of this port and all its symmetry images; not the full model surface area",
         "interfaces": [{"id": item["id"], "label": item["id"].removeprefix("interface:"),
                         "represented_area_m2": sweep.interface_areas_m2[i] if sweep.interface_areas_m2 else None,
                         "symmetry_multiplier": symmetry_multiplier,

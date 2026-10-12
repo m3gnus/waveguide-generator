@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { EXTERIOR_FIELDS, EXTERIOR_LIMIT_FIELDS, SEMI_INDUCTANCE_FIELDS, exteriorDisplayScale,
+import { EXTERIOR_FIELDS, EXTERIOR_LIMIT_FIELDS, EXTERIOR_SD_FIELD, SEMI_INDUCTANCE_FIELDS, exteriorDisplayScale,
   normalizeExteriorOptions, type ExteriorTransducerForm } from '../stores/exteriorTransducer';
 
 export function ExteriorDriverFields({ channelId, form, onChange }: {
@@ -22,6 +22,13 @@ export function ExteriorDriverOptions({ channelId, form, onChange }: {
   const semi = form.semi_inductance;
   const chamber = form.lumped_sealed_rear_chamber;
   return <>
+    <label className="cad-driver-field"><span>Sd (cm², optional)</span>
+      <input type="number" min="0" step="any" aria-label={`Sd for ${channelId}`}
+        value={form.sd_m2 === undefined ? '' : form.sd_m2 * exteriorDisplayScale(EXTERIOR_SD_FIELD[0])}
+        onChange={event => onChange(normalizeExteriorOptions({ ...form,
+          sd_m2: event.target.value === '' ? undefined : Number(event.target.value) / 10000 }))}/>
+    </label>
+    <p className="cad-driver-hint">Sd is the driver's effective projected area. Check the library value or enter it from the datasheet. Declared Sd controls chamber stiffness and acoustic impedance; geometry is a cross-check.</p>
     <label className="cad-driver-hint"><input type="checkbox" aria-label={`Semi-inductance for ${channelId}`}
       checked={semi?.enabled ?? false} onChange={event => {
         semiCache.current = semi ?? semiCache.current;
@@ -43,7 +50,7 @@ export function ExteriorDriverOptions({ channelId, form, onChange }: {
           lumped_sealed_rear_chamber: { ...chamberCache.current, enabled: event.target.checked } }));
       }}/>Lumped sealed rear chamber</label>
     {chamber?.enabled && <>
-      <p className="cad-driver-hint">Adds lossless sealed-box stiffness ρc²Sd²/V using the net projected Sd of a front-only diaphragm on a closed body. Use this for an unmeshed rear chamber; untag exterior rear faces or disable this chamber.</p>
+      <p className="cad-driver-hint">Adds lossless sealed-box stiffness ρc²Sd²/V using the declared Sd, or an unambiguous net projection for a front-only diaphragm. Use this for an unmeshed rear chamber; untag exterior rear faces or disable this chamber.</p>
       <label className="cad-driver-field"><span>Rear chamber volume (litres) *</span>
         <input type="number" min="0" step="any" aria-label={`Rear chamber volume for ${channelId}`} value={chamber.volume_m3 === undefined ? '' : chamber.volume_m3 * 1000}
           onChange={event => onChange({ ...form, lumped_sealed_rear_chamber: { ...chamber, volume_m3: event.target.value === '' ? undefined : Number(event.target.value) / 1000 } })}/>

@@ -1342,3 +1342,18 @@ it('recalls an explicit exterior-only run on its own FEM snapshot', () => {
   store.applyIngest({ ...air, evidence: { fem_regions: [{ region_id: 'new' }] } }, store.beginIngestIntent());
   expect(useCadReturnStore.getState().exteriorOnly).toBe(false);
 });
+
+it('prefills explicit BEAT Sd from the selected library driver before the legacy form is retired', () => {
+  localStorage.clear();
+  resetCadReturnStore();
+  const store = useCadReturnStore.getState();
+  store.selectBundle(bundle);
+  store.setChannelDriverPreset('drive-hf', PRESET);
+  store.setExteriorTransducer('drive-hf', { version: 1, motion_axis: [0, 0, 1] });
+  const transducer = useCadReturnStore.getState().driveChannels.find(c => c.id === 'drive-hf')!.exterior_transducer!;
+  expect(transducer).toMatchObject({ version: 2, sd_m2: .0026, re_ohm: 6.2, bl_n_per_a: 12.4 });
+  expect(transducer.le_h).toBeCloseTo(.00012);
+  expect(transducer.mmd_kg).toBeUndefined(); // The library's Mms is not bare Mmd.
+  store.setExteriorTransducer('drive-hf', { ...transducer, sd_m2: .003 });
+  expect(useCadReturnStore.getState().driveChannels.find(c => c.id === 'drive-hf')!.exterior_transducer!.sd_m2).toBe(.003);
+});

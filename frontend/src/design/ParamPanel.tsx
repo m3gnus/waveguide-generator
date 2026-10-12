@@ -27,7 +27,7 @@ import {
   type CadDriveChannel,
   type PortAreaSource,
 } from '../stores/cadReturn';
-import { ChannelDriverPicker } from './DriverPicker';
+import { ExteriorDriverLibraryPicker, ChannelDriverPicker } from './DriverPicker';
 import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
 import { NATIVE_FAMILIES, defaultWallThickness, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { athControlError, lipRadiusWallError, lipUnavailableReason, opusClampNote, opusMountingReason } from './athImportControls';
@@ -1046,6 +1046,8 @@ function CadDriveChannels() {
             Solve driver in BEAT</label>
           {channel.exterior_transducer && <>
             <p className="cad-driver-hint">Complete outward solids only. Enter bare Mmd, excluding air load; datasheet Mms is not Mmd. Other drivers are shorted for each excitation.</p>
+            <ExteriorDriverLibraryPicker channel={channel}
+              roleHint={activeSources.find(source => source.id === channel.source_ids[0])?.role}/>
             <ExteriorDriverFields channelId={channel.id} form={channel.exterior_transducer}
               onChange={form => state.setExteriorTransducer(channel.id, form)}/>
             <ExteriorDriverOptions channelId={channel.id} form={channel.exterior_transducer}

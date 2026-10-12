@@ -3657,6 +3657,8 @@ export interface components {
             re_ohm: number;
             /** Rms N S Per M */
             rms_n_s_per_m: number;
+            /** Sd M2 */
+            sd_m2?: number | null;
             semi_inductance?: components["schemas"]["SemiInductanceSpec"] | null;
             /**
              * Version

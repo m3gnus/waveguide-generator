@@ -298,7 +298,8 @@ def build_coupled_system(
     problem = fem_termination_problem([r.record for r in regions], has_exterior=exterior is not None)
     if problem:
         raise CoupledSystemError(f"{problem[0]}: {problem[1]}")
-    problem = fem_drive_problem([r.record for r in regions], {}, painted_sources=set())
+    problem = fem_drive_problem([r.record for r in regions], {}, painted_sources=set(),
+                                transducer_channels=set(transducers or {}))
     if problem and problem[0] in {"fem_lining_unsupported", "fem_motion_weight_unsupported"}:
         raise CoupledSystemError(f"{problem[0]}: {problem[1]}")
     if problem and problem[0] in {"fem_multiple_diaphragms_unsupported", "fem_missing_channel"}:
@@ -469,6 +470,7 @@ def build_coupled_system(
         raise CoupledSystemError(f"Transducer channels have no moving boundary: {sorted(unknown)}")
     components, ports = [], []
     projected_areas = {}
+    driver_sd = {}
     area_warnings: list[str] = []
     channel_warnings: dict[str, list[str]] = {}
     for channel, boundary_ids in sorted(moving_by_channel.items()):
@@ -479,9 +481,10 @@ def build_coupled_system(
             from server.solver.beat_adapter.coupled_transducers import parameters
 
             channel_warnings[channel] = []
+            driver_sd[channel] = {}
             params, projected_areas[channel] = parameters(
                 spec, moving_triangles[channel], collected_warnings=channel_warnings[channel],
-                channel_id=channel)
+                channel_id=channel, sd_metadata=driver_sd[channel])
             area_warnings.extend(channel_warnings[channel])
         components.append({
             "id": component_id, "name": channel,
@@ -502,7 +505,7 @@ def build_coupled_system(
         "excitation_ports": ports,
         "assumptions": [],
         "metadata": {"producer": "waveguide-generator", "feature": "fem-regions-v1",
-                     **({"projected_areas_m2": projected_areas} if projected_areas else {}),
+                     **({"projected_areas_m2": projected_areas, "driver_sd": driver_sd} if projected_areas else {}),
                      **({"warnings": area_warnings, "channel_warnings": channel_warnings} if area_warnings else {})},
     }
 

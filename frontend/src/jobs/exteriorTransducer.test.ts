@@ -161,3 +161,19 @@ it.each(['auto', 'beat-cuda', 'beat-rocm'] as const)('keeps non-FEM driver restr
   expect(exteriorModeBlocker(useCadReturnStore.getState(), useSolveOptionsStore.getState()))
     .toBe('Choose BEAT CPU or BEAT Metal for coupled exterior drivers.');
 });
+
+it('round-trips v2 Sd without altering v1 readers or allowing invalid Sd', async () => {
+  const { parseExteriorTransducer, normalizeExteriorOptions, prefillExteriorDriver, exteriorTransducerError } = await import('../stores/exteriorTransducer');
+  const original = { ...form };
+  const filled = prefillExteriorDriver(original, { sd_cm2: 220, mms_g: 30 });
+  expect(filled).toMatchObject({ version: 2, sd_m2: .022, mmd_kg: original.mmd_kg });
+  expect(parseExteriorTransducer(filled)).toEqual(filled);
+  expect(prefillExteriorDriver(filled, { sd_cm2: 500 })).toEqual(filled);
+  expect(exteriorTransducerError({ ...filled, sd_m2: -1 })).toContain('positive Sd');
+  expect(exteriorTransducerError({ ...filled, version: 1 })).toContain('Unsupported');
+  expect(parseExteriorTransducer({ ...filled, sd_m2: 'bad' }).version).toBe(0);
+  expect(normalizeExteriorOptions({ ...filled, sd_m2: undefined }).version).toBe(1);
+  expect(prefillExteriorDriver({ version: 1, motion_axis: [0, 0, 1] }, { sd_cm2: 55, re_ohm: 6,
+    mmd_g: 20, mms_g: 99, rms_kg_per_s: 1.5, le_mh: .5 })).toMatchObject({
+    sd_m2: .0055, version: 2, re_ohm: 6, mmd_kg: .02, rms_n_s_per_m: 1.5, le_h: .0005 });
+});

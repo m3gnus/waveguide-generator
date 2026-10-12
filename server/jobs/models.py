@@ -384,6 +384,7 @@ class LumpedSealedRearChamberSpec(JobModel):
 class ExteriorTransducerSpec(JobModel):
     """Opt-in BEAT bare-driver coordinate; SI scalars, global axis, RMS volts."""
     version: Literal[1, 2] = 1
+    sd_m2: PositiveTransducerScalar | None = None
     power_w: PositiveTransducerScalar | None = None
     xmax_mm: PositiveTransducerScalar | None = None
     semi_inductance: SemiInductanceSpec | None = None
@@ -401,7 +402,7 @@ class ExteriorTransducerSpec(JobModel):
     @model_serializer(mode="wrap")
     def omit_absent_options(self, handler):
         wire = handler(self)
-        for name in ("semi_inductance", "lumped_sealed_rear_chamber", "power_w", "xmax_mm"):
+        for name in ("semi_inductance", "lumped_sealed_rear_chamber", "power_w", "xmax_mm", "sd_m2"):
             if getattr(self, name) is None:
                 wire.pop(name, None)
         return wire
@@ -409,7 +410,7 @@ class ExteriorTransducerSpec(JobModel):
     @model_validator(mode="after")
     def nonzero_axis(self):
         if self.version == 1 and any(getattr(self, name) is not None for name in
-                                     ("semi_inductance", "lumped_sealed_rear_chamber", "power_w", "xmax_mm")):
+                                     ("semi_inductance", "lumped_sealed_rear_chamber", "power_w", "xmax_mm", "sd_m2")):
             raise ValueError("transducer options require version 2")
         if not any(self.motion_axis):
             raise ValueError("transducer motion_axis must be nonzero")

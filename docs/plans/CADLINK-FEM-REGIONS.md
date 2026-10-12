@@ -64,9 +64,11 @@ Two existing tools set the shape of the work:
    to silence, and a lost interface would seal the chamber.
 5. **The engine is the official BEAT worker,** through the contract-2
    `compiled_system` that Boundary Lab also uses. One painted exterior front and one FEM rear diaphragm may share
-   one ideal velocity source per drive channel. Two FEM moving groups on the
-   same channel are refused in 0.3.6 because positive FEM load weights would
-   make both chambers breathe rather than move as a piston.
+   one ideal velocity source per drive channel. Two FEM moving groups on an
+   ideal channel are refused in 0.3.6 because positive FEM load weights would
+   make both chambers breathe rather than move as a piston. An electrodynamic
+   channel uses the rigid translation axis and may own moving faces in two
+   separate meshes; their absolute net projections are averaged for Sd.
 6. **The display slices exactly.** Boundary Lab samples a grid and locates
    points in tetrahedra. WG cuts each crossed tetrahedron and interpolates
    along its edges, which is exact for P1 elements and leaves no gaps. Smooth
@@ -348,8 +350,19 @@ Interface outputs include area-weighted complex normal velocity and radiated
 pressure on the polar cuts, per drive channel. Radiation phasors use lossless
 base64 complex128 arrays (little endian, C order, frequency by observation);
 observation points are shared by all sources in the ports block. The represented
-area is the reduced patch area; symmetry multiplier and full model area are recorded beside
-it, and port radiation includes symmetry images, including off-plane ports.
+area is the reduced patch area. `full_model_area_m2` is the area of that port
+and all its symmetry images, not the area of the whole model. The symmetry
+multiplier is recorded beside it, and port radiation includes symmetry images,
+including off-plane ports. Packed arrays require base64, complex128, little
+endian, C order and exactly frequencies × angles × 16 decoded bytes; an invalid
+array suppresses the complete ports block with a one-line display note.
+
+Port pressure storage scales as frequencies × planes × angles × sources,
+with 16 raw bytes per complex128 sample and 4/3 overhead for base64. At 721
+angles × 3 planes × 200 frequencies, each source column uses about 9.2 MB
+of base64 text. One interface, other exterior sources and total pressure are
+three columns, about 28 MB per drive channel (before JSON overhead). More
+interfaces add a column each.
 Other exterior radiation is shown only when the engine supplies that source
 column. Combined results refer users to the individual drive channels for ports.
 Voltage drives retain RMS input power and current, with the reference voltage
@@ -452,22 +465,39 @@ to read a selection without inflating earlier frequencies or channels.
 
 ## F-T exterior driver options and F10a rear loading
 
-Exterior transducer v2 accepts optional positive `power_w` and `xmax_mm`
+Exterior transducer v2 accepts optional positive `sd_m2`, `power_w` and `xmax_mm`
 ratings for the existing power and excursion limits. BEAT Pmax channels use
 constant nominal V²/Re′ when semi-inductance is enabled (V²/Re otherwise),
 instead of per-frequency real terminal power. The impedance plot still allows
 real terminal power to be calculated. Ratings stay in result metadata and do
 not enter the engine's driver parameters; absent options retain v1 bytes.
 
-Source tags currently have no front/rear label. Connected moving patches
-are treated as diaphragm sides: local back-facing folds subtract from each
-patch's net signed projected area. Single-sided Sd is its absolute net
-projection. The shared area helper averages only explicitly supplied front
-and rear sides and warns when they differ by more than 10%. Exterior patches
-with opposing net projections radiate both sides and refuse an enabled lumped
-sealed rear chamber: a lumped rear chamber replaces the rear radiation;
-untag the rear faces or disable the chamber. A front-only diaphragm on a
-closed body may use this unmeshed rear load.
+Driver options expose **Sd** in cm² and store it as `sd_m2` in SI m². The
+selected library driver's `Sd_cm2` prefills the field; users may edit it. A
+spec declaring Sd requires v2; absent options preserve v1 serialization.
+Declared Sd alone controls sealed-chamber stiffness Kbox = ρc²Sd²/V and
+acoustic impedance normalization Z/(ρcSd). Results record `sd_m2`,
+`sd_source` (`declared` or `geometry`), `geometric_sd_m2` and
+`geometry_ambiguous` per channel. An undetermined Sd has null value/source.
+
+Geometry is a prefill/fallback and cross-check, never a front/rear classifier.
+All the channel's moving faces in each mesh contribute their signed net
+projection; Sd is its absolute value. Separate FEM regions, or FEM plus
+exterior, retain separate meshes and use the mean of their absolute nets,
+with a per-channel warning above 10% difference. Connected surround folds
+subtract without being reclassified as another side. Declared Sd remains in
+use even for ambiguous geometry; a geometric difference above 10% of the
+declared value produces a per-channel result warning.
+
+Without declared Sd, geometry is ambiguous if any mesh's absolute net is
+less than 20% of its sum of absolute face projections, or a minority
+opposite-sign connected patch has at least 5% of the majority patch's
+absolute net. Numerically neutral rim faces do not join independent skins.
+This catches thick cones, shelled domes, closed moving skins and partly
+tagged rear faces. An enabled lumped chamber refuses at admission and
+compilation with `driver_sd_required` and asks for Sd for the named channel.
+With no chamber the solve continues, omits acoustic impedance and records
+“Sd not determined; enter Sd to get acoustic impedance”.
 
 F10a must refuse an enabled lumped rear chamber when a FEM rear region is
 attached to the same diaphragm. The FEM rear load and the lumped stiffness

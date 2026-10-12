@@ -61,7 +61,8 @@ def fem_termination_problem(regions: Sequence[Mapping[str, Any]], *,
 def fem_drive_problem(regions: Sequence[Mapping[str, Any]],
                       channels: Mapping[str, Sequence[str]], *,
                       painted_sources: set[str],
-                      combine_id: str | None = None) -> tuple[str, str] | None:
+                      combine_id: str | None = None,
+                      transducer_channels: set[str] | None = None) -> tuple[str, str] | None:
     problem = fem_group_options_problem(regions)
     if problem:
         return problem
@@ -76,7 +77,7 @@ def fem_drive_problem(regions: Sequence[Mapping[str, Any]],
                 return "fem_missing_channel", f"FEM diaphragm {diaphragm!r} names no drive channel"
             moving.setdefault(channel, []).append(diaphragm)
     for channel, diaphragms in moving.items():
-        if len(diaphragms) > 1:
+        if len(diaphragms) > 1 and channel not in (transducer_channels or set()):
             return "fem_multiple_diaphragms_unsupported", (
                 f"Channel {channel!r}, regions/diaphragms {', '.join(diaphragms)}: "
                 "more than one FEM diaphragm on one drive channel is not supported yet")
@@ -114,7 +115,8 @@ def fem_request_problem(record: Mapping[str, Any], channels: Sequence[Any] | Non
                         ground: bool = False, passive_cardioid: bool = False,
                         combine_id: str | None = None, enabled: bool | None = None,
                         has_exterior: bool | None = None,
-                        has_transducers: bool = False) -> tuple[str, str] | None:
+                        has_transducers: bool = False,
+                        moving_meshes: Mapping[str, Any] | None = None) -> tuple[str, str] | None:
     """One ordered declaration refusal for admission and request compilation.
 
     Feature availability, termination/exterior conflicts, domain restrictions,
@@ -153,6 +155,73 @@ def fem_request_problem(record: Mapping[str, Any], channels: Sequence[Any] | Non
         return "fem_drive_unsupported", ("FEM solves support ideal normal-velocity and electrodynamic "
                                          "voltage drives; passive-cardioid synthesis is unsupported")
     if channels is not None:
-        return fem_drive_problem(record.get("fem_regions", ()), {c.id: c.source_ids for c in channels},
-                                 painted_sources=sources, combine_id=combine_id)
+        problem = fem_drive_problem(record.get("fem_regions", ()), {c.id: c.source_ids for c in channels},
+                                    painted_sources=sources, combine_id=combine_id,
+                                    transducer_channels={c.id for c in channels
+                                                         if getattr(c, "exterior_transducer", None) is not None})
+        if problem:
+            return problem
+        return driver_sd_problem(record, channels, moving_meshes=moving_meshes)
     return None
+
+
+def driver_sd_problem(record: Mapping[str, Any], channels: Sequence[Any], *,
+                      moving_meshes: Mapping[str, Any] | None = None,
+                      exterior_msh_text: str | None = None) -> tuple[str, str] | None:
+    """Check verified moving geometry only for chambers lacking a declared Sd."""
+    from server.solver.beat_adapter.transducers import DriverSdRequired, resolve_driver_sd
+
+    for channel in channels:
+        spec = getattr(channel, "exterior_transducer", None)
+        chamber = getattr(spec, "lumped_sealed_rear_chamber", None)
+        if spec is None or getattr(spec, "sd_m2", None) is not None or not getattr(chamber, "enabled", False):
+            continue
+        raw = spec.model_dump(mode="json")
+        meshes = (moving_meshes[channel.id] if moving_meshes is not None
+                  else _channel_moving_meshes(record, channel, exterior_msh_text=exterior_msh_text))
+        try:
+            resolve_driver_sd(raw, meshes, spec.motion_axis, channel.id)
+        except DriverSdRequired as exc:
+            return exc.reason_code, exc.message
+    return None
+
+
+def _channel_moving_meshes(record, channel, *, exterior_msh_text=None):
+    """Read the same verified boundaries and tetrahedral normals as compilation."""
+    import numpy as np
+    from server.mesh.artifact import (read_verified_fem_region_mesh,
+                                      read_verified_coupled_exterior_mesh, read_verified_import_mesh)
+    from server.mesh.fem_regions import read_fem_region_domain, parse_physical_name
+    from server.mesh.fem_coupling import read_coupled_exterior
+    from server.solver.coupled_system import _fem_driver_triangles
+    from server.solver.beat_adapter.mesh import read_surface
+
+    meshes = {}
+    for region in record.get("fem_regions", ()):
+        groups = {g["group_id"] for g in region.get("surface_groups", ())
+                  if g.get("kind") == "moving" and g.get("drive_channel_id") == channel.id}
+        if not groups:
+            continue
+        domain = read_fem_region_domain(read_verified_fem_region_mesh(record, region["region_id"]),
+                                        region["region_id"])
+        oriented = _fem_driver_triangles(domain)
+        boundaries = []
+        for name, faces in domain.surfaces.items():
+            fields = parse_physical_name(name)
+            if fields and fields.get("group") in groups:
+                triangles = np.asarray([oriented[tuple(sorted(face))] for face in faces])
+                boundaries.append((faces, triangles))
+        meshes[f"fem:{region['region_id']}"] = boundaries
+    if channel.source_ids:
+        if record.get("coupled_exterior"):
+            points, groups = read_coupled_exterior(read_verified_coupled_exterior_mesh(record))
+            boundaries = [(faces, points[faces] * .001) for name, faces in groups.items()
+                          if any(f"source_id={source}" in name.split("|") for source in channel.source_ids)]
+        else:
+            mesh = read_surface(exterior_msh_text if exterior_msh_text is not None else read_verified_import_mesh(record))
+            tags = [record["source_tags"][source] for source in channel.source_ids]
+            faces = mesh.faces[np.isin(mesh.tags, tags)]
+            boundaries = [(faces, mesh.points_m[faces])]
+        if boundaries:
+            meshes["exterior"] = boundaries
+    return meshes

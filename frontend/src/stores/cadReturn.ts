@@ -1,4 +1,4 @@
-import { parseExteriorTransducer, type ExteriorTransducerForm } from './exteriorTransducer';
+import { prefillExteriorDriver, parseExteriorTransducer, type ExteriorTransducerForm } from './exteriorTransducer';
 import { create } from 'zustand';
 import { subscribeSolveSettingsEdits, withEditSignals } from './solveSettingsEdits';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
@@ -1285,7 +1285,8 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       const driveChannels = state.driveChannels.map(channel => {
         if (channel.id !== channelId) return channel;
         const { exterior_transducer: _previous, ...base } = channel;
-        return form ? { ...base, motion: 'axial' as const, exterior_transducer: form } : base;
+        return form ? { ...base, motion: 'axial' as const, exterior_transducer: _previous ? form
+          : prefillExteriorDriver(form, driverValues(state.channelDrivers[channelId])) } : base;
       });
       return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
     });
