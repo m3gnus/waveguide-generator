@@ -344,7 +344,8 @@ def test_author_cut_coupled_ingest(tmp_path, planes):
 @pytest.mark.skipif(__import__("os").environ.get("WG2_RUN_LIVE") != "1", reason="set WG2_RUN_LIVE=1")
 @pytest.mark.parametrize("planes,symmetry", [(("x0",), "yz"), (("x0", "y0"), "yz+xz")])
 def test_live_full_and_reduced_box_far_field_agree_within_one_percent(tmp_path, worker, planes, symmetry):
-    from server.solver.beat_adapter.results import map_coupled_sweep
+    from types import SimpleNamespace
+    from server.solver.official_beat import solve_coupled_compiled
 
     layout = compiled(coupled=False).layout
     requests = []
@@ -353,7 +354,8 @@ def test_live_full_and_reduced_box_far_field_agree_within_one_percent(tmp_path, 
         exterior, item = inputs(built, region)
         requests.append(build_coupled_request(exterior, [item], layout=layout, frame=FRAME,
                                               frequencies_hz=[100.], symmetry=mode))
-    pressures = [map_coupled_sweep(worker.submit(request.wire), request).channels["drive-lf"].pressure_complex
+    manager = SimpleNamespace(get_worker=lambda *a, **k: worker)
+    pressures = [solve_coupled_compiled(request, worker_manager=manager).channels["drive-lf"].pressure_complex
                  for request in requests]
     assert np.all(np.abs(pressures[0]) > 0)
     np.testing.assert_allclose(pressures[1], pressures[0], rtol=.01, atol=0)
