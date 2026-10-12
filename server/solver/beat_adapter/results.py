@@ -601,6 +601,7 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
             metadata={"drive_channel_id": name, "source_ids": list(spec.source_ids) if spec else [],
                       **identity.get(name, {"role": None}), "solver_backend": "beat-cpu",
                       "solver_engine": solver_engine, "fem": fem_metadata,
+                      "warnings": list(request.warnings),
                       "phase_time_convention": PHASE_TIME_CONVENTION,
                       "pressure_normalization": "voltage_rms" if request.drive_normalization[name] == "voltage_rms"
                       else "unit_acceleration_m_per_s2"},
@@ -623,6 +624,7 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
             metadata={"drive_channel_id": spec.id, "derived_from_channels": list(spec.members),
                       "source_ids": [source for name in spec.members for source in specs[name].source_ids],
                       "combine": payload, "solver_engine": solver_engine, "fem": fem_metadata,
+                      "warnings": list(request.warnings),
                       "phase_time_convention": PHASE_TIME_CONVENTION}, sound_speed_m_per_s=speed)
         response.pop("impedance", None)
         channels[spec.id] = response
@@ -641,6 +643,7 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
                          "solve_path": "interior-fem" if formulation == "interior_fem" else "coupled-fem-bem",
                          "cancelled": sweep.cancelled, "exterior_only": False,
                          "fem": fem_metadata,
+                         "warnings": list(request.warnings),
                          **({"beat_transducer_contract": 1,
                              "channel_bases_unavailable_reason": "native_voltage_bases_not_supported_by_legacy_recombine"}
                             if has_voltage else {}),

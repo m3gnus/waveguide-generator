@@ -7,17 +7,44 @@ import warnings
 import numpy as np
 
 from .preflight import UnsupportedPhysics
-from .transducers import (DRIVER_SCALARS, ExteriorDriver, _signed_projected_area, driver_parameters,
+from .transducers import (DRIVER_SCALARS, ExteriorDriver, _projected_face_areas, driver_parameters,
                            projected_driver_area)
 
 
-def parameters(spec: Any, boundaries_m: Sequence[np.ndarray]) -> tuple[dict[str, Any], float]:
-    """Map the WG driver exactly, deriving Sd from the declared moving boundaries.
+def _moving_patches(mesh_boundaries: Sequence[tuple[np.ndarray, np.ndarray]]) -> list[np.ndarray]:
+    """Join moving faces across tags by shared vertex edges within one mesh."""
+    faces = np.concatenate([faces for faces, _ in mesh_boundaries])
+    triangles = np.concatenate([triangles for _, triangles in mesh_boundaries])
+    owners: dict[tuple[int, int], list[int]] = {}
+    neighbours = [set() for _ in faces]
+    for index, face in enumerate(faces):
+        for a, b in zip(face, np.roll(face, -1)):
+            edge = tuple(sorted((int(a), int(b))))
+            for owner in owners.setdefault(edge, []):
+                neighbours[index].add(owner)
+                neighbours[owner].add(index)
+            owners[edge].append(index)
+    remaining = set(range(len(faces)))
+    patches = []
+    while remaining:
+        pending, patch = [remaining.pop()], []
+        while pending:
+            index = pending.pop()
+            patch.append(index)
+            adjacent = neighbours[index] & remaining
+            remaining.difference_update(adjacent)
+            pending.extend(adjacent)
+        patches.append(triangles[patch])
+    return patches
 
-    Each boundary keeps its own net projection, so folds on one side still
-    subtract. Boundaries facing along the axis form one side and those facing
-    against it the other; with both sides present Sd is their mean, and a
-    lumped rear chamber would load the rear twice.
+
+def parameters(spec: Any, meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.ndarray]]], *,
+               collected_warnings: list[str] | None = None) -> tuple[dict[str, Any], float]:
+    """Derive Sd from connected moving patches, keeping source meshes separate.
+
+    Folds subtract within their patch regardless of tagging. Numerically neutral
+    patches join the populated side; only genuinely opposing patches form two
+    radiating sides and preclude a lumped rear chamber.
     """
     raw = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
     axis = np.asarray(raw["motion_axis"], dtype=float)
@@ -25,9 +52,18 @@ def parameters(spec: Any, boundaries_m: Sequence[np.ndarray]) -> tuple[dict[str,
         raise ValueError("Electrodynamic motion_axis must be finite and nonzero")
     axis /= np.max(np.abs(axis))
     axis /= np.linalg.norm(axis)
+    patches = [patch for boundaries in meshes_m.values() for patch in _moving_patches(boundaries)]
+    projections = [_projected_face_areas(patch, axis) for patch in patches]
+    tolerance = sum(float(np.abs(values).sum()) for values in projections) * 1e-12
     sides: dict[bool, list[np.ndarray]] = {True: [], False: []}
-    for triangles in boundaries_m:
-        sides[_signed_projected_area(triangles, axis) >= 0].append(np.asarray(triangles, dtype=float))
+    neutral = []
+    for patch, values in zip(patches, projections):
+        net = float(values.sum())
+        if abs(net) <= tolerance:
+            neutral.append(patch)
+        else:
+            sides[net > 0].append(patch)
+    sides[bool(sides[True]) or not sides[False]].extend(neutral)
     front, rear = (np.concatenate(sides[key]) if sides[key] else None for key in (True, False))
     if front is not None and rear is not None:
         chamber = raw.get("lumped_sealed_rear_chamber") or {}
@@ -39,6 +75,8 @@ def parameters(spec: Any, boundaries_m: Sequence[np.ndarray]) -> tuple[dict[str,
         area, warning = projected_driver_area(front if front is not None else rear, axis)
     if warning:
         warnings.warn(warning, UserWarning, stacklevel=2)
+        if collected_warnings is not None:
+            collected_warnings.append(warning)
     driver = ExteriorDriver("", (), axis, **{key: raw[key] for key in DRIVER_SCALARS},
                             semi_inductance=raw.get("semi_inductance"),
                             lumped_sealed_rear_chamber=raw.get("lumped_sealed_rear_chamber"))
@@ -83,6 +121,11 @@ def recover_load(components: Sequence[Mapping[str, Any]], ports: Sequence[Mappin
             or singular[-1] <= singular[0] * 1e-10):
         return np.full((len(drivers), len(components)), complex(np.nan, np.nan))
     return force @ np.linalg.pinv(motion, rcond=1e-10)
+
+
+FEM_DRIVER_SYMMETRY_MESSAGE = (
+    "Electrodynamic drivers on FEM regions need a full model until driver symmetry is supported; prepare the return with Force full domain enabled, or export without symmetry planes if the CAD author cut it"
+)
 
 
 def channel_problem(channel: Any) -> tuple[str, str] | None:

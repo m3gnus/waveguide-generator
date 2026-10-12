@@ -273,3 +273,103 @@ def test_ill_conditioned_load_and_zero_current_map_to_contract_gaps():
     assert response['impedance']['real'] == response['impedance']['imaginary'] == [None, None]
     assert response['acoustic_impedance']['real'] == [None, None]
     assert response['metadata']['beat_transducer']['generalized_load']['unavailable_frequency_indices'] == [0, 1]
+
+
+@pytest.mark.parametrize('split_tags', [False, True])
+def test_connected_fold_keeps_sd_and_accepts_lumped_chamber_across_tags(split_tags):
+    points = np.array([[0., 0., 0.], [20., 0., 0.], [0., 10., 0.], [0., 2.5, 5.]])
+    moving = np.array([[0, 1, 2], [1, 0, 3]])
+    groups = {'moving': moving, 'walls': np.array([[0, 2, 3], [1, 3, 2]])}
+    if split_tags:
+        groups['fold'] = groups['moving'][1:]
+        groups['moving'] = groups['moving'][:1]
+    exterior = ExteriorSurface(points, groups, {
+        name: {'kind': 'rigid' if name == 'walls' else 'moving', 'drive_channel_id': 'front'}
+        for name in groups})
+    request = build_coupled_request(exterior, [region_input()], layout=compiled().layout, frame=FRAME,
+        frequencies_hz=[100.], transducers={'front': driver(
+            lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})})
+    system = request.wire['compiled_system']
+    assert system['metadata']['projected_areas_m2']['front'] == pytest.approx(7.5e-5)
+    component = next(c for c in system['components'] if c['name'] == 'front')
+    assert component['parameters']['lumped_sealed_rear_chamber']['projected_area_m2'] == pytest.approx(7.5e-5)
+
+
+def test_numerically_neutral_disconnected_rim_joins_populated_side():
+    from server.solver.beat_adapter.coupled_transducers import parameters
+    front = np.array([[[0., 0., 0.], [.02, 0., 0.], [0., .01, 0.]]])
+    # A separate rim group with opposing projections and a tiny negative net.
+    rim = np.array([[[1., 0., 0.], [1.02, 0., 0.], [1., .01, .01]],
+                    [[1.02, 0., 0.], [1., 0., 0.], [1., .01 + 1e-16, -.01]]])
+    spec = driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+    params, area = parameters(spec, {'exterior': [(np.array([[0, 1, 2]]), front),
+                                                (np.array([[3, 4, 5], [4, 3, 6]]), rim)]})
+    assert area == pytest.approx(1e-4)
+    assert params['lumped_sealed_rear_chamber']['projected_area_m2'] == pytest.approx(area)
+
+
+def test_coincident_faces_in_distinct_meshes_are_two_sides_and_average():
+    from server.solver.beat_adapter.coupled_transducers import parameters
+    front = np.array([[[0., 0., 0.], [.02, 0., 0.], [0., .01, 0.]]])
+    rear = front[:, [0, 2, 1]]
+    meshes = {'exterior': [(np.array([[0, 1, 2]]), front)],
+              'fem': [(np.array([[0, 2, 1]]), rear)]}
+    _, area = parameters(driver(), meshes)
+    assert area == pytest.approx(1e-4)
+    with pytest.raises(ValueError, match='both sides'):
+        parameters(driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}), meshes)
+
+
+def test_projected_area_mismatch_reaches_compiled_and_result_warnings():
+    from server.tests.test_imported_jobs import _request
+    region = region_input()
+    points = region.domain.points_mm.copy()
+    points[:, 0] *= 2
+    exterior = ExteriorSurface(points, region.domain.surfaces, {
+        name: {'kind': 'moving' if 'moving' in name else 'rigid', 'drive_channel_id': 'fem'}
+        for name in region.domain.surfaces})
+    with pytest.warns(UserWarning, match='more than 10%'):
+        request = build_coupled_request(exterior, [region], layout=compiled().layout, frame=FRAME,
+                                        frequencies_hz=[100.], transducers={'fem': driver()})
+    assert request.wire['compiled_system']['metadata']['projected_areas_m2']['fem'] == pytest.approx(7.5e-5)
+    assert len(request.warnings) == 1
+    geometry = _request('wgi_' + '0' * 26).geometry
+    geometry.drive_channels = [DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=driver())]
+    context = SolverContext(design=None, frequency_range=(100., 1000.), num_frequencies=2)
+    response = coupled_envelope(map_coupled_sweep(events(request), request), request, context=context,
+        geometry=geometry, record={}, config=official_beat.response_config(request, context), started=time.time())
+    assert response['metadata']['warnings'] == list(request.warnings)
+    assert response['channels']['fem']['metadata']['warnings'] == list(request.warnings)
+
+
+def test_direct_builder_prioritizes_termination_like_admission(monkeypatch):
+    from server.jobs.runtime.imported_refusals import _imported_request_refusal
+    from server.tests.test_imported_jobs import _request
+    monkeypatch.setenv('WG2_FEM_REGIONS', '1')
+    region = region_input(interface=True).record
+    region['surface_groups'].append({'group_id': 'tube', 'kind': 'plane-wave-termination'})
+    record = {'fem_regions': [region]}
+    request = _request('wgi_' + '0' * 26)
+    request.geometry.drive_channels[0].patch_weights = {'patch': 1.}
+    problem = _imported_request_refusal(request, record)
+    assert problem[0] == 'fem_termination_with_exterior'
+    with pytest.raises(ValueError, match=problem[0]):
+        build_imported_coupled_request(record, request.geometry, None, frequencies_hz=[100.])
+
+
+def test_driver_symmetry_refusal_names_actual_preparation_control(monkeypatch):
+    from server.jobs.runtime.imported_refusals import _imported_request_refusal
+    from server.tests.test_imported_jobs import _request
+    monkeypatch.setenv('WG2_FEM_REGIONS', '1')
+    request = _request('wgi_' + '0' * 26)
+    request.geometry.drive_channels = [DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=driver())]
+    problem = _imported_request_refusal(request, {'fem_regions': [region_input().record],
+                                               'symmetry': {'domain_planes': ['x0']}})
+    assert problem[0] == 'fem_domain_unsupported'
+    assert 'until driver symmetry is supported' in problem[1]
+    assert 'Force full domain' in problem[1]
+    assert 'CAD author cut it' in problem[1]
+    with pytest.raises(ValueError, match='Force full domain') as raised:
+        build_coupled_request(None, [region_input()], layout=compiled().layout, frame=FRAME,
+                             frequencies_hz=[100.], symmetry='yz', transducers={'fem': driver()})
+    assert str(raised.value) == problem[1]

@@ -411,7 +411,10 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
 
     built = compiled(fem_channel="exterior", **({"transducers": {"exterior": driver()}} if voltage else {}))
     built = replace(built, wire={**built.wire, "frequencies_hz": [100., 500., 1000.]})
-    monkeypatch.setattr(coupled_request, "build_imported_coupled_request", lambda *a, **k: built)
+    def compile_request(*args, **kwargs):
+        assert kwargs["resolved_quadrants"] == 1234
+        return built
+    monkeypatch.setattr(coupled_request, "build_imported_coupled_request", compile_request)
     def mutate(raw):
         wire = runtime.requests[-1]
         index = runtime.result_count % 3
@@ -473,6 +476,8 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
                 assert field["drive_normalization"].tolist() == ["voltage_rms" if voltage else "unit_acceleration"]
                 if voltage:
                     assert field["transducer_reference_voltage_v"].item() == 2.83
+                else:
+                    assert "transducer_reference_voltage_v" not in field.files
                 assert field["pressure"].shape == (3, 1, 4)
                 np.testing.assert_array_equal(field["tetrahedra_0"], [[0, 1, 2, 3]])
             assert not exterior_runs

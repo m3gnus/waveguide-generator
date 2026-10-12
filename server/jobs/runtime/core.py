@@ -3814,7 +3814,7 @@ class JobRuntime:
         except Exception:
             logger.exception("Could not persist final logs for cancelled job %s", job_id)
 
-    async def _run_coupled_regions(self, job_id, request, record, stage_cb):
+    async def _run_coupled_regions(self, job_id, request, record, stage_cb, symmetry_metadata=None):
         """Run declared air automatically; the ordinary job lifecycle owns persistence."""
         import numpy as np
         from server.solver.base import EngineRunResult
@@ -3837,7 +3837,8 @@ class JobRuntime:
         started = time.time()
         compiled = await asyncio.to_thread(
             build_imported_coupled_request, record, request.geometry, context,
-            frequencies_hz=canonical_frequencies(context))
+            frequencies_hz=canonical_frequencies(context),
+            resolved_quadrants=(symmetry_metadata or {}).get("resolved_quadrants"))
         sweep = await asyncio.to_thread(
             solve_coupled_compiled, compiled,
             cancellation_callback=lambda: self._check_cancelled(job_id),
@@ -3851,12 +3852,14 @@ class JobRuntime:
             arrays = {"schema": np.asarray("wg-fem-field-store-v2"),
                       "phasor_convention": np.asarray(compiled.wire["solver_options"]["phasor_convention"]),
                       "drive_normalization": np.asarray(list(compiled.drive_normalization.values())),
-                      "transducer_reference_voltage_v": np.asarray(compiled.wire["solver_options"].get("transducer_reference_voltage_v", 0.0)),
                       "frequencies_hz": next(iter(sweep.channels.values())).frequencies_hz,
                       "channel_ids": np.asarray(list(compiled.channel_ports)),
                       "region_ids": np.asarray([r.domain.region_id for r in compiled.regions]),
                       "pressure": sweep.nodal_pressure,
                       "symmetry_planes": np.asarray(imported_domain_planes(record), dtype="U2")}
+            voltage = compiled.wire["solver_options"].get("transducer_reference_voltage_v")
+            if voltage is not None:
+                arrays["transducer_reference_voltage_v"] = np.asarray(voltage)
             for index, region in enumerate(compiled.regions):
                 arrays[f"points_mm_{index}"] = region.domain.points_mm
                 arrays[f"tetrahedra_{index}"] = region.domain.tetrahedra
@@ -3960,7 +3963,7 @@ class JobRuntime:
             solve_started = time.perf_counter()
             if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
                 outcome = await self._run_coupled_regions(
-                    job_id, request, imported_record, stage_callback)
+                    job_id, request, imported_record, stage_callback, symmetry_metadata)
             elif is_full3d_solver_port(engine):
                 # BEAT and Metal have one HornLab-facing port. Their native
                 # protocols differ; the scheduler never needs to inspect them.

@@ -37,7 +37,7 @@ def enabled(monkeypatch):
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
 
 
-def symmetry_bundle(root: Path, planes=("x0", "y0"), *, authored=False, sealed=False):
+def symmetry_bundle(root: Path, planes=("x0", "y0"), *, authored=False, sealed=False, asymmetric_x=False):
     """A centred piston and mouth; an optional y-asymmetric rib permits x only."""
     root.mkdir(parents=True)
     low = np.array([-20., -15., 0.])
@@ -71,6 +71,9 @@ def symmetry_bundle(root: Path, planes=("x0", "y0"), *, authored=False, sealed=F
         if planes == ("x0",):
             rib = gmsh.model.occ.addBox(-22, 17, -2, 44, 3, 22)
             material, _ = gmsh.model.occ.fuse(material, [(3, rib)])
+        if asymmetric_x:
+            rib = gmsh.model.occ.addBox(22, -17, -2, 3, 34, 22)
+            material, _ = gmsh.model.occ.fuse(material, [(3, rib)])
         if authored:
             clip_low = [-30., -30., -10.]
             for plane in planes:
@@ -93,7 +96,7 @@ def symmetry_bundle(root: Path, planes=("x0", "y0"), *, authored=False, sealed=F
     manifest["instances"] = []
     manifest["sources"] = []
     manifest["coordinate_system"]["solver_anchor_instance_id"] = None
-    manifest["assembly"]["bbox_mm"] = [[-22, -17, -2], [22, 20 if planes == ("x0",) else 17, 20]]
+    manifest["assembly"]["bbox_mm"] = [[-22, -17, -2], [25 if asymmetric_x else 22, 20 if planes == ("x0",) else 17, 20]]
     if authored:
         manifest["required_features"].append("reduced-domain-v1")
         manifest["assembly"]["domain"] = {"kind": "half" if len(planes) == 1 else "quarter",
@@ -205,7 +208,8 @@ def test_ingest_reuses_exterior_symmetry_for_region_artifacts(tmp_path, planes):
     job = _request(record["ingest_id"])
     job.geometry.drive_channels = []
     context = SolverContext.from_imported_request(job, quadrants=quadrants, source_motion="normal")
-    request = build_imported_coupled_request(record, job.geometry, context, frequencies_hz=[100.])
+    request = build_imported_coupled_request(record, job.geometry, context, frequencies_hz=[100.],
+                                             resolved_quadrants=quadrants)
     assert request.wire["solver_options"]["symmetry"] == ("x" if len(planes) == 1 else "xy")
     assert len(points) and groups
 
@@ -277,7 +281,12 @@ def test_fake_worker_job_retains_half_field_and_displays_completed_field(tmp_pat
         raw.clear()
         raw.update(coupled_result(wire, 100.))
     runtime.mutate = mutate
-    result = asyncio.run(runner._run_coupled_regions("symmetric", request, record, lambda *args: None))
+    with pytest.raises(ValueError, match="disagree on symmetry"):
+        asyncio.run(runner._run_coupled_regions("symmetric", request, record, lambda *args: None,
+                                              {"resolved_quadrants": 1234}))
+    assert not runtime.requests  # Reject before starting the native worker.
+    result = asyncio.run(runner._run_coupled_regions("symmetric", request, record, lambda *args: None,
+                                                   {"resolved_quadrants": 14 if len(planes) == 1 else 1}))
     assert result.results["channel_order"] == ["drive-lf"]
     wire = runtime.requests[-1]
     assert wire["solver_options"]["symmetry"] == ("x" if len(planes) == 1 else "xy")
@@ -418,3 +427,158 @@ def test_request_rejects_leaks_and_exterior_plane_caps(tmp_path):
     with pytest.raises(ValueError, match="without plane caps"):
         build_coupled_request(cap_exterior, [item], layout=layout, frame=FRAME,
                               frequencies_hz=[100.], symmetry="yz+xz")
+
+
+
+def test_symmetry_snap_uses_union_extent_for_shared_interface_vertex():
+    from dataclasses import replace
+    from server.tests.test_fem_engine_route import region_input
+    item = region_input(interface=True)
+    points = item.domain.points_mm.copy()
+    points[[0, 2, 3], 0] = 1e-4
+    item = replace(item, domain=replace(item.domain, points_mm=points))
+    # The interface's vertices are shared; the far BEM tip is 1 m away,
+    # while the region is only 17 mm across its diagonal.
+    exterior_points = points.copy()
+    exterior_points[2, 1] = 1000.
+    groups = {name: faces[:1] if "walls" in name else faces
+              for name, faces in item.domain.surfaces.items()}
+    exterior = ExteriorSurface(exterior_points, groups, {
+        name: {"kind": "interface" if "interface" in name else "rigid"}
+        for name in item.domain.surfaces})
+    request = build_coupled_request(exterior, [item], layout=compiled().layout, frame=FRAME,
+                                    frequencies_hz=[100.], symmetry="yz")
+    topology = request.wire["compiled_system"]["interfaces"][0]["topology"]
+    assert topology["max_coordinate_error"] == 0.
+    assert request.regions[0] is item
+
+
+@pytest.mark.parametrize("collapsed", ["exterior_triangle", "region_triangle", "tetrahedron"])
+def test_symmetry_snap_refuses_collapsed_cells(collapsed):
+    from dataclasses import replace
+    from server.tests.test_fem_engine_route import region_input
+    item = region_input()
+    exterior = None
+    points = item.domain.points_mm.copy()
+    points[1, 0] = 1e-8
+    if collapsed == "exterior_triangle":
+        exterior = ExteriorSurface(points, item.domain.surfaces, {
+            name: {"kind": "rigid"} for name in item.domain.surfaces})
+    elif collapsed == "region_triangle":
+        item = replace(item, domain=replace(item.domain, points_mm=points))
+    else:
+        # All four vertices are distinct, all surface triangles survive,
+        # but snapping the fourth vertex into x=0 flattens the tetrahedron.
+        points = np.array([[0., 0., 0.], [0., 10., 0.], [0., 0., 10.], [1e-8, 2., 2.]])
+        item = replace(item, domain=replace(item.domain, points_mm=points))
+    with pytest.raises(ValueError, match="Symmetry snapping collapsed a " +
+                       ("tetrahedron" if collapsed == "tetrahedron" else "triangle")):
+        build_coupled_request(exterior, [item], layout=compiled().layout, frame=FRAME,
+                              frequencies_hz=[100.], symmetry="yz")
+
+
+def test_direct_builder_compares_record_to_stored_job_symmetry(monkeypatch):
+    from types import SimpleNamespace
+    from server.solver.context import SolverContext
+    from server.tests.test_fem_engine_route import region_input
+    region = region_input()
+    record = {"fem_regions": [region.record], "symmetry": {"domain_planes": ["x0"]}}
+    geometry = SimpleNamespace(drive_channels=[], combine=None)
+    context = SolverContext(design=None, frequency_range=(100., 1000.), num_frequencies=2, quadrants=14)
+    monkeypatch.setattr("server.solver.beat_adapter.coupled_request.read_verified_fem_region_mesh",
+                        lambda *args: pytest.fail("Stale stored symmetry must be refused before loading meshes"))
+    with pytest.raises(ValueError, match="disagree on symmetry"):
+        build_imported_coupled_request(record, geometry, context, frequencies_hz=[100.], resolved_quadrants=1234)
+
+
+@pytest.mark.parametrize("sealed", [False, True], ids=["coupled", "interior"])
+@pytest.mark.parametrize("failed_plane", ["x0", "y0"])
+def test_auto_fem_role_asymmetry_drops_only_unsupported_candidate_planes(tmp_path, sealed, failed_plane):
+    bundle, manifest, region = symmetry_bundle(tmp_path / "returns", sealed=sealed)
+    # Geometry mirrors on both planes, but the driver on just one side wall
+    # does not. FEM role matching must participate in AUTO's plane selection.
+    region["surface_groups"][0]["faces"] = [_face(
+        600, [20, 0, 10], [1, 0, 0], [20, -15, 0], [20, 15, 20])
+        if failed_plane == "x0" else _face(
+        800, [0, 15, 10], [0, 1, 0], [-20, 15, 0], [20, 15, 20])]
+    (bundle / "wgreturn.json").write_text(json.dumps(manifest))
+    record = _ingest(bundle, tmp_path)
+    expected = [] if failed_plane == "x0" else ["x0"]
+    assert record["symmetry"]["domain_planes"] == expected
+    assert record["domain_decision"]["solver_domain"]["planes"] == expected
+    assert record["domain_decision"]["refusal"] is None
+    from server.cadlink.interpretation.domain_decision import decision_problem
+    assert decision_problem(record) is None
+    notes = [f for f in record["findings"] if f["kind"] == "fem-symmetry-fallback"]
+    assert notes[0]["plane"] == failed_plane
+    assert f"does not mirror on {failed_plane}" in notes[0]["reason"]
+    assert all(not note["blocking"] for note in notes)
+    if failed_plane == "x0":
+        assert notes[1]["plane"] == "y0"
+        assert "y0-only FEM" in notes[1]["reason"]
+    domain = read_fem_region_domain(read_verified_fem_region_mesh(record, region["region_id"]), region["region_id"])
+    xyz = domain.points_mm[domain.tetrahedra]
+    assert np.abs(np.linalg.det(xyz[:, 1:] - xyz[:, :1])).sum() / 6 == pytest.approx(24000 / 2 ** len(expected))
+
+
+def test_author_cut_y_only_is_refused_at_ingest(tmp_path):
+    bundle, _, _ = symmetry_bundle(tmp_path / "returns", ("y0",), authored=True, asymmetric_x=True)
+    with pytest.raises(ValueError, match="y0-only FEM returns cannot be solved by BEAT CPU"):
+        _ingest(bundle, tmp_path)
+
+
+def test_negative_author_cut_fem_return_has_accurate_refusal(tmp_path):
+    bundle, manifest, region = symmetry_bundle(tmp_path / "returns", ("x0",), authored=True)
+    # Reflect both actual STEP members and their declared face evidence.
+    def reflect_step(path):
+        import gmsh
+        gmsh.model.add("negative-author-cut")
+        roots = gmsh.model.occ.importShapes(str(path))
+        gmsh.model.occ.mirror(roots, 1., 0., 0., 0.)
+        gmsh.model.occ.synchronize()
+        gmsh.write(str(path))
+        gmsh.model.remove()
+    for path in (bundle / manifest["assembly"]["file"], bundle / region["file"]):
+        _run_in_gmsh_session(reflect_step, path)
+        data = path.read_bytes()
+        member = manifest["files"][path.relative_to(bundle).as_posix()]
+        member.update(sha256="sha256:" + hashlib.sha256(data).hexdigest(), size_bytes=len(data))
+    for group in region["surface_groups"]:
+        for face in group["faces"]:
+            face["centroid_mm"][0] *= -1
+            face["normal"][0] *= -1
+            lo, hi = face["bbox_mm"]
+            lo[0], hi[0] = -hi[0], -lo[0]
+    manifest["assembly"]["bbox_mm"][0][0] = -22
+    manifest["assembly"]["bbox_mm"][1][0] = 0
+    from server.tests.test_cadlink_domain_automatic import provenance
+    manifest["required_features"].remove("reduced-domain-v1")
+    manifest["required_features"].append("domain-automatic-v1")
+    manifest["assembly"]["domain"] = {"kind": "automatic"}
+    manifest["assembly"]["cut_provenance"] = [
+        provenance(body["object_id"], kept_side="negative") for body in manifest["scope"]["included"]]
+    (bundle / "wgreturn.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="author-cut model keeps the negative side; FEM regions need the positive side"):
+        _ingest(bundle, tmp_path)
+
+
+@pytest.mark.parametrize("sealed", [False, True], ids=["coupled", "interior"])
+def test_author_cut_fem_fundamental_domain_failure_never_falls_back(tmp_path, sealed):
+    bundle, manifest, region = symmetry_bundle(tmp_path / "author", ("x0",), authored=True, sealed=sealed)
+    full, _, full_region = symmetry_bundle(tmp_path / "full", sealed=sealed)
+    data = (full / full_region["file"]).read_bytes()
+    (bundle / region["file"]).write_bytes(data)
+    region["surface_groups"] = full_region["surface_groups"]
+    manifest["files"][region["file"]].update(
+        sha256="sha256:" + hashlib.sha256(data).hexdigest(), size_bytes=len(data))
+    (bundle / "wgreturn.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="outside the positive author-cut domain on x0"):
+        _ingest(bundle, tmp_path)
+
+
+
+def test_author_y_cut_with_auto_x_mirror_keeps_supported_quarter(tmp_path):
+    bundle, _, _ = symmetry_bundle(tmp_path / "returns", ("y0",), authored=True)
+    record = _ingest(bundle, tmp_path)
+    assert record["symmetry"]["domain_planes"] == ["x0", "y0"]
+    assert record["domain_decision"]["solver_domain"]["planes"] == ["x0", "y0"]

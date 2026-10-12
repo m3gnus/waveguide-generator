@@ -9,6 +9,7 @@ from importlib.metadata import PackageNotFoundError, version
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import secrets
 import shutil
@@ -1421,7 +1422,7 @@ def ingest_bundle(
     # is part of the mesh cache key -- the same STEP declared differently is a
     # different solve.
     options["declared_cut_planes"] = list(declared_domain_planes(manifest))
-    _refuse_fem_domain(manifest, options, options["declared_cut_planes"])
+    _refuse_fem_domain(manifest, options, options["declared_cut_planes"], final_domain=False)
     # M1c-auto: the evidence for this snapshot's domain (domain_interpretation).
     # A reading that changes what is solved enters the cache key; with no
     # evidence the key is exactly what it was before.
@@ -1658,6 +1659,43 @@ def ingest_bundle(
                 applied_planes = tuple(recovered_options["domain_interpretation"]["applied"])
                 reflected_planes = recovery.reflect
                 built_inline_viewport = not defer_viewport
+    # AUTO may reduce only when every declared air domain supports the same
+    # plane. Rebuild the exterior with rejected planes excluded so its artifact,
+    # replay recipe, polar grid and all FEM meshes retain one domain decision.
+    fem_symmetry_notes = []
+    fem_deadline = time.monotonic() + FEM_REGIONS_WALL_TIME_S
+    while True:
+        reflected = (set(reflected_planes) | set(options.get("reflect_planes", ()))
+                     | set((built.get("symmetry") or {}).get("reflected_planes", ())))
+        reflected.update(p for p, verdict in (built.get("symmetry", {}).get("planes") or {}).items()
+                         if verdict.get("reflected"))
+        if manifest["scope"].get("fem_regions") and reflected:
+            raise IngestRefusal("stage 6 symmetry", "The author-cut model keeps the negative side; "
+                                "FEM regions need the positive side. Export the positive side instead.")
+        try:
+            coupled_exterior, coupled_regions = _mesh_coupled_regions(
+                bundle, imports_root, built, normalized_mesh, options, applied_planes, deadline=fem_deadline,
+            )
+            fem_regions = _mesh_fem_regions(
+                bundle, imports_root, coupled_regions, deadline=fem_deadline, exterior=built)
+        except IngestRefusal as exc:
+            # Never turn parser/mesh failures or an author's declared cut into
+            # a fallback. Only a failed FEM mirror on a WG candidate is optional.
+            match = re.search(r"FEM region .*?does not mirror on (x0|y0):", str(exc))
+            plane = match.group(1) if match else "y0" if "y0-only FEM" in str(exc) else None
+            candidates = set((built.get("symmetry") or {}).get("cut_planes") or ())
+            if (plane not in candidates or options.get("symmetry_mode", "auto") != "auto"
+                    or plane in set(options["declared_cut_planes"]) | set(applied_planes)):
+                raise
+            reason = str(exc)
+            fem_symmetry_notes.append({"plane": plane, "reason": reason})
+            options["fem_rejected_symmetry_planes"] = [
+                *options.get("fem_rejected_symmetry_planes", ()), plane]
+            built, cache_key, cache_hit, mesh_path = mesh_for(options, include_viewport=not defer_viewport)
+            if not applied_planes:
+                observations = observe_record_mesh(built)
+        else:
+            break
     (
         viewport_lookup_key,
         _viewport_index,
@@ -1680,11 +1718,6 @@ def ingest_bundle(
         else built["normalisation"]
     )
     mesh_content_sha256 = mesh_text_sha256(str(built["msh_text"]))
-    fem_deadline = time.monotonic() + FEM_REGIONS_WALL_TIME_S
-    coupled_exterior, coupled_regions = _mesh_coupled_regions(
-        bundle, imports_root, built, normalized_mesh, options, applied_planes, deadline=fem_deadline,
-    )
-    fem_regions = _mesh_fem_regions(bundle, imports_root, coupled_regions, deadline=fem_deadline, exterior=built)
     # The one domain decision (``domain_decision.py``): made here, once, on the
     # mesh this snapshot is solved with; the model card, the Solve card's plan,
     # the preparation, every submission and the job all read it.
@@ -1764,6 +1797,9 @@ def ingest_bundle(
     freshness = compute_freshness(manifest, store, recompute=recompute_freshness)
 
     findings = list(scope_findings)
+    for note in fem_symmetry_notes:
+        findings.append({"id": _finding_id("fem-symmetry-fallback", note),
+                         "kind": "fem-symmetry-fallback", "blocking": False, **note})
     from server.solver.coupled_admission import fem_termination_problem
 
     termination = fem_termination_problem(
@@ -2093,8 +2129,9 @@ def ingest_bundle(
 FEM_REGIONS_WALL_TIME_S = MESH_BUDGET.wall_time_s
 
 
-def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], planes: Any) -> str:
-    """Refuse known unsupported FEM domains before exterior meshing."""
+def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], planes: Any, *,
+                       final_domain: bool = True) -> str:
+    """Check declarations early, then engine coverage after AUTO chooses its cuts."""
     regions = manifest["scope"].get("fem_regions", [])
     if not regions:
         return ""
@@ -2111,6 +2148,10 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
     )
     if any(p not in {"x0", "y0"} for p in planes):
         raise IngestRefusal("stage 7 meshing", f"{labels}: FEM symmetry supports only x0 and y0.")
+    if final_domain and set(planes) == {"y0"}:
+        raise IngestRefusal("stage 6 symmetry", f"{labels}: y0-only FEM returns cannot be solved "
+                            "by BEAT CPU. Prepare a full model with Force full domain enabled, "
+                            "or export a full model if the CAD author cut it.")
     return labels
 
 

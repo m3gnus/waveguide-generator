@@ -306,7 +306,7 @@ def build_coupled_system(
     boundaries: list[dict[str, Any]] = []
     interfaces: list[dict[str, Any]] = []
     moving_by_channel: dict[str, list[str]] = {}
-    moving_triangles: dict[str, list[np.ndarray]] = {}
+    moving_triangles: dict[str, dict[str, list[tuple[np.ndarray, np.ndarray]]]] = {}
     exterior_boundary_by_name: dict[str, str] = {}
     exterior_rows: dict[str, np.ndarray] = {}
     exterior_triangles = np.zeros((0, 3), dtype=np.int64)
@@ -367,7 +367,8 @@ def build_coupled_system(
                     raise CoupledSystemError(f"Exterior source {group_name!r} names no drive channel.")
                 moving_by_channel.setdefault(str(channel), []).append(boundary_id)
                 if channel in (transducers or {}):
-                    moving_triangles.setdefault(str(channel), []).append(exterior.points_mm[block] * MM_TO_M)
+                    moving_triangles.setdefault(str(channel), {}).setdefault(EXTERIOR_MESH_ID, []).append(
+                        (block, exterior.points_mm[block] * MM_TO_M))
 
     paired: set[str] = set()
     media = set()
@@ -425,7 +426,7 @@ def build_coupled_system(
                         corners = np.asarray([driver_triangles[tuple(sorted(face))] for face in block])
                     except KeyError as exc:
                         raise CoupledSystemError(f"Diaphragm {group_name!r} is not on the tetrahedral boundary") from exc
-                    moving_triangles.setdefault(str(channel), []).append(corners)
+                    moving_triangles.setdefault(str(channel), {}).setdefault(mesh_id, []).append((block, corners))
             elif kind == "interface":
                 partner = exterior_boundary_by_name.get(group_name)
                 if exterior is None or partner is None:
@@ -466,6 +467,7 @@ def build_coupled_system(
         raise CoupledSystemError(f"Transducer channels have no moving boundary: {sorted(unknown)}")
     components, ports = [], []
     projected_areas = {}
+    area_warnings: list[str] = []
     for channel, boundary_ids in sorted(moving_by_channel.items()):
         component_id = f"component:{channel}"
         spec = (transducers or {}).get(channel)
@@ -473,7 +475,8 @@ def build_coupled_system(
         if spec is not None:
             from server.solver.beat_adapter.coupled_transducers import parameters
 
-            params, projected_areas[channel] = parameters(spec, moving_triangles[channel])
+            params, projected_areas[channel] = parameters(
+                spec, moving_triangles[channel], collected_warnings=area_warnings)
         components.append({
             "id": component_id, "name": channel,
             "kind": "electrodynamic_transducer" if spec is not None else "ideal_velocity_source",
@@ -493,7 +496,8 @@ def build_coupled_system(
         "excitation_ports": ports,
         "assumptions": [],
         "metadata": {"producer": "waveguide-generator", "feature": "fem-regions-v1",
-                     **({"projected_areas_m2": projected_areas} if projected_areas else {})},
+                     **({"projected_areas_m2": projected_areas} if projected_areas else {}),
+                     **({"warnings": area_warnings} if area_warnings else {})},
     }
 
 

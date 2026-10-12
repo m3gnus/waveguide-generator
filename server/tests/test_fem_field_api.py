@@ -261,3 +261,17 @@ def test_v2_refuses_invalid_normalization_axes_and_voltage(field_app, field_arra
         "drive_normalization": np.array(normalization), "transducer_reference_voltage_v": np.array(voltage)})
     status, payload, _ = _get(app)
     assert status == 500
+
+
+@pytest.mark.parametrize("old_voltage", [None, 0.])
+def test_ideal_v2_field_accepts_missing_or_legacy_zero_voltage(field_app, field_arrays, old_voltage):
+    app, store = field_app
+    arrays = {**field_arrays, "schema": np.array("wg-fem-field-store-v2"),
+              "drive_normalization": np.array(["unit_acceleration", "unit_acceleration"])}
+    if old_voltage is not None:
+        arrays["transducer_reference_voltage_v"] = np.array(old_voltage)
+    store.store_fem_field_arrays("field", arrays)
+    status, payload, _ = _get(app)
+    assert status == 200
+    assert payload["drive_normalization"] == "unit_acceleration"
+    assert "transducer_reference_voltage_v" not in payload or payload["transducer_reference_voltage_v"] is None

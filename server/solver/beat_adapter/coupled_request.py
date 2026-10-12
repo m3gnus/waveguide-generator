@@ -26,6 +26,10 @@ class CoupledRequest:
     channel_ports: Mapping[str, tuple[str, ...]]
 
     @property
+    def warnings(self) -> tuple[str, ...]:
+        return tuple(self.wire["compiled_system"]["metadata"].get("warnings", ()))
+
+    @property
     def drive_normalization(self) -> dict[str, str]:
         kinds = {p["id"]: p["kind"] for p in self.wire["compiled_system"]["excitation_ports"]}
         return {channel: "voltage_rms" if kinds[ports[0]] == "voltage" else "unit_acceleration"
@@ -56,20 +60,39 @@ def build_coupled_request(
             or np.any(frequencies <= 0) or len(np.unique(frequencies)) != len(frequencies)):
         raise ValueError("Frequencies must be positive, finite and distinct")
     if transducers and axes:
-        raise ValueError("Electrodynamic transducers in FEM solves need a full model")
+        from .coupled_transducers import FEM_DRIVER_SYMMETRY_MESSAGE
 
-    def image_points(points):
+        raise ValueError(FEM_DRIVER_SYMMETRY_MESSAGE)
+
+    all_points = np.concatenate([item.domain.points_mm for item in regions]
+                                + ([exterior.points_mm] if exterior is not None else []))
+    all_points = (all_points + translation * 1000) @ rotation.T
+    tolerance = max(1e-6, float(np.linalg.norm(np.ptp(all_points, axis=0))) * 1e-6)
+
+    def image_points(points, surfaces, tetrahedra=None):
         points = (np.asarray(points, dtype=float) + translation * 1000) @ rotation.T
-        tolerance = max(1e-6, float(np.linalg.norm(np.ptp(points, axis=0))) * 1e-6)
         for axis in axes:
             if np.min(points[:, axis]) < -tolerance:
                 raise ValueError("Mesh is outside the positive symmetry fundamental domain")
             points[np.abs(points[:, axis]) <= tolerance, axis] = 0.
+        if axes:
+            for faces in surfaces.values():
+                corners = points[faces]
+                areas = np.linalg.norm(np.cross(corners[:, 1] - corners[:, 0],
+                                               corners[:, 2] - corners[:, 0]), axis=1)
+                if not np.all(areas > 0):
+                    raise ValueError("Symmetry snapping collapsed a triangle")
+            if tetrahedra is not None:
+                corners = points[tetrahedra]
+                volumes = np.abs(np.linalg.det(corners[:, 1:] - corners[:, :1]))
+                if not np.all(volumes > 0):
+                    raise ValueError("Symmetry snapping collapsed a tetrahedron")
         return points
 
     transformed_regions = [replace(item, domain=replace(
-        item.domain, points_mm=image_points(item.domain.points_mm))) for item in regions]
-    transformed_exterior = (replace(exterior, points_mm=image_points(exterior.points_mm))
+        item.domain, points_mm=image_points(item.domain.points_mm, item.domain.surfaces,
+                                           item.domain.tetrahedra))) for item in regions]
+    transformed_exterior = (replace(exterior, points_mm=image_points(exterior.points_mm, exterior.groups))
                             if exterior is not None else None)
     transformed_layout = replace(layout, points_m={
         name: (points + translation) @ rotation.T for name, points in layout.points_m.items()})
@@ -101,19 +124,20 @@ def build_coupled_request(
 
 
 def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any, *,
-                                   frequencies_hz: Sequence[float]) -> CoupledRequest:
+                                   frequencies_hz: Sequence[float],
+                                   resolved_quadrants: int | None = None) -> CoupledRequest:
     from server.solver.coupled_admission import fem_drive_problem, fem_termination_problem, painted_source_ids
 
     from .coupled_transducers import channel_problem
 
-    for channel in geometry.drive_channels:
-        problem = channel_problem(channel)
-        if problem:
-            raise ValueError(f"{problem[0]}: {problem[1]}")
     problem = fem_termination_problem(record.get("fem_regions", ()), has_exterior=bool(
         any(c.source_ids for c in geometry.drive_channels) or painted_source_ids(record)))
     if problem:
         raise ValueError(f"{problem[0]}: {problem[1]}")
+    for channel in geometry.drive_channels:
+        problem = channel_problem(channel)
+        if problem:
+            raise ValueError(f"{problem[0]}: {problem[1]}")
     problem = fem_drive_problem(record.get("fem_regions", ()),
         {c.id: c.source_ids for c in geometry.drive_channels},
         painted_sources=painted_source_ids(record),
@@ -123,8 +147,8 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
     if bool(record.get("infinite_baffle")):
         raise ValueError("FEM regions require free space without an infinite baffle")
     symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
-    if symmetry.quadrants != context.quadrants:
-        raise ValueError("Stored context and ingestion record disagree on symmetry")
+    if resolved_quadrants is not None and symmetry.quadrants != resolved_quadrants:
+        raise ValueError("Stored job and ingestion record disagree on symmetry")
     regions = tuple(FemRegionInput(
         region, read_fem_region_domain(read_verified_fem_region_mesh(record, region["region_id"]),
                                       region["region_id"])) for region in record.get("fem_regions", ()))

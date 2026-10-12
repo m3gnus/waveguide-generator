@@ -3377,7 +3377,9 @@ def build_imported_mesh(
         else:
             cut = auto_cut_occ_geometry(
                 groups,
-                planes=SUPPORTED_CUT_PLANES if allow_symmetry_reduction else (),
+                planes=tuple(p for p in SUPPORTED_CUT_PLANES
+                             if p not in options.get("fem_rejected_symmetry_planes", ()))
+                if allow_symmetry_reduction else (),
             )
             if not allow_symmetry_reduction:
                 cut.report["note"] = (
