@@ -402,3 +402,37 @@ def test_even_unambiguous_exterior_chamber_requires_declared_sd(mesh, layout, ta
         t.build_transducer_request(mesh, drivers=[driver(tags=tags,
             lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .01})],
             layout=layout, frame=FRAME, frequencies_hz=[100.])
+
+
+def test_geometric_sd_weights_each_face_projection():
+    faces = np.array([[0, 1, 2], [1, 3, 2]])
+    points = np.array([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [1., 1., 0.]])
+    meshes = {'front': [(faces, points[faces])]}
+    assert t.geometric_driver_area(meshes, [0, 0, 1]) == (1., False, [])
+    area, ambiguous, notes = t.geometric_driver_area(meshes, [0, 0, 1],
+                                                    face_weights={'front': [np.array([1., .25])]})
+    assert area == pytest.approx(.625)
+    assert not ambiguous and notes == []
+    # The reverse fold subtracts its weighted projection inside a connected patch.
+    area, ambiguous, _ = t.geometric_driver_area(meshes, [0, 0, 1],
+                                               face_weights={'front': [np.array([1., -.25])]})
+    assert area == pytest.approx(.375) and not ambiguous
+
+
+@pytest.mark.parametrize('weights', [[np.array([1.])], [np.array([1., np.nan])], []])
+def test_geometric_sd_refuses_mismatched_or_nonfinite_weights(weights):
+    faces = np.array([[0, 1, 2], [1, 3, 2]])
+    points = np.array([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [1., 1., 0.]])
+    with pytest.raises(UnsupportedPhysics, match='motion weights'):
+        t.geometric_driver_area({'front': [(faces, points[faces])]}, [0, 0, 1],
+                                face_weights={'front': weights})
+
+
+def test_exterior_declared_sd_does_not_allow_two_sided_chamber(make_mesh, layout):
+    mesh = make_mesh([[0, 0, 0], [1, 0, 0], [0, 1, 0],
+                      [0, 0, -1], [1, 0, -1], [0, 1, -1]],
+                     [[0, 1, 2], [3, 5, 4]], [2, 3])
+    with pytest.raises(t.LumpedChamberDoubleRearLoad, match='rear already radiates'):
+        t.build_transducer_request(mesh, drivers=[driver(sd_m2=.5,
+            lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .01})],
+            layout=layout, frame=FRAME, frequencies_hz=[100])

@@ -928,17 +928,23 @@ export function ExteriorDriverLibraryPicker({ channel, roleHint }: { channel: Ca
   const load = useDriverLibraryStore((store) => store.load);
   const counts = useMemo(() => driverKindCounts(info), [info]);
   useEffect(() => { void load(); }, [load]);
-  const [pickedWithoutSd, setPickedWithoutSd] = useState(false);
+  const [pickedLibraryDriver, setPickedLibraryDriver] = useState<DriverPreset | null>(null);
+  const form = useCadReturnStore(store => store.driveChannels.find(c => c.id === channel.id)?.exterior_transducer);
+  const librarySd = pickedLibraryDriver?.base.sd_cm2;
+  const pickedWithoutSd = pickedLibraryDriver !== null && form?.sd_m2 === undefined
+    && !(librarySd !== undefined && Number.isFinite(librarySd) && librarySd > 0);
   return <>
-    <DriverSearch channel={channel} roleHint={roleHint} counts={counts} onPick={picked => {
+    <DriverSearch channel={channel} roleHint={roleHint} counts={counts} onPick={(picked, options) => {
+      setPickedLibraryDriver(options?.edit ? null : picked);
+      if (options?.edit) return;
       const state = useCadReturnStore.getState();
       const form = state.driveChannels.find(c => c.id === channel.id)?.exterior_transducer;
       if (form) state.setExteriorTransducer(channel.id, prefillExteriorDriver(form, picked.base, { replace: true }));
-      const sd = picked.base.sd_cm2;
-      setPickedWithoutSd(!(sd !== undefined && Number.isFinite(sd) && sd > 0));
     }}/>
     {pickedWithoutSd && <p className="section-note" role="status">
-      This library driver lists no Sd. Enter Sd in the driver options to use a lumped rear chamber.
+      {form?.lumped_sealed_rear_chamber?.enabled
+        ? "This library driver lists no Sd. Enter Sd in the driver options to use a lumped rear chamber."
+        : "This library driver lists no Sd. You can enter Sd from the datasheet for acoustic impedance."}
     </p>}
   </>;
 }

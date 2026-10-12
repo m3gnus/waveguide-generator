@@ -97,6 +97,13 @@ export function parseExteriorTransducer(value: unknown): ExteriorTransducerForm 
       ? raw.motion_axis as [number, number, number] : [0, 0, 0] };
 }
 
+// Replacement identity only controls the mounted editor's transient option cache.
+// Weak references keep this marker out of saved specs without retaining old forms.
+const driverReplacements = new WeakSet<ExteriorTransducerForm>();
+export function isExteriorDriverReplacement(form: ExteriorTransducerForm): boolean {
+  return driverReplacements.has(form);
+}
+
 /** Library defaults fill gaps; explicit picks replace fields and clear unavailable values. Mms is never bare Mmd. */
 export function prefillExteriorDriver(form: ExteriorTransducerForm, values: Record<string, number | undefined>, options: { replace?: boolean } = {}): ExteriorTransducerForm {
   const conversions = [
@@ -106,6 +113,7 @@ export function prefillExteriorDriver(form: ExteriorTransducerForm, values: Reco
     ['power_w', 'power_w', 1], ['xmax_mm', 'xmax_mm', 1],
   ] as const;
   const filled = { ...form };
+  if (options.replace) delete filled.semi_inductance;
   for (const [key, libraryKey, divisor] of conversions) {
     if (!options.replace && filled[key] !== undefined) continue;
     const value = values[libraryKey];
@@ -113,5 +121,7 @@ export function prefillExteriorDriver(form: ExteriorTransducerForm, values: Reco
       && (key === 'le_h' ? value >= 0 : value > 0)) filled[key] = value / divisor;
     else if (options.replace) delete filled[key];
   }
-  return normalizeExteriorOptions(filled);
+  const result = normalizeExteriorOptions(filled);
+  if (options.replace) driverReplacements.add(result);
+  return result;
 }

@@ -101,57 +101,80 @@ class LumpedChamberDoubleRearLoad(UnsupportedPhysics):
 
     def __init__(self, channel_id: str):
         self.message = (f"Channel '{channel_id}': a lumped rear chamber replaces rear radiation; "
-                        "the moving faces lie in multiple meshes and the rear already radiates")
+                        "the rear already radiates; untag the rear faces or disable the chamber")
         super().__init__(f"{self.reason_code}: {self.message}")
 
 
-def chamber_sd_problem(raw: Mapping[str, Any], channel_id: str, *, mesh_count: int = 1) -> None:
-    """Declaration-only chamber checks, shared by admission and compilation."""
+def chamber_sd_problem(raw: Mapping[str, Any], channel_id: str, *, both_sides_radiate: bool = False) -> None:
+    """Chamber checks shared by admission and compilation."""
     if (raw.get("lumped_sealed_rear_chamber") or {}).get("enabled", False):
         if raw.get("sd_m2") is None:
             raise DriverSdRequired(channel_id)
-        if mesh_count > 1:
+        if both_sides_radiate:
             raise LumpedChamberDoubleRearLoad(channel_id)
 
 
+def _projected_patch_nets(faces, projections, total) -> list[float]:
+    """Connected signed projections, excluding numerically neutral rims."""
+    remaining = set(np.flatnonzero(np.abs(projections) > total * 1e-12))
+    owners: dict[tuple[int, int], list[int]] = {}
+    neighbours = [set() for _ in faces]
+    for index in sorted(remaining):
+        for a, b in zip(faces[index], np.roll(faces[index], -1)):
+            edge = tuple(sorted((int(a), int(b))))
+            for owner in owners.setdefault(edge, []):
+                neighbours[index].add(owner)
+                neighbours[owner].add(index)
+            owners[edge].append(index)
+    nets = []
+    while remaining:
+        pending, patch = [remaining.pop()], []
+        while pending:
+            index = pending.pop()
+            patch.append(index)
+            adjacent = neighbours[index] & remaining
+            remaining.difference_update(adjacent)
+            pending.extend(adjacent)
+        nets.append(float(projections[patch].sum()))
+    return nets
+
+
 def geometric_driver_area(meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.ndarray]]],
-                          axis: Sequence[float]) -> tuple[float, bool, list[str]]:
+                          axis: Sequence[float],
+                          face_weights: Mapping[str, Sequence[np.ndarray]] | None = None
+                          ) -> tuple[float, bool, list[str]]:
     """Sum same-sign mesh nets; average opposite sides. Neutral rims do not join skins.
 
     Connected folds keep their signed subtraction. Only edge connectivity is
     used: there is no normal-angle separator or inferred front/rear classifier.
+    Optional weights mirror each mesh's boundary list, with one weight per face.
     """
     nets_by_mesh, ambiguous = [], False
-    for boundaries in meshes_m.values():
+    for mesh_id, boundaries in meshes_m.items():
+        if not boundaries:
+            ambiguous = True
+            continue
         faces = np.concatenate([faces for faces, _ in boundaries])
         triangles = np.concatenate([triangles for _, triangles in boundaries])
         projections = _projected_face_areas(triangles, axis)
+        if face_weights is not None and mesh_id in face_weights:
+            blocks = face_weights[mesh_id]
+            if len(blocks) != len(boundaries):
+                raise UnsupportedPhysics("motion weights must match the moving boundary list")
+            for weights, (block_faces, _) in zip(blocks, boundaries):
+                if np.asarray(weights).shape != (len(block_faces),):
+                    raise UnsupportedPhysics("motion weights require one finite value per moving face")
+            weights = np.concatenate(blocks)
+            if not np.isfinite(weights).all():
+                raise UnsupportedPhysics("motion weights require one finite value per moving face")
+            projections *= weights
         total = float(np.abs(projections).sum())
         net = float(projections.sum())
         nets_by_mesh.append(net)
         ambiguous |= total <= 0 or abs(net) < .2 * total
         # Numerically neutral faces carry no projected area and cannot hide an
         # independently tagged rear patch behind a connecting cylindrical rim.
-        remaining = set(np.flatnonzero(np.abs(projections) > total * 1e-12))
-        owners: dict[tuple[int, int], list[int]] = {}
-        neighbours = [set() for _ in faces]
-        for index in sorted(remaining):
-            for a, b in zip(faces[index], np.roll(faces[index], -1)):
-                edge = tuple(sorted((int(a), int(b))))
-                for owner in owners.setdefault(edge, []):
-                    neighbours[index].add(owner)
-                    neighbours[owner].add(index)
-                owners[edge].append(index)
-        nets = []
-        while remaining:
-            pending, patch = [remaining.pop()], []
-            while pending:
-                index = pending.pop()
-                patch.append(index)
-                adjacent = neighbours[index] & remaining
-                remaining.difference_update(adjacent)
-                pending.extend(adjacent)
-            nets.append(float(projections[patch].sum()))
+        nets = _projected_patch_nets(faces, projections, total)
         majority = max(nets, key=abs, default=0.)
         ambiguous |= any(value * majority < 0 and abs(value) >= .05 * abs(majority)
                          for value in nets)
@@ -164,19 +187,43 @@ def geometric_driver_area(meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.n
     area = float(np.mean(sides)) if sides else 0.
     notes = []
     if len(sides) > 1 and (max(sides) - min(sides)) / area > .1:
-        notes.append("Moving-face projected areas in separate meshes differ by more than 10 %; Sd uses their mean.")
+        ambiguous = True
+        notes.append("Moving-face projected areas on opposite sides differ by more than 10 %; geometry is ambiguous.")
     return area, bool(ambiguous), notes
+
+
+def moving_meshes_have_opposite_nets(meshes_m, axis) -> bool:
+    """Check signs per mesh and patch; connected folds keep their subtraction."""
+    nets = []
+    for boundaries in meshes_m.values():
+        if not boundaries:
+            continue
+        faces = np.concatenate([faces for faces, _ in boundaries])
+        projections = _projected_face_areas(np.concatenate([t for _, t in boundaries]), axis)
+        total = float(np.abs(projections).sum())
+        patches = _projected_patch_nets(faces, projections, total)
+        # A tiny disconnected rear still radiates. Ignore only numerical zero,
+        # rather than the looser ambiguity threshold used for the Sd fallback.
+        if any(net > total * 1e-12 for net in patches) and any(net < -total * 1e-12 for net in patches):
+            return True
+        nets.append(float(projections.sum()))
+    return any(net > 0 for net in nets) and any(net < 0 for net in nets)
 
 
 def resolve_driver_sd(raw: Mapping[str, Any], meshes_m, axis, channel_id: str
                       ) -> tuple[float | None, dict[str, Any], list[str]]:
-    chamber_sd_problem(raw, channel_id, mesh_count=len(meshes_m))
+    chamber_sd_problem(raw, channel_id)
     geometric, ambiguous, notes = geometric_driver_area(meshes_m, axis)
+    if (raw.get("lumped_sealed_rear_chamber") or {}).get("enabled", False):
+        chamber_sd_problem(raw, channel_id, both_sides_radiate=(
+            ambiguous or moving_meshes_have_opposite_nets(meshes_m, axis)))
     declared = raw.get("sd_m2")
     area = _positive(declared, "sd_m2") if declared is not None else (None if ambiguous else geometric)
     source = "declared" if declared is not None else ("geometry" if area is not None else None)
-    if declared is not None and not ambiguous and abs(geometric - area) / area > .25:
-        notes.append("Sd cross-check: geometry differs from declared Sd by more than 25 %; geometry includes everything that moves, including the surround roll, so 10–20 % above datasheet Sd is normal. Declared Sd is used.")
+    if declared is not None and not ambiguous and not .8 <= geometric / area <= 1.6:
+        notes.append(f"Sd cross-check: geometric projected area ({geometric * 10000:g} cm², "
+                     "includes everything that moves such as the surround) differs from "
+                     f"the declared Sd ({area * 10000:g} cm²)")
     if area is None:
         notes.append("Sd not determined; enter Sd to get acoustic impedance")
     metadata = {"sd_m2": area, "sd_source": source, "geometric_sd_m2": geometric,

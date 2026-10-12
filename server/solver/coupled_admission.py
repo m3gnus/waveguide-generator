@@ -116,7 +116,8 @@ def fem_request_problem(record: Mapping[str, Any], channels: Sequence[Any] | Non
                         combine_id: str | None = None, enabled: bool | None = None,
                         has_exterior: bool | None = None,
                         has_transducers: bool = False,
-                        moving_meshes: Mapping[str, Any] | None = None) -> tuple[str, str] | None:
+                        moving_meshes: Mapping[str, Any] | None = None,
+                        inspect_sd_geometry: bool = True) -> tuple[str, str] | None:
     """One ordered declaration refusal for admission and request compilation.
 
     Feature availability, termination/exterior conflicts, domain restrictions,
@@ -161,16 +162,18 @@ def fem_request_problem(record: Mapping[str, Any], channels: Sequence[Any] | Non
                                                          if getattr(c, "exterior_transducer", None) is not None})
         if problem:
             return problem
-        return driver_sd_problem(record, channels, moving_meshes=moving_meshes)
+        return driver_sd_problem(record, channels, moving_meshes=moving_meshes,
+                                 inspect_geometry=inspect_sd_geometry)
     return None
 
 
 def driver_sd_problem(record: Mapping[str, Any], channels: Sequence[Any], *,
                       moving_meshes: Mapping[str, Any] | None = None,
-                      exterior_msh_text: str | None = None) -> tuple[str, str] | None:
+                      exterior_msh_text: str | None = None,
+                      inspect_geometry: bool = True) -> tuple[str, str] | None:
     """Require declared chamber Sd; inspect geometry only for enabled chambers."""
     from server.solver.beat_adapter.transducers import (
-        DriverSdRequired, LumpedChamberDoubleRearLoad, chamber_sd_problem)
+        DriverSdRequired, LumpedChamberDoubleRearLoad, chamber_sd_problem, resolve_driver_sd)
 
     for channel in channels:
         spec = getattr(channel, "exterior_transducer", None)
@@ -180,12 +183,31 @@ def driver_sd_problem(record: Mapping[str, Any], channels: Sequence[Any], *,
         raw = spec.model_dump(mode="json")
         try:
             chamber_sd_problem(raw, channel.id)
+            # Counting moving meshes needs only declarations. Exterior-only
+            # geometry is checked during compilation, without an admission read.
+            if not inspect_geometry or (moving_meshes is None and not record.get("fem_regions")):
+                continue
+            if moving_meshes is None and not _channel_moving_mesh_ids(record, channel):
+                continue
             meshes = (moving_meshes[channel.id] if moving_meshes is not None
                       else _channel_moving_meshes(record, channel, exterior_msh_text=exterior_msh_text))
-            chamber_sd_problem(raw, channel.id, mesh_count=len(meshes))
+            resolve_driver_sd(raw, meshes, spec.motion_axis, channel.id)
         except (DriverSdRequired, LumpedChamberDoubleRearLoad) as exc:
             return exc.reason_code, exc.message
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            return "driver_sd_geometry_invalid", (
+                f"Channel '{channel.id}': cannot determine moving-face geometry: {exc}")
     return None
+
+
+def _channel_moving_mesh_ids(record, channel) -> set[str]:
+    """Count moving meshes from declarations without reading or orienting them."""
+    meshes = {f"fem:{region['region_id']}" for region in record.get("fem_regions", ())
+              if any(g.get("kind") == "moving" and g.get("drive_channel_id") == channel.id
+                     for g in region.get("surface_groups", ()))}
+    if channel.source_ids:
+        meshes.add("exterior")
+    return meshes
 
 
 def _channel_moving_meshes(record, channel, *, exterior_msh_text=None):
@@ -211,7 +233,12 @@ def _channel_moving_meshes(record, channel, *, exterior_msh_text=None):
         for name, faces in domain.surfaces.items():
             fields = parse_physical_name(name)
             if fields and fields.get("group") in groups:
-                triangles = np.asarray([oriented[tuple(sorted(face))] for face in faces])
+                try:
+                    triangles = np.asarray([oriented[tuple(sorted(face))] for face in faces])
+                except KeyError as exc:
+                    from server.solver.coupled_system import CoupledSystemError
+
+                    raise CoupledSystemError(f"Diaphragm {name!r} is not on the tetrahedral boundary") from exc
                 boundaries.append((faces, triangles))
         meshes[f"fem:{region['region_id']}"] = boundaries
     if channel.source_ids:

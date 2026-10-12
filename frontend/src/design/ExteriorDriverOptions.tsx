@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { EXTERIOR_FIELDS, EXTERIOR_LIMIT_FIELDS, EXTERIOR_SD_FIELD, SEMI_INDUCTANCE_FIELDS, exteriorDisplayScale,
-  normalizeExteriorOptions, type ExteriorTransducerForm } from '../stores/exteriorTransducer';
+  normalizeExteriorOptions, isExteriorDriverReplacement, type ExteriorTransducerForm } from '../stores/exteriorTransducer';
 
 export function ExteriorDriverFields({ channelId, form, onChange }: {
   channelId: string; form: ExteriorTransducerForm; onChange: (form: ExteriorTransducerForm) => void;
@@ -19,6 +19,13 @@ export function ExteriorDriverOptions({ channelId, form, onChange }: {
 }) {
   const semiCache = useRef(form.semi_inductance);
   const chamberCache = useRef(form.lumped_sealed_rear_chamber);
+  const previousForm = useRef(form);
+  // An explicit library pick clears the previous driver's disabled cache too.
+  // Ordinary field edits retain values for toggling an option back on.
+  if (previousForm.current !== form && isExteriorDriverReplacement(form)) {
+    semiCache.current = form.semi_inductance;
+  }
+  previousForm.current = form;
   const semi = form.semi_inductance;
   const chamber = form.lumped_sealed_rear_chamber;
   return <>
@@ -50,7 +57,7 @@ export function ExteriorDriverOptions({ channelId, form, onChange }: {
           lumped_sealed_rear_chamber: { ...chamberCache.current, enabled: event.target.checked } }));
       }}/>Lumped sealed rear chamber</label>
     {chamber?.enabled && <>
-      <p className="cad-driver-hint">Adds lossless sealed-box stiffness ρc²Sd²/V using the declared Sd, or an unambiguous net projection for a front-only diaphragm. Use this for an unmeshed rear chamber; untag exterior rear faces or disable this chamber.</p>
+      <p className="cad-driver-hint">Adds lossless sealed-box stiffness ρc²Sd²/V using the declared Sd. Use this for a front-only diaphragm with an unmeshed rear chamber; untag exterior rear faces or disable this chamber.</p>
       <label className="cad-driver-field"><span>Rear chamber volume (litres) *</span>
         <input type="number" min="0" step="any" aria-label={`Rear chamber volume for ${channelId}`} value={chamber.volume_m3 === undefined ? '' : chamber.volume_m3 * 1000}
           onChange={event => onChange({ ...form, lumped_sealed_rear_chamber: { ...chamber, volume_m3: event.target.value === '' ? undefined : Number(event.target.value) / 1000 } })}/>

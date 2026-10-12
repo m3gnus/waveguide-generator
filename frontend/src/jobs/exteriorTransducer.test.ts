@@ -200,3 +200,14 @@ it('blocks a lumped rear chamber without a declared Sd', () => {
   expect(exteriorTransducerError({ ...base, sd_m2: 0.0132 })).toBeNull();
   expect(exteriorTransducerError({ ...base, lumped_sealed_rear_chamber: { enabled: false } })).toBeNull();
 });
+
+it('preserves gap-fill options but clears semi-inductance when replacing a driver', async () => {
+  const { prefillExteriorDriver } = await import('../stores/exteriorTransducer');
+  const previous = { ...form, version: 2, semi_inductance: { enabled: true, re_prime_ohm: 5, leb_h: .001,
+    le_h: .002, ke_semi_h: .003, rss_ohm: 4 }, lumped_sealed_rear_chamber: { enabled: true, volume_m3: .01 } };
+  expect(prefillExteriorDriver(previous, { sd_cm2: 200 }).semi_inductance).toEqual(previous.semi_inductance);
+  const replaced = prefillExteriorDriver(previous, { sd_cm2: 200 }, { replace: true });
+  expect(replaced).not.toHaveProperty('semi_inductance');
+  expect(replaced.lumped_sealed_rear_chamber).toEqual(previous.lumped_sealed_rear_chamber);
+  expect(replaced.motion_axis).toEqual(previous.motion_axis);
+});

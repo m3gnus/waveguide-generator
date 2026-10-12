@@ -187,7 +187,8 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
         record, geometry.drive_channels,
         ground=getattr(context, "ground_plane", None) is not None,
         passive_cardioid=getattr(geometry, "passive_cardioid_enabled", False),
-        combine_id=getattr(getattr(geometry, "combine", None), "id", None))
+        combine_id=getattr(getattr(geometry, "combine", None), "id", None),
+        inspect_sd_geometry=False)  # Compilation uses the boundaries loaded below.
     if problem:
         raise ValueError(f"{problem[0]}: {problem[1]}")
     symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
