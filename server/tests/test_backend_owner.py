@@ -380,14 +380,27 @@ def test_probe_loop_never_contends_with_instance_lock(data_dir: Path, monkeypatc
 
     thread = threading.Thread(target=probe)
     thread.start()
-    cycles = 0
-    deadline = time.monotonic() + 1.5
+    # Count evidence, not wall-clock throughput: a slow runner reaches the same
+    # number of overlapping cycles, only later. The deadline is a hang guard.
+    target = 20
+    cycles = overlapped = 0
+    deadline = time.monotonic() + 30
     try:
-        while time.monotonic() < deadline:
+        while cycles < target and not failures and time.monotonic() < deadline:
             lock = InstanceLock(data_dir / "locks")
             try:
                 lock.acquire(4000)
                 cycles += 1
+                # Hold the lock until a whole discovery has run against it: the
+                # first completion may belong to a probe already in flight at
+                # the acquire, the second started after it. So every cycle
+                # proves a probe ran entirely while the lock was held, and the
+                # next acquire follows that probe.
+                seen = len(probes)
+                while len(probes) < seen + 2 and not failures and time.monotonic() < deadline:
+                    time.sleep(0.001)
+                if len(probes) >= seen + 2:
+                    overlapped += 1
             except Exception as exc:
                 failures.append(exc)
             finally:
@@ -397,8 +410,8 @@ def test_probe_loop_never_contends_with_instance_lock(data_dir: Path, monkeypatc
         thread.join(timeout=2)
     assert not thread.is_alive()
     assert not failures
-    assert cycles > 10
-    assert probes
+    assert cycles == target
+    assert overlapped == target
 
 
 def test_case_variant_data_folder_is_accepted(data_dir: Path, monkeypatch) -> None:
