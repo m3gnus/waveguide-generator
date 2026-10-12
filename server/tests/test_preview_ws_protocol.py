@@ -748,7 +748,9 @@ def test_preview_applies_legacy_migrations_before_translation() -> None:
         await transport.incoming.put(None)
         await task
         assert configs[0]["profile"]["inflectionPolicy"] == "warn"
-        assert configs[0]["profile"]["crossSections"][0]["shape"] == "ellipse"
+        # "circle" is a valid station shape now (the mesher reads it as an ellipse
+        # with local H/V radii), so the migration keeps it instead of rewriting it.
+        assert configs[0]["profile"]["crossSections"][0]["shape"] == "circle"
 
     asyncio.run(scenario())
 
