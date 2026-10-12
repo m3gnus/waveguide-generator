@@ -39,17 +39,23 @@ export type DecodedFemField = Awaited<ReturnType<typeof fetchFemField>>;
 
 export type FemPlaneScope = 'interior' | 'exterior' | 'combined';
 export type FemPlaneQuantity = 'pressure' | 'velocity_normal';
+export const FEM_PLANE_MASK_REASONS = [
+  '', 'Solid or outside the selected domain', 'Too close to a surface for a reliable velocity',
+] as const;
 export interface FemPlaneField {
   positions: Float32Array;
   real: Float32Array;
   imag: Float32Array;
   unit: 'Pa' | 'm/s';
+  /** Original row-major grid, including masked points omitted from triangles. */
+  samplePositions: Float32Array;
+  maskReasons: Uint8Array;
 }
 
 /** Convert a masked grid to triangles; never bridge a solid or invalid sample. */
 export function decodeFemPlane(payload: {
   nx: number; ny: number; points_mm: string; pressure_real: string; pressure_imag: string;
-  valid_mask: string; region_class: string; crosses_body: string; unit: 'Pa' | 'm/s';
+  valid_mask: string; region_class: string; crosses_body: string; mask_reason?: string; unit: 'Pa' | 'm/s';
 }): FemPlaneField {
   const bytes = (value: string) => Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
   const floats = (value: string) => {
@@ -60,10 +66,12 @@ export function decodeFemPlane(payload: {
   const points = floats(payload.points_mm), real = floats(payload.pressure_real), imag = floats(payload.pressure_imag);
   const regions = bytes(payload.region_class), crosses = bytes(payload.crosses_body);
   const valid = bytes(payload.valid_mask), count = payload.nx * payload.ny;
+  const reasons = payload.mask_reason === undefined ? Uint8Array.from(valid, (v) => v ? 0 : 1) : bytes(payload.mask_reason);
   if (!Number.isSafeInteger(payload.nx) || !Number.isSafeInteger(payload.ny) || payload.nx < 2 || payload.ny < 2
     || payload.nx > 256 || payload.ny > 256 || points.length !== count * 3 || real.length !== count
     || imag.length !== count || valid.length !== count || valid.some((v) => v > 1)
     || regions.length !== count || regions.some((v) => v > 2)
+    || reasons.length !== count || reasons.some((v, i) => v > 2 || (v === 0) !== (valid[i] === 1))
     || crosses.length !== (payload.nx - 1) * (payload.ny - 1) || crosses.some((v) => v > 1)
     || points.some((v) => !Number.isFinite(v)) || real.some((v) => !Number.isFinite(v)) || imag.some((v) => !Number.isFinite(v)))
     throw new Error('Invalid coupled plane grid');
@@ -77,7 +85,8 @@ export function decodeFemPlane(payload: {
     indices.push(a, b, d, a, d, c);
   }
   return { positions: Float32Array.from(indices.flatMap((i) => [points[i * 3], points[i * 3 + 1], points[i * 3 + 2]])),
-    real: Float32Array.from(indices.map((i) => real[i])), imag: Float32Array.from(indices.map((i) => imag[i])), unit: payload.unit };
+    real: Float32Array.from(indices.map((i) => real[i])), imag: Float32Array.from(indices.map((i) => imag[i])), unit: payload.unit,
+    samplePositions: points, maskReasons: reasons };
 }
 
 export async function fetchFemPlane(jobId: string, plane: import('./fieldPlane').FieldPlaneSpec,

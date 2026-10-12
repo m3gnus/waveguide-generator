@@ -42,3 +42,15 @@ it('preserves server error detail for unavailable runtimes and corrupt traces', 
       .rejects.toThrow('BEAT runtime unavailable');
   }
 });
+
+it('retains per-point mask reasons and original positions for probes and legends', () => {
+  const grid = { ...payload([1, 0, 0, 1]), mask_reason: encode(new Uint8Array([0, 1, 2, 0])) };
+  const decoded = decodeFemPlane(grid);
+  expect(Array.from(decoded.maskReasons)).toEqual([0, 1, 2, 0]);
+  expect(Array.from(decoded.samplePositions)).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0]);
+  expect(decoded.positions.length).toBe(0);
+  expect(Array.from(decodeFemPlane(payload([1, 0, 1, 1])).maskReasons)).toEqual([0, 1, 0, 0]);
+  for (const reasons of [[0, 1, 3, 0], [0, 1], [0, 0, 2, 0], [2, 1, 2, 0]]) {
+    expect(() => decodeFemPlane({ ...grid, mask_reason: encode(new Uint8Array(reasons)) })).toThrow('grid');
+  }
+});

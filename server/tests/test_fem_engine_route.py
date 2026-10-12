@@ -1289,7 +1289,7 @@ def test_planner_keeps_beat_cpu_and_metal_selectable_for_auto_exterior_drivers(m
     assert verdicts["beat-metal"]["solves"] is True
 
 
-@pytest.mark.parametrize("failure", ["cap", "disk_full"])
+@pytest.mark.parametrize("failure", ["cap", "disk_full", "size", "invalid", "other", "owner"])
 def test_unavailable_bem_retention_keeps_completed_coupled_solve(runtime, monkeypatch, tmp_path, failure, caplog):
     import asyncio
     from server.jobs.runtime import JobRuntime
@@ -1314,9 +1314,13 @@ def test_unavailable_bem_retention_keeps_completed_coupled_solve(runtime, monkey
     store = JobStore(tmp_path / "jobs.db")
     store.initialize()
     store.create_job(_job("field"))
-    if failure == "disk_full":
+    if failure in {"disk_full", "size", "invalid", "other", "owner"}:
         def fail(*a, **k):
-            raise OSError("No space left on device")
+            if failure == "owner":
+                return False
+            raise {"disk_full": OSError("No space left on device"),
+                   "size": ValueError("Coupled BEM trace sidecar exceeds 256 MiB"),
+                   "invalid": ValueError("Invalid traces"), "other": RuntimeError("Unexpected failure")}[failure]
         monkeypatch.setattr(store, "store_bem_trace_arrays", fail)
     from server.jobs.models import DriveChannel
     request = _request("wgi_" + "0" * 26)
@@ -1333,11 +1337,15 @@ def test_unavailable_bem_retention_keeps_completed_coupled_solve(runtime, monkey
         payload = store.load_fem_field("field")
         assert payload["plane_scopes"] == ["interior"]
         reason = payload["plane_unavailable_reason"]
-        assert ("256 MiB" if failure == "cap" else "storage failed") in reason
+        expected = {"cap": "256 MiB", "disk_full": "storage failed", "size": "256 MiB",
+                    "invalid": "data is invalid", "other": "preparation failed", "owner": "changed or was removed"}
+        assert expected[failure] in reason
+        assert ("available disk space" in reason) == (failure == "disk_full")
         metadata = store.get_job_row("field")["task_metadata"]
         assert metadata["plane_scopes"] == ["interior"]
         assert metadata["fem_plane_unavailable_reason"] == reason
         assert not metadata.get("has_bem_traces_artifact")
-        assert ("256 MiB" if failure == "cap" else "Could not retain") in caplog.text
+        if failure != "owner":
+            assert ("256 MiB" if failure == "cap" else "Could not retain") in caplog.text
     finally:
         store.close()

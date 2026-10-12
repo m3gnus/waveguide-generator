@@ -199,6 +199,7 @@ class FemPlanePresentation(BaseModel):
     valid_mask: str
     region_class: str
     crosses_body: str
+    mask_reason: str = Field(description="Base64 uint8 per point: 0 valid, 1 solid or outside selected domain, 2 too close to a surface for a reliable velocity")
 
 
 class EngineSubstitution(BaseModel):
@@ -1051,9 +1052,9 @@ def create_jobs_router(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except FieldPlaneTimedOut as exc:
             raise HTTPException(status_code=504, detail=str(exc)) from exc
-        except ArtifactCorrupt as exc:
+        except (ArtifactCorrupt, FemFieldCorrupt) as exc:
             raise HTTPException(status_code=410, detail=f"Field-trace artifact is corrupt: {exc}") from exc
-        except (FemFieldCorrupt, FieldPlaneEvaluationFailed) as exc:
+        except FieldPlaneEvaluationFailed as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         if payload is None:
             raise HTTPException(status_code=404, detail="No retained FEM field for this job")

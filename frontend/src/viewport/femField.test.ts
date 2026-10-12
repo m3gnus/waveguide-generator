@@ -240,7 +240,8 @@ it('particle velocity is constant on P1 cuts and reverses under reflection', () 
 it('real, imaginary and manual colour limits apply to retained plane geometry', () => {
   const domain: FemFieldDomain = { regionId: 'air', surfaces: [], points: new Float32Array(0), tetrahedra: new Uint32Array(0) };
   const values = { real: new Float32Array(0), imag: new Float32Array(0) };
-  const planeField = { positions: new Float32Array(9), real: new Float32Array([1, 1, 1]), imag: new Float32Array([-1, -1, -1]), unit: 'Pa' as const };
+  const planeField = { positions: new Float32Array(9), real: new Float32Array([1, 1, 1]), imag: new Float32Array([-1, -1, -1]), unit: 'Pa' as const,
+    samplePositions: new Float32Array(9), maskReasons: new Uint8Array(3) };
   const options = { plane: { origin: [0, 0, 0] as [number, number, number], normal: [0, 0, 1] as [number, number, number] },
     rendering: 'smooth' as const, sequential: ['#000000', '#ffffff'], planeField,
     manualWindow: { minimum: -2, maximum: 2, unit: 'Pa' as const } };
@@ -256,7 +257,8 @@ it('combined rendering joins the exact tetrahedron cut to the exterior plane', (
     mode: 'normalized' as const, rendering: 'smooth' as const, sequential: ['#000000', '#ffffff'] };
   const interior = buildFemFieldGeometries(domain, values, options);
   const exterior = { positions: new Float32Array([20, 0, 5, 20, 10, 5, 30, 0, 5]),
-    real: new Float32Array([1, 2, 3]), imag: new Float32Array(3), unit: 'Pa' as const };
+    real: new Float32Array([1, 2, 3]), imag: new Float32Array(3), unit: 'Pa' as const,
+    samplePositions: new Float32Array([20, 0, 5, 20, 10, 5, 30, 0, 5]), maskReasons: new Uint8Array(3) };
   const combined = buildFemFieldGeometries(domain, values, { ...options, planeField: exterior, includeInterior: true });
   const count = interior.slice!.getAttribute('position').count;
   expect(combined.slice!.getAttribute('position').count).toBe(count + 3);

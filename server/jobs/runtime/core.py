@@ -3947,10 +3947,19 @@ class JobRuntime:
             try:
                 traces = trace_arrays(compiled, sweep)
                 if traces is not None:
-                    self.store.store_bem_trace_arrays(job_id, traces)
-            except Exception:
+                    if not self.store.store_bem_trace_arrays(job_id, traces):
+                        reason = "Exterior and combined planes unavailable: retained FEM field changed or was removed before BEM trace publication. Re-solve to retain matching traces."
+            except OSError:
                 logger.exception("Could not retain coupled BEM traces for job %s", job_id)
                 reason = "Exterior and combined planes unavailable: BEM trace storage failed. Re-solve after checking available disk space."
+            except ValueError as exc:
+                logger.exception("Could not retain coupled BEM traces for job %s", job_id)
+                reason = ("Exterior and combined planes unavailable: BEM traces exceed the 256 MiB retention limit. Re-solve with a smaller mesh or frequency sweep."
+                          if "256 MiB" in str(exc) else
+                          "Exterior and combined planes unavailable: BEM trace data is invalid. Re-solve to recreate the traces.")
+            except Exception:
+                logger.exception("Could not retain coupled BEM traces for job %s", job_id)
+                reason = "Exterior and combined planes unavailable: BEM trace preparation failed. Re-solve to retry trace retention."
             if reason:
                 self.store.mutate_job_metadata(job_id, {"fem_plane_unavailable_reason": reason,
                                                        "has_bem_traces_artifact": False,

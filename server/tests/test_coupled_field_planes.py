@@ -316,12 +316,13 @@ def test_combined_fake_worker_routes_distinct_fem_and_exterior_fields(stored, ru
 def test_normal_velocity_never_evaluates_a_stencil_inside_a_body(stored):
     store, _, _, _, _ = stored
     request = plane_request("exterior", quantity="velocity_normal")
-    request.plane.origin_m = (.001, .001, -.000005)
+    request.plane.origin_m = (.001, .001, -5e-9)
     request.plane.width_m = request.plane.height_m = .001
     def forbidden(*args, **kwargs):
         pytest.fail("A difference stencil crossed the closed boundary")
     result = evaluate_coupled_plane(store, "field", request, evaluator=forbidden)
     assert not decode(result, "valid_mask", "u1").any()
+    assert (decode(result, "mask_reason", "u1") == 2).all()
 
 
 def test_feature_flag_revert_hides_planes_without_deleting_retained_data(stored, monkeypatch):
@@ -428,7 +429,7 @@ def test_float32_velocity_stencil_reuses_base_mask_and_resolves_remote_points(st
     result = evaluate_coupled_plane(store, "field", request, evaluator=wave)
     valid = decode(result, "valid_mask", "u1").astype(bool)
     assert valid.all()
-    assert calls == [21, 21]  # cached classification and clearance, never 2N masking
+    assert calls == [21]  # base classification only, never 2N masking
     assert min(separations) > .1
     z = decode(result, "points_mm").reshape(-1, 3)[:, 2] / 1000
     expected = np.exp(1j * 2 * np.pi * 100 / 343 * z) / (1.21 * 343)
@@ -468,7 +469,7 @@ def test_interior_location_batches_tetrahedra_and_preserves_shared_face_priority
     np.testing.assert_allclose(velocity, np.tile([1, 2j, 0], (2, 1)) / (1j * 2 * np.pi * 100 * 1.21))
 
 
-def test_velocity_step_shrinks_to_normal_boundary_clearance(stored):
+def test_velocity_step_shrinks_to_nearest_surface_distance(stored):
     store, _, _, _, _ = stored
     request = plane_request("exterior", quantity="velocity_normal", frequency=100.)
     request.plane.origin_m = (.001, .001, -.002)
@@ -481,4 +482,173 @@ def test_velocity_step_shrinks_to_normal_boundary_clearance(stored):
         return np.exp(1j * k * points[:, 2].astype(np.float32))
     result = evaluate_coupled_plane(store, "field", request, evaluator=evaluate)
     assert decode(result, "valid_mask", "u1").all()
-    np.testing.assert_allclose(steps, .002 * .45, rtol=1e-9)
+    np.testing.assert_allclose(steps, .002 * .05, rtol=1e-9)
+
+
+@pytest.mark.parametrize("frequency", [50., 100., 200., 500.])
+@pytest.mark.parametrize("radius", [.05, .1, .15])
+def test_near_field_monopole_velocity_error_below_one_percent(stored, frequency, radius):
+    from types import SimpleNamespace
+    store, _, _, _, _ = stored
+    fem = store.load_fem_field("field", 100., "fem")
+    traces = store.load_bem_traces("field", 100., "fem")
+    replay = SimpleNamespace(load_fem_field=lambda *a: {**fem, "frequency_hz": frequency},
+                             load_bem_traces=lambda *a: traces)
+    request = plane_request("exterior", quantity="velocity_normal", frequency=frequency)
+    request.plane.origin_m = (.004, .003, radius)
+    request.plane.width_m = request.plane.height_m = .001
+    def monopole(mesh, f, k, p, q, points, **kwargs):
+        # Exercise the actual float32 point boundary used by the worker too.
+        r = np.linalg.norm(points.astype(np.float32).astype(float), axis=1)
+        return np.exp(1j * k * r) / r
+    result = evaluate_coupled_plane(replay, "field", request, evaluator=monopole)
+    assert decode(result, "valid_mask", "u1").all()
+    assert not decode(result, "mask_reason", "u1").any()
+    from server.solver.field_plane import field_plane_points
+    points = field_plane_points(request.plane)
+    r = np.linalg.norm(points, axis=1)
+    k = 2 * np.pi * frequency / 343
+    expected = np.exp(1j * k * r) * (1j * k * r - 1) * points[:, 2] / r ** 3 / (1j * 2 * np.pi * frequency * 1.21)
+    actual = decode(result, "pressure_real") + 1j * decode(result, "pressure_imag")
+    assert np.max(np.abs(actual / expected - 1)) < .01
+
+
+def test_nearest_skin_distance_checks_faces_edges_and_remote_centroids():
+    from server.jobs.body_index import SkinDistanceIndex
+    # The large triangle is closer although its centroid is much farther away.
+    triangles = np.array([[[0, 0, 0], [100, 0, 0], [0, 100, 0]],
+                          [[0, 0, 1], [1, 0, 1], [0, 1, 1]]], float)
+    # Force separate leaves, so the centroid seed alone cannot find the answer.
+    triangles = np.concatenate([triangles[:1], np.repeat(triangles[1:], 260, axis=0)])
+    points = np.array([[.1, .1, .01], [-.1, .1, 0], [-.1, -.1, 0]])
+    np.testing.assert_allclose(SkinDistanceIndex(triangles).query(points), [.01, .1, np.sqrt(.02)])
+
+
+def test_velocity_ulp_floor_tracks_small_coordinates(stored):
+    store, _, _, _, _ = stored
+    request = plane_request("exterior", quantity="velocity_normal", frequency=100.)
+    request.plane.origin_m = (.001, .001, -5e-6)
+    request.plane.width_m = request.plane.height_m = .001
+    steps = []
+    def wave(mesh, f, k, p, q, points, **kwargs):
+        n = len(points) // 2
+        steps.extend((points[:n, 2] - points[n:, 2]) / 2)
+        return np.exp(1j * k * points[:, 2].astype(np.float32).astype(float))
+    result = evaluate_coupled_plane(store, "field", request, evaluator=wave)
+    assert decode(result, "valid_mask", "u1").all()
+    np.testing.assert_allclose(steps, 5e-6 * .05)
+
+
+def test_remote_near_surface_velocity_is_masked_with_reason(stored):
+    store, _, _, _, arrays = stored
+    offset = np.array([1000., 1000., 1000.])
+    store.store_bem_trace_arrays("field", {**arrays, "points_m": arrays["points_m"] + offset})
+    request = plane_request("exterior", quantity="velocity_normal", frequency=100.)
+    request.plane.origin_m = tuple(offset + [.001, .001, -5e-6])
+    request.plane.width_m = request.plane.height_m = .001
+    result = evaluate_coupled_plane(store, "field", request,
+        evaluator=lambda *a, **k: pytest.fail("unresolvable stencil evaluated"))
+    assert not decode(result, "valid_mask", "u1").any()
+    assert (decode(result, "region_class", "u1") == 2).all()
+    assert (decode(result, "mask_reason", "u1") == 2).all()
+    assert not decode(result, "pressure_real").any()
+
+
+def test_rotated_box_cut_supercover_blocks_only_crossed_cells():
+    from server.jobs.body_index import crossing_cells
+    from types import SimpleNamespace
+    # Off-grid corners avoid numerical ambiguity about closed-cell edge touches.
+    corners = np.array([[-.61, -.17], [.61, -.17], [.61, .17], [-.61, .17]])
+    angle = .61
+    rotation = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+    corners = corners @ rotation.T + [.003, .007]
+    triangles = []
+    for a, b in zip(corners, np.roll(corners, -1, axis=0)):
+        bottom_a, bottom_b = np.r_[a, -.2], np.r_[b, -.2]
+        top_a, top_b = np.r_[a, .2], np.r_[b, .2]
+        triangles.extend([[bottom_a, bottom_b, top_b], [bottom_a, top_b, top_a]])
+    plane = SimpleNamespace(origin_m=[0, 0, 0], axis_u=[1, 0, 0], axis_v=[0, 1, 0],
+                            width_m=2., height_m=2., nx=81, ny=81)
+    blocked = crossing_cells(np.asarray(triangles), plane, np.eye(3)).reshape(80, 80)
+    # Independent segment/rectangle separating-axis oracle for every cell.
+    expected = np.zeros_like(blocked)
+    for row in range(80):
+        for col in range(80):
+            lo = np.array([col, row]) * .025 - 1
+            hi = lo + .025
+            cell = np.array([lo, [hi[0], lo[1]], hi, [lo[0], hi[1]]])
+            for a, b in zip(corners, np.roll(corners, -1, axis=0)):
+                normal = np.array([a[1] - b[1], b[0] - a[0]])
+                axes = np.array([[1, 0], [0, 1], normal])
+                segment_projection, cell_projection = np.array([a, b]) @ axes.T, cell @ axes.T
+                if ((segment_projection.max(axis=0) >= cell_projection.min(axis=0))
+                    & (cell_projection.max(axis=0) >= segment_projection.min(axis=0))).all():
+                    expected[row, col] = True
+    assert expected.any()
+    assert np.count_nonzero(blocked & ~expected) == 0
+    assert np.count_nonzero(expected & ~blocked) == 0
+
+
+def test_grid_edge_corner_clipping_and_coplanar_supercovers():
+    from server.jobs.body_index import _supercover_segment, _coplanar_cells
+    blocked = np.zeros((4, 4), bool)
+    _supercover_segment(blocked, np.array([-1., 2.]), np.array([5., 2.]))
+    assert blocked.tolist() == [[False] * 4, [True] * 4, [True] * 4, [False] * 4]
+    blocked[:] = False
+    _supercover_segment(blocked, np.array([.5, .5]), np.array([3.5, 3.5]))
+    row, col = np.indices(blocked.shape)
+    np.testing.assert_array_equal(blocked, np.abs(row - col) <= 1)
+    blocked[:] = False
+    _coplanar_cells(blocked, np.array([[.1, .1], [3.9, .1], [.1, 3.9]]))
+    assert blocked[0].all() and blocked[:, 0].all()
+    assert not blocked[3, 3]
+    blocked[:] = False
+    _coplanar_cells(blocked, np.array([[-10., .1], [-8., .1], [-10., 3.9]]))
+    assert not blocked.any()
+
+
+@pytest.mark.parametrize("symmetry", ["off", "xy"])
+def test_adaptive_dense_feature_bins_bound_memory_and_local_scaling(symmetry):
+    from server.jobs.body_index import SkinRayIndex, SkinDistanceIndex, skin_triangles, MAX_BIN_FACES, MAX_WORK_PAIRS
+    from types import SimpleNamespace
+    counts, distance_counts = [], []
+    grid = np.linspace(.00001, .00999, 48)
+    x, y = np.meshgrid(grid, grid)
+    points = np.column_stack([x.ravel(), y.ravel(), np.full(x.size, .1)])
+    for resolution in (64, 128):
+        grid = np.linspace(0, .01, resolution + 1)
+        x, y = np.meshgrid(grid, grid)
+        vertices = np.column_stack([x.ravel(), y.ravel(), np.zeros(x.size)])
+        row, col = np.meshgrid(np.arange(resolution), np.arange(resolution), indexing="ij")
+        a = (row * (resolution + 1) + col).ravel()
+        faces = np.concatenate([np.column_stack([a, a + 1, a + resolution + 2]),
+                                np.column_stack([a, a + resolution + 2, a + resolution + 1])])
+        # A distant feature broadens the whole-skin projection by 200x.
+        triangles = np.concatenate([vertices[faces], [[[-1, -1, -1], [1, -1, -1], [-1, 1, -1]]]])
+        mesh = SimpleNamespace(points_m=triangles.reshape(-1, 3), faces=np.arange(triangles.size // 3).reshape(-1, 3))
+        triangles = skin_triangles(mesh, symmetry)
+        index = SkinRayIndex(triangles, [0, 0, 1])
+        inside, _ = index.query(points)
+        assert not inside.any()
+        assert index.bins.max_candidates <= MAX_BIN_FACES
+        assert index.peak_pairs <= MAX_WORK_PAIRS
+        assert index.pair_count < len(points) * len(triangles) * .05
+        counts.append(index.pair_count)
+        distance_index = SkinDistanceIndex(triangles)
+        np.testing.assert_allclose(distance_index.query(points), .1)
+        assert distance_index.peak_pairs <= MAX_WORK_PAIRS
+        distance_counts.append(distance_index.pair_count)
+    # Quadrupling the dense feature does not quadruple work on a zoomed plane.
+    assert counts[1] < counts[0] * 2
+    assert distance_counts[1] < distance_counts[0] * 2
+
+
+def test_corrupt_retained_bem_trace_route_returns_gone(stored):
+    store, _, _, _, arrays = stored
+    store.store_bem_trace_arrays("field", {**arrays, "neumann": np.full(arrays["neumann"].shape, np.nan, complex)})
+    app = FastAPI()
+    app.include_router(create_jobs_router(JobRuntime(store)))
+    status, body, _ = asyncio.run(_request_with_headers(app, "POST", "/api/results/field/fem-field/plane",
+        body=plane_request("exterior").model_dump(mode="json")))
+    assert status == 410
+    assert "corrupt" in json.loads(body)["detail"]

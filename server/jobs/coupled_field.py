@@ -82,16 +82,18 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
     region_class = interior.astype("u1")
     crosses = np.zeros((request.plane.nx - 1) * (request.plane.ny - 1), bool)
     valid = interior.copy() if request.scope != "exterior" else np.zeros(len(points), bool)
+    # Wire codes: 0 valid, 1 solid/outside selected domain, 2 unreliable stencil.
+    mask_reason = np.ones(len(points), dtype="u1")
     if request.scope != "interior":
         retained = store.load_bem_traces(job_id, frequency, payload["channel_id"])
         if retained is None:
             raise FemFieldInvalidSelection("No retained BEM traces; re-solve to enable exterior planes")
         mesh, p, q, speed, density, symmetry, rotation = retained
-        from server.jobs.body_index import SkinRayIndex, skin_triangles, crossing_cells
+        from server.jobs.body_index import SkinRayIndex, SkinDistanceIndex, skin_triangles, crossing_cells
 
         triangles = skin_triangles(mesh, symmetry)
         image_points = points @ rotation.T
-        # One cached classification for this plane; velocity reuses it.
+        # One base classification per request; velocity reuses it.
         body = SkinRayIndex(triangles, [0.371, 0.529, 0.763], check).query(image_points, check)[0]
         exterior = ~interior & ~body
         region_class[exterior] = 2
@@ -106,17 +108,16 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
             # The official operation returns pressure. A centred difference of
             # that same potential gives normal exterior velocity; P1 interior
             # velocity above remains exact, with no averaging between elements.
-            # h=lambda/50: centred plane-wave truncation is (kh)^2/6
-            # (~0.26%). Float32 point coordinates need a resolvable separation.
+            # Bound both wavelength and near-surface curvature. The float32
+            # floor follows coordinate ULPs, including sub-metre coordinates.
             step = np.full(len(selected), min(speed / frequency / 50, 0.1))
             evaluation_points = selected
             if request.quantity == "velocity_normal":
-                # Ray clearance bounds the whole normal segment, including thin
-                # walls whose far endpoint could be exterior again. No 2N mask.
-                _, clearance = SkinRayIndex(triangles, image_normal, check).query(selected, check)
-                step = np.minimum(step, clearance * 0.45)
-                rounding = np.maximum(np.max(np.abs(selected), axis=1), 1.) * np.finfo(np.float32).eps
+                distance = SkinDistanceIndex(triangles, check).query(selected, check)
+                step = np.minimum(step, distance * 0.05)
+                rounding = np.max(np.abs(np.spacing(selected.astype(np.float32))), axis=1).astype(float)
                 safe = step >= 32 * rounding
+                mask_reason[np.flatnonzero(exterior)[~safe]] = 2
                 indices = np.flatnonzero(exterior)[safe]
                 exterior[:] = False
                 exterior[indices] = True
@@ -136,6 +137,7 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
     if request.quantity == "velocity_normal":
         values = velocity @ np.cross(request.plane.axis_u, request.plane.axis_v)
     values[~valid] = 0
+    mask_reason[valid] = 0
     return {"frequency_hz": frequency, "channel_id": payload["channel_id"], "scope": request.scope,
             "quantity": request.quantity, "unit": "Pa" if request.quantity == "pressure" else "m/s",
             "phasor_convention": payload["phasor_convention"], "nx": request.plane.nx, "ny": request.plane.ny,
@@ -143,6 +145,7 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
             "pressure_imag": _encode(values.imag, "<f4"),
             "region_class": base64.b64encode(region_class.tobytes()).decode("ascii"),
             "crosses_body": base64.b64encode(crosses.astype("u1").tobytes()).decode("ascii"),
+            "mask_reason": base64.b64encode(mask_reason.tobytes()).decode("ascii"),
             "valid_mask": base64.b64encode(valid.astype("u1").tobytes()).decode("ascii")}
 
 

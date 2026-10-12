@@ -3716,6 +3716,8 @@ export interface components {
             phasor_convention: "exp(-i omega t)";
             /** Plane Scopes */
             plane_scopes?: ("interior" | "exterior" | "combined")[];
+            /** Plane Unavailable Reason */
+            plane_unavailable_reason?: string | null;
             /** Points Mm */
             points_mm: string;
             /** Pressure Imag */
@@ -3747,8 +3749,15 @@ export interface components {
         FemPlanePresentation: {
             /** Channel Id */
             channel_id: string;
+            /** Crosses Body */
+            crosses_body: string;
             /** Frequency Hz */
             frequency_hz: number;
+            /**
+             * Mask Reason
+             * @description Base64 uint8 per point: 0 valid, 1 solid or outside selected domain, 2 too close to a surface for a reliable velocity
+             */
+            mask_reason: string;
             /** Nx */
             nx: number;
             /** Ny */
@@ -3769,6 +3778,8 @@ export interface components {
              * @enum {string}
              */
             quantity: "pressure" | "velocity_normal";
+            /** Region Class */
+            region_class: string;
             /**
              * Scope
              * @enum {string}

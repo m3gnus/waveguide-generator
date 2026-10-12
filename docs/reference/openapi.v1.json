@@ -4309,6 +4309,11 @@
             "title": "Frequency Hz",
             "type": "number"
           },
+          "mask_reason": {
+            "description": "Base64 uint8 per point: 0 valid, 1 solid or outside selected domain, 2 too close to a surface for a reliable velocity",
+            "title": "Mask Reason",
+            "type": "string"
+          },
           "nx": {
             "title": "Nx",
             "type": "integer"
@@ -4382,7 +4387,8 @@
           "pressure_imag",
           "valid_mask",
           "region_class",
-          "crosses_body"
+          "crosses_body",
+          "mask_reason"
         ],
         "title": "FemPlanePresentation",
         "type": "object"

@@ -4,6 +4,7 @@ import { useFieldPlaneStore } from './fieldPlaneStore';
 import type { FemFieldRendering, FemDisplayMode } from './FemFieldView';
 import type { useFemField } from './useFemField';
 import { femInteriorDisplayValues } from './FemFieldScene';
+import { FEM_PLANE_MASK_REASONS } from '../api/femField';
 
 export function FemFieldControls({ field, rendering, setRendering, sequential, children, planeResult, scope, setScope, quantity, setQuantity, displayMode, setDisplayMode, manualWindow, setManualWindow, interiorValues }: {
   interiorValues?: ReturnType<typeof femInteriorDisplayValues> | null;
@@ -41,6 +42,10 @@ export function FemFieldControls({ field, rendering, setRendering, sequential, c
       : `${quantity === 'pressure' ? 'Pressure' : 'Velocity'} per unit acceleration (${quantity === 'pressure' ? 'Pa' : '(m/s)'} per m/s²). `}</p>
     {field.field?.payload.plane_unavailable_reason && <p role="note">{field.field.payload.plane_unavailable_reason}</p>}
     {quantity === 'velocity_normal' && <p role="note">Signed particle velocity normal to the plane (m/s), constant within each P1 element. Exterior velocity uses a centred potential difference.</p>}
+    {FEM_PLANE_MASK_REASONS.slice(1).map((reason, i) => {
+      const count = planeResult.field?.maskReasons.filter((code) => code === i + 1).length ?? 0;
+      return count > 0 && <p key={reason} role="note" title={reason}>{count} masked samples: {reason}.</p>;
+    })}
     <div className="field-plane-mode-row"><label>Plane region<select aria-label="FEM plane region" value={scope}
       onChange={(e) => setScope(e.target.value as typeof scope)}>
       {(['interior', 'exterior', 'combined'] as const).map((value) => <option key={value} value={value} disabled={!scopes.includes(value)}>{value}</option>)}
