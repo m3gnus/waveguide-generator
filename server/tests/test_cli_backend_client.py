@@ -297,22 +297,42 @@ def test_no_backend_concurrent_clients_ensure_starts_exactly_one(tmp_path, monke
                 process.wait(timeout=5)
 
 
-def test_cli_reports_job_query_failure_without_starting_backend(tmp_path, monkeypatch):
+@pytest.mark.parametrize("subject", ["caller", "backend"])
+def test_cli_reports_job_query_failure_without_contained_fallback(tmp_path, monkeypatch, subject):
+    import ctypes
+    from server.platform import job_start
+
     data_dir = tmp_path / "data"
     args = _args(_design(tmp_path), data_dir)
-    def refuse():
-        raise OSError("Could not query the caller's Windows job; cannot detach the backend")
-    def forbidden(*args, **kwargs):
-        pytest.fail("a refused job must not create a backend process")
+    def in_job(process, job, result):
+        assert job is None
+        return subject == "backend" and process == 42
+    kernel = SimpleNamespace(GetCurrentProcess=lambda: 42, IsProcessInJob=in_job)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: kernel, raising=False)
+    spawns, stopped = [], []
+    def popen(*args, **kwargs):
+        assert subject == "backend", "a failed caller query must not create a process"
+        spawns.append(kwargs)
+        assert len(spawns) == 1, "a query failure must not retry contained"
+        code = [None]
+        return SimpleNamespace(
+            pid=123, _handle=43, poll=lambda: code[0],
+            terminate=lambda: (stopped.append(123), code.__setitem__(0, -1)),
+            wait=lambda **kwargs: code[0],
+        )
+    @contextmanager
+    def start(*args, **kwargs):
+        yield SimpleNamespace(fired=False, job=None)
+    monkeypatch.setattr(job_start, "windows_job_start", start)
+    monkeypatch.setattr(process_tree, "confine_to_windows_job", lambda *a, **kw: pytest.fail("query must succeed first"))
     monkeypatch.setattr(backend_owner, "sys", SimpleNamespace(platform="win32"))
-    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", refuse)
-    monkeypatch.setattr(backend_owner.subprocess, "Popen", forbidden)
+    monkeypatch.setattr(backend_owner.subprocess, "Popen", popen)
     monkeypatch.setattr(cli, "discover_backend", lambda root: None)
     monkeypatch.setattr(backend_owner, "_discover", lambda root: None)
     result, messages, stderr = asyncio.run(_solve(args))
     expected = (
         f"Could not start the backend ({sys.executable!r}): "
-        "Could not query the caller's Windows job; cannot detach the backend. "
+        f"Could not check the {subject}'s Windows job; cannot detach the backend. "
         "Check the installation, or start Waveguide Generator manually."
     )
     assert result == 5
@@ -320,7 +340,12 @@ def test_cli_reports_job_query_failure_without_starting_backend(tmp_path, monkey
     assert messages[-1]["error"]["code"] == "backend_spawn_failed"
     assert messages[-1]["error"]["message"] == expected
     assert stderr == f"Waveguide Generator backend unavailable: {expected}\n"
-    assert not (data_dir / "logs" / backend_owner.LOG_FILENAME).exists()
+    assert len(spawns) == int(subject == "backend")
+    assert stopped == ([123] if subject == "backend" else [])
+    log = data_dir / "logs" / backend_owner.LOG_FILENAME
+    assert log.exists() is (subject == "backend")
+    if log.exists():
+        assert "contained" not in log.read_text()
 
 
 @pytest.mark.parametrize("error,code,name", [

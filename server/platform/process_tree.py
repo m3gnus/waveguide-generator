@@ -174,9 +174,9 @@ def _windows_caller_job_limits(kernel: Any) -> int:
 def windows_backend_breakaway_flags() -> int:
     """Detach a backend from the caller's job, or refuse before creating it.
 
-    Query the immediate job: without kill-on-close, closing it cannot kill the
-    backend. Otherwise the owner also checks the suspended child for residual
-    membership, because a non-breakaway outer job can retain it.
+    The immediate job's limits cannot establish the ancestor jobs' lifetimes.
+    Require breakaway for every caller job, then check the suspended child for
+    residual membership because a non-breakaway outer job can retain it.
     """
     import ctypes
     from ctypes import wintypes
@@ -192,8 +192,6 @@ def windows_backend_breakaway_flags() -> int:
         return 0
 
     flags = _windows_caller_job_limits(kernel)
-    if not flags & _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE:
-        return 0  # Closing this job cannot kill the backend.
     if flags & 0x00000800:  # JOB_OBJECT_LIMIT_BREAKAWAY_OK
         return 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
     if flags & 0x00001000:  # JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
@@ -205,7 +203,7 @@ def windows_backend_breakaway_flags() -> int:
 
 
 def require_windows_job_detached(process_handle: Any) -> None:
-    """Refuse residual membership when the caller job has kill-on-close."""
+    """Refuse any residual job membership before admitting a detached backend."""
     import ctypes
     from ctypes import wintypes
 
@@ -214,9 +212,9 @@ def require_windows_job_detached(process_handle: Any) -> None:
     kernel.IsProcessInJob.restype = wintypes.BOOL
     member = wintypes.BOOL()
     checked = kernel.IsProcessInJob(process_handle, None, ctypes.byref(member))
-    if checked and not member.value:
-        return
-    if checked and not _windows_caller_job_limits(kernel) & _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE:
+    if not checked:
+        raise OSError("Could not check the backend's Windows job; cannot detach the backend")
+    if not member.value:
         return
     raise BreakawayRefused(
         "The backend could not detach from the caller's Windows job chain. "

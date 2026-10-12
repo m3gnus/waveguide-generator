@@ -1200,10 +1200,11 @@ environment override is preserved. Default discovery migrates the legacy data
 folder using the GUI's migration path before creating a startup lock. This
 preserves the GUI's Documents workspace default and legacy export adoption.
 Its backend has `--no-browser` and no parent lifetime or status-control file:
-it stays available after the caller
+an independently started backend stays available after the caller
 exits, and a later GUI adopts that same owner and sees its durable jobs/results.
 The response is one JSON line with `ok`, `base_url`, `pid`, `data_dir`, `version`
-and `commit`; failures have `ok: false` and `error: {type, message}`. Exit codes
+and `commit`, adding `lifetime: "contained"` only when adopting a contained owner;
+failures have `ok: false` and `error: {type, message}`. Exit codes
 are 0 for success, 3 for a data-folder mismatch, 4 for timeout or cancellation,
 and 5 for spawn/configuration failure. Backend output goes to the start log.
 All Python-side failures, including invalid/help arguments, installer guards,
@@ -1219,9 +1220,10 @@ on another starter never terminates that starter. On Windows the unconfirmed
 stub/interpreter tree is held in an explicitly terminated Job Object; cancellation
 of the public stub is observed by its admitted interpreter. Confirmation closes
 the job handle without killing the backend. The suspended child requests
-`CREATE_BREAKAWAY_FROM_JOB` when a kill-on-close caller job permits explicit
-breakaway (silent breakaway needs no flag). A caller job without kill-on-close
-does not require breakaway. A retaining kill-on-close job chain produces a typed
+`CREATE_BREAKAWAY_FROM_JOB` when the caller job permits explicit
+breakaway (silent breakaway needs no flag). Every caller job requires breakaway,
+because its limit flags cannot establish ancestor jobs' lifetimes. A forbidding
+caller job or any residual child job membership produces a typed
 `BreakawayRefused` with the existing Windows refusal text. The installed entry
 and WGLink cold start still refuse, with a Start-menu / outside-CI-or-IDE-job
 instruction, because their backend must remain available to later clients.
@@ -1237,14 +1239,13 @@ for either a newly started or adopted contained owner, and adds
 health and outcome payloads retain their previous fields.
 
 One owner per folder still holds; only its lifetime changes. A contained backend
-ends when the caller's job closes or is terminated, potentially interrupting
+can end when the caller's job or an ancestor job closes or is terminated, potentially interrupting
 solves submitted by later clients too. The OS releases the instance lock; the
 next client starts a new owner and durable job recovery handles interrupted work.
 GUI and add-in adopters currently show no lifetime warning; see
 [shutdown and recovery](../reference/SHUTDOWN-AND-RECOVERY.md).
-The limit query observes the immediate caller job only. Allowing that job when
-it lacks kill-on-close does not establish the limits of hidden ancestor jobs;
-qualify nested host jobs on Windows when an independent lifetime is required.
+Job membership query failures are plain `OSError`s and never trigger the contained
+fallback.
 
 Installed WG adds `launcher: {argv: [<absolute OS entry>], ensureBackend: true}`
 to `<data>/ipc/wglink/wg-capabilities.json`. The path is derived from its own

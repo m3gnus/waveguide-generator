@@ -567,7 +567,9 @@ def test_ensure_forwards_contained_permission_only_when_requested(data_dir, monk
     assert ensure_backend(data_dir, ["unused"], allow_contained=True) is found
 
 
-def test_non_killing_windows_job_starts_without_contained_marker(data_dir, monkeypatch):
+@pytest.mark.parametrize("flags", [0, 0x2000])
+@pytest.mark.parametrize("allow_contained", [False, True])
+def test_forbidding_windows_job_requires_contained_permission(data_dir, monkeypatch, flags, allow_contained):
     import ctypes
     from server.platform import process_tree
 
@@ -575,7 +577,7 @@ def test_non_killing_windows_job_starts_without_contained_marker(data_dir, monke
         result._obj.value = True
         return True
     def query(job, kind, result, size, returned):
-        result._obj.LimitFlags = 0
+        result._obj.LimitFlags = flags
         return True
     kernel = SimpleNamespace(GetCurrentProcess=lambda: 42, IsProcessInJob=member, QueryInformationJobObject=query)
     monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: kernel, raising=False)
@@ -588,13 +590,19 @@ def test_non_killing_windows_job_starts_without_contained_marker(data_dir, monke
         return SimpleNamespace(pid=123, _handle=42)
     monkeypatch.setattr(subprocess, "Popen", popen)
     environment = {"WG2_BACKEND_CONTAINED": "1", "CUSTOM": "retained"}
+    if not allow_contained:
+        with pytest.raises(backend_owner.BackendSpawnError, match="does not allow backend breakaway"):
+            backend_owner._spawn(["backend"], data_dir, environment)
+        assert captured == []
+        assert not (data_dir / "logs" / backend_owner.LOG_FILENAME).exists()
+        return
     child, log = backend_owner._spawn(["backend"], data_dir, environment, allow_contained=True)
     assert child._wg_start_job is job
     assert len(captured) == 1
     assert not captured[0]["creationflags"] & 0x01000000
-    assert captured[0]["env"] == {"CUSTOM": "retained"}
+    assert captured[0]["env"] == {"CUSTOM": "retained", "WG2_BACKEND_CONTAINED": "1"}
     assert environment["WG2_BACKEND_CONTAINED"] == "1"
-    assert "contained" not in log.read_text()
+    assert log.read_text().count("job breakaway: refused (contained)") == 1
 
 
 def test_contained_fallback_still_refuses_failed_nested_job(data_dir, monkeypatch):

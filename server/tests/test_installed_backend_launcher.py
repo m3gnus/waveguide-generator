@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+from dataclasses import replace
 
 import pytest
 
@@ -27,6 +28,24 @@ def test_launcher_keeps_contained_fallback_disabled(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
     assert entry.main(["--data-dir", str(tmp_path)]) == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+@pytest.mark.parametrize("contained", [False, True])
+def test_launcher_reports_adopted_owner_lifetime_only_when_contained(tmp_path, monkeypatch, capsys, contained):
+    found = replace(handle(tmp_path), contained=contained)
+    monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
+    monkeypatch.setattr(backend_owner, "_discover", lambda root: found)
+    monkeypatch.setattr(backend_owner, "_spawn", lambda *a, **kw: pytest.fail("must adopt owner"))
+    assert entry.main(["--data-dir", str(tmp_path)]) == 0
+    expected = {
+        "ok": True, "base_url": found.base_url, "pid": found.pid,
+        "data_dir": str(found.data_dir), "version": found.version, "commit": found.commit,
+    }
+    if contained:
+        expected["lifetime"] = "contained"
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert output.out == json.dumps(expected, separators=(",", ":")) + "\n"
 
 
 @pytest.mark.parametrize("running", [True, False])

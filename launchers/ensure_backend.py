@@ -122,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
             "version": handle.version,
             "commit": handle.commit,
         }
+        if handle.contained:
+            payload["lifetime"] = "contained"
         code = 0
     except BaseException as exc:
         code = (

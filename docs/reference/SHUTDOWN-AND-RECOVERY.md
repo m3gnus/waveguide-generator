@@ -67,16 +67,18 @@ skips is crash-safe by construction:
 
 ## CLI-contained backends on Windows
 
-When a kill-on-close Windows job refuses backend breakaway, `wg solve` can start
+When a Windows job refuses backend breakaway, `wg solve` can start
 the shared backend inside that job. The nested admission job remains in place;
 `GET /health` adds `lifetime: "contained"`, and the CLI prints one stderr notice
 and includes `backend_lifetime: "contained"` in the terminal NDJSON outcome.
 The installed `--ensure-backend` entry and WGLink cold start refuse this fallback
 and explain how to start WG from the Start menu or outside the forbidding job.
-A caller job without kill-on-close does not need the fallback.
+Breakaway is required even when the immediate job lacks kill-on-close: its limits
+cannot establish whether an ancestor job will kill the backend. Job membership
+query failures refuse startup and do not trigger this fallback.
 
 Exiting the CLI alone does not end this backend. Closing or terminating its
-terminal or CI/IDE job can kill the backend and its running work immediately,
+terminal or CI/IDE job, or an ancestor job, can kill the backend and its running work immediately,
 skipping graceful shutdown. The OS releases the instance lock, so the next client
 can start a new owner for the same folder without removing stale lock metadata.
 Jobs left running recover as failed with "Server restarted during execution";
@@ -85,8 +87,9 @@ Committed results remain available, but interrupted work is not resumed.
 
 Later GUI or add-in clients may adopt this same contained owner; they currently
 show no lifetime warning and lose it when its original caller's job ends. The
-CLI warns on adoption too. Start WG independently first when later clients need
-a backend that survives that job.
+CLI warns on adoption too; the installed launcher's success JSON includes
+`lifetime: "contained"` when adopting this owner. Start WG independently first
+when later clients need a backend that survives that job.
 
 ## What the next start does
 
