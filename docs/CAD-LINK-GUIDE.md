@@ -127,13 +127,13 @@ Rigid FEM face groups can carry Miki absorbing lining: specify its positive
 thickness in mm and airflow resistivity in Pa·s/m² in WGLink. Moving groups can
 set relative motion from -120 to 0 dB (0 dB means full motion). WG lists these
 settings beside each prepared group and retains them in the ingest evidence.
-Painted patches in FEM solves also accept positive setup patch weights. Each
-weight scales surface motion relative to its channel's reference velocity;
-interface outputs already include that motion. An enabled lumped rear chamber
-requires declared driver Sd and uses it alone for stiffness. Motion weights
-enter the geometric Sd cross-check and fallback. A channel with any non-unit
-motion weight keeps its raw generalized load and omits normalized acoustic
-impedance; see the driver Sd rules below.
+The coupled route also passes positive patch weights of painted sources to the
+engine; today only native-source records carry patch weights, and those do not
+declare FEM regions, so CAD Link returns use the relative level above. An
+enabled lumped rear chamber requires declared driver Sd and uses it alone for
+stiffness. Motion weights enter the geometric Sd cross-check and fallback. A
+channel with any non-unit motion weight keeps its raw generalized load and
+omits normalized acoustic impedance; see the driver Sd rules below.
 
 WG lists the prepared regions and shows retained interior pressure on a slice
 plane after solving; select a frequency and drive channel in the field controls.

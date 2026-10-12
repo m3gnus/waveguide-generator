@@ -42,7 +42,9 @@ def test_motion_and_lining_exact_engine_contract_and_revert(level, weight, coupl
     validate_solve_request(wire)
     system = wire["compiled_system"]
     component, = system["components"]
-    assert component["parameters"] == {"boundary_motion_weights": {"boundary:fem:air:cone": weight}}
+    # A unit weight is not sent at all, so default systems compile as before weights existed.
+    assert component["parameters"] == ({} if weight == 1. else
+                                       {"boundary_motion_weights": {"boundary:fem:air:cone": weight}})
     wall = next(b for b in system["boundaries"] if b["id"] == "boundary:fem:air:walls")
     assert wall["parameters"] == {"wall_impedance": {
         "model": "miki", "thickness_m": .03, "flow_resistivity_pa_s_per_m2": 5000.}}

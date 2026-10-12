@@ -522,7 +522,10 @@ def build_coupled_system(
                 channel_id=channel, sd_metadata=driver_sd[channel],
                 face_weights=moving_triangle_weights[channel])
             area_warnings.extend(channel_warnings[channel])
-        params["boundary_motion_weights"] = {bid: motion_weights[bid] for bid in sorted(boundary_ids)}
+        # Only a non-unit weight is sent, so a system without levels or patch
+        # weights compiles exactly as before weights existed.
+        if any(motion_weights[bid] != 1.0 for bid in boundary_ids):
+            params["boundary_motion_weights"] = {bid: motion_weights[bid] for bid in sorted(boundary_ids)}
         components.append({
             "id": component_id, "name": channel,
             "kind": "electrodynamic_transducer" if spec is not None else "ideal_velocity_source",
