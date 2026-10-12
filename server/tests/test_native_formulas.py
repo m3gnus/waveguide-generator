@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
+from server.contracts.geometry import normalise_quadrants
 from server.design.native import NATIVE_FORMULAS
 from server.design.schema import DesignConfig, Expr
 from server.design.textcfg import TextConfigError, parse, serialize
@@ -21,7 +22,12 @@ from server.design_io.api import open_design, save_design
 from server.exports.api import WgLinkExportRequest, _export_wglink_sync
 from server.cadlink.store import CadLinkStore
 from server.exports.core import _build_step_solid_sync, _build_stl_mesh_sync, build_profiles
-from server.mesh.builder import MAX_SOLVER_MESH_ARTIFACT_TRIANGLES, _build_sync, _mesh_policy, _solver_mesher_config
+from server.mesh.builder import (
+    MAX_SOLVER_MESH_ARTIFACT_TRIANGLES, _build_sync, _dense_solver_memory_requirements,
+    _enforce_dense_solver_memory_ceiling, _mesh_policy, _solver_mesher_config,
+    _triangles_and_tags, resolve_dense_solver_memory_limit,
+)
+from server.platform.memory import PhysicalMemory
 from server.preview.core import _recentred_preview_config, preview_options
 from server.preview.translate import design_to_mesher_config, has_closed_outer_body
 from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
@@ -72,6 +78,8 @@ RECIPES = {
     },
 }
 FAMILIES = sorted(NATIVE_FORMULAS)
+# macos-latest has 7 GiB; fix the figure so this guard fails the same way on every OS.
+SMALLEST_HOSTED_RUNNER = PhysicalMemory(7 * 1024**3, "7 GiB hosted runner", True)
 
 
 def documented_config(formula: str) -> dict:
@@ -106,8 +114,15 @@ def small_design(formula: str) -> DesignConfig:
         payload["mesh"].update(throat_resolution=.4, mouth_resolution=.6, rear_resolution=.8)
         if "axial_scale" in payload:
             payload["axial_scale"] = .1
+        # These two horns stay compact: native walls use fixed absolute refinement
+        # tolerances whatever the mm resolutions, so size keeps dense solves under
+        # a 7 GiB host's 3.5 GiB ceiling. Native formulas require the full circular
+        # domain, so symmetry reduction is unavailable.
         if formula == "OSSE-ADAPTER-CONTROLS":
-            payload["scale"] = .025
+            payload["scale"] = .015
+        if formula == "OSSE-ARC":
+            payload["scale"] = .08
+            payload["L"] = 30
         if formula == "OSSE-ROUNDOVER":
             payload["L"] = 20
             payload["mesh"].update(mouth_roundover_radius_mm=.5, wall_thickness=.1)
@@ -201,10 +216,45 @@ def test_native_step_and_stl_export_complete_geometry(formula: str) -> None:
 
 
 @pytest.mark.parametrize("formula", FAMILIES)
-def test_native_uses_real_solver_mesh_pipeline(formula: str) -> None:
+def test_native_uses_real_solver_mesh_pipeline(formula: str, tmp_path: Path) -> None:
     result = _build_sync(small_design(formula).model_dump(mode="json"))
-    assert result["stats"]["triangle_count"] > 0
-    assert result["stats"]["domain_multiplier"] == 1
+    stats = result["stats"]
+    assert stats["triangle_count"] > 0
+    assert stats["domain_multiplier"] == 1
+    assert stats["dense_solver_domain_multiplier"] == 1
+    assert {tag for tag, n in stats["tag_counts"].items() if n} == {"1", "2"}
+    assert stats["integrity"]["valid"] is True
+    path = tmp_path / "solver.msh"
+    path.write_text(result["msh_text"], encoding="utf-8")
+    mesh = meshio.read(path)
+    assert {cells.type for cells in mesh.cells} == {"triangle"}
+    assert {name: value.tolist() for name, value in mesh.field_data.items()} == {
+        "SD1G0": [1, 2], "SD1D1001": [2, 2],
+    }
+
+
+@pytest.mark.parametrize("formula", FAMILIES)
+def test_native_fixture_fits_a_7_gib_runner_dense_solver_ceiling(formula: str, tmp_path: Path) -> None:
+    """Catch the macos-latest RC failure everywhere; the pipeline fails only on low-RAM hosts."""
+    limit = resolve_dense_solver_memory_limit(physical=SMALLEST_HOSTED_RUNNER, environ={})
+    assert limit.bytes == 7 * 1024**3 // 2
+    design = small_design(formula)
+    config, _, _ = _mesh_policy(design, _solver_mesher_config(design))
+    path = tmp_path / "native.msh"
+    build_from_config(config, path, allow_large_mesh=False)
+    triangles, tags = _triangles_and_tags(meshio.read(path))
+    quadrants = normalise_quadrants(config["mesh"]["quadrants"])
+    mode = str(config.get("mode", "")).strip().lower()
+    requirements = _dense_solver_memory_requirements(triangles, quadrants, mode=mode, tags=tags)
+    dofs = requirements["used_vertex_count"]
+    metal_dofs = requirements["metal_dof_count"]
+    metal_detail = f" ({metal_dofs:,} Metal DOFs)" if metal_dofs != dofs else ""
+    est = requirements["estimated_bytes"]
+    assert est <= limit.bytes, (
+        f"{formula}: {dofs:,} P1 DOFs{metal_detail} estimate {est/1024**3:.2f} GiB of dense-solver memory, "
+        f"above the {limit.bytes/1024**3:.2f} GiB ceiling of a 7 GiB hosted runner; make this fixture more compact"
+    )
+    _enforce_dense_solver_memory_ceiling(triangles, quadrants, mode=mode, tags=tags, limit=limit)
 
 
 @pytest.mark.parametrize("formula, updates, message", [
