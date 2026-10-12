@@ -77,6 +77,10 @@ describe('native formula editing and persistence', () => {
       default_by_family: { 'OSSE-ADAPTER-CONTROLS': 20.4 } });
     const axial = catalog.parameters.find((field) => field.id === 'native.axial_scale');
     expect(axial?.default_by_family).toEqual({ 'OSSE-AXIAL': 1, 'OSSE-ADAPTER-AXIAL': 1 });
+    for (const field of catalog.parameters.filter((field) => field.id.startsWith('morph.')
+      || field.id.startsWith('enclosure.') || field.id === 'simulation.sim_type')) {
+      expect(field.families.some((family) => (NATIVE_FAMILIES as readonly string[]).includes(family)), field.id).toBe(false);
+    }
   });
 });
 
@@ -103,7 +107,7 @@ it.each([
 });
 
 it.each(NATIVE_FAMILIES)('explains native domain and CAD limits for %s', (formula) => {
-  for (const symmetry of ['half_xz', 'half_yz', 'quarter']) expect(nativeSymmetryLimitation(formula, symmetry)).toContain('Select Auto or Full');
+  for (const symmetry of ['half_xz', 'half_yz', 'quarter']) expect(nativeSymmetryLimitation(formula, symmetry)).toContain('Select Full');
   for (const symmetry of ['auto', 'full']) expect(nativeSymmetryLimitation(formula, symmetry)).toBeNull();
   expect(nativeCadLimitation(formula)).toContain('Export STEP or STL');
 });

@@ -3,7 +3,7 @@ export type NativeFamily = typeof NATIVE_FAMILIES[number];
 
 export function nativeSymmetryLimitation(formula: string, symmetry: string): string | null {
   return (NATIVE_FAMILIES as readonly string[]).includes(formula) && symmetry !== 'auto' && symmetry !== 'full'
-    ? `${formula} requires the full circular mesh domain. Select Auto or Full in Solve domain.`
+    ? `${formula} requires the full circular mesh domain. Select Full in Solve domain.`
     : null;
 }
 

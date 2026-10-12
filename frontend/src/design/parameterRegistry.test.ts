@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
+import { NATIVE_FAMILIES, designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import {
   PARAMETER_REGISTRY,
   PARAMETER_SECTION_DEFINITIONS,
   TRACEABILITY_PARAMETER_INVENTORY,
   EXPRESSION_PARAMETER_IDS,
+  fieldAppliesToFamily,
   fieldIsVisible,
   fieldMatchesQuery,
   parameterSectionIsVisible,
@@ -32,6 +33,23 @@ const TRACEABILITY_KEYS = {
 } as const;
 
 describe('complete parameter registry', () => {
+  it.each(NATIVE_FAMILIES)('excludes morph, enclosure and simulation type from %s, including search', (family) => {
+    const fields = PARAMETER_REGISTRY.filter((field) => field.id.startsWith('morph.')
+      || field.id.startsWith('enclosure.') || field.id === 'simulation.sim_type');
+    expect(fields.length).toBeGreaterThan(0);
+    const design = designForFamily(family);
+    design.morph.target_shape = 3;
+    design.enclosure.depth = 280;
+    design.simulation.sim_type = 'infinite-baffle';
+    for (const field of fields) {
+      expect(fieldAppliesToFamily(field, family), field.id).toBe(false);
+      expect(fieldIsVisible(field, design), field.id).toBe(false);
+      for (const legacy of ['OSSE', 'R-OSSE', 'ICW', 'FREEFORM'] as const) {
+        expect(fieldAppliesToFamily(field, legacy), `${legacy}: ${field.id}`).toBe(true);
+      }
+    }
+  });
+
   it('covers every current family-qualified traceability entry with no deferrals', () => {
     const encodedCount = Object.values(TRACEABILITY_KEYS).reduce<number>((count, keys) => count + keys.length, 0);
     expect(encodedCount).toBe(105);

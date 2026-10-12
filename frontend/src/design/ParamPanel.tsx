@@ -582,6 +582,11 @@ function SolveDomainControl({ design }: { design: DesignDocument }) {
   const accuracy = useSolveOptionsStore((state) => state.accuracy);
   const symmetry = useSolveOptionsStore((state) => state.symmetry);
   const setSymmetry = useSolveOptionsStore((state) => state.setSymmetry);
+  const native = isNativeFamily(design.formula);
+  const modes: SymmetryMode[] = native ? ['full'] : Object.keys(symmetryModeLabels) as SymmetryMode[];
+  // Saved Auto still resolves to Full for native formulas. Keep an invalid
+  // saved domain explicit until the user selects Full.
+  const selectedMode = native ? symmetry === 'auto' || symmetry === 'full' ? 'full' : '' : symmetry;
   const limitation = (mode: SymmetryMode) => {
     if (accuracy === 'accurate' && mode === 'half_xz') return 'Accurate cannot solve half xz domains. Choose Fast or another domain.';
     if (!candidates.length || candidates.some((candidate) => !symmetryDomainLimitation(candidate, mode))) return undefined;
@@ -592,17 +597,15 @@ function SolveDomainControl({ design }: { design: DesignDocument }) {
   return <div className="solve-domain-control" data-control-reveal-id={PARAMETRIC_CONTROLS.solveDomain.reveal.id}>
     <div className="select-row">
       <label htmlFor="solve-symmetry">Solve domain</label>
-      <select id="solve-symmetry" value={symmetry} onChange={(event) => setSymmetry(event.target.value as SymmetryMode)}>
-        {(Object.keys(symmetryModeLabels) as SymmetryMode[]).map((mode) => {
-          const nativeBlocked = isNativeFamily(design.formula) && mode !== 'auto' && mode !== 'full';
-          return <option key={mode} value={mode} disabled={nativeBlocked || Boolean(limitation(mode))}>{symmetryModeLabels[mode]}{!nativeBlocked && limitation(mode) ? ' · unsupported' : ''}</option>;
-        })}
+      <select id="solve-symmetry" value={selectedMode} onChange={(event) => setSymmetry(event.target.value as SymmetryMode)}>
+        {selectedMode === '' && <option value="" disabled hidden>Select Full</option>}
+        {modes.map((mode) => <option key={mode} value={mode} disabled={Boolean(limitation(mode))}>{symmetryModeLabels[mode]}{limitation(mode) ? ' · unsupported' : ''}</option>)}
       </select>
     </div>
-    {(Object.keys(symmetryModeLabels) as SymmetryMode[]).filter((mode) => limitation(mode)).map((mode) => <small key={mode}>{limitation(mode)}</small>)}
+    {modes.filter((mode) => limitation(mode)).map((mode) => <small key={mode}>{limitation(mode)}</small>)}
     {nativeSymmetryLimitation(design.formula, symmetry) && <small className="field-error" role="alert">{nativeSymmetryLimitation(design.formula, symmetry)}</small>}
-    {symmetry === 'auto' && <AutoSymmetryReadout design={design} />}
-    {isNativeFamily(design.formula) && <small>This native formula requires the full circular mesh domain.</small>}
+    {!native && symmetry === 'auto' && <AutoSymmetryReadout design={design} />}
+    {native && <small>This native formula requires the full circular mesh domain.</small>}
   </div>;
 }
 

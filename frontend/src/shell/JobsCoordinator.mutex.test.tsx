@@ -593,7 +593,7 @@ describe('solve invocation mutex', () => {
   it.each(['half_xz', 'half_yz', 'quarter'] as const)('blocks native submission with persisted %s symmetry', async (symmetry) => {
     act(() => useSolveOptionsStore.getState().setSymmetry(symmetry));
     await expect(jobsCoordinatorBridge.getSnapshot().run(designForFamily('OSSE-ARC')))
-      .rejects.toThrow('Select Auto or Full in Solve domain.');
+      .rejects.toThrow('Select Full in Solve domain.');
     expect(mocks.submitDesign).not.toHaveBeenCalled();
   });
 

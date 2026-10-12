@@ -232,8 +232,36 @@ describe('ParamPanel inventory UX', () => {
       expect(host.querySelectorAll('[data-parameter-id^="native.controls."] input')).toHaveLength(6);
     }
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(host.querySelector<HTMLOptionElement>('#solve-symmetry option[value="quarter"]')!.disabled).toBe(true);
-    expect(host.querySelector<HTMLOptionElement>('#solve-symmetry option[value="full"]')!.disabled).toBe(false);
+    const domain = host.querySelector<HTMLSelectElement>('#solve-symmetry')!;
+    expect([...domain.options].map((option) => option.value)).toEqual(['full']);
+    expect(domain.value).toBe('full');
+    expect(domain.options[0].disabled).toBe(false);
+    expect(host.textContent).toContain('This native formula requires the full circular mesh domain.');
+    expect(host.textContent).not.toContain('Auto resolves to');
+  });
+
+  it.each(NATIVE_FAMILIES)('hides incompatible %s controls even with active saved values and search', (family) => {
+    act(() => {
+      useDesignStore.getState().setFamily(family);
+      useDesignStore.getState().updateField('morph.target_shape', 3);
+      useDesignStore.getState().updateField('enclosure.depth', 280);
+      useDesignStore.getState().updateValue('simulation.sim_type', 'infinite-baffle');
+    });
+    for (const tab of ['geometry', 'simulation'] as const) {
+      act(() => root.render(withQueryClient(<ParamPanel tab={tab} />)));
+      const filter = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+      for (const query of ['', 'morph', 'enclosure', 'infinite baffle']) {
+        act(() => {
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(filter, query);
+          filter.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        expect(host.querySelector('#outer-body-mode')).toBeNull();
+        expect(host.querySelector('[data-parameter-id^="morph."]')).toBeNull();
+        expect(host.querySelector('[data-parameter-id^="enclosure."]')).toBeNull();
+        expect(host.querySelector('[data-parameter-id="simulation.sim_type"]')).toBeNull();
+        expect(host.querySelector('[data-section="Morph Target"]')).toBeNull();
+      }
+    }
   });
 
   it.each(['half_xz', 'half_yz', 'quarter'] as const)('explains a persisted %s domain before native submission', (symmetry) => {
@@ -242,9 +270,16 @@ describe('ParamPanel inventory UX', () => {
       useDesignStore.getState().setFamily('OSSE-ARC');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    expect(host.textContent).toContain('Select Auto or Full in Solve domain.');
-    act(() => useSolveOptionsStore.getState().setSymmetry('full'));
-    expect(host.textContent).not.toContain('Select Auto or Full in Solve domain.');
+    expect(host.textContent).toContain('Select Full in Solve domain.');
+    const domain = host.querySelector<HTMLSelectElement>('#solve-symmetry')!;
+    expect(domain.value).toBe('');
+    expect([...domain.options].filter((option) => !option.hidden).map((option) => option.value)).toEqual(['full']);
+    act(() => {
+      domain.value = 'full';
+      domain.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(useSolveOptionsStore.getState().symmetry).toBe('full');
+    expect(host.textContent).not.toContain('Select Full in Solve domain.');
   });
 
   it('shows plain stretch controls for OSSE families and announces preview revisions on edits', () => {
