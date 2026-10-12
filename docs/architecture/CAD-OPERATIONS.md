@@ -1239,13 +1239,23 @@ for an older stub, and a downgrade cannot retain a positive claim via the marker
 The CLI and installed launcher share `launchers/backend_start.py`, preserving one
 start definition.
 The installed CPU qualification gate checks JSON output, owner identity, and the
-capability path through that OS entry. It also cold-starts through the installed
-entry with no data override in a fresh isolated profile, reaps the caller, checks
-the backend's health twice, compares its data folder and workspace default to a
-fresh GUI backend start, and stops the confirmed owner by pid. Cold data is
-retained as evidence and provider workers are cleaned up from this phase's own
-registry. The adoption check remains in the solve phase. Actual installed runs
-and cancellation still require qualification on each supported platform.
+capability path through that OS entry. Where the host permits backend
+breakaway, it also cold-starts through the installed entry with no data
+override in a fresh isolated profile, reaps the caller, checks the backend's
+health twice, compares its data folder and workspace default to a fresh GUI
+backend start, and stops the confirmed owner by pid. Cold data is retained as
+evidence and provider workers are cleaned up from this phase's own registry.
+The gate decides with the product's own job probe
+(`process_tree.windows_backend_breakaway_flags`). On a Windows host whose job
+refuses breakaway, such as a hosted CI runner, the product refuses a cold start
+by design. The gate then skips this phase and goes straight to its own direct
+`launch/serve.py --status-control` start, the one it used before the installed
+entry existed and still uses on every host, and records
+"cold start via --ensure-backend: not exercised (host refuses breakaway)" in
+its report. A job query that fails in any other way fails the gate. The
+adoption check remains in the solve phase on every host. Actual installed runs
+and cancellation still require qualification on each supported platform, and
+the Windows cold start needs a host that grants breakaway.
 
 ## Solve-command delivery
 
