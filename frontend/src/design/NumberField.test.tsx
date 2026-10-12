@@ -284,6 +284,25 @@ describe('NumberField', () => {
     expect(commit).not.toHaveBeenCalled();
   });
 
+  it('keeps the final candidate when compositionend precedes the last input event', () => {
+    const commitExpression = vi.fn();
+    act(() => root.render(<NumberField label="Radius" value={4} allowExpression onCommit={vi.fn()} onCommitExpression={commitExpression} />));
+    const input = host.querySelector('input')!;
+    act(() => input.focus());
+    act(() => input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })));
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '4*p');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // Older Firefox: the DOM already holds the final candidate when compositionend fires.
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '4*pi');
+    act(() => input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '4*pi' })));
+    const textarea = host.querySelector('textarea')!;
+    expect(textarea.value).toBe('4*pi');
+    act(() => textarea.blur());
+    expect(commitExpression).toHaveBeenCalledExactlyOnceWith({ raw: '4*pi', value: null });
+  });
+
   it('commits with Enter and cancels with Escape in the formula editor', () => {
     const commitExpression = vi.fn();
     const render = () => root.render(<NumberField label="Radius" value={4} expression={{ raw: '4*p', value: 4 }} allowExpression onCommit={vi.fn()} onCommitExpression={commitExpression} />);

@@ -181,6 +181,9 @@ export function NumberField({
     composingRef.current = false;
     const element = event.currentTarget;
     const next = element.value.replace(/[\r\n]/g, '');
+    // Some browsers fire the final input after compositionend; take the value
+    // here so the swapped-in editor starts from the composed text.
+    setDraft(next);
     const start = element.selectionStart ?? next.length;
     expandFor(next, { start, end: element.selectionEnd ?? start, direction: element.selectionDirection ?? 'none' });
   };
