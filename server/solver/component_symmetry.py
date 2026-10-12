@@ -152,8 +152,7 @@ def _infer_component_symmetry(
             cross = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
             signed = cross @ axis
             area = np.abs(signed).sum() / 2
-            center = np.average(triangles.mean(axis=1) @ axis, weights=np.maximum(np.abs(signed), 1e-30))
-            projections.append((signed.sum(), center, 2 * np.sqrt(area / np.pi)))
+            projections.append((signed.sum(), 2 * np.sqrt(area / np.pi)))
         helper = np.eye(3)[np.argmin(np.abs(axis))]
         u = np.cross(axis, helper)
         u /= np.linalg.norm(u)
@@ -164,16 +163,18 @@ def _infer_component_symmetry(
                     continue
                 connected = False
                 check_geometry()
-                sign_i, center_i, size_i = projections[i]
-                sign_j, center_j, size_j = projections[j]
+                sign_i, size_i = projections[i]
+                sign_j, size_j = projections[j]
                 # Only nearby skins of one diaphragm may merge by footprint;
                 # opposed drivers can share a footprint across an air gap.
-                if (not connected and sign_i * sign_j < 0
-                        and abs(center_i - center_j) <= max(.005, .05 * min(size_i, size_j)) + tolerance_m):
+                if sign_i * sign_j < 0:
                     for k in (i, j):
                         if k not in footprints:
-                            footprints[k] = _footprint(patches[k][0] @ basis)
-                    connected = _footprints_overlap(footprints[i], footprints[j])
+                            triangles = patches[k][0]
+                            footprints[k] = _footprint(triangles @ basis, triangles @ axis)
+                    connected = _footprints_overlap(
+                        footprints[i], footprints[j],
+                        max_gap=max(.005, .05 * min(size_i, size_j)) + tolerance_m)
                 if not connected:
                     for k in (i, j):
                         if k not in edge_sets:
@@ -214,13 +215,17 @@ class _Footprint(NamedTuple):
     origin: np.ndarray
     cell: float
     shape: np.ndarray
+    axial: np.ndarray | None = None
+    heights: np.ndarray | None = None
 
 
-def _footprint(triangles):
+def _footprint(triangles, axial=None):
     """Area-weighted projected union on a grid independent of tessellation."""
     triangles = np.asarray(triangles, float)
     edges = triangles[:, 1:] - triangles[:, :1]
     area = np.abs(edges[:, 0, 0] * edges[:, 1, 1] - edges[:, 0, 1] * edges[:, 1, 0]) / 2
+    if axial is not None:
+        axial = np.asarray(axial, float)[area > 0]
     triangles = triangles[area > 0]
     if not len(triangles):
         return _Footprint(triangles, 0., np.zeros(1, bool), np.zeros(2), 1., np.ones(2, int))
@@ -228,17 +233,25 @@ def _footprint(triangles):
     extent = triangles.max(axis=(0, 1)) - origin
     cell = extent.max() / 256
     shape = np.maximum(1, np.ceil(extent / cell).astype(int))
-    coverage = _coverage(triangles, origin, cell, shape)
-    return _Footprint(triangles, float(coverage.sum() * cell**2), coverage, origin, cell, shape)
+    heights = None
+    if axial is None:
+        coverage = _coverage(triangles, origin, cell, shape)
+    else:
+        heights = _coverage(triangles, origin, cell, shape, axial)
+        coverage = np.isfinite(heights)
+    return _Footprint(triangles, float(coverage.sum() * cell**2), coverage, origin, cell, shape, axial, heights)
 
 
-def _coverage(triangles, origin, cell, shape):
+def _coverage(triangles, origin, cell, shape, axial=None):
     """Vectorised cell-centre coverage, with bounded cancellable chunks.
 
     Boolean union counts folded surfaces once and retains annular holes. Cell
     area is common to both skins, so counts give area-weighted overlap.
+    With axial vertex coordinates, return interpolated cell heights instead,
+    leaving uncovered cells NaN.
     """
-    covered = np.zeros(shape[0] * shape[1], bool)
+    covered = (np.zeros(shape[0] * shape[1], bool) if axial is None
+               else np.full(shape[0] * shape[1], np.nan))
     triangles = (triangles - origin) / cell
     lower = np.maximum(0, np.ceil(triangles.min(axis=1) - .5).astype(int))
     upper = np.minimum(np.array(shape) - 1, np.floor(triangles.max(axis=1) - .5).astype(int))
@@ -252,6 +265,7 @@ def _coverage(triangles, origin, cell, shape):
                   int(np.searchsorted(cumulative, cumulative[start] + 131072, side="right")) - 1)
         end = max(start + 1, end)
         block, low = triangles[start:end], lower[start:end]
+        block_axial = None if axial is None else axial[start:end]
         spans, counts = widths[start:end], work[start:end]
         start = end
         ids = np.repeat(np.arange(len(block)), counts)
@@ -266,11 +280,19 @@ def _coverage(triangles, origin, cell, shape):
         delta = points[:, None] - corner
         side = edges[:, :, 0] * delta[:, :, 1] - edges[:, :, 1] * delta[:, :, 0]
         inside = (side >= -1e-10).all(axis=1) | (side <= 1e-10).all(axis=1)
-        covered[x[inside] + shape[0] * y[inside]] = True
+        cells = x[inside] + shape[0] * y[inside]
+        if axial is None:
+            covered[cells] = True
+        else:
+            # Edge signs give the opposite vertices' barycentric weights.
+            weights = side[inside][:, [1, 2, 0]]
+            weights /= weights.sum(axis=1, keepdims=True)
+            covered[cells] = (weights * block_axial[ids[inside]]).sum(axis=1)
     return covered
 
 
-def _footprints_overlap(first, second):
+def _footprints_overlap(first, second, *, max_gap=None):
+    """Require shared area and, for skins, a robust gap on that same grid."""
     a, b = first.triangles, second.triangles
     if min(first.area, second.area) <= 0:
         return False
@@ -281,5 +303,11 @@ def _footprints_overlap(first, second):
     # Rasterise the larger footprint onto the smaller footprint's grid. Both
     # now use the same cell area; folded triangles never inflate union area.
     smaller, larger = (first, second) if first.area <= second.area else (second, first)
-    other = _coverage(larger.triangles, smaller.origin, smaller.cell, smaller.shape)
-    return bool(np.count_nonzero(smaller.coverage & other) >= .5 * smaller.coverage.sum())
+    other = _coverage(larger.triangles, smaller.origin, smaller.cell, smaller.shape,
+                      larger.axial if max_gap is not None else None)
+    shared = smaller.coverage & (other if max_gap is None else np.isfinite(other))
+    if np.count_nonzero(shared) < .5 * smaller.coverage.sum():
+        return False
+    # Front-only surrounds must not bias the gap between the shared skins.
+    # The upper quartile also rejects clamshells whose rims nearly touch.
+    return max_gap is None or bool(np.percentile(np.abs(smaller.heights[shared] - other[shared]), 75) <= max_gap)

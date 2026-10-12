@@ -782,6 +782,111 @@ def test_diaphragm_skin_axial_bound(radius, extra_gap, allowed):
         assert caught.value.code == 'driver_disconnected_patches'
 
 
+def profile_skin(profile, *, reverse=False, sectors=48):
+    """Revolve the reviewer probe's radial/axial profile, welding the pole."""
+    profile = np.asarray(profile, float)
+    theta = np.arange(sectors) * 2 * np.pi / sectors
+    points, indices, faces = [], {}, []
+    def vertex(ring, sector):
+        sector = 0 if profile[ring, 0] == 0 else sector % sectors
+        key = ring, sector
+        if key not in indices:
+            radius, height = profile[ring]
+            indices[key] = len(points)
+            points.append((radius * np.cos(theta[sector]), radius * np.sin(theta[sector]), height))
+        return indices[key]
+    for ring in range(len(profile) - 1):
+        for sector in range(sectors):
+            a, b = vertex(ring, sector), vertex(ring, sector + 1)
+            c, d = vertex(ring + 1, sector), vertex(ring + 1, sector + 1)
+            faces.extend([(a, d, c)] if profile[ring, 0] == 0 else [(a, b, d), (a, d, c)])
+    points, faces = np.asarray(points), np.asarray(faces)
+    triangles = points[faces]
+    if np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])[:, 2].sum() < 0:
+        faces = faces[:, ::-1]
+    return skin(points, faces[:, ::-1] if reverse else faces)
+
+
+def normal_offset_profile(profile, thickness):
+    tangent = np.gradient(profile, axis=0)
+    tangent /= np.linalg.norm(tangent, axis=1)[:, None]
+    normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])
+    normal[normal[:, 1] < 0] *= -1
+    rear = profile - thickness * normal
+    rear[:, 0] = np.maximum(rear[:, 0], 0)
+    if profile[0, 0] == 0:
+        rear[0, 0] = 0
+    return rear
+
+
+@pytest.mark.parametrize('radius,depth,inner,surround', [(.065, .045, .015, .015), (.05, .03, .012, .012)])
+@pytest.mark.parametrize('motion_axis', [2, 0])
+def test_front_cone_surround_and_rear_cone_share_one_diaphragm(radius, depth, inner, surround, motion_axis):
+    radii = np.linspace(inner, radius, 30)
+    cone = np.column_stack([radii, depth * (radii - inner) / (radius - inner)])
+    rim = np.linspace(radius, radius + surround, 10)
+    roll = np.column_stack([rim, depth + surround / 2 * np.sin(np.pi * (rim - radius) / surround)])
+    front = profile_skin(np.vstack([cone, roll[1:]]))
+    rear = profile_skin(normal_offset_profile(cone, .001), reverse=True)
+    if motion_axis == 0:
+        front = front[0], front[1][..., [2, 0, 1]]
+        rear = rear[0], rear[1][..., [2, 0, 1]]
+    axis = np.eye(3)[motion_axis]
+    assert infer_component_symmetry({'exterior': [front], 'fem:rear': [rear]}, axis)['physical_driver_orbit_count'] == 1
+
+
+@pytest.mark.parametrize('depth', [.06, .09])
+@pytest.mark.parametrize('equal_extent', [False, True])
+def test_deep_200mm_cone_one_mm_skins_remain_one_driver(depth, equal_extent):
+    radii = np.linspace(.02, .1, 30)
+    cone = np.column_stack([radii, depth * (radii - .02) / .08])
+    rear = normal_offset_profile(cone, .001)
+    if equal_extent:
+        rear = cone - [0, .001 * np.sqrt(1 + (depth / .08)**2)]
+    assert infer_component_symmetry({'front': [profile_skin(cone)],
+                                     'rear': [profile_skin(rear, reverse=True)]}, [0, 0, 1])['physical_driver_orbit_count'] == 1
+
+
+@pytest.mark.parametrize('diameter,height', [(.025, .008), (.025, .0125), (.044, .012), (.075, .02)])
+@pytest.mark.parametrize('surround', [False, True])
+def test_dome_skins_across_fem_regions_with_optional_front_surround(diameter, height, surround):
+    radii = np.linspace(0, diameter / 2, 16)
+    sphere_radius = ((diameter / 2)**2 + height**2) / (2 * height)
+    dome = np.column_stack([radii, np.sqrt(sphere_radius**2 - radii**2) - (sphere_radius - height)])
+    front = dome
+    if surround:
+        rim = np.linspace(diameter / 2, diameter / 2 + .004, 6)
+        roll = np.column_stack([rim, -.001 * np.sin(np.pi * (rim - diameter / 2) / .004)])
+        front = np.vstack([dome, roll[1:]])
+    assert infer_component_symmetry({'fem:front': [profile_skin(front)],
+                                     'fem:rear': [profile_skin(normal_offset_profile(dome, .0001), reverse=True)]},
+                                    [0, 0, 1])['physical_driver_orbit_count'] == 1
+
+
+@pytest.mark.parametrize('depth', [.015, .02, .03, .04])
+@pytest.mark.parametrize('rim_gap', [.001, .002])
+@pytest.mark.parametrize('two_meshes', [False, True])
+def test_clamshell_200mm_cones_with_close_rims_are_separate_drivers(depth, rim_gap, two_meshes):
+    radii = np.linspace(0, .1, 30)
+    cone = np.column_stack([radii, depth * radii / .1])
+    opposed = cone.copy()
+    opposed[:, 1] = 2 * depth + rim_gap - cone[:, 1]
+    front, rear = profile_skin(cone), profile_skin(opposed, reverse=True)
+    meshes = {'front': [front], 'rear': [rear]} if two_meshes else {'fem:trap': [front, rear]}
+    with pytest.raises(DriverSymmetryError) as caught:
+        infer_component_symmetry(meshes, [0, 0, 1])
+    assert caught.value.code == 'driver_disconnected_patches'
+
+
+def test_very_shallow_face_to_face_cones_within_skin_gap_merge():
+    radii = np.linspace(0, .1, 30)
+    cone = np.column_stack([radii, .005 * radii / .1])
+    opposed = cone.copy()
+    opposed[:, 1] = .011 - cone[:, 1]
+    assert infer_component_symmetry({'fem:trap': [profile_skin(cone), profile_skin(opposed, reverse=True)]},
+                                    [0, 0, 1])['physical_driver_orbit_count'] == 1
+
+
 def test_geometry_verdict_cache_uses_content_and_grouping_not_artifact_path(monkeypatch):
     from server.solver import component_symmetry as module
     patch = revolved_patch(.023456)

@@ -630,8 +630,12 @@ fake-worker regression gate.
 
 Electrodynamic drivers support transverse half and quarter domains. A channel
 represents one driver when its moving patches connect through shared edges after
-coordinate welding, or their footprints projected along the motion axis overlap
-by at least 50% of the smaller patch's projected area. Zero-projection faces still
+coordinate welding, or oppositely oriented faces have footprints projected along
+the motion axis overlapping by at least 50% of the smaller patch's projected area
+and a 75th-percentile axial gap over their shared footprint at most max(5 mm, 5% of D),
+where D is the smaller patch's equivalent projected diameter. Faces within this
+gap are treated as one diaphragm, so very shallow face-to-face drivers within
+the gap still merge. Zero-projection faces still
 carry connectivity. Shared edges join separately tagged dome, surround and cap
 surfaces; overlapping front and rear skins may share a driver in one mesh or
 across FEM chambers and the exterior mesh. Separate diaphragms, including a coax

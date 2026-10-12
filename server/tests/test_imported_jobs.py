@@ -5133,6 +5133,79 @@ def test_job_geometry_recheck_is_off_loop_and_cancellable(monkeypatch, tmp_path,
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize('failure_source', ['mesh-read', 'cancel-check'])
+def test_task_cancel_drain_worker_error_preserves_running_job(monkeypatch, tmp_path, caplog, failure_source):
+    import threading
+    from server.jobs.runtime import core
+
+    started, release, ended = threading.Event(), threading.Event(), threading.Event()
+    def fail_worker(error):
+        started.set()
+        try:
+            assert release.wait(1), 'worker was not released after task cancellation'
+            raise error
+        finally:
+            ended.set()
+    def inspect(*args):
+        fail_worker(OSError('mesh read failed during cancellation'))
+    monkeypatch.setattr(core, '_imported_request_refusal', inspect)
+    monkeypatch.setattr(core, '_refuse_imported_fem', lambda *a: {})
+    monkeypatch.setattr(core, '_refuse_inverted_reduced_mesh', lambda *a: None)
+    monkeypatch.setattr(core, '_imported_decision_refusal', lambda *a: None)
+    monkeypatch.setattr(core, '_imported_job_decision_refusal', lambda *a: None)
+    monkeypatch.setattr(core, '_imported_side_identity_refusal', lambda *a: None)
+    monkeypatch.setattr(core, '_imported_open_half_refusal', lambda *a: None)
+
+    async def exercise():
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, {'fem_regions': [{}]})
+        request = _request(ingest_id)
+        request.options.engine = 'beat-cpu'
+        runtime.store.initialize()
+        now = datetime.now(timezone.utc).isoformat()
+        runtime.store.create_job({
+            'id': 'drain-error', 'status': 'running', 'created_at': now,
+            'updated_at': now, 'queued_at': now,
+            'config_json': request.model_dump(mode='json'), 'config_summary_json': {},
+            'task_metadata': {}, 'progress': 0, 'stage': 'setup',
+            'has_results': False, 'has_mesh_artifact': False,
+        })
+        async def already_started():
+            pass
+        monkeypatch.setattr(runtime, 'start', already_started)
+        if failure_source == 'cancel-check':
+            main_thread = threading.get_ident()
+            original_check = runtime._check_cancelled
+            def check(job_id):
+                if threading.get_ident() != main_thread:
+                    fail_worker(core.JobNotFoundError(job_id))
+                original_check(job_id)
+            monkeypatch.setattr(runtime, '_check_cancelled', check)
+        task = asyncio.create_task(runtime._run_job('drain-error', runtime.store.get_job_row('drain-error')))
+        try:
+            async with asyncio.timeout(.5):
+                while not started.is_set():
+                    await asyncio.sleep(.001)
+            task.cancel('orphan recovery')
+            await asyncio.sleep(0)  # Enter the cancel drain before the worker fails.
+            release.set()
+            with pytest.raises(asyncio.CancelledError, match='orphan recovery'):
+                await asyncio.wait_for(task, .5)
+            assert ended.is_set()
+            row = runtime.store.get_job_row('drain-error')
+            assert row['status'] == 'running'
+            assert row['error_message'] is None
+            assert 'Geometry worker failed while draining task cancellation' in caplog.text
+            assert ('OSError' if failure_source == 'mesh-read' else 'JobNotFoundError') in caplog.text
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            runtime.store.close()
+            runtime.cadlink_store.close()
+    asyncio.run(exercise())
+
+
 def test_async_job_recheck_reuses_admission_verdict_by_mesh_content(monkeypatch):
     from server.jobs.models import DriveChannel
     from server.jobs.runtime import core

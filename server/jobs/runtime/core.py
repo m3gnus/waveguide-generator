@@ -1088,6 +1088,8 @@ async def _imported_request_refusal_async(request, record=None, msh_text=None, *
             await asyncio.shield(work)
         except (GeometryCheckCancelled, _CancelledAtCheckpoint):
             pass
+        except Exception:
+            logger.exception("Geometry worker failed while draining task cancellation")
         raise
 
 
