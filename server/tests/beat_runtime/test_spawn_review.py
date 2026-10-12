@@ -283,7 +283,7 @@ def _ready_read_raising(monkeypatch, failures):
 
 def test_ready_file_sharing_violation_is_retried_until_the_host_publishes(launch, monkeypatch):
     key, directory, children = launch
-    monkeypatch.setattr(spawn, "READY_SHARING_RETRY", True, raising=False)
+    monkeypatch.setattr(spawn, "READY_SHARING_RETRY", True)
     state = _ready_read_raising(monkeypatch, 5)
     record = spawn.start_host(key, directory)
     assert state["denied"] == 5
@@ -292,18 +292,19 @@ def test_ready_file_sharing_violation_is_retried_until_the_host_publishes(launch
 
 def test_persistent_ready_file_sharing_violation_ends_in_the_start_timeout(launch, monkeypatch):
     key, directory, children = launch
-    monkeypatch.setattr(spawn, "READY_SHARING_RETRY", True, raising=False)
+    monkeypatch.setattr(spawn, "READY_SHARING_RETRY", True)
     state = _ready_read_raising(monkeypatch, None)
     started = time.monotonic()
-    with pytest.raises(TimeoutError, match="deadline exceeded"):
+    with pytest.raises(TimeoutError, match="deadline exceeded") as raised:
         spawn.start_host(key, directory, timeout=1.5)
+    assert isinstance(raised.value.__cause__, PermissionError)
     assert state["denied"] > 1
     assert time.monotonic() - started < 8
 
 
 def test_ready_file_permission_error_stays_fatal_off_windows(launch, monkeypatch):
     key, directory, children = launch
-    monkeypatch.setattr(spawn, "READY_SHARING_RETRY", False, raising=False)
+    monkeypatch.setattr(spawn, "READY_SHARING_RETRY", False)
     state = _ready_read_raising(monkeypatch, None)
     with pytest.raises(PermissionError):
         spawn.start_host(key, directory)

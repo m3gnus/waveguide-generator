@@ -191,7 +191,9 @@ def start_host(
         r.write_launch_spec(key, directory)
         ready = ready_path(identifier, directory)
         if ready.exists():
-            read_private_json(ready)  # Refuse linked/nonprivate bootstrap residue.
+            # Refuse linked/nonprivate bootstrap residue; a scanner briefly holding
+            # the old file open is retried, bounded, like the other record writes.
+            r._retry_permission(read_private_json, ready)
             r.unlink_record(ready)
         launch_options = {} if environment is None else {"environment": environment}
         process = _launch(key, directory, idle_timeout, remaining_time(deadline), **launch_options)
@@ -199,7 +201,11 @@ def start_host(
         owned_interpreter: r.HostRecord | None = None
         launcher_start = r.process_start_identity(process.pid)
         try:
+            last_denial: PermissionError | None = None
             while True:
+                if last_denial is not None and time.monotonic() >= deadline:
+                    # Keep the denial visible: a persistent one is not a slow host.
+                    raise TimeoutError("Host control deadline exceeded") from last_denial
                 remaining_time(deadline)
                 try:
                     raw = read_private_json(ready)
@@ -208,6 +214,7 @@ def start_host(
                     # so a reader never sees a partial file; only this retry is needed.
                     if isinstance(exc, PermissionError) and not READY_SHARING_RETRY:
                         raise
+                    last_denial = exc if isinstance(exc, PermissionError) else None
                     if process.poll() is not None:
                         raise RuntimeError(f"BEAT host exited ({process.returncode}); see {r.log_path(identifier, directory)}")
                     time.sleep(0.02)
