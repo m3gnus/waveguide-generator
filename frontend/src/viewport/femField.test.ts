@@ -264,3 +264,15 @@ it('combined rendering joins the exact tetrahedron cut to the exterior plane', (
     .toEqual(Array.from(interior.slice!.getAttribute('position').array));
   expect(combined.fieldMaxSplDb).toBe(interior.fieldMaxSplDb);
 });
+
+it('omits degenerate tetrahedra from velocity without throwing during render', () => {
+  const domain: FemFieldDomain = { regionId: 'flat', surfaces: [],
+    points: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0]), tetrahedra: new Uint32Array([0, 1, 2, 3]) };
+  const values = { real: new Float32Array([1, 2, 3, 4]), imag: new Float32Array(4) };
+  const plane = { origin: [.5, 0, 0] as [number, number, number], normal: [1, 0, 0] as [number, number, number] };
+  const slice = femNormalVelocitySlice(domain, values, plane, 100);
+  expect(slice.positions.length).toBe(0);
+  const built = buildFemFieldGeometries(domain, values, { plane, mode: 'real', velocity: { frequencyHz: 100, density: 1.21 },
+    rendering: 'smooth', sequential: ['#000000', '#ffffff'] });
+  expect(built.slice?.getAttribute('position').count).toBe(0);
+});

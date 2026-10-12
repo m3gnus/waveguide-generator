@@ -22,77 +22,42 @@ def sample_interior(xyz, tetrahedra, pressure, points, frequency, density, check
     velocity = np.zeros((len(points), 3), complex)
     inside = np.zeros(len(points), bool)
     tree = cKDTree(points)
-    for indices in tetrahedra:
+    tetrahedra = np.asarray(tetrahedra)
+    for start in range(0, len(tetrahedra), 512):
         check()
+        indices = tetrahedra[start:start + 512]
         corners = xyz[indices]
-        center = corners.mean(axis=0)
-        candidates = np.asarray(tree.query_ball_point(center, np.linalg.norm(corners - center, axis=1).max() + 1e-9), dtype=int)
-        if not len(candidates):
+        centers = corners.mean(axis=1)
+        candidates = tree.query_ball_point(centers, np.linalg.norm(corners - centers[:, None], axis=2).max(axis=1) + 1e-9)
+        counts = np.array([len(c) for c in candidates])
+        if not counts.sum():
             continue
-        edges = corners[1:] - corners[0]
+        elements = np.repeat(np.arange(len(indices)), counts)
+        selected = np.concatenate([np.asarray(c, dtype=int) for c in candidates])
         try:
-            inverse = np.linalg.inv(edges)
+            inverse = np.linalg.inv(corners[:, 1:] - corners[:, :1])
         except np.linalg.LinAlgError as exc:
             raise FemFieldCorrupt("Degenerate retained FEM tetrahedron") from exc
-        bary = (points[candidates] - corners[0]) @ inverse
-        keep = (bary >= -1e-7).all(axis=1) & (bary.sum(axis=1) <= 1 + 1e-7) & ~inside[candidates]
-        selected = candidates[keep]
-        delta = pressure[indices[1:]] - pressure[indices[0]]
-        values[selected] = pressure[indices[0]] + bary[keep] @ delta
-        # Euler: -i omega rho v = -grad(p) for the retained solver convention.
-        velocity[selected] = inverse @ delta / (1j * 2 * np.pi * frequency * density)
+        bary = np.einsum("ni,nij->nj", points[selected] - corners[elements, 0], inverse[elements])
+        keep = (bary >= -1e-7).all(axis=1) & (bary.sum(axis=1) <= 1 + 1e-7) & ~inside[selected]
+        # Preserve first-element priority on shared faces without Python/tet loops.
+        hits = np.flatnonzero(keep)
+        _, first = np.unique(selected[hits], return_index=True)
+        hits = hits[first]
+        selected, elements, bary = selected[hits], elements[hits], bary[hits]
+        delta = pressure[indices[:, 1:]] - pressure[indices[:, :1]]
+        values[selected] = pressure[indices[elements, 0]] + np.einsum("ni,ni->n", bary, delta[elements])
+        velocity[selected] = np.einsum("nij,nj->ni", inverse[elements], delta[elements]) / (1j * 2 * np.pi * frequency * density)
         inside[selected] = True
     return values, velocity, inside
 
 
 def inside_bodies(mesh, points, symmetry, check=lambda: None):
-    """Closed-skin winding, including correctly oriented symmetry images.
+    """Indexed ray parity, including the closed symmetry images."""
+    from server.jobs.body_index import SkinRayIndex, skin_triangles
 
-    Coupled skins also enclose FEM air. The caller gives FEM regions priority,
-    so the remainder of the skin interior is solid and cannot be evaluated.
-    """
-    signs = [np.ones(3)]
-    for axis in ((0,) if symmetry == "x" else (0, 1) if symmetry == "xy" else ()):
-        reflected = []
-        for sign in signs:
-            image = sign.copy()
-            image[axis] *= -1
-            reflected.append(image)
-        signs.extend(reflected)
-    points = np.asarray(points, dtype=float)
-    inside = np.zeros(len(points), bool)
-    lo, hi = mesh.points_m.min(axis=0), mesh.points_m.max(axis=0)
-    for axis in ((0,) if symmetry == "x" else (0, 1) if symmetry == "xy" else ()):
-        lo[axis] = -hi[axis]
-    candidates = np.flatnonzero(((points >= lo - 1e-9) & (points <= hi + 1e-9)).all(axis=1))
-    for start in range(0, len(candidates), 128):
-        check()
-        indices = candidates[start:start + 128]
-        block = points[indices]
-        angle = np.zeros(len(block))
-        on_surface = np.zeros(len(block), bool)
-        for sign in signs:
-            for offset in range(0, len(mesh.faces), 512):
-                check()
-                triangles = mesh.points_m[mesh.faces[offset:offset + 512]] * sign
-                if np.prod(sign) < 0:
-                    triangles = triangles[:, [0, 2, 1]]
-                vectors = triangles[None] - block[:, None, None]
-                a, b, c = vectors[:, :, 0], vectors[:, :, 1], vectors[:, :, 2]
-                la, lb, lc = (np.linalg.norm(v, axis=2) for v in (a, b, c))
-                numerator = np.einsum("...i,...i->...", a, np.cross(b, c))
-                denominator = la * lb * lc + np.einsum("...i,...i->...", a, b) * lc + np.einsum("...i,...i->...", b, c) * la + np.einsum("...i,...i->...", c, a) * lb
-                angle += (2 * np.arctan2(numerator, denominator)).sum(axis=1)
-                # Points exactly on a face must not reach a singular BEM potential.
-                normals = np.cross(b - a, c - a)
-                area = np.linalg.norm(normals, axis=2)
-                distance = np.abs(np.einsum("...i,...i->...", a, normals)) / np.maximum(area, 1e-30)
-                edge_sum = (np.linalg.norm(np.cross(a, b), axis=2)
-                            + np.linalg.norm(np.cross(b, c), axis=2)
-                            + np.linalg.norm(np.cross(c, a), axis=2))
-                on_surface |= ((distance < 1e-9) & (edge_sum <= area * (1 + 1e-7))).any(axis=1)
-        inside[indices] = (np.abs(angle) > 2 * np.pi) | on_surface
-    return inside
+    index = SkinRayIndex(skin_triangles(mesh, symmetry), [0.371, 0.529, 0.763], check)
+    return index.query(points, check)[0]
 
 
 def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_seconds=90, cancellation_callback=None):
@@ -114,14 +79,23 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
     if not np.isfinite(density) or density <= 0:
         raise FemFieldCorrupt("Invalid retained FEM density")
     values, velocity, interior = sample_interior(xyz, tets, pressure, points, frequency, density, check)
+    region_class = interior.astype("u1")
+    crosses = np.zeros((request.plane.nx - 1) * (request.plane.ny - 1), bool)
     valid = interior.copy() if request.scope != "exterior" else np.zeros(len(points), bool)
     if request.scope != "interior":
         retained = store.load_bem_traces(job_id, frequency, payload["channel_id"])
         if retained is None:
             raise FemFieldInvalidSelection("No retained BEM traces; re-solve to enable exterior planes")
         mesh, p, q, speed, density, symmetry, rotation = retained
-        exterior = ~interior
-        exterior[exterior] &= ~inside_bodies(mesh, points[exterior] @ rotation.T, symmetry, check)
+        from server.jobs.body_index import SkinRayIndex, skin_triangles, crossing_cells
+
+        triangles = skin_triangles(mesh, symmetry)
+        image_points = points @ rotation.T
+        # One cached classification for this plane; velocity reuses it.
+        body = SkinRayIndex(triangles, [0.371, 0.529, 0.763], check).query(image_points, check)[0]
+        exterior = ~interior & ~body
+        region_class[exterior] = 2
+        crosses = crossing_cells(triangles, request.plane, rotation, check)
         if exterior.any():
             if evaluator is None:
                 from server.solver.beat_field import evaluate_exterior_from_traces
@@ -132,17 +106,23 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
             # The official operation returns pressure. A centred difference of
             # that same potential gives normal exterior velocity; P1 interior
             # velocity above remains exact, with no averaging between elements.
-            step = min(1e-4, speed / frequency * 1e-4)
+            # h=lambda/50: centred plane-wave truncation is (kh)^2/6
+            # (~0.26%). Float32 point coordinates need a resolvable separation.
+            step = np.full(len(selected), min(speed / frequency / 50, 0.1))
             evaluation_points = selected
             if request.quantity == "velocity_normal":
-                stencil = np.concatenate([selected + step * image_normal, selected - step * image_normal])
-                blocked = inside_bodies(mesh, stencil, symmetry, check)
-                safe = ~(blocked[:len(selected)] | blocked[len(selected):])
+                # Ray clearance bounds the whole normal segment, including thin
+                # walls whose far endpoint could be exterior again. No 2N mask.
+                _, clearance = SkinRayIndex(triangles, image_normal, check).query(selected, check)
+                step = np.minimum(step, clearance * 0.45)
+                rounding = np.maximum(np.max(np.abs(selected), axis=1), 1.) * np.finfo(np.float32).eps
+                safe = step >= 32 * rounding
                 indices = np.flatnonzero(exterior)[safe]
                 exterior[:] = False
                 exterior[indices] = True
-                selected = selected[safe]
-                evaluation_points = np.concatenate([selected + step * image_normal, selected - step * image_normal])
+                selected, step = selected[safe], step[safe]
+                evaluation_points = np.concatenate([selected + step[:, None] * image_normal,
+                                                    selected - step[:, None] * image_normal])
             result = (np.asarray(evaluator(mesh, frequency, 2 * np.pi * frequency / speed, p, q,
                                           evaluation_points, symmetry_plane={"off": None, "x": "yz", "xy": "yz+xz"}[symmetry],
                                           cancellation_callback=check)) if len(evaluation_points) else np.empty(0, complex))
@@ -161,6 +141,8 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
             "phasor_convention": payload["phasor_convention"], "nx": request.plane.nx, "ny": request.plane.ny,
             "points_mm": _encode(points * 1000, "<f4"), "pressure_real": _encode(values.real, "<f4"),
             "pressure_imag": _encode(values.imag, "<f4"),
+            "region_class": base64.b64encode(region_class.tobytes()).decode("ascii"),
+            "crosses_body": base64.b64encode(crosses.astype("u1").tobytes()).decode("ascii"),
             "valid_mask": base64.b64encode(valid.astype("u1").tobytes()).decode("ascii")}
 
 

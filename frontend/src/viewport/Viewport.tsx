@@ -48,7 +48,7 @@ import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskSto
 import { defaultFieldPlane, nearestFieldPlaneFrequencyIndex, useFieldPlaneStore } from './fieldPlaneStore';
 import { useObservationStore } from './observationStore';
 import { FemFieldControls } from './FemFieldControls';
-import { FemFieldScene } from './FemFieldScene';
+import { FemFieldScene, femInteriorDisplayValues } from './FemFieldScene';
 import type { FemFieldRendering, FemDisplayMode } from './FemFieldView';
 import { useFemField, useFemPlane } from './useFemField';
 import type { FieldPlaneResponseId } from '../api/fieldPlane';
@@ -455,7 +455,8 @@ export function Viewport() {
   const femField = useFemField(femActive ? fieldJobId : null);
   const effectiveFemScope = !femField.field || femField.field.payload.plane_scopes?.includes(femScope) ? femScope : 'interior';
   const femPlane = useFemPlane(femActive ? fieldJobId : null, femField.field, fieldPlane, effectiveFemScope, femQuantity);
-  const needsFemPlane = effectiveFemScope !== 'interior';
+  const femInterior = useMemo(() => femField.field ? femInteriorDisplayValues(femField.field, fieldPlane, femQuantity) : null,
+    [femField.field, fieldPlane, femQuantity]);
   const selectedRef = useRef<DecodedFrame | null>(null);
   const solveWasRunningOrQueued = useRef(solveRunningOrQueued);
   const latencyClock = useRef(new ClientLatencyClock());
@@ -1029,7 +1030,7 @@ export function Viewport() {
       onRenderFailure={setRenderFailure}
       onCameraDirection={setCameraDirection}
     >
-      {femActive && femField.field && (!needsFemPlane || femPlane.field) && <FemFieldScene field={femField.field} planeField={femPlane.field} quantity={femQuantity} scope={effectiveFemScope} displayMode={femDisplayMode ?? fieldDisplayMode} manualWindow={femManualWindow} rendering={femRendering}
+      {femActive && femField.field && <FemFieldScene interiorValues={femInterior} field={femField.field} planeField={femPlane.field} quantity={femQuantity} scope={effectiveFemScope} displayMode={femDisplayMode ?? fieldDisplayMode} manualWindow={femManualWindow} rendering={femRendering}
         sequential={fieldColormap} unitsPerMetre={activeScene.unitsPerMetre}/>}
     </ViewportCanvas>}
 
@@ -1157,7 +1158,7 @@ export function Viewport() {
       </li>)}</ul>
     </div>}
 
-    {femActive && <FemFieldControls field={femField} planeResult={femPlane} scope={effectiveFemScope} setScope={setFemScope}
+    {femActive && <FemFieldControls interiorValues={femInterior} field={femField} planeResult={femPlane} scope={effectiveFemScope} setScope={setFemScope}
       quantity={femQuantity} setQuantity={(q) => { setFemQuantity(q); setFemDisplayMode(q === 'pressure' ? null : 'real'); setFemManualWindow(null); }}
       displayMode={femDisplayMode ?? fieldDisplayMode} setDisplayMode={(m) => {
         if (m === 'real' || m === 'imaginary') setFemDisplayMode(m);

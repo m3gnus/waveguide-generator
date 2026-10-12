@@ -17,6 +17,7 @@ import {
   femNormalVelocitySlice,
   sliceFemField,
   type ComplexNodal,
+  type FemSlice,
   type FemFieldDomain,
   type FemSurfaceKind,
   type SlicePlane,
@@ -44,6 +45,7 @@ export function buildFemFieldGeometries(
     includeInterior?: boolean;
     planeField?: import('../api/femField').FemPlaneField | null;
     manualWindow?: FieldPlaneValueWindow | null;
+    interiorSlice?: FemSlice;
     velocity?: { frequencyHz: number; density: number };
     rendering: FemFieldRendering;
     sequential: readonly string[];
@@ -71,9 +73,9 @@ export function buildFemFieldGeometries(
   const phaseRadians = options.mode === 'real' ? 0 : options.mode === 'imaginary' ? Math.PI / 2 : options.phaseRadians;
   const empty = { positions: new Float32Array(0), real: new Float32Array(0),
     imag: new Float32Array(0), tetrahedron: new Uint32Array(0) };
-  const interior = options.planeField && !options.includeInterior ? empty : options.velocity
+  const interior = options.planeField && !options.includeInterior ? empty : options.interiorSlice ?? (options.velocity
     ? femNormalVelocitySlice(domain, values, options.plane, options.velocity.frequencyHz, options.velocity.density)
-    : sliceFemField(domain, values, options.plane);
+    : sliceFemField(domain, values, options.plane));
   const interiorShown = !options.velocity && options.rendering === 'element'
     ? elementMeanSlice(domain, values, interior) : interior;
   const join = (a: Float32Array, b: Float32Array) => {
@@ -118,6 +120,7 @@ interface FemFieldViewProps {
   includeInterior?: boolean;
   planeField?: import('../api/femField').FemPlaneField | null;
   manualWindow?: FieldPlaneValueWindow | null;
+  interiorSlice?: FemSlice;
   velocity?: { frequencyHz: number; density: number };
   rendering: FemFieldRendering;
   sequential: readonly string[];
@@ -135,11 +138,11 @@ interface FemFieldViewProps {
  * the kept half-volume with the walls hidden.
  */
 export function FemFieldView({
-  domain, values, plane, mode, planeField, includeInterior, manualWindow, velocity, rendering, sequential, unitsPerMetre, phaseRadians, animating = false, animationSpeed = 1,
+  domain, values, plane, mode, planeField, includeInterior, manualWindow, velocity, interiorSlice, rendering, sequential, unitsPerMetre, phaseRadians, animating = false, animationSpeed = 1,
 }: FemFieldViewProps) {
   const built = useMemo(
-    () => buildFemFieldGeometries(domain, values, { plane, mode, planeField, includeInterior, manualWindow, velocity, rendering, sequential, phaseRadians }),
-    [domain, values, plane, mode, planeField, includeInterior, manualWindow, velocity, rendering, sequential, phaseRadians],
+    () => buildFemFieldGeometries(domain, values, { plane, mode, planeField, includeInterior, manualWindow, velocity, interiorSlice, rendering, sequential, phaseRadians }),
+    [domain, values, plane, mode, planeField, includeInterior, manualWindow, velocity, interiorSlice, rendering, sequential, phaseRadians],
   );
   const invalidate = useThree((state) => state.invalidate);
   const phase = useRef(0);

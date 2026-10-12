@@ -372,6 +372,7 @@ export function femNormalVelocitySlice(domain: FemFieldDomain, values: ComplexNo
   const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
   const dot = (a: number[], b: number[]) => a.reduce((s, v, i) => s + v * b[i], 0);
   const perTet = new Map<number, [number, number]>();
+  const invalid = new Set<number>();
   for (let triangle = 0; triangle < cut.tetrahedron.length; triangle++) {
     const tet = cut.tetrahedron[triangle];
     let velocity = perTet.get(tet);
@@ -381,7 +382,10 @@ export function femNormalVelocitySlice(domain: FemFieldDomain, values: ComplexNo
       const edges = xyz.slice(1).map((p) => p.map((v, i) => v - xyz[0][i]));
       const cofactors = [cross(edges[1], edges[2]), cross(edges[2], edges[0]), cross(edges[0], edges[1])];
       const det = dot(edges[0], cofactors[0]);
-      if (!Number.isFinite(det) || det === 0) throw new Error('Degenerate velocity tetrahedron');
+      if (!Number.isFinite(det) || Math.abs(det) <= 1e-12 * Math.hypot(...edges[0]) * Math.hypot(...edges[1]) * Math.hypot(...edges[2])) {
+        invalid.add(tet);
+        continue;
+      }
       const gradient = (field: Float32Array) => cofactors.reduce((sum, c, i) => sum + dot(c, normal) * (field[indices[i + 1]] - field[indices[0]]) / det, 0);
       const factor = 2 * Math.PI * frequencyHz * density;
       velocity = [gradient(values.imag) / factor, -gradient(values.real) / factor];
@@ -390,5 +394,10 @@ export function femNormalVelocitySlice(domain: FemFieldDomain, values: ComplexNo
     cut.real.fill(velocity[0], triangle * 3, triangle * 3 + 3);
     cut.imag.fill(velocity[1], triangle * 3, triangle * 3 + 3);
   }
-  return cut;
+  if (!invalid.size) return cut;
+  const triangles = Array.from(cut.tetrahedron.keys()).filter((i) => !invalid.has(cut.tetrahedron[i]));
+  const vertices = triangles.flatMap((i) => [i * 3, i * 3 + 1, i * 3 + 2]);
+  return { positions: Float32Array.from(vertices.flatMap((i) => Array.from(cut.positions.subarray(i * 3, i * 3 + 3)))),
+    real: Float32Array.from(vertices.map((i) => cut.real[i])), imag: Float32Array.from(vertices.map((i) => cut.imag[i])),
+    tetrahedron: Uint32Array.from(triangles.map((i) => cut.tetrahedron[i])) };
 }

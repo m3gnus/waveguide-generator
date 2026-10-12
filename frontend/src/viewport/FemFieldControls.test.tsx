@@ -16,6 +16,7 @@ function Harness({ coupled = true }: { coupled?: boolean }) {
   const [rendering, setRendering] = useState<FemFieldRendering>('smooth');
   const [window, setWindow] = useState<FieldPlaneValueWindow | null>(null);
   const payload = femFieldFixture();
+  if (!coupled) payload.plane_unavailable_reason = 'Exterior and combined planes unavailable: BEM traces exceed the retention limit.';
   payload.plane_scopes = coupled ? ['interior', 'exterior', 'combined'] : ['interior'];
   const field = { ...decodeFemFieldPayload(payload), payload };
   return <FemFieldControls field={{ field, error: null, loading: false, frequencies: [100], channels: ['front'],
@@ -52,13 +53,15 @@ describe('coupled FEM controls', () => {
       expect(host.querySelector('[aria-label="FEM colour minimum"]')).not.toBeNull();
       expect(host.querySelector('[aria-label="FEM colour maximum"]')).not.toBeNull();
       act(() => checkbox.click()); expect(host.querySelector('[aria-label="FEM colour minimum"]')).toBeNull();
-      select('FEM field quantity', 'velocity_normal'); expect(host.textContent).toContain('m/s');
+      select('FEM field quantity', 'velocity_normal'); expect(host.textContent).toContain('Velocity per unit acceleration ((m/s) per m/s²)');
+      expect(host.textContent).not.toContain('Pressure per unit acceleration');
       expect(host.querySelector<HTMLOptionElement>('[aria-label="FEM field display mode"] option[value="spl"]')!.disabled).toBe(true);
     } finally { cleanup(); }
   });
   it('keeps old interior sidecars available while disabling unretained exterior scopes', () => {
     const { host, cleanup } = mounted(false);
     try {
+      expect(host.textContent).toContain('BEM traces exceed the retention limit');
       expect(host.querySelector<HTMLOptionElement>('[aria-label="FEM plane region"] option[value="exterior"]')!.disabled).toBe(true);
       expect(host.querySelector<HTMLOptionElement>('[aria-label="FEM plane region"] option[value="interior"]')!.disabled).toBe(false);
     } finally { cleanup(); }

@@ -172,6 +172,7 @@ class FemFieldPresentation(BaseModel):
     drive_normalization: Literal["unit_acceleration_m_per_s2", "unit_acceleration", "voltage_rms"]
     transducer_reference_voltage_v: float | None = None
     density_kg_per_m3: float | None = None
+    plane_unavailable_reason: str | None = None
     plane_scopes: list[Literal["interior", "exterior", "combined"]] = Field(default_factory=lambda: ["interior"])
 
 
@@ -196,6 +197,8 @@ class FemPlanePresentation(BaseModel):
     pressure_real: str
     pressure_imag: str
     valid_mask: str
+    region_class: str
+    crosses_body: str
 
 
 class EngineSubstitution(BaseModel):
@@ -1048,6 +1051,8 @@ def create_jobs_router(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except FieldPlaneTimedOut as exc:
             raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except ArtifactCorrupt as exc:
+            raise HTTPException(status_code=410, detail=f"Field-trace artifact is corrupt: {exc}") from exc
         except (FemFieldCorrupt, FieldPlaneEvaluationFailed) as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         if payload is None:

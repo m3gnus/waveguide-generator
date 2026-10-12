@@ -4204,6 +4204,17 @@
             "title": "Plane Scopes",
             "type": "array"
           },
+          "plane_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plane Unavailable Reason"
+          },
           "points_mm": {
             "title": "Points Mm",
             "type": "string"
@@ -4290,6 +4301,10 @@
             "title": "Channel Id",
             "type": "string"
           },
+          "crosses_body": {
+            "title": "Crosses Body",
+            "type": "string"
+          },
           "frequency_hz": {
             "title": "Frequency Hz",
             "type": "number"
@@ -4327,6 +4342,10 @@
             "title": "Quantity",
             "type": "string"
           },
+          "region_class": {
+            "title": "Region Class",
+            "type": "string"
+          },
           "scope": {
             "enum": [
               "interior",
@@ -4361,7 +4380,9 @@
           "points_mm",
           "pressure_real",
           "pressure_imag",
-          "valid_mask"
+          "valid_mask",
+          "region_class",
+          "crosses_body"
         ],
         "title": "FemPlanePresentation",
         "type": "object"

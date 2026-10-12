@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import type { FieldPlaneSpec } from '../api/fieldPlane';
 import type { DecodedFemField } from '../api/femField';
 import { FemFieldView, type FemFieldRendering, type FemDisplayMode } from './FemFieldView';
-import { femNormalVelocitySlice, type SlicePlane } from './femField';
+import { femNormalVelocitySlice, type FemSlice, type SlicePlane } from './femField';
 import { useFieldPlaneStore } from './fieldPlaneStore';
 
 export function femSlicePlane(plane: FieldPlaneSpec): SlicePlane {
@@ -12,8 +12,9 @@ export function femSlicePlane(plane: FieldPlaneSpec): SlicePlane {
     normal: [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx] };
 }
 
-export function FemFieldScene({ field, rendering, sequential, unitsPerMetre, planeField, displayMode, manualWindow, quantity, scope }: {
+export function FemFieldScene({ field, rendering, sequential, unitsPerMetre, planeField, displayMode, manualWindow, quantity, scope, interiorValues }: {
   field: DecodedFemField;
+  interiorValues?: ReturnType<typeof femInteriorDisplayValues> | null;
   planeField?: import('../api/femField').FemPlaneField | null;
   displayMode?: FemDisplayMode;
   scope?: import('../api/femField').FemPlaneScope;
@@ -26,8 +27,11 @@ export function FemFieldScene({ field, rendering, sequential, unitsPerMetre, pla
   const animating = useFieldPlaneStore((state) => state.animating);
   const animationSpeed = useFieldPlaneStore((state) => state.animationSpeed);
   const slicePlane = useMemo(() => plane ? femSlicePlane(plane) : null, [plane]);
+  const velocity = useMemo(() => quantity === 'velocity_normal'
+    ? { frequencyHz: field.frequencyHz, density: field.payload.density_kg_per_m3 ?? 1.21 } : undefined,
+    [quantity, field.frequencyHz, field.payload.density_kg_per_m3]);
   return <FemFieldView domain={field.domain} values={field.values} plane={slicePlane}
-    mode={displayMode ?? mode} planeField={planeField} includeInterior={scope === 'combined'} manualWindow={manualWindow} velocity={quantity === 'velocity_normal' ? { frequencyHz: field.frequencyHz, density: field.payload.density_kg_per_m3 ?? 1.21 } : undefined} rendering={rendering} sequential={sequential} unitsPerMetre={unitsPerMetre}
+    mode={displayMode ?? mode} planeField={planeField} includeInterior={scope === 'combined'} manualWindow={manualWindow} velocity={velocity} interiorSlice={interiorValues && 'tetrahedron' in interiorValues ? interiorValues as FemSlice : undefined} rendering={rendering} sequential={sequential} unitsPerMetre={unitsPerMetre}
     animating={animating} animationSpeed={animationSpeed}/>;
 }
 

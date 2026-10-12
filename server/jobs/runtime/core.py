@@ -3942,10 +3942,20 @@ class JobRuntime:
             self.store.store_fem_field_arrays(job_id, arrays)
             from server.jobs.bem_traces import trace_arrays
 
-            traces = trace_arrays(compiled, sweep)
-            if traces is not None:
-                self._check_cancelled(job_id)
-                self.store.store_bem_trace_arrays(job_id, traces)
+            reason = compiled.plane_unavailable_reason
+            self._check_cancelled(job_id)
+            try:
+                traces = trace_arrays(compiled, sweep)
+                if traces is not None:
+                    self.store.store_bem_trace_arrays(job_id, traces)
+            except Exception:
+                logger.exception("Could not retain coupled BEM traces for job %s", job_id)
+                reason = "Exterior and combined planes unavailable: BEM trace storage failed. Re-solve after checking available disk space."
+            if reason:
+                self.store.mutate_job_metadata(job_id, {"fem_plane_unavailable_reason": reason,
+                                                       "has_bem_traces_artifact": False,
+                                                       "bem_traces_artifact_bytes": None,
+                                                       "plane_scopes": ["interior"]})
             return (None if "voltage_rms" in compiled.drive_normalization.values()
                     else serialize_channel_bases(sweep.channels))
 

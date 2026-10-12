@@ -2401,6 +2401,17 @@ class JobStore:
         path = self._bem_traces_path(job_id) if bem else self._fem_field_path(job_id)
         marker = "has_bem_traces_artifact" if bem else "has_fem_field_artifact"
         bytes_key = "bem_traces_artifact_bytes" if bem else "fem_field_artifact_bytes"
+        fem_owner = None
+        if bem:
+            with self._lock:
+                row = self.get_job_row(job_id)
+                if row is None or not row["task_metadata"].get("has_fem_field_artifact"):
+                    return False
+                try:
+                    stat = self._fem_field_path(job_id).stat()
+                    fem_owner = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+                except FileNotFoundError:
+                    return False
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
             fd, name = tempfile.mkstemp(prefix=".fem-", dir=path.parent)
@@ -2414,7 +2425,18 @@ class JobStore:
                 stream.flush()
                 os.fsync(stream.fileno())
             with self._lock, self._transaction() as conn:
-                if not self._job_exists(conn, job_id):
+                owns_fem = True
+                if bem:
+                    row = self.get_job_row(job_id)
+                    try:
+                        owns_fem = (row is not None and row["task_metadata"].get("has_fem_field_artifact")
+                                    and self._fem_field_path(job_id).is_file())
+                        if owns_fem:
+                            stat = self._fem_field_path(job_id).stat()
+                            owns_fem = (stat.st_ino, stat.st_mtime_ns, stat.st_size) == fem_owner
+                    except FileNotFoundError:
+                        owns_fem = False
+                if not self._job_exists(conn, job_id) or not owns_fem:
                     Path(name).unlink(missing_ok=True)
                     try:
                         path.parent.rmdir()
@@ -2459,6 +2481,9 @@ class JobStore:
             payload = load_fem_field_payload(path, frequency, channel)
             if row["task_metadata"].get("has_bem_traces_artifact") and self._bem_traces_path(job_id).is_file():
                 payload["plane_scopes"] = ["interior", "exterior", "combined"]
+            elif row["task_metadata"].get("fem_plane_unavailable_reason"):
+                payload["plane_scopes"] = ["interior"]
+                payload["plane_unavailable_reason"] = row["task_metadata"]["fem_plane_unavailable_reason"]
             return payload
         except FileNotFoundError:
             return None

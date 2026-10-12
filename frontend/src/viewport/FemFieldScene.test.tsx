@@ -1,7 +1,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { decodeFemFieldPayload } from './femField';
+import { decodeFemFieldPayload, femNormalVelocitySlice } from './femField';
 import { femFieldFixture } from './test-fixtures/femField';
 import { femSlicePlane, FemFieldScene } from './FemFieldScene';
 import { useFieldPlaneStore } from './fieldPlaneStore';
@@ -34,6 +34,20 @@ describe('FEM view mount', () => {
     expect(mounted.view.mock.lastCall?.[0]).toMatchObject({ mode: 'instantaneous', animating: true, animationSpeed: 2 });
     act(() => useFieldPlaneStore.getState().setPlane({ ...plane, origin_m: [0, 0, 0.01] }));
     expect(mounted.view.mock.lastCall?.[0]).toMatchObject({ plane: { origin: [0, 0, 10] } });
+  });
+
+  it('keeps the interior while a combined plane is absent and reuses velocity inputs', () => {
+    const payload = femFieldFixture();
+    const field = { ...decodeFemFieldPayload(payload), payload };
+    const slice = femNormalVelocitySlice(field.domain, field.values, femSlicePlane(plane), field.frequencyHz);
+    const render = () => root.render(<FemFieldScene field={field} quantity="velocity_normal" scope="combined"
+      planeField={null} interiorValues={slice} rendering="smooth" sequential={['#000000', '#ffffff']} unitsPerMetre={1000}/>);
+    act(render);
+    const first = mounted.view.mock.lastCall?.[0];
+    expect(first).toMatchObject({ includeInterior: true, planeField: null, interiorSlice: slice });
+    act(render);
+    expect(mounted.view.mock.lastCall?.[0].velocity).toBe(first.velocity);
+    expect(mounted.view.mock.lastCall?.[0].interiorSlice).toBe(slice);
   });
 
   it('uses the shared gizmo axes for the FEM normal', () => {

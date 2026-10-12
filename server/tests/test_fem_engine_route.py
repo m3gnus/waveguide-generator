@@ -1287,3 +1287,57 @@ def test_planner_keeps_beat_cpu_and_metal_selectable_for_auto_exterior_drivers(m
     verdicts = {verdict["name"]: verdict for verdict in plan["engines"]}
     assert verdicts["beat-cpu"]["solves"] is True
     assert verdicts["beat-metal"]["solves"] is True
+
+
+@pytest.mark.parametrize("failure", ["cap", "disk_full"])
+def test_unavailable_bem_retention_keeps_completed_coupled_solve(runtime, monkeypatch, tmp_path, failure, caplog):
+    import asyncio
+    from server.jobs.runtime import JobRuntime
+    from server.jobs.store import JobStore
+    from server.solver.beat_adapter import coupled_request
+    from server.tests.test_imported_jobs import _request
+    from server.tests.test_jobs_store import _job
+
+    if failure == "cap":
+        monkeypatch.setattr("server.solver.beat_adapter.trace_retention.MAX_BEM_TRACE_BYTES", 100)
+    from server.tests.test_fem_electrodynamic import driver
+    built = compiled(transducers={"fem": driver()})
+    quantities = {o["quantity"] for o in built.wire["outputs"]}
+    if failure == "cap":
+        assert not {"bem_boundary_pressure", "bem_boundary_neumann"} & quantities
+        assert built.plane_unavailable_reason and "256 MiB" in built.plane_unavailable_reason
+    else:
+        assert {"bem_boundary_pressure", "bem_boundary_neumann"} <= quantities
+    monkeypatch.setattr(coupled_request, "build_imported_coupled_request", lambda *a, **k: built)
+    runtime.mutate = lambda raw: (raw.clear(), raw.update(coupled_result(
+        runtime.requests[-1], runtime.requests[-1]["frequencies_hz"][runtime.result_count % 2])))
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("field"))
+    if failure == "disk_full":
+        def fail(*a, **k):
+            raise OSError("No space left on device")
+        monkeypatch.setattr(store, "store_bem_trace_arrays", fail)
+    from server.jobs.models import DriveChannel
+    request = _request("wgi_" + "0" * 26)
+    request.geometry.drive_channels = [DriveChannel(id="fem", source_ids=[], exterior_transducer=driver(), motion="axial")]
+    request.options.engine = "beat-cpu"
+    self = SimpleNamespace(store=store, _check_cancelled=lambda *a: None)
+    from server.tests.test_fem_termination import _closed_domain
+    record = {"domain_interpretation": _closed_domain(), "fem_regions": [r.record for r in built.regions],
+              "coupled_exterior": {"physical_names": {"source": {"kind": "moving", "drive_channel_id": "exterior"}}}}
+    try:
+        outcome = asyncio.run(JobRuntime._run_coupled_regions(self, "field", request, record, lambda *a: None))
+        assert outcome.results
+        assert store.get_fem_field("field") is not None
+        payload = store.load_fem_field("field")
+        assert payload["plane_scopes"] == ["interior"]
+        reason = payload["plane_unavailable_reason"]
+        assert ("256 MiB" if failure == "cap" else "storage failed") in reason
+        metadata = store.get_job_row("field")["task_metadata"]
+        assert metadata["plane_scopes"] == ["interior"]
+        assert metadata["fem_plane_unavailable_reason"] == reason
+        assert not metadata.get("has_bem_traces_artifact")
+        assert ("256 MiB" if failure == "cap" else "Could not retain") in caplog.text
+    finally:
+        store.close()

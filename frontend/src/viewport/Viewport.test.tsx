@@ -18,6 +18,8 @@ import { useFieldPlaneStore } from './fieldPlaneStore';
 import { useFieldPlaneProbeStore } from './fieldPlaneProbe';
 import meshFixture from './test-fixtures/tagged_sources-small.msh?raw';
 import { femFieldFixture } from './test-fixtures/femField';
+import * as canvasModule from './ViewportCanvas';
+import * as femSceneModule from './FemFieldScene';
 
 const frame: DecodedFrame = {
   header: {
@@ -298,6 +300,38 @@ describe('Viewport preview errors', () => {
     expect(section?.getAttribute('aria-label')).toContain('Section cut off');
   });
 
+  it('keeps the interior scene mounted while a combined plane loads and after it fails', async () => {
+    vi.spyOn(canvasModule, 'canRenderWebGL').mockReturnValue(true);
+    vi.spyOn(canvasModule.ViewportCanvas as unknown as { type: (props: { children: import('react').ReactNode }) => import('react').ReactNode }, 'type')
+      .mockImplementation(({ children }) => <>{children}</>);
+    vi.spyOn(femSceneModule, 'FemFieldScene').mockImplementation(() => <div data-testid="fem-scene"/>);
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname.endsWith('/fem-field/plane')) return pending;
+      if (url.pathname.endsWith('/fem-field')) return new Response(JSON.stringify({ ...femFieldFixture(),
+        plane_scopes: ['interior', 'exterior', 'combined'] }));
+      return new Response('', { status: 404 });
+    });
+    act(() => {
+      compareSelection.setPrimary('fem');
+      publishJobs([{ ...completeJob('fem', false), has_fem_field_artifact: true }]);
+      useFieldPlaneStore.getState().enableFem('fem', fieldPlane);
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    act(() => {
+      const scope = host.querySelector<HTMLSelectElement>('[aria-label="FEM plane region"]')!;
+      scope.value = 'combined'; scope.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 275)); });
+    expect(host.textContent).toContain('Loading FEM field');
+    expect(host.querySelector('[data-testid="fem-scene"]')).not.toBeNull();
+    await act(async () => { finish(new Response(JSON.stringify({ detail: 'BEAT runtime unavailable' }), { status: 409 })); });
+    expect(host.textContent).toContain('BEAT runtime unavailable');
+    expect(host.querySelector('[data-testid="fem-scene"]')).not.toBeNull();
+  });
+
   it.each(['unit_acceleration', 'voltage_rms'] as const)('mounts FEM controls with %s and selects only the requested frequency/channel', async (normalization) => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = new URL(String(input), 'http://localhost');
@@ -338,6 +372,11 @@ describe('Viewport preview errors', () => {
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="Play FEM phase animation"]')!.click());
     expect(useFieldPlaneStore.getState()).toMatchObject({ animating: true, displayMode: 'instantaneous' });
     expect(host.querySelector('[aria-label="FEM phase animation speed"]')).not.toBeNull();
+    act(() => {
+      const quantity = host.querySelector<HTMLSelectElement>('[aria-label="FEM field quantity"]')!;
+      quantity.value = 'velocity_normal'; quantity.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(host.textContent).toContain(normalization === 'voltage_rms' ? '2.83 V RMS (m/s)' : '(m/s) per m/s²');
 
     act(() => {
       publishJobs([completeJob('ordinary', false)]);

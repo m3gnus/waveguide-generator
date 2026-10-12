@@ -5,7 +5,8 @@ import type { FemFieldRendering, FemDisplayMode } from './FemFieldView';
 import type { useFemField } from './useFemField';
 import { femInteriorDisplayValues } from './FemFieldScene';
 
-export function FemFieldControls({ field, rendering, setRendering, sequential, children, planeResult, scope, setScope, quantity, setQuantity, displayMode, setDisplayMode, manualWindow, setManualWindow }: {
+export function FemFieldControls({ field, rendering, setRendering, sequential, children, planeResult, scope, setScope, quantity, setQuantity, displayMode, setDisplayMode, manualWindow, setManualWindow, interiorValues }: {
+  interiorValues?: ReturnType<typeof femInteriorDisplayValues> | null;
   field: ReturnType<typeof useFemField>; rendering: FemFieldRendering;
   setRendering: (value: FemFieldRendering) => void; sequential: readonly string[]; children?: ReactNode;
   planeResult: ReturnType<typeof import('./useFemField').useFemPlane>;
@@ -20,8 +21,8 @@ export function FemFieldControls({ field, rendering, setRendering, sequential, c
   const hz = field.frequencies[field.frequencyIndex];
   const colormap = fieldPlaneColormap(mode, sequential);
   const plane = useFieldPlaneStore((state) => state.plane);
-  const interior = useMemo(() => field.field ? femInteriorDisplayValues(field.field, plane, quantity) : null,
-    [field.field, plane, quantity]);
+  const interior = useMemo(() => interiorValues !== undefined ? interiorValues : field.field ? femInteriorDisplayValues(field.field, plane, quantity) : null,
+    [interiorValues, field.field, plane, quantity]);
   const shown = useMemo(() => {
     if (!planeResult.field) return interior;
     if (scope !== 'combined' || !interior) return planeResult.field;
@@ -36,8 +37,9 @@ export function FemFieldControls({ field, rendering, setRendering, sequential, c
   return <div className="field-plane-legend" role="group" aria-label="FEM field controls">
     <div className="field-plane-legend-title"><b>{scope === 'interior' ? 'FEM interior field' : scope === 'exterior' ? 'Coupled exterior field' : 'Combined acoustic field'}</b></div>
     <p className="field-plane-note" role="note">{field.field?.payload.drive_normalization === 'voltage_rms'
-      ? `RMS pressure at ${field.field.payload.transducer_reference_voltage_v} V RMS (Pa). `
-      : 'Pressure per unit acceleration (Pa per m/s²). '}</p>
+      ? `RMS ${quantity === 'pressure' ? 'pressure' : 'velocity'} at ${field.field.payload.transducer_reference_voltage_v} V RMS (${quantity === 'pressure' ? 'Pa' : 'm/s'}). `
+      : `${quantity === 'pressure' ? 'Pressure' : 'Velocity'} per unit acceleration (${quantity === 'pressure' ? 'Pa' : '(m/s)'} per m/s²). `}</p>
+    {field.field?.payload.plane_unavailable_reason && <p role="note">{field.field.payload.plane_unavailable_reason}</p>}
     {quantity === 'velocity_normal' && <p role="note">Signed particle velocity normal to the plane (m/s), constant within each P1 element. Exterior velocity uses a centred potential difference.</p>}
     <div className="field-plane-mode-row"><label>Plane region<select aria-label="FEM plane region" value={scope}
       onChange={(e) => setScope(e.target.value as typeof scope)}>

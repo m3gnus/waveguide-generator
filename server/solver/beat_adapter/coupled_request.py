@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import logging
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -25,6 +26,7 @@ class CoupledRequest:
     regions: tuple[FemRegionInput, ...]
     channel_ports: Mapping[str, tuple[str, ...]]
     image_rotation: np.ndarray | None = None
+    plane_unavailable_reason: str | None = None
 
     @property
     def warnings(self) -> tuple[str, ...]:
@@ -149,14 +151,20 @@ def build_coupled_request(
                        if output["id"].removeprefix("pressure:") in layout.planes)
         outputs.append({"id": "interface:velocity", "quantity": "interface_average_normal_velocity",
                         "target_ids": [], "options": {}})
+    plane_unavailable_reason = None
     if exterior is not None:
-        from server.jobs.bem_traces import check_trace_size
+        from .trace_retention import check_trace_size
 
         mesh = next(m["mesh_data"] for m in system["meshes"] if m["purpose"] == "bem_surface")
-        check_trace_size(len(frequencies), len(channels), mesh["points"]["shape"][0],
-                         mesh["cells"][0]["connectivity"]["shape"][0], precision)
-        outputs.extend({"id": q, "quantity": q, "target_ids": [], "options": {}}
-                       for q in ("bem_boundary_pressure", "bem_boundary_neumann"))
+        try:
+            check_trace_size(len(frequencies), len(channels), mesh["points"]["shape"][0],
+                             mesh["cells"][0]["connectivity"]["shape"][0], precision)
+        except ValueError:
+            plane_unavailable_reason = "Exterior and combined planes unavailable: BEM traces exceed the 256 MiB retention limit."
+            logging.getLogger(__name__).warning(plane_unavailable_reason)
+        else:
+            outputs.extend({"id": q, "quantity": q, "target_ids": [], "options": {}}
+                           for q in ("bem_boundary_pressure", "bem_boundary_neumann"))
     outputs.append({"id": "fem:pressure", "quantity": "fem_nodal_pressure",
                     "target_ids": [], "options": {}})
     if transducers:
@@ -183,7 +191,7 @@ def build_coupled_request(
             "requested_backend": requested_backend, "requested_precision": requested_precision,
             "backend": backend, "precision": precision,
             "reason": "Interior-only FEM uses CPU float64"}
-    return CoupledRequest(wire, layout, frame, tuple(regions), channels, rotation)
+    return CoupledRequest(wire, layout, frame, tuple(regions), channels, rotation, plane_unavailable_reason)
 
 
 def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any, *,

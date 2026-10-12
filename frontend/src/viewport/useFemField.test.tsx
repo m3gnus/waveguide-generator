@@ -134,6 +134,7 @@ it('coupled plane requests debounce, abort and discard obsolete results', async 
     points_mm: btoa(String.fromCharCode(...new Uint8Array(new Float32Array(12).buffer))),
     pressure_real: btoa(String.fromCharCode(...new Uint8Array(new Float32Array([1, 1, 1, 1]).buffer))),
     pressure_imag: btoa(String.fromCharCode(...new Uint8Array(new Float32Array(4).buffer))),
+    region_class: btoa(String.fromCharCode(2, 2, 2, 2)), crosses_body: btoa(String.fromCharCode(0)),
     valid_mask: btoa(String.fromCharCode(1, 1, 1, 1)), frequency_hz: 100, channel_id: 'front',
     scope: 'exterior', quantity: 'pressure', phasor_convention: 'exp(-i omega t)', unit: 'Pa' }));
   try {

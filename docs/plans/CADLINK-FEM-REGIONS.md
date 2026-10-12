@@ -560,7 +560,10 @@ Retention is limited to 256 MiB of uncompressed arrays per job, including
 boundary coordinates and connectivity. Before solving, admission reserves
 64 KiB for axes and metadata and checks
 `frequency_count * channel_count * (node_count + face_count) * complex_itemsize`
-plus mesh storage. An oversized request asks for a smaller mesh or sweep.
+plus mesh storage. Above the cap the solve omits BEM trace outputs and completes
+with interior planes available. A trace publication failure also preserves the
+completed solve. Both cases record an interior-only scope and a user-visible
+reason in job metadata and the field view.
 Compression and fsync run outside the store lock; atomic publication and small
 metadata updates share the existing FEM sidecar pattern. There is no database
 schema change. Both sidecars follow FEM failure, cancellation, startup recovery,
@@ -569,27 +572,41 @@ job deletion and result-retention cleanup.
 `POST /api/results/{job_id}/fem-field/plane` accepts the existing orthonormal
 plane specification, frequency/channel selectors, `interior`, `exterior` or
 `combined` scope, and `pressure` or `velocity_normal`. It returns float32
-base64 coordinates and complex components plus a byte validity mask. Masked
+base64 coordinates and complex components plus byte validity, region-class
+(0 invalid/body, 1 FEM, 2 exterior) and cell-crossing masks. Masked
 samples are zero; they must never become displayed field triangles. Plane grids
 retain the existing maximum of 256 × 256 samples. The route shares the existing
 field permit, solve priority and worker-drain lifecycle, with a maximum 90 second
 evaluation deadline.
 
 FEM tetrahedra take priority in combined samples. The completed BEM skin masks
-remaining points inside bodies and on boundary faces. Symmetry images preserve
+remaining points inside bodies and on boundary faces using ray parity with a
+projected spatial index. The per-plane classification is reused for velocity;
+a normal-ray clearance query bounds the stencil without remasking 2N points. Symmetry images preserve
 scalar pressure and reflect vector components through geometry, including the
 image rotation needed for a Y-only half model. The exterior potential is
 computed by WG's official BEAT `bem_field` operation without another solve.
 In `exp(-i omega t)`, velocity is `grad(p)/(i omega rho)`. Interior gradients
 are exact and constant per P1 tetrahedron; exterior normal velocity uses a
-centred difference of the same potential with a step no larger than 0.1 mm or
-0.0001 wavelength. Exterior velocity samples whose difference stencil crosses
-a body or bounded region are masked.
+centred difference of the same potential with h ≈ wavelength/50, capped at
+0.1 m and 45% of the nearest normal-ray boundary distance. Plane-wave truncation
+is approximately (kh)²/6 (0.26% at wavelength/50). Samples whose safe step is too
+small to resolve in Float32 coordinates are masked.
 
 The viewport offers pressure SPL, normalized level, phase, real, imaginary,
 instantaneous animation and manual colour limits. Normal particle velocity
 uses m/s and disables pressure SPL. Interior cuts retain exact tetrahedron
 polygons; combined views join those polygons to the masked exterior grid.
-Triangles touching masked grid samples are omitted, leaving a grid-scale gap
+Cells with invalid or mixed region-class corners, or a plane/skin intersection,
+are omitted entirely, including walls narrower than the sampling grid. Only
+exterior-class cells become grid triangles, avoiding overlap with FEM polygons.
+Conservative intersection bounds can leave a grid-scale gap
 at body boundaries. Older FEM sidecars retain the interior view and disable
 exterior/combined choices until a new solve retains BEM traces.
+
+
+Fake-worker plane tests verify routing, retained drive scaling and masking with
+distinct FEM and exterior functions; they do not establish physical continuity.
+Physical replay agreement is checked by the live V10 case: exterior plane versus
+retained polar points has relative error ≤1e-6. This case is outside the targeted
+fake-worker regression gate.

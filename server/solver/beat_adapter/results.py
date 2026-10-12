@@ -629,8 +629,10 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                              for name, points in request.layout.points_m.items()
                              if any(o["id"] == f"interface:radiation:{name}" for o in outputs)} if interface_ids else {},
                             interface_areas, radiation_ids if interface_ids else [],
-                            np.stack([row["bem_boundary_pressure"] for row in rows]) if rows and exterior_ids else None,
-                            np.stack([row["bem_boundary_neumann"] for row in rows]) if rows and exterior_ids else None)
+                            np.stack([row["bem_boundary_pressure"] for row in rows])
+                            if rows and any(o["quantity"] == "bem_boundary_pressure" for o in outputs) else None,
+                            np.stack([row["bem_boundary_neumann"] for row in rows])
+                            if rows and any(o["quantity"] == "bem_boundary_neumann" for o in outputs) else None)
     finally:
         close = getattr(events, "close", None) or getattr(stream, "close", None)
         if close:
