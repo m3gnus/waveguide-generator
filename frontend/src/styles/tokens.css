@@ -63,7 +63,6 @@
      gives it a machined edge without turning the cyan indicator into a glow. */
   --solve-sh: none;
   --track: var(--border-default);
-  --track-fill: #7d766d;
   --thumb: var(--fg);
   --thumb-sh: none;
   --vp-grad: var(--surface-panel);
@@ -259,7 +258,6 @@
   --solve-kbd-fg: var(--inv-fg);
   --solve-sh: none;
   --track: var(--border-default);
-  --track-fill: #8f938b;
   --thumb: var(--fg);
   --thumb-sh: none;
   --vp-grad: var(--surface-panel);

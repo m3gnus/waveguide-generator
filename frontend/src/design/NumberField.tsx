@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ChangeEvent, type KeyboardEvent, type PointerEvent } from 'react';
 import type { ExprNumber } from '../stores/design';
 import { useHelpTip } from './HelpTip';
 
@@ -67,6 +67,9 @@ export function NumberField({
   const displayed = expression?.raw ?? (value === undefined ? '' : value.toFixed(precision));
   const [draft, setDraft] = useState(displayed);
   const [editing, setEditing] = useState(false);
+  const [expandedDraft, setExpandedDraft] = useState(false);
+  const editor = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+  const pendingSelection = useRef<{ start: number; end: number; direction: 'forward' | 'backward' | 'none' } | null>(null);
   const [dragDelta, setDragDelta] = useState<number | null>(null);
   const drag = useRef<{ x: number; value: number } | null>(null);
   const dragFrame = useRef<number | null>(null);
@@ -89,6 +92,7 @@ export function NumberField({
   const holdsExpression = Boolean(rawExpression) && !Number.isFinite(Number(rawExpression));
   const showEvaluatedExpression = holdsExpression && expression?.value != null;
   const isExpression = allowExpression && draft.trim() !== '' && !Number.isFinite(parsed);
+  const formulaLayout = holdsExpression || isExpression || (editing && expandedDraft);
   const empty = draft.trim() === '';
   const outOfRange = !empty && !isExpression && Number.isFinite(parsed) && (parsed < min || parsed > max);
   /**
@@ -117,8 +121,53 @@ export function NumberField({
     if (!editing && !drag.current) setDraft(displayed);
   }, [displayed, editing]);
 
+  useLayoutEffect(() => {
+    const element = editor.current;
+    const selection = pendingSelection.current;
+    if (element && selection) {
+      pendingSelection.current = null;
+      element.focus();
+      element.setSelectionRange(selection.start, selection.end, selection.direction);
+    }
+    if (!(element instanceof HTMLTextAreaElement)) return;
+    const grow = () => {
+      element.style.height = 'auto';
+      element.style.height = `${element.scrollHeight}px`;
+    };
+    grow();
+    let width = element.getBoundingClientRect().width;
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(() => {
+      const nextWidth = element.getBoundingClientRect().width;
+      if (nextWidth !== width) { width = nextWidth; grow(); }
+    });
+    observer?.observe(element);
+    window.addEventListener('resize', grow);
+    return () => { observer?.disconnect(); window.removeEventListener('resize', grow); };
+  }, [draft, formulaLayout]);
+
+  const changeDraft = (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const element = event.currentTarget;
+    const next = element.value.replace(/[\r\n]/g, '');
+    const becomesExpression = allowExpression && next.trim() !== '' && !Number.isFinite(Number(next));
+    const start = element.selectionStart ?? next.length;
+    const end = element.selectionEnd ?? start;
+    const selection = {
+      start: element.value.slice(0, start).replace(/[\r\n]/g, '').length,
+      end: element.value.slice(0, end).replace(/[\r\n]/g, '').length,
+      direction: element.selectionDirection ?? 'none',
+    };
+    if (next !== element.value) {
+      element.value = next;
+      element.setSelectionRange(selection.start, selection.end, selection.direction);
+    }
+    if (!formulaLayout && becomesExpression) pendingSelection.current = selection;
+    if (becomesExpression) setExpandedDraft(true);
+    setDraft(next);
+  };
+
   const commit = () => {
     setEditing(false);
+    setExpandedDraft(false);
     if (cancelBlur.current) {
       cancelBlur.current = false;
       setDraft(displayed);
@@ -155,7 +204,7 @@ export function NumberField({
    * step, and stepping would overwrite the expression with a plain number.
    */
   const stepBy = (multiplier: number) => {
-    if (holdsExpression) return false;
+    if (formulaLayout) return false;
     const base = Number.isFinite(parsed) ? parsed : value;
     if (base === undefined || !Number.isFinite(base)) return false;
     const next = Math.min(max, Math.max(min, base + step * multiplier));
@@ -165,10 +214,12 @@ export function NumberField({
     return true;
   };
 
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     if (event.key === 'Enter') {
+      event.preventDefault();
       event.currentTarget.blur();
     } else if (event.key === 'Escape') {
+      event.preventDefault();
       cancelBlur.current = true;
       setDraft(displayed);
       setEditing(false);
@@ -186,7 +237,7 @@ export function NumberField({
     if (disabled) return;
     // Scrubbing commits a plain number, which would silently overwrite the
     // formula this field holds. Expressions are edited by typing only.
-    if (holdsExpression) return;
+    if (formulaLayout) return;
     if (value === undefined) return;
     if (event.button !== 0) return;
     event.preventDefault();
@@ -236,9 +287,11 @@ export function NumberField({
     endDragCallback.current?.();
   }, []);
 
+  const Editor = formulaLayout ? 'textarea' : 'input';
+
   return (
     <div
-      className={`field-row${modified ? ' modified' : ''}${disabled ? ' field-disabled' : ''}${holdsExpression ? ' expression-row' : ''}`}
+      className={`field-row${modified ? ' modified' : ''}${disabled ? ' field-disabled' : ''}${formulaLayout ? ' expression-row' : ''}`}
       title={disabledReason}
       data-control-reveal-id={revealId}
     >
@@ -247,7 +300,7 @@ export function NumberField({
         htmlFor={id}
         className="field-label"
         // The hover tip carries the full name and symbol as its heading, so a
-        // label ellipsized against the value control is still readable. The
+        // label clamped against the value control is still readable. The
         // native `title` is only the fallback for a field with no description,
         // because a native tooltip would otherwise pop up over the hover tip.
         title={description ? undefined : `${titled} — drag horizontally to adjust`}
@@ -260,46 +313,36 @@ export function NumberField({
       >
         <span className="field-name">{label}</span>{symbol && <span className="field-symbol">({symbol})</span>}{help.tip}
       </label>
-      {holdsExpression && <span className="expr-badge" aria-hidden="true">fx</span>}
+      {formulaLayout && <span className="expr-badge" aria-hidden="true">fx</span>}
       {showEvaluatedExpression && <span className="expr-value" title="Evaluated expression value">= {Number(expression!.value!.toPrecision(8))}{unit}</span>}
-      {/* The formula marker follows `holdsExpression`, not the mere presence of a
-          raw string. An imported design carries a raw for every field it names,
-          most of them plain numbers ("10", "0.992"), and keying the marker off
-          `expression.raw` widened those fields to formula width -- so a loaded
-          design showed a rail of boxes at two different sizes with no rule a
-          reader could see behind which was which. */}
-      <div className={`number-control${editing ? ' editing' : ''}${invalid ? ' invalid' : ''}${holdsExpression ? ' expression' : ''}`}>
+      <div className={`number-control${editing ? ' editing' : ''}${invalid ? ' invalid' : ''}${formulaLayout ? ' expression' : ''}`}>
         {dragDelta !== null && (
           <span className="scrub-tip">drag <b>{dragDelta >= 0 ? '+' : ''}{dragDelta.toFixed(precision)}{unit}</b></span>
         )}
-        <input
+        <Editor
+          ref={(element: HTMLInputElement | HTMLTextAreaElement | null) => { editor.current = element; }}
+          {...(formulaLayout ? { rows: 1 } : {})}
           id={id}
           aria-invalid={invalid}
           aria-describedby={(draftMessage ?? invalidMessage) ? `${id}-error` : undefined}
-          /* The fill track encodes where this value sits in its range, which is
-             information a sighted user gets and a screen-reader user did not.
-             spinbutton carries the same fact, and it is also what makes the
-             Arrow-key stepping above discoverable rather than a secret. A
-             formula field is not a spinbutton; it holds text. */
-          role={holdsExpression ? undefined : 'spinbutton'}
-          aria-valuemin={holdsExpression || !Number.isFinite(min) ? undefined : min}
-          aria-valuemax={holdsExpression || !Number.isFinite(max) ? undefined : max}
-          aria-valuenow={holdsExpression || value === undefined ? undefined : value}
-          aria-valuetext={holdsExpression || value === undefined ? undefined : `${value.toFixed(precision)}${unit ? ` ${unit}` : ''}`}
-          inputMode={holdsExpression ? 'text' : 'decimal'}
+          // Formulas hold text; plain numbers keep their spinbutton semantics.
+          role={formulaLayout ? undefined : 'spinbutton'}
+          aria-valuemin={formulaLayout || !Number.isFinite(min) ? undefined : min}
+          aria-valuemax={formulaLayout || !Number.isFinite(max) ? undefined : max}
+          aria-valuenow={formulaLayout || value === undefined ? undefined : value}
+          aria-valuetext={formulaLayout || value === undefined ? undefined : `${value.toFixed(precision)}${unit ? ` ${unit}` : ''}`}
+          inputMode={formulaLayout ? 'text' : 'decimal'}
           spellCheck={false}
           disabled={disabled}
           placeholder={optional ? 'Unset' : undefined}
-          title={holdsExpression ? draft : undefined}
+          title={formulaLayout ? draft : undefined}
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={changeDraft}
           onFocus={() => setEditing(true)}
           onBlur={commit}
           onKeyDown={onKeyDown}
         />
-        {unit && !holdsExpression && <span className="unit">{unit}</span>}
-        {/* The scrub track reads as a value within a range, which a formula has not got. */}
-        {!holdsExpression && value !== undefined && <i className="number-track" style={{ '--fill': `${Math.max(5, Math.min(100, ((value - min) / (max - min)) * 100 || 50))}%` } as React.CSSProperties} />}
+        {unit && !formulaLayout && <span className="unit">{unit}</span>}
       </div>
       {/* Visible, not screen-reader-only. The message was announced and never
           shown, so a sighted user got a red border and no reason for it. */}

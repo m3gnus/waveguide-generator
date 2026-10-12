@@ -7,6 +7,7 @@ import {
   EXPRESSION_PARAMETER_IDS,
   fieldAppliesToFamily,
   fieldIsVisible,
+  fieldOptionsForBackend,
   fieldMatchesQuery,
   parameterSectionIsVisible,
   traceEntryIsRegistered,
@@ -173,6 +174,36 @@ describe('complete parameter registry', () => {
     expect(visible('mesh.z_map_points', osse)).toBe(true);
   });
 
+  it.each(['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'] as const)('shows morph controls only for applicable targets in %s', (family) => {
+    const design = designForFamily(family);
+    const visible = (id: string) => fieldIsVisible(PARAMETER_REGISTRY.find((field) => field.id === id)!, design);
+    for (const shape of [0, 1, 2, 3]) {
+      design.morph.target_shape = shape;
+      for (const name of ['target_width', 'target_height', 'rate', 'fixed_part', 'allow_shrinkage']) {
+        expect(visible(`morph.${name}`), `${shape}: ${name}`).toBe(shape !== 0);
+      }
+      expect(visible('morph.corner_radius')).toBe(shape === 1);
+      expect(visible('morph.target_exponent')).toBe(shape === 3);
+    }
+  });
+
+  it('preserves Legacy only when held and shows amplitude only for Legacy', () => {
+    const field = PARAMETER_REGISTRY.find((entry) => entry.id === 'source.velocity_convention')!;
+    const amplitude = PARAMETER_REGISTRY.find((entry) => entry.id === 'source.velocity')!;
+    const design = designForFamily('OSSE');
+    for (const convention of ['normal', 'axial', 'legacy'] as const) {
+      design.source.velocity_convention = convention;
+      expect(fieldOptionsForBackend(field, convention, null).map((option) => option.value)).toEqual(
+        convention === 'legacy' ? ['normal', 'axial', 'legacy'] : ['normal', 'axial'],
+      );
+      expect(fieldIsVisible(amplitude, design)).toBe(convention === 'legacy');
+    }
+  });
+
+  it('leaves dimensionless throat stretch controls without units', () => {
+    for (const id of ['common.s1', 'common.s2']) expect(PARAMETER_REGISTRY.find((field) => field.id === id)?.unit).toBeUndefined();
+  });
+
   it('offers only supported sampling modes and maps legacy Source.Velocity to its enum', () => {
     const sampling = PARAMETER_REGISTRY.find((field) => field.id === 'mesh.sampling_mode')!;
     expect(sampling.options?.map((option) => option.value)).toEqual(['uniform', 'ath-default-zmap', 'zmap']);
@@ -214,7 +245,7 @@ describe('complete parameter registry', () => {
     osse.morph.target_shape = 0;
     osse.enclosure.depth = 0;
     osse.mesh.wall_thickness = 0;
-    for (const id of ['osse.a', 'morph.target_width', 'morph.target_height', 'morph.corner_radius', 'morph.rate', 'morph.fixed_part', 'mesh.rear_resolution']) {
+    for (const id of ['osse.a', 'mesh.rear_resolution']) {
       const field = PARAMETER_REGISTRY.find((item) => item.id === id)!;
       expect(fieldIsVisible(field, osse), id).toBe(true);
       expect(field.disabledWhen?.(osse), id).toBeUndefined();

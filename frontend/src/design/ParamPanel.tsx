@@ -38,6 +38,7 @@ import { SourceContourEditor } from './SourceContourEditor';
 import { SourceAssemblyLauncher } from './SourceAssemblyEditor';
 import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
+import { SelectRow } from './SelectRow';
 import { LiveDimensions } from './LiveDimensions';
 import { HelpTipRow } from './HelpTip';
 import { Icon } from '../shell/icons';
@@ -269,14 +270,14 @@ function WallEnclosureModeControl({ design }: { design: DesignDocument }) {
   };
 
   return <div className="outer-body-mode">
-    <div className="select-row">
+    <SelectRow>
       <label htmlFor="outer-body-mode">Outer body</label>
       <select id="outer-body-mode" value={selectedMode} onChange={(event) => chooseMode(event.target.value as SelectableOuterBodyMode)}>
         <option value="bare">Bare shell</option>
         <option value="freestanding">Thickened waveguide (freestanding)</option>
         <option value="enclosure">Waveguide in enclosure</option>
       </select>
-    </div>
+    </SelectRow>
     <div className={`resolved-mode${resolvedMode === 'infinite-baffle' ? ' override' : ''}`}>
       <span>Resolved mode</span><b>{outerModeLabels[resolvedMode]}</b>
       {resolvedMode === 'infinite-baffle' && <small>Infinite baffle simulation overrides the outer body.</small>}
@@ -306,6 +307,7 @@ function TextField({ field, value, disabled, onCommit }: {
     <input
       id={`parameter-${field.id}`}
       value={draft}
+      title={draft}
       disabled={disabled}
       spellCheck={false}
       onChange={(event) => setDraft(event.target.value)}
@@ -440,7 +442,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
       ? backendPlan.find((candidate) => candidate.mountings?.includes('infinite-baffle'))
       : undefined;
     return <>
-      <HelpTipRow className={`select-row${disabled ? ' field-disabled' : ''}`} text={field.description}>
+      <SelectRow className={disabled ? 'field-disabled' : undefined} text={field.description}>
         <label htmlFor={`parameter-${field.id}`} title={disabledReason}>{field.label}</label>
         <select id={`parameter-${field.id}`} value={String(value ?? '')} disabled={disabled} onChange={(event) => {
           const option = field.options?.find((item) => String(item.value) === event.target.value);
@@ -448,7 +450,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
         }}>
           {options.map((option) => <option key={String(option.value)} value={String(option.value)} disabled={Boolean(option.unavailableReason)} title={option.unavailableReason}>{option.label}</option>)}
         </select>
-      </HelpTipRow>
+      </SelectRow>
       {ibEngine?.name === 'bempp' && ibEngine.assembly_backend === 'numba' &&
         <OpenclUnavailableHook platform={hostPlatform} engine={ibEngine} notice="infinite_baffle_numba" />}
       {/* Listed but disabled: no engine on this host can run it. Say why here,
@@ -1254,7 +1256,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     summary={design.formula}
     forceOpen={false}
   >
-    <div className="select-row family-row">
+    <SelectRow className="family-row">
       <label htmlFor="family">Family</label>
       <select id="family" value={design.formula} onChange={(event) => {
         const family = event.target.value as DesignFamily;
@@ -1265,7 +1267,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option>FREEFORM</option>
         {NATIVE_FAMILIES.map((family) => <option key={family}>{family}</option>)}
       </select>
-    </div>
+    </SelectRow>
     {conversionNotice && <div className="field-warning conversion-notice" role="status">
       {conversionNotice} <button onClick={() => setConversionNotice(null)}>Dismiss</button>
     </div>}

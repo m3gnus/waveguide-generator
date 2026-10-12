@@ -151,6 +151,64 @@ describe('ParamPanel inventory UX', () => {
     vi.unstubAllGlobals();
   });
 
+  it('stacks long selects and text while keeping short selects inline', () => {
+    // Native formula names such as OSSE-ADAPTER-CONTROLS do not fit the numeric column.
+    expect(host.querySelector('#family')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(true);
+    expect(host.querySelector('#outer-body-mode')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(true);
+    act(() => useDesignStore.getState().updateValue('morph.target_shape', 1));
+    expect(host.querySelector('[data-parameter-id="morph.allow_shrinkage"] .select-row')?.classList.contains('stacked-select-row')).toBe(false);
+    act(() => useDesignStore.getState().setFamily('ICW'));
+    act(() => useDesignStore.getState().updateValue('coverage_mode', 'a long imported coverage mode'));
+    const text = host.querySelector<HTMLInputElement>('[data-parameter-id="common.coverage_mode"] input')!;
+    expect(text.closest('.param-text-row')).not.toBeNull();
+    expect(text.title).toBe('a long imported coverage mode');
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    expect(host.querySelector('[data-parameter-id="source.velocity_convention"] .select-row')?.classList.contains('stacked-select-row')).toBe(true);
+    expect(host.querySelector('#solve-engine')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(true);
+    expect(host.querySelector('#solve-accuracy')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(false);
+  });
+
+  it('hides inactive morph edits and preserves the existing search reveal behavior', () => {
+    act(() => useDesignStore.getState().updateValue('morph.target_width', 600));
+    expect(host.querySelector('[data-parameter-id="morph.target_width"]')).toBeNull();
+    expect(host.querySelector('[data-section="Morph Target"] .modified')).toBeNull();
+    const search = host.querySelector<HTMLInputElement>('.parameter-search input')!;
+    const searchFor = (value: string) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(search, value);
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    act(() => searchFor('Target width'));
+    expect(host.querySelector<HTMLInputElement>('[data-parameter-id="morph.target_width"] input')?.value).toBe('600.00');
+    expect(host.querySelector('.filter-note')?.textContent).toContain('normally hidden');
+    act(() => searchFor(''));
+    expect(host.querySelector('[data-parameter-id="morph.target_width"]')).toBeNull();
+    act(() => useDesignStore.getState().updateValue('morph.target_shape', 1));
+    expect(host.querySelector('[data-parameter-id="morph.corner_radius"]')).not.toBeNull();
+    act(() => useDesignStore.getState().updateValue('morph.target_shape', 2));
+    expect(host.querySelector('[data-parameter-id="morph.corner_radius"]')).toBeNull();
+    expect(useDesignStore.getState().design.morph.target_width).toBe(600);
+  });
+
+  it('keeps Legacy selectable only while held and amplitude visible only under Legacy', () => {
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    const selector = '[data-parameter-id="source.velocity_convention"] select';
+    expect(host.querySelector(`${selector} option[value="legacy"]`)).toBeNull();
+    expect(host.querySelector('[data-parameter-id="source.velocity"]')).toBeNull();
+    act(() => useDesignStore.getState().setSourceConvention('legacy'));
+    expect(host.querySelector<HTMLSelectElement>(selector)?.value).toBe('legacy');
+    expect(host.querySelector(`${selector} option[value="legacy"]`)).not.toBeNull();
+    expect(host.querySelector('[data-parameter-id="source.velocity"]')).not.toBeNull();
+    expect(serializeDesign(useDesignStore.getState().design)).toMatchObject({ source: { velocity_convention: 'legacy' } });
+    act(() => {
+      const select = host.querySelector<HTMLSelectElement>(selector)!;
+      select.value = 'axial';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(host.querySelector(`${selector} option[value="legacy"]`)).toBeNull();
+    expect(host.querySelector('[data-parameter-id="source.velocity"]')).toBeNull();
+    expect(serializeDesign(useDesignStore.getState().design)).toMatchObject({ source: { velocity_convention: 'axial' } });
+  });
+
   it('shows imported ATH lip, Opus rear and NAC values as read-only geometry', () => {
     act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
       formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', ath_nac_present: true, ath_nac: 10,

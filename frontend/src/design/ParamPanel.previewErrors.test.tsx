@@ -35,6 +35,7 @@ describe('ParamPanel preview field errors', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     localStorage.clear();
     resetDesignStore();
+    useDesignStore.getState().updateValue('morph.target_shape', 1);
     workspaceModeStore.setMode('parametric');
     preview.snapshot.errorFields = null;
     preview.snapshot.errorRevision = null;

@@ -122,6 +122,7 @@ describe('live design dimensions', () => {
     expect(dimensions()?.textContent).toContain('Current preview');
   });
   it('labels values last valid beside an invalid uncommitted NumberField draft', async () => {
+    act(() => useDesignStore.getState().updateValue('morph.target_shape', 1));
     render(); valid();
     const input = host.querySelector<HTMLInputElement>('[data-parameter-id="morph.corner_radius"] input')!;
     await act(async () => {

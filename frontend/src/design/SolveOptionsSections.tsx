@@ -1,3 +1,4 @@
+import { SelectRow } from './SelectRow';
 import { BeatRuntimePreparation } from './BeatRuntimePreparation';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { useEffect, useState, useSyncExternalStore } from 'react';
@@ -193,9 +194,9 @@ export function FrequencySweepControls({ idPrefix, context }: { idPrefix: string
     ? 'These frequencies replace the range and count from the design, and sweep spacing no longer applies.'
     : 'These frequencies replace the imported solve range and count, and sweep spacing no longer applies.';
   return <>
-    <HelpTipRow className="select-row" text={modeHelp + samplingHelp}><label htmlFor={modeId}>Sweep points</label><select id={modeId} value={store.frequencyMode} onChange={(event) => store.setFrequencyMode(event.target.value as FrequencyMode)}><option value="range">Generated grid</option><option value="list">Explicit list</option></select></HelpTipRow>
+    <SelectRow text={modeHelp + samplingHelp}><label htmlFor={modeId}>Sweep points</label><select id={modeId} value={store.frequencyMode} onChange={(event) => store.setFrequencyMode(event.target.value as FrequencyMode)}><option value="range">Generated grid</option><option value="list">Explicit list</option></select></SelectRow>
     {store.frequencyMode === 'range'
-      ? <HelpTipRow className="select-row" text="How the generated frequencies are spread across the range. Logarithmic gives even spacing per octave, which matches how the response is read; Linear spends most of the points on the top octave."><label htmlFor={spacingId}>Sweep spacing</label><select id={spacingId} value={store.frequencySpacing} onChange={(event) => store.setFrequencySpacing(event.target.value as FrequencySpacing)}><option value="log">Logarithmic</option><option value="linear">Linear</option></select></HelpTipRow>
+      ? <SelectRow text="How the generated frequencies are spread across the range. Logarithmic gives even spacing per octave, which matches how the response is read; Linear spends most of the points on the top octave."><label htmlFor={spacingId}>Sweep spacing</label><select id={spacingId} value={store.frequencySpacing} onChange={(event) => store.setFrequencySpacing(event.target.value as FrequencySpacing)}><option value="log">Logarithmic</option><option value="linear">Linear</option></select></SelectRow>
       : <div className="point-paste">
           <textarea id={listId} aria-label="Solver frequencies in Hz" rows={4} value={store.frequencyListText} onChange={(event) => store.setFrequencyListText(event.target.value)} placeholder={'500, 630, 800, 1000\n1250 1600 2000'} />
           <div className="paste-meta">{frequencies
@@ -265,7 +266,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   const beatGpu = engines.find((engine) => ['beat-metal', 'beat-cuda', 'beat-rocm'].includes(engine.name) && engine.available);
   const beatCpu = engines.find((engine) => engine.name === 'beat-cpu' && engine.available);
   return <>
-    <HelpTipRow className="select-row" text={accuracyHelp}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></HelpTipRow>
+    <SelectRow text={accuracyHelp}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></SelectRow>
     <AccuracyExplainer fastEngine={explainerFast} accurateEngine={explainerAccurate} />
     {store.engine === 'auto' && store.accuracy === 'fast' && explainerFast === 'bempp'
       && engines.some((engine) => engine.name.startsWith('beat-') && engine.runtime_state === 'preparing')
@@ -275,10 +276,10 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
     {store.accuracy === 'accurate' && !beatGpu && beatCpu && <p className="section-note" role="status">No BEAT GPU backend is ready; Accurate will use BEAT CPU.</p>}
     {store.engine !== 'auto' && <p className="section-note">Advanced engine override: {store.engine}. This engine takes precedence. Selecting Fast or Accurate clears the override.</p>}
     {mode === 'parametric' ? <>
-      <HelpTipRow className="select-row" text="Advanced engine override. AUTO follows the Fast or Accurate choice. An explicit engine takes precedence."><label htmlFor="solve-engine">Advanced backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
+      <SelectRow text="Advanced engine override. AUTO follows the Fast or Accurate choice. An explicit engine takes precedence."><label htmlFor="solve-engine">Advanced backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">Automatic — follow accuracy</option>
         {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available && engine.qualification !== 'pending'}>{engine.label || engine.name}{engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${!engine.name.startsWith('beat-') && engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
-      </select></HelpTipRow>
+      </select></SelectRow>
     </> : <>
       {/* The engine is the same choice as the parametric workspace's: the
           imported submission sends it as it is. The formulation and domain are
@@ -309,7 +310,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
       && <span className="section-note" role="status">BEMPP · checking OpenCL…</span>}
     {showOpenclGuidance && <OpenclUnavailableHook platform={hostPlatform}
       engine={engines.find((engine) => engine.name === 'bempp')} />}
-    <HelpTipRow className="select-row" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></HelpTipRow>
+    <SelectRow text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></SelectRow>
     {mode === 'parametric' && <GroundPlaneControls />}
     <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />
     <ToggleRow id="solve-verbose" label="Verbose backend logging" help="Records the backend's own per-frequency diagnostics in the job log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />
@@ -366,8 +367,7 @@ export function GroundPlaneControls() {
       onChange={(enabled) => store.updateGroundPlane({ enabled })}
     />
     {ground.enabled && <>
-      <HelpTipRow
-        className="select-row"
+      <SelectRow
         text="Which surface reflects. WG's frame runs the waveguide axis along z with y vertical, so Floor is the ground under the horn, Side wall is a wall beside it, and Rear wall stands behind the throat. A rear wall is not the same as an infinite baffle: the baffle is at the mouth."
       >
         <label htmlFor="ground-plane-axis">Reflecting surface</label>
@@ -380,7 +380,7 @@ export function GroundPlaneControls() {
           <option value="x" disabled={axes ? !axes.includes('x') : false}>Side wall — beside the horn</option>
           <option value="z" disabled={axes ? !axes.includes('z') : false}>Rear wall — behind the throat</option>
         </select>
-      </HelpTipRow>
+      </SelectRow>
       <PolarNumber
         id="ground-plane-height"
         label="Height above surface"
@@ -642,7 +642,7 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
     <PolarNumber id="polar-diagonal-angle" label="Diagonal plane angle" help="Where the diagonal plane sits, measured from the horizontal. 45° is the corner of a square mouth. Only used when the diagonal plane is enabled." value={polar.diagonalAngle} unit="°" step={1} disabled={!polar.enabledAxes.includes('diagonal')} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('diagonalAngle')} />
     {validationError && <div id={validationErrorId} className="field-error polar-grid-error" role="alert">{validationError}</div>}
     {cardinalDiagonal && <p className="section-note" role="status">A diagonal at {Number(polar.diagonalAngle.toFixed(6))}° is the {Math.abs((polar.diagonalAngle % 180 + 180) % 180 - 90) < 1e-6 ? 'vertical' : 'horizontal'} plane, so it will be measured and plotted twice. Use an angle between the planes, such as 45°.</p>}
-    <HelpTipRow className="select-row" text="The point the measurement angles pivot around. Mouth rotates about the mouth centre, which is what a measured polar set matches; Throat pivots at the driver instead."><label htmlFor="polar-observation-origin">Measurement origin</label><select id="polar-observation-origin" value={polar.observationOrigin} onChange={(event) => update({ observationOrigin: event.target.value as ObservationOrigin })}><option value="mouth">Mouth</option><option value="throat">Throat</option></select></HelpTipRow>
+    <SelectRow text="The point the measurement angles pivot around. Mouth rotates about the mouth centre, which is what a measured polar set matches; Throat pivots at the driver instead."><label htmlFor="polar-observation-origin">Measurement origin</label><select id="polar-observation-origin" value={polar.observationOrigin} onChange={(event) => update({ observationOrigin: event.target.value as ObservationOrigin })}><option value="mouth">Mouth</option><option value="throat">Throat</option></select></SelectRow>
     <ToggleRow id="polar-spherical-sampling" label="Keep 3D balloon result" help="WG samples a spherical field for Directivity Index independently of the selected H/V/D display planes. Enable this to retain that grid for the 3D balloon and forward-beam views; availability depends on the backend." checked={polar.sphericalSampling} onChange={(sphericalSampling) => update({ sphericalSampling })} />
     <ToggleRow disabled={Boolean(fieldReason)} reasonId={fieldReason ? 'field-plane-support-reason' : undefined} id="polar-field-plane" label="Keep field plane data" help="Retains the surface data needed for acoustic field planes. This adds ~0.1–1 MB per typical parametric job, with larger results for CAD-link imports." checked={polar.fieldPlane !== false} onChange={(fieldPlane) => update({ fieldPlane })} />
     {fieldReason && <p id="field-plane-support-reason" className="section-note">{fieldReason}</p>}

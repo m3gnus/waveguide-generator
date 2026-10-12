@@ -153,12 +153,12 @@ describe('NumberField', () => {
   it('commits a non-numeric ATH expression verbatim and shows a known evaluated value', () => {
     const commitExpression = vi.fn();
     act(() => root.render(<NumberField label="Radius" value={140} expression={{ raw: 'mouth(p) * 2', value: 280 }} allowExpression onCommit={vi.fn()} onCommitExpression={commitExpression} />));
-    expect(host.querySelector<HTMLInputElement>('input')!.value).toBe('mouth(p) * 2');
+    expect(host.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe('mouth(p) * 2');
     expect(host.textContent).toContain('= 280');
-    const input = host.querySelector<HTMLInputElement>('input')!;
+    const input = host.querySelector<HTMLTextAreaElement>('textarea')!;
     act(() => {
       input.focus();
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '140 + p');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(input, '140 + p');
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.blur();
     });
@@ -169,7 +169,7 @@ describe('NumberField', () => {
     const commitExpression = vi.fn();
     const expression = { raw: '48.5 - 7*cos(2*p)^5', value: 33.7 };
     act(() => root.render(<NumberField label="Coverage" value={33.7} expression={expression} allowExpression onCommit={vi.fn()} onCommitExpression={commitExpression} />));
-    const input = host.querySelector<HTMLInputElement>('input')!;
+    const input = host.querySelector<HTMLTextAreaElement>('textarea')!;
     expect(host.textContent).toContain('= 33.7');
     act(() => input.focus());
     act(() => input.blur());
@@ -185,7 +185,7 @@ describe('NumberField', () => {
     const row = host.querySelector('.field-row')!;
     expect(row.classList.contains('expression-row')).toBe(true);
     // The whole formula is present, reading from its start rather than clipped.
-    expect(host.querySelector<HTMLInputElement>('input')!.value).toBe(formula);
+    expect(host.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe(formula);
     // A range track would imply a scrubbable value; a formula has none.
     expect(host.querySelector('.number-track')).toBeNull();
 
@@ -198,13 +198,13 @@ describe('NumberField', () => {
     });
     expect(commit).not.toHaveBeenCalled();
     expect(commitExpression).not.toHaveBeenCalled();
-    expect(host.querySelector<HTMLInputElement>('input')!.value).toBe(formula);
+    expect(host.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe(formula);
   });
 
-  it('keeps a plain numeric field scrubbable', () => {
+  it('keeps plain numbers compact without a misleading range track', () => {
     act(() => root.render(<NumberField label="Scale" value={1} onCommit={vi.fn()} />));
     expect(host.querySelector('.field-row')!.classList.contains('expression-row')).toBe(false);
-    expect(host.querySelector('.number-track')).not.toBeNull();
+    expect(host.querySelector('.number-track')).toBeNull();
   });
 
   it('does not repeat a plain numeric imported value as a green evaluation', () => {
@@ -220,8 +220,99 @@ describe('NumberField', () => {
     act(() => root.render(<NumberField label="Termination smoothness" value={0.992} expression={{ raw: '0.9 + 0.092*p', value: 0.992 }} allowExpression onCommit={vi.fn()} />));
     expect(host.querySelector('.number-control')!.classList.contains('expression')).toBe(true);
   });
-  const setValue = (input: HTMLInputElement, value: string) => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
+  it.each(['4*', '4*2'])('switches at %s without losing focus, text or caret and stays expanded', (formula) => {
+    const commit = vi.fn();
+    act(() => root.render(<NumberField label="Radius" value={4} allowExpression onCommit={commit} />));
+    const input = host.querySelector('input')!;
+    act(() => input.focus());
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, formula);
+      input.setSelectionRange(2, 2);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const textarea = host.querySelector('textarea')!;
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.value).toBe(formula);
+    expect(textarea.selectionStart).toBe(2);
+    expect(textarea.selectionEnd).toBe(2);
+    expect(textarea.rows).toBe(1);
+    expect(textarea.hasAttribute('role')).toBe(false);
+    expect(textarea.hasAttribute('aria-valuenow')).toBe(false);
+    expect(host.querySelector('.expr-badge')).not.toBeNull();
+    act(() => setValue(textarea, '4'));
+    expect(host.querySelector('textarea')).toBe(textarea);
+    const label = host.querySelector('label')!;
+    label.setPointerCapture = vi.fn();
+    act(() => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+      label.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+      label.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 90 }));
+      label.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }));
+    });
+    expect(commit).not.toHaveBeenCalled();
+    act(() => textarea.blur());
+    expect(host.querySelector('textarea')).toBeNull();
+    expect(host.querySelector('input')?.getAttribute('role')).toBe('spinbutton');
+  });
+
+  it('commits with Enter and cancels with Escape in the formula editor', () => {
+    const commitExpression = vi.fn();
+    const render = () => root.render(<NumberField label="Radius" value={4} expression={{ raw: '4*p', value: 4 }} allowExpression onCommit={vi.fn()} onCommitExpression={commitExpression} />);
+    act(render);
+    const textarea = host.querySelector('textarea')!;
+    act(() => textarea.focus());
+    act(() => setValue(textarea, '8*p'));
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    act(() => textarea.dispatchEvent(enter));
+    expect(enter.defaultPrevented).toBe(true);
+    expect(document.activeElement).not.toBe(textarea);
+    expect(commitExpression).toHaveBeenCalledExactlyOnceWith({ raw: '8*p', value: null });
+    act(() => textarea.focus());
+    act(() => setValue(textarea, '9*p'));
+    act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(commitExpression).toHaveBeenCalledTimes(1);
+    expect(textarea.value).toBe('4*p');
+    expect(document.activeElement).not.toBe(textarea);
+  });
+
+  it('strips pasted newlines and preserves the caret in the sanitized draft', () => {
+    const commitExpression = vi.fn();
+    act(() => root.render(<NumberField label="Radius" expression={{ raw: '4*p', value: null }} allowExpression onCommit={vi.fn()} onCommitExpression={commitExpression} />));
+    const textarea = host.querySelector('textarea')!;
+    act(() => textarea.focus());
+    act(() => setValue(textarea, '4*\np+\r\n2'));
+    expect(textarea.value).toBe('4*p+2');
+    expect(textarea.selectionStart).toBe(5);
+    act(() => textarea.blur());
+    expect(commitExpression).toHaveBeenCalledWith({ raw: '4*p+2', value: null });
+  });
+
+  it('ignores a pasted newline even when stripping it leaves the draft unchanged', () => {
+    const commitExpression = vi.fn();
+    act(() => root.render(<NumberField label="Radius" expression={{ raw: '4*p', value: null }} allowExpression onCommit={vi.fn()} onCommitExpression={commitExpression} />));
+    const textarea = host.querySelector('textarea')!;
+    act(() => textarea.focus());
+    act(() => setValue(textarea, '4*p\n'));
+    expect(textarea.value).toBe('4*p');
+    expect(textarea.selectionStart).toBe(3);
+    act(() => textarea.blur());
+    expect(commitExpression).not.toHaveBeenCalled();
+  });
+
+  it('grows and shrinks the formula editor with its content', () => {
+    act(() => root.render(<NumberField label="Radius" expression={{ raw: '4*p', value: null }} allowExpression onCommit={vi.fn()} />));
+    const textarea = host.querySelector('textarea')!;
+    let contentHeight = 72;
+    Object.defineProperty(textarea, 'scrollHeight', { get: () => contentHeight });
+    act(() => { textarea.focus(); setValue(textarea, '4*p+2'); });
+    expect(textarea.style.height).toBe('72px');
+    contentHeight = 24;
+    act(() => setValue(textarea, '4*p'));
+    expect(textarea.style.height).toBe('24px');
+  });
+
+  const setValue = (input: HTMLInputElement | HTMLTextAreaElement, value: string) => {
+    Object.getOwnPropertyDescriptor(input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value')?.set?.call(input, value);
     input.dispatchEvent(new Event('input', { bubbles: true }));
   };
 

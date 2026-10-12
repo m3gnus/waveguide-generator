@@ -262,8 +262,8 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .section-name { font-size: var(--text-micro); font-weight: 660; letter-spacing: .12em; text-transform: uppercase; }
 .section-summary { color: var(--fg4); font: var(--text-micro) var(--mono); }
 .section-body { padding: 1px 8px 8px; }
-.select-row { display: flex; align-items: center; gap: 8px; height: 24px; margin-bottom: 2px; }
-.select-row label { flex: 1; color: var(--fg1); font-size: var(--text-base); }
+.select-row { display: flex; align-items: center; gap: 8px; min-height: 24px; margin-bottom: 2px; }
+.select-row label { flex: 1; min-width: 0; color: var(--fg1); font-size: var(--text-base); }
 .select-row select, .static-select { width: var(--field-w); height: 21px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font-size: var(--text-micro); }
 .select-row select { appearance: auto; }
 .static-select { display: flex; align-items: center; justify-content: space-between; }
@@ -273,13 +273,16 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .field-row > .field-error { flex-basis: 100%; }
 .modified-dot { position: absolute; left: -6px; width: 3px; height: 3px; border-radius: 50%; background: var(--acc); opacity: 0; }
 .field-row.modified .modified-dot { opacity: .85; }
-.field-label { display: flex; align-items: baseline; gap: 4px; flex: 1; min-width: 0; overflow: hidden; color: var(--fg1); font-size: var(--text-base); text-overflow: ellipsis; white-space: nowrap; cursor: ew-resize; user-select: none; }
-/* The ATH formula symbol is the part an ATH user scans for, so it holds its
-   width and the prose name ellipsizes against the value control instead. The
-   name needs its own box to do that: as an anonymous flex item its automatic
-   minimum is min-content, so it would refuse to shrink and push "(a0)" out of
-   the label's overflow rather than clipping itself. */
-.field-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.field-label { display: flex; align-items: baseline; gap: 4px; flex: 1; min-width: 0; overflow: hidden; color: var(--fg1); font-size: var(--text-base); cursor: ew-resize; user-select: none; }
+/* Names wrap twice while the formula symbol keeps its width beside them. */
+.field-name,
+.select-row label,
+.toggle-row > span,
+.toggle-row > label,
+.field-label:not(:has(.field-name)) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; min-width: 0; overflow: hidden; white-space: normal; overflow-wrap: anywhere; }
+.toggle-row { gap: 8px; }
+.toggle-row > span, .toggle-row > label { flex: 1; }
+.toggle-row > input, .select-row > select, .field-row > .number-control { flex-shrink: 0; }
 .field-symbol { flex: 0 0 auto; color: var(--fg3); font: italic var(--text-micro) var(--mono); }
 
 /* Parameter hover help. Portalled to <body> and positioned in JS, so it is
@@ -305,9 +308,6 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .number-control.editing input { color: var(--acc); }
 .number-control.invalid input { color: var(--red); }
 .unit { color: var(--fg3); font-size: var(--text-micro); letter-spacing: .02em; white-space: nowrap; }
-.number-track { position: absolute; right: 5px; bottom: 2px; left: 5px; height: 1px; border-radius: var(--r3); background: var(--track); }
-.number-track::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--fill, 40%); border-radius: var(--r3); background: var(--track-fill); }
-.number-control.invalid .number-track::after { width: 100%; background: var(--red); }
 .scrub-tip { position: absolute; top: -1px; right: calc(100% + 7px); z-index: 3; padding: 2px 4px; border: 1px solid rgba(var(--acc-rgb), .35); border-radius: var(--r3); background: var(--acc-deep); box-shadow: var(--tip-sh); color: var(--acc); font: var(--text-micro) var(--mono); white-space: nowrap; }
 .scrub-tip b { color: var(--fg); }
 .derived { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 4px 6px; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
@@ -323,9 +323,9 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 /* The domain names are the whole point of this select and none of them fit the
    fixed 132px every other select in the rail takes, so the label goes above it
    and the select gets the full width. */
-.solve-domain-control > .select-row { flex-direction: column; align-items: stretch; gap: 4px; }
-.solve-domain-control > .select-row label { flex: none; }
-.solve-domain-control > .select-row select { width: 100%; min-width: 0; }
+.stacked-select-row, .solve-domain-control > .select-row { flex-direction: column; align-items: stretch; gap: 4px; }
+.stacked-select-row label, .solve-domain-control > .select-row label { flex: none; }
+.stacked-select-row select, .solve-domain-control > .select-row select { width: 100%; min-width: 0; }
 .field-error { padding: 1px 0 2px; color: var(--red); font-size: var(--text-micro); }
 /* A value the active backend cannot solve. Not an error — the design is valid
    and portable, it just will not run here — so it takes the amber the rest of
@@ -1057,6 +1057,7 @@ textarea:disabled { opacity: .48; }
 .field-row { min-height: 30px; }
 /* Width comes from --field-w, the one control column the selects also take. */
 .number-control { height: var(--field-h); width: var(--field-w); padding-inline: 6px; border: 0; border-bottom: 1px solid var(--border-default); border-radius: var(--r3); background: var(--surface-raised); box-shadow: none; }
+.number-control.invalid { border-bottom-color: var(--red); background: rgba(var(--red-rgb), .08); }
 .number-control input { font-size: var(--text-base); }
 .unit { font-size: var(--text-micro); }
 .section-description { font-size: var(--text-base); line-height: 1.45; }

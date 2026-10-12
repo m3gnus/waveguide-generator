@@ -5,7 +5,6 @@
 .family-row { margin: 2px 0 6px; padding-bottom: 5px; border-bottom: 1px solid var(--hair-soft); }
 .section-description { margin: 2px 0 6px; color: var(--fg4); font-size: var(--text-micro); line-height: 1.4; }
 .outer-body-mode { margin: 2px 0 6px; padding-bottom: 7px; border-bottom: 1px solid var(--hair-soft); }
-.outer-body-mode .select-row select { max-width: 180px; }
 .resolved-mode { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; margin-top: 4px; padding: 4px 6px; border-radius: var(--r3); background: var(--ov1); color: var(--fg3); font-size: var(--text-micro); }
 .resolved-mode b { color: var(--green); font-weight: 560; }
 .resolved-mode small { grid-column: 1 / -1; color: var(--fg4); line-height: 1.35; }
@@ -17,24 +16,27 @@
 .select-row.field-disabled label { cursor: help; }
 .disabled-reason, .lambda-hint { margin: -1px 0 2px; color: var(--fg4); font-size: var(--text-micro); line-height: 1.3; }
 .lambda-hint.warning { color: var(--amber); }
-.param-text-row > input { width: var(--field-w); height: 21px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font: var(--text-micro) var(--mono); }
+.param-text-row { flex-direction: column; align-items: stretch; gap: 4px; padding: 2px 0 4px; }
+.param-text-row .field-label { flex: none; cursor: default; }
+.param-text-row > input { box-sizing: border-box; width: 100%; min-width: 0; height: 21px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font: var(--text-micro) var(--mono); }
 /* Tint only. A field that holds a formula is always on an `.expression-row`,
    which gives it the full width of the rail below; a width here could only ever
    have applied to a numeric raw, which is an ordinary field and sized like one. */
-.number-control.expression { border-color: rgba(var(--acc-rgb), .25); }
+.number-control.expression:not(.invalid) { border-color: rgba(var(--acc-rgb), .25); }
 .expr-value { color: var(--green); font: var(--text-micro) var(--mono); }
 
 /* A field holding an ATH formula gets its own full-width line: the label and
    the evaluated result stay on top, the expression reads left-to-right beneath
    them, and the whole formula is visible instead of its last twelve characters. */
 .field-row.expression-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 2px 6px; align-items: center; padding: 2px 0 4px; }
+.field-row.expression-row > .field-error { grid-column: 1 / -1; }
 .field-row.expression-row .field-label { grid-column: 1; cursor: default; }
 .field-row.expression-row .expr-badge { grid-column: 2; padding: 0 4px; border: 1px solid rgba(var(--acc-rgb), .3); border-radius: var(--r3); color: var(--acc); font: var(--text-micro) var(--mono); font-style: italic; letter-spacing: .04em; }
 .field-row.expression-row .expr-value { grid-column: 3; justify-self: end; white-space: nowrap; }
-.field-row.expression-row .number-control { grid-column: 1 / -1; width: 100%; height: 24px; padding: 0 6px; }
-/* A single-line input cannot wrap, so the formula is set a little smaller and
-   reads from its start; the rest scrolls, and the title carries the whole text. */
-.field-row.expression-row .number-control input { text-align: left; font-size: var(--text-micro); }
+.field-row.expression-row .number-control { grid-column: 1 / -1; width: 100%; height: auto; min-height: var(--field-h); padding: 4px 6px; }
+.field-row.expression-row .number-control textarea { box-sizing: border-box; display: block; width: 100%; min-width: 0; min-height: 1lh; padding: 0; border: 0; background: transparent; color: var(--fg); text-align: left; font: var(--text-base)/1.4 var(--mono); resize: none; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
+.number-control.editing textarea { color: var(--acc); }
+.number-control.invalid textarea { color: var(--red); }
 .readonly-parameter-table { margin: 4px 0 8px; overflow: hidden; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
 .readonly-table-head { display: flex; justify-content: space-between; padding: 4px 6px; border-bottom: 1px solid var(--hair-soft); color: var(--fg2); font-size: var(--text-micro); }
 .readonly-table-head b { color: var(--fg1); font-weight: 560; }
@@ -154,7 +156,6 @@
 .lambda-hint,
 .schema-gap small { font-size: var(--text-micro); line-height: 1.4; }
 .param-text-row > input { height: var(--control-h-sm); padding-inline: 8px; border-radius: var(--r3); font-size: var(--text-base); }
-.expr-value { top: 27px; font-size: var(--text-micro); }
 .resolved-mode { padding: 6px 8px; border-radius: var(--r3); font-size: var(--text-micro); }
 .toggle-row,
 .passthrough-row { min-height: 30px; font-size: var(--text-base); }
@@ -231,7 +232,12 @@
   .section-body > .schema-gap,
   .section-body > .point-paste,
   .section-body > p { grid-column: 1 / -1; }
-  /* Formula fields and driver guidance take the full rail for readable text. */
+  /* Wrapping editors, long selects and driver guidance take the full rail. */
+  .section-body > .expression-row,
+  .section-body > .stacked-select-row,
+  .section-body > .param-text-row,
+  .section-body > .parameter-entry:has(.stacked-select-row),
+  .section-body > .parameter-entry:has(.param-text-row),
   .section-body > .parameter-entry:has(.expression-row),
   .section-body > .parameter-entry:has(.opencl-guidance) { grid-column: 1 / -1; }
 }
