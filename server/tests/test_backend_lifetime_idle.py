@@ -519,7 +519,7 @@ def test_monitor_retries_undeletable_request_within_one_second(tmp_path, monkeyp
     notification = SimpleNamespace(close=lambda: notification_closed.append(True))
     monkeypatch.setattr(lifetime, "os", SimpleNamespace(name="nt", getpid=os.getpid, path=os.path))
     monkeypatch.setattr(lifetime, "_RequestNotification", lambda *_args: notification)
-    monkeypatch.setattr(tracker, "snapshot", lambda: (True, 0, 0))
+    monkeypatch.setattr(tracker, "snapshot", lambda *_args: (True, 0, 0))
     monkeypatch.setattr(lifetime, "heartbeat_fresh", lambda _app: False)
     files.write_request(tmp_path, pid=os.getpid(), mode="release", reason="gui-quit")
     path = tmp_path / files.REQUEST_FILENAME
@@ -602,7 +602,7 @@ def test_poll_thread_takes_request_file(tmp_path, monkeypatch):
     worker, tracker, _clock, _stops = _worker(tmp_path, clock=time.monotonic)
     worker.poll_interval = 0.02
     taken = threading.Event()
-    monkeypatch.setattr(tracker, "snapshot", lambda: (True, 0, tracker.last_activity))
+    monkeypatch.setattr(tracker, "snapshot", lambda *_args: (True, 0, tracker.last_activity))
     monkeypatch.setattr(lifetime, "heartbeat_fresh", lambda _app: False)
     real_take = worker._take_request
 
@@ -626,7 +626,7 @@ def test_inactive_thread_sleeps_full_ticks(tmp_path, monkeypatch):
     worker, tracker, clock, _stops = _worker(tmp_path)
     worker.poll_interval = 600
     waits = []
-    monkeypatch.setattr(tracker, "snapshot", lambda: (False, 0, 0))
+    monkeypatch.setattr(tracker, "snapshot", lambda *_args: (False, 0, 0))
     monkeypatch.setattr(lifetime, "heartbeat_fresh", lambda _app: False)
 
     def wait(timeout, notification):
@@ -644,7 +644,7 @@ def test_inactive_thread_sleeps_full_ticks(tmp_path, monkeypatch):
 
 def test_inactive_file_poll_does_not_scan_clients_between_idle_ticks(tmp_path, monkeypatch):
     worker, tracker, _clock, _stops = _worker(tmp_path)
-    monkeypatch.setattr(tracker, "snapshot", lambda: pytest.fail("only idle ticks need to scan clients"))
+    monkeypatch.setattr(tracker, "snapshot", lambda *_args: pytest.fail("only idle ticks need to scan clients"))
     worker._step(idle_tick=False)
     worker.close()
 
@@ -652,7 +652,7 @@ def test_inactive_file_poll_does_not_scan_clients_between_idle_ticks(tmp_path, m
 @pytest.mark.parametrize("mode", ["release", "retire"])
 def test_active_request_still_updates_idle_presence_at_each_tick(tmp_path, mode, monkeypatch):
     worker, tracker, clock, _stops = _worker(tmp_path)
-    monkeypatch.setattr(tracker, "snapshot", lambda: (True, 0, 0))
+    monkeypatch.setattr(tracker, "snapshot", lambda *_args: (True, 0, 0))
     monkeypatch.setattr(tracker, "has_client", lambda: True)
     files.write_request(tmp_path, pid=os.getpid(), mode=mode, reason="test")
     worker._take_request()
@@ -671,7 +671,7 @@ def test_windows_notification_takes_file_with_long_poll_interval(tmp_path, monke
     worker.tick = 60
     taken = threading.Event()
     armed = threading.Event()
-    monkeypatch.setattr(tracker, "snapshot", lambda: (True, 0, tracker.last_activity))
+    monkeypatch.setattr(tracker, "snapshot", lambda *_args: (True, 0, tracker.last_activity))
     real_wait, real_take = worker._wait, worker._take_request
 
     def wait(timeout, notification):

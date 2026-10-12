@@ -172,7 +172,9 @@ On packaged Windows the official host is started with
 
 The headless backend itself (including a contained start) also outlives its
 caller. It retires after 30 minutes without a job, open window, active request
-or fresh WGLink heartbeat. Quitting a window that adopted it writes a
+or fresh WGLink heartbeat; a CAD solve waiting for its first Prepare press stops
+counting as a job for that purpose, and for Quit's `release`, one hour after it was
+created. It stays `preparing` and a later backend resumes it. Quitting a window that adopted it writes a
 pid-matched `release` request in `<data>/locks/backend-retire.json`: running
 jobs and WGLink operations keep it alive, and a new client cancels that request.
 A window that adopted a headless or contained backend offers no in-app update

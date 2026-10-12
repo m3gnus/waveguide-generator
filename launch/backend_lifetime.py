@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
+from datetime import datetime
 import logging
 import math
 import os
@@ -15,6 +16,7 @@ from server.app import QUIET_REQUEST_ROUTES
 from launchers.backend_retire_request import REQUEST_FILENAME, take_request
 from server.cadlink.fusion.fusion_status import select_heartbeat
 from server.cadlink.intake.returns_folder import selected_workspace_root
+from server.jobs.cad_intent import cad_of
 from server.platform.instance import StopSignal
 from server.solver.beat_runtime.clock import suspend_aware_monotonic
 from server.solver.beat_runtime import retire
@@ -25,6 +27,66 @@ RETIRE_REASON = "the installer is replacing it"
 UPDATE_REASON = "an update is replacing it"
 RELEASE_REASON = "Waveguide Generator was closed"
 RELEASE_START_MARGIN = 2.0
+#: How long a CAD solve waiting for its first Prepare press keeps an idle or
+#: quitting backend alive (Magnus, 2026-10-12). The row is durable: the next
+#: backend shows it again and a press resumes it.
+MANUAL_WAIT_CAP = 3600.0
+#: Preparing rows read per check; more than this fails closed (holds work).
+MANUAL_WAIT_SCAN_LIMIT = 1000
+
+
+def _manual_waiting(row: Mapping) -> bool:
+    return (
+        row.get("status") == "preparing" and row.get("started_at") is None
+        and bool(cad_of(row).get("manual_waiting"))
+    )
+
+
+class ManualWaitCap:
+    """Stop counting a manual-waiting preparing row as work after ``cap`` seconds.
+
+    Used only by the idle exit and the GUI-Quit release; the installer and
+    update retirement holds keep counting every preparing row. Age is measured
+    on ``clock``, the idle timer's own suspend-inclusive clock, from the row's
+    first sight in this process, plus the wall-clock age it already had then.
+    The store marks a row manual-waiting only when it creates it, so
+    ``created_at`` is when it entered the wait; that offset also carries time
+    waited under an earlier backend. Every error makes a row look newer, never
+    older. Read and written only on the serving loop.
+    """
+
+    def __init__(
+        self, clock: Callable[[], float], *, cap: float = MANUAL_WAIT_CAP,
+        wall: Callable[[], datetime] = datetime.now,
+    ):
+        self.clock = clock
+        self.cap = cap
+        self.wall = wall
+        self.seen: dict[str, tuple[float, float]] = {}
+
+    def _waited_before(self, row: Mapping) -> float:
+        try:
+            # The store writes naive local ``datetime.now().isoformat()``.
+            waited = (self.wall() - datetime.fromisoformat(str(row["created_at"]))).total_seconds()
+        except (KeyError, TypeError, ValueError):
+            return 0.0
+        return waited if math.isfinite(waited) and waited > 0 else 0.0
+
+    def holds(self, rows: Iterable[Mapping]) -> bool:
+        """Whether any of these active rows still holds work; forget rows that left."""
+        now = self.clock()
+        current: dict[str, tuple[float, float]] = {}
+        held = False
+        for row in rows:
+            if not _manual_waiting(row):
+                held = True
+                continue
+            job_id = str(row["id"])
+            seen_at, waited = self.seen.get(job_id) or (now, self._waited_before(row))
+            current[job_id] = (seen_at, waited)
+            held = held or waited + now - seen_at < self.cap
+        self.seen = current
+        return held
 
 
 class ActivityTracker:
@@ -65,7 +127,7 @@ class ActivityTracker:
             if http or websocket:
                 self.last_activity = self.clock()
 
-    async def holds_work(self) -> bool:
+    async def holds_work(self, manual_wait: ManualWaitCap | None = None) -> bool:
         delivery_in_flight = getattr(self.app.state, "cad_delivery_in_flight", None)
         if delivery_in_flight is not None:
             try:
@@ -81,12 +143,24 @@ class ActivityTracker:
             _rows, total = await asyncio.to_thread(
                 runtime.store.list_jobs, statuses=("queued", "running", "preparing"), limit=1
             )
-            if total:
+            if total and manual_wait is None:
                 return True
+            if total:
+                # The idle exit and GUI-Quit release cap a manual wait's hold.
+                _rows, active = await asyncio.to_thread(
+                    runtime.store.list_jobs, statuses=("queued", "running"), limit=1
+                )
+                if active:
+                    return True
+                rows, preparing = await asyncio.to_thread(
+                    runtime.store.list_jobs, statuses=("preparing",), limit=MANUAL_WAIT_SCAN_LIMIT
+                )
+                if preparing > len(rows) or manual_wait.holds(rows):
+                    return True
         return bool(self.http_requests)
 
-    async def _has_client(self) -> bool:
-        return await self.holds_work() or bool(self.websockets)
+    async def _has_client(self, manual_wait: ManualWaitCap | None = None) -> bool:
+        return await self.holds_work(manual_wait) or bool(self.websockets)
 
     def _on_loop(self, check: Callable, *, on_error=True):
         if self.loop is None or not self.loop.is_running():
@@ -113,10 +187,10 @@ class ActivityTracker:
     def has_client(self) -> bool:
         return self._on_loop(self._has_client)
 
-    def snapshot(self) -> tuple[bool, float, float]:
+    def snapshot(self, manual_wait: ManualWaitCap | None = None) -> tuple[bool, float, float]:
         """Read client and activity evidence together on the serving loop."""
         async def check():
-            client = await self._has_client()
+            client = await self._has_client(manual_wait)
             return client, self.last_start_wall, self.last_activity
 
         return self._on_loop(check, on_error=(True, float("inf"), self.clock()))
@@ -125,6 +199,7 @@ class ActivityTracker:
         self, request_stop: Callable[[str], None], reason: str,
         *, requested: Callable[[], bool] = lambda: True,
         stop_started: Callable[[], bool] = lambda: False,
+        manual_wait: ManualWaitCap | None = None,
     ) -> bool:
         """Hold-checked commit: re-check, mark retiring, then ask the server to stop.
 
@@ -137,7 +212,7 @@ class ActivityTracker:
         async def commit() -> bool:
             if getattr(self.app.state, "retiring", False):
                 return True
-            if await self._has_client() or not requested():
+            if await self._has_client(manual_wait) or not requested():
                 return False
             self.app.state.retiring = True
             log.info(
@@ -437,6 +512,8 @@ class BackendLifetimeThread:
         self.tick = min(60.0, max(0.25, idle_timeout / 4))
         self.clock = tracker.clock
         self.idle = IdleRetirement(timeout=idle_timeout, tick=self.tick, clock=self.clock)
+        # The installer and update watchers call ``has_client`` uncapped.
+        self.manual_wait = ManualWaitCap(self.clock)
         self.release: ReleaseRequest | None = None
         self.update: RetirementWatcher | None = None
         self._request_pending = False
@@ -476,7 +553,7 @@ class BackendLifetimeThread:
         hold.hold(reason, owner=owner)
         committed = self.tracker.retire_if_idle(
             self.request_stop, reason, requested=lambda: not self.stop.is_set() and requested(),
-            stop_started=self.stop_started,
+            stop_started=self.stop_started, manual_wait=self.manual_wait,
         )
         if not committed and not getattr(self.tracker.app.state, "retiring", False):
             hold.release(owner=owner)
@@ -490,13 +567,13 @@ class BackendLifetimeThread:
             return
         if self.update is not None:
             if idle_tick:
-                client, _last_start_wall, last_activity = self.tracker.snapshot()
+                client, _last_start_wall, last_activity = self.tracker.snapshot(self.manual_wait)
                 self.idle.step(has_client=client, heartbeat_fresh=False, last_activity=last_activity)
             self.update.step(True)
             if not self.update.armed:
                 self.update = None
             return
-        client, last_start_wall, last_activity = self.tracker.snapshot()
+        client, last_start_wall, last_activity = self.tracker.snapshot(self.manual_wait)
         if self.release is not None:
             if idle_tick:
                 self.idle.step(has_client=client, heartbeat_fresh=False, last_activity=last_activity)
