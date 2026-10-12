@@ -197,7 +197,12 @@ def _inverse_scaled_expr(value: Expr | None, scale: float) -> str | float | None
 def _scaled_icw_coeffs(coeffs: list[Any] | None, scale: float) -> list[Any] | None:
     """Curvature spline coefficients are 1/mm, so they divide by Scale."""
 
-    if coeffs is None or scale == 1.0:
+    if coeffs is None:
+        return None
+    # A string entry is validated as a WG expression, so send it in the
+    # mesher's syntax (Math.PI -> pi and so on), as every other expression is.
+    coeffs = [Expr.model_validate(item).execution_text() if isinstance(item, str) else item for item in coeffs]
+    if scale == 1.0:
         return coeffs
     scaled: list[Any] = []
     for item in coeffs:

@@ -198,6 +198,15 @@ def test_scale_divides_curvature_expressions_and_coefficients_in_direct_mode() -
     assert _translated({**at_two, "kappa0": "0.002"})["kappa0"] == .001
 
 
+def test_string_coefficients_reach_the_mesher_in_its_syntax() -> None:
+    at_two, by_hand = _scaled_pair({}, {"icw_S": 90}, {}, coeffs=[.004, .008, .012, .016])
+    # The schema accepts WG expression syntax, so the mesher must get its own spelling.
+    unscaled = _translated({**by_hand, "icw_coeffs": [.004, "Math.PI*0.001", .012, .016]})["icw_coeffs"]
+    assert unscaled[1] == "pi*0.001"
+    scaled = _translated({**at_two, "icw_coeffs": [.004, "Math.PI*0.001", .012, .016]})["icw_coeffs"]
+    assert scaled[1] == "(pi*0.001) / 2"
+
+
 def test_scale_with_icw_seed_is_refused_but_scale_one_passes() -> None:
     seed = {"type": "OSSE", "L": 120, "r0": 12.7, "a": 45}
     with pytest.raises(ValueError, match="icw_seed holds unscaled"):
