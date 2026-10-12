@@ -4,6 +4,7 @@ This adapter authors its own evidence; it never impersonates a CAD return or
 weakens linked_throat. Patch identity is independent of temporary CAD selectors.
 """
 
+import contextlib
 import hashlib
 import json
 import math
@@ -14,6 +15,11 @@ import sys
 import tempfile
 
 from server.contracts.canonical import canonical_ascii_strict_bytes as _canonical
+from server.cadlink.intake import isolation
+from server.platform import process_tree
+from server.platform.job_start import ContainedStartError
+
+_WORKER_TIMEOUT_S = isolation.MESH_BUDGET.wall_time_s
 
 FEATURE = "native-source-contour-v1"
 BAFFLE_FEATURE = "native-front-baffle-woofer-v1"
@@ -259,18 +265,7 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
             raise ValueError("native source changed during capture")
         request = {"manifest": imported_manifest, "sizes": sizes}
         (stage / "request.json").write_bytes(_canonical(request))
-        run = subprocess.run(
-            _worker_command(stage),
-            capture_output=True,
-            text=True,
-        )
-        if run.returncode:
-            ceiling = _memory_ceiling_message(run.stderr)
-            if ceiling:
-                # The ceiling's own text names the DOF count, estimate, limit and
-                # host memory; the generic "ingestion failed" message hides them.
-                raise ValueError(ceiling)
-            raise ValueError("native source ingestion failed: " + run.stderr)
+        _run_worker(stage)
         built = json.loads((stage / "built.json").read_text())
         mesh_text = built.pop("msh_text")
         (stage / "solve.msh").write_bytes(mesh_text.encode())
@@ -434,6 +429,51 @@ def _memory_ceiling_message(stderr):
         if line.startswith(_MEMORY_CEILING_PREFIX) and "safety ceiling" in line:
             return line.removeprefix("RuntimeError: ").strip()
     return None
+
+
+def _run_worker(stage):
+    """Contain the worker's tree in a Windows job and bound its wall time everywhere."""
+    command = _worker_command(stage)
+    try:
+        child, job = process_tree.popen_in_windows_job(
+            command,
+            subject="the native-source worker",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except ContainedStartError as exc:
+        raise ValueError("native source ingestion failed: " + str(exc)) from exc
+    try:
+        try:
+            stdout, stderr = child.communicate(timeout=_WORKER_TIMEOUT_S)
+        finally:
+            # Also stop any grandchild left behind after a normal worker exit.
+            isolation.terminate_process_tree(child, job)
+    except subprocess.TimeoutExpired as exc:
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            child.communicate(timeout=5)
+        raise ValueError(
+            "native source ingestion failed: the native-source worker exceeded its "
+            f"{_WORKER_TIMEOUT_S:g} second deadline and was stopped"
+        ) from exc
+    finally:
+        try:
+            if job is not None:
+                job.close()
+        finally:
+            for stream in (child.stdin, child.stdout, child.stderr):
+                if stream is not None:
+                    with contextlib.suppress(Exception):
+                        stream.close()
+    if child.returncode:
+        ceiling = _memory_ceiling_message(stderr)
+        if ceiling:
+            # The ceiling's own text names the DOF count, estimate, limit and
+            # host memory; the generic "ingestion failed" message hides them.
+            raise ValueError(ceiling)
+        raise ValueError("native source ingestion failed: " + stderr)
+    return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
 
 
 def _worker(stage):
@@ -817,5 +857,13 @@ def _worker_command(stage: Path) -> list[str]:
     return [*child_command(_WORKER_MODULE), str(stage)]
 
 
+def _worker_main(argv):
+    """Hold the installer's Running mutex before reading the stage or loading gmsh."""
+    from server.platform.running_exclusion import hold_running_exclusion
+
+    hold_running_exclusion()
+    _worker(Path(argv[0]))
+
+
 if __name__ == "__main__":
-    _worker(Path(sys.argv[1]))
+    _worker_main(sys.argv[1:])
