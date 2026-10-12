@@ -24,7 +24,7 @@ from server.tests.backend_breakaway import WINDOWS_BREAKAWAY_REFUSAL
 NOT_EXERCISED = {
     "exercised": False,
     "result": "cold start via --ensure-backend: not exercised (host refuses breakaway)",
-    "start_path": "launch/serve.py --status-control (the status window's start)",
+    "start_path": "the gate's own direct launch/serve.py --status-control start, used on every host",
     "probe": "server.platform.process_tree.windows_backend_breakaway_flags",
     "refusal": WINDOWS_BREAKAWAY_REFUSAL,
 }

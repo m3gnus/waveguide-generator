@@ -774,6 +774,11 @@ def backend_breakaway_permitted() -> bool:
     # We start the launcher with plain subprocess.run. Neither the native
     # launcher nor launchers/ensure_backend.py creates a Windows job, so the
     # backend owner inherits this process's immediate job, which this probes.
+    # One exception: if this process runs in a SILENT_BREAKAWAY_OK job (a venv
+    # python.exe redirector or py.exe), the probe grants while the launcher
+    # silently leaves that job for the outer one. The cold start then fails
+    # loudly, never vacuously. Run the gate on a base interpreter, as
+    # rc-build's `uv run --no-project` does.
     try:
         process_tree.windows_backend_breakaway_flags()
     except OSError as exc:
@@ -793,7 +798,7 @@ def ensure_backend_cold_start_phase(
         return {
             "exercised": False,
             "result": result,
-            "start_path": "launch/serve.py --status-control (the status window's start)",
+            "start_path": "the gate's own direct launch/serve.py --status-control start, used on every host",
             "probe": "server.platform.process_tree.windows_backend_breakaway_flags",
             "refusal": WINDOWS_BREAKAWAY_REFUSAL,
         }

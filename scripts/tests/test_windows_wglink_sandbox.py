@@ -670,8 +670,9 @@ def test_python_app_launch_inventory() -> None:
             ('qualify_imported_return', 'Server'): 2,
             ('qualify', 'Server'): 1,
             # Installed --ensure-backend checks: the bundle's own fixed launcher,
-            # the same isolated environment, stdin closed, bounded to 75 s; the
-            # cold start then adopts the owner through the existing Server.
+            # the same isolated environment, stdin closed, bounded to 75 s. The
+            # cold start runs only where the job permits breakaway; adoption
+            # runs inside the gate's Server on every host.
             ('check_ensure_backend', 'subprocess.run'): 1,
             ('_check_cold_start', 'subprocess.run'): 1,
             ('_check_cold_start', 'Server'): 1,
