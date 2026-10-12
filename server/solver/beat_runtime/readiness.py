@@ -156,7 +156,7 @@ def _prove_backend_readiness(
             return BackendReadiness(False, "stale", "WG's portable Julia needs an upgrade; provision again.")
     if provision._ready(record, expected):
         return BackendReadiness(True, "ready", f"BEAT {backend} runtime proved by a matching compiled-system 1 kHz solve.")
-    reason = "WG was updated; this runtime needs preparing again (a few minutes)." if record else "Runtime has not been provisioned and proved."
+    reason = "This runtime needs preparing again, for example after a WG update (a few minutes)." if record else "Runtime has not been provisioned and proved."
     return BackendReadiness(False, "stale" if record else "unprovisioned", f"BEAT {backend}: {reason}")
 
 

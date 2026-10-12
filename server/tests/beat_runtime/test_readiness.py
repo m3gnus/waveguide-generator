@@ -54,7 +54,7 @@ def test_every_launch_identity_field_revokes_readiness(proved_cpu, field):
     state.write_state(saved, root)
     verdict = readiness.backend_readiness("cpu", root, **query)
     assert verdict.state == "stale"
-    assert verdict.reason == "BEAT cpu: WG was updated; this runtime needs preparing again (a few minutes)."
+    assert verdict.reason == "BEAT cpu: This runtime needs preparing again, for example after a WG update (a few minutes)."
 
 
 @pytest.mark.parametrize("field,value", [

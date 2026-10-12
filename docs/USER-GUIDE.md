@@ -239,7 +239,9 @@ state and a readable reason. Click **Prepare** for an
 unprepared or stale runtime, or **Retry** after a failure, once you are online.
 Preparation runs in the background; its current step appears there, and the
 backend becomes selectable when its verification finishes. Only one runtime
-can prepare at a time. Opening this panel does not start a download.
+can prepare at a time. Opening this panel does not start a download. While BEAT
+prepares, Fast on Auto uses BEMPP where native Metal is not available (Solve
+options say so in one line), and Accurate asks you to wait for BEAT.
 
 CPU, Metal, CUDA and ROCm use the same preparation path as the launcher. GPU
 preparation requires matching hardware, and installation opt-out settings are

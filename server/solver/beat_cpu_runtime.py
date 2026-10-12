@@ -371,13 +371,13 @@ def runtime_preparation_status(backend: str) -> tuple[str | None, str | None]:
         cpu = _official_cpu_stage_pending or _provision_step is not None
         gpu = _gpu_stage_backend
         step = _provision_step if backend == CPU_BACKEND else _gpu_stage_step
-    if active and (requested == backend or backend == CPU_BACKEND and cpu or gpu == backend):
-        from .beat import BEAT_BACKEND_LABELS
+    from .beat import BEAT_BACKEND_LABELS
 
-        label = BEAT_BACKEND_LABELS.get(backend, f"BEAT {backend}").split(" — ")[0]
+    label = BEAT_BACKEND_LABELS.get(backend, f"BEAT {backend}").split(" — ")[0]
+    if active and (requested == backend or backend == CPU_BACKEND and cpu or gpu == backend):
         return "preparing", f"Preparing {label} (step: {step or 'starting'})."
     if error:
-        return "failed", f"BEAT {backend} preparation failed: {error}"
+        return "failed", f"{label} preparation failed: {error}"
     return None, None
 
 
