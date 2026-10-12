@@ -20,6 +20,7 @@ ever disagreeing about what is accepted.
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
 
@@ -49,6 +50,16 @@ UPDATE_STAGING_ROOT_ENV = "WG2_UPDATE_STAGING_ROOT"
 PROGRAM_NAME = "waveguide-generator"
 
 
+def _positive_finite_float(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive finite number") from exc
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("must be a positive finite number")
+    return number
+
+
 def add_server_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     """Add every argument ``launch.serve`` accepts, and return the parser.
 
@@ -65,4 +76,5 @@ def add_server_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     parser.add_argument("--status-control", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--parent-pid", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--lifetime", choices=("headless",), default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--idle-timeout", type=_positive_finite_float, default=1800.0, help=argparse.SUPPRESS)
     return parser

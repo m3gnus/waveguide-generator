@@ -1200,8 +1200,26 @@ environment override is preserved. Default discovery migrates the legacy data
 folder using the GUI's migration path before creating a startup lock. This
 preserves the GUI's Documents workspace default and legacy export adoption.
 Its backend has `--no-browser` and no parent lifetime or status-control file:
-an independently started backend stays available after the caller
-exits, and a later GUI adopts that same owner and sees its durable jobs/results.
+an independently started backend stays available after the caller exits while anything uses it, and a later
+GUI adopts that same owner and sees its durable jobs/results. Headless and
+contained backends share the same retirement rules. With no job, open window,
+active request or fresh WGLink heartbeat, it exits after 30 minutes. The idle
+clock includes suspend and grants 60 seconds of grace on resume. A fresh
+heartbeat restarts the idle count indefinitely.
+The GUI writes `<data>/locks/backend-retire.json`, matched to the backend pid
+and process start time. On Quit, mode `release` allows 10 seconds for clients
+and work to leave, then requires 3 seconds of quiet; a new request or websocket
+start more than 2 seconds after `requested_at` cancels it. Starts within that
+unload margin allow the quitting SPA's keepalive flushes to finish and still
+require 3 seconds of quiet afterward. A heartbeat alone does not block release,
+but a running job or WGLink delivery does. A window that adopted a headless or
+contained backend offers no in-app update because its backend has no installer
+handoff. Windows uses the installer's retirement event. On macOS/Linux, the
+controller's `retire` write after a successful handoff is a defensive counterpart
+of that event when it holds an adoption record. A `retire` request holds
+submissions immediately while existing work and windows drain, and expires after
+130 seconds if still busy. Each path rechecks activity on the serving loop
+before committing. The next ensure starts a backend on the same data folder.
 The response is one JSON line with `ok`, `base_url`, `pid`, `data_dir`, `version`
 and `commit`, adding `lifetime: "contained"` only when adopting a contained owner;
 failures have `ok: false` and `error: {type, message}`. Exit codes

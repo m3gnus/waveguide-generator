@@ -302,31 +302,34 @@ class RetirementHold:
     def __init__(self, restart: RestartApproval) -> None:
         self._restart = restart
         self._lock = threading.Lock()
-        self._reason: str | None = None
+        self._reasons: dict[str, str] = {}
 
-    def hold(self, reason: str) -> None:
+    def hold(self, reason: str, owner: str = "installer") -> None:
         with self._lock:
-            self._reason = reason
+            self._reasons.pop(owner, None)
+            self._reasons[owner] = reason
 
     @property
     def held(self) -> bool:
         with self._lock:
-            return self._reason is not None
+            return bool(self._reasons)
 
     def refusal(self) -> str | None:
         with self._lock:
-            reason = self._reason
+            reason = next(reversed(self._reasons.values()), None)
         if reason is None:
             return None
         return f"This backend is shutting down ({reason}); submit again and a new one will start."
 
-    def release(self) -> None:
+    def release(self, owner: str = "installer") -> None:
         with self._lock:
-            reason, self._reason = self._reason, None
+            reason = self._reasons.pop(owner, None)
+            still_held = bool(self._reasons)
         if reason is None:
             return
         log.info("Backend retirement hold released (%s)", reason)
-        self._restart.notify_listeners(reason)
+        if not still_held:
+            self._restart.notify_listeners(reason)
 
 
 __all__ = [

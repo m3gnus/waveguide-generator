@@ -29,9 +29,9 @@ def _machine(*, busy=False):
     client = [busy]
     real_hold = approval.retirement_hold.hold
 
-    def hold(reason):
+    def hold(reason, owner="installer"):
         events.append("hold")
-        real_hold(reason)
+        real_hold(reason, owner=owner)
 
     approval.retirement_hold.hold = hold
 
@@ -522,6 +522,10 @@ def test_retire_thread_does_not_release_hold_when_retiring(retire_thread_driver)
 def test_serve_creates_and_passes_early_signal(tmp_path, monkeypatch, retire_event, initially_set, failure, lifetime):
     from launch import backend_lifetime, serve
     from server.solver.beat_runtime import retire
+    from server.solver.beat_runtime.clock import suspend_aware_monotonic
+
+    arguments = serve.build_parser().parse_args(["--lifetime=headless", "--no-browser"])
+    monkeypatch.setattr(serve, "build_parser", lambda: SimpleNamespace(parse_args=lambda _argv: arguments))
 
     events = []
     requested = [initially_set]
@@ -554,6 +558,19 @@ def test_serve_creates_and_passes_early_signal(tmp_path, monkeypatch, retire_eve
             events.append("thread close")
             signal.close()
 
+    class LifetimeThread:
+        def __init__(self, tracker, request_stop, **kwargs):
+            assert tracker.clock is suspend_aware_monotonic
+            assert kwargs["locks_dir"] == tmp_path and kwargs["idle_timeout"] == 1800
+            assert isinstance(kwargs["started_at_wall"], float)
+            events.append("lifetime create")
+
+        def start(self):
+            events.append("lifetime start")
+
+        def close(self):
+            events.append("lifetime close")
+
     def reserve(*_args, **_kwargs):
         fail_at("port")
         return SimpleNamespace(close=lambda: events.append("listener close")), 3100
@@ -568,6 +585,7 @@ def test_serve_creates_and_passes_early_signal(tmp_path, monkeypatch, retire_eve
     monkeypatch.setattr(retire, "RetireSignal", create_signal)
     monkeypatch.setattr(backend_lifetime, "InstallerRetireThread", Thread)
     environ = {"WG2_BACKEND_CONTAINED": "1"} if lifetime == "contained" else {}
+    monkeypatch.setattr(backend_lifetime, "BackendLifetimeThread", LifetimeThread)
     monkeypatch.setattr(serve, "os", SimpleNamespace(name="nt", environ=environ, getpid=lambda: 123))
     monkeypatch.setattr(serve, "ensure_data_layout", lambda: SimpleNamespace(root=tmp_path, locks=tmp_path))
     for name in ("setup_logging", "flush_logs", "_no_gui_healthy_start", "_start_beat_cpu_provisioning",
@@ -602,6 +620,8 @@ def test_serve_creates_and_passes_early_signal(tmp_path, monkeypatch, retire_eve
     if failure is None:
         assert events.index("app") < events.index("thread create")
         assert "run" in events and "thread close" in events
+        assert events.index("lifetime start") < events.index("run")
+        assert events.index("lifetime close") < events.index("lock release")
 
 
 def test_retirement_release_wakes_listeners_without_update_bookkeeping():

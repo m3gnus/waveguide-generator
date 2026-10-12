@@ -680,6 +680,7 @@ def _start_temporary_session() -> TemporarySession | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    started_at_wall = time.time()
     args = build_parser().parse_args(argv)
     isolated_data_dir = args.data_dir is not None or bool(os.environ.get(DATA_DIR_ENV))
     if args.data_dir is not None:
@@ -805,6 +806,7 @@ def main(argv: list[str] | None = None) -> int:
         retire_signal = RetireSignal()
         retire_initially_requested = retire_signal.requested()
     retire_thread = None
+    lifetime_thread = None
     try:
         backstop.activate()
         app = create_app(
@@ -831,8 +833,9 @@ def main(argv: list[str] | None = None) -> int:
         tracker = None
         if lifetime in RETIRABLE_LIFETIMES:
             from launch.backend_lifetime import ActivityTracker
+            from server.solver.beat_runtime.clock import suspend_aware_monotonic
 
-            tracker = ActivityTracker(app)
+            tracker = ActivityTracker(app, clock=suspend_aware_monotonic)
         # ``getattr`` twice: an embedder's or a test's stand-in app need not
         # carry Starlette's ``state`` at all.
         jobs_runtime = getattr(getattr(app, "state", None), "jobs_runtime", None)
@@ -895,6 +898,16 @@ def main(argv: list[str] | None = None) -> int:
             )
             retire_thread.start()
 
+        if tracker is not None:
+            from launch.backend_lifetime import BackendLifetimeThread
+
+            lifetime_thread = BackendLifetimeThread(
+                tracker, request_stop, locks_dir=paths.locks,
+                idle_timeout=args.idle_timeout, started_at_wall=started_at_wall,
+                stop_started=lambda: bool(server.should_exit),
+            )
+            lifetime_thread.start()
+
         # Windows-only, and a no-op anywhere else or without a console.
         harden_console(
             lambda: request_stop("console window was closed"),
@@ -951,6 +964,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             stop_browser.set()
             stop_status_watch.set()
+            if lifetime_thread is not None:
+                lifetime_thread.close()
             if retire_thread is not None:
                 retire_thread.close()
             elif retire_signal is not None:

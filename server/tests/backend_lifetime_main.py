@@ -17,7 +17,8 @@ from server.tests.beat_runtime.fake_host_main import _test_retire_event_name  # 
 
 def main(argv: list[str] | None = None) -> int:
     # Reject unsafe names before serve.py can create any retirement event.
-    retire.RETIRE_IDLE_EVENT = _test_retire_event_name(os.environ.get("WG2_TEST_RETIRE_EVENT", ""))
+    if os.name == "nt" or "WG2_TEST_RETIRE_EVENT" in os.environ:
+        retire.RETIRE_IDLE_EVENT = _test_retire_event_name(os.environ.get("WG2_TEST_RETIRE_EVENT", ""))
     from launch import serve
 
     return serve.main(sys.argv[1:] if argv is None else argv)

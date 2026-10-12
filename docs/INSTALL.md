@@ -268,9 +268,15 @@ an active installer or ambiguous native recovery; a missing/unusable interpreter
 or admission hook; process/handle creation, admission handshake or exec failure;
 and an OS denial, crash or forced termination before Python can report. A missing
 JSON response is a launcher failure regardless of its exit code.
-An independently started backend stays running after a successful response.
+An independently started backend stays running while anything uses it. It
+exits after 30 minutes with no client: no job, open window or active request,
+and no fresh WGLink heartbeat. Quitting a WG window that adopted it asks it to
+exit once idle; a running job or WGLink operation keeps it running. On Windows
+the installer retires it when idle.
+The next launch starts a new backend on the same data folder.
 Adopting an existing contained owner adds `lifetime: "contained"` to the success
-JSON; its lifetime remains tied to its original caller's Windows job.
+JSON; its lifetime remains tied to its original caller's Windows job, and the
+rules above apply to it too.
 SIGINT/SIGTERM while waiting clean up an unconfirmed child this command started; an existing healthy
 backend is retained. On Windows cancelling the public launcher also cancels its
 waiting interpreter. Concurrent calls use one backend owner, and opening WG

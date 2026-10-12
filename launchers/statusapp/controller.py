@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from http.client import HTTPConnection, HTTPException
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -32,6 +33,8 @@ from scripts.frontend_freshness import (
 from launch.serve_options import UPDATE_RELEASED_FILENAME
 from launchers.apply_update import append_update_log, destination_staging_root
 from launchers.backend_start import backend_argv, backend_environment
+from launchers.backend_retire_request import write_request
+from server.platform.backend_owner import BackendHandle, discover_backend
 from server.platform.instance import requested_port
 from server.platform.job_start import ContainedStartError, JobStart, windows_job_start
 from server.platform.paths import app_root, resolve_data_dir
@@ -50,6 +53,9 @@ from .updater import (
 
 
 HOST = "127.0.0.1"
+# Counterpart: launch/serve.py RETIRABLE_LIFETIMES; launch/backend_lifetime.py retires both.
+RETIRABLE_LIFETIMES = ("headless", "contained")
+log = logging.getLogger("wg.launch")
 
 #: How often the adopted-instance path asks a server it does not own whether it
 #: is still there. Deliberately far apart: the only cost of noticing late is
@@ -571,6 +577,9 @@ class StatusController:
 
         self._lock = threading.RLock()
         self._process: subprocess.Popen[str] | None = None
+        self._adopted_backend: BackendHandle | None = None
+        self._adopted_at_stop: BackendHandle | None = None
+        self._adopted_update_requested = False
         self._output: deque[str] = deque(maxlen=40)
         # The collector thread appends under this lock alone, never under
         # ``_lock``, so ``poll()`` can wait for it while holding ``_lock``.
@@ -814,6 +823,9 @@ class StatusController:
             if self._process is not None and self._process.poll() is None:
                 return self._snapshot
 
+            self._adopted_backend = None
+            self._adopted_at_stop = None
+            self._adopted_update_requested = False
             dist_index = self.repo_root / "frontend" / "dist" / "index.html"
             if not dist_index.is_file():
                 reason = (
@@ -1044,7 +1056,10 @@ class StatusController:
             payload = json.loads(body)
         except (OSError, ValueError, HTTPError, URLError, HTTPException):
             return False
-        return status == 200 and isinstance(payload, dict) and "version" in payload
+        return (
+            status == 200 and isinstance(payload, dict) and "version" in payload
+            and payload.get("retiring") is not True
+        )
 
     def _discard_dead_child(self) -> None:
         """Release everything the exited child still owns, before another starts.
@@ -1058,6 +1073,9 @@ class StatusController:
         """
 
         job, self._windows_job = self._windows_job, None
+        self._adopted_backend = None
+        self._adopted_at_stop = None
+        self._adopted_update_requested = False
         if job is not None:
             job.close()  # type: ignore[attr-defined]
         thread, self._output_thread = self._output_thread, None
@@ -1181,7 +1199,10 @@ class StatusController:
         try:
             status, body = self.request_probe(url + "health", self.request_timeout)
             payload = json.loads(body)
-            if status != 200 or not isinstance(payload, dict) or "version" not in payload:
+            if (
+                status != 200 or not isinstance(payload, dict) or "version" not in payload
+                or payload.get("retiring") is True
+            ):
                 raise RuntimeError("unexpected /health response")
             if not observing_existing:
                 # An adopted server is never settled on, so its build is left
@@ -1194,6 +1215,20 @@ class StatusController:
             backend = LampStatus(ServiceState.OK, f"Healthy — v{payload['version']}{suffix}")
         except (OSError, ValueError, RuntimeError, HTTPError, URLError) as exc:
             backend = LampStatus(ServiceState.ERROR, "/health failed: " + _probe_failure(exc))
+
+        adopted_handle = None
+        adopted_changed = False
+        if observing_existing and backend.state is ServiceState.OK:
+            with self._lock:
+                record = self._adopted_backend
+                adopted_changed = record is not None and payload.get("pid", record.pid) != record.pid
+                needs_discovery = record is None or adopted_changed
+            if needs_discovery:
+                # File and HTTP work stays outside the controller lock. None is
+                # transient; the next healthy poll tries discovery again.
+                handle = discover_backend(self._data_dir())
+                if handle is not None and handle.port == urlsplit(url).port:
+                    adopted_handle = handle
 
         dist_index = self.repo_root / "frontend" / "dist" / "index.html"
         if not dist_index.is_file():
@@ -1233,6 +1268,14 @@ class StatusController:
             ):
                 return self.poll()
             if backend.state is ServiceState.OK:
+                if adopted_changed:
+                    self._adopted_backend = None
+                    self._adopted_at_stop = None
+                    self._adopted_update_requested = False
+                if adopted_handle is not None:
+                    self._adopted_backend = adopted_handle
+                    self._adopted_at_stop = None
+                    self._adopted_update_requested = False
                 # Only a serving backend ends the wait. A child that is merely
                 # alive is not evidence: the retry starts one every time, so
                 # resetting on that would renew the budget on each attempt and
@@ -1367,6 +1410,8 @@ class StatusController:
                 lost = self._await_adopted_loss(snapshot, stopping)
                 if lost is None:
                     return
+                with self._lock:
+                    self._adopted_backend = None
                 self._report_lost(lost, on_lost)
                 return
             if process.poll() is None:
@@ -1555,13 +1600,12 @@ class StatusController:
             pass
 
     def launch_update(self, request: UpdateRequest | FullInstallerRequest) -> None:
-        """Start the independent updater before this status owner shuts down."""
+        """Start the independent updater, including after the bundle owner's close()."""
 
         if isinstance(request, FullInstallerRequest):
             launch_full_installer(self.repo_root, request, os.getpid(),
                 data_dir=self._data_dir(), environ=self.environ)
-            return
-        if isinstance(request, BundleUpdateRequest):
+        elif isinstance(request, BundleUpdateRequest):
             launch_bundle_update_handoff(
                 self.repo_root,
                 request,
@@ -1569,14 +1613,48 @@ class StatusController:
                 environ=self.environ,
                 server_args=self.server_args,
             )
+        else:
+            launch_update_handoff(
+                self.repo_root,
+                request,
+                os.getpid(),
+                environ=self.environ,
+                server_args=self.server_args,
+            )
+        if os.name != "nt":
+            # The retire write is defensive: an adopted session's backend has
+            # no installer handoff.
+            self._request_adopted_retirement(mode="retire", reason="update")
+
+    def _request_adopted_retirement(self, *, mode: str, reason: str) -> None:
+        with self._lock:
+            record = self._adopted_backend
+            if mode == "retire" and record is None:
+                record = self._adopted_at_stop
+            # A successful update handoff is followed immediately by stop().
+            # Preserve its stronger retire request until the backend takes it.
+            if mode == "release" and self._adopted_update_requested:
+                return
+            snapshot = self._snapshot
+        if mode == "release" and record is None and self._is_adopted(snapshot):
+            handle = discover_backend(self._data_dir())
+            if handle is not None and handle.port == urlsplit(snapshot.url).port:
+                with self._lock:
+                    if self._snapshot is snapshot:
+                        if self._adopted_backend is None:
+                            self._adopted_backend = handle
+                        record = self._adopted_backend
+        if record is None or record.lifetime not in RETIRABLE_LIFETIMES:
             return
-        launch_update_handoff(
-            self.repo_root,
-            request,
-            os.getpid(),
-            environ=self.environ,
-            server_args=self.server_args,
-        )
+        try:
+            # Counterpart: launch/backend_lifetime.py consumes this pid-matched
+            # request. The controller never opens or signals the adopted pid.
+            write_request(self._data_dir() / "locks", pid=record.pid, mode=mode, reason=reason)
+            if mode == "retire":
+                with self._lock:
+                    self._adopted_update_requested = True
+        except OSError:
+            log.info("Could not request adopted backend retirement (%s)", mode, exc_info=True)
 
     def stop(self) -> StatusSnapshot:
         """Request graceful shutdown, then guarantee the entire tree is gone."""
@@ -1586,7 +1664,13 @@ class StatusController:
         # parked in ``wait()`` on the very process this is about to end, and a
         # shutdown somebody asked for is not a backend loss to report.
         self._watch_stop.set()
+        self._request_adopted_retirement(mode="release", reason="gui-quit")
         with self._lock:
+            # desktop.py closes before handing off bundle/full updates. Keep
+            # that adoption so launch_update() can supersede Quit's release.
+            if self._adopted_backend is not None:
+                self._adopted_at_stop = self._adopted_backend
+                self._adopted_backend = None
             process = self._process
             if process is None:
                 return self._snapshot
@@ -1644,6 +1728,7 @@ class StatusController:
 
         with self._lock:
             self._process = None
+            self._adopted_backend = None
             self._output_thread = None
             self._watcher = None
             self._windows_job = None

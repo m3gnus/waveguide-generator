@@ -31,8 +31,14 @@ def _until(check, deadline, message):
     pytest.fail(message)
 
 
+@pytest.fixture
+def idle_timeout():
+    """Overridden by direct parametrisation for the idle-expiry cases."""
+    return 600
+
+
 @pytest.fixture(params=["headless"])
-def backend(request, tmp_path, retire_event):
+def backend(request, tmp_path, retire_event, idle_timeout):
     lifetime = request.param
     if lifetime == "headless":
         # A contained start never asks for breakaway: it is the fallback for a
@@ -69,6 +75,7 @@ def backend(request, tmp_path, retire_event):
         argv = [
             sys.executable, str(ROOT / "server" / "tests" / "backend_lifetime_main.py"),
             "--lifetime=headless", "--no-browser", "--data-dir", str(data), "--port", str(port),
+            "--idle-timeout", str(idle_timeout),
         ]
         # A contained start is the CLI's fallback: inside the caller's job, marked
         # by the owner's environment. It must retire exactly as a headless one.
@@ -188,3 +195,77 @@ def test_websocket_keeps_backend_busy_and_reset_reopens_submissions(backend):
     signal()
     process.wait(timeout=12)
     assert process.returncode == 0
+
+
+@pytest.mark.parametrize("idle_timeout", [3])
+@pytest.mark.parametrize("backend", ["headless", "contained"], indirect=True)
+def test_backend_exits_on_idle_timeout(backend):
+    process, data, port, _request, _signal = backend
+    process.wait(timeout=15)
+    assert process.returncode == 0
+    lock = InstanceLock(data / "locks")
+    try:
+        lock.acquire(port)
+    finally:
+        lock.release()
+    with socket.socket() as probe:
+        probe.settimeout(1)
+        assert probe.connect_ex(("127.0.0.1", port)) != 0
+
+
+@pytest.mark.parametrize("idle_timeout", [3])
+@pytest.mark.parametrize("backend", ["headless", "contained"], indirect=True)
+def test_websocket_keeps_backend_past_idle_timeout(backend):
+    from websockets.sync.client import connect
+
+    process, _data, port, _request, _signal = backend
+    with connect(f"ws://127.0.0.1:{port}/ws/jobs", origin=f"http://127.0.0.1:{port}", proxy=None):
+        time.sleep(5)
+        assert process.poll() is None
+    process.wait(timeout=15)
+    assert process.returncode == 0
+
+
+@pytest.mark.parametrize("backend", ["headless", "contained"], indirect=True)
+def test_release_file_retires_clientless_backend(backend):
+    from launchers.backend_retire_request import write_request
+
+    process, data, _port, request, _signal = backend
+    health_pid = request()[1]["pid"]
+    started = time.monotonic()
+    write_request(data / "locks", pid=health_pid, mode="release", reason="gui-quit")
+    process.wait(timeout=15)
+    elapsed = time.monotonic() - started
+    print(f"release_seconds={elapsed:.2f}")
+    assert elapsed < 15 and process.returncode == 0
+
+
+@pytest.mark.parametrize("backend", ["headless", "contained"], indirect=True)
+def test_pid_mismatch_is_deleted_and_backend_stays_alive(backend):
+    from launchers.backend_retire_request import REQUEST_FILENAME, write_request
+
+    process, data, _port, request, _signal = backend
+    health_pid = request()[1]["pid"]
+    write_request(data / "locks", pid=health_pid + 1, mode="release", reason="gui-quit")
+    _until(lambda: not (data / "locks" / REQUEST_FILENAME).exists(), time.monotonic() + 10, "request was not removed")
+    assert process.poll() is None
+
+
+@pytest.mark.parametrize("backend", ["headless", "contained"], indirect=True)
+def test_second_websocket_after_release_cancels_quit(backend):
+    from launchers.backend_retire_request import REQUEST_FILENAME, write_request
+    from websockets.sync.client import connect
+
+    process, data, port, request, _signal = backend
+    health_pid = request()[1]["pid"]
+    url = f"ws://127.0.0.1:{port}/ws/jobs"
+    kwargs = {"origin": f"http://127.0.0.1:{port}", "proxy": None}
+    with connect(url, **kwargs):
+        write_request(data / "locks", pid=health_pid, mode="release", reason="gui-quit")
+        time.sleep(2.5)  # The second client must start beyond the unload margin.
+        with connect(url, **kwargs):
+            _until(lambda: not (data / "locks" / REQUEST_FILENAME).exists(), time.monotonic() + 10, "request was not removed")
+            time.sleep(0.5)
+            assert process.poll() is None
+    time.sleep(9)  # Three seconds of quiet plus a full five-second poll.
+    assert process.poll() is None

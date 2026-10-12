@@ -170,6 +170,20 @@ On packaged Windows the official host is started with
   and dies with it, as every host did before. The next start prunes the stale
   record and spawns a fresh host.
 
+The headless backend itself (including a contained start) also outlives its
+caller. It retires after 30 minutes without a job, open window, active request
+or fresh WGLink heartbeat. Quitting a window that adopted it writes a
+pid-matched `release` request in `<data>/locks/backend-retire.json`: running
+jobs and WGLink operations keep it alive, and a new client cancels that request.
+A window that adopted a headless or contained backend offers no in-app update
+because its backend has no installer handoff. Windows uses the installer event.
+On macOS/Linux, the controller's `retire` write after a successful handoff is a
+defensive counterpart of that event when it holds an adoption record.
+The update `retire` request and installer
+event hold new submissions while existing clients drain; Quit's `release`
+holds submissions only at the retirement commit. A later ensure starts a new
+backend on the same folder.
+
 A host that outlives Quit must not get in the way of an update:
 
 - **It does not pin the install tree.** On Windows the host, its native stub

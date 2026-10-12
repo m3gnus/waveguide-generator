@@ -25,6 +25,334 @@ from launchers.statusapp.controller import (
 )
 from scripts.frontend_freshness import installer_hint, vite_executable
 from server.platform import instance
+from server.platform.backend_owner import BackendHandle
+
+
+def _retirement_controller(tmp_path, monkeypatch, *, lifetime="headless", adopted=True):
+    """Exercise adoption and stop entirely in process, with only our fake child."""
+    from launchers.statusapp import controller as module
+
+    owner_pid, child_pid = 4242, 100
+    calls = []
+    controller = _controller(tmp_path, settle_on_ready=False)
+    data = tmp_path / "data"
+    monkeypatch.setattr(controller, "_data_dir", lambda: data)
+    record = BackendHandle("http://127.0.0.1:3199", owner_pid, 3199, data, "test", "abc", lifetime)
+    discoveries = []
+
+    def discover(folder):
+        assert not controller._lock._is_owned(), "discovery must be outside the controller lock"
+        assert folder == data
+        discoveries.append(folder)
+        return record
+
+    monkeypatch.setattr(module, "discover_backend", discover)
+
+    class Child:
+        pid = child_pid
+        stdout = None
+        exited = adopted
+
+        def poll(self):
+            calls.append(("poll", self.pid))
+            return (2 if adopted else 0) if self.exited else None
+
+        def wait(self, **_kwargs):
+            calls.append(("wait", self.pid))
+            self.exited = True
+            return 2 if adopted else 0
+
+        def kill(self):
+            pytest.fail("fake child never needs a kill")
+
+    controller._process = Child()
+    controller._windows_job = SimpleNamespace(close=lambda: calls.append(("job.close", child_pid)))
+    controller._snapshot = StatusSnapshot(
+        LampStatus(ServiceState.STARTING, "Starting"), LampStatus(ServiceState.STARTING, "Starting"),
+        "http://127.0.0.1:3199/", child_pid, None,
+    )
+    monkeypatch.setattr(controller, "_already_running_url", lambda: "http://127.0.0.1:3199/")
+    monkeypatch.setattr(controller, "_drain_output", lambda: None)
+    monkeypatch.setattr(controller, "_stop_posix_group", lambda pid: calls.append(("stop_group", pid)))
+    monkeypatch.setattr(os, "kill", lambda *_args: pytest.fail("stop must never call os.kill"))
+    return controller, record, discoveries, calls
+
+
+@pytest.mark.parametrize("lifetime", ["headless", "contained", "attached"])
+def test_adopted_backend_quit_writes_only_for_retiring_lifetimes(tmp_path, monkeypatch, lifetime):
+    from launchers.backend_retire_request import REQUEST_FILENAME
+
+    controller, record, discoveries, calls = _retirement_controller(tmp_path, monkeypatch, lifetime=lifetime)
+    assert controller.poll().backend.state is ServiceState.OK
+    assert controller.poll().backend.state is ServiceState.OK
+    assert len(discoveries) == 1 and controller._adopted_backend == record
+    controller.stop()
+    path = record.data_dir / "locks" / REQUEST_FILENAME
+    if lifetime in ("headless", "contained"):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert (payload["pid"], payload["mode"], payload["reason"]) == (record.pid, "release", "gui-quit")
+    else:
+        assert not path.exists()
+    assert all(pid != record.pid for _operation, pid in calls)
+    assert controller._adopted_backend is None
+    assert controller._adopted_at_stop == record
+
+
+def test_owned_server_quit_never_writes_adopted_request(tmp_path, monkeypatch):
+    from launchers.backend_retire_request import REQUEST_FILENAME
+
+    controller, record, discoveries, _calls = _retirement_controller(tmp_path, monkeypatch, adopted=False)
+    assert controller.poll().backend.state is ServiceState.OK
+    assert not discoveries and controller._adopted_backend is None
+    controller.stop()
+    assert not (record.data_dir / "locks" / REQUEST_FILENAME).exists()
+
+
+def test_adoption_discovery_retries_none_and_mismatched_port(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from launchers.statusapp import controller as module
+
+    controller, record, _discoveries, _calls = _retirement_controller(tmp_path, monkeypatch)
+    results = iter([None, replace(record, port=3200), record])
+    monkeypatch.setattr(module, "discover_backend", lambda _folder: next(results))
+    controller.poll()
+    assert controller._adopted_backend is None
+    controller.poll()
+    assert controller._adopted_backend is None
+    controller.poll()
+    assert controller._adopted_backend == record
+    controller.stop()
+    assert controller._adopted_at_stop == record
+    controller._discard_dead_child()
+    assert controller._adopted_backend is None
+    assert controller._adopted_at_stop is None
+
+
+@pytest.mark.parametrize("matching_port", [True, False])
+def test_quit_rediscovers_adoption_after_transient_poll_failure(tmp_path, monkeypatch, matching_port):
+    from dataclasses import replace
+    from launchers.backend_retire_request import REQUEST_FILENAME
+    from launchers.statusapp import controller as module
+
+    controller, record, _discoveries, calls = _retirement_controller(tmp_path, monkeypatch)
+    results = iter([None, record if matching_port else replace(record, port=3200)])
+    discoveries = []
+
+    def discover(folder):
+        assert not controller._lock._is_owned()
+        assert folder == record.data_dir
+        discoveries.append(folder)
+        return next(results)
+
+    writes = []
+    real_write = module.write_request
+
+    def write(*args, **kwargs):
+        assert not controller._lock._is_owned()
+        writes.append(kwargs)
+        real_write(*args, **kwargs)
+
+    monkeypatch.setattr(module, "discover_backend", discover)
+    monkeypatch.setattr(module, "write_request", write)
+    assert controller.poll().backend.state is ServiceState.OK
+    assert controller._adopted_backend is None
+    controller.stop()
+    assert len(discoveries) == 2
+    path = record.data_dir / "locks" / REQUEST_FILENAME
+    if matching_port:
+        assert writes == [{"pid": record.pid, "mode": "release", "reason": "gui-quit"}]
+        assert json.loads(path.read_text(encoding="utf-8"))["pid"] == record.pid
+        assert controller._adopted_at_stop == record
+    else:
+        assert not writes and not path.exists()
+        assert controller._adopted_at_stop is None
+    assert all(pid != record.pid for _operation, pid in calls)
+
+
+def test_adopted_backend_loss_clears_record_before_reporting_and_quit(tmp_path, monkeypatch):
+    from launchers.backend_retire_request import REQUEST_FILENAME
+    from launchers.statusapp import controller as module
+
+    controller, record, _discoveries, calls = _retirement_controller(tmp_path, monkeypatch)
+    controller.poll()
+    assert controller._adopted_backend == record
+    monkeypatch.setattr(controller, "_instance_answers", lambda *_args: False)
+    stopping = SimpleNamespace(is_set=lambda: False, wait=lambda _timeout: False)
+    reported = []
+
+    def on_lost(snapshot):
+        assert controller._adopted_backend is None
+        assert snapshot.backend.state is ServiceState.ERROR
+        reported.append(snapshot)
+
+    controller._watch_backend(on_lost, stopping)
+    assert len(reported) == 1
+    monkeypatch.setattr(module, "discover_backend", lambda _folder: pytest.fail("lost adoption must not be rediscovered"))
+    controller.stop()
+    assert not (record.data_dir / "locks" / REQUEST_FILENAME).exists()
+    assert controller._adopted_at_stop is None
+    assert all(pid != record.pid for _operation, pid in calls)
+
+
+def test_instance_answers_false_when_retiring(tmp_path):
+    controller = _controller(tmp_path, request_probe=lambda *_args: (200, b'{"version":"test","retiring":true}'))
+    assert not controller._instance_answers("http://127.0.0.1:3199/")
+
+
+def test_adoption_rediscovers_a_replacement_pid(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from launchers.statusapp import controller as module
+
+    controller, record, _discoveries, _calls = _retirement_controller(tmp_path, monkeypatch)
+    controller.poll()
+    replacement = replace(record, pid=record.pid + 1, lifetime="contained")
+    controller.request_probe = lambda url, _timeout: (
+        (200, json.dumps({"version": "test", "pid": replacement.pid}).encode())
+        if url.endswith("/health") else (200, b"<html></html>")
+    )
+    results = iter([None, replacement])
+    monkeypatch.setattr(module, "discover_backend", lambda _folder: next(results))
+    controller._adopted_at_stop = record
+    controller._adopted_update_requested = True
+    controller.poll()
+    assert controller._adopted_backend is None
+    assert controller._adopted_at_stop is None
+    controller.poll()
+    assert controller._adopted_backend == replacement
+    assert not controller._adopted_update_requested
+    controller.stop()
+
+
+def test_new_start_clears_stopped_adoption_without_spawning(tmp_path, monkeypatch):
+    controller, record, _discoveries, _calls = _retirement_controller(tmp_path, monkeypatch)
+    controller.poll()
+    controller.stop()
+    assert controller._adopted_at_stop == record
+    controller._adopted_update_requested = True
+    # Fail preflight before any child can start.
+    (controller.repo_root / "frontend" / "dist" / "index.html").unlink()
+    assert controller.start().backend.state is ServiceState.ERROR
+    assert controller._adopted_backend is None and controller._adopted_at_stop is None
+    assert not controller._adopted_update_requested
+
+
+@pytest.mark.parametrize("os_name", ["posix", "nt"])
+@pytest.mark.parametrize("close_first", [True, False])
+@pytest.mark.parametrize("request_kind", ["bundle", "full"])
+@pytest.mark.parametrize("lifetime", ["headless", "contained"])
+def test_adopted_update_and_close_orders(tmp_path, monkeypatch, os_name, close_first, request_kind, lifetime):
+    from launchers.backend_retire_request import REQUEST_FILENAME
+    from launchers.statusapp import controller as module
+
+    controller, record, _discoveries, calls = _retirement_controller(tmp_path, monkeypatch, lifetime=lifetime)
+    controller.poll()
+    path = record.data_dir / "locks" / REQUEST_FILENAME
+    events = []
+    real_write = module.write_request
+
+    def launch(*_args, **_kwargs):
+        if close_first:
+            assert json.loads(path.read_text(encoding="utf-8"))["mode"] == "release"
+            assert controller._process is None
+        else:
+            assert not path.exists()
+        events.append("launch")
+
+    def write(*args, **kwargs):
+        assert not controller._lock._is_owned()
+        assert kwargs["pid"] == record.pid
+        events.append(kwargs["mode"])
+        real_write(*args, **kwargs)
+
+    monkeypatch.setattr(module, "os", SimpleNamespace(name=os_name, getpid=os.getpid))
+    monkeypatch.setattr(module, "launch_bundle_update_handoff", launch)
+    monkeypatch.setattr(module, "launch_full_installer", launch)
+    monkeypatch.setattr(module, "write_request", write)
+    request = (
+        module.BundleUpdateRequest("1.2", tmp_path, None) if request_kind == "bundle"
+        else module.FullInstallerRequest("1.2", "1.1", tmp_path, tmp_path, "linux", "hash", 1, 100, 1)
+    )
+    if close_first:
+        # Exact bundle/full installer call sequence in desktop.py.
+        controller.close()
+        controller.launch_update(request)
+    else:
+        controller.launch_update(request)
+        controller.close()
+    if os_name == "nt":
+        assert events == (["release", "launch"] if close_first else ["launch", "release"])
+        expected_mode = "release"
+    else:
+        assert events == (["release", "launch", "retire"] if close_first else ["launch", "retire"])
+        expected_mode = "retire"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert (payload["pid"], payload["mode"]) == (record.pid, expected_mode)
+    assert all(pid != record.pid for _operation, pid in calls)
+
+
+@pytest.mark.parametrize("os_name", ["posix", "nt"])
+@pytest.mark.parametrize("success", [True, False])
+@pytest.mark.parametrize("lifetime", ["headless", "contained", "attached"])
+@pytest.mark.parametrize("request_kind", ["legacy", "bundle", "full"])
+def test_update_retires_adopted_backend_only_after_success_off_windows(tmp_path, monkeypatch, os_name, success, lifetime, request_kind):
+    from launchers.backend_retire_request import REQUEST_FILENAME
+    from launchers.statusapp import controller as module
+
+    controller, record, _discoveries, _calls = _retirement_controller(tmp_path, monkeypatch, lifetime=lifetime)
+    controller.poll()
+    path = record.data_dir / "locks" / REQUEST_FILENAME
+    events = []
+    real_write = module.write_request
+
+    def launch(*_args, **_kwargs):
+        assert not path.exists(), "retirement must follow a successful launch"
+        events.append("launch")
+        if not success:
+            raise OSError("launch failed")
+
+    def write(*args, **kwargs):
+        assert events == ["launch"]
+        events.append("write")
+        real_write(*args, **kwargs)
+
+    monkeypatch.setattr(module, "os", SimpleNamespace(name=os_name, getpid=os.getpid))
+    monkeypatch.setattr(module, "launch_update_handoff", launch)
+    monkeypatch.setattr(module, "launch_bundle_update_handoff", launch)
+    monkeypatch.setattr(module, "launch_full_installer", launch)
+    monkeypatch.setattr(module, "write_request", write)
+    request = (
+        module.BundleUpdateRequest("1.2", tmp_path, None) if request_kind == "bundle"
+        else module.FullInstallerRequest("1.2", "1.1", tmp_path, tmp_path, "linux", "hash", 1, 100, 1)
+        if request_kind == "full" else "legacy"
+    )
+    if success:
+        controller.launch_update(request)
+    else:
+        with pytest.raises(OSError, match="launch failed"):
+            controller.launch_update(request)
+    expected = success and os_name != "nt" and lifetime in ("headless", "contained")
+    assert path.exists() is expected
+    if expected:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert (payload["pid"], payload["mode"], payload["reason"]) == (record.pid, "retire", "update")
+        controller.stop()
+        assert json.loads(path.read_text(encoding="utf-8"))["mode"] == "retire"
+
+
+def test_retirement_file_errors_are_logged_and_do_not_block_stop(tmp_path, monkeypatch, caplog):
+    from launchers.statusapp import controller as module
+
+    controller, _record, _discoveries, _calls = _retirement_controller(tmp_path, monkeypatch)
+    controller.poll()
+
+    def failed(*_args, **_kwargs):
+        raise OSError("read-only locks")
+
+    monkeypatch.setattr(module, "write_request", failed)
+    with caplog.at_level("INFO", logger="wg.launch"):
+        controller.stop()
+    assert "Could not request adopted backend retirement" in caplog.text
+    assert controller._process is None and controller._adopted_backend is None
 
 
 FAKE_SERVER = r'''from __future__ import annotations
