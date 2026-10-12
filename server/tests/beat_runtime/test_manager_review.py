@@ -70,6 +70,28 @@ def test_unkeyed_secrets_reach_launch_only_and_never_written_records(engine_tree
     runtime.detach()
 
 
+@pytest.mark.parametrize('destination', ['depot', 'project', 'environment_project', 'linked_depot'])
+def test_destination_checks_refuse_hbb_project_and_inherited_depots(engine_tree, tmp_path, destination):
+    hbb = tmp_path / 'hbb'
+    hbb.mkdir()
+    env = {'HORNLAB_BEAT_RUNTIME_DIR': str(hbb), 'WG2_BEAT_RUNTIME_DIR': str(tmp_path / 'wg')}
+    options = {'julia_executable': sys.executable, 'environment': env}
+    if destination == 'project':
+        options['julia_project'] = hbb / 'project'
+    elif destination == 'environment_project':
+        env['JULIA_PROJECT'] = str(hbb / 'project')
+    else:
+        depot = hbb / 'depot'
+        if destination == 'linked_depot':
+            link = tmp_path / 'link'
+            link.symlink_to(hbb, target_is_directory=True)
+            depot = link / 'depot'
+        env['JULIA_DEPOT_PATH'] = os.pathsep.join((str(tmp_path / 'safe'), str(depot)))
+    with pytest.raises(paths.RootConflict):
+        manager.resolve_key('cpu', **options)
+    assert list(hbb.iterdir()) == []
+
+
 def test_depot_entries_are_absolute_and_path_is_not_keyed(engine_tree, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     env = {'JULIA_DEPOT_PATH': os.pathsep.join(('depot', 'other')), 'PATH': os.pathsep.join(('bin', 'tools'))}

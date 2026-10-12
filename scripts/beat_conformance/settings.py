@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Any
 
-from .recorder import record_sha256
 
 # Aliases are wire names of the two public diagnostic formats.
 DIAGNOSTIC_FIELDS = {
@@ -49,7 +47,7 @@ def validate_native_backend(native: Any, backend: str, *, official: bool,
         execution = diagnostic.get("engine_provenance", {}).get("execution", {})
         if execution and execution.get("backend") != backend:
             raise ValueError("Native device backend differs from requested backend")
-        if (backend == "metal"):
+        if backend == "metal":
             device = execution.get("device", diagnostic.get("device"))
             if (not isinstance(device, str) or not device.strip()
                     or device.lower() in {"cpu", "host"} or execution.get("device_query_error")

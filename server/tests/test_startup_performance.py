@@ -17,7 +17,6 @@ import gzip
 import json
 import logging
 from pathlib import Path
-import sys
 import threading
 import time
 import types
@@ -591,7 +590,6 @@ def test_the_beat_warmup_warms_the_backend_the_solve_will_use(
     engine = f"beat-{backend}"
     assert solver_warmup.prewarm_beat_worker_for_engine(engine) is True
 
-    from server.solver.beat_runtime.threads import resolve_julia_threads
 
     # The thread count is part of the package's worker key: the solve asks
     # ``beat_julia_threads`` too, so both land on the same worker.
@@ -626,7 +624,6 @@ def test_the_beat_prewarm_still_answers_the_legacy_family_name(
     before the split, and it is better than warming nothing.
     """
 
-    from server.solver import beat as beat_adapter
     from server.solver import warmup as solver_warmup
 
     calls: list[dict[str, object]] = []
@@ -970,7 +967,6 @@ def test_solver_warmup_falls_back_to_bempp(
     one.
     """
 
-    from server.solver import beat as beat_adapter
     from server.solver import bempp, metal, warmup
 
     calls: list[tuple[str, object]] = []
@@ -1025,7 +1021,6 @@ def test_solver_warmup_skips_when_no_physical_engine_is_available(
     test means to exercise.
     """
 
-    from server.solver import beat as beat_adapter
     from server.solver import bempp, metal, warmup
 
     calls: list[str] = []
@@ -1737,7 +1732,6 @@ def test_the_beat_prewarm_records_every_outcome_in_the_log(
     reason are all INFO now.
     """
 
-    from server.solver import beat as beat_adapter
     from server.solver import warmup as solver_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)

@@ -230,6 +230,22 @@ def test_worker_capabilities_must_support_probe_request(tmp_path, field, value):
     assert not verdict.ready and worker.stream.closed
 
 
+@pytest.mark.parametrize("root_env", ["HORNLAB_BEAT_RUNTIME_DIR", "HORNLAB_BEAT_WORKER_DIR"])
+@pytest.mark.parametrize("via_link", [False, True])
+def test_probe_staging_refuses_hbb_root_and_symlink(tmp_path, monkeypatch, root_env, via_link):
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    monkeypatch.setenv(root_env, str(protected))
+    directory = protected / "must-not-be-created"
+    if via_link:
+        directory = tmp_path / "alias"
+        directory.symlink_to(protected, target_is_directory=True)
+    worker = FakeWorker([result(), COMPLETED])
+    verdict = probe.compiled_probe(worker, directory=directory)
+    assert not verdict.ready and "overlaps" in verdict.reason
+    assert list(protected.iterdir()) == [] and not hasattr(worker, "path")
+
+
 def test_ready_verdict_requires_probe_proof():
     with pytest.raises(ValueError, match="compiled_probe"):
         probe.ProbeResult(ready=True, reason="fabricated")

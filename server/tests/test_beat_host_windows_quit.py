@@ -22,7 +22,6 @@ host flags and the documented lifecycle.
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 import os

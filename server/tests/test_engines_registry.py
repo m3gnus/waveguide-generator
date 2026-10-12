@@ -107,7 +107,6 @@ def test_explicit_engine_overrides_accuracy_and_accurate_refuses_coupled_baffle(
 def test_cpu_refresh_preserves_terminal_event_during_an_inflight_probe(
     monkeypatch,
 ) -> None:
-    from server.solver import beat, official_beat
 
     first_started = threading.Event()
     release_first = threading.Event()
@@ -158,7 +157,7 @@ def test_finished_preparation_refreshes_the_gpu_rows_too(monkeypatch) -> None:
     was, so it kept that sentence until the next launch.
     """
 
-    from server.solver import beat, beat_cpu_runtime
+    from server.solver import beat_cpu_runtime
 
     stale = "No Julia executable was found."
     in_flight = {"value": True}
@@ -227,7 +226,6 @@ def test_finished_preparation_refreshes_the_gpu_rows_too(monkeypatch) -> None:
 def test_cpu_refresh_retains_an_event_before_initial_cache_population(
     monkeypatch,
 ) -> None:
-    from server.solver import beat, official_beat
 
     monkeypatch.setattr(registry, "_official_runtime_statuses", _runtime_rows(lambda _package: (True, "ready")))
     engine_registry = registry.EngineRegistry(
@@ -247,7 +245,7 @@ def test_cpu_refresh_retains_an_event_before_initial_cache_population(
 
 
 def test_custom_detector_is_not_overridden_by_runtime_refresh(monkeypatch) -> None:
-    from server.solver import beat, beat_cpu_runtime
+    from server.solver import beat_cpu_runtime
 
     calls = 0
 
@@ -277,7 +275,6 @@ def test_custom_detector_is_not_overridden_by_runtime_refresh(monkeypatch) -> No
 def test_missing_package_consumes_refresh_and_a_later_event_retries(
     monkeypatch,
 ) -> None:
-    from server.solver import beat, official_beat
 
     package = None
     calls = 0
@@ -324,7 +321,6 @@ def test_missing_package_consumes_refresh_and_a_later_event_retries(
 
 
 def test_failed_refresh_is_consumed_without_a_busy_retry(monkeypatch) -> None:
-    from server.solver import beat, official_beat
 
     calls = 0
 
@@ -356,7 +352,7 @@ def test_failed_refresh_is_consumed_without_a_busy_retry(monkeypatch) -> None:
 
 
 def test_shutdown_unregisters_listener_and_cancels_refresh(monkeypatch) -> None:
-    from server.solver import beat, beat_cpu_runtime
+    from server.solver import beat_cpu_runtime
 
     status_started = threading.Event()
     release_status = threading.Event()
@@ -472,7 +468,7 @@ def test_every_beat_backend_is_selectable_and_ordered(monkeypatch) -> None:
     fifth backend lands.
     """
 
-    from server.solver import beat, official_beat
+    from server.solver import beat
 
     expected = {beat.beat_engine_name(backend) for backend in beat.BEAT_BACKENDS}
     assert expected <= set(registry.FULL3D_ENGINE_ORDER)
@@ -506,7 +502,7 @@ def test_beat_advertises_the_reduced_domains_and_di_sphere_it_really_has(
     "half" here would promise it.
     """
 
-    from server.solver import beat, bempp, metal, official_beat
+    from server.solver import beat, bempp, metal
 
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no helper", "version": None})
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "package absent", "version": None})

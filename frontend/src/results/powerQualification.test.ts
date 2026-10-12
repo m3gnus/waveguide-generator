@@ -255,21 +255,19 @@ describe('power qualification', () => {
 });
 
 it.each([false, true])('requires the BEAT engine pin (imported=%s)', (imported) => {
-  {
-    for (const availablePin of ['beat-engine', 'hornlab-metal-bem']) {
-      const pkg = 'beat-engine';
-      const payload = flat([.1]);
-      payload.metadata!.engine = pkg;
-      payload.metadata!.solver_backend = 'beat';
-      payload.provenance = { dependency_shas: { [availablePin]: 'pin' } };
-      const wrapper: ResultPayload = imported ? {
-        frequencies: payload.frequencies,
-        metadata: { solver_engine: { package: pkg } },
-        provenance: payload.provenance,
-      } : payload;
-      if (imported) delete payload.provenance;
-      expect(powerQualificationOf(payload, wrapper)!.status)
-        .toBe(pkg === availablePin ? 'qualified' : 'unknown');
-    }
+  for (const availablePin of ['beat-engine', 'hornlab-metal-bem']) {
+    const pkg = 'beat-engine';
+    const payload = flat([.1]);
+    payload.metadata!.engine = pkg;
+    payload.metadata!.solver_backend = 'beat';
+    payload.provenance = { dependency_shas: { [availablePin]: 'pin' } };
+    const wrapper: ResultPayload = imported ? {
+      frequencies: payload.frequencies,
+      metadata: { solver_engine: { package: pkg } },
+      provenance: payload.provenance,
+    } : payload;
+    if (imported) delete payload.provenance;
+    expect(powerQualificationOf(payload, wrapper)!.status)
+      .toBe(pkg === availablePin ? 'qualified' : 'unknown');
   }
 });

@@ -18,16 +18,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from pathlib import Path
-import tempfile
 from typing import Any, Mapping, Sequence
 
 from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import build_solver_mesh
-from server.platform.temp_session import temporary_directory_root
 
-from .acoustics import solver_sound_speed_m_per_s
 from .base import (
     ArtifactCallback,
     CancelCallback,
@@ -49,7 +45,6 @@ from .adaptive_sweep import (
 )
 from .frequency_sweep import (
     live_execution_frequencies,
-    sort_native_result_frequencies,
 )
 from .imported import read_verified_import_mesh, verify_record_mesh_text
 from .infinite_baffle import reject_beat_infinite_baffle
@@ -57,9 +52,7 @@ from .result_mapping import (
     build_provisional_frequency_response,
     build_solver_response,
     json_safe_native_value,
-    native_observation_frame,
     native_symmetry_plane,
-    observation_config,
     response_solver_log,
 )
 from .warmup import BEAT_WARMUP_STAGE_MESSAGE, beat_warmup_in_progress
@@ -142,14 +135,10 @@ logger = logging.getLogger(__name__)
 
 
 def reprobe_package_backend_statuses() -> dict[str, Any] | None:
-    """The package's per-backend verdicts, asked again from scratch.
+    """Refresh the official engine's independent readiness for every backend.
 
-    For after runtime preparation, when every cached verdict may describe a
-    host without a Julia or without the GPU runtime. The package's own
-    ``functional()`` cache is cleared too: a probe that overlapped provisioning
-    can have stored its "false" after provisioning cleared it. Clearing and
-    re-reading happen under the probe lock, so a probe still running elsewhere
-    finishes first and its answer is discarded rather than read.
+    After runtime preparation, discard readiness cached before Julia or the
+    backend runtime was available.
     """
 
     from .official_beat import production_statuses

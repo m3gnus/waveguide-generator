@@ -249,3 +249,26 @@ def test_unreadable_live_child_of_exiting_parent_still_refuses():
     native = reader([snapshot] * 6, rss)
     with pytest.raises(OSError, match='child denied'):
         native.read_owned(lambda rows: set(rows))
+
+
+@pytest.mark.parametrize('exited', [False, True])
+def test_sampler_terminates_only_owned_live_birth_identities(monkeypatch, exited):
+    from scripts.beat_conformance import rss_sampler
+
+    snapshots = iter([
+        {10: row(), 11: row(start=2), 12: row(start=99), 13: row()},
+        {10: row(), 11: row(start=2), 12: row(start=99), 13: row()},
+    ])
+    sampler = rss_sampler.RSSSampler(10, (), reader=lambda: next(snapshots))
+    sampler.known = {10: (1, 0), 11: (2, 0), 12: (3, 0), 14: (4, 0)}
+    signals = []
+
+    def kill(pid, sig):
+        signals.append((pid, sig))
+        if exited:
+            raise ProcessLookupError(pid)
+
+    monkeypatch.setattr(rss_sampler.os, 'kill', kill)
+    monkeypatch.setattr(rss_sampler.time, 'sleep', lambda _: None)
+    sampler.terminate_owned()
+    assert signals == [(11, rss_sampler.signal.SIGTERM), (11, rss_sampler.signal.SIGKILL)]

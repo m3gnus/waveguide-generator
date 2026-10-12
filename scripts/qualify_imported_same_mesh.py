@@ -46,8 +46,7 @@ from server.mesh.imported import polar_grid_from_symmetry  # noqa: E402
 from server.solver.combine import deserialize_channel_bases  # noqa: E402
 from server.solver.imported import config_supports_source_axes, mesh_text_sha256  # noqa: E402
 
-#: The air every engine here solves in (hornlab-metal-bem and beat-engine
-#: publish the same two constants).
+#: Air properties used by this qualification for every engine.
 AIR_DENSITY = 1.2041
 SOUND_SPEED = 343.0
 OBSERVATION_DISTANCE_M = 2.0
@@ -212,8 +211,7 @@ def rotation_matrix(axis: Sequence[float], degrees: float) -> np.ndarray:
 def pulsating_sphere(radius: float, frequency_hz: float, distance: float) -> complex:
     """Pressure per unit outward normal acceleration, e^{-iwt}, outgoing e^{+ikr}.
 
-    The form beat-engine's conformance suite uses
-    (``tests/conformance/analytic.py``): ``rho a^2 / r * e^{ik(r-a)} / (1 - ika)``.
+    Independent pulsating-sphere reference: ``rho a^2 / r * e^{ik(r-a)} / (1 - ika)``.
     """
 
     k = 2.0 * math.pi * frequency_hz / SOUND_SPEED

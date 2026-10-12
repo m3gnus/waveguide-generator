@@ -89,11 +89,8 @@ describe('operationStageWord', () => {
 
 describe('parseFrequencyProgress', () => {
   it('reads the printed number as the completed count -- every engine\'s callback fires after that frequency finishes', () => {
-    // hornlab_metal_bem/sweep.py, beat_engine/sweep.py and
-    // hornlab_bempp_bem/sweep.py all invoke progress_callback(i, total, freq)
-    // only after appending that frequency's result, and the WG adapters
-    // (server/solver/metal.py, beat.py, bempp.py) print index+1 -- so
-    // "Solving frequency 3/12" means 3 are already done, not 2.
+    // Metal and BEMPP callbacks report completed frequencies; official BEAT
+    // reports "Solved i/N" after completion. The printed count is already done.
     expect(parseFrequencyProgress('Solving frequency 3/12 with Metal BEM')).toEqual({ completed: 3, total: 12 });
     expect(parseFrequencyProgress('Solving frequency 1/12 with BEAT Engine')).toEqual({ completed: 1, total: 12 });
     expect(parseFrequencyProgress('Solving frequency 12/12 with BEMPP BEM')).toEqual({ completed: 12, total: 12 });

@@ -689,7 +689,7 @@ def ensure_backend_cold_start_phase(
             "refusal": WINDOWS_BREAKAWAY_REFUSAL,
         }
     return {"exercised": True, **check_ensure_backend_cold_start(
-        interpreter, app, work, output, )}
+        interpreter, app, work, output)}
 
 
 def check_ensure_backend_cold_start(
@@ -1291,7 +1291,7 @@ def check_axes(
 
 
 def check_solve(
-    result: dict[str, Any], expected_pins: dict[str, str], *, official: bool = True,
+    result: dict[str, Any], expected_pins: dict[str, str],
 ) -> dict[str, Any]:
     """The solve reported the CPU backend, drifted from nothing, and has numbers."""
 
@@ -1695,7 +1695,6 @@ def check_imported_result(
     *,
     channels: list[str],
     frequencies: list[float],
-    official: bool = True,
 ) -> dict[str, Any]:
     """An imported solve ran on the engine asked for, answered what was asked, and has numbers.
 
@@ -2068,7 +2067,6 @@ def qualify_imported_return(
                 engine,
                 channels=[str(channel["id"]) for channel in geometry["drive_channels"]],
                 frequencies=list(IMPORTED_FREQUENCIES),
-                official=True,
             )
             entry.update(
                 decision="solved",
@@ -2222,7 +2220,7 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
     # knows where to look even if the very next call raises.
     arguments.cleanup = (interpreter, environment, output)
     report["ensure_backend_cold_start"] = ensure_backend_cold_start_phase(
-        interpreter, app, work, output, )
+        interpreter, app, work, output)
     control = work / "status" / "stop-1"
     # One server for the whole gate: the row the application published and the
     # solve that uses it are then the same process, so "offered" cannot describe
@@ -2265,7 +2263,7 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
         report["workspace"] = workspace_isolation(server.base, work)
         result = server.completed(server.solve(SOLVE_FREQUENCIES, CPU_ENGINE))
         (output / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-        report["solve"] = check_solve(result, expected_pins, official=True)
+        report["solve"] = check_solve(result, expected_pins)
         report["gpu_independence"] = gpu_independence(capabilities, report["solve"])
         if arguments.ib_engine:
             section: dict[str, Any] = {}

@@ -771,7 +771,7 @@ def run_gate(
             raise QualificationError(f"the next start left stale temporary directories: {leftovers}")
 
         if beat:
-            restarted_host = warm_beat_host(second, interpreter, app, base_environment)
+            warm_beat_host(second, interpreter, app, base_environment)
             second.children = descendants(second.pid)
         if beat:
             report["beat_host_after_restart"] = require_detached_host(

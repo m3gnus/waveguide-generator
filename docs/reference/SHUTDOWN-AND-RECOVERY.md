@@ -123,6 +123,14 @@ when later clients need a backend that survives that job.
 
 ## BEAT's persistent host on Windows
 
+The status window's job is `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+JOB_OBJECT_LIMIT_BREAKAWAY_OK`, never `SILENT_BREAKAWAY_OK`: only a child
+that asks for `CREATE_BREAKAWAY_FROM_JOB` leaves it. The server, the mesher
+and gmsh, BEMPP workers and the CAD Link child do not ask, so they die when
+the job closes. The CAD Link child nests its own kill-on-close job inside the
+status window's.
+
+
 The official BEAT host keeps its Julia worker between completed solves.
 The clean server Quit hook calls
 `get_manager().detach()` (`server/app.py`, `shutdown_beat_worker`;

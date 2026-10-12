@@ -33,6 +33,39 @@ function row(groups: SummaryGroup[], groupTitle: string, label: string) {
 }
 
 describe('simulation summary groups', () => {
+  it.each([
+    ['official', '1.2.3', 'Official BEAT · 1.2.3'],
+    ['hbb', '0.9.0', 'Legacy HBB · 0.9.0'],
+    ['official', undefined, 'Official BEAT'],
+  ])('shows the recorded %s provider beside the engine', (provider, version, display) => {
+    const result: ResultPayload = {
+      frequencies: [100],
+      metadata: { solver_backend: 'beat-cpu', solver_engine: { provider, package_version: version } },
+    };
+    const rows = summaryGroups({ result }).find(({ title }) => title === 'Solve')!.rows;
+    expect(rows.findIndex(({ label }) => label === 'BEAT engine')).toBe(
+      rows.findIndex(({ label }) => label === 'Engine') + 1,
+    );
+    expect(row(summaryGroups({ result }), 'Solve', 'BEAT engine')?.value).toBe(display);
+  });
+
+  it('reads provider provenance from the wrapper and prefers channel provenance', () => {
+    const wrapper: ResultPayload = {
+      frequencies: [100],
+      metadata: { solver_engine: { provider: 'hbb', package_version: '0.9.0' } },
+    };
+    const result: ResultPayload = { frequencies: [100] };
+    expect(row(summaryGroups({ result, wrapper }), 'Solve', 'BEAT engine')?.value).toBe('Legacy HBB · 0.9.0');
+    result.metadata = { solver_engine: { provider: 'official' } };
+    expect(row(summaryGroups({ result, wrapper }), 'Solve', 'BEAT engine')?.value).toBe('Official BEAT');
+  });
+
+  it('does not guess the provider for earlier runs', () => {
+    const result: ResultPayload = { frequencies: [100], metadata: { solver_backend: 'beat-cpu' } };
+    expect(row(summaryGroups({ result }), 'Solve', 'BEAT engine')).toBeUndefined();
+  });
+
+
   it('shows each axial source\'s resolved axis, snapped and raw, read-only', () => {
     const result = {
       frequencies: [1000],

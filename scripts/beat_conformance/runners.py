@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
-import hashlib
+from dataclasses import dataclass
 from importlib import import_module, metadata
 from importlib.util import find_spec
-import json
 import os
 from pathlib import Path
-import tempfile
 import sys
 from typing import Any
 
@@ -29,7 +26,7 @@ from server.solver.beat_runtime.threads import resolve_julia_threads
 from server.solver.directivity_index import calculate_di_from_spherical_grid
 
 from .agreement import ResultSet
-from .recorder import EngineRun, write_record
+from .recorder import EngineRun
 from .settings import observed_settings
 
 
@@ -202,7 +199,7 @@ def metal_worker_environment(threads: int | str, *, assembly: str = "direct_syst
 
 
 def result_set(inputs: FrozenExterior, native: Any, *, revision: str,
-               recorder_record: dict | None = None, official: bool = True) -> ResultSet:
+               recorder_record: dict | None = None) -> ResultSet:
     """Score the same full-sphere quadrature for DI and far-field power estimates."""
     compiled = inputs.compiled()
     if (native.cancelled or native.is_partial

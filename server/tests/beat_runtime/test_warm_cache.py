@@ -216,6 +216,30 @@ def test_source_walk_timing(capsys):
         print(f"source stat walk: median={median(samples):.3f} ms entries={sum(map(len, signatures))}")
 
 
+@pytest.mark.parametrize("bad_config", ["linked", "conflict", "corrupt"])
+def test_bad_runtime_signature_falls_back_to_uncached_resolution(proved_cpu, monkeypatch, tmp_path, bad_config):
+    root, _, julia, _, query, _, _ = proved_cpu
+    env = dict(query["environ"])
+    if bad_config == "linked":
+        target = tmp_path / "linked-runtime"
+        target.symlink_to(root, target_is_directory=True)
+        env[paths.RUNTIME_DIR_ENV] = str(target)
+    elif bad_config == "conflict":
+        env["HORNLAB_BEAT_RUNTIME_DIR"] = str(root)
+    else:
+        (root / "julia.json").write_text("{")
+    calls = []
+    original = manager._resolve_key
+    monkeypatch.setattr(manager, "_resolve_key", lambda *a, **kw: (calls.append(1), original(*a, **kw))[1])
+    options = dict(julia_executable=str(julia), julia_threads=3, environment=env)
+    if bad_config == "conflict":
+        with pytest.raises(paths.RootConflict):
+            manager.resolve_key("cpu", **options)
+    else:
+        assert manager.resolve_key("cpu", **options)["backend"] == "cpu"
+    assert calls == [1]
+
+
 @pytest.mark.parametrize("backend,negative", [("metal", "no-device"), ("metal", "detection-failed"),
                                              ("cuda", "unsupported"), ("rocm", "unsupported")])
 def test_hardware_negative_cache_expires_and_refresh_clears(monkeypatch, tmp_path, backend, negative):
@@ -240,7 +264,7 @@ def test_hardware_negative_cache_expires_and_refresh_clears(monkeypatch, tmp_pat
     assert calls == [1, 1, 1, 1]
 
 
-@pytest.mark.parametrize("signature_error", [ValueError])
+@pytest.mark.parametrize("signature_error", [ValueError, paths.RootConflict])
 def test_signature_errors_preserve_unavailable_bridge_semantics(monkeypatch, tmp_path, signature_error):
     from server.solver import official_beat
     from server.solver.beat_adapter.capabilities import probe_request

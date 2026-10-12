@@ -9,8 +9,8 @@ import sys
 
 import pytest
 
-from server.engines.registry import EngineInfo, EngineRegistry, _official_runtime_statuses, detect_engines
-from server.solver import beat, beat_cpu_runtime as facade
+from server.engines.registry import EngineInfo, EngineRegistry, _official_runtime_statuses
+from server.solver import beat_cpu_runtime as facade
 from server.solver.beat_runtime import cli, hardware, identity, locks, paths, provider, readiness, state
 from server.tests.beat_runtime import test_readiness
 

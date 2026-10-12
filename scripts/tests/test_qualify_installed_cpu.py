@@ -3179,9 +3179,9 @@ def test_official_parametric_contract_refuses_fallback_and_unpinned_revisions(da
         result["provenance"]["dependency_shas"] = {**OFFICIAL_PINS, "beat-engine": "f" * 40}
     if damage:
         with pytest.raises(gate.QualificationError):
-            gate.check_solve(result, OFFICIAL_PINS, official=True)
+            gate.check_solve(result, OFFICIAL_PINS)
     else:
-        report = gate.check_solve(result, OFFICIAL_PINS, official=True)
+        report = gate.check_solve(result, OFFICIAL_PINS)
         assert report["engine"] == "beat-engine"
         assert "beat-engine" in report["pins_cross_checked"]
 
@@ -3202,10 +3202,10 @@ def test_official_imported_contract_checks_package_and_each_channel(damage):
     if damage:
         with pytest.raises(gate.QualificationError, match="official"):
             gate.check_imported_result(result, "beat-cpu", channels=["drive-hf"],
-                                       frequencies=[500.0, 1000.0], official=True)
+                                       frequencies=[500.0, 1000.0])
     else:
         gate.check_imported_result(result, "beat-cpu", channels=["drive-hf"],
-                                   frequencies=[500.0, 1000.0], official=True)
+                                   frequencies=[500.0, 1000.0])
 
 
 @pytest.mark.parametrize("damage", [None, "hbb", "not-ready", "missing-proof", "missing-fingerprint", "escaped", "probe-exit", "unreadable"])

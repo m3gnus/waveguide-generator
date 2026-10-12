@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import os
-from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 
-from server.diagnostics import capabilities
 from server.solver import beat_cpu_runtime
 
 

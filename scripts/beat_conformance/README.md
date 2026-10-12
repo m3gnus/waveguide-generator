@@ -4,10 +4,10 @@ Status: current developer tools for the pinned `beat-engine` route.
 
 The HBB comparisons are historical. Their acquisition/performance commands
 (`run_agreement`, `run_corpus`, `run_perf`, `perf_report` and wire-quantization
-comparison) have been removed. Recorded agreement, corpus and performance evidence
-remains in [docs/validation](../../docs/validation), particularly
-[the October records](../../docs/validation/2026-10). These records describe the
-revisions and commands used at the time; they are not current instructions.
+comparison) have been removed. The HBB agreement, corpus and performance
+comparison evidence was recorded outside this repository. Those historical
+records describe the revisions and commands used at the time; they are not
+current instructions.
 
 The retained tools exercise official compiled requests, backend capability
 refusals, coordinate/phase/area controls, sweep protocol and independent analytic

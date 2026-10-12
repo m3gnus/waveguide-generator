@@ -272,3 +272,24 @@ def test_windows_julia_record_sharing_violation_retry(directory, monkeypatch, fa
         assert state.write_julia(replacement)["executable"] == "new"
     assert len(calls) == min(failures + 1, 5)
     assert list(directory.iterdir()) == [directory / "julia.json"]
+
+
+@pytest.mark.parametrize("api", ["write_state", "write_julia", "atomic_json"])
+@pytest.mark.parametrize("alias", [False, True])
+def test_explicit_directory_hbb_isolation_before_mutation(tmp_path, monkeypatch, record, api, alias):
+    legacy = tmp_path / "hbb"
+    legacy.mkdir()
+    keep = legacy / "keep"
+    keep.write_bytes(b"HBB")
+    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(legacy))
+    root = tmp_path / "alias" if alias else legacy
+    if alias:
+        root.symlink_to(legacy, target_is_directory=True)
+    with pytest.raises(paths.RootConflict):
+        if api == "write_state":
+            state.write_state(record, root)
+        elif api == "write_julia":
+            state.write_julia({"origin": "external", "executable": "fake", "identity": "sha", "version": None}, root)
+        else:
+            state._atomic_write_json(root / "record.json", {})
+    assert list(legacy.iterdir()) == [keep] and keep.read_bytes() == b"HBB"

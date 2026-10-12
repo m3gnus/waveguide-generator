@@ -6,7 +6,7 @@ import threading
 import pytest
 
 from server.engines.registry import EngineInfo, EngineRegistry, _official_runtime_statuses
-from server.solver import beat, beat_cpu_runtime as facade
+from server.solver import beat_cpu_runtime as facade
 from server.solver.beat_runtime import hardware, provider, readiness
 
 

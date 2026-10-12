@@ -11,26 +11,20 @@ qualification suite's job.
 from __future__ import annotations
 
 import asyncio
-import io
-import json
 import math
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
 
-from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.engines import registry
 from server.jobs.models import SolveRequest
 from server.mesh.builder import _dense_solver_memory_requirements
 from server.mesh.imported import polar_grid_from_symmetry
 from server.solver import beat, beat_imported
-from server.solver.combine import deserialize_channel_bases
 from server.solver.context import SolverContext
 from server.solver.imported import mesh_text_sha256
-from server.solver.result_mapping import REFERENCE_RHO_C
 
 
 MANIFEST_SHA = "sha256:" + "1" * 64
@@ -440,7 +434,6 @@ def test_the_registry_declares_imported_geometry_for_every_beat_backend(
 @pytest.mark.parametrize("parts", [((1, 3), (-1, 2)), ((-1, 3),)])
 def test_signed_sum_auxiliary_aggregation_is_only_adaptive(parts):
     """Off preserves base's first-group averages/logs; fits need signed traces."""
-    from types import SimpleNamespace
 
     groups = [
         (

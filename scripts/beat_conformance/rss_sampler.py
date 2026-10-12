@@ -1,7 +1,9 @@
 """Measure resident memory of an invocation's owned process tree."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import threading

@@ -165,10 +165,8 @@ const PLAIN_PATTERN = /(\d+)\s*\/\s*(\d+)/;
  *
  * The printed number IS the completed count, for every engine, not one
  * behind it: each adapter's `progress`/`stage_callback` wrapper is invoked
- * from the vendored package's own sweep loop (`hornlab_metal_bem/sweep.py`,
- * `beat_engine/sweep.py`, `hornlab_bempp_bem/sweep.py`) only *after*
- * that frequency's result has been appended -- and official BEAT's own
- * "Solved i/N" wording says the same thing directly. A message this cannot
+ * after a completed frequency. Metal and BEMPP report from their sweep
+ * callbacks; official BEAT reports completion as "Solved i/N". A message this cannot
  * parse (a batched engine, or a stage other than the main solve) yields no
  * frequency progress, which is the signal to fall back to an indeterminate
  * bar.

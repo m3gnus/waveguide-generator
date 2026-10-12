@@ -1,7 +1,6 @@
 """Mock every provisioner: these tests never start Julia or download packages."""
 
 import threading
-from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

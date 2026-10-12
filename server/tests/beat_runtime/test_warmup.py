@@ -10,8 +10,8 @@ import pytest
 
 from server.app import create_app
 from server.platform import temp_session
-from server.solver import beat_cpu_runtime as facade, warmup as app_warmup
-from server.solver.beat_runtime import cleanup, manager, paths, probe, readiness, registry, warmup
+from server.solver import warmup as app_warmup
+from server.solver.beat_runtime import cleanup, manager, paths, probe, registry, warmup
 from server.solver.beat_runtime.ownership import OwnershipClosed
 from server.solver.beat_runtime.session import SolveSession
 from server.tests.beat_runtime.fake_host_worker import EngineWorker, events, wait_until

@@ -639,7 +639,6 @@ def _provision_beat_runtime(python: Path) -> None:
         return
     _provision_gpu_runtime(python)
     _provision_beat_cpu_runtime(python)
-    return
 
 
 def _provision_gpu_runtime(python: Path) -> None:
@@ -677,7 +676,6 @@ def _provision_beat_cpu_runtime(python: Path) -> None:
         return
     if _run([str(python), "-m", "server.solver.beat_runtime.cli", "--backend", "cpu"]).returncode != 0:
         print("WARNING: the WG-owned BEAT CPU runtime could not be provisioned (see above).")
-    return
 
 
 def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:

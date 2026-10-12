@@ -2782,6 +2782,7 @@ Nothing is sent anywhere; it runs entirely on your machine.
         # or engine project instead of the package in the bundle.
         for name in (
             "PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE",
+            "WG2_BEAT_JULIA",
             "JULIA_PROJECT", "JULIA_LOAD_PATH",
         ):
             private.pop(name, None)
@@ -2800,6 +2801,8 @@ Nothing is sent anywhere; it runs entirely on your machine.
             ("XDG_STATE_HOME", home / ".local" / "state"),
             ("XDG_RUNTIME_DIR", home / "runtime"),
             ("XDG_DOCUMENTS_DIR", home / "Documents"),
+            ("WG2_BEAT_RUNTIME_DIR", scratch / "beat-runtime"),
+            ("WG2_BEAT_WORKER_DIR", scratch / "beat-workers"),
             ("JULIA_DEPOT_PATH", scratch / "julia-depot"),
             *((name, scratch / "caches" / name.lower()) for name in CACHE_ENVIRONMENT),
         ):

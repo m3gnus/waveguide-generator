@@ -99,7 +99,6 @@ def main() -> int:
     from server.solver.beat import (
         BEAT_BACKENDS,
         BEAT_BACKEND_LABELS,
-        beat_backend_statuses,
     )
     from server.solver.metal import metal_status
 

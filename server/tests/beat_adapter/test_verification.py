@@ -205,6 +205,28 @@ def test_revision_verification_blob_read_is_binary_and_bounded(tmp_path, monkeyp
     assert verification._blob(tmp_path, "a" * 40, "src/beat_engine/__init__.py") == b"exact bytes\x00\n"
 
 
+@pytest.mark.parametrize("destination", ["depot", "relative_depot", "symlink_depot", "project"])
+def test_metal_probe_destination_isolation_precedes_any_julia_launch(observer, monkeypatch, tmp_path, destination):
+    binary, state = observer
+    legacy = tmp_path / "hbb-runtime"
+    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(legacy))
+    if destination == "project":
+        state["assets"].project = legacy / "project"
+    else:
+        depot = legacy / "depot"
+        if destination == "relative_depot":
+            monkeypatch.chdir(tmp_path)
+            depot = Path("hbb-runtime/depot")
+        elif destination == "symlink_depot":
+            alias = tmp_path / "alias"
+            alias.symlink_to(legacy, target_is_directory=True)
+            depot = alias / "depot"
+        monkeypatch.setenv("JULIA_DEPOT_PATH", str(depot))
+    with pytest.raises(ValueError, match="overlaps"):
+        verification.verify_runtime(str(binary), "metal")
+    assert not state["commands"] and not legacy.exists()
+
+
 def test_metal_probe_receives_validated_environment_and_explicit_project(observer, monkeypatch, tmp_path):
     binary, state = observer
     monkeypatch.chdir(tmp_path)

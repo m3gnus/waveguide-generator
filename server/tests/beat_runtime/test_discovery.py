@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -11,6 +10,7 @@ from server.solver.beat_runtime import discovery, paths, state
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv(paths.RUNTIME_DIR_ENV, str(tmp_path / "wg"))
+    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(tmp_path / "hbb"))
     monkeypatch.delenv(discovery.JULIA_ENV_VAR, raising=False)
     monkeypatch.setattr(discovery.shutil, "which", lambda *args, **kwargs: None)
 
@@ -133,3 +133,35 @@ def test_relative_julia_selection_is_absolute_without_resolving_launcher(tmp_pat
     root = paths.runtime_dir()
     discovery.write_julia_record(root, Path("juliaup"), origin="external", version=None)
     assert state.read_julia(root)["executable"] == str(launcher)
+
+
+@pytest.mark.parametrize("alias", [False, True])
+def test_discovery_record_directory_hbb_isolation_before_mutation(tmp_path, monkeypatch, alias):
+    legacy = tmp_path / "hbb"
+    legacy.mkdir()
+    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(legacy))
+    root = tmp_path / "alias" if alias else legacy
+    if alias:
+        root.symlink_to(legacy, target_is_directory=True)
+    with pytest.raises(paths.RootConflict):
+        discovery.write_julia_record(root, tmp_path / "missing", origin="external", version=None)
+    assert list(legacy.iterdir()) == []
+
+
+
+@pytest.mark.parametrize("source", ["explicit", "configured", "path", "record"])
+@pytest.mark.parametrize("alias", [False, True])
+def test_hbb_managed_executable_is_only_a_legacy_hint(tmp_path, monkeypatch, source, alias):
+    legacy = executable(tmp_path / "hbb/bin/julia")
+    candidate = tmp_path / "alias" if alias else legacy
+    if alias:
+        candidate.symlink_to(legacy)
+    kwargs = {}
+    if source in ("explicit", "configured"):
+        kwargs[source] = str(candidate)
+    elif source == "path":
+        monkeypatch.setattr(discovery.shutil, "which", lambda *a, **k: str(candidate))
+    else:
+        discovery.write_julia_record(paths.runtime_dir(), candidate, origin="external", version=None)
+    assert discovery.discover_julia(**kwargs) is None
+    assert legacy.read_bytes() == b"fake Julia"

@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import importlib
 import logging
 import os
-from pathlib import Path
 import platform
 import sys
 import shlex
@@ -169,7 +167,7 @@ def remove_readiness_listener(listener: Any) -> None:
         if listener in _readiness_listeners:
             _readiness_listeners.remove(listener)
         empty = not _readiness_listeners
-    if (empty):
+    if empty:
         from .beat_runtime import readiness
 
         readiness.remove_readiness_listener(_official_readiness_changed)

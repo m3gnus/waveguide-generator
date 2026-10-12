@@ -11,12 +11,10 @@ voltage-driven v3 contract.
 
 from __future__ import annotations
 
-from contextlib import ExitStack
 from copy import copy
 from dataclasses import dataclass
 import logging
 from pathlib import Path
-import tempfile
 import time
 from typing import Any, Mapping, Sequence
 
@@ -32,15 +30,12 @@ from server.contracts.geometry import (
     symmetry_plane_axes_for_quadrants,
 )
 from server.jobs.models import ImportedGeometrySource, SolveRequest
-from server.platform.temp_session import temporary_directory_root
 
-from .acoustics import solver_sound_speed_m_per_s
 from .beat_runtime.warm_cache import signature_scope as solve_signature_scope
 from .base import CancelCallback, ResultCallback, StageCallback
 from .beat import (
     BeatUnavailable,
     announce_beat_warmup_wait,
-    beat_backend_statuses,
     beat_engine_name,
 )
 from .combine import combine_drive_channels, serialize_channel_bases
@@ -56,7 +51,7 @@ from .adaptive_sweep import (
     native_acquisition_frequencies,
     solve_native_adaptively,
 )
-from .frequency_sweep import live_execution_frequencies, sort_native_result_frequencies
+from .frequency_sweep import live_execution_frequencies
 from .imported import (
     imported_anchor_frame,
     imported_domain_planes,
@@ -73,7 +68,6 @@ from .result_mapping import (
     build_provisional_frequency_response,
     build_solver_response,
     json_safe_native_value,
-    observation_config,
     response_solver_log,
 )
 

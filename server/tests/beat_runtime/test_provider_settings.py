@@ -1,11 +1,13 @@
 """Retired settings warn once while every backend keeps the official route."""
 
+from pathlib import Path
+
 import pytest
 
 from server.solver.beat_runtime import provider
 from server.solver import beat
 from server.solver.context import SolverContext
-from server.tests.test_official_beat_bridge import runtime
+from server.tests.test_official_beat_bridge import runtime as runtime  # shared pytest fixture
 
 
 @pytest.mark.parametrize("value", [" hBb ", " Legacy "])
@@ -38,7 +40,7 @@ def test_unknown_provider_preserves_warning(caplog, monkeypatch):
 def test_obsolete_setting_cannot_change_solve_route(runtime, monkeypatch, backend, value):
     monkeypatch.setenv(provider.PROVIDER_ENV, value)
     result = beat.solve_beat_from_msh_text(
-        beat.Path(beat.__file__).with_name("warmup_mesh.msh").read_text(),
+        Path(beat.__file__).with_name("warmup_mesh.msh").read_text(),
         SolverContext(design=None, frequency_range=(300., 500.), num_frequencies=2),
         backend=backend,
     )

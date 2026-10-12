@@ -237,7 +237,6 @@ def _warm_beat(backend: str) -> None:
 
     with beat_warmup_recorded():
         warm_up(beat_backend=backend, mode="tiny")
-    return
 
 
 def warm_bempp_in_this_process(status: Mapping[str, object]) -> None:

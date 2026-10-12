@@ -396,6 +396,11 @@ def ensure_julia(
         raise RuntimeError(f"Linked runtime directory refused: {root}")
     existing = discovery.discover_julia(explicit, configured=configured, root=root, environ=env)
     configured_path = configured if configured is not None else env.get(discovery.JULIA_ENV_VAR, "")
+    for source, candidate in (("explicit", explicit), ("configured", configured_path)):
+        if candidate and candidate.strip():
+            if paths.hbb_executable(Path(candidate.strip()), environ=env):
+                _report(status_cb, f"Ignoring {source} Julia in an HBB root: {candidate}; installing WG-owned Julia")
+            break
     selected = bool((explicit or "").strip() or configured_path.strip())
     record = discovery.read_julia_record(root)
     if existing and not selected:
@@ -409,6 +414,8 @@ def ensure_julia(
             existing = shutil.which("julia", path=env.get("PATH", os.defpath))
             if existing and Path(existing).resolve().is_relative_to((root / "julia").resolve()):
                 existing = None
+    if existing and paths.hbb_executable(Path(existing), environ=env):
+        existing = None
     if existing:
         existing = str(Path(existing).expanduser().absolute())
         resolved = Path(existing).resolve()

@@ -163,21 +163,10 @@ def _ground_plane_axes(name: str, status: Mapping[str, Any]) -> tuple[str, ...]:
     nothing here and the mounting simply does not appear -- rather than being
     offered and then failing with a TypeError deep in the adapter.
 
-    BEAT is absent, and the reason is worth stating precisely because it has
-    changed. beat-engine CAN express a rigid half space now: at the pin
-    this application currently carries it exports ``GroundPlane``,
-    ``SolveConfig.ground_plane``, ``reject_unsupported_ground_plane`` and
-    ``GROUND_PLANE_AXES = ("y",)`` -- commented in its own source as the
-    capability advertisement for exactly this probe. Its transform mirrors
-    across y = 0 alone, which in the frame this application builds meshes in
-    (z the horn axis, y vertical, per the same config.py) is the floor: the
-    common case, not a corner.
-
-    What is missing is on this side. ``server/solver/beat.py`` only reads
-    ``SolverContext.ground_plane`` to refuse it; it does not translate the
-    plane into BEAT's native image geometry. Without that refusal, a grounded
-    solve dispatched to BEAT would return a free-standing answer to a question
-    about a floor.
+    BEAT does not advertise ground-plane support. The official adapter refuses
+    ``SolverContext.ground_plane`` because WG has no native ground-plane
+    translation for the official engine. A grounded request must therefore be
+    routed to an engine with a probed ground-plane capability.
 
     The mounting gate in ``resolve_auto_engine`` avoids selecting an engine
     that must refuse the request; the adapter's own guard is defense in depth.
@@ -336,10 +325,9 @@ def detect_engines(
     if not any(name.startswith("beat-") for name in selected):
         return engines
     from server.solver.beat import (
-        BEAT_BACKENDS, beat_backend_statuses, beat_engine_name,
+        BEAT_BACKENDS, beat_engine_name,
     )
     try:
-
         from server.solver.official_beat import production_statuses
 
         backend_statuses = production_statuses()
@@ -402,7 +390,7 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
         # No ground plane: the BEAT adapter does not translate one yet.
         mountings=("free-standing",),
         geometry_sources=beat_geometry_sources(backend),
-        imported_features=("exterior-transducers",) if (backend in {"cpu", "metal"}) else (),
+        imported_features=("exterior-transducers",) if backend in {"cpu", "metal"} else (),
         symmetry_domains=_symmetry_domains(name),
         field_traces=bool(status.get("surface_traces")),
         di_sphere=True,
@@ -466,28 +454,6 @@ def _official_runtime_statuses() -> dict[str, dict[str, Any]]:
         if reason is not None:
             statuses[backend].update(available=False, state="provisioning", reason=reason)
     return statuses
-
-
-def _beat_row_updates(
-    package: Any, cpu_backend_status: Callable[[Any], tuple[bool, str]]
-) -> dict[str, tuple[bool, str]]:
-    """Fresh ``(available, reason)`` for the BEAT rows background preparation moved.
-
-    While preparation runs only the CPU row is re-read, plus a "being prepared"
-    sentence on the GPU row whose runtime is being provisioned: asking a GPU
-    backend for its verdict costs a Julia startup that would race the
-    provisioning it is about to report on. Once preparation has finished every
-    BEAT row is probed again, if it provisioned anything. The GPU rows were
-    detected at startup, which on a host preparing its runtimes is before any
-    Julia existed -- left alone, they kept saying "No Julia executable was
-    found" until the next launch.
-    """
-
-    from server.solver import beat, beat_cpu_runtime
-
-    return {f"beat-{backend}": (bool(status["available"]), str(status["reason"]))
-            for backend, status in _official_runtime_statuses().items()
-            if backend in {"cpu", "metal", "cuda", "rocm"}}
 
 
 def _failed_detection(
@@ -1092,7 +1058,6 @@ class EngineRegistry:
         self._schedule_cpu_refresh()
 
     async def _refresh_cpu_backend(self) -> None:
-        from server.solver import beat_cpu_runtime
         from server.solver.beat import (
             beat_engine_backend,
         )
@@ -1105,13 +1070,11 @@ class EngineRegistry:
                 return
             try:
                 self.official_runtime_statuses = await asyncio.to_thread(_official_runtime_statuses)
-                package = None
                 updates = ({f"beat-{backend}": (bool(status["available"]), str(status["reason"]))
                             for backend, status in self.official_runtime_statuses.items()
                             if backend in {"cpu", "metal", "cuda", "rocm"}})
                 async with self._lock:
                     if self._cache is not None and not self._listener_removed:
-                        preparing = beat_cpu_runtime.cpu_preparation_in_flight()
                         self._cache = tuple(
                             _beat_engine_info(beat_engine_backend(item.name), {
                                 "available": updates[item.name][0],

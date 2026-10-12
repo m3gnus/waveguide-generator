@@ -11,7 +11,6 @@ from contextlib import nullcontext
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
-import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]

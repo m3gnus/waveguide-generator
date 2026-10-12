@@ -714,7 +714,6 @@ def create_app(
 
         def stop_workers() -> None:
             try:
-
                 from .solver.beat_runtime.manager import get_manager
 
                 # Final Quit closes admission for good. Ordinary session

@@ -68,7 +68,8 @@ def recorded_julia(
         return None
     path = Path(record["executable"]).expanduser()
     try:
-        if (executable_file(path) and record["identity"] == executable_identity(path)):
+        if (not paths.hbb_executable(path, environ=environ)
+                and executable_file(path) and record["identity"] == executable_identity(path)):
             return str(path)
     except OSError:
         pass
@@ -87,7 +88,7 @@ def discover_julia(
             path = Path(candidate.strip()).expanduser().absolute()
             if not executable_file(path):
                 raise JuliaDiscoveryError(f"Invalid {source} Julia executable: {path}")
-            return str(path)
+            return None if paths.hbb_executable(path, environ=env) else str(path)
     directory = runtime_dir(environ=env) if root is None else root
     record = read_julia_record(directory)
     # Installer-only explicit choices remain one-off. Once provisioning has
@@ -104,4 +105,4 @@ def discover_julia(
     if recorded is not None:
         return recorded
     candidate = shutil.which("julia", path=env.get("PATH", os.defpath))
-    return candidate
+    return candidate if candidate and not paths.hbb_executable(Path(candidate), environ=env) else None
