@@ -30,7 +30,7 @@ import {
 import { ChannelDriverPicker } from './DriverPicker';
 import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
 import { NATIVE_FAMILIES, defaultWallThickness, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
-import { athControlError, isAthV2, opusClampNote, opusMountingReason } from './athImportControls';
+import { athControlError, lipRadiusWallError, lipUnavailableReason, opusClampNote, opusMountingReason } from './athImportControls';
 import { namespaceStorage } from '../stores/durableSettings';
 import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -226,9 +226,9 @@ type SelectableOuterBodyMode = Exclude<OuterBodyMode, 'infinite-baffle'>;
  *
  * The two implementations have to agree on "unset" as well as on a value. The
  * server keeps `mesh.wall_thickness` nullable so a CFG round-trip is lossless
- * and resolves an omitted wall using the imported geometry's dependent
- * default. Hydration and edits refresh that display value while `_absent`
- * keeps the document unset. Only an explicit 0 means a bare shell.
+ * and resolves an omitted wall to ATH's 5 mm (0 under an infinite baffle).
+ * Hydration and edits refresh that display value while `_absent` keeps the
+ * document unset. Only an explicit 0 means a bare shell.
  */
 export function resolveOuterBodyMode(design: DesignDocument): OuterBodyMode {
   if (design.simulation.sim_type === 'infinite-baffle') return 'infinite-baffle';
@@ -280,9 +280,16 @@ function WallEnclosureModeControl({ design, mounting = false, serverError }: { d
     const updates = mode === 'bare'
       ? { 'mesh.wall_thickness': 0, 'enclosure.depth': 0 }
       : mode === 'freestanding'
-        ? { 'mesh.wall_thickness': lastWallThickness ?? defaultWallThickness(design), 'enclosure.depth': 0 }
+        ? { 'mesh.wall_thickness': lastWallThickness ?? defaultWallThickness(), 'enclosure.depth': 0 }
         : { 'mesh.wall_thickness': 0, 'enclosure.depth': lastEnclosureDepth };
-    updateValues({ ...updates, ...(mounting && design.simulation.sim_type === 'infinite-baffle' ? { 'simulation.sim_type': 'freestanding' } : {}) });
+    // Write only what changes. An import without Mesh.Enclosure keeps `enclosure`
+    // in _absent, and any write under it (even depth 0 over 0) would drop that
+    // marker and send a full object, which the mesher refuses with a lip or Opus.
+    const current: Record<string, number> = { 'mesh.wall_thickness': design.mesh.wall_thickness, 'enclosure.depth': design.enclosure.depth };
+    const wallUnset = Boolean(design._absent?.includes('mesh.wall_thickness'));
+    const changed = Object.fromEntries(Object.entries(updates).filter(([path, next]) =>
+      current[path] !== next && !(mode === 'freestanding' && wallUnset && path === 'mesh.wall_thickness')));
+    updateValues({ ...changed, ...(mounting && design.simulation.sim_type === 'infinite-baffle' ? { 'simulation.sim_type': 'freestanding' } : {}) });
   };
 
   return <div className="outer-body-mode" data-parameter-id={mounting ? 'simulation.sim_type' : undefined} data-control-reveal-id={mounting ? PARAMETRIC_CONTROLS.mounting.reveal.id : undefined}>
@@ -368,6 +375,7 @@ function validationMessage(field: ParameterDefinition, design: DesignDocument): 
   if (field.id === 'icw.hold_end' && (design.hold_end ?? 0) <= (design.hold_start ?? 0)) return 'Must exceed coverage hold start.';
   if (field.id === 'simulation.f2' && design.simulation.f2 <= design.simulation.f1) return 'Must exceed sweep start.';
   if (field.id === 'source.velocity' && design.source.velocity_convention === 'legacy' && ![1, 2].includes(design.source.velocity)) return 'Legacy velocity must be 1 (normal) or 2 (axial).';
+  if (field.id === 'mesh.ath_roundover.radius' || field.id === 'mesh.wall_thickness') return lipRadiusWallError(design);
   return undefined;
 }
 
@@ -386,6 +394,8 @@ function prospectiveValidation(field: ParameterDefinition, design: DesignDocumen
   const athError = athControlError(field.path, value);
   if (athError) return athError;
   if (field.id.startsWith('cross_section.') && value <= 0) return 'Must be greater than zero.';
+  if (field.id === 'mesh.ath_roundover.radius') return lipRadiusWallError(design, { radius: value });
+  if (field.id === 'mesh.wall_thickness') return lipRadiusWallError(design, { wall: value });
   if (field.id === 'simulation.f1' && value >= design.simulation.f2) return 'Must be below sweep end.';
   if (field.id === 'simulation.f2' && value <= design.simulation.f1) return 'Must exceed sweep start.';
   if (field.id === 'source.velocity' && design.source.velocity_convention === 'legacy' && ![1, 2].includes(value)) return 'Legacy velocity must be 1 (normal) or 2 (axial).';
@@ -447,18 +457,33 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
   const modeReason = field.disabledWhen?.(design);
   const disabledReason = field.disabledReason ?? modeReason;
   const disabled = Boolean(disabledReason);
+  // Session memory so Off then On, or Opus to 1 to Opus, restores what was set.
+  const lastLip = useRef<{ radius: number; segments: number } | null>(null);
+  const lastOpus = useRef<{ offset: number; step: number } | null>(null);
   const commit = (next: DesignValue) => {
     if (!field.path || disabled) return;
     if (field.id === 'mesh.ath_roundover') {
-      updateValue(field.path, next === 1 ? { radius: Math.max(10, design.mesh.wall_thickness + 5), segments: 5 } : null);
+      if (next === 1) {
+        if (lipUnavailableReason(design)) return;
+        const remembered = lastLip.current;
+        updateValue(field.path, remembered && remembered.radius > design.mesh.wall_thickness
+          ? { ...remembered }
+          : { radius: Math.max(10, design.mesh.wall_thickness + 5), segments: 5 });
+      } else {
+        if (design.mesh.ath_roundover) lastLip.current = { ...design.mesh.ath_roundover };
+        updateValue(field.path, null);
+      }
       return;
     }
     if (field.id === 'mesh.ath_rear_shape') {
       if (next === 3 && opusMountingReason(design)) return;
+      if (next !== 3 && design.mesh.ath_rear_shape === 3) {
+        lastOpus.current = { offset: design.mesh.ath_rear_front_offset ?? 40, step: design.mesh.ath_rear_step ?? 25 };
+      }
       updateValues({
         [field.path]: next === '' ? null : next,
-        'mesh.ath_rear_front_offset': next === 3 ? design.mesh.ath_rear_front_offset ?? 40 : null,
-        'mesh.ath_rear_step': next === 3 ? design.mesh.ath_rear_step ?? 25 : null,
+        'mesh.ath_rear_front_offset': next === 3 ? design.mesh.ath_rear_front_offset ?? lastOpus.current?.offset ?? 40 : null,
+        'mesh.ath_rear_step': next === 3 ? design.mesh.ath_rear_step ?? lastOpus.current?.step ?? 25 : null,
       });
       return;
     }
@@ -488,7 +513,9 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
   }
   if (field.kind === 'select' || field.kind === 'toggle') {
     const options = fieldOptionsForBackend(field, value, backend, backendPlan, hostEngines).map((option) =>
-      field.id === 'mesh.ath_rear_shape' && option.value === 3 ? { ...option, unavailableReason: opusMountingReason(design) } : option);
+      field.id === 'mesh.ath_rear_shape' && option.value === 3 ? { ...option, unavailableReason: opusMountingReason(design) }
+        : field.id === 'mesh.ath_roundover' && option.value === 1 ? { ...option, unavailableReason: lipUnavailableReason(design) }
+          : option);
     const selectedValue = field.id === 'mesh.ath_roundover' ? value ? 1 : 0 : value;
     const unsupported = fieldUnsupportedFeature(field, value, backend, backendPlan);
     const ibEngine = field.id === 'simulation.sim_type'
@@ -531,7 +558,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
       unit={field.unit}
       min={field.min}
       exclusiveMin={field.exclusiveMin}
-      max={field.id === 'mesh.wall_thickness' && isAthV2(design) && design.mesh.ath_rear_shape === 3 ? undefined : field.max}
+      max={field.max}
       step={field.step}
       precision={field.precision}
       disabled={disabled}

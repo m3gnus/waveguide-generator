@@ -30,6 +30,8 @@ describe('NumberField', () => {
     act(() => input.blur());
     expect(commit).not.toHaveBeenCalled();
     expect(input.value).toBe('0.10');
+    // The rejection is explained, not silent.
+    expect(host.querySelector('.field-error')?.textContent).toBe('Radius must be > 0');
     act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })));
     expect(commit).not.toHaveBeenCalled();
     expect(input.value).toBe('0.10');

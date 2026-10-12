@@ -221,18 +221,19 @@ export interface DesignDocument {
   _absent?: string[];
 }
 
-/** Match config_builder's dependent default for imported dictionary geometry. */
 /**
- * ATH's default for an omitted wall. It is 5 mm for every imported design, and
- * matches what the translation sends, so a lip or an Opus rear changes nothing here.
+ * ATH's default for an omitted wall: 5 mm, whatever the geometry (a lip or an
+ * Opus rear does not change it), and 0 under an infinite baffle (see
+ * refreshAbsentWall). It matches what the translation sends the mesher.
  */
-export function defaultWallThickness(_design: DesignDocument): number {
-  return 5;
+export const DEFAULT_WALL_THICKNESS_MM = 5;
+export function defaultWallThickness(): number {
+  return DEFAULT_WALL_THICKNESS_MM;
 }
 
 export function refreshAbsentWall(design: DesignDocument): DesignDocument {
   if (design.text_import_version === 'ath-2026-09a-v2' && design._absent?.includes('mesh.wall_thickness')) {
-    design.mesh.wall_thickness = design.simulation.sim_type === 'infinite-baffle' ? 0 : defaultWallThickness(design);
+    design.mesh.wall_thickness = design.simulation.sim_type === 'infinite-baffle' ? 0 : defaultWallThickness();
   }
   return design;
 }

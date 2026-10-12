@@ -82,6 +82,8 @@ export function NumberField({
   const [draft, setDraft] = useState(displayed);
   const [editing, setEditing] = useState(false);
   const [expandedDraft, setExpandedDraft] = useState(false);
+  // A typed value can pass validate() while its rounded form fails it; say why.
+  const [roundedError, setRoundedError] = useState<string | undefined>();
   const editor = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const composingRef = useRef(false);
   const pendingSelection = useRef<{ start: number; end: number; direction: 'forward' | 'backward' | 'none' } | null>(null);
@@ -132,13 +134,14 @@ export function NumberField({
   const emptyMessage = empty && !optional ? 'This value is required.' : undefined;
   const numberMessage = !empty && !isExpression && !Number.isFinite(parsed) ? 'Enter a valid number.' : undefined;
   const validationMessage = draft.trim() && Number.isFinite(parsed) ? validate?.(parsed) : undefined;
-  const draftMessage = rangeMessage ?? emptyMessage ?? numberMessage ?? validationMessage;
+  const draftMessage = rangeMessage ?? emptyMessage ?? numberMessage ?? validationMessage ?? roundedError;
   const draftInvalid = (empty && !optional) || (!empty && !isExpression && (!Number.isFinite(parsed) || outOfRange || Boolean(validationMessage)));
-  const invalid = Boolean(invalidMessage) || draftInvalid;
+  const invalid = Boolean(invalidMessage) || draftInvalid || Boolean(roundedError);
 
   useEffect(() => {
     if (!editing && !drag.current) setDraft(displayed);
   }, [displayed, editing]);
+  useEffect(() => setRoundedError(undefined), [displayed]);
 
   useLayoutEffect(() => {
     const element = editor.current;
@@ -174,6 +177,7 @@ export function NumberField({
       end: element.value.slice(0, end).replace(/[\r\n]/g, '').length,
       direction: element.selectionDirection ?? 'none',
     };
+    setRoundedError(undefined);
     if (next !== element.value) {
       element.value = next;
       element.setSelectionRange(selection.start, selection.end, selection.direction);
@@ -233,10 +237,13 @@ export function NumberField({
       return;
     }
     const rounded = Number(parsed.toFixed(precision));
-    if (validate?.(rounded)) {
+    const roundedMessage = validate?.(rounded);
+    if (roundedMessage) {
       setDraft(displayed);
+      setRoundedError(roundedMessage);
       return;
     }
+    setRoundedError(undefined);
     setDraft(rounded.toFixed(shown));
     if (rounded !== value) onCommit(rounded);
   };
