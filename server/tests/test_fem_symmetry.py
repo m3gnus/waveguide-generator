@@ -523,7 +523,7 @@ def test_auto_fem_role_asymmetry_drops_only_unsupported_candidate_planes(tmp_pat
 
 def test_author_cut_y_only_is_refused_at_ingest(tmp_path):
     bundle, _, _ = symmetry_bundle(tmp_path / "returns", ("y0",), authored=True, asymmetric_x=True)
-    with pytest.raises(ValueError, match="y0-only FEM returns cannot be solved by BEAT CPU"):
+    with pytest.raises(ValueError, match="y0-only FEM returns cannot be solved by BEAT[.]"):
         _ingest(bundle, tmp_path)
 
 

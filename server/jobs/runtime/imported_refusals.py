@@ -317,6 +317,10 @@ def _imported_backend_refusal(
     request: SolveRequest, record: Mapping[str, Any] | None = None,
 ) -> tuple[str, str] | None:
     """Refuse the selected backend at submit/run, without restricting other picks."""
+    coupled_regions = bool(record and record.get("fem_regions") and not request.geometry.exterior_only)
+    if (not coupled_regions and any(c.exterior_transducer is not None for c in request.geometry.drive_channels)
+            and request.options.engine not in {"beat-cpu", "beat-metal"}):
+        return "exterior_transducer_engine_unsupported", "exterior transducer jobs require an explicit beat-cpu or beat-metal engine"
     if (record and record.get("fem_regions") and not request.geometry.exterior_only
             and request.options.engine not in {"auto", "beat", "beat-cpu", "beat-metal", "beat-cuda", "beat-rocm"}):
         return "fem_backend_unsupported", (
@@ -334,6 +338,9 @@ def _imported_request_refusal(
     if not request.geometry.drive_channels and not coupled_regions:
         return "drive_source_coverage", "The return has no driven exterior source or FEM diaphragm"
     if not coupled_regions and any(c.exterior_transducer is not None for c in request.geometry.drive_channels):
+        backend_refusal = _imported_backend_refusal(request, record)
+        if backend_refusal:
+            return backend_refusal
         if not all(c.exterior_transducer is not None for c in request.geometry.drive_channels):
             return "exterior_transducer_mixed_channels", "Exterior-only transducer jobs require a model on every drive channel; mixed drives require FEM regions"
         if any(not c.source_ids for c in request.geometry.drive_channels):

@@ -131,3 +131,33 @@ it('restores v2 driver options through the persisted CAD profile parser', () => 
   expect(useCadReturnStore.getState().driveChannels[0].exterior_transducer).toEqual(extended);
   localStorage.clear();
 });
+
+
+it.each(['auto', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'] as const)(
+  'admits full FEM driver submissions and setup publication on %s', (engine) => {
+    enable();
+    useSolveOptionsStore.getState().setEngine(engine);
+    useCadReturnStore.setState({
+      ingestRecord: { ...useCadReturnStore.getState().ingestRecord!,
+        evidence: { fem_regions: [{ region_id: 'air' }] } },
+      exteriorOnly: false,
+      driveChannels: [...useCadReturnStore.getState().driveChannels,
+        { id: 'ideal-fem', source_ids: [], motion: 'normal' }],
+    });
+    expect(exteriorModeBlocker(useCadReturnStore.getState(), useSolveOptionsStore.getState())).toBeNull();
+    expect(buildImportedSubmission().options.engine).toBe(engine);
+    useCadReturnStore.setState({ selectedBundle: { sources: [{ id: 's', role: 'LF', required: true }] } as never });
+    const setup = buildCadProjectSetup(useCadReturnStore.getState(), useSolveOptionsStore.getState(), undefined, 'lineage');
+    expect(setup).not.toBeNull();
+    expect(setup!.setup.geometry.drive_channels).toHaveLength(2);
+    useCadReturnStore.setState({ exteriorOnly: true });
+    expect(exteriorModeBlocker(useCadReturnStore.getState(), useSolveOptionsStore.getState())).not.toBeNull();
+  },
+);
+
+it.each(['auto', 'beat-cuda', 'beat-rocm'] as const)('keeps non-FEM driver restrictions on %s', (engine) => {
+  enable();
+  useSolveOptionsStore.getState().setEngine(engine);
+  expect(exteriorModeBlocker(useCadReturnStore.getState(), useSolveOptionsStore.getState()))
+    .toBe('Choose BEAT CPU or BEAT Metal for coupled exterior drivers.');
+});

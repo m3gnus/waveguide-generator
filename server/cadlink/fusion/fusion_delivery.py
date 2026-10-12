@@ -132,7 +132,7 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
         "automaticDomain": AUTOMATIC_DOMAIN,
     }
     # Protocol support is static and independent of Onshape/capture settings.
-    # Job admission separately requires an available official BEAT CPU engine.
+    # Job admission separately requires an available official BEAT engine.
     if fem_regions_enabled():
         advertised["femRegions"] = FEM_REGIONS
     from launchers.backend_start import installed_launcher_argv

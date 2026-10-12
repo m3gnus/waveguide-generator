@@ -1143,8 +1143,9 @@ class SolveRequest(JobModel):
         if not isinstance(geometry, ImportedGeometrySource) or not any(c.exterior_transducer for c in geometry.drive_channels):
             return self
         # The ingestion record determines whether a mixed system uses FEM.
-        # Exterior-only jobs retain their single-mode restriction; automatic
-        # FEM jobs enforce the exterior restriction during record admission.
+        # Explicit exterior-only jobs retain their restrictions here. With the
+        # default exterior_only=False, record admission applies those same
+        # restrictions unless retained FEM regions establish a coupled job.
         if geometry.exterior_only and not all(c.exterior_transducer for c in geometry.drive_channels):
             raise ValueError("exterior transducer jobs currently require a model on every drive channel")
         if geometry.exterior_only:

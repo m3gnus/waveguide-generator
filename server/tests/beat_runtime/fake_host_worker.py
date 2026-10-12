@@ -199,7 +199,13 @@ def coupled_result(request, frequency):
                                       "order": "C", "byte_order": "little",
                                       "content_base64": base64.b64encode(values.tobytes()).decode()}, **extra})
     diagnostics = dict(request["solver_options"])
+    scalar = np.float32 if diagnostics["precision"] == "float32" else np.float64
+    # Julia serializes Float32 scalars using their shortest round-trip decimal.
+    def json_scalar(value):
+        return float(str(scalar(value)))
+    if "transducer_reference_voltage_v" in diagnostics:
+        diagnostics["transducer_reference_voltage_v"] = json_scalar(diagnostics["transducer_reference_voltage_v"])
     if not any(r["kind"] == "unbounded_air" for r in request["compiled_system"]["regions"]):
         diagnostics["linear_backend"] = diagnostics.pop("bem_backend")
-    return {"schema_version": 2, "freq_hz": float(np.asarray(frequency, dtype=request["solver_options"]["precision"])), "excitation_port_ids": ports,
+    return {"schema_version": 2, "freq_hz": json_scalar(frequency), "excitation_port_ids": ports,
             "quantities": quantities, "diagnostics": diagnostics}

@@ -128,12 +128,13 @@ plane after solving; select a frequency and drive channel in the field controls.
 
 FEM has been validated against closed-form references (sealed box, open box,
 ported box, plane-wave and closed tubes) on official BEAT CPU float64.
-This release requires official BEAT CPU in float64, a full free-space domain,
-and ideal normal-velocity drives. Reduced domains, ground planes,
-electrodynamic drivers, passive cardioid and two FEM diaphragms sharing a drive
-channel are unsupported. With painted exterior sources, a FEM diaphragm must
-use a channel in that source setup. A missing compatible engine refuses the job;
-choose exterior-only explicitly if the interior should be excluded.
+Declared FEM regions use official BEAT CPU float64 or Metal/CUDA/ROCm float32.
+Auto and interior-only systems use CPU float64. Electrodynamic drivers require a full free-space domain; their symmetry support
+is pending. Ideal drives also support x0 and x0+y0 symmetry. Ground planes,
+passive cardioid and two FEM diaphragms sharing a drive channel are unsupported.
+FEM-only channels can coexist with painted exterior sources. A missing
+compatible engine refuses the job; choose exterior-only explicitly if the
+interior should be excluded.
 
 Plane-wave terminations are supported only in interior-only solves. A return
 with a termination and any painted exterior source or interface in any region
@@ -254,10 +255,11 @@ the driver's voltage sensitivity, electrical impedance, power or excursion.
    scaling belongs to the derived `passive_cardioid` channel; use that channel
    in the combined response instead of the raw MF reference response.
 
-Passive cardioid is Metal-only. Declared FEM regions use the official BEAT CPU
-route described above and cannot be combined with passive cardioid or driver
-models in this release. **Exterior-only (leave FEM regions out)** excludes the
-interior air. Legacy declared air volumes also require this explicit exclusion.
+Passive cardioid is Metal-only. Declared FEM regions use official BEAT CPU
+float64 or Metal/CUDA/ROCm float32; Auto uses CPU float64. Electrodynamic driver
+models are supported on full models, with driver symmetry pending. FEM regions
+cannot be combined with passive cardioid in this release.
+**Exterior-only (leave FEM regions out)** excludes the interior air. Legacy declared air volumes also require this explicit exclusion.
 The sealed rear-volume driver model and passive-cardioid model above add chamber
 loads without a FEM region. Structural vibration and cone breakup are not modelled.
 

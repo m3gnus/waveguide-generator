@@ -39,8 +39,8 @@ class CoupledRequest:
 def validate_coupled_execution(backend: str, precision: str, *, interior: bool) -> None:
     if backend not in {"cpu", "metal", "cuda", "rocm"}:
         raise ValueError("FEM regions require official BEAT CPU, Metal, CUDA or ROCm")
-    if precision not in {"float32", "float64"} or (backend != "cpu" and precision != "float32"):
-        raise ValueError("Coupled FEM requires CPU float32/float64 or GPU float32")
+    if precision != ("float64" if backend == "cpu" else "float32"):
+        raise ValueError("Coupled FEM requires CPU float64 or GPU float32")
     if interior and (backend, precision) != ("cpu", "float64"):
         raise ValueError("Interior-only FEM requires CPU float64")
 
@@ -221,10 +221,8 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
                            if int(tag) in by_tag else {"kind": "rigid"})
         exterior = ExteriorSurface(mesh.points_m * 1000, groups, kinds)
     frame = imported_anchor_frame(record)
-    # Match the exterior routes: ideal bases use f32 for either accuracy;
-    # voltage bases use CPU f64 and GPU f32. AUTO supplies its f64 reference override.
-    precision = precision or ("float64" if backend == "cpu" and any(
-        getattr(c, "exterior_transducer", None) is not None for c in geometry.drive_channels) else "float32")
+    # FEM keeps the CPU float64 reference for every drive; GPUs use float32.
+    precision = precision or ("float64" if backend == "cpu" else "float32")
     request = build_coupled_request(exterior, regions, layout=_layout(context, frame, precision),
                                     backend=backend, precision=precision,
                                     frame=frame, frequencies_hz=frequencies_hz,

@@ -12,7 +12,7 @@ engine eligibility, the public field route and the frontend's region list and
 field marker. A disabled receiver refuses declared regions before inspecting
 or meshing STEP. It never silently drops FEM physics. The protocol stays
 flag-independent, and Onshape and Fusion document capture do not control FEM.
-Job admission separately requires an available official BEAT CPU engine;
+Job admission separately requires an available official BEAT engine;
 unsupported providers and unavailable engines refuse clearly.
 
 The aim is Boundary Lab's interior capability for geometry drawn in Fusion.
@@ -125,10 +125,10 @@ count and mesh density remain user-selected.
 | F5 | waveguide-generator | done | frontend exact slice, element mode, ghost, role colours, `wg-fem-field-v1` decoder, `FemFieldView` |
 | F6 | waveguide-generator | done | ingest: mesh each region in the child at stage 7, retain region meshes, record `evidence.fem_regions`, list regions in the CAD Link panel |
 | F7 | waveguide-generator | preparation implemented; live qualification pending | exterior closure: mesh the exterior with each interface patch conforming to the FEM interface, by fragmenting the shell with the region's interface face so OCC shares the rim |
-| F8 | waveguide-generator | CPU route implemented; qualification pending | official CPU float64 coupled jobs (`coupled_fem_bem_lem` / `interior_fem`), multi-channel results and FEM field sidecars; declared regions solve by default; explicit kill switch remains |
+| F8 | waveguide-generator | CPU and GPU routes implemented; GPU qualification pending | official CPU float64 and Metal/CUDA/ROCm float32 coupled jobs (`coupled_fem_bem_lem` / `interior_fem`), multi-channel results and FEM field sidecars; declared regions solve by default; explicit kill switch remains |
 | F9 | waveguide-generator | interior field implemented | result route `/api/results/{id}/fem-field`, then mount `FemFieldView` with the field-plane gizmo, a frequency slider, system or channel response, phase animation, interior slice plane (combined exterior display remains follow-up) |
-| F10 | both | open | electrodynamic drivers on FEM diaphragms (voltage ports, T/S parameters), aligned with [DRIVER-REAR-LOAD](DRIVER-REAR-LOAD.md)'s meshed front chambers; candidate: coupled front and rear chambers sharing one moving diaphragm |
-| F11 | waveguide-generator | open | validation: sealed box against the lumped model; Boundary Lab's Simple_Sealed and compression_driver solved from the same meshes |
+| F10 | both | full-model drivers implemented; symmetry pending | electrodynamic drivers on FEM diaphragms (voltage ports, T/S parameters), aligned with [DRIVER-REAR-LOAD](DRIVER-REAR-LOAD.md)'s meshed front chambers; candidate: coupled front and rear chambers sharing one moving diaphragm |
+| F11 | waveguide-generator | CPU float64 reference validated; GPU qualification pending | validation: sealed box against the lumped model; Boundary Lab's Simple_Sealed and compression_driver solved from the same meshes |
 | F12 | wglink | open | live Fusion verification of the dialog and the temporary-component export in a parametric timeline; regions under reduced domains and non-root frames |
 
 F6 to F9 must land in order. F10 and F11 can follow F8.
@@ -309,7 +309,7 @@ interface topology and winding, the compiled-system contract, verified storage,
 painted source ancestry, multiple interface regions, rotated/translated/recentred
 frames, flag-off admission and named refusals.
 The acoustic qualification remains opt-in and is run **through the compute
-broker**, on CPU float64:
+broker**, on the CPU float64 reference:
 
 ```bash
 WG2_RUN_LIVE=1 WG2_FEM_REGIONS=1 python scripts/run_tests.py \
@@ -326,25 +326,23 @@ and requires interior peak pressure between 1 and 100 Pa at 100 Hz for a
 
 ## F8 engine and field sidecar contract
 
-By default, declared regions use the official BEAT CPU backend
-with float64 and contract 2. Auto skips other engines for this feature, including
-in Accurate. Explicit exterior-only solves retain the original surface and
-solver route. Legacy required `fem_air_volumes` remain refused unless explicitly
-excluded. Ideal normal-velocity FEM diaphragms use their declared channel ids;
-a diaphragm still produces its own channel only when the design has no painted
-exterior sources; next to painted sources it must use one of their channels.
-`validation_diagnostics` is sent as false, which in the pinned engine also selects
-the statically condensed (Schur) solver; interior nodal pressure is still
-reconstructed.
-Ground planes, infinite baffles and backends other than CPU refuse. The official
-CPU route accepts off/x/xy symmetry.
+Declared regions use the official BEAT compiled-system contract 2. Auto selects
+BEAT CPU float64 in both Fast and Accurate. Explicit BEAT CPU also uses float64
+for every drive; explicit Metal, CUDA and ROCm use float32. Interior-only systems
+always run on CPU float64, recording the requested engine and the reroute reason.
+Explicit exterior-only solves retain the original surface and solver route.
+Legacy required `fem_air_volumes` remain refused unless explicitly excluded.
+Ideal normal-velocity FEM diaphragms use their declared channel ids, including
+FEM-only channels alongside painted sources. `validation_diagnostics` is sent
+as false, which in the pinned engine also selects the statically condensed
+(Schur) solver; interior nodal pressure is still reconstructed.
+Ground planes and infinite baffles refuse. Ideal drives accept off/x/xy symmetry
+on the official BEAT backends.
 
-**0.3.6 limitation:** the contract-2 coupled route supports ideal normal-velocity
-drives only. Any `exterior_transducer`, legacy driver, patch weights, axial
-motion or passive-cardioid campaign refuses, including painted exterior
-transducers on channels separate from the FEM diaphragm. Painted ideal exterior
-sources keep working; painted electrodynamic exterior transducers require an
-explicit exterior-only solve until a coupled electrodynamic route is supported.
+Electrodynamic voltage drives are supported on full models, including FEM
+and painted exterior diaphragms and mixed ideal/voltage channels. Driver symmetry
+is pending and reduced models with drivers refuse clearly. Legacy driver models,
+patch weights, ideal axial motion and passive-cardioid campaigns remain unsupported.
 With painted sources present, each FEM diaphragm channel must exist in the
 setup; renaming, regrouping or skipping the front source cannot silently create
 a separate rear driver. Designs without painted sources retain FEM-only channel
@@ -371,16 +369,22 @@ it. New sidecars and public field/result metadata omit that label.
 
 The NPZ is readable with `numpy.load(..., allow_pickle=False)`:
 
-- `schema`: scalar string `wg-fem-field-store-v1`;
+- `schema`: scalar string `wg-fem-field-store-v2`; older v1 ideal-drive
+  sidecars remain readable;
 - `phasor_convention`: scalar string `exp(-i omega t)`;
-- `drive_normalization`: scalar string `unit_acceleration_m_per_s2`;
+- `drive_normalization`: per-channel string array, `unit_acceleration` or
+  `voltage_rms`;
+- `transducer_reference_voltage_v`: optional scalar RMS reference voltage
+  for electrodynamic drives;
 - `frequencies_hz`: float64 frequency axis in execution order;
 - `channel_ids`: string drive-channel ids, in excitation order;
 - `region_ids`: string region ids, in compiled FEM-domain order;
 - `symmetry_planes`: optional string array of WG `x0`/`y0` planes; absent in
   older full-domain sidecars. Display mirrors these planes in WG coordinates;
-- `pressure`: complex128, shape `(frequency, channel, total_fem_nodes)`, Pa
-  per unit acceleration. Nodes concatenate in `region_ids` order;
+- `pressure`: complex128 after drive normalization, shape
+  `(frequency, channel, total_fem_nodes)`, Pa per unit acceleration for ideal
+  drives or at the reference RMS voltage for electrodynamic drives. Nodes
+  concatenate in `region_ids` order;
 - `points_mm_<r>`: float64 `(node, 3)` coordinates for region index `r`;
 - `tetrahedra_<r>`: integer `(tetrahedron, 4)`, zero-based local node indices;
 - `surface_names_<r>`: physical names in surface order;
@@ -390,9 +394,10 @@ The NPZ is readable with `numpy.load(..., allow_pickle=False)`:
 To make `wg-fem-field-v1`, F9 selects a frequency and channel, slices `pressure`
 using cumulative region node counts, and encodes the selected domain coordinates,
 indices, and pressure real/imaginary parts as the existing little-endian
-float32/uint32 decoder expects. The sidecar preserves float64/complex128;
-conversion to float32 belongs only to the display payload. Exterior observation
-pressure and FEM pressure share the same acceleration scaling. Exterior field
+float32/uint32 decoder expects. The sidecar stores normalized complex128 pressure
+and a float64 frequency axis; native GPU outputs are complex64 and the display
+payload uses float32. Exterior
+observation and FEM pressure share the same drive normalization. Exterior field
 traces are not retained for coupled results.
 
 An exterior-only choice saved in a setup or frontend profile records the

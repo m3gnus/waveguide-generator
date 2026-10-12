@@ -449,6 +449,7 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                       request_cancel=None) -> CoupledSweep:
     """Validate contract-2 identities and node ordering before retaining any row."""
     frequencies = request.wire["frequencies_hz"]
+    scalar = np.float32 if request.wire["solver_options"]["precision"] == "float32" else np.float64
     ports = request.wire["excitation_port_ids"]
     outputs = request.wire["outputs"]
     domains = request.regions
@@ -481,8 +482,8 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                 if (index >= len(frequencies) or not isinstance(raw, dict)
                         or type(raw.get("schema_version")) is not int or raw["schema_version"] != 2
                         or type(raw.get("freq_hz")) not in {int, float}
-                        or raw.get("freq_hz") != float(np.asarray(
-                            frequencies[index], dtype=request.wire["solver_options"]["precision"]))
+                        or not math.isfinite(raw["freq_hz"])
+                        or scalar(raw["freq_hz"]) != scalar(frequencies[index])
                         or raw.get("excitation_port_ids") != ports):
                     raise ResultContractError("Coupled result frequency, version or excitation identity changed")
                 diagnostics = raw.get("diagnostics")
@@ -524,7 +525,9 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                 if drivers:
                     from .coupled_transducers import recover_load
 
-                    if diagnostics.get("transducer_reference_voltage_v") != expected["transducer_reference_voltage_v"]:
+                    voltage = diagnostics.get("transducer_reference_voltage_v")
+                    if (type(voltage) not in {int, float} or not math.isfinite(voltage)
+                            or scalar(voltage) != scalar(expected["transducer_reference_voltage_v"])):
                         raise ResultContractError("Coupled reference voltage changed")
                     velocities.append(decoded.pop("diaphragm_velocity"))
                     currents.append(decoded.pop("voice_coil_current"))

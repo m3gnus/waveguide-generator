@@ -2160,7 +2160,7 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
         raise IngestRefusal("stage 7 meshing", f"{labels}: FEM symmetry supports only x0 and y0.")
     if final_domain and set(planes) == {"y0"}:
         raise IngestRefusal("stage 6 symmetry", f"{labels}: y0-only FEM returns cannot be solved "
-                            "by BEAT CPU. Export without the y0 cut, or keep the x0 cut "
+                            "by BEAT. Export without the y0 cut, or keep the x0 cut "
                             "along with y0 when preparing the return.", symmetry_plane="y0")
     return labels
 

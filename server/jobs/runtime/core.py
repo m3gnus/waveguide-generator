@@ -1113,6 +1113,9 @@ async def resolve_imported_submission(
         )
     _refuse_removed_solver(request)
     original_requested = request.options.engine
+    backend_refusal = _imported_backend_refusal(request, imported_record)
+    if backend_refusal is not None:
+        raise ImportedSolveRefusal(*backend_refusal)
     if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
         cpu_fallback = None
         # AUTO keeps the CPU f64 FEM reference policy. Explicit coupled GPU
@@ -1138,6 +1141,17 @@ async def resolve_imported_submission(
         raise UnknownEngineError(f"Unknown solve engine: {requested}")
 
     detected = await engine_registry.capabilities()
+    if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
+        selected_info = next((info for info in detected if info.name == requested), None)
+        if (original_requested in {"auto", "beat"} and selected_info is not None
+                and not selected_info.available and selected_info.runtime_state == "preparing"):
+            raise EngineUnavailableError(
+                "BEAT CPU is still preparing. FEM regions on Auto run on BEAT CPU float64; "
+                "wait for BEAT CPU preparation to finish, or choose a ready GPU backend."
+            )
+        if requested in _BEAT_ACCELERATORS and (selected_info is None or not selected_info.available):
+            reason = selected_info.reason if selected_info is not None else "this host does not detect it"
+            raise EngineUnavailableError(f"Solve engine '{requested}' is unavailable. {reason}")
     if (imported_record and imported_record.get("fem_regions")
             and not request.geometry.exterior_only
             and not any(info.available and "fem-regions" in info.imported_features
@@ -1198,6 +1212,7 @@ async def resolve_imported_submission(
             requested in _BEAT_ACCELERATORS
             and requested not in _BEAT_FAST_IMPORTED_EXPLICIT
             and request.options.accuracy != "accurate"
+            and "fem-regions" not in needed_features
         ):
             label = declared[requested].display_label()
             others = [
@@ -3871,11 +3886,16 @@ class JobRuntime:
         options = compiled.wire["solver_options"]
         execution = {"engine": f"beat-{options['bem_backend']}",
                      "backend": options["bem_backend"], "precision": options["precision"]}
-        reroute = (compiled.wire["compiled_system"].get("metadata", {}).get("fem_execution_reroute")
-                   or self.store.get_job_row(job_id)["task_metadata"].get("fem_execution_reroute"))
+        reroute = (self.store.get_job_row(job_id)["task_metadata"].get("fem_execution_reroute")
+                   or compiled.wire["compiled_system"].get("metadata", {}).get("fem_execution_reroute"))
         if plan.get("fallback_reason"):
             reroute = {"requested_engine": plan["requested"], **execution,
                        "reason": plan["fallback_reason"]}
+        if reroute and plan.get("requested"):
+            reroute = {**reroute, "requested_engine": plan["requested"]}
+            requested_backend = beat_engine_backend(plan["requested"])
+            if requested_backend:
+                reroute["requested_backend"] = requested_backend
         metadata = {"fem_execution": execution}
         if reroute:
             compiled.wire["compiled_system"].setdefault("metadata", {})["fem_execution_reroute"] = reroute

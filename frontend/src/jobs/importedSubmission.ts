@@ -102,9 +102,8 @@ export function importedSubmissionBlocker(
   if (!state.ingestRecord) return 'Ingest a CAD return before solving.';
   if (state.ingestRecord.evidence_unverified) return 'The retained return manifest cannot be verified; re-ingest this return before solving.';
   if (state.needsIngest) return state.ingestStaleReason ?? 'Sizing or source selection changed. Re-ingest before solving.';
-  if ((femRegions.length > 0 || requiredFem) && !state.exteriorOnly) {
-    const declared = requiredFem && femRegions.length > 0 ? 'required FEM air volumes and FEM regions'
-      : femRegions.length > 0 ? 'FEM regions' : 'required FEM air volumes';
+  if (requiredFem && femRegions.length === 0 && !state.exteriorOnly) {
+    const declared = 'required FEM air volumes';
     return `This return includes ${declared}. Choose exterior-only to solve without the FEM air, or wait for coupled FEM solving.`;
   }
   if (rangeInvalid || listInvalid) return 'Enter a valid explicit frequency sweep.';
@@ -179,10 +178,15 @@ export function importedSubmissionBlocker(
 
 export function exteriorModeBlocker(state: CadReturnSnapshot, solveStore: SolveOptionsSnapshot): string | null {
   if (!state.driveChannels.some(channel => channel.exterior_transducer)) return null;
-  if (!['beat-cpu', 'beat-metal'].includes(solveStore.engine)) return 'Choose BEAT CPU or BEAT Metal for coupled exterior drivers.';
-  if (state.driveChannels.some(channel => !channel.exterior_transducer)) return 'Enable the BEAT driver model on every channel in this solve.';
+  const fem = !state.exteriorOnly && (state.ingestRecord?.evidence?.fem_regions?.length ?? 0) > 0;
+  const engines = fem ? ['auto', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'] : ['beat-cpu', 'beat-metal'];
+  if (!engines.includes(solveStore.engine)) return fem
+    ? 'Choose Auto or BEAT CPU, Metal, CUDA or ROCm for FEM drivers.'
+    : 'Choose BEAT CPU or BEAT Metal for coupled exterior drivers.';
+  if (!fem && state.driveChannels.some(channel => !channel.exterior_transducer)) return 'Enable the BEAT driver model on every channel in this solve.';
   for (const channel of state.driveChannels) {
-    const error = exteriorTransducerError(channel.exterior_transducer!);
+    if (!channel.exterior_transducer) continue;
+    const error = exteriorTransducerError(channel.exterior_transducer);
     if (error) return `${channel.id}: ${error}`;
     if (channel.motion !== 'axial') return `${channel.id}: coupled exterior drivers require axial motion.`;
   }

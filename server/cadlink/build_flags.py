@@ -13,7 +13,7 @@ including unset, means off.
 
 Declared FEM regions are enabled by default. ``WG2_FEM_REGIONS=0`` (or
 ``false``, ``no``, ``off``) disables the WGLink capability, bundle reader,
-isolated mesh tasks, official CPU coupled solver route and frontend FEM UI.
+isolated mesh tasks, official BEAT coupled solver routes and frontend FEM UI.
 """
 
 from __future__ import annotations
