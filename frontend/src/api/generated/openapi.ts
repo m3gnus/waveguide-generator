@@ -4554,6 +4554,12 @@ export interface components {
              * @default 15.5
              */
             a0?: number;
+            /** Ath Axial Sampling Rule */
+            ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Nac */
+            ath_nac?: number | null;
+            /** Ath Nac Present */
+            ath_nac_present?: boolean | null;
             /**
              * Axial Scale
              * @description Absolute axial factor; scale controls X/Y
@@ -4603,7 +4609,7 @@ export interface components {
             source?: components["schemas"]["SourceConfig"];
             terminating_arc?: components["schemas"]["TerminatingArc"] | null;
             /** Text Import Version */
-            text_import_version?: "ath-2026-08c-v1" | null;
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
             /** Throat Adapter */
             throat_adapter?: (components["schemas"]["AuthoredThroatAdapter"] | components["schemas"]["ControlThroatAdapter"]) | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
@@ -5538,6 +5544,12 @@ export interface components {
         };
         /** SourceDiskConfig */
         SourceDiskConfig: {
+            /** Ath Axial Sampling Rule */
+            ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Nac */
+            ath_nac?: number | null;
+            /** Ath Nac Present */
+            ath_nac_present?: boolean | null;
             /** Coverage Mode */
             coverage_mode?: string | null;
             enclosure?: components["schemas"]["EnclosureConfig"] | null;
@@ -5565,7 +5577,7 @@ export interface components {
             source?: components["schemas"]["SourceConfig"];
             source_body?: components["schemas"]["SourceBody"];
             /** Text Import Version */
-            text_import_version?: "ath-2026-08c-v1" | null;
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
         };

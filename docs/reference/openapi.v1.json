@@ -7320,6 +7320,43 @@
             "title": "A0",
             "type": "number"
           },
+          "ath_axial_sampling_rule": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ath-v2025-06",
+                  "ath-v2025-12+"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Axial Sampling Rule"
+          },
+          "ath_nac": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Nac"
+          },
+          "ath_nac_present": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Nac Present"
+          },
           "axial_scale": {
             "anyOf": [
               {
@@ -7467,7 +7504,10 @@
           "text_import_version": {
             "anyOf": [
               {
-                "const": "ath-2026-08c-v1",
+                "enum": [
+                  "ath-2026-08c-v1",
+                  "ath-2026-09a-v2"
+                ],
                 "type": "string"
               },
               {
@@ -10470,6 +10510,43 @@
       "SourceDiskConfig": {
         "additionalProperties": false,
         "properties": {
+          "ath_axial_sampling_rule": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ath-v2025-06",
+                  "ath-v2025-12+"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Axial Sampling Rule"
+          },
+          "ath_nac": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Nac"
+          },
+          "ath_nac_present": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Nac Present"
+          },
           "coverage_mode": {
             "anyOf": [
               {
@@ -10566,7 +10643,10 @@
           "text_import_version": {
             "anyOf": [
               {
-                "const": "ath-2026-08c-v1",
+                "enum": [
+                  "ath-2026-08c-v1",
+                  "ath-2026-09a-v2"
+                ],
                 "type": "string"
               },
               {

@@ -8,6 +8,7 @@ block rows.  Stable writer order mirrors ``src/export/mwgConfig.js:46-295``.
 from __future__ import annotations
 
 import ast
+import json
 import math
 import re
 from dataclasses import dataclass, field
