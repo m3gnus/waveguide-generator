@@ -245,7 +245,7 @@ def test_registry_only_offers_official_cpu_fem(monkeypatch, backend, provider, f
 
 @pytest.mark.parametrize("change,code", [
     ("provider", "fem_provider_unsupported"), ("ground", "fem_domain_unsupported"),
-    ("reduced", "fem_domain_unsupported"), ("transducer", "fem_transducer_unsupported"),
+    ("reduced", "fem_domain_unsupported"),
 ])
 def test_job_refusals(monkeypatch, change, code):
     from server.jobs.runtime.imported_refusals import _imported_request_refusal
@@ -259,13 +259,9 @@ def test_job_refusals(monkeypatch, change, code):
         request.options.ground_plane.enabled = True
     if change == "reduced":
         request.options.symmetry = "yz"
-    if change == "transducer":
-        # The admission check needs only the already validated presence and channel identity.
-        request.geometry.drive_channels[0].exterior_transducer = object()
     refusal = _imported_request_refusal(request, record)
     assert refusal and refusal[0] == code
-    if change == "transducer":
-        assert "left" in refusal[1] and "F10" in refusal[1]
+
 
 
 @pytest.mark.parametrize("accuracy", ["fast", "accurate"])
@@ -395,7 +391,8 @@ def test_sidecar_cleanup_and_rated_retention(tmp_path, operation):
     assert store._fem_field_path("one").exists() is (operation == "rated")
 
 
-def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runtime, monkeypatch, tmp_path):
+@pytest.mark.parametrize("voltage", [False, True])
+def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runtime, monkeypatch, tmp_path, voltage):
     import asyncio
     from dataclasses import replace
     from server.engines.registry import EngineInfo
@@ -407,7 +404,9 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
 
     monkeypatch.setenv("WG2_FEM_REGIONS", "1")
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
-    built = compiled(fem_channel="exterior")
+    from server.tests.test_fem_electrodynamic import driver
+
+    built = compiled(fem_channel="exterior", **({"transducers": {"exterior": driver()}} if voltage else {}))
     built = replace(built, wire={**built.wire, "frequencies_hz": [100., 500., 1000.]})
     monkeypatch.setattr(coupled_request, "build_imported_coupled_request", lambda *a, **k: built)
     def mutate(raw):
@@ -440,7 +439,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
     class Registry:
         async def capabilities(self):
             return (EngineInfo("beat-cpu", True, "fixture", "test", geometry_sources=("imported",),
-                               imported_features=("fem-regions",), symmetry_domains=("full",)),)
+                               imported_features=("fem-regions", "exterior-transducers"), symmetry_domains=("full",)),)
         async def get_engine(self, name):
             return Engine()
     async def scenario():
@@ -453,6 +452,9 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
         })
         job_runtime.engine_registry = Registry()
         request = _request(ingest_id, drive_channels=[{"id": "exterior", "source_ids": ["source-a", "source-b", "source-c"]}])
+        if voltage:
+            request.geometry.drive_channels[0].exterior_transducer = driver()
+            request.geometry.drive_channels[0].motion = "axial"
         request.options.engine = "auto"
         try:
             first = await job_runtime.submit(request)
@@ -464,7 +466,10 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
             assert envelope.channel_order == ["exterior"]
             with np.load(BytesIO(job_runtime.store.get_fem_field(first)), allow_pickle=False) as field:
                 assert "experimental" not in field.files
-                assert field["schema"].item() == "wg-fem-field-store-v1"
+                assert field["schema"].item() == "wg-fem-field-store-v2"
+                assert field["drive_normalization"].tolist() == ["voltage_rms" if voltage else "unit_acceleration"]
+                if voltage:
+                    assert field["transducer_reference_voltage_v"].item() == 2.83
                 assert field["pressure"].shape == (3, 1, 4)
                 np.testing.assert_array_equal(field["tetrahedra_0"], [[0, 1, 2, 3]])
             assert not exterior_runs
@@ -476,7 +481,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
             assert job_runtime.store.get_fem_field(second) is None
             assert exterior_runs == [True]
             assert len(runtime.requests) == 1
-            assert worker_operations == ["field-npz", "basis", "basis-npz"]
+            assert worker_operations == (["field-npz"] if voltage else ["field-npz", "basis", "basis-npz"])
         finally:
             await job_runtime.shutdown()
     asyncio.run(scenario())
@@ -719,17 +724,17 @@ def test_stricter_fem_drive_limit_is_explicit(fem_admission, change):
         fem_admission.geometry.passive_cardioid_rear_volume_l = 10.
     refusal = admission(fem_admission, [region_input("rear", "left")])
     assert refusal[0] == "fem_drive_unsupported"
-    assert "The contract-2 coupled route supports ideal normal-velocity drives only" in refusal[1]
+    assert {"driver": "legacy driver", "weights": "patch weights", "axial": "axial ideal",
+            "cardioid": "passive-cardioid"}[change] in refusal[1]
 
 
 @pytest.mark.parametrize("channel_index", [0, 1])
-def test_any_exterior_transducer_is_refused_in_coupled_mode(fem_admission, channel_index):
+def test_exterior_transducer_is_admitted_in_coupled_mode(fem_admission, channel_index, monkeypatch):
+    monkeypatch.setattr("server.jobs.runtime.imported_refusals._imported_open_half_refusal", lambda *args: None)
     channel = fem_admission.geometry.drive_channels[channel_index]
     channel.exterior_transducer = object()
     refusal = admission(fem_admission, [region_input("rear", "left")])
-    assert refusal[0] == "fem_transducer_unsupported"
-    assert channel.id in refusal[1]
-    assert "The contract-2 coupled route supports ideal normal-velocity drives only" in refusal[1]
+    assert refusal is None
 
 
 def test_admission_names_mixed_media(fem_admission):

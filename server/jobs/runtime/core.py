@@ -3845,9 +3845,10 @@ class JobRuntime:
                                    record=record, config=response_config(compiled, context), started=started)
 
         def pack_and_publish():
-            arrays = {"schema": np.asarray("wg-fem-field-store-v1"),
+            arrays = {"schema": np.asarray("wg-fem-field-store-v2"),
                       "phasor_convention": np.asarray(compiled.wire["solver_options"]["phasor_convention"]),
-                      "drive_normalization": np.asarray("unit_acceleration_m_per_s2"),
+                      "drive_normalization": np.asarray(list(compiled.drive_normalization.values())),
+                      "transducer_reference_voltage_v": np.asarray(compiled.wire["solver_options"].get("transducer_reference_voltage_v", 0.0)),
                       "frequencies_hz": next(iter(sweep.channels.values())).frequencies_hz,
                       "channel_ids": np.asarray(list(compiled.channel_ports)),
                       "region_ids": np.asarray([r.domain.region_id for r in compiled.regions]),
@@ -3861,7 +3862,8 @@ class JobRuntime:
                     arrays[f"surface_triangles_{index}_{j}"] = region.domain.surfaces[name]
             self._check_cancelled(job_id)
             self.store.store_fem_field_arrays(job_id, arrays)
-            return serialize_channel_bases(sweep.channels)
+            return (None if "voltage_rms" in compiled.drive_normalization.values()
+                    else serialize_channel_bases(sweep.channels))
 
         channel_bases = await asyncio.to_thread(pack_and_publish)
         return EngineRunResult(results=results, channel_bases=channel_bases,

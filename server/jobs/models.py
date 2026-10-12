@@ -418,7 +418,7 @@ class ExteriorTransducerSpec(JobModel):
 
 class DriveChannel(JobModel):
     id: str = Field(min_length=1)
-    source_ids: list[str] = Field(min_length=1)
+    source_ids: list[str]
     motion: Literal["normal", "axial"] = "normal"
     physical_source_id: str | None = Field(default=None, min_length=1)
     patch_weights: dict[str, float] | None = None
@@ -449,6 +449,8 @@ class DriveChannel(JobModel):
 
     @model_validator(mode="after")
     def validate_driver_applicability(self) -> "DriveChannel":
+        if not self.source_ids and self.exterior_transducer is None:
+            raise ValueError("a channel without painted sources requires an electrodynamic transducer")
         if self.exterior_transducer is not None:
             if self.driver is not None or self.motion != "axial":
                 raise ValueError("an exterior transducer requires axial motion and no legacy driver model")
@@ -1140,7 +1142,10 @@ class SolveRequest(JobModel):
         geometry = self.geometry
         if not isinstance(geometry, ImportedGeometrySource) or not any(c.exterior_transducer for c in geometry.drive_channels):
             return self
-        if not all(c.exterior_transducer for c in geometry.drive_channels):
+        # The ingestion record determines whether a mixed system uses FEM.
+        # Exterior-only jobs retain their single-mode restriction; automatic
+        # FEM jobs enforce the exterior restriction during record admission.
+        if geometry.exterior_only and not all(c.exterior_transducer for c in geometry.drive_channels):
             raise ValueError("exterior transducer jobs currently require a model on every drive channel")
         if self.options.engine not in {"beat-cpu", "beat-metal"}:
             raise ValueError("exterior transducer jobs require an explicit beat-cpu or beat-metal engine")

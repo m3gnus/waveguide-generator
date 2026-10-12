@@ -16,6 +16,16 @@ describe('FEM result wire route', () => {
     expect(field.frequencyHz).toBe(1000);
   });
 
+  it('accepts per-channel voltage normalization and requires the reference voltage', async () => {
+    const payload = { ...femFieldFixture(), drive_normalization: 'voltage_rms', transducer_reference_voltage_v: 2.83 };
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(payload)));
+    expect((await fetchFemField('one')).payload.drive_normalization).toBe('voltage_rms');
+    spy.mockResolvedValue(new Response(JSON.stringify({ ...payload, transducer_reference_voltage_v: null })));
+    await expect(fetchFemField('one')).rejects.toThrow('selection metadata');
+    spy.mockResolvedValue(new Response(JSON.stringify({ ...payload, drive_normalization: 'unit_acceleration' })));
+    expect((await fetchFemField('one')).payload.drive_normalization).toBe('unit_acceleration');
+  });
+
   it('reports an unavailable/flag-off field', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 404 }));
     await expect(fetchFemField('ordinary')).rejects.toThrow('No retained FEM field');

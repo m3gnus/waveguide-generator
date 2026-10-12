@@ -168,7 +168,7 @@ def test_pinned_fem_writer_reader_mesh_and_fake_job(packaged, runtime, tmp_path,
             assert envelope["metadata"]["fem"] == {
                 "engine": "beat-cpu", "precision": "float64"}
             with np.load(BytesIO(jobs.store.get_fem_field(job_id)), allow_pickle=False) as field:
-                assert field["schema"].item() == "wg-fem-field-store-v1"
+                assert field["schema"].item() == "wg-fem-field-store-v2"
                 assert field["channel_ids"].tolist() == ["drive-lf"]
                 assert field["region_ids"].tolist() == ["rear-chamber"]
                 assert field["pressure"].shape == (1, 1, len(domain.points_mm))

@@ -3675,9 +3675,9 @@ export interface components {
             channel_ids: string[];
             /**
              * Drive Normalization
-             * @constant
+             * @enum {string}
              */
-            drive_normalization: "unit_acceleration_m_per_s2";
+            drive_normalization: "unit_acceleration_m_per_s2" | "unit_acceleration" | "voltage_rms";
             /** Frequencies Hz */
             frequencies_hz: number[];
             /** Frequency Hz */
@@ -3704,6 +3704,8 @@ export interface components {
             surfaces: components["schemas"]["FemFieldSurface"][];
             /** Tetrahedra */
             tetrahedra: string;
+            /** Transducer Reference Voltage V */
+            transducer_reference_voltage_v?: number | null;
         };
         /** FemFieldSurface */
         FemFieldSurface: {

@@ -325,6 +325,11 @@ def _imported_request_refusal(
     coupled_regions = bool(record and record.get("fem_regions") and not request.geometry.exterior_only)
     if not request.geometry.drive_channels and not coupled_regions:
         return "drive_source_coverage", "The return has no driven exterior source or FEM diaphragm"
+    if not coupled_regions and any(c.exterior_transducer is not None for c in request.geometry.drive_channels):
+        if not all(c.exterior_transducer is not None for c in request.geometry.drive_channels):
+            return "exterior_transducer_mixed_channels", "Exterior-only transducer jobs require a model on every drive channel; mixed drives require FEM regions"
+        if any(not c.source_ids for c in request.geometry.drive_channels):
+            return "exterior_transducer_missing_source", "An exterior-only transducer needs painted source faces; a FEM-only driver requires FEM regions"
     if coupled_regions:
         from server.solver.coupled_admission import fem_termination_problem, painted_source_ids
         from server.cadlink.build_flags import fem_regions_enabled
@@ -336,20 +341,20 @@ def _imported_request_refusal(
             return "fem_provider_unsupported", ("FEM regions require the official BEAT provider; "
                                                 "unset WG2_BEAT_PROVIDER, or choose exterior-only")
         problem = fem_termination_problem(record["fem_regions"], has_exterior=bool(
-            request.geometry.drive_channels or painted_source_ids(record)))
+            any(c.source_ids for c in request.geometry.drive_channels) or painted_source_ids(record)))
         if problem:
             return problem
         if imported_domain_planes(record) or request.options.symmetry not in {"auto", "full"}:
             return "fem_domain_unsupported", "FEM regions require a full domain"
         if request.options.ground_plane.enabled or record.get("infinite_baffle"):
             return "fem_domain_unsupported", "FEM regions require free space without a ground plane"
-        ideal_message = "The contract-2 coupled route supports ideal normal-velocity drives only"
+        ideal_message = "FEM solves support ideal normal-velocity and electrodynamic voltage drives"
+        from server.solver.beat_adapter.coupled_transducers import channel_problem
+
         for channel in request.geometry.drive_channels:
-            if channel.exterior_transducer is not None:
-                return "fem_transducer_unsupported", (
-                    f"{ideal_message}; channel {channel.id!r} carries an exterior_transducer (F10)")
-            if channel.motion != "normal" or channel.driver is not None or channel.patch_weights is not None:
-                return "fem_drive_unsupported", f"{ideal_message}; channel {channel.id!r} is unsupported"
+            problem = channel_problem(channel)
+            if problem:
+                return problem
         if request.geometry.passive_cardioid_enabled:
             return "fem_drive_unsupported", f"{ideal_message}; passive-cardioid synthesis is unsupported"
         from server.solver.coupled_admission import fem_drive_problem
@@ -464,9 +469,10 @@ async def imported_engine_verdict(
             "engine_unavailable",
             unavailable_reason or "No capability reason was reported.",
         )
-    refusal = await _imported_preflight_refusal(
-        adapter, imported_record, imported_msh_text, drive_channels
-    )
+    # FEM dispatch validates its own compiled boundaries. Exterior-only
+    # preflight cannot describe a mixed drive or an interior-only transducer.
+    refusal = (None if "fem-regions" in needed_features else
+               await _imported_preflight_refusal(adapter, imported_record, imported_msh_text, drive_channels))
     if refusal is not None:
         return ImportedEngineVerdict(
             info.name,

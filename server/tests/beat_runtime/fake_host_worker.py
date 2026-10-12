@@ -180,14 +180,24 @@ def coupled_result(request, frequency):
     quantities = []
     for output in request["outputs"]:
         fem = output["quantity"] == "fem_nodal_pressure"
-        count = sum(counts) if fem else len(output["options"]["points_m"])
+        transducer = output["quantity"] in {"diaphragm_velocity", "voice_coil_current"}
+        drivers = [c for c in request["compiled_system"]["components"] if c["kind"] == "electrodynamic_transducer"]
+        count = sum(counts) if fem else len(drivers) if transducer else len(output["options"]["points_m"])
         values = np.asarray([np.full(count, (i + 1) * (2 + 3j)) for i in range(len(ports))], dtype="<c16")
-        quantities.append({"id": output["id"], "quantity": output["quantity"], "unit": "Pa",
-                           "target_id": None, "axes": ["excitation", "fem_node" if fem else "observation"],
+        extra = {"metadata": metadata} if fem else {}
+        if transducer:
+            unit = "m/s" if output["quantity"] == "diaphragm_velocity" else "A"
+            meta = {"component_ids": [c["id"] for c in drivers]}
+            if any(r["kind"] == "unbounded_air" for r in request["compiled_system"]["regions"]):
+                meta.update(surface_completion_factors=[1] * len(drivers), physical_driver_orbit_counts=[1] * len(drivers))
+            extra = {"metadata": meta}
+        else:
+            unit = "Pa"
+        quantities.append({"id": output["id"], "quantity": output["quantity"], "unit": unit,
+                           "target_id": None, "axes": ["excitation", "fem_node" if fem else "transducer" if transducer else "observation"],
                            "values": {"encoding": "base64", "dtype": "complex128", "shape": list(values.shape),
                                       "order": "C", "byte_order": "little",
-                                      "content_base64": base64.b64encode(values.tobytes()).decode()},
-                           **({"metadata": metadata} if fem else {})})
+                                      "content_base64": base64.b64encode(values.tobytes()).decode()}, **extra})
     diagnostics = dict(request["solver_options"])
     if not any(r["kind"] == "unbounded_air" for r in request["compiled_system"]["regions"]):
         diagnostics["linear_backend"] = diagnostics.pop("bem_backend")

@@ -298,11 +298,12 @@ describe('Viewport preview errors', () => {
     expect(section?.getAttribute('aria-label')).toContain('Section cut off');
   });
 
-  it('mounts FEM controls and selects only the requested frequency/channel', async () => {
+  it.each(['unit_acceleration', 'voltage_rms'] as const)('mounts FEM controls with %s and selects only the requested frequency/channel', async (normalization) => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = new URL(String(input), 'http://localhost');
-      if (url.pathname.endsWith('/fem-field')) return new Response(JSON.stringify(femFieldFixture(
-        Number(url.searchParams.get('frequency') ?? 100), url.searchParams.get('channel') ?? 'front')));
+      if (url.pathname.endsWith('/fem-field')) return new Response(JSON.stringify({ ...femFieldFixture(
+        Number(url.searchParams.get('frequency') ?? 100), url.searchParams.get('channel') ?? 'front'),
+        drive_normalization: normalization, transducer_reference_voltage_v: normalization === 'voltage_rms' ? 2.83 : undefined }));
       return new Response('', { status: 404 });
     });
     act(() => {
@@ -312,6 +313,7 @@ describe('Viewport preview errors', () => {
     });
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
     expect(host.querySelector('[aria-label="FEM field controls"]')).not.toBeNull();
+    expect(host.textContent).toContain(normalization === 'voltage_rms' ? '2.83 V RMS (Pa)' : 'Pa per m/s²');
     expect(host.querySelector('.experimental-badge')).toBeNull();
     expect(host.textContent).not.toContain('Experimental');
     expect(host.querySelector('[aria-label="FEM field plane presets"]')?.getAttribute('role')).toBe('group');

@@ -438,8 +438,11 @@ def map_sweep(
 @dataclass
 class CoupledSweep:
     channels: dict[str, SweepResult]
-    nodal_pressure: np.ndarray  # frequency, channel, concatenated FEM node; Pa per m/s²
+    nodal_pressure: np.ndarray  # frequency, channel, concatenated FEM node; per-channel drive basis
     cancelled: bool
+    velocity: np.ndarray | None = None  # frequency, basis, transducer; native RMS
+    current: np.ndarray | None = None
+    generalized_load: np.ndarray | None = None  # frequency, transducer, component
 
 
 def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_result=None,
@@ -453,6 +456,12 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
     metadata = {"mesh_ids": [f"mesh:fem:{item.domain.region_id}" for item in domains],
                 "region_ids": [f"region:fem:{item.domain.region_id}" for item in domains],
                 "node_counts": counts, "node_offsets": np.cumsum([0, *counts[:-1]]).tolist()}
+    system = request.wire["compiled_system"]
+    components = system["components"]
+    drivers = [c for c in components if c["kind"] == "electrodynamic_transducer"]
+    port_records = system["excitation_ports"]
+    scales = np.asarray([1 if p["kind"] == "voltage" else 0 for p in port_records])
+    velocities, currents, loads = [], [], []
     rows, fields, logs = [], [], []
     terminal = None
     stream = iter(events)
@@ -490,9 +499,11 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                 decoded = {}
                 for output, item in zip(outputs, quantities):
                     fem = output["quantity"] == "fem_nodal_pressure"
-                    axis = "fem_node" if fem else "observation"
-                    count = sum(counts) if fem else len(output["options"]["points_m"])
-                    if (item.get("quantity") != output["quantity"] or item.get("unit") != "Pa"
+                    transducer = output["quantity"] in {"diaphragm_velocity", "voice_coil_current"}
+                    axis = "fem_node" if fem else "transducer" if transducer else "observation"
+                    count = sum(counts) if fem else len(drivers) if transducer else len(output["options"]["points_m"])
+                    unit = "m/s" if output["quantity"] == "diaphragm_velocity" else "A" if transducer else "Pa"
+                    if (item.get("quantity") != output["quantity"] or item.get("unit") != unit
                             or item.get("target_id") is not None
                             or item.get("axes") != ["excitation", axis]
                             or not isinstance(item.get("values"), dict)
@@ -500,8 +511,26 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                         raise ResultContractError("Coupled quantity identity, unit or precision changed")
                     if fem and item.get("metadata") != metadata:
                         raise ResultContractError("FEM result node layout differs from retained domains")
+                    if transducer:
+                        expected_meta = {"component_ids": [c["id"] for c in drivers]}
+                        if backend_key == "bem_backend":
+                            expected_meta.update(surface_completion_factors=[1] * len(drivers),
+                                                 physical_driver_orbit_counts=[1] * len(drivers))
+                        if item.get("metadata") != expected_meta:
+                            raise ResultContractError("Coupled transducer identity or physical-copy accounting changed")
                     decoded[output["id"]] = decode_complex_values(item["values"], (len(ports), count))
-                scale = acceleration_scale(frequencies[index])
+                if drivers:
+                    from .coupled_transducers import recover_load
+
+                    if diagnostics.get("transducer_reference_voltage_v") != expected["transducer_reference_voltage_v"]:
+                        raise ResultContractError("Coupled reference voltage changed")
+                    velocities.append(decoded.pop("diaphragm_velocity"))
+                    currents.append(decoded.pop("voice_coil_current"))
+                    medium = domains[0].record["medium"]
+                    loads.append(recover_load(components, port_records, velocities[-1], currents[-1],
+                                             frequencies[index], density=medium["density_kg_per_m3"],
+                                             sound_speed=medium["sound_speed_m_per_s"]))
+                scale = np.where(scales, 1, acceleration_scale(frequencies[index]))[:, None]
                 fields.append(decoded.pop("fem:pressure") * scale)
                 rows.append({key: value * scale for key, value in decoded.items()})
                 logs.append({"frequency_hz": frequencies[index], "converged": True,
@@ -522,7 +551,7 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
         for channel, members in request.channel_ports.items():
             port_index = ports.index(members[0])
             pressure = (np.stack([np.stack([row[f"pressure:{p}"][port_index]
-                         for p in request.layout.planes]) for row in rows]) if rows and rows[0]
+                         for p in request.layout.planes]) for row in rows]) if rows and f"pressure:{request.layout.planes[0]}" in rows[0]
                         else np.zeros((len(rows), len(request.layout.planes), len(request.layout.angles_deg)), complex))
             sphere = (np.stack([row["pressure:sphere"][port_index] for row in rows])
                       if rows and "pressure:sphere" in rows[0] else None)
@@ -534,7 +563,10 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                 list(request.layout.planes), sphere, request.layout.sphere_theta_deg,
                 request.layout.sphere_phi_deg, None, None, terminal == "cancelled", len(frequencies), logs)
         nodal = np.stack(fields) if fields else np.empty((0, len(ports), sum(counts)), complex)
-        return CoupledSweep(channels, nodal, terminal == "cancelled")
+        return CoupledSweep(channels, nodal, terminal == "cancelled",
+                            np.asarray(velocities).reshape(len(rows), len(ports), len(drivers)) if drivers else None,
+                            np.asarray(currents).reshape(len(rows), len(ports), len(drivers)) if drivers else None,
+                            np.asarray(loads).reshape(len(rows), len(drivers), len(components)) if drivers else None)
     finally:
         close = getattr(events, "close", None) or getattr(stream, "close", None)
         if close:
@@ -542,7 +574,7 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
 
 
 def coupled_envelope(sweep, request, *, context, geometry, record, config, started):
-    """Map every ideal drive, including FEM-only drives, to the shared channel envelope."""
+    """Map ideal and voltage drives, including FEM-only drives, to the channel envelope."""
     from server.solver.result_mapping import build_solver_response
     from server.solver.imported_channels import channel_source_identity
     from server.solver.combine import combine_drive_channels
@@ -557,6 +589,7 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
                      "package_version": engine_version(), "device": "cpu", "precision": "double",
                      "formulation": formulation}
     fem_metadata = {"engine": "beat-cpu", "precision": "float64"}
+    has_voltage = "voltage_rms" in request.drive_normalization.values()
 
     specs = {c.id: c for c in geometry.drive_channels}
     identity = channel_source_identity(geometry, record)
@@ -569,9 +602,14 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
                       **identity.get(name, {"role": None}), "solver_backend": "beat-cpu",
                       "solver_engine": solver_engine, "fem": fem_metadata,
                       "phase_time_convention": PHASE_TIME_CONVENTION,
-                      "pressure_normalization": "unit_acceleration_m_per_s2"},
+                      "pressure_normalization": "voltage_rms" if request.drive_normalization[name] == "voltage_rms"
+                      else "unit_acceleration_m_per_s2"},
             sound_speed_m_per_s=speed)
         response.pop("impedance", None)
+        if request.drive_normalization[name] == "voltage_rms":
+            from server.solver.result_mapping import map_coupled_transducer_response
+
+            map_coupled_transducer_response(response, sweep, request, name, spec)
         channels[name] = response
     if geometry.combine is not None and not sweep.cancelled:
         spec = geometry.combine
@@ -596,9 +634,15 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
                          "solver_backend": "beat", "solver_engine": solver_engine,
                          "solver_mode": "full_3d",
                          "phase_time_convention": PHASE_TIME_CONVENTION,
-                         "pressure_normalization": "unit_acceleration_m_per_s2",
+                         "pressure_normalization": ("mixed" if len(set(request.drive_normalization.values())) > 1
+                                                    else "voltage_rms" if "voltage_rms" in request.drive_normalization.values()
+                                                    else "unit_acceleration_m_per_s2"),
+                         "drive_normalization": request.drive_normalization,
                          "solve_path": "interior-fem" if formulation == "interior_fem" else "coupled-fem-bem",
                          "cancelled": sweep.cancelled, "exterior_only": False,
                          "fem": fem_metadata,
+                         **({"beat_transducer_contract": 1,
+                             "channel_bases_unavailable_reason": "native_voltage_bases_not_supported_by_legacy_recombine"}
+                            if has_voltage else {}),
                          "ingest_id": geometry.ingest_id, "manifest_sha256": geometry.manifest_sha256,
                          "artifact_sha256": geometry.artifact_sha256}}

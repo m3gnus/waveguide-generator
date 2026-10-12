@@ -94,9 +94,9 @@ def _pipeline(tmp_path, case, frequencies, *, engine_registry=None):
                 "coupled-fem-bem" if case in {"open", "ported"} else "interior-fem")
             with np.load(BytesIO(runtime.store.get_fem_field(job_id)), allow_pickle=False) as stored:
                 field = {name: stored[name].copy() for name in stored.files}
-            assert field["schema"].item() == "wg-fem-field-store-v1"
+            assert field["schema"].item() == "wg-fem-field-store-v2"
             assert field["phasor_convention"].item() == "exp(-i omega t)"
-            assert field["drive_normalization"].item() == "unit_acceleration_m_per_s2"
+            assert field["drive_normalization"].tolist() == ["unit_acceleration"]
             assert field["channel_ids"].tolist() == ["drive-lf"]
             assert field["region_ids"].tolist() == ["rear-chamber"]
             np.testing.assert_array_equal(field["frequencies_hz"], frequencies)

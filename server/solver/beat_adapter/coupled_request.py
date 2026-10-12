@@ -25,12 +25,19 @@ class CoupledRequest:
     regions: tuple[FemRegionInput, ...]
     channel_ports: Mapping[str, tuple[str, ...]]
 
+    @property
+    def drive_normalization(self) -> dict[str, str]:
+        kinds = {p["id"]: p["kind"] for p in self.wire["compiled_system"]["excitation_ports"]}
+        return {channel: "voltage_rms" if kinds[ports[0]] == "voltage" else "unit_acceleration"
+                for channel, ports in self.channel_ports.items()}
+
 
 def build_coupled_request(
     exterior: ExteriorSurface | None, regions: Sequence[FemRegionInput], *,
     layout: ObservationLayout, frequencies_hz: Sequence[float], frame: Mapping[str, Any],
     backend: str = "cpu", precision: str = "float64", symmetry: str = "full",
-    ground: Any = None,
+    ground: Any = None, transducers: Mapping[str, Any] | None = None,
+    reference_voltage_rms_v: float = 2.83,
 ) -> CoupledRequest:
     if backend != "cpu":
         raise ValueError("FEM regions require the official BEAT CPU backend")
@@ -46,11 +53,14 @@ def build_coupled_request(
     if (frequencies.ndim != 1 or not frequencies.size or not np.isfinite(frequencies).all()
             or np.any(frequencies <= 0) or len(np.unique(frequencies)) != len(frequencies)):
         raise ValueError("Frequencies must be positive, finite and distinct")
-    system = build_coupled_system(exterior, regions)
+    system = build_coupled_system(exterior, regions, transducers=transducers)
     channels = {port["name"]: (port["id"],) for port in system["excitation_ports"]}
     outputs = layout.exterior_outputs() if exterior is not None else []
     outputs.append({"id": "fem:pressure", "quantity": "fem_nodal_pressure",
                     "target_ids": [], "options": {}})
+    if transducers:
+        outputs.extend({"id": q, "quantity": q, "target_ids": [], "options": {}}
+                       for q in ("diaphragm_velocity", "voice_coil_current"))
     wire = {"schema_version": 1, "compiled_system": system,
             "frequencies_hz": frequencies.tolist(),
             "excitation_port_ids": [p["id"] for p in system["excitation_ports"]],
@@ -62,6 +72,10 @@ def build_coupled_request(
                                # Native validation diagnostics add costly matrices; qualification
                                # requests opt in separately, ordinary jobs retain field checks.
                                "validation_diagnostics": False}}
+    if transducers:
+        from .transducers import _positive
+
+        wire["solver_options"]["transducer_reference_voltage_v"] = _positive(reference_voltage_rms_v, "transducer_reference_voltage_v")
     return CoupledRequest(wire, layout, frame, tuple(regions), channels)
 
 
@@ -69,8 +83,14 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
                                    frequencies_hz: Sequence[float]) -> CoupledRequest:
     from server.solver.coupled_admission import fem_drive_problem, fem_termination_problem, painted_source_ids
 
+    from .coupled_transducers import channel_problem
+
+    for channel in geometry.drive_channels:
+        problem = channel_problem(channel)
+        if problem:
+            raise ValueError(f"{problem[0]}: {problem[1]}")
     problem = fem_termination_problem(record.get("fem_regions", ()), has_exterior=bool(
-        geometry.drive_channels or painted_source_ids(record)))
+        any(c.source_ids for c in geometry.drive_channels) or painted_source_ids(record)))
     if problem:
         raise ValueError(f"{problem[0]}: {problem[1]}")
     problem = fem_drive_problem(record.get("fem_regions", ()),
@@ -102,7 +122,7 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
                 kind["kind"] = "rigid"
                 kind.pop("drive_channel_id", None)
         exterior = ExteriorSurface(points, groups, kinds)
-    elif geometry.drive_channels:
+    elif any(c.source_ids for c in geometry.drive_channels):
         from server.mesh.artifact import read_verified_import_mesh
         from .mesh import read_surface
 
@@ -118,7 +138,10 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
         exterior = ExteriorSurface(mesh.points_m * 1000, groups, kinds)
     frame = imported_anchor_frame(record)
     request = build_coupled_request(exterior, regions, layout=_layout(context, frame, "float64"),
-                                    frame=frame, frequencies_hz=frequencies_hz)
+                                    frame=frame, frequencies_hz=frequencies_hz,
+                                    transducers={c.id: c.exterior_transducer for c in geometry.drive_channels
+                                                 if getattr(c, "exterior_transducer", None) is not None},
+                                    reference_voltage_rms_v=getattr(geometry, "drive_voltage_v", 2.83))
     missing = {c.id for c in geometry.drive_channels} - set(request.channel_ports)
     if missing:
         raise ValueError(f"Coupled exterior has no moving surface for channels {sorted(missing)}")

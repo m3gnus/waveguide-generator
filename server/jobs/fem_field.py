@@ -80,10 +80,10 @@ def load_fem_field_payload(path: Path, frequency: float | None,
     """Read topology and just one frequency/channel, with local indices rebased."""
     try:
         with np.load(path, allow_pickle=False) as arrays:
-            if str(arrays["schema"].item()) != "wg-fem-field-store-v1":
+            schema = str(arrays["schema"].item())
+            if schema not in {"wg-fem-field-store-v1", "wg-fem-field-store-v2"}:
                 raise FemFieldCorrupt("Unsupported FEM sidecar schema")
-            if (str(arrays["phasor_convention"].item()) != "exp(-i omega t)"
-                    or str(arrays["drive_normalization"].item()) != "unit_acceleration_m_per_s2"):
+            if str(arrays["phasor_convention"].item()) != "exp(-i omega t)":
                 raise FemFieldCorrupt("Unsupported FEM field conventions")
             frequencies = np.asarray(arrays["frequencies_hz"])
             channels = arrays["channel_ids"].tolist()
@@ -106,6 +106,21 @@ def load_fem_field_payload(path: Path, frequency: float | None,
             if selected_channel not in channels:
                 raise FemFieldInvalidSelection("Channel is not retained in this FEM field")
             channel_index = channels.index(selected_channel)
+            reference_voltage = None
+            if schema == "wg-fem-field-store-v1":
+                normalization = str(arrays["drive_normalization"].item())
+                if normalization != "unit_acceleration_m_per_s2":
+                    raise FemFieldCorrupt("Unsupported FEM field normalization")
+            else:
+                normalizations = arrays["drive_normalization"].tolist()
+                if (not isinstance(normalizations, list) or len(normalizations) != len(channels)
+                        or any(n not in {"unit_acceleration", "voltage_rms"} for n in normalizations)):
+                    raise FemFieldCorrupt("Invalid per-channel FEM field normalization")
+                normalization = normalizations[channel_index]
+                if "voltage_rms" in normalizations:
+                    reference_voltage = float(arrays["transducer_reference_voltage_v"].item())
+                    if not np.isfinite(reference_voltage) or reference_voltage <= 0:
+                        raise FemFieldCorrupt("Invalid FEM reference voltage")
             points, tetrahedra, surfaces = [], [], []
             offset = 0
             for region_index, _region in enumerate(regions):
@@ -142,7 +157,9 @@ def load_fem_field_payload(path: Path, frequency: float | None,
                 "channel_ids": channels,
                 "channel_id": selected_channel,
                 "phasor_convention": "exp(-i omega t)",
-                "drive_normalization": "unit_acceleration_m_per_s2",
+                "drive_normalization": normalization,
+                **({"transducer_reference_voltage_v": reference_voltage}
+                   if normalization == "voltage_rms" else {}),
             }
     except (FemFieldCorrupt, FemFieldInvalidSelection):
         raise

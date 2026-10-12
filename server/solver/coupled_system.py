@@ -13,7 +13,9 @@ The CAD Link exterior is a BEM surface; declared FEM regions
 * one ``ideal_velocity_source`` component per drive channel, owning every
   moving boundary that channel drives -- an exterior source patch and a FEM
   diaphragm on the same channel move together, as one cone seen from both
-  sides -- with a ``normal_velocity`` excitation port;
+  sides -- with a ``normal_velocity`` excitation port; configured drivers use
+  one ``electrodynamic_transducer`` and ``voltage`` port instead, sharing the
+  mechanical coordinate across every FEM and BEM moving boundary;
 * one interface per FEM ``interface`` group, paired with the exterior patch
   of the same physical name, with its conforming topology map.
 
@@ -151,6 +153,32 @@ def _boundary_faces(tetrahedra: np.ndarray) -> set[tuple[int, int, int]]:
     return {tuple(int(value) for value in row) for row in keys[counts == 1]}
 
 
+
+def _fem_driver_triangles(domain: FemRegionDomain) -> dict[tuple[int, int, int], np.ndarray]:
+    """Driver-side winding from tetrahedra, matching the engine's FEM normals.
+
+    A bounded region may have inner walls. Derive orientation from each
+    facet's opposite tetrahedral vertex instead of imposing BEM skin rules.
+    Reverse the air-domain outward winding for projected driver area only.
+    """
+    tets = domain.tetrahedra
+    faces = np.concatenate([tets[:, [1, 2, 3]], tets[:, [0, 2, 3]],
+                            tets[:, [0, 1, 3]], tets[:, [0, 1, 2]]])
+    opposite = np.concatenate([tets[:, i] for i in range(4)])
+    keys, indices, counts = np.unique(np.sort(faces, axis=1), axis=0,
+                                      return_index=True, return_counts=True)
+    result = {}
+    for key, index in zip(keys[counts == 1], indices[counts == 1]):
+        face = faces[index].copy()
+        corners = domain.points_mm[face]
+        normal = np.cross(corners[1] - corners[0], corners[2] - corners[0])
+        # Driver normal points into the adjacent air tetrahedron.
+        if np.dot(normal, domain.points_mm[opposite[index]] - corners[0]) < 0:
+            face[[1, 2]] = face[[2, 1]]
+        result[tuple(int(v) for v in key)] = domain.points_mm[face] * MM_TO_M
+    return result
+
+
 def interface_topology(
     fem_points_mm: np.ndarray,
     fem_tetrahedra: np.ndarray,
@@ -250,6 +278,7 @@ def build_coupled_system(
     exterior: ExteriorSurface | None,
     regions: Sequence[FemRegionInput],
     *,
+    transducers: Mapping[str, Any] | None = None,
     system_id: str = "wg-cad-coupled",
     name: str = "CAD Link coupled FEM/BEM system",
 ) -> dict[str, Any]:
@@ -276,6 +305,7 @@ def build_coupled_system(
     boundaries: list[dict[str, Any]] = []
     interfaces: list[dict[str, Any]] = []
     moving_by_channel: dict[str, list[str]] = {}
+    moving_triangles: dict[str, list[np.ndarray]] = {}
     exterior_boundary_by_name: dict[str, str] = {}
     exterior_rows: dict[str, np.ndarray] = {}
     exterior_triangles = np.zeros((0, 3), dtype=np.int64)
@@ -315,7 +345,7 @@ def build_coupled_system(
             "sound_speed_m_per_s": 343.0, "density_kg_per_m3": 1.21, "loss_model": {},
         })
         exterior_rows = _rows(surfaces)
-        for index, (group_name, _block) in enumerate(surfaces):
+        for index, (group_name, block) in enumerate(surfaces):
             kind_record = exterior.kinds.get(group_name) or {}
             kind = kind_record.get("kind", "rigid")
             if kind not in {"rigid", "moving", "interface"}:
@@ -334,6 +364,8 @@ def build_coupled_system(
                 if not channel:
                     raise CoupledSystemError(f"Exterior source {group_name!r} names no drive channel.")
                 moving_by_channel.setdefault(str(channel), []).append(boundary_id)
+                if channel in (transducers or {}):
+                    moving_triangles.setdefault(str(channel), []).append(exterior.points_mm[block] * MM_TO_M)
 
     paired: set[str] = set()
     media = set()
@@ -366,7 +398,8 @@ def build_coupled_system(
         }
         fem_triangles = np.concatenate([block for _n, block in surfaces]).astype(np.int64)
         rows = _rows(surfaces)
-        for group_name, _block in surfaces:
+        driver_triangles = None
+        for group_name, block in surfaces:
             fields = parse_physical_name(group_name)
             if fields is None or "kind" not in fields:
                 raise CoupledSystemError(f"FEM region {region_id!r} carries a foreign surface {group_name!r}.")
@@ -383,6 +416,14 @@ def build_coupled_system(
                 if not channel:
                     raise CoupledSystemError(f"Diaphragm {group_name!r} names no drive channel.")
                 moving_by_channel.setdefault(str(channel), []).append(boundary_id)
+                if channel in (transducers or {}):
+                    if driver_triangles is None:
+                        driver_triangles = _fem_driver_triangles(domain)
+                    try:
+                        corners = np.asarray([driver_triangles[tuple(sorted(face))] for face in block])
+                    except KeyError as exc:
+                        raise CoupledSystemError(f"Diaphragm {group_name!r} is not on the tetrahedral boundary") from exc
+                    moving_triangles.setdefault(str(channel), []).append(corners)
             elif kind == "interface":
                 partner = exterior_boundary_by_name.get(group_name)
                 if exterior is None or partner is None:
@@ -418,15 +459,26 @@ def build_coupled_system(
     if not moving_by_channel:
         raise CoupledSystemError("The coupled system has no driven surface.")
 
+    unknown = set(transducers or {}) - set(moving_by_channel)
+    if unknown:
+        raise CoupledSystemError(f"Transducer channels have no moving boundary: {sorted(unknown)}")
     components, ports = [], []
+    projected_areas = {}
     for channel, boundary_ids in sorted(moving_by_channel.items()):
         component_id = f"component:{channel}"
+        spec = (transducers or {}).get(channel)
+        params = {}
+        if spec is not None:
+            from server.solver.beat_adapter.coupled_transducers import parameters
+
+            params, projected_areas[channel] = parameters(spec, np.concatenate(moving_triangles[channel]))
         components.append({
-            "id": component_id, "name": channel, "kind": "ideal_velocity_source",
-            "boundary_ids": sorted(boundary_ids), "parameters": {},
+            "id": component_id, "name": channel,
+            "kind": "electrodynamic_transducer" if spec is not None else "ideal_velocity_source",
+            "boundary_ids": sorted(boundary_ids), "parameters": params,
         })
         ports.append({"id": f"port:{channel}", "name": channel,
-                      "component_id": component_id, "kind": "normal_velocity"})
+                      "component_id": component_id, "kind": "voltage" if spec is not None else "normal_velocity"})
     return {
         "id": system_id,
         "name": name,
@@ -438,7 +490,8 @@ def build_coupled_system(
         "components": components,
         "excitation_ports": ports,
         "assumptions": [],
-        "metadata": {"producer": "waveguide-generator", "feature": "fem-regions-v1"},
+        "metadata": {"producer": "waveguide-generator", "feature": "fem-regions-v1",
+                     **({"projected_areas_m2": projected_areas} if projected_areas else {})},
     }
 
 

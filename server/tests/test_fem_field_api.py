@@ -105,7 +105,7 @@ def test_presentation_alias_preserves_wire_and_openapi_schema(field_app):
     assert status == 200
     presentation = FemFieldPresentation.model_validate(payload)
     assert presentation.schema_ == "wg-fem-field-v1"
-    assert presentation.model_dump(by_alias=True) == payload
+    assert presentation.model_dump(by_alias=True, exclude_unset=True) == payload
     schema = app.openapi()["components"]["schemas"]["FemFieldPresentation"]
     assert "schema" in schema["properties"]
     assert "schema" in schema["required"]
@@ -233,3 +233,31 @@ def test_older_sidecars_remain_readable_without_exposing_experimental(
     status, payload, _ = _get(app)
     assert status == 200
     assert "experimental" not in payload
+
+
+@pytest.mark.parametrize("channel,normalization", [("front", "unit_acceleration"), ("rear", "voltage_rms")])
+def test_v2_field_selection_uses_each_channels_normalization(field_app, field_arrays, channel, normalization):
+    app, store = field_app
+    arrays = {**field_arrays, "schema": np.array("wg-fem-field-store-v2"),
+              "drive_normalization": np.array(["unit_acceleration", "voltage_rms"]),
+              "transducer_reference_voltage_v": np.array(2.83)}
+    store.store_fem_field_arrays("field", arrays)
+    status, payload, _ = _get(app, query=f"channel={channel}")
+    assert status == 200
+    assert payload["drive_normalization"] == normalization
+    if channel == "rear":
+        assert payload["transducer_reference_voltage_v"] == 2.83
+    assert payload["channel_id"] == channel
+    values = np.frombuffer(base64.b64decode(payload["pressure_real"]), "<f4")
+    np.testing.assert_allclose(values, arrays["pressure"][0, ["front", "rear"].index(channel)].real)
+
+
+@pytest.mark.parametrize("normalization,voltage", [(["voltage_rms"], 2.83),
+    (["unit_acceleration", "invalid"], 2.83), (["unit_acceleration", "voltage_rms"], 0.),
+    (["unit_acceleration", "voltage_rms"], float("nan"))])
+def test_v2_refuses_invalid_normalization_axes_and_voltage(field_app, field_arrays, normalization, voltage):
+    app, store = field_app
+    store.store_fem_field_arrays("field", {**field_arrays, "schema": np.array("wg-fem-field-store-v2"),
+        "drive_normalization": np.array(normalization), "transducer_reference_voltage_v": np.array(voltage)})
+    status, payload, _ = _get(app)
+    assert status == 500

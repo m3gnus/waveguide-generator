@@ -1365,3 +1365,67 @@ __all__ = [
     "specific_impedance_z_over_rho_c",
     "spl_on_axis",
 ]
+
+
+def map_coupled_transducer_response(response, sweep, request, channel, spec):
+    """Add the exterior route's voltage driver contract to a FEM channel."""
+    from server.contracts.conventions import ENGINEERING_PHASE_CONVENTION, SOLVER_TIME_CONVENTION, solver_to_engineering
+
+    system = request.wire["compiled_system"]
+    drivers = [c for c in system["components"] if c["kind"] == "electrodynamic_transducer"]
+    ports = request.wire["excitation_port_ids"]
+    members = request.channel_ports[channel]
+    basis_indices = [ports.index(p) for p in members]
+    port_by_id = {p["id"]: p for p in system["excitation_ports"]}
+    owned = {port_by_id[p]["component_id"] for p in members}
+    driver_indices = [i for i, c in enumerate(drivers) if c["id"] in owned]
+    voltage = request.wire["solver_options"]["transducer_reference_voltage_v"]
+    # Electrical currents of physical drivers connected to one voltage channel
+    # add in parallel; induced currents in other shorted channels stay separate.
+    current = sweep.current[:, basis_indices][:, :, driver_indices].sum(axis=(1, 2))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        zin = voltage / current
+    frequencies = response["frequencies"]
+
+    def impedance(values):
+        return {"frequencies": frequencies,
+                "real": [_finite(z.real) for z in values],
+                "imaginary": [_finite(solver_to_engineering(z).imag) for z in values]}
+
+    electrical = impedance(zin)
+    index = driver_indices[0]  # One mechanical coordinate per WG drive channel.
+    velocity = sweep.velocity[:, basis_indices].sum(axis=1)
+    excursion = np.sqrt(2) * 1000 * np.abs(velocity[:, index]) / (2 * np.pi * np.asarray(frequencies))
+    component_index = system["components"].index(drivers[index])
+    load = sweep.generalized_load[:, index, component_index]
+    area = system["metadata"]["projected_areas_m2"][channel]
+    medium = request.regions[0].record["medium"]
+    normalized = load / (medium["density_kg_per_m3"] * medium["sound_speed_m_per_s"] * area)
+    response["impedance"] = electrical
+    response["acoustic_impedance"] = impedance(normalized)
+    driver_spec = spec.exterior_transducer.model_dump(mode="json")
+    response["metadata"].update(
+        impedance_units="ohms", impedance_quantity="electrical_input_impedance",
+        impedance_drive="rms_voltage", impedance_phase_convention=ENGINEERING_PHASE_CONVENTION,
+        source_normalization="native_rms_voltage", source_motion="axial",
+        drive={"voltage_v": voltage, "rg_ohm": 0.0},
+        driver={"spec": driver_spec, "label": channel, "drive_voltage_v": voltage, "rg_ohm": 0.0,
+                "electrical_impedance_ohm": electrical,
+                "cone_excursion_mm": {"frequencies": frequencies, "values": excursion.tolist(),
+                                      "peak_mm": float(np.max(excursion, initial=0)),
+                                      "quantity": "one_way_peak_displacement"}},
+        acoustic_impedance={"units": "Z/(rho*c)", "quantity": "specific_acoustic_impedance",
+                            "projected_area_m2": area, "phase_convention": ENGINEERING_PHASE_CONVENTION},
+        beat_transducer={"version": 1, "excitation_port_id": members[0],
+                         "transducer_ids": [c["id"] for c in drivers],
+                         "phasor_convention": SOLVER_TIME_CONVENTION, "amplitude_convention": "rms",
+                         "undriven_transducers": "shorted",
+                         "velocity_rms_m_per_s": json_safe_native_value(velocity),
+                         "current_rms_a": json_safe_native_value(sweep.current[:, basis_indices].sum(axis=1)),
+                         "excursion_peak_mm": (np.sqrt(2) * 1000 * np.abs(velocity)
+                                               / (2 * np.pi * np.asarray(frequencies)[:, None])).tolist(),
+                         "transducer_reference_voltage_v": voltage,
+                         "generalized_load": {"frequencies": frequencies, "units": "N*s/m",
+                                              "component_ids": [c["id"] for c in system["components"]],
+                                              "values": json_safe_native_value(sweep.generalized_load[:, index]),
+                                              "unavailable_frequency_indices": np.flatnonzero(~np.isfinite(load)).tolist()}})

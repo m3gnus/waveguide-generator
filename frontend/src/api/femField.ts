@@ -6,7 +6,8 @@ export interface FemFieldResponse extends FemFieldPayload {
   channel_ids: string[];
   channel_id: string;
   phasor_convention: 'exp(-i omega t)';
-  drive_normalization: 'unit_acceleration_m_per_s2';
+  drive_normalization: 'unit_acceleration_m_per_s2' | 'unit_acceleration' | 'voltage_rms';
+  transducer_reference_voltage_v?: number | null;
 }
 
 export async function fetchFemField(jobId: string, frequency?: number, channel?: string, signal?: AbortSignal) {
@@ -24,7 +25,9 @@ export async function fetchFemField(jobId: string, frequency?: number, channel?:
     || !payload.frequencies_hz.includes(payload.frequency_hz)
     || !payload.channel_ids.includes(payload.channel_id)
     || payload.phasor_convention !== 'exp(-i omega t)'
-    || payload.drive_normalization !== 'unit_acceleration_m_per_s2') throw new Error('Invalid FEM field selection metadata');
+    || !['unit_acceleration_m_per_s2', 'unit_acceleration', 'voltage_rms'].includes(payload.drive_normalization)
+    || (payload.drive_normalization === 'voltage_rms'
+      && (!Number.isFinite(payload.transducer_reference_voltage_v) || (payload.transducer_reference_voltage_v ?? 0) <= 0))) throw new Error('Invalid FEM field selection metadata');
   return { ...decodeFemFieldPayload(payload), payload };
 }
 

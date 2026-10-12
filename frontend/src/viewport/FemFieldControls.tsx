@@ -16,7 +16,9 @@ export function FemFieldControls({ field, rendering, setRendering, sequential, c
   const window = field.field ? fieldPlaneWindowForMode(mode, field.field.values.real, field.field.values.imag) : null;
   return <div className="field-plane-legend" role="group" aria-label="FEM field controls">
     <div className="field-plane-legend-title"><b>FEM interior field</b></div>
-    <p className="field-plane-note" role="note">Pressure per unit acceleration (Pa per m/s²). Interior regions only.</p>
+    <p className="field-plane-note" role="note">{field.field?.payload.drive_normalization === 'voltage_rms'
+      ? `RMS pressure at ${field.field.payload.transducer_reference_voltage_v} V RMS (Pa). Interior regions only.`
+      : 'Pressure per unit acceleration (Pa per m/s²). Interior regions only.'}</p>
     {field.frequencies.length > 0 && <label className="field-plane-frequency">
       Frequency <output>{hz === undefined ? '—' : `${hz.toLocaleString()} Hz`}</output>
       <input type="range" aria-label="FEM field frequency" aria-valuetext={`${hz ?? 0} Hz`}

@@ -126,6 +126,11 @@ def test_refuse_unsupported_job_options(option, value):
 def test_hybrid_and_ceiling_refused():
     payload = request().model_dump(mode="json")
     payload["geometry"]["drive_channels"][1].pop("exterior_transducer")
+    # The immutable ingestion record chooses exterior versus coupled dispatch.
+    from server.jobs.runtime.imported_refusals import _imported_request_refusal
+    mixed = SolveRequest.model_validate(payload)
+    assert _imported_request_refusal(mixed, {})[0] == "exterior_transducer_mixed_channels"
+    payload["geometry"]["exterior_only"] = True
     with pytest.raises(ValidationError, match="every drive channel"):
         SolveRequest.model_validate(payload)
     payload = request().model_dump(mode="json")
