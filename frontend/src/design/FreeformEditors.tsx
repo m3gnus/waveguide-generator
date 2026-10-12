@@ -131,7 +131,7 @@ export function EditableLookupTable({ field, points }: { field: ParameterDefinit
     <table><thead><tr><th>z mm</th><th>r mm</th><th /></tr></thead><tbody>
       {points.map(([z, r], index) => <tr key={index}>
         <td><NumberField label={`Lookup point ${index + 1} z`} value={z} step={.1} precision={4} unit="mm"
-          min={index > 0 ? points[index - 1][0] : -Infinity} max={index < points.length - 1 ? points[index + 1][0] : Infinity}
+          min={index > 0 ? points[index - 1][0] + 1e-4 : -Infinity} max={index < points.length - 1 ? points[index + 1][0] - 1e-4 : Infinity}
           formatRangeError={() => LOOKUP_ORDER_MESSAGE}
           validate={(value) => positionError(index, value)} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => write(index, 0, value)} /></td>
         <td><NumberField label={`Lookup point ${index + 1} radius`} value={r} step={.1} precision={4} unit="mm" onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => write(index, 1, value)} /></td>

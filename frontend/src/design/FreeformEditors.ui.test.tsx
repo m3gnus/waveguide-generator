@@ -127,9 +127,9 @@ describe('FREEFORM numeric tables', () => {
     act(() => label.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientX: 0 })));
     move(100);
     expect(useDesignStore.getState().design.lookup_profile![1][0]).toBe(60);
-    // Far past the next row: clamped onto it, and a duplicate z is refused.
+    // Far past the next row: held just short of it, so z stays strictly increasing.
     move(5000);
-    expect(useDesignStore.getState().design.lookup_profile![1][0]).toBe(60);
+    expect(useDesignStore.getState().design.lookup_profile![1][0]).toBe(119.9999);
     move(150);
     expect(useDesignStore.getState().design.lookup_profile![1][0]).toBe(65);
     act(() => label.dispatchEvent(new PointerEvent('lostpointercapture', { bubbles: true, pointerId: 1 })));
