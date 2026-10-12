@@ -20,7 +20,33 @@ software remains a peer client and does not import WG, mesher, or solver interna
 
 Catalog `editor_bounds` describe the editor, not hard validity or recommended search
 ranges. The strict request/design schema and WG validation are authoritative. Search
-ranges belong to the calling study.
+ranges belong to the calling study. `editor_bounds.exclusive_minimum` (additive,
+default `false`) is `true` when the minimum itself is rejected, so the lowest accepted
+value is strictly greater than `minimum`.
+
+### Declarative conditions
+
+`visible_when` and `disabled_when` are condition trees. A leaf has a design `path`
+and an `operator`; `all` and `any` combine `conditions`. Operators:
+
+| Operator | True when |
+|---|---|
+| `equals`, `not_equals` | the value at `path` equals / differs from `value` |
+| `greater_than`, `less_than_or_equal` | the numeric value at `path` compares with `value` |
+| `all` | every child condition holds |
+| `never` | never |
+| `any` | at least one child condition holds (additive v1 extension) |
+| `present` | the value at `path` is neither null nor missing (additive v1 extension) |
+| `absent` | the value at `path` is null or missing (additive v1 extension) |
+
+`any`, `present` and `absent` are additive within catalog v1: they were introduced for
+optional nested ICW inputs (`icw_seed`, `icw_coeffs`, `pin_mouth_radius`, `R`). A client
+that does not know an operator should treat the condition as not satisfied and rely on
+server validation. A condition on an optional field whose value is null or missing
+evaluates the comparison operators as false.
+
+Optional select fields publish `null` as an option value for "unset" and JSON `true` or
+`false` for boolean choices (for example `icw.pin_mouth_radius`).
 
 ## HTTP lifecycle
 

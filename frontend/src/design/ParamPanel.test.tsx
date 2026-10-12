@@ -194,6 +194,96 @@ describe('ParamPanel inventory UX', () => {
     }
   });
 
+  describe('Advanced ICW review fixes', () => {
+    const typeInto = (input: HTMLInputElement, text: string) => {
+      act(() => {
+        input.focus();
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, text);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    };
+    const advancedGroup = () => host.querySelector<HTMLElement>('[data-section="Advanced ICW"]')!;
+    const openAdvanced = () => {
+      const group = advancedGroup();
+      if (group.querySelector('button')!.getAttribute('aria-expanded') === 'false') act(() => group.querySelector<HTMLButtonElement>('button')!.click());
+      return advancedGroup();
+    };
+    const inputFor = (group: HTMLElement, id: string) => group.querySelector<HTMLInputElement>(`[data-parameter-id="${id}"] input`)!;
+
+    it('lets a stale pin_mouth_radius be reset after coverage is cleared, and publishes it as boolean or null', () => {
+      act(() => useDesignStore.getState().setFamily('ICW'));
+      act(() => useDesignStore.getState().updateValues({ coverage_angle: 45, pin_mouth_radius: true }));
+      act(() => useDesignStore.getState().updateValue('coverage_angle', 0));
+      const pin = openAdvanced().querySelector<HTMLSelectElement>('[id="parameter-icw.pin_mouth_radius"]')!;
+      expect(pin.disabled).toBe(false);
+      expect(pin.value).toBe('true');
+      act(() => { pin.value = ''; pin.dispatchEvent(new Event('change', { bubbles: true })); });
+      expect(useDesignStore.getState().design.pin_mouth_radius).toBeNull();
+      expect(openAdvanced().querySelector<HTMLSelectElement>('[id="parameter-icw.pin_mouth_radius"]')!.disabled).toBe(true);
+      const field = PARAMETER_REGISTRY.find((candidate) => candidate.id === 'icw.pin_mouth_radius')!;
+      expect(field.options!.map((option) => option.value)).toEqual([null, false, true]);
+    });
+
+    it('opens the collapsed group when one of its fields has an error', () => {
+      act(() => useDesignStore.getState().setFamily('ICW'));
+      expect(advancedGroup().querySelector('button')!.getAttribute('aria-expanded')).toBe('false');
+      act(() => useDesignStore.getState().updateValue('kappa_abs_max', 0));
+      expect(advancedGroup().querySelector('button')!.getAttribute('aria-expanded')).toBe('true');
+      act(() => useDesignStore.getState().updateValue('kappa_abs_max', .05));
+      expect(advancedGroup().querySelector('button')!.getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('treats the strict minima as exclusive and explains the bound', () => {
+      act(() => useDesignStore.getState().setFamily('ICW'));
+      act(() => useDesignStore.getState().updateValue('termination', 'rollback'));
+      const group = openAdvanced();
+      const theta = inputFor(group, 'icw.theta_max_deg');
+      typeInto(theta, '90');
+      expect(group.querySelector('[data-parameter-id="icw.theta_max_deg"]')!.textContent).toContain('Must be greater than 90');
+      act(() => theta.blur());
+      expect(useDesignStore.getState().design.theta_max_deg).toBeUndefined();
+      typeInto(theta, '91');
+      act(() => theta.blur());
+      expect(useDesignStore.getState().design.theta_max_deg).toBe(91);
+      const cap = inputFor(group, 'icw.kappa_abs_max');
+      typeInto(cap, '0');
+      expect(group.querySelector('[data-parameter-id="icw.kappa_abs_max"]')!.textContent).toContain('Must be greater than 0');
+      act(() => cap.blur());
+      const aperture = inputFor(group, 'icw.r_aperture');
+      typeInto(aperture, '0');
+      expect(group.querySelector('[data-parameter-id="icw.r_aperture"]')!.textContent).toContain('Must be at least');
+    });
+
+    it('offers a way out of seed or coefficient mode', () => {
+      act(() => useDesignStore.getState().setFamily('ICW'));
+      expect(advancedGroup().querySelector('[data-action="clear-imported-icw"]')).toBeNull();
+      act(() => useDesignStore.getState().loadDesign({
+        ...designForFamily('ICW'), icw_seed: { type: 'OSSE' }, icw_coeffs: [0, 0, 0, 0], icw_S: 90,
+      }));
+      expect(host.querySelector<HTMLInputElement>('[data-parameter-id="icw.L"] input')!.disabled).toBe(true);
+      const clear = openAdvanced().querySelector<HTMLButtonElement>('[data-action="clear-imported-icw"]')!;
+      act(() => clear.click());
+      const design = useDesignStore.getState().design;
+      expect(design.icw_seed).toBeNull();
+      expect(design.icw_coeffs).toBeNull();
+      expect(design.icw_S).toBeNull();
+      expect(host.querySelector<HTMLInputElement>('[data-parameter-id="icw.L"] input')!.disabled).toBe(false);
+      expect(advancedGroup().querySelector('[data-action="clear-imported-icw"]')).toBeNull();
+    });
+
+    it('does not let a leftover coverage angle disable R on a rollback, and hints the blank R default on a flat baffle', () => {
+      act(() => useDesignStore.getState().setFamily('ICW'));
+      act(() => useDesignStore.getState().updateValues({ coverage_angle: 45, R: null }));
+      const radius = () => host.querySelector<HTMLInputElement>('[data-parameter-id="icw.R"] input')!;
+      expect(radius().disabled).toBe(true);
+      act(() => useDesignStore.getState().updateValue('coverage_angle', 0));
+      expect(radius().placeholder).toBe('Mesher default 150');
+      act(() => useDesignStore.getState().updateValues({ coverage_angle: 45, termination: 'rollback' }));
+      expect(radius().disabled).toBe(false);
+      expect(radius().placeholder).toBe('Unset');
+    });
+  });
+
   it('stacks long selects and text while keeping short selects inline', () => {
     // Native formula names such as OSSE-ADAPTER-CONTROLS do not fit the numeric column.
     expect(host.querySelector('#family')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(true);

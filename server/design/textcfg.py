@@ -1539,8 +1539,8 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
                 raise ValueError("unknown WG.Geometry controls")
             if "icw" in controls:
                 advanced = controls["icw"]
-                if version != NATIVE_GEOMETRY_VERSION or payload["formula"] != "ICW":
-                    raise ValueError("advanced ICW controls require a native ICW design")
+                if payload["formula"] != "ICW":
+                    raise ValueError("advanced ICW controls require an ICW design")
                 if not isinstance(advanced, dict) or set(advanced) - set(ICW_ADVANCED_KEYS):
                     raise ValueError("unknown advanced ICW controls")
                 payload.update(advanced)
@@ -1814,8 +1814,7 @@ def _serialize_canonical(
     if isinstance(config, ICWConfig):
         advanced = {key: value for key, value in config.model_dump(mode="json").items() if key in ICW_ADVANCED_KEYS}
         if advanced:
-            if config.text_import_version is not None:
-                raise TextConfigError("advanced ICW inputs are native WG/JSON only; ATH has no equivalent keys")
+            # WG.Geometry is a WG-only block that ATH ignores, so it is legal under any WG stamp.
             controls["icw"] = advanced
     if controls:
         encoded = json.dumps(controls, ensure_ascii=True, allow_nan=False, separators=(",", ":")).replace(";", "\\u003b")

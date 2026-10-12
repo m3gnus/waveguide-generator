@@ -439,9 +439,10 @@ unsupported expression must be replaced.
 Native WG text saves store the optional ICW keys `r_aperture`, `x_aperture`,
 `x_setback`, `kappa0`, `kappa_abs_max`, `dkappa_ds_abs_max`, `theta_max_deg`,
 `pin_mouth_radius`, `icw_seed`, `icw_coeffs`, and `icw_S` as a JSON object under
-`WG.Geometry.Payload.icw`. This requires the native WG geometry stamp and ICW
-family; it has no ATH equivalent. JSON designs carry the keys directly in the
-ICW model. Absent advanced fields are omitted, preserving existing bytes and
+`WG.Geometry.Payload.icw`. This requires an ICW design under any WG stamp,
+including an ATH-import stamp that survived a family switch (ATH ignores the whole
+`WG.Geometry` block, so there is no conflict); it has no ATH equivalent. JSON
+designs carry the keys directly in the ICW model. Absent advanced fields are omitted, preserving existing bytes and
 mesher defaults. Nested seeds and coefficient lists round-trip without editors.
 See [ICW advanced controls](ICW-ADVANCED-AND-FREEFORM-CIRCLE.md) for units,
 bounds, input-mode precedence, and coverage/rollback target interactions.

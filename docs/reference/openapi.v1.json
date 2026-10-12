@@ -1513,6 +1513,11 @@
       "CatalogEditorBounds": {
         "additionalProperties": false,
         "properties": {
+          "exclusive_minimum": {
+            "default": false,
+            "title": "Exclusive Minimum",
+            "type": "boolean"
+          },
           "maximum": {
             "title": "Maximum",
             "type": "number"

@@ -43,7 +43,8 @@ export interface ParameterSectionDefinition {
 export type ParameterKind = 'number' | 'select' | 'text' | 'toggle' | 'table' | 'indicator';
 
 export interface ParameterOption {
-  value: string | number;
+  /** `null` is the unset choice of an optional field (JSON null on the wire). */
+  value: string | number | boolean | null;
   label: string;
   /**
    * Hidden unless the active solver backend implements this feature.
@@ -87,6 +88,10 @@ export interface ParameterDefinition {
   description?: string;
   disabledReason?: string;
   optional?: boolean;
+  /** The minimum is not itself allowed (strictly greater than `min`). */
+  exclusiveMin?: boolean;
+  /** Hint for an empty optional field; defaults to "Unset". */
+  placeholderWhen?: (design: DesignDocument) => string | undefined;
   group?: 'Advanced ICW';
   visibleWhen?: (design: DesignDocument) => boolean;
   disabledWhen?: (design: DesignDocument) => string | undefined;
@@ -242,7 +247,8 @@ export const LEGACY_PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('icw.r0', 'r0', 'r0', profile, 'Throat radius', { families: ['ICW'], unit: 'mm', min: .1, max: 200, description: 'Radius at the throat, where the driver attaches. The curvature solver starts the wall here.' }),
   number('icw.a0', 'a0', 'a0', profile, 'Throat half-angle', { families: ['ICW'], unit: '°', min: -90, max: 90, description: "Wall angle where the curve leaves the throat, measured from the horn axis. This is the curve's starting angle, not a target." }),
   number('icw.L', 'L', 'L', profile, 'Horn length', { families: ['ICW'], unit: 'mm', min: 1, max: 1_000, visibleWhen: (design) => design.termination !== 'rollback', description: 'Target axial length. The curvature solver sizes the curve to reach it. Rollback terminations use Rollback depth instead.' }),
-  number('icw.R', 'R', 'R', profile, 'Mouth radius', { families: ['ICW'], unit: 'mm', min: .1, max: 1_000, optional: true, disabledWhen: (design) => (design.coverage_angle ?? 0) > 0 && !design.pin_mouth_radius ? 'Emergent while coverage hold is enabled; enable Pin mouth radius to target R.' : undefined, description: 'Target mouth radius the curvature solver sizes the curve to reach. On a rollback it is the aperture radius where the wall first turns through 90°, not the radius at the curled tip. During coverage hold it is emergent unless Pin mouth radius is enabled. Clear R to use the advanced Aperture radius on rollback.' }),
+  number('icw.R', 'R', 'R', profile, 'Mouth radius', { families: ['ICW'], unit: 'mm', min: .1, max: 1_000, optional: true, placeholderWhen: (design) => design.termination === 'rollback' ? undefined : 'Mesher default 150',
+    disabledWhen: (design) => design.termination !== 'rollback' && (design.coverage_angle ?? 0) > 0 && !design.pin_mouth_radius ? 'Emergent while coverage hold is enabled; enable Pin mouth radius to target R.' : undefined, description: 'Target mouth radius the curvature solver sizes the curve to reach. On a rollback it is the aperture radius where the wall first turns through 90°, not the radius at the curled tip. During coverage hold it is emergent unless Pin mouth radius is enabled. On a rollback, clear R to use the advanced Aperture radius instead. On a flat baffle a blank R means the mesher default of 150 mm, so only clear it to reproduce an older file.' }),
   number('icw.coverage_angle', 'coverage_angle', 'coverage_angle', profile, 'Coverage angle', { families: ['ICW'], unit: '°', min: 0, max: 80, step: 1, precision: 0, disabledWhen: (design) => design.termination === 'rollback' ? 'Coverage hold applies to flat-baffle termination only.' : undefined, description: 'Above 0 this holds a constant wall angle — the constant-directivity plateau — between the hold start and end, and Mouth radius becomes an emergent output rather than a target. 0 turns the hold off and sizes the curve from Horn length and Mouth radius alone. Flat baffle only.' }),
   number('icw.hold_start', 'hold_start', 'hold_start', profile, 'Coverage hold start', { families: ['ICW'], unit: 'σ', min: .05, max: .9, step: .01, visibleWhen: (design) => design.termination !== 'rollback', description: 'Where the constant-angle plateau begins, as a fraction of arc length from throat (0) to mouth (1). Only used when Coverage angle is above 0.' }),
   number('icw.hold_end', 'hold_end', 'hold_end', profile, 'Coverage hold end', { families: ['ICW'], unit: 'σ', min: .1, max: .95, step: .01, visibleWhen: (design) => design.termination !== 'rollback', description: 'Where the constant-angle plateau ends, as a fraction of arc length. Must be past the hold start. Only used when Coverage angle is above 0.' }),
@@ -254,15 +260,15 @@ export const LEGACY_PARAMETER_REGISTRY: ParameterDefinition[] = [
   // mesher's ICW builder never reads these four (they are absent from
   // _ICW_PARAM_KEYS), so the tooltip has to say they are inert rather than
   // implying they shape the curve.
-  number('icw.r_aperture', 'r_aperture', 'r_aperture', profile, 'Aperture radius', { ...advancedIcw, unit: 'mm', disabledWhen: (design) => rollbackIcwReason(design) ?? (design.R != null ? 'R takes precedence; clear Mouth radius to use this fallback.' : undefined), description: 'Rollback radius at the foremost 90° wall-angle crossing. Used only when R is absent. Unset adds no radial target; rollback needs a radial target. Feasibility is checked by the mesher.' }),
+  number('icw.r_aperture', 'r_aperture', 'r_aperture', profile, 'Aperture radius', { ...advancedIcw, unit: 'mm', min: .1, disabledWhen: (design) => rollbackIcwReason(design) ?? (design.R != null ? 'R takes precedence; clear Mouth radius to use this fallback.' : undefined), description: 'Rollback radius at the foremost 90° wall-angle crossing. Used only when R is absent. Unset adds no radial target; rollback needs a radial target. Feasibility is checked by the mesher.' }),
   number('icw.x_aperture', 'x_aperture', 'x_aperture', profile, 'Aperture axial position', { ...advancedIcw, unit: 'mm', disabledWhen: rollbackIcwReason, description: 'Rollback axial coordinate of the foremost 90° crossing, measured from the throat. Unset adds no target. At least one of this, Rollback depth or Tip setback is needed; setting several adds simultaneous constraints.' }),
   number('icw.x_setback', 'x_setback', 'x_setback', profile, 'Tip setback', { ...advancedIcw, unit: 'mm', disabledWhen: rollbackIcwReason, description: 'Rollback aperture axial position minus the curled tip axial position. Positive means the tip sits behind the aperture. Unset adds no target. May be combined with depth and aperture position if all targets are feasible.' }),
   number('icw.kappa0', 'kappa0', 'kappa0', profile, 'Throat curvature', { ...advancedIcw, unit: '1/mm', step: .001, precision: 6, disabledWhen: icwInputReason, description: 'Signed wall curvature at the throat. Unset uses 0, a locally conical throat. There is no fixed scalar range; the requested shape must remain feasible.' }),
-  number('icw.kappa_abs_max', 'kappa_abs_max', 'kappa_abs_max', profile, 'Maximum absolute curvature', { ...advancedIcw, unit: '1/mm', min: 0, step: .001, precision: 6, disabledWhen: icwInputReason, description: 'Strictly positive cap on sampled absolute wall curvature. Unset leaves it unbounded. Guides the target solve and is checked afterwards; a violated cap fails rather than silently changing the requested targets.' }),
-  number('icw.dkappa_ds_abs_max', 'dkappa_ds_abs_max', 'dkappa_ds_abs_max', profile, 'Maximum curvature slope', { ...advancedIcw, unit: '1/mm per σ', min: 0, step: .001, precision: 6, disabledWhen: icwInputReason, description: 'Strictly positive cap on sampled |dκ/dσ|. Despite the key name, the pinned mesher differentiates with respect to normalized arc length σ, not physical s. Unset leaves it unbounded. Guides the target solve and is verified afterwards.' }),
-  number('icw.theta_max_deg', 'theta_max_deg', 'theta_max_deg', profile, 'Maximum wall angle', { ...advancedIcw, unit: '°', min: 90, max: 180, disabledWhen: rollbackIcwReason, description: 'Rollback cap on the sampled wall angle, strictly above 90° and at most 180°. Unset leaves it unbounded. It must allow the terminal angle; it does not choose that angle. Flat-baffle mode ignores it.' }),
-  select('icw.pin_mouth_radius', 'pin_mouth_radius', 'pin_mouth_radius', profile, 'Pin mouth radius', [{ value: '', label: 'Default (No)' }, { value: 'false', label: 'No' }, { value: 'true', label: 'Yes' }], { ...advancedIcw, disabledWhen: (design) => icwInputReason(design) ?? (design.termination === 'rollback' || !((design.coverage_angle ?? 0) > 0) ? 'Used only with a flat-baffle coverage hold.' : undefined), description: 'Default is false: coverage hold lets mouth radius emerge. Yes adds R as a hard target during a flat-baffle coverage hold, which can make the targets infeasible. No effect without coverage or on rollback.' }),
-  number('icw.icw_S', 'icw_S', 'icw_S', profile, 'Direct curve arc length', { ...advancedIcw, unit: 'mm', min: 0, disabledWhen: (design) => design.icw_seed != null ? 'Seed mode takes precedence over direct coefficients.' : design.icw_coeffs == null ? 'Used only with imported direct coefficients.' : undefined, description: 'Required strictly positive total arc length for imported icw_coeffs. There is no default. Ignored by the target solver and by seed mode.' }),
+  number('icw.kappa_abs_max', 'kappa_abs_max', 'kappa_abs_max', profile, 'Maximum absolute curvature', { ...advancedIcw, unit: '1/mm', min: 0, exclusiveMin: true, step: .001, precision: 6, disabledWhen: icwInputReason, description: 'Strictly positive cap on sampled absolute wall curvature. Unset leaves it unbounded. Guides the target solve and is checked afterwards; a violated cap fails rather than silently changing the requested targets.' }),
+  number('icw.dkappa_ds_abs_max', 'dkappa_ds_abs_max', 'dkappa_ds_abs_max', profile, 'Maximum curvature slope', { ...advancedIcw, unit: '1/mm per σ', min: 0, exclusiveMin: true, step: .001, precision: 6, disabledWhen: icwInputReason, description: 'Strictly positive cap on sampled |dκ/dσ|. Despite the key name, the pinned mesher differentiates with respect to normalized arc length σ, not physical s. Unset leaves it unbounded. Guides the target solve and is verified afterwards.' }),
+  number('icw.theta_max_deg', 'theta_max_deg', 'theta_max_deg', profile, 'Maximum wall angle', { ...advancedIcw, unit: '°', min: 90, exclusiveMin: true, max: 180, disabledWhen: rollbackIcwReason, description: 'Rollback cap on the sampled wall angle, strictly above 90° and at most 180°. Unset leaves it unbounded. It must allow the terminal angle; it does not choose that angle. Flat-baffle mode ignores it.' }),
+  select('icw.pin_mouth_radius', 'pin_mouth_radius', 'pin_mouth_radius', profile, 'Pin mouth radius', [{ value: null, label: 'Default (No)' }, { value: false, label: 'No' }, { value: true, label: 'Yes' }], { ...advancedIcw, disabledWhen: (design) => icwInputReason(design) ?? (design.pin_mouth_radius == null && (design.termination === 'rollback' || !((design.coverage_angle ?? 0) > 0)) ? 'Used only with a flat-baffle coverage hold.' : undefined), description: 'Default is false: coverage hold lets mouth radius emerge. Yes adds R as a hard target during a flat-baffle coverage hold, which can make the targets infeasible. No effect without coverage or on rollback; a value left over from an earlier coverage setting stays editable so it can be reset.' }),
+  number('icw.icw_S', 'icw_S', 'icw_S', profile, 'Direct curve arc length', { ...advancedIcw, unit: 'mm', min: 0, exclusiveMin: true, disabledWhen: (design) => design.icw_seed != null ? 'Seed mode takes precedence over direct coefficients.' : design.icw_coeffs == null ? 'Used only with imported direct coefficients.' : undefined, description: 'Required strictly positive total arc length for imported icw_coeffs. There is no default. Ignored by the target solver and by seed mode.' }),
   { id: 'icw.icw_seed', legacyKey: 'icw_seed', path: 'icw_seed', section: profile, label: 'Imported ICW seed', kind: 'indicator', ...advancedIcw, visibleWhen: (design) => design.icw_seed != null, description: 'Preserved nested OSSE/R-OSSE seed. The mesher fits it in preference to direct coefficients and targets. Edit the native file to change the seed.' },
   { id: 'icw.icw_coeffs', legacyKey: 'icw_coeffs', path: 'icw_coeffs', section: profile, label: 'Imported ICW coefficients', kind: 'indicator', ...advancedIcw, visibleWhen: (design) => design.icw_coeffs != null, description: 'Preserved direct curvature coefficient list; requires Direct curve arc length. Seed mode takes precedence if both are present. Edit the native file to change the list.' },
 
@@ -606,6 +612,9 @@ export function fieldIsVisible(field: ParameterDefinition, design: DesignDocumen
  * it is set to. And an option whose label promises a fast path this backend
  * lacks can be relabelled without silently discarding a legacy value.
  */
+/** Select-element key of an option value or stored value; unset (null/undefined) is the empty string. */
+export const optionKey = (value: unknown): string => (value === null || value === undefined ? '' : String(value));
+
 export function fieldOptionsForBackend(
   field: ParameterDefinition,
   value: unknown,
@@ -616,7 +625,7 @@ export function fieldOptionsForBackend(
   const options: ParameterOption[] = [];
   for (const option of field.options ?? []) {
     const feature = option.requiresFeature;
-    const held = String(option.value) === String(value ?? '');
+    const held = optionKey(option.value) === optionKey(value);
     if (option.currentOnly && !held) continue;
     if (feature && !held && !backendSupports(backend, feature, plan)) {
       // The chosen engine cannot run it. Keep the option visible but disabled
@@ -648,7 +657,7 @@ export function fieldUnsupportedFeature(
   backend: BackendIdentity,
   plan?: readonly EngineCapability[],
 ): BackendFeature | undefined {
-  const selected = (field.options ?? []).find((option) => String(option.value) === String(value ?? ''));
+  const selected = (field.options ?? []).find((option) => optionKey(option.value) === optionKey(value));
   const feature = selected?.requiresFeature;
   return feature && !backendSupports(backend, feature, plan) ? feature : undefined;
 }

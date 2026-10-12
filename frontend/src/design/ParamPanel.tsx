@@ -59,6 +59,7 @@ import {
   type ParameterDefinition,
   type ParameterSectionDefinition,
   type ParameterTab,
+  optionKey,
 } from './parameterRegistry';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { useCadFeedbackError } from '../shell/cadSetupPublisher';
@@ -370,6 +371,15 @@ function validationMessage(field: ParameterDefinition, design: DesignDocument): 
   return undefined;
 }
 
+/** A stored value that breaks the field's own bounds (an imported or hand-edited file). */
+function storedValueError(field: ParameterDefinition, design: DesignDocument): string | undefined {
+  const value = getAtPath(design, field.path);
+  if (field.kind !== 'number' || typeof value !== 'number' || design._expressions?.[field.path ?? '']) return undefined;
+  if (field.min !== undefined && (value < field.min || (field.exclusiveMin && value === field.min))) return 'Outside the allowed range.';
+  if (field.max !== undefined && value > field.max) return 'Outside the allowed range.';
+  return undefined;
+}
+
 function prospectiveValidation(field: ParameterDefinition, design: DesignDocument, value: number): string | undefined {
   if (['icw.kappa_abs_max', 'icw.dkappa_ds_abs_max', 'icw.icw_S'].includes(field.id) && value <= 0) return 'Must be greater than zero.';
   if (field.id === 'icw.theta_max_deg' && value <= 90) return 'Must be greater than 90° and at most 180°.';
@@ -470,12 +480,11 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
     return <>
       <SelectRow className={disabled ? 'field-disabled' : undefined} text={field.description}>
         <label htmlFor={`parameter-${field.id}`} title={disabledReason}>{field.label}</label>
-        <select id={`parameter-${field.id}`} value={String(value ?? '')} disabled={disabled} onChange={(event) => {
-          const option = field.options?.find((item) => String(item.value) === event.target.value);
-          if (field.id === 'icw.pin_mouth_radius') commit(event.target.value === '' ? null : event.target.value === 'true');
-          else commit(option?.value ?? event.target.value);
+        <select id={`parameter-${field.id}`} value={optionKey(value)} disabled={disabled} onChange={(event) => {
+          const option = field.options?.find((item) => optionKey(item.value) === event.target.value);
+          commit(option ? option.value : event.target.value);
         }}>
-          {options.map((option) => <option key={String(option.value)} value={String(option.value)} disabled={Boolean(option.unavailableReason)} title={option.unavailableReason}>{option.label}</option>)}
+          {options.map((option) => <option key={optionKey(option.value)} value={optionKey(option.value)} disabled={Boolean(option.unavailableReason)} title={option.unavailableReason}>{option.label}</option>)}
         </select>
       </SelectRow>
       {ibEngine?.name === 'bempp' && ibEngine.assembly_backend === 'numba' &&
@@ -503,6 +512,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
       allowExpression={fieldAcceptsExpression(field)}
       unit={field.unit}
       min={field.min}
+      exclusiveMin={field.exclusiveMin}
       max={field.max}
       step={field.step}
       precision={field.precision}
@@ -514,6 +524,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
         ? (next) => throatStretchError(field.path as 's1' | 's2', next) : undefined}
       onCommit={(next) => commit(next)}
       optional={optional}
+      placeholder={field.placeholderWhen?.(design)}
       onClear={optional ? () => commit(null) : undefined}
       onCommitExpression={(expression) => { if (field.path && !disabled) updateExpression(field.path, expression); }}
       onBeginDrag={beginDrag}
@@ -1149,6 +1160,7 @@ function CadSimulationEmpty() {
 export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
+  const updateValues = useDesignStore((state) => state.updateValues);
   const previewErrorFields = useSyncExternalStore(
     previewSocket.subscribe,
     () => previewSocket.getSnapshot().errorFields,
@@ -1258,6 +1270,11 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
 
   const renderRegistrySection = (definition: ParameterSectionDefinition) => {
     const fields = fieldsBySection.get(definition.title) ?? [];
+    const advancedIcwFields = fields.filter((field) => field.group === 'Advanced ICW');
+    // A collapsed group would hide the very field that needs fixing.
+    const advancedIcwHasError = advancedIcwFields.some((field) => Boolean(
+      previewErrorForParameter(field, currentPreviewFields) || validationMessage(field, design) || storedValueError(field, design),
+    ));
     const showSolveDomain = definition.title === PARAMETRIC_CONTROLS.solveDomain.section
       && (!searching || matchingParametricSections.has(definition.title));
     const showOuterBodyMode = ['Wall & Enclosure', 'Mounting'].includes(definition.title) && !isNativeFamily(design.formula)
@@ -1289,7 +1306,14 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         const field = fields.find((candidate) => candidate.id === id);
         return field && !field.group && (workspaceMode === 'cad' || id !== 'simulation.sim_type') ? <Fragment key={id}>{renderField(field)}</Fragment> : null;
       })}
-      {fields.some((field) => field.group === 'Advanced ICW') && <Section title="Advanced ICW" forceOpen={searching} description="Optional native ICW inputs. Blank uses the mesher default.">{fields.filter((field) => field.group === 'Advanced ICW').map(renderField)}</Section>}
+      {advancedIcwFields.length > 0 && <Section title="Advanced ICW" forceOpen={searching || advancedIcwHasError} description="Optional native ICW inputs. Blank uses the mesher default.">
+        {advancedIcwFields.map(renderField)}
+        {(design.icw_seed != null || design.icw_coeffs != null) && <div className="parameter-entry">
+          <button type="button" className="secondary" data-action="clear-imported-icw"
+            title="Remove the imported seed and direct coefficients, so the target controls apply again."
+            onClick={() => updateValues({ icw_seed: null, icw_coeffs: null, icw_S: null })}>Clear imported seed / coefficients</button>
+        </div>}
+      </Section>}
       {custom}
       {definition.title === 'Imported ATH values' && importedAthValues}
       {searching && fields.some((field) => !fieldIsVisible(field, design)) && <p className="filter-note">Some matches are normally hidden by the active mode; they are shown here for discoverability.</p>}

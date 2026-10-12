@@ -41,6 +41,8 @@ class CatalogCondition(_DiscoveryModel):
 class CatalogEditorBounds(_DiscoveryModel):
     minimum: float
     maximum: float
+    # Additive: true when the editor rejects the minimum itself (strictly greater than).
+    exclusive_minimum: bool = False
 
 
 class CatalogOption(_DiscoveryModel):

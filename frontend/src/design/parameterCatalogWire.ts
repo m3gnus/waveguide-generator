@@ -55,7 +55,11 @@ const FIELD_CONDITIONS: Record<string, FieldConditions> = {
   'enclosure.back_resolution': { visible_when: { path: 'enclosure.depth', operator: 'greater_than', value: 0 } },
   'icw.L': { visible_when: { path: 'termination', operator: 'not_equals', value: 'rollback' } },
   'icw.R': {
-    disabled_when: { operator: 'all', conditions: [{ path: 'coverage_angle', operator: 'greater_than', value: 0 }, { path: 'pin_mouth_radius', operator: 'not_equals', value: true }] },
+    disabled_when: { operator: 'all', conditions: [
+      { path: 'termination', operator: 'not_equals', value: 'rollback' },
+      { path: 'coverage_angle', operator: 'greater_than', value: 0 },
+      { path: 'pin_mouth_radius', operator: 'not_equals', value: true },
+    ] },
     disabled_reason: 'Emergent while coverage hold is enabled; enable Pin mouth radius to target R.',
   },
   'icw.coverage_angle': {
@@ -129,10 +133,17 @@ for (const id of ['icw.x_aperture', 'icw.x_setback', 'icw.theta_max_deg', 'icw.r
     ...(id === 'icw.r_aperture' ? [{ path: 'R', operator: 'present' } as Condition] : []),
   ] } };
 }
+// A value left over from an earlier coverage setting stays editable so it can be reset.
 FIELD_CONDITIONS['icw.pin_mouth_radius'] = { disabled_when: { operator: 'any', conditions: [
-  ICW_IMPORTED_INPUT, { path: 'termination', operator: 'equals', value: 'rollback' },
-  { path: 'coverage_angle', operator: 'less_than_or_equal', value: 0 },
-  { path: 'coverage_angle', operator: 'absent' },
+  ICW_IMPORTED_INPUT,
+  { operator: 'all', conditions: [
+    { path: 'pin_mouth_radius', operator: 'absent' },
+    { operator: 'any', conditions: [
+      { path: 'termination', operator: 'equals', value: 'rollback' },
+      { path: 'coverage_angle', operator: 'less_than_or_equal', value: 0 },
+      { path: 'coverage_angle', operator: 'absent' },
+    ] },
+  ] },
 ] } };
 FIELD_CONDITIONS['icw.icw_S'] = { disabled_when: { operator: 'any', conditions: [
   { path: 'icw_seed', operator: 'present' }, { path: 'icw_coeffs', operator: 'absent' },
@@ -162,7 +173,7 @@ function serializeField(field: ParameterDefinition) {
     default_by_family: defaultValues(field),
     editor_bounds: field.min === undefined || field.max === undefined
       ? null
-      : { minimum: field.min, maximum: field.max },
+      : { minimum: field.min, maximum: field.max, ...(field.exclusiveMin ? { exclusive_minimum: true } : {}) },
     step: field.step ?? null,
     precision: field.precision ?? null,
     options: (field.options ?? []).map((option) => ({

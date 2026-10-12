@@ -173,6 +173,45 @@ def _scaled_expr(value: Expr | None, scale: float) -> str | float | None:
     return result
 
 
+def _inverse_scaled_expr(value: Expr | None, scale: float) -> str | float | None:
+    """Apply the Scale transform to one curvature (1/mm): divide, not multiply."""
+
+    translated = _expr(value)
+    if translated is None or scale == 1.0:
+        return translated
+    if value is not None and value.raw is not None:
+        execution = value.execution_text()
+        assert isinstance(execution, str)
+        try:
+            numeric = float(execution.strip())
+        except (OverflowError, ValueError):
+            return f"({execution}) / {scale:.15g}"
+        translated = numeric
+    assert isinstance(translated, (int, float))
+    result = float(translated) / scale
+    if not math.isfinite(result):
+        raise ValueError("scaled curvature must be finite")
+    return result
+
+
+def _scaled_icw_coeffs(coeffs: list[Any] | None, scale: float) -> list[Any] | None:
+    """Curvature spline coefficients are 1/mm, so they divide by Scale."""
+
+    if coeffs is None or scale == 1.0:
+        return coeffs
+    scaled: list[Any] = []
+    for item in coeffs:
+        if isinstance(item, str):
+            try:
+                number = float(item.strip())
+            except (OverflowError, ValueError):
+                scaled.append(f"({item}) / {scale:.15g}")
+                continue
+            item = number
+        scaled.append(float(item) / scale)
+    return scaled
+
+
 def enclosure_resolution(value: ResolutionExpr | None) -> float | str | None:
     """Keep quadrant values in the mesher's documented comma-list syntax."""
     if value is None:
@@ -302,7 +341,14 @@ def _profile(
             )
         )
     else:
-        coverage = _structural_number(design.coverage_angle, "coverage_angle")
+        if design.icw_seed is not None and scale != 1.0:
+            raise ValueError(
+                "icw_seed holds unscaled OSSE/R-OSSE lengths, so Scale other than 1 is not "
+                "supported with an imported ICW seed; set Scale to 1 and size the seed directly"
+            )
+        # The mesher refuses coverage on a rollback termination; it only applies to a flat baffle.
+        flat_baffle = design.termination in (None, "flat_baffle")
+        coverage = _structural_number(design.coverage_angle, "coverage_angle") if flat_baffle else 0
         profile.update(
             _clean(
                 {
@@ -315,13 +361,13 @@ def _profile(
                     "r_aperture": _scaled_expr(design.r_aperture, scale),
                     "x_aperture": _scaled_expr(design.x_aperture, scale),
                     "x_setback": _scaled_expr(design.x_setback, scale),
-                    "kappa0": _expr(design.kappa0),
-                    "kappa_abs_max": _expr(design.kappa_abs_max),
-                    "dkappa_ds_abs_max": _expr(design.dkappa_ds_abs_max),
+                    "kappa0": _inverse_scaled_expr(design.kappa0, scale),
+                    "kappa_abs_max": _inverse_scaled_expr(design.kappa_abs_max, scale),
+                    "dkappa_ds_abs_max": _inverse_scaled_expr(design.dkappa_ds_abs_max, scale),
                     "theta_max_deg": _expr(design.theta_max_deg),
                     "pin_mouth_radius": design.pin_mouth_radius,
                     "icw_seed": design.icw_seed,
-                    "icw_coeffs": design.icw_coeffs,
+                    "icw_coeffs": _scaled_icw_coeffs(design.icw_coeffs, scale),
                     "icw_S": _scaled_expr(design.icw_S, scale),
                     "coverage_angle": _expr(design.coverage_angle) if coverage > 0 else None,
                     "hold_start": _expr(design.hold_start) if coverage > 0 else None,

@@ -2752,6 +2752,11 @@ export interface components {
         };
         /** CatalogEditorBounds */
         CatalogEditorBounds: {
+            /**
+             * Exclusive Minimum
+             * @default false
+             */
+            exclusive_minimum?: boolean;
             /** Maximum */
             maximum: number;
             /** Minimum */

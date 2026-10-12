@@ -13,6 +13,7 @@ the exception in `validation/`: it is a blank form to copy, not evidence.
 | [Development guide](DEVELOPMENT.md) | Contributors and AI agents | Current orientation | Repository layout and tests, 2026-08-13 |
 | [Release guide](RELEASING.md) | Maintainers | Current release process; moved from the README | `release.yml` and `scripts/bump_version.py`, 2026-10-06 |
 | [Configuration format](reference/CFG-FORMAT.md) | Developers and integrations | Canonical contract | `server/design/`, 2026-08-13 |
+| [ICW advanced inputs and FREEFORM circle stations](reference/ICW-ADVANCED-AND-FREEFORM-CIRCLE.md) | Developers, integrations and users of ICW designs | Canonical contract | `server/design/schema.py`, `server/preview/translate.py` and the pinned mesher, 2026-10-12 |
 | [Headless CLI](reference/CLI.md) | Automation and integration clients | Canonical contract v1 | `server/cli/`, 2026-08-20 |
 | [External evaluation API](reference/EXTERNAL-EVALUATION.md) | Language-neutral client developers | Canonical contract v1 | FastAPI, CLI, catalog, and examples, 2026-08-20 |
 | [OpenAPI snapshot](reference/openapi.v1.json) | Generated HTTP clients | Generated release contract | `scripts/gen_openapi.py`, 2026-08-20 |

@@ -561,7 +561,7 @@ MIGRATIONS: tuple[Migration, ...] = (
         transform=_migrate_removed_freeform_controls,
         note=(
             "Removed obsolete FREEFORM tangent scales, per-anchor strengths, and "
-            "and overshoot policy."
+            "overshoot policy."
         ),
     ),
     Migration(

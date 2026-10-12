@@ -21,6 +21,8 @@ from pydantic import (
     ConfigDict,
     Field,
     RootModel,
+    StrictFloat,
+    StrictInt,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -878,7 +880,9 @@ class ICWConfig(DesignCommon):
     theta_max_deg: Expr | None = Field(default=None, exclude_if=lambda v: v is None)
     pin_mouth_radius: bool | None = Field(default=None, strict=True, exclude_if=lambda v: v is None)
     icw_seed: dict[str, Any] | None = Field(default=None, exclude_if=lambda v: v is None)
-    icw_coeffs: list[int | Annotated[float, Field(allow_inf_nan=False)] | str] | None = Field(default=None, exclude_if=lambda v: v is None)
+    icw_coeffs: list[StrictInt | Annotated[StrictFloat, Field(allow_inf_nan=False)] | str] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     icw_S: Expr | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @field_validator(
@@ -892,11 +896,59 @@ class ICWConfig(DesignCommon):
         scalar = value.constant_value()
         if scalar is None:
             raise ValueError(f"{info.field_name} must be a finite scalar; ICW is axisymmetric")
-        if info.field_name in {"kappa_abs_max", "dkappa_ds_abs_max", "icw_S"} and scalar <= 0:
+        if info.field_name in {"kappa_abs_max", "dkappa_ds_abs_max", "icw_S", "r_aperture"} and scalar <= 0:
             raise ValueError(f"{info.field_name} must be greater than 0")
         if info.field_name == "theta_max_deg" and not 90 < scalar <= 180:
             raise ValueError("theta_max_deg must be in (90, 180] degrees")
         return value
+
+    @field_validator("icw_seed")
+    @classmethod
+    def _seed_matches_mesher(cls, seed: dict[str, Any] | None) -> dict[str, Any] | None:
+        if seed is None:
+            return seed
+
+        def finite(value: Any, where: str) -> None:
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError(f"icw_seed must contain only finite numbers ({where})")
+            if isinstance(value, Mapping):
+                for key, item in value.items():
+                    finite(item, f"{where}.{key}")
+            elif isinstance(value, (list, tuple)):
+                for index, item in enumerate(value):
+                    finite(item, f"{where}[{index}]")
+
+        finite(seed, "icw_seed")
+        # The mesher defaults a missing type to OSSE and normalises case, "_" and ROSSE.
+        kind = str(seed.get("type") or "OSSE").strip().upper().replace("_", "-")
+        if kind == "ROSSE":
+            kind = "R-OSSE"
+        if kind not in {"OSSE", "R-OSSE"}:
+            raise ValueError(f"icw_seed type must be OSSE or R-OSSE, got {seed.get('type')!r}")
+        return seed
+
+    @field_validator("icw_coeffs")
+    @classmethod
+    def _coeffs_match_mesher(cls, coeffs: list[int | float | str] | None) -> list[int | float | str] | None:
+        if coeffs is None:
+            return coeffs
+        if not coeffs:
+            raise ValueError("icw_coeffs must not be empty")
+        for index, item in enumerate(coeffs):
+            if isinstance(item, str):
+                try:
+                    number = Expr.model_validate(item).constant_value()
+                except ValueError as exc:
+                    raise ValueError(f"icw_coeffs[{index}] is not a valid expression: {exc}") from exc
+                if number is None or not math.isfinite(number):
+                    raise ValueError(f"icw_coeffs[{index}] must be a finite constant expression")
+        return coeffs
+
+    @model_validator(mode="after")
+    def _direct_mode_needs_arc_length(self) -> "ICWConfig":
+        if self.icw_coeffs is not None and self.icw_seed is None and self.icw_S is None:
+            raise ValueError("icw_coeffs requires icw_S (arc length, mm) unless icw_seed is set")
+        return self
 
 
 class LookupConfig(DesignCommon):

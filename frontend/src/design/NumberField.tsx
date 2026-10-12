@@ -14,6 +14,8 @@ interface NumberFieldProps {
   value?: number;
   unit?: string;
   min?: number;
+  /** The minimum itself is not allowed: the lowest accepted value is just above it. */
+  exclusiveMin?: boolean;
   max?: number;
   step?: number;
   precision?: number;
@@ -35,6 +37,8 @@ interface NumberFieldProps {
   onEndDrag?: () => void;
   /** Semantic target consumed by ParamPanel's queued reveal request. */
   revealId?: string;
+  /** Shown in an empty optional field instead of "Unset". */
+  placeholder?: string;
 }
 
 export function NumberField({
@@ -44,6 +48,7 @@ export function NumberField({
   value,
   unit,
   min = -Infinity,
+  exclusiveMin = false,
   max = Infinity,
   step = 1,
   precision = 1,
@@ -63,6 +68,7 @@ export function NumberField({
   onBeginDrag,
   onEndDrag,
   revealId,
+  placeholder,
 }: NumberFieldProps) {
   const id = useId();
   const titled = symbol ? `${label} (${symbol})` : label;
@@ -105,7 +111,7 @@ export function NumberField({
   // composition to end; otherwise a non-numeric draft is a formula.
   const formulaLayout = holdsExpression || (editing ? expandedDraft : isExpression);
   const empty = draft.trim() === '';
-  const outOfRange = !empty && !isExpression && Number.isFinite(parsed) && (parsed < min || parsed > max);
+  const outOfRange = !empty && !isExpression && Number.isFinite(parsed) && (parsed < min || (exclusiveMin && parsed === min) || parsed > max);
   /**
    * The bounds are the reason the field went red, so they are the message.
    *
@@ -115,7 +121,9 @@ export function NumberField({
    * invalid draft is reverted on blur -- their typing silently discarded.
    */
   const rangeMessage = outOfRange
-    ? formatRangeError?.(parsed) ?? (Number.isFinite(min) && Number.isFinite(max)
+    ? formatRangeError?.(parsed) ?? (exclusiveMin && Number.isFinite(min)
+      ? `Must be greater than ${formatBound(min, precision)}${Number.isFinite(max) ? ` and at most ${formatBound(max, precision)}` : ''}${unit ? ` ${unit}` : ''}.`
+      : Number.isFinite(min) && Number.isFinite(max)
       ? `Must be between ${formatBound(min, precision)} and ${formatBound(max, precision)}${unit ? ` ${unit}` : ''}.`
       : Number.isFinite(min)
         ? `Must be at least ${formatBound(min, precision)}${unit ? ` ${unit}` : ''}.`
@@ -238,11 +246,13 @@ export function NumberField({
    * whole field and retyping it. A formula field is exempt: there is nothing to
    * step, and stepping would overwrite the expression with a plain number.
    */
+  // The lowest value an exclusive minimum can step or drag to.
+  const floorAt = (candidate: number) => (exclusiveMin && candidate <= min ? min + 10 ** -precision : Math.max(min, candidate));
   const stepBy = (multiplier: number) => {
     if (formulaLayout) return false;
     const base = draft !== displayed && Number.isFinite(parsed) ? parsed : value ?? parsed;
     if (base === undefined || !Number.isFinite(base)) return false;
-    const next = Math.min(max, Math.max(min, base + step * multiplier));
+    const next = Math.min(max, floorAt(base + step * multiplier));
     const rounded = Number(next.toFixed(precision));
     setDraft(rounded.toFixed(shown));
     if (rounded !== value) onCommit(rounded);
@@ -287,7 +297,7 @@ export function NumberField({
   const onLabelPointerMove = (event: PointerEvent<HTMLLabelElement>) => {
     if (!drag.current) return;
     const delta = event.clientX - drag.current.x;
-    const next = Math.min(max, Math.max(min, drag.current.value + delta * step));
+    const next = Math.min(max, floorAt(drag.current.value + delta * step));
     const rounded = Number(next.toFixed(precision));
     setDraft(rounded.toFixed(shown));
     setDragDelta(rounded - drag.current.value);
@@ -372,7 +382,7 @@ export function NumberField({
           inputMode={formulaLayout ? 'text' : 'decimal'}
           spellCheck={false}
           disabled={disabled}
-          placeholder={optional ? 'Unset' : undefined}
+          placeholder={optional ? placeholder ?? 'Unset' : undefined}
           title={formulaLayout ? draft : undefined}
           value={draft}
           onChange={changeDraft}

@@ -31,6 +31,16 @@ describe('public parameter catalog', () => {
     ]);
   });
 
+  it('publishes boolean or null ICW option values and exclusive strict minima', () => {
+    const { parameters } = buildParameterCatalog();
+    const pin = parameters.find((field) => field.id === 'icw.pin_mouth_radius')!;
+    expect(pin.options.map((option) => option.value)).toEqual([null, false, true]);
+    const theta = parameters.find((field) => field.id === 'icw.theta_max_deg')!;
+    expect(theta.editor_bounds).toEqual({ minimum: 90, maximum: 180, exclusive_minimum: true });
+    const radius = parameters.find((field) => field.id === 'icw.R')!;
+    expect(JSON.stringify(radius.disabled_when)).toContain('"termination"');
+  });
+
   it('matches the committed server-owned integration artifact', () => {
     const bytes = readFileSync('../server/integration/parameter-catalog.v1.json');
     const committed = JSON.parse(new TextDecoder().decode(bytes));

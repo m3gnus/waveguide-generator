@@ -1810,7 +1810,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Target mouth radius the curvature solver sizes the curve to reach. On a rollback it is the aperture radius where the wall first turns through 90°, not the radius at the curled tip. During coverage hold it is emergent unless Pin mouth radius is enabled. Clear R to use the advanced Aperture radius on rollback.",
+      "description": "Target mouth radius the curvature solver sizes the curve to reach. On a rollback it is the aperture radius where the wall first turns through 90°, not the radius at the curled tip. During coverage hold it is emergent unless Pin mouth radius is enabled. On a rollback, clear R to use the advanced Aperture radius instead. On a flat baffle a blank R means the mesher default of 150 mm, so only clear it to reproduce an older file.",
       "disabled_when": {
         "operator": "any",
         "conditions": [
@@ -1830,6 +1830,11 @@
           {
             "operator": "all",
             "conditions": [
+              {
+                "path": "termination",
+                "operator": "not_equals",
+                "value": "rollback"
+              },
               {
                 "path": "coverage_angle",
                 "operator": "greater_than",
@@ -2458,7 +2463,8 @@
       "default_by_family": {},
       "editor_bounds": {
         "minimum": 90,
-        "maximum": 180
+        "maximum": 180,
+        "exclusive_minimum": true
       },
       "step": 0.1,
       "precision": 2,
@@ -2509,7 +2515,7 @@
       "precision": null,
       "options": [
         {
-          "value": "",
+          "value": null,
           "label": "Default (No)",
           "requires_feature": null,
           "degraded_without": null,
@@ -2517,7 +2523,7 @@
           "current_only": false
         },
         {
-          "value": "false",
+          "value": false,
           "label": "No",
           "requires_feature": null,
           "degraded_without": null,
@@ -2525,7 +2531,7 @@
           "current_only": false
         },
         {
-          "value": "true",
+          "value": true,
           "label": "Yes",
           "requires_feature": null,
           "degraded_without": null,
@@ -2533,7 +2539,7 @@
           "current_only": false
         }
       ],
-      "description": "Default is false: coverage hold lets mouth radius emerge. Yes adds R as a hard target during a flat-baffle coverage hold, which can make the targets infeasible. No effect without coverage or on rollback.",
+      "description": "Default is false: coverage hold lets mouth radius emerge. Yes adds R as a hard target during a flat-baffle coverage hold, which can make the targets infeasible. No effect without coverage or on rollback; a value left over from an earlier coverage setting stays editable so it can be reset.",
       "disabled_when": {
         "operator": "any",
         "conditions": [
@@ -2551,18 +2557,32 @@
             ]
           },
           {
-            "path": "termination",
-            "operator": "equals",
-            "value": "rollback"
-          },
-          {
-            "path": "coverage_angle",
-            "operator": "less_than_or_equal",
-            "value": 0
-          },
-          {
-            "path": "coverage_angle",
-            "operator": "absent"
+            "operator": "all",
+            "conditions": [
+              {
+                "path": "pin_mouth_radius",
+                "operator": "absent"
+              },
+              {
+                "operator": "any",
+                "conditions": [
+                  {
+                    "path": "termination",
+                    "operator": "equals",
+                    "value": "rollback"
+                  },
+                  {
+                    "path": "coverage_angle",
+                    "operator": "less_than_or_equal",
+                    "value": 0
+                  },
+                  {
+                    "path": "coverage_angle",
+                    "operator": "absent"
+                  }
+                ]
+              }
+            ]
           }
         ]
       }
