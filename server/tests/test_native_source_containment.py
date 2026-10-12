@@ -15,7 +15,7 @@ import time
 import pytest
 
 from server.cadlink.intake import native_source
-from server.platform import process_tree, running_exclusion
+from server.platform import child_process, process_tree, running_exclusion
 from server.platform.job_start import ContainedStartError
 
 _STAGE = Path("unused-stage")
@@ -60,7 +60,21 @@ class FakeJob:
         self.calls.append("close")
 
 
-def test_worker_uses_contained_start_and_cleans_up_after_success(monkeypatch):
+@pytest.fixture
+def fake_child_has_no_process_group(monkeypatch):
+    """A FakeChild's pid is invented, so no real process group may be looked up for it.
+
+    On POSIX ``terminate_process_tree`` resolves ``os.getpgid(child.pid)``. The
+    invented pid 1234 is a live process on a busy Linux runner, so the fake would
+    be given that process's group, which the cleanup then signals and waits out
+    before forcing ``kill()`` (returncode -9, empty stderr). With no group the
+    cleanup takes the same path it takes on Windows: the job, then the child.
+    """
+
+    monkeypatch.setattr(child_process, "posix_process_group", lambda process: None)
+
+
+def test_worker_uses_contained_start_and_cleans_up_after_success(monkeypatch, fake_child_has_no_process_group):
     child, job = FakeChild(), FakeJob()
     starts = []
 
@@ -133,7 +147,9 @@ def test_timeout_stops_and_reaps_a_real_worker(monkeypatch):
 
 
 @pytest.mark.parametrize("error", [OSError("broken pipe"), KeyboardInterrupt()])
-def test_communicate_exception_still_terminates_and_closes(monkeypatch, error):
+def test_communicate_exception_still_terminates_and_closes(
+    monkeypatch, error, fake_child_has_no_process_group
+):
     child, job = FakeChild(returncode=None, errors=[error]), FakeJob()
     monkeypatch.setattr(process_tree, "popen_in_windows_job", lambda *a, **kw: (child, job))
     with pytest.raises(type(error)) as raised:
@@ -144,7 +160,9 @@ def test_communicate_exception_still_terminates_and_closes(monkeypatch, error):
     assert child.stdout.closed and child.stderr.closed
 
 
-def test_second_communicate_timeout_is_bounded_and_suppressed(monkeypatch, caplog):
+def test_second_communicate_timeout_is_bounded_and_suppressed(
+    monkeypatch, caplog, fake_child_has_no_process_group
+):
     child = FakeChild(errors=[subprocess.TimeoutExpired("worker", 0.1)] * 2)
     job = FakeJob()
     monkeypatch.setattr(process_tree, "popen_in_windows_job", lambda *a, **kw: (child, job))
@@ -214,7 +232,9 @@ def test_ingest_native_source_bounds_real_worker(monkeypatch, tmp_path):
     ),
     ("gmsh failed\n", "native source ingestion failed: gmsh failed\n"),
 ])
-def test_nonzero_exit_preserves_refusal_text(monkeypatch, stderr, message):
+def test_nonzero_exit_preserves_refusal_text(
+    monkeypatch, stderr, message, fake_child_has_no_process_group
+):
     child, job = FakeChild(returncode=1, stderr=stderr), FakeJob()
     monkeypatch.setattr(process_tree, "popen_in_windows_job", lambda *a, **kw: (child, job))
     with pytest.raises(ValueError) as raised:
