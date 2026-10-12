@@ -2368,6 +2368,8 @@ def _fem_region_evidence(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "name": group["name"],
                     "kind": group["kind"],
                     "face_count": len(group["faces"]),
+                    **({"lining": dict(group["lining"])} if "lining" in group else {}),
+                    **({"relative_level_db": group["relative_level_db"]} if "relative_level_db" in group else {}),
                 }
                 for group in region["surface_groups"]
             ],

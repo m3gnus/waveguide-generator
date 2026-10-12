@@ -123,6 +123,18 @@ In Fusion, create one closed solid air body per region and use WGLink's
 as moving diaphragms, exterior interfaces, plane-wave terminations or rigid
 walls. Ungrouped faces are rigid. Hide each declared air body before Send/Solve
 so it is exported separately from the speaker assembly. Check Pre-flight.
+Rigid FEM face groups can carry Miki absorbing lining: specify its positive
+thickness in mm and airflow resistivity in Pa·s/m² in WGLink. Moving groups can
+set relative motion from -120 to 0 dB (0 dB means full motion). WG lists these
+settings beside each prepared group and retains them in the ingest evidence.
+Painted patches in FEM solves also accept positive setup patch weights. Each
+weight scales surface motion relative to its channel's reference velocity;
+interface outputs already include that motion. An enabled lumped rear chamber
+requires declared driver Sd and uses it alone for stiffness. Motion weights
+enter the geometric Sd cross-check and fallback. A channel with any non-unit
+motion weight keeps its raw generalized load and omits normalized acoustic
+impedance; see the driver Sd rules below.
+
 WG lists the prepared regions and shows retained interior pressure on a slice
 plane after solving; select a frequency and drive channel in the field controls.
 
@@ -257,7 +269,12 @@ enter missing values, especially bare Mmd (Mms includes air load and is not
 substituted). Sd is stored in m² in a v2 transducer spec. Every enabled lumped
 sealed rear chamber requires an entered Sd, at admission and compilation,
 on both exterior-only and coupled FEM routes. The declared value controls
-chamber stiffness ρc²Sd²/V and acoustic impedance Z/(ρcSd).
+chamber stiffness ρc²Sd²/V and, for unit motion weights, acoustic impedance Z/(ρcSd).
+
+Motion weights enter the geometric cross-check and fallback as per-face weights.
+If any moving boundary of a channel has a weight other than 1, results retain
+its raw generalized load and omit normalized acoustic impedance with
+“acoustic impedance is not normalised for weighted motion”.
 
 Moving-face geometry supplies acoustic-impedance normalization when Sd is
 undeclared and geometry is unambiguous. Same-sign mesh net projections are

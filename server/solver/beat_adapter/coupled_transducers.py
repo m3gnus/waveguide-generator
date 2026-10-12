@@ -12,11 +12,12 @@ from .transducers import DRIVER_SCALARS, ExteriorDriver, driver_parameters, reso
 
 def parameters(spec: Any, meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.ndarray]]], *,
                collected_warnings: list[str] | None = None, channel_id: str = "unknown",
-               sd_metadata: dict[str, Any] | None = None) -> tuple[dict[str, Any], float | None]:
+               sd_metadata: dict[str, Any] | None = None,
+               face_weights: Mapping[str, Sequence[np.ndarray]] | None = None) -> tuple[dict[str, Any], float | None]:
     """Use declared Sd, with per-mesh geometry as a fallback and cross-check."""
     raw = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
     axis = _axis(raw["motion_axis"])
-    area, metadata, notes = resolve_driver_sd(raw, meshes_m, axis, channel_id)
+    area, metadata, notes = resolve_driver_sd(raw, meshes_m, axis, channel_id, face_weights=face_weights)
     if sd_metadata is not None:
         sd_metadata.update(metadata)
     for note in notes:
@@ -78,8 +79,13 @@ def channel_problem(channel: Any) -> tuple[str, str] | None:
     """Restrictions shared by early admission and direct request compilation."""
     if getattr(channel, "driver", None) is not None:
         return "fem_drive_unsupported", f"Channel {channel.id!r}: FEM legacy driver models are unsupported; use an electrodynamic transducer"
-    if getattr(channel, "patch_weights", None) is not None:
-        return "fem_drive_unsupported", f"Channel {channel.id!r}: FEM patch weights are not supported yet"
+    weights = getattr(channel, "patch_weights", None)
+    if weights is not None:
+        if set(weights) != set(channel.source_ids):
+            return "fem_drive_unsupported", f"Channel {channel.id!r}: patch weights must cover exactly source_ids"
+        if any(isinstance(w, bool) or not isinstance(w, (int, float)) or not np.isfinite(w) or w <= 0
+               for w in weights.values()):
+            return "fem_drive_unsupported", f"Channel {channel.id!r}: FEM patch weights must be finite and positive"
     if getattr(channel, "motion", "normal") != "normal" and getattr(channel, "exterior_transducer", None) is None:
         return "fem_drive_unsupported", f"Channel {channel.id!r}: axial ideal sources are unsupported; use an electrodynamic transducer"
     return None

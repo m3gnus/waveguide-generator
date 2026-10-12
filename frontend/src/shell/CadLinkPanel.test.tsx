@@ -929,10 +929,11 @@ describe('CadLinkPanel', () => {
         mesh_size_mm: 8, medium: { sound_speed_m_per_s: 343, density_kg_per_m3: 1.21, bulk_loss_factor: 0 },
         mesh_cache_key: 'key', mesh_lookup_key: 'lookup', mesh_content_sha256: 'sha256:mesh', mesh_size_bytes: 500,
         surface_groups: [
-          { group_id: 'cone', name: 'Cone', kind: 'moving', mesh_size_mm: 4 },
+          { group_id: 'cone', name: 'Cone', kind: 'moving', mesh_size_mm: 4, relative_level_db: -6 },
           { group_id: 'port', name: 'Port', kind: 'interface', mesh_size_mm: 4 },
           { group_id: 'end', name: 'End', kind: 'plane-wave-termination', mesh_size_mm: 8 },
-          { group_id: 'walls', name: 'Walls', kind: 'rigid', mesh_size_mm: 8 },
+          { group_id: 'walls', name: 'Walls', kind: 'rigid', mesh_size_mm: 8,
+            lining: { model: 'miki', thickness_mm: 30, flow_resistivity_pa_s_per_m2: 5000 } },
         ],
         stats: { tetrahedra: 1234, nodes: 456, surface_groups: {
           cone: { kind: 'moving', triangle_count: 210, area_mm2: 1200, face_count: 1 },
@@ -955,6 +956,8 @@ describe('CadLinkPanel', () => {
     expect(regions.textContent).toContain('interface · 100 triangles · 600 mm²');
     expect(regions.textContent).toContain('plane wave termination · 120 triangles · 800 mm²');
     expect(regions.textContent).toContain('rigid · 130 triangles · 1,000 mm²');
+    expect(regions.textContent).toContain('-6 dB relative motion');
+    expect(regions.textContent).toContain('Miki lining: 30 mm · 5000 Pa·s/m²');
     expect(regions.textContent).toContain('Unclaimed walls');
     expect(regions.textContent).toContain('rigid · 400 triangles · 3,400 mm²');
     await act(async () => capabilityClient.setQueryData(['capabilities'], { engines: [], femRegions: false }));

@@ -6,34 +6,19 @@ from typing import Any
 
 
 def fem_group_options_problem(regions: Sequence[Mapping[str, Any]]) -> tuple[str, str] | None:
-    """Refuse protocol options this build cannot yet apply."""
-    offending: dict[str, list[str]] = {}
+    """Validate options again for retained records and direct solver callers."""
+    from server.mesh.fem_regions import validate_group_options
+
     for region in regions:
         for group in region.get("surface_groups", ()):
-            if "lining" not in group and group.get("relative_level_db", 0) == 0:
-                continue
-            label = (
-                f"FEM region {region.get('name') or region['region_id']!r} "
-                f"({region['region_id']!r}), group {group.get('name') or group['group_id']!r} "
-                f"({group['group_id']!r})"
-            )
-            if "lining" in group:
-                offending.setdefault("fem_lining_unsupported", []).append(label)
-            if group.get("relative_level_db", 0) != 0:
-                offending.setdefault("fem_motion_weight_unsupported", []).append(label)
-    if not offending:
-        return None
-    descriptions = {
-        "fem_lining_unsupported": "lining",
-        "fem_motion_weight_unsupported": "a nonzero relative level",
-    }
-    message = "; ".join(
-        f"{'; '.join(labels)}: {descriptions[code]} is not supported yet in this WG build"
-        for code, labels in offending.items()
-    )
-    return next(iter(offending)), (
-        f"{message}. To continue, remove the lining (or set the relative level to 0 dB) "
-        "on these groups in WGLink and send again.")
+            label = (f"FEM region {region.get('name') or region['region_id']!r} "
+                     f"({region['region_id']!r}), group {group.get('name') or group['group_id']!r} "
+                     f"({group['group_id']!r})")
+            try:
+                validate_group_options(group, label)
+            except ValueError as exc:
+                return "fem_group_options_invalid", str(exc)
+    return None
 
 
 def fem_termination_problem(regions: Sequence[Mapping[str, Any]], *,

@@ -91,19 +91,34 @@ entry has:
 | `mesh_size_mm` | region size; finer group sizes blend back over three region sizes |
 | `medium` | `sound_speed_m_per_s`, `density_kg_per_m3`, `bulk_loss_factor` in 0..1 |
 | `surface_groups[]` | `group_id`, `name`, `kind`, `mesh_size_mm`, `faces[]`, and `drive_channel_id` for `moving` only |
-| `lining` | Optional on a rigid group: `model` (`miki`), `thickness_mm`, `flow_resistivity_pa_s_per_m2` |
-| `relative_level_db` | Optional on a moving group: relative motion level in dB; defaults to 0 |
+| `lining` | Optional on a rigid FEM group: `model` (`miki`), positive `thickness_mm` and `flow_resistivity_pa_s_per_m2`; compiled as boundary `parameters.wall_impedance` with `thickness_m = thickness_mm / 1000` |
+| `relative_level_db` | Optional on a moving group: -120..0 dB, default 0; compiled as component `parameters.boundary_motion_weights[boundary_id] = 10^(dB/20)` |
 | `faces[]` | `area_mm2`, `centroid_mm`, `normal` (unit, planes only) or null, `bbox_mm` |
 
 Both validation profiles call the shared `validate_fem_regions`. A return
 whose only driver is a FEM diaphragm is drivable without painted sources.
 
-Until the lining and motion-weight slices land, this WG build refuses any
-declared `lining` with `fem_lining_unsupported` and any nonzero
-`relative_level_db` with `fem_motion_weight_unsupported`, before meshing or
-solve admission. An explicit relative level of 0 dB is accepted. The refusal
-names every offending region and group: remove the lining (or set the relative
-level to 0 dB) on these groups in WGLink and send again.
+Rigid FEM groups accept Miki rigid-backed porous lining. Lining on moving,
+interface, termination or exterior boundaries refuses. Moving FEM groups accept
+relative levels; painted exterior patches use their setup `patch_weights`.
+Coupled patch weights must be finite and strictly positive (zero and negative
+weights remain available only on the existing exterior-only routes). The panel
+and ingest evidence retain the declared lining and relative levels.
+
+Motion weights multiply the component's canonical normal velocity, or its rigid
+translation for an electrodynamic driver. They do not change excitation port
+amplitudes: ideal ports remain 1 m/s before unit-acceleration result scaling,
+and voltage ports retain their RMS voltage. Interface velocity is still averaged
+by geometric interface area; interface radiation and volume velocity already
+include the weighted source response and receive no further weight multiplier.
+Declared `sd_m2` alone controls lumped rear-chamber stiffness, and an enabled
+chamber always requires it. Motion weights reach `geometric_driver_area` as
+per-face weights for the acoustic-impedance fallback and geometric cross-check;
+the rear-load sign guard uses unweighted geometry. Reciprocal engine force
+coupling uses the same motion weights, so a generalized load scales with their
+square. If any moving boundary of a channel has weight other than 1, results
+keep the raw generalized load and omit normalized acoustic impedance with
+“acoustic impedance is not normalised for weighted motion”.
 
 WG names its physical groups as follows:
 
@@ -360,7 +375,8 @@ on the official BEAT backends.
 Electrodynamic voltage drives are supported on full models, including FEM
 and painted exterior diaphragms and mixed ideal/voltage channels. Driver symmetry
 is pending and reduced models with drivers refuse clearly. Legacy driver models,
-patch weights, ideal axial motion and passive-cardioid campaigns remain unsupported.
+ideal axial motion and passive-cardioid campaigns remain unsupported. Positive
+painted-patch weights and FEM relative motion levels are supported.
 
 Interface outputs include area-weighted complex normal velocity and radiated
 pressure on the polar cuts, per drive channel. Radiation phasors use lossless
@@ -493,7 +509,7 @@ selected library driver's `Sd_cm2` replaces the field; users may edit it.
 Explicit picks replace all mapped T/S fields and clear unavailable values. A
 spec declaring Sd requires v2; absent options preserve v1 serialization.
 Declared Sd alone controls sealed-chamber stiffness Kbox = ρc²Sd²/V and
-acoustic impedance normalization Z/(ρcSd). Results record `sd_m2`,
+acoustic impedance normalization Z/(ρcSd) for unit motion weights. Results record `sd_m2`,
 `sd_source` (`declared` or `geometry`), `geometric_sd_m2` and
 `geometry_ambiguous` per channel. An undetermined Sd has null value/source.
 

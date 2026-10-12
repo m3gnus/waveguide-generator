@@ -22,14 +22,13 @@ from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import read_wgreturn, validate_manifest
 from server.engines.registry import EngineInfo, EngineRegistry
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
-from server.jobs.runtime import ImportedSolveRefusal, JobRuntime, resolve_imported_submission
+from server.jobs.runtime import JobRuntime
 from server.jobs.runtime.imported_refusals import _imported_request_refusal
 from server.jobs.store import JobStore
 from server.mesh.artifact import read_verified_fem_region_mesh
 from server.mesh.fem_regions import read_fem_region_domain
 from server.solver.beat_adapter.results import acceleration_scale
 from server.solver.coupled_admission import fem_drive_problem
-from server.solver.coupled_system import CoupledSystemError, FemRegionInput, build_coupled_system
 from server.tests.beat_runtime.fake_host_worker import coupled_result
 from server.tests.fem_validation import _write_geometry, validation_request
 from server.tests.test_cadlink_wgreturn import _manifest
@@ -142,7 +141,7 @@ def _write_addin_bundle(addin, root, assembly, air, bounds, *, coupled, option, 
 
 
 @pytest.mark.parametrize("coupled", [False, True], ids=["interior", "coupled"])
-@pytest.mark.parametrize("level", [None, 0], ids=["default-level", "explicit-zero"])
+@pytest.mark.parametrize("level", [None, 0, -6., -120., "lining"])
 def test_pinned_fem_writer_reader_mesh_and_fake_job(packaged, runtime, tmp_path, monkeypatch, coupled, level):
     monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
     bundle, manifest, members = _addin_bundle(packaged, tmp_path / "returns", coupled=coupled, option=level)
@@ -217,21 +216,30 @@ def test_pinned_fem_writer_reader_mesh_and_fake_job(packaged, runtime, tmp_path,
         assert wire["solver_options"]["precision"] == "float64"
         assert wire["solver_options"]["bem_backend"] == "cpu"
         assert bool(wire["compiled_system"]["interfaces"]) is coupled
+        from beat_engine.beat_contract import validate_solve_request
+        validate_solve_request(wire)
+        component, = wire["compiled_system"]["components"]
+        weights = component["parameters"]["boundary_motion_weights"]
+        assert weights == {"boundary:fem:rear-chamber:cone": pytest.approx(
+            10 ** ((level if isinstance(level, (int, float)) else 0) / 20))}
+        walls = [b for b in wire["compiled_system"]["boundaries"] if b["parameters"]]
+        if level == "lining":
+            assert len(walls) == 1
+            assert walls[0]["parameters"]["wall_impedance"] == {
+                "model": "miki", "thickness_m": .03, "flow_resistivity_pa_s_per_m2": 5000.}
+        else:
+            assert walls == []
         for name, content in members.items():
             assert (bundle / name).read_bytes() == content
     finally:
         cad_store.close()
 
 
-@pytest.mark.parametrize("option,code,group_name", [
-    ("lining", "fem_lining_unsupported", "Wall"),
-    (-6., "fem_motion_weight_unsupported", "Cone"),
-    (-120., "fem_motion_weight_unsupported", "Cone"),
-])
+@pytest.mark.parametrize("option,group_name", [("lining", "Wall"), (-6., "Cone"), (-120., "Cone")])
 @pytest.mark.parametrize("coupled", [False, True], ids=["interior", "coupled"])
 @pytest.mark.parametrize("shared", [None, "two-regions"], ids=["one-region", "two-regions"])
-def test_pinned_optional_physics_round_trips_but_refuses_before_meshing_and_admission(
-    packaged, tmp_path, monkeypatch, option, code, group_name, coupled, shared,
+def test_pinned_optional_physics_round_trips_and_passes_scope_gate(
+    packaged, tmp_path, monkeypatch, option, group_name, coupled, shared,
 ):
     monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
     bundle, manifest, _ = _addin_bundle(
@@ -239,55 +247,23 @@ def test_pinned_optional_physics_round_trips_but_refuses_before_meshing_and_admi
     assert read_wgreturn(bundle).manifest == manifest
     regions = manifest["scope"]["fem_regions"]
     group = next(g for g in regions[0]["surface_groups"] if g["name"] == group_name)
-    assert group["lining" if option == "lining" else "relative_level_db"] == (
-        {"model": "miki", "thickness_mm": 30., "flow_resistivity_pa_s_per_m2": 5000.}
-        if option == "lining" else option)
-
-    def unexpected(*_args, **_kwargs):
-        pytest.fail("unsupported FEM options must refuse before meshing")
-
-    monkeypatch.setattr(ingest, "build_imported_mesh_isolated", unexpected)
-    monkeypatch.setattr(ingest, "build_fem_region_mesh_isolated", unexpected)
-    monkeypatch.setattr(ingest, "build_coupled_mesh_isolated", unexpected)
-    store = CadLinkStore(tmp_path / "cadlink.db")
-    try:
-        with pytest.raises(ingest.IngestRefusal) as caught:
-            ingest.ingest_bundle(bundle, {
-                "rigid_size_mm": 12., "transition_mm": 12., "source_size_mm": {},
-            }, [], store, tmp_path / "data", defer_viewport=True)
-        assert caught.value.reason_code == code
-        assert caught.value.stage == "stage 2 scope gate"
-        assert code not in str(caught.value)
-        assert "meshing" not in str(caught.value)
-        for label in ("Rear chamber", group_name, "not supported yet in this WG build"):
-            assert label in str(caught.value)
-        for region in regions:
-            assert f"{region['name']!r} ({region['region_id']!r})" in str(caught.value)
-            assert f"{group_name!r} ({group['group_id']!r})" in str(caught.value)
-        assert ("remove the lining (or set the relative level to 0 dB) "
-                "on these groups in WGLink and send again") in str(caught.value)
-    finally:
-        store.close()
-
-    # An older stored ingest must not bypass the same declaration refusal.
-    request = _request("wgi_" + "0" * 26, drive_channels=[],
-                       mesh={"rigid_size_mm": 12., "transition_mm": 12., "source_size_mm": {}})
-    request.options.engine = "beat-cpu"
-    record = {"fem_regions": regions}
-    problem = _imported_request_refusal(request, record)
-    assert problem[0] == code
-    assert problem[1] in str(caught.value)
-
-    class NoEngine:
-        async def capabilities(self):
-            pytest.fail("unsupported FEM options must refuse before engine selection")
-
-    with pytest.raises(ImportedSolveRefusal) as admission:
-        asyncio.run(resolve_imported_submission(request, NoEngine(), imported_record=record))
-    assert admission.value.reason_code == code
-    assert problem[1] in str(admission.value)
-    with pytest.raises(CoupledSystemError, match=code):
-        build_coupled_system(None, [FemRegionInput(region, None) for region in regions])
+    expected = ({"model": "miki", "thickness_mm": 30., "flow_resistivity_pa_s_per_m2": 5000.}
+                if option == "lining" else option)
+    key = "lining" if option == "lining" else "relative_level_db"
+    assert group[key] == expected
+    assert ingest._refuse_fem_domain(manifest, {}, [])
+    evidence = ingest._fem_region_evidence(manifest)
+    assert next(g for g in evidence[0]["surface_groups"] if g["name"] == group_name)[key] == expected
+    problem = fem_drive_problem(regions, {}, painted_sources=set())
+    if shared:
+        assert problem[0] == "fem_multiple_diaphragms_unsupported"
+    else:
+        assert problem is None
+        request = _request("wgi_" + "0" * 26, drive_channels=[],
+                           mesh={"rigid_size_mm": 12., "transition_mm": 12., "source_size_mm": {}})
+        from server.tests.test_fem_termination import _closed_domain
+        assert _imported_request_refusal(request, {
+            "fem_regions": regions, "domain_interpretation": _closed_domain()}) is None
 
 
 @pytest.mark.parametrize("level", [0, 0., -0.])

@@ -782,20 +782,18 @@ def test_cheap_admission_checks_driven_surface_and_missing_channels(fem_admissio
     assert ("right" if driven else "no driven surface") in refusal[1]
 
 
-@pytest.mark.parametrize("change", ["driver", "weights", "axial", "cardioid"])
+@pytest.mark.parametrize("change", ["driver", "axial", "cardioid"])
 def test_stricter_fem_drive_limit_is_explicit(fem_admission, change):
     channel = fem_admission.geometry.drive_channels[0]
     if change == "driver":
         channel.driver = object()
-    elif change == "weights":
-        channel.patch_weights = {"source-a": 1.}
     elif change == "axial":
         channel.motion = "axial"
     else:
         fem_admission.geometry.passive_cardioid_rear_volume_l = 10.
     refusal = admission(fem_admission, [region_input("rear", "left")])
     assert refusal[0] == "fem_drive_unsupported"
-    assert {"driver": "legacy driver", "weights": "patch weights", "axial": "axial ideal",
+    assert {"driver": "legacy driver", "axial": "axial ideal",
             "cardioid": "passive-cardioid"}[change] in refusal[1]
 
 

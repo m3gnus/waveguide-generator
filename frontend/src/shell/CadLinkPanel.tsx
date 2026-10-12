@@ -892,10 +892,16 @@ export function CadLinkPanel() {
         {record.fem_regions.map((region) => <div key={region.region_id}>
           <b>{region.name}</b>
           <p className="cad-detail">{region.stats.tetrahedra.toLocaleString()} tetrahedra · {region.stats.nodes.toLocaleString()} nodes · {region.mesh_size_mm} mm region size</p>
-          {Object.entries(region.stats.surface_groups).map(([groupId, stats]) => <div className="cad-row" key={groupId}>
-            <b>{region.surface_groups.find((group) => group.group_id === groupId)?.name ?? (groupId === '_walls' ? 'Unclaimed walls' : groupId)}</b>
-            <span>{stats.kind.replaceAll('-', ' ')} · {stats.triangle_count.toLocaleString()} triangles · {stats.area_mm2.toLocaleString(undefined, { maximumFractionDigits: 2 })} mm²</span>
-          </div>)}
+          {Object.entries(region.stats.surface_groups).map(([groupId, stats]) => {
+            const group = region.surface_groups.find((candidate) => candidate.group_id === groupId);
+            return <div className="cad-row" key={groupId}>
+              <b>{group?.name ?? (groupId === '_walls' ? 'Unclaimed walls' : groupId)}</b>
+              <span>{stats.kind.replaceAll('-', ' ')} · {stats.triangle_count.toLocaleString()} triangles · {stats.area_mm2.toLocaleString(undefined, { maximumFractionDigits: 2 })} mm²
+                {group?.kind === 'moving' && <> · {group.relative_level_db ?? 0} dB relative motion</>}
+                {group?.lining && <> · Miki lining: {group.lining.thickness_mm} mm · {group.lining.flow_resistivity_pa_s_per_m2} Pa·s/m²</>}
+              </span>
+            </div>;
+          })}
         </div>)}
       </section>}
       {/* The one Solve card: what Solve uses -- the model, which way it

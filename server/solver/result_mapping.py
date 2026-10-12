@@ -1408,7 +1408,13 @@ def map_coupled_transducer_response(response, sweep, request, channel, spec):
     medium = request.regions[0].record["medium"]
     sd_metadata = system["metadata"]["driver_sd"][channel]
     response["metadata"].update(sd_metadata)
-    if area is not None:
+    weighted_motion = any(weight != 1 for weight in
+                          drivers[index]["parameters"].get("boundary_motion_weights", {}).values())
+    if weighted_motion:
+        response.pop("acoustic_impedance", None)
+        response["metadata"].pop("acoustic_impedance", None)
+        response["metadata"]["acoustic_impedance_note"] = "acoustic impedance is not normalised for weighted motion"
+    elif area is not None:
         normalized = load / (medium["density_kg_per_m3"] * medium["sound_speed_m_per_s"] * area)
         response["acoustic_impedance"] = impedance(normalized)
         response["metadata"]["acoustic_impedance"] = {

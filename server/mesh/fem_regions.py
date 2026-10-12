@@ -57,6 +57,27 @@ class FemRegionMeshError(ValueError):
         super().__init__(message)
 
 
+def validate_group_options(group: Mapping[str, Any], label: str) -> None:
+    """Guard boundary physics in WG records, independent of bundle validation."""
+    if "lining" in group:
+        if group.get("kind") != "rigid":
+            raise FemRegionMeshError(f"{label}: lining is accepted only on a rigid group")
+        lining = group["lining"]
+        keys = {"model", "thickness_mm", "flow_resistivity_pa_s_per_m2"}
+        if not isinstance(lining, Mapping) or set(lining) != keys or lining["model"] != "miki":
+            raise FemRegionMeshError(f"{label}: lining requires the Miki model, thickness and airflow resistivity")
+        for key in keys - {"model"}:
+            value = lining[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise FemRegionMeshError(f"{label}: lining {key} must be finite and positive")
+    if "relative_level_db" in group:
+        if group.get("kind") != "moving":
+            raise FemRegionMeshError(f"{label}: relative_level_db is accepted only on a moving group")
+        value = group["relative_level_db"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not -120 <= value <= 0:
+            raise FemRegionMeshError(f"{label}: relative_level_db must be finite and between -120 and 0 dB")
+
+
 def physical_name(region_id: str, group_id: str | None = None, kind: str | None = None) -> str:
     if group_id is None:
         return f"{FEM_TAG_NAMESPACE}|region={region_id}|volume"
@@ -343,6 +364,8 @@ def build_fem_region_mesh(
 
     import gmsh
 
+    for group in region.get("surface_groups", ()):
+        validate_group_options(group, f"FEM region {region['region_id']!r}, group {group['group_id']!r}")
     region_id = str(region["region_id"])
     region_size = float(region["mesh_size_mm"])
     gmsh.model.add(f"fem-region-{region_id}")
@@ -402,6 +425,8 @@ def build_fem_region_mesh(
                 "group_id": group_id,
                 "kind": str(group["kind"]),
                 **({"drive_channel_id": group["drive_channel_id"]} if group.get("drive_channel_id") else {}),
+                **({"lining": dict(group["lining"])} if "lining" in group else {}),
+                **({"relative_level_db": group["relative_level_db"]} if "relative_level_db" in group else {}),
             }
             sized.append((surfaces, float(group["mesh_size_mm"])))
         if caps:

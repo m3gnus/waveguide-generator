@@ -342,14 +342,12 @@ def test_interior_termination_stays_supported_with_a_voltage_driver():
     assert request.wire['compiled_system']['components'][0]['kind'] == 'electrodynamic_transducer'
 
 
-@pytest.mark.parametrize('unsupported', ['driver', 'weights', 'axial'])
+@pytest.mark.parametrize('unsupported', ['driver', 'axial'])
 def test_direct_builder_keeps_unsupported_drive_refusals(unsupported):
     channel = SimpleNamespace(id='one', source_ids=[], motion='normal', driver=None,
                               patch_weights=None, exterior_transducer=None)
     if unsupported == 'driver':
         channel.driver = object()
-    elif unsupported == 'weights':
-        channel.patch_weights = {'patch': 1.}
     else:
         channel.motion = 'axial'
     with pytest.raises(ValueError, match='fem_drive_unsupported'):

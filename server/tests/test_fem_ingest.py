@@ -119,53 +119,26 @@ def test_single_interior_region_checks_assembly_replay_truth(tmp_path, monkeypat
     assert str(caught.value).count('Rear chamber') == 1
 
 
-def test_optional_physics_refusal_lists_all_groups_and_clears_after_remedy(tmp_path, monkeypatch):
-    regions = [_interior_region(), _interior_region(
-        region_id="front-chamber", name="Front chamber", object_id="air-2",
-        file="fem-regions/front-chamber.step")]
-    for region in regions:
-        moving, wall = region["surface_groups"]
-        moving["relative_level_db"] = -6.
-        wall.update(kind="rigid", lining={
-            "model": "miki", "thickness_mm": 30., "flow_resistivity_pa_s_per_m2": 5000.,
-        })
-        second_wall = deepcopy(wall)
-        second_wall.update(group_id="wall", name="Wall")
-        region["surface_groups"].append(second_wall)
-    bundle = _bundle(tmp_path / "returns", regions=regions)
-
-    def unexpected(*_args, **_kwargs):
-        pytest.fail("unsupported FEM options must refuse before meshing")
-
-    monkeypatch.setattr(ingest, "build_imported_mesh_isolated", unexpected)
-    monkeypatch.setattr(ingest, "build_fem_region_mesh_isolated", unexpected)
-    monkeypatch.setattr(ingest, "build_coupled_mesh_isolated", unexpected)
-    with pytest.raises(ingest.IngestRefusal) as caught:
-        _ingest(bundle, tmp_path)
-    assert caught.value.reason_code == "fem_motion_weight_unsupported"
-    assert caught.value.stage == "stage 2 scope gate"
-    message = str(caught.value)
-    for region in regions:
-        for group in region["surface_groups"]:
-            assert (f"FEM region {region['name']!r} ({region['region_id']!r}), "
-                    f"group {group['name']!r} ({group['group_id']!r})") in message
-    assert "fem_motion_weight_unsupported" not in message
-    assert "fem_lining_unsupported" not in message
-    assert ("remove the lining (or set the relative level to 0 dB) "
-            "on these groups in WGLink and send again") in message
-    assert not (tmp_path / "cadlink.db").exists()
-
-    from server.solver.coupled_admission import fem_group_options_problem
-
-    for region in regions:
-        for group in region["surface_groups"]:
-            group.pop("lining", None)
-            if "relative_level_db" in group:
-                group["relative_level_db"] = 0.
-    assert fem_group_options_problem(regions) is None
+def test_optional_physics_ingests_and_retains_mesh_records_and_evidence(tmp_path):
+    region = _interior_region()
+    moving, wall = region["surface_groups"]
+    moving["relative_level_db"] = -6.
+    wall.update(kind="rigid", lining={
+        "model": "miki", "thickness_mm": 30., "flow_resistivity_pa_s_per_m2": 5000.,
+    })
+    record = _ingest(_bundle(tmp_path / "returns", regions=[region]), tmp_path)
+    retained, = record["fem_regions"]
+    assert retained["surface_groups"] == region["surface_groups"]
+    names = retained["physical_names"]
+    assert names[physical_name(region["region_id"], "cone", "moving")]["relative_level_db"] == -6.
+    assert names[physical_name(region["region_id"], "port", "rigid")]["lining"] == wall["lining"]
+    evidence, = record["evidence"]["fem_regions"]
+    assert evidence["surface_groups"][0]["relative_level_db"] == -6.
+    assert evidence["surface_groups"][1]["lining"] == wall["lining"]
+    read_verified_fem_region_mesh(record, region["region_id"])
 
 
-@pytest.mark.parametrize("code", [None, "fem_lining_unsupported", "fem_motion_weight_unsupported"])
+@pytest.mark.parametrize("code", [None, "fem_group_options_invalid"])
 def test_rebuilt_child_refusal_preserves_reason_code(tmp_path, monkeypatch, code):
     bundle = _bundle(tmp_path / "returns")
     refusal = ChildRefusal("stage 7 meshing", "child refusal",

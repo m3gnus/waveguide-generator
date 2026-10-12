@@ -317,6 +317,8 @@ export interface CadFemRegion {
     kind: CadFemSurfaceGroupStats['kind'];
     mesh_size_mm: number;
     drive_channel_id?: string;
+    relative_level_db?: number;
+    lining?: { model: 'miki'; thickness_mm: number; flow_resistivity_pa_s_per_m2: number };
   }>;
   mesh_cache_key: string;
   mesh_lookup_key: string;

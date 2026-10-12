@@ -204,6 +204,8 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
         points, groups = read_coupled_exterior(read_verified_coupled_exterior_mesh(record))
         kinds = {name: dict(value) for name, value in record["coupled_exterior"]["physical_names"].items()}
         # The setup owns painted-source channel assignment; FEM declarations own diaphragms.
+        source_weights = {source: (getattr(channel, "patch_weights", None) or {}).get(source, 1.0)
+                          for channel in geometry.drive_channels for source in channel.source_ids}
         source_channels = {source: channel.id for channel in geometry.drive_channels
                            for source in channel.source_ids}
         for name, kind in kinds.items():
@@ -211,6 +213,7 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
                            if part.startswith("source_id=")), None)
             if source in source_channels:
                 kind["drive_channel_id"] = source_channels[source]
+                kind["motion_weight"] = source_weights[source]
             elif source is not None:
                 kind["kind"] = "rigid"
                 kind.pop("drive_channel_id", None)
@@ -221,12 +224,16 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
 
         mesh = read_surface(read_verified_import_mesh(record))
         groups, kinds = {}, {}
+        by_weight = {s: (getattr(c, "patch_weights", None) or {}).get(s, 1.0)
+                     for c in geometry.drive_channels for s in c.source_ids}
         by_source = {s: c.id for c in geometry.drive_channels for s in c.source_ids}
         by_tag = {int(record["source_tags"][s]): c for s, c in by_source.items()}
+        tag_weights = {int(record["source_tags"][s]): w for s, w in by_weight.items()}
         for tag in np.unique(mesh.tags):
             name = f"exterior:{tag}"
             groups[name] = mesh.faces[mesh.tags == tag]
-            kinds[name] = ({"kind": "moving", "drive_channel_id": by_tag[int(tag)]}
+            kinds[name] = ({"kind": "moving", "drive_channel_id": by_tag[int(tag)],
+                            "motion_weight": tag_weights[int(tag)]}
                            if int(tag) in by_tag else {"kind": "rigid"})
         exterior = ExteriorSurface(mesh.points_m * 1000, groups, kinds)
     frame = imported_anchor_frame(record)

@@ -210,13 +210,18 @@ def moving_meshes_have_opposite_nets(meshes_m, axis) -> bool:
     return any(net > 0 for net in nets) and any(net < 0 for net in nets)
 
 
-def resolve_driver_sd(raw: Mapping[str, Any], meshes_m, axis, channel_id: str
+def resolve_driver_sd(raw: Mapping[str, Any], meshes_m, axis, channel_id: str, *,
+                      face_weights: Mapping[str, Sequence[np.ndarray]] | None = None
                       ) -> tuple[float | None, dict[str, Any], list[str]]:
     chamber_sd_problem(raw, channel_id)
-    geometric, ambiguous, notes = geometric_driver_area(meshes_m, axis)
+    geometric, ambiguous, notes = (geometric_driver_area(meshes_m, axis, face_weights=face_weights)
+                                   if face_weights is not None else geometric_driver_area(meshes_m, axis))
     if (raw.get("lumped_sealed_rear_chamber") or {}).get("enabled", False):
+        # Motion weights affect the cross-check, not the geometry sign guard.
+        chamber_ambiguous = (geometric_driver_area(meshes_m, axis)[1]
+                             if face_weights is not None else ambiguous)
         chamber_sd_problem(raw, channel_id, both_sides_radiate=(
-            ambiguous or moving_meshes_have_opposite_nets(meshes_m, axis)))
+            chamber_ambiguous or moving_meshes_have_opposite_nets(meshes_m, axis)))
     declared = raw.get("sd_m2")
     area = _positive(declared, "sd_m2") if declared is not None else (None if ambiguous else geometric)
     source = "declared" if declared is not None else ("geometry" if area is not None else None)

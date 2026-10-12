@@ -315,7 +315,7 @@ def build_coupled_system(
     problem = fem_drive_problem([r.record for r in regions], {}, painted_sources=set(),
                                electrodynamic_channels={channel for channel, spec in (transducers or {}).items()
                                                         if spec is not None})
-    if problem and problem[0] in {"fem_lining_unsupported", "fem_motion_weight_unsupported"}:
+    if problem and problem[0] == "fem_group_options_invalid":
         raise CoupledSystemError(f"{problem[0]}: {problem[1]}")
     if problem and problem[0] in {"fem_multiple_diaphragms_unsupported", "fem_missing_channel"}:
         raise CoupledSystemError(problem[1])
@@ -324,6 +324,8 @@ def build_coupled_system(
     boundaries: list[dict[str, Any]] = []
     interfaces: list[dict[str, Any]] = []
     moving_by_channel: dict[str, list[str]] = {}
+    motion_weights: dict[str, float] = {}
+    moving_triangle_weights: dict[str, dict[str, list[np.ndarray]]] = {}
     moving_triangles: dict[str, dict[str, list[tuple[np.ndarray, np.ndarray]]]] = {}
     exterior_boundary_by_name: dict[str, str] = {}
     exterior_rows: dict[str, np.ndarray] = {}
@@ -358,6 +360,8 @@ def build_coupled_system(
         for index, (group_name, block) in enumerate(surfaces):
             kind_record = exterior.kinds.get(group_name) or {}
             kind = kind_record.get("kind", "rigid")
+            if "lining" in kind_record or "wall_impedance" in kind_record:
+                raise CoupledSystemError(f"Exterior group {group_name!r}: lining is supported only on rigid FEM boundaries.")
             if kind not in {"rigid", "moving", "interface"}:
                 raise CoupledSystemError(f"Exterior group {group_name!r} has unknown kind {kind!r}.")
             boundary_id = f"boundary:exterior:{index}"
@@ -374,7 +378,12 @@ def build_coupled_system(
                 if not channel:
                     raise CoupledSystemError(f"Exterior source {group_name!r} names no drive channel.")
                 moving_by_channel.setdefault(str(channel), []).append(boundary_id)
+                weight = kind_record.get("motion_weight", 1.0)
+                if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not np.isfinite(weight) or weight <= 0:
+                    raise CoupledSystemError(f"Exterior source {group_name!r}: motion weight must be finite and positive.")
+                motion_weights[boundary_id] = float(weight)
                 if channel in (transducers or {}):
+                    moving_triangle_weights.setdefault(str(channel), {}).setdefault(EXTERIOR_MESH_ID, []).append(np.full(len(block), weight))
                     moving_triangles.setdefault(str(channel), {}).setdefault(EXTERIOR_MESH_ID, []).append(
                         (block, np.asarray(exterior.points_mm[block], dtype=np.float64) * MM_TO_M))
 
@@ -403,10 +412,16 @@ def build_coupled_system(
             "density_kg_per_m3": float(medium["density_kg_per_m3"]),
             "loss_model": {"bulk_loss_factor": float(medium["bulk_loss_factor"])},
         })
-        channels = {
-            str(group["group_id"]): group.get("drive_channel_id")
+        declarations = {
+            str(group["group_id"]): group
             for group in record.get("surface_groups") or ()
         }
+        for group_id, declaration in declarations.items():
+            if "lining" in declaration or "relative_level_db" in declaration:
+                expected = f"wg-fem-v1|region={region_id}|group={group_id}|kind={declaration['kind']}"
+                if expected not in domain.surfaces:
+                    raise CoupledSystemError(f"FEM region {region_id!r}, group {group_id!r}: "
+                                             "boundary physics has no matching mesh group.")
         fem_triangles = np.concatenate([block for _n, block in surfaces]).astype(np.int64)
         rows = _rows(surfaces)
         driver_triangles = None
@@ -416,18 +431,33 @@ def build_coupled_system(
                 raise CoupledSystemError(f"FEM region {region_id!r} carries a foreign surface {group_name!r}.")
             kind = _BOUNDARY_KINDS[fields["kind"]]
             boundary_id = f"boundary:fem:{region_id}:{fields['group']}"
+            declaration = declarations.get(fields["group"], {})
+            if declaration and declaration["kind"] != fields["kind"]:
+                raise CoupledSystemError(f"FEM group {group_name!r} disagrees with its declared kind.")
+            boundary_params = {}
+            if "lining" in declaration:
+                if kind != "rigid":
+                    raise CoupledSystemError(f"FEM group {group_name!r}: lining requires a rigid boundary.")
+                lining = declaration["lining"]
+                boundary_params["wall_impedance"] = {
+                    "model": lining["model"], "thickness_m": lining["thickness_mm"] * MM_TO_M,
+                    "flow_resistivity_pa_s_per_m2": lining["flow_resistivity_pa_s_per_m2"],
+                }
             boundaries.append({
                 "id": boundary_id, "name": group_name, "region_id": region_key, "kind": kind,
                 "group": {"mesh_id": mesh_id, "dimension": 2, "name": group_name,
                           "tag": tags[group_name][0]},
-                "parameters": {},
+                "parameters": boundary_params,
             })
             if kind == "moving":
-                channel = channels.get(fields["group"])
+                channel = declaration.get("drive_channel_id")
                 if not channel:
                     raise CoupledSystemError(f"Diaphragm {group_name!r} names no drive channel.")
                 moving_by_channel.setdefault(str(channel), []).append(boundary_id)
+                weight = 10 ** (float(declaration.get("relative_level_db", 0.0)) / 20)
+                motion_weights[boundary_id] = weight
                 if channel in (transducers or {}):
+                    moving_triangle_weights.setdefault(str(channel), {}).setdefault(mesh_id, []).append(np.full(len(block), weight))
                     if driver_triangles is None:
                         driver_triangles = _fem_driver_triangles(domain)
                     try:
@@ -489,8 +519,10 @@ def build_coupled_system(
             driver_sd[channel] = {}
             params, projected_areas[channel] = parameters(
                 spec, moving_triangles[channel], collected_warnings=channel_warnings[channel],
-                channel_id=channel, sd_metadata=driver_sd[channel])
+                channel_id=channel, sd_metadata=driver_sd[channel],
+                face_weights=moving_triangle_weights[channel])
             area_warnings.extend(channel_warnings[channel])
+        params["boundary_motion_weights"] = {bid: motion_weights[bid] for bid in sorted(boundary_ids)}
         components.append({
             "id": component_id, "name": channel,
             "kind": "electrodynamic_transducer" if spec is not None else "ideal_velocity_source",
