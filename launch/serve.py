@@ -34,6 +34,7 @@ from launch.serve_options import (  # noqa: E402
     add_server_arguments,
 )
 from server.app import BUILD, create_app  # noqa: E402
+from server.platform import running_exclusion  # noqa: E402
 from server.platform.backend_owner import CONTAINED_ENV  # noqa: E402
 from server.platform.console import harden_console  # noqa: E402
 from server.platform.instance import (  # noqa: E402
@@ -682,6 +683,7 @@ def _start_temporary_session() -> TemporarySession | None:
 def main(argv: list[str] | None = None) -> int:
     started_at_wall = time.time()
     args = build_parser().parse_args(argv)
+    lifetime = _backend_lifetime(args, os.environ)
     isolated_data_dir = args.data_dir is not None or bool(os.environ.get(DATA_DIR_ENV))
     if args.data_dir is not None:
         os.environ[DATA_DIR_ENV] = str(args.data_dir)
@@ -697,6 +699,10 @@ def main(argv: list[str] | None = None) -> int:
         setup_logging(paths)
         if args.status_control is None:
             no_gui_start = _no_gui_healthy_start(paths.root)
+        if lifetime in RETIRABLE_LIFETIMES:
+            # Children can exit first: keep the installer seeing this interpreter
+            # until it exits too. The native stub covers stub-started servers.
+            running_exclusion.hold_running_exclusion()
         preferred_port = requested_port(args.port)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Waveguide Generator could not start: {exc}", file=sys.stderr)
@@ -799,7 +805,6 @@ def main(argv: list[str] | None = None) -> int:
     # Setup runs -- so the watcher waits to see it clear before honouring it.
     retire_signal = None
     retire_initially_requested = False
-    lifetime = _backend_lifetime(args, os.environ)
     if lifetime in RETIRABLE_LIFETIMES and os.name == "nt":
         from server.solver.beat_runtime.retire import RetireSignal
 

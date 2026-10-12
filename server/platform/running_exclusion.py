@@ -1,12 +1,13 @@
-"""Keep bundled multiprocessing children visible to the Windows installer.
+"""Keep bundled backend interpreters and children visible to the Windows installer.
 
-These children bypass the native stub and otherwise hold no Running mutex.
-Holding it closes the window where a child outlives a dead server and the
-installer replaces ``app/`` under it. Only Windows ``wg-python.exe`` children
-participate; failure to obtain a handle refuses to run. This deliberately
-does not look at the installer's admission mutex.
+Multiprocessing children and CLI-started headless or contained backends bypass
+the native stub and otherwise hold no Running mutex. Holding it protects both
+children that outlive a server and a backend interpreter still exiting after
+its children are gone. Only Windows ``wg-python.exe`` processes participate;
+failure to obtain a handle refuses to run. This deliberately does not look at
+the installer's admission mutex.
 
-A refusal raises :class:`RunningExclusionError`. The mesher child and the
+A refusal raises :class:`RunningExclusionError`. The backend, mesher child and the
 BEMPP worker then exit with code 1. A sweep pool worker is refused in its
 initializer instead: ``concurrent.futures`` logs that, lets the worker exit
 with code 0 and marks the pool broken, so the sweep fails with
@@ -29,7 +30,7 @@ _handle: int | None = None
 
 
 class RunningExclusionError(RuntimeError):
-    """The child could not hold the Running mutex and must not run."""
+    """The process could not hold the Running mutex and must not run."""
 
     def __init__(self, winerror: int) -> None:
         self.winerror = winerror
