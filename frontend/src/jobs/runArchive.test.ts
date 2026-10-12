@@ -76,6 +76,13 @@ describe('run archive layout', () => {
     expect(JSON.parse(buildRunRecord(jobItem()).text).artifacts.mesh).toBeNull();
   });
 
+  it('names each archive member where it landed', () => {
+    const moved = (filename: string) => (filename.endsWith('.json') ? `archive/${filename}` : filename);
+    const record = JSON.parse(buildRunRecord(jobItem(), moved, ['9_OSSE.json', '9_OSSE.csv']).text);
+    expect(record.artifacts.files).toEqual(['9_OSSE.csv', 'archive/9_OSSE.json']);
+    expect(JSON.parse(buildRunRecord(jobItem()).text).artifacts).not.toHaveProperty('files');
+  });
+
   it('names the CAD document and return state a run was solved from', () => {
     const record = JSON.parse(buildRunRecord(jobItem({
       config_summary: { geometry_type: 'imported' },

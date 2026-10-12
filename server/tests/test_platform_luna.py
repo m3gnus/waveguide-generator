@@ -223,6 +223,60 @@ def test_runtime_file_handler_rotates_during_logging(
     assert (paths.logs / "server.log.1").exists()
 
 
+def _report_through_event_loop(message: str, error: BaseException) -> None:
+    """Hand an exception to a real loop's handler, as asyncio does for a callback."""
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.call_exception_handler({"message": message, "exception": error})
+    finally:
+        loop.close()
+
+
+def test_a_dropped_connection_is_not_an_error_in_the_log(tmp_path: Path) -> None:
+    paths = ensure_data_layout(tmp_path)
+    logging_setup.setup_logging(paths)
+    reset = ConnectionResetError(
+        10054, "An existing connection was forcibly closed by the remote host"
+    )
+    _report_through_event_loop(
+        "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)", reset
+    )
+    # The same error from something that is not a transport callback is a fault.
+    _report_through_event_loop("Exception in callback solve_worker_pipe()", reset)
+    # So is any other error out of a transport callback.
+    _report_through_event_loop(
+        "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)",
+        RuntimeError("transport bug"),
+    )
+    logging_setup.flush_logs()
+
+    text = (paths.logs / "server.log").read_text(encoding="utf-8")
+    assert "RuntimeError: transport bug" in text
+    assert "Exception in callback solve_worker_pipe()" in text
+    assert text.count("ConnectionResetError") == 1  # only the non-transport one
+    assert " ERROR asyncio: Exception in callback _ProactorBasePipeTransport" in text
+
+
+def test_a_dropped_connection_is_kept_at_debug_when_debug_is_on(tmp_path: Path) -> None:
+    paths = ensure_data_layout(tmp_path)
+    logging_setup.setup_logging(paths, level=logging.DEBUG)
+    logging.getLogger("asyncio").setLevel(logging.DEBUG)
+    try:
+        _report_through_event_loop(
+            "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)",
+            ConnectionResetError(10054, "forcibly closed"),
+        )
+        logging_setup.flush_logs()
+    finally:
+        logging.getLogger("asyncio").setLevel(logging.NOTSET)
+        logging.getLogger().setLevel(logging.INFO)
+
+    text = (paths.logs / "server.log").read_text(encoding="utf-8")
+    assert " DEBUG asyncio: Exception in callback _ProactorBasePipeTransport" in text
+    assert " ERROR asyncio" not in text
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

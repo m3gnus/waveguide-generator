@@ -192,7 +192,15 @@ describe('run archive and automatic export in one Workspace', () => {
     // Only the names that were taken moved.
     expect(files.has('OSSE/9_OSSE/9_OSSE.csv')).toBe(true);
     expect(files.has('OSSE/9_OSSE/archive/9_OSSE.csv')).toBe(false);
-    expect(JSON.parse(files.get('OSSE/9_OSSE/run.json')!).artifacts.mesh).toBe('archive/9_OSSE.msh');
+    const artifacts = JSON.parse(files.get('OSSE/9_OSSE/run.json')!).artifacts;
+    expect(artifacts.mesh).toBe('archive/9_OSSE.msh');
+    // run.json names every file where it landed, the redirected result files included.
+    expect(artifacts.files).toEqual(expect.arrayContaining([
+      'archive/9_OSSE.json', 'archive/9_OSSE_report.html', 'archive/9_OSSE.msh', '9_OSSE.csv',
+    ]));
+    expect(artifacts.files).not.toContain('9_OSSE.json');
+    expect(artifacts.files).not.toContain('9_OSSE.msh');
+    expect(artifacts.files.every((name: string) => files.has(`OSSE/9_OSSE/${name}`))).toBe(true);
 
     // A retry of the same archive lands on the same names: a no-op, not a refusal.
     const snapshot = new Map(files);

@@ -1177,9 +1177,13 @@ export async function archiveRunToWorkspace(
     : { files: [], moved: new Map<string, string>() };
   // The record names the artifacts it sits beside, wherever they landed.
   const moved = new Map([...results.moved, ...mesh.moved]);
+  const written = [
+    ...[...prepared.values()].map(({ filename }) => filename),
+    ...(snapshot.mesh_artifact ? [`${exportStemForJob(archiveJob)}.msh`] : []),
+  ];
   const record = await writeArchiveMembers(
     subdirectory,
-    [textFile(buildRunRecord(archiveJob, (filename) => moved.get(filename) ?? filename))],
+    [textFile(buildRunRecord(archiveJob, (filename) => moved.get(filename) ?? filename, written))],
     fetcher,
   );
   const pointer = await writeWorkspaceFiles(

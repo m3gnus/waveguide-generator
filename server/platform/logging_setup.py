@@ -23,6 +23,34 @@ from .paths import DataPaths, ensure_data_layout
 MAX_LOG_BYTES = 5 * 1024 * 1024
 LOG_FILENAME = "server.log"
 
+
+class _PeerDisconnectFilter(logging.Filter):
+    """Demote asyncio's report of a peer that dropped its connection to DEBUG.
+
+    Closing the WebView resets the socket; on Windows the proactor transport
+    then fails its own ``_call_connection_lost`` callback with a
+    ``ConnectionResetError`` (WinError 10054), and the event loop's default
+    exception handler logs that as an ERROR with a traceback. It is the peer
+    leaving, not a fault. Only that shape is matched -- the ``asyncio`` logger,
+    an exception that is a ``ConnectionResetError``, and a callback of a
+    transport -- so every other asyncio error still logs as before.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno < logging.ERROR or not record.exc_info:
+            return True
+        error = record.exc_info[1]
+        if not isinstance(error, ConnectionResetError):
+            return True
+        if "Transport." not in record.getMessage():
+            return True
+        record.levelno = logging.DEBUG
+        record.levelname = logging.getLevelName(logging.DEBUG)
+        return logging.getLogger().isEnabledFor(logging.DEBUG)
+
+
+_PEER_DISCONNECT_FILTER = _PeerDisconnectFilter()
+
 #: The live listener, so a second ``setup_logging`` (tests, a re-entered main)
 #: stops the previous one instead of leaking its thread and its file handle.
 _listener: QueueListener | None = None
@@ -113,6 +141,10 @@ def setup_logging(
     queue_handler = QueueHandler(record_queue)
     queue_handler._wg2_handler = True  # type: ignore[attr-defined]
     root.addHandler(queue_handler)
+
+    asyncio_logger = logging.getLogger("asyncio")
+    if _PEER_DISCONNECT_FILTER not in asyncio_logger.filters:
+        asyncio_logger.addFilter(_PEER_DISCONNECT_FILTER)
 
     logger = logging.getLogger("wg")
     logger.info("Logging to %s", log_path)

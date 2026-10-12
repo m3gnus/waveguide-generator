@@ -50,10 +50,14 @@ export function buildDesignRecord(job: JobItem): WorkspaceTextFile {
  *
  * `nameOf` maps an artifact's usual filename to the one it was written under,
  * for the rare archive that had to move a file aside (`ARCHIVE_DISPLACED_FOLDER`).
+ * `members` lists every file the archive wrote beside this record, by its usual
+ * filename, and the record names each one at `nameOf` -- so a result file moved
+ * aside shows as `archive/<name>`, not only the mesh and impedance files.
  */
 export function buildRunRecord(
   job: JobItem,
   nameOf: (filename: string) => string = (filename) => filename,
+  members: readonly string[] = [],
 ): WorkspaceTextFile {
   if (job.run_number === null) throw new Error('A run number is required to archive a solve');
   const cad = job.cad_source ?? null;
@@ -91,6 +95,7 @@ export function buildRunRecord(
       },
       mesh: job.mesh_stats ?? null,
       artifacts: {
+        ...(members.length ? { files: members.map(nameOf).sort() } : {}),
         mesh: job.has_mesh_artifact ? nameOf(`${exportStemForJob(job)}.msh`) : null,
         radiationImpedance: job.has_radiation_impedance_artifact ? {
           matrix: nameOf(`${exportStemForJob(job)}_radiation_impedance.npz`),
