@@ -91,6 +91,13 @@ The in-app updater supplies no `/TASKS` option, so setup keeps that managed copy
 current. An explicit `/TASKS` or `/MERGETASKS` choice takes precedence; for example,
 `/TASKS=""` leaves WGLink untouched even on a managed upgrade. With no managed copy,
 silent setup leaves WGLink off unless explicitly selected.
+Automatic discovery checks both the legacy `Autodesk Fusion 360` and newer
+`Autodesk Fusion` AddIns locations, preferring an owned legacy copy when both
+are owned. Interactive discovery still prefers the legacy folder. Automatic
+updates leave the CAD Link usage record unchanged. Ownership query failures
+and restart guidance after a successful update are written to the setup log;
+restart Fusion if it was running during the update. Silent setup shows no
+Fusion restart prompt.
 
 For a self-contained Linux install, download
 **Waveguide.Generator-&lt;version&gt;-linux-x86_64.tar.gz**, extract it, and run

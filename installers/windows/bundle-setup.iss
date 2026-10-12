@@ -278,6 +278,8 @@ var
   OpenClHelpButton: TNewButton;
   OpenClNotice: TNewMemo;
   WgLinkStatus: String;
+  { Nonempty only for an ownership-selected silent update, never a user choice. }
+  WgLinkAutomaticAddInsDirectory: String;
   { Set by InitializeWizard, spent by the first visit to the tasks page. }
   WgLinkPreselectPending: Boolean;
   { The same for desktopicon, when the user's own shortcut is on the desktop. }
@@ -668,7 +670,10 @@ var
 begin
   Result := False;
   if not FileExists(ExpandConstant('{app}\runtime\python.exe')) then
+  begin
+    WgLog('WGLink ownership query skipped for ' + Target + ': bundled runtime python.exe is missing.');
     exit;
+  end;
   { Let install_wglink.py decide ownership. Its structured marker validator is
     the authority for schema, types, pin and developer-marker precedence; a
     substring check here could disagree with it and report an update that the
@@ -687,9 +692,15 @@ begin
       ExpandConstant('{app}\runtime\python.exe'), Parameters, ExpandConstant('{app}'),
       SW_HIDE, ewWaitUntilTerminated, ExitCode, @WgLinkOutput
     ) then
-      Result := ExitCode = 0
+    begin
+      Result := ExitCode = 0;
+      if not Result then
+        WgLog('WGLink ownership query returned exit code ' + IntToStr(ExitCode) +
+          ' for ' + Target + ': ownership was not confirmed; automatic selection stays off for this target.');
+    end
     else
-      WgLog('WGLink ownership query could not start for ' + Target + '.');
+      WgLog('WGLink ownership query could not start for ' + Target +
+        ' (error code ' + IntToStr(ExitCode) + '); ownership was not confirmed.');
   finally
     SetEnvironmentVariable('WG2_BUNDLE', PreviousBundleFlag);
     SetEnvironmentVariable('WG2_APP_ROOT', PreviousAppRoot);
@@ -730,22 +741,35 @@ end;
 
 procedure SelectManagedWGLinkForSilentUpgrade();
 var
-  AddInsDirectory: String;
+  AddInsDirectory, Current: String;
 begin
   { Run after the new app/runtime is committed, when the tasks list exists and
     the current ownership validator is available. WGLink has no [Files] or
     [Icons] entries: its only installation action follows this selection.
     Explicit /TASKS or /MERGETASKS and interactive checkbox choices win. }
+  WgLinkAutomaticAddInsDirectory := '';
   if not WizardSilent() or TaskChoiceOnCommandLine() then
     exit;
   AddInsDirectory := WgLinkAddInsDirectory();
   if AddInsDirectory = '' then
     exit;
-  if WgLinkManagedByThisInstall(WgLinkTarget(AddInsDirectory)) then
+  if not WgLinkManagedByThisInstall(WgLinkTarget(AddInsDirectory)) then
   begin
-    WizardSelectTasks(WgLinkTaskName);
-    WgLog('WGLink: task selected for silent upgrade of an existing managed copy.');
+    { Interactive discovery keeps its legacy-first behaviour. Only automatic
+      updates look in the newer location when the first target is not owned.
+      An explicit gate override must never fall back to a real Fusion folder. }
+    if WgLinkAddInsOverrideSpecified() then
+      exit;
+    Current := ExpandConstant('{userappdata}\Autodesk\Autodesk Fusion\API\AddIns');
+    if (CompareText(AddInsDirectory, Current) = 0) or not DirExists(Current) then
+      exit;
+    if not WgLinkManagedByThisInstall(WgLinkTarget(Current)) then
+      exit;
+    AddInsDirectory := Current;
   end;
+  WgLinkAutomaticAddInsDirectory := AddInsDirectory;
+  WizardSelectTasks(WgLinkTaskName);
+  WgLog('WGLink: task selected for silent upgrade of an existing managed copy.');
 end;
 
 function DesktopShortcutPath(): String;
@@ -827,7 +851,9 @@ var
   PreviousBundleFlag, PreviousAppRoot: String;
   WasManaged: Boolean;
 begin
-  AddInsDirectory := WgLinkAddInsDirectory();
+  AddInsDirectory := WgLinkAutomaticAddInsDirectory;
+  if AddInsDirectory = '' then
+    AddInsDirectory := WgLinkAddInsDirectory();
   if AddInsDirectory = '' then
   begin
     if WgLinkAddInsOverrideSpecified() then
@@ -908,6 +934,7 @@ begin
       WgLinkStatus :=
         'WGLink was installed. Restart Fusion, then enable Run on Startup in Scripts and Add-Ins.';
     WgLog('WGLink: installed or updated managed copy at ' + Target + '.');
+    WgLog(WgLinkStatus);
   end
   else if WgLinkHasMarker(Target) then
   begin
@@ -1807,7 +1834,10 @@ begin
     SelectManagedWGLinkForSilentUpgrade();
     if WizardIsTaskSelected(WgLinkTaskName) then
     begin
-      RecordWGLinkSetupChoice();
+      { Ownership-driven refresh is not a new setup choice. In particular a
+        failed refresh must not leave new CAD Link usage or notice state. }
+      if WgLinkAutomaticAddInsDirectory = '' then
+        RecordWGLinkSetupChoice();
       InstallWGLink();
     end
     else

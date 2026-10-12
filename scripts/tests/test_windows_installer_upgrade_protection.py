@@ -108,7 +108,7 @@ def test_silent_upgrade_selection_uses_current_ownership_validator(code: str) ->
     assert "if not WizardSilent() or TaskChoiceOnCommandLine() then\n    exit;" in plain
     assert "AddInsDirectory := WgLinkAddInsDirectory();" in selection
     assert "if AddInsDirectory = '' then\n    exit;" in selection
-    guard = "if WgLinkManagedByThisInstall(WgLinkTarget(AddInsDirectory)) then"
+    guard = "if not WgLinkManagedByThisInstall(WgLinkTarget(AddInsDirectory)) then"
     assert guard in selection
     assert selection.index(guard) < selection.index("WizardSelectTasks(WgLinkTaskName);")
     assert "WgLinkHasMarker(" not in selection
@@ -122,15 +122,69 @@ def test_silent_upgrade_selection_uses_current_ownership_validator(code: str) ->
     assert code.count("SelectManagedWGLinkForSilentUpgrade();") == 2
 
 
+def test_ownership_query_logs_nonzero_exits_and_launch_failures(code: str) -> None:
+    ownership = _body(code, "function WgLinkManagedByThisInstall(Target: String): Boolean;")
+    returned = ownership.split("Result := ExitCode = 0;", 1)[1].split("\n    else", 1)[0]
+    assert "if not Result then" in returned
+    assert "WgLog('WGLink ownership query returned exit code ' + IntToStr(ExitCode)" in returned
+    assert "ownership was not confirmed" in returned
+    failed_launch = ownership.split("\n    else", 1)[1].split("\n  finally", 1)[0]
+    assert "WgLog('WGLink ownership query could not start for ' + Target" in failed_launch
+    assert "IntToStr(ExitCode)" in failed_launch
+    assert "bundled runtime python.exe is missing" in ownership
+
+
+def test_automatic_discovery_checks_newer_location_after_unowned_legacy(code: str) -> None:
+    selection = _body(code, "procedure SelectManagedWGLinkForSilentUpgrade();")
+    fallback = selection.split(
+        "if not WgLinkManagedByThisInstall(WgLinkTarget(AddInsDirectory)) then", 1
+    )[1].split("WgLinkAutomaticAddInsDirectory := AddInsDirectory;", 1)[0]
+    assert "if WgLinkAddInsOverrideSpecified() then\n      exit;" in fallback
+    assert "Current := ExpandConstant('{userappdata}\\Autodesk\\Autodesk Fusion\\API\\AddIns');" in fallback
+    assert "if (CompareText(AddInsDirectory, Current) = 0) or not DirExists(Current) then\n      exit;" in fallback
+    assert "if not WgLinkManagedByThisInstall(WgLinkTarget(Current)) then\n      exit;" in fallback
+    assert fallback.index("WgLinkManagedByThisInstall(WgLinkTarget(Current))") < fallback.index("AddInsDirectory := Current;")
+    assert selection.index("WgLinkAutomaticAddInsDirectory := AddInsDirectory;") < selection.index("WizardSelectTasks(WgLinkTaskName);")
+    install = _body(code, "procedure InstallWGLink();")
+    assert "AddInsDirectory := WgLinkAutomaticAddInsDirectory;\n  if AddInsDirectory = '' then\n    AddInsDirectory := WgLinkAddInsDirectory();" in install
+    assert "AddQuotes(AddInsDirectory)" in install
+
+
+def test_interactive_and_explicit_discovery_keep_legacy_first_preference(code: str) -> None:
+    discovery = _body(code, "function WgLinkAddInsDirectory(): String;")
+    assert "if DirExists(Legacy) then\n    Result := Legacy\n  else if DirExists(Current) then\n    Result := Current" in discovery
+    assert "WgLinkManagedByThisInstall" not in discovery
+    selection = _body(code, "procedure SelectManagedWGLinkForSilentUpgrade();")
+    assert selection.index("WgLinkAutomaticAddInsDirectory := '';") < selection.index("if not WizardSilent() or TaskChoiceOnCommandLine() then")
+
+
+@pytest.mark.parametrize("argument, expected", [
+    ('/TASKS=""', True), ('/tasks=""', True), ('/tasks="wglink"', True),
+    ('/MERGETASKS="!wglink"', True), ('/mergetasks="!wglink"', True),
+    ('/MeRgEtAsKs="wglink"', True), ('/NOTASKS="wglink"', False),
+    ('/DIR=tasks', False),
+])
+def test_command_line_task_contract_is_case_insensitive(
+    code: str, argument: str, expected: bool,
+) -> None:
+    choice = _body(code, "function TaskChoiceOnCommandLine(): Boolean;")
+    assert "Argument := Uppercase(ParamStr(Index));" in choice
+    switches = re.findall(r"Pos\('([^']+)', Argument\) = 1", choice)
+    assert switches == ["/TASKS=", "/MERGETASKS="]
+    assert any(argument.upper().startswith(switch) for switch in switches) is expected
+
+
 def test_windows_gates_cover_silent_fresh_managed_unmanaged_and_opt_out(gates: str) -> None:
     fresh = gates.split('$freshSilent =', 1)[1].split('$p =', 1)[0]
     assert '/TASKS=' not in fresh and 'Gate 20 ' in fresh
     assert '-not (Test-Path (Join-Path $wglinkAddins "WGLink"))' in fresh
     upgrade = gates.split('# --- Gate 12:', 1)[1].split('# --- Gate 13:', 1)[0]
-    assert '$optOutUpgrade = Start-SandboxedSetup' in upgrade and '"/TASKS=`"`""' in upgrade
+    assert '$optOutUpgrade = Start-SandboxedSetup' in upgrade and '"/tasks=`"`""' in upgrade
     assert '$beforeSilentUpgrade -eq $afterOptOutUpgrade' in upgrade
     assert '$silentUpgrade = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART" -Wait' in upgrade
     assert '-not (Test-Path $silentSentinel)' in upgrade and '$upgradedPinOk' in upgrade
+    assert '$automaticChoiceUnchanged = $usageBefore -eq $usageAfterSilentUpgrade' in upgrade
+    assert '-and $automaticChoiceUnchanged' in upgrade
     developer = gates.split('# --- Gate 11:', 1)[1].split('# --- Gate 5:', 1)[0]
     assert '$developerSilent = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART" -AddIns $developerAddins -Wait' in developer
     assert '$developerTreeBefore -eq $developerTreeAfter' in developer and 'Gate 22 ' in developer
@@ -151,11 +205,14 @@ def test_fusion_preselection_runs_on_the_first_interactive_tasks_page(script: st
     assert "(Pos('/TASKS=', Argument) = 1) or (Pos('/MERGETASKS=', Argument) = 1)" in choice
 
 
-def test_setup_choice_is_recorded_only_for_the_selected_task_before_install(code: str) -> None:
+def test_setup_choice_is_recorded_only_for_user_selection_before_install(code: str) -> None:
     step = _body(code, "procedure CurStepChanged(CurStep: TSetupStep);")
     post_install = step.split("if CurStep = ssPostInstall then", 1)[1]
     selected = post_install.split("if WizardIsTaskSelected(WgLinkTaskName) then", 1)[1].split("\n    else", 1)[0]
-    assert selected.strip() == "begin\n      RecordWGLinkSetupChoice();\n      InstallWGLink();\n    end"
+    assert "if WgLinkAutomaticAddInsDirectory = '' then\n        RecordWGLinkSetupChoice();\n      InstallWGLink();" in selected
+    selection = _body(code, "procedure SelectManagedWGLinkForSilentUpgrade();")
+    install = _body(code, "procedure InstallWGLink();")
+    assert "RecordWGLinkSetupChoice" not in selection + install
     recording = _body(code, "procedure RecordWGLinkSetupChoice();")
     assert code.count("RecordWGLinkSetupChoice();") == 2  # declaration and selected-task call
     assert code.count("--record-setup-choice") == 1 and "--record-setup-choice" in recording
@@ -172,6 +229,17 @@ def test_setup_choice_is_recorded_only_for_the_selected_task_before_install(code
     for header in ("procedure UninstallWGLink();", "procedure CurUninstallStepChanged("):
         uninstall = _body(code, header)
         assert "RecordWGLinkSetupChoice" not in uninstall and "--record-setup-choice" not in uninstall
+
+
+def test_successful_wglink_update_logs_restart_guidance_without_silent_ui(code: str) -> None:
+    install = _body(code, "procedure InstallWGLink();")
+    success = install.split("else if WgLinkManagedByThisInstall(Target) then", 1)[1].split("\n  else if", 1)[0]
+    assert "WGLink was updated. Restart Fusion to load the update." in success
+    assert "WgLog(WgLinkStatus);" in success
+    assert "WizardSilent()" not in success
+    assert not re.search(r"\b(?:MsgBox|TaskDialogMsgBox|RecordWGLinkSetupChoice)\b", install)
+    page = _body(code, "procedure CurPageChanged(CurPageID: Integer);")
+    assert page.index("if (CurPageID <> wpFinished) or WizardSilent() then\n    exit;") < page.index("if WgLinkStatus <> '' then")
 
 
 def test_uninstall_reaches_locked_cleanup_when_only_an_orphan_lock_remains(code: str) -> None:
