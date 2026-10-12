@@ -36,7 +36,8 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "LOOKUP"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -83,7 +84,8 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "LOOKUP"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -123,7 +125,8 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "LOOKUP"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -163,7 +166,8 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "LOOKUP"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -218,7 +222,8 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "LOOKUP"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -258,7 +263,8 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM"
+        "FREEFORM",
+        "LOOKUP"
       ],
       "accepts_expression": false,
       "writable": true,
