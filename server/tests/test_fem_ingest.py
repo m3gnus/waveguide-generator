@@ -24,14 +24,17 @@ def _interior_region(**overrides):
     return region
 
 
-def _bundle(root, *, regions=None):
+def _bundle(root, *, regions=None, overlaps_material=False):
     root.mkdir(parents=True)
     step = _write_step(root / "box.step").read_bytes()
-    manifest = _manifest(step)
+    assembly = step if overlaps_material else _write_step(
+        root / 'material.step', boxes=((200, 0, 0),)).read_bytes()
+    manifest = _manifest(assembly)
     manifest["instances"] = []
     manifest["sources"] = []
     manifest["coordinate_system"]["solver_anchor_instance_id"] = None
-    manifest["assembly"]["bbox_mm"] = [[0, 0, 0], [40, 30, 20]]
+    manifest["assembly"]["bbox_mm"] = (
+        [[0, 0, 0], [40, 30, 20]] if overlaps_material else [[200, 0, 0], [240, 30, 20]])
     manifest["scope"]["included"] = [{
         "object_id": "box", "name": "Box", "body_kind": "solid", "visible": True,
         "external_reference": "local",
@@ -43,7 +46,7 @@ def _bundle(root, *, regions=None):
             "sha256": "sha256:" + hashlib.sha256(step).hexdigest(), "size_bytes": len(step),
             "media_type": "model/step", "purpose": "fem-region",
         }
-    bundle = write_bundle(root, manifest, step=step)
+    bundle = write_bundle(root, manifest, step=assembly)
     for region in manifest["scope"]["fem_regions"]:
         path = bundle / region["file"]
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -67,6 +70,53 @@ def _ingest(bundle, root):
 @pytest.fixture(autouse=True)
 def enabled(monkeypatch):
     monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+
+
+@pytest.mark.parametrize('region_count', [1, 2])
+def test_interior_only_material_overlap_is_refused_for_any_region_count(tmp_path, region_count):
+    regions = [_interior_region()]
+    if region_count == 2:
+        regions.append(_interior_region(region_id='front-chamber', name='Front chamber',
+                                       object_id='air-2', file='fem-regions/front-chamber.step'))
+    bundle = _bundle(tmp_path / 'returns', regions=regions, overlaps_material=True)
+    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*overlaps assembly material") as caught:
+        _ingest(bundle, tmp_path)
+    assert str(caught.value).count('Rear chamber') == 1
+
+
+def test_single_interior_region_replays_assembly_without_meshing_it(tmp_path, monkeypatch):
+    bundle = _bundle(tmp_path / 'returns')
+    calls = []
+    child = ingest.build_coupled_mesh_isolated
+
+    def contact_gate(*args, **kwargs):
+        calls.append(kwargs['contacts_only'])
+        return child(*args, **kwargs)
+
+    monkeypatch.setattr(ingest, 'build_coupled_mesh_isolated', contact_gate)
+    record = _ingest(bundle, tmp_path)
+    assert calls == [True]
+    assert len(record['fem_regions']) == 1
+    assert not record.get('coupled_exterior')
+
+
+@pytest.mark.parametrize('failure', ['fingerprint', 'transform'])
+def test_single_interior_region_checks_assembly_replay_truth(tmp_path, monkeypatch, failure):
+    bundle = _bundle(tmp_path / 'returns')
+    exterior = ingest.build_imported_mesh_isolated
+
+    def stale_replay(*args, **kwargs):
+        result = exterior(*args, **kwargs)
+        if failure == 'fingerprint':
+            result['transformed_geometry_hash'] = 'stale-fingerprint'
+        else:
+            result['viewport_recipe']['normalisation_matrix'][0][3] += 1.
+        return result
+
+    monkeypatch.setattr(ingest, 'build_imported_mesh_isolated', stale_replay)
+    with pytest.raises(ingest.IngestRefusal, match='Rear chamber.*normalisation mismatch') as caught:
+        _ingest(bundle, tmp_path)
+    assert str(caught.value).count('Rear chamber') == 1
 
 
 def test_optional_physics_refusal_lists_all_groups_and_clears_after_remedy(tmp_path, monkeypatch):

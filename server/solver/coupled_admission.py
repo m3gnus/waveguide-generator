@@ -164,6 +164,8 @@ def fem_request_problem(record: Mapping[str, Any], channels: Sequence[Any] | Non
                                     painted_sources=sources, combine_id=combine_id,
                                     electrodynamic_channels={c.id for c in channels
                                                          if getattr(c, "exterior_transducer", None) is not None})
+        if planes and problem and problem[0] == "fem_multiple_diaphragms_unsupported":
+            return problem[0], f"{problem[1]}. {FEM_DRIVER_SYMMETRY_MESSAGE}"
         if problem:
             return problem
         return driver_sd_problem(record, channels, moving_meshes=moving_meshes,

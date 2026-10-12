@@ -39,11 +39,65 @@ from server.mesh.surface_topology import open_edges, orient_closed_surface
 from server.platform.temp_session import temporary_directory_root
 
 
+# An explicit intake tolerance in export millimetres, independent of OCC's
+# Boolean tolerance. Gaps larger than this remain separate air regions.
+NEAR_CONTACT_TOLERANCE_MM = 1e-3
+
+
 def _label(region: Mapping[str, Any], group: Mapping[str, Any] | None = None) -> str:
     result = f"FEM region {region.get('name', region['region_id'])!r}"
     if group is not None:
         result += f", group {group.get('name', group['group_id'])!r}"
     return result
+
+
+def _near_contact_problem(gmsh: Any, region_data: Sequence[Any]) -> str | None:
+    """Check separated face contacts before Boolean operations remove parents.
+
+    Bounding boxes prune distant pairs. OCC provides exact trimmed-face
+    distances; the separation must be non-tangential to both faces so neighbouring
+    side walls across a diaphragm's rim do not count as another contact.
+    Exact contacts are checked using shared topology after fragmentation.
+    """
+    tolerance = NEAR_CONTACT_TOLERANCE_MM
+    boxes = {tag: np.asarray(gmsh.model.getBoundingBox(2, tag))
+             for _region, _volumes, boundary, _assigned in region_data for tag in boundary}
+    for index, (first, _volumes, faces, assigned) in enumerate(region_data):
+        first_groups = {tag: group for group in first['surface_groups']
+                        for tag in assigned[group['group_id']]}
+        for second, _other_volumes, other_faces, other_assigned in region_data[index + 1:]:
+            second_groups = {tag: group for group in second['surface_groups']
+                             for tag in other_assigned[group['group_id']]}
+            for a in faces:
+                for b in other_faces:
+                    low = np.maximum(boxes[a][:3], boxes[b][:3])
+                    high = np.minimum(boxes[a][3:], boxes[b][3:])
+                    if np.linalg.norm(np.maximum(low - high, 0)) > tolerance + 1e-7:
+                        continue
+                    distance, *coordinates = gmsh.model.occ.getDistance(2, a, 2, b)
+                    if distance < 0:
+                        return f"{_label(first)} and {_label(second)}: could not check near-contact face distance."
+                    if not 1e-7 < distance <= tolerance + 1e-7:
+                        continue
+                    p, q = np.asarray(coordinates).reshape(2, 3)
+                    direction = (q - p) / distance
+                    normals = [gmsh.model.getNormal(tag, gmsh.model.getParametrization(2, tag, point))
+                               for tag, point in ((a, p), (b, q))]
+                    if any(abs(np.dot(direction, normal)) < 1e-6 for normal in normals):
+                        continue
+                    left, right = first_groups.get(a), second_groups.get(b)
+                    if (left and right and left['kind'] == right['kind'] == 'moving'
+                            and left.get('drive_channel_id')
+                            and left.get('drive_channel_id') == right.get('drive_channel_id')):
+                        continue
+                    def contact_label(region, group):
+                        return _label(region, group) if group else f"{_label(region)}, group '_walls' (implicit rigid)"
+                    return (
+                        f"{contact_label(first, left)} and {contact_label(second, right)} are in near-contact "
+                        f"({distance:.6g} mm; tolerance {tolerance:g} mm); shared FEM air boundaries "
+                        "require moving faces on both sides of the same electrodynamic channel."
+                    )
+    return None
 
 
 def _boundary(gmsh: Any, volumes: Sequence[int]) -> set[int]:
@@ -250,6 +304,9 @@ def build_coupled_mesh(
     All face matching happens before fragmentation in the export frame. Surface
     ancestry comes from BooleanFragments, so a split face retains its group.
     Assembly replay must match the exterior fingerprint and total transform.
+    Interior-only intake uses contacts_only for every region count: it pays
+    for one assembly/region replay and Boolean fragmentation, including the
+    material-overlap gate, but generates no surface or tetrahedral mesh.
     """
     import gmsh
     from hornlab_mesher.step_import import (
@@ -334,6 +391,7 @@ def build_coupled_mesh(
                 raise FemRegionMeshError(f"{_label(region)} normalisation mismatch.")
             verify_region_symmetry(gmsh, region, boundary, assigned, domain_planes, cut_planes)
             region_data.append((region, volumes, boundary, assigned))
+        near_contact_problem = _near_contact_problem(gmsh, region_data)
         # Copy painted assembly faces as explicit tools. Passing constituent
         # faces alongside their parent volume yields empty ancestry for some
         # unchanged outer faces in OCC; independent copies retain that map.
@@ -405,6 +463,8 @@ def build_coupled_mesh(
                 for tag in groups[physical_name(region["region_id"], group["group_id"], "moving")]
             }
             region_volumes.append((region, volumes, groups))
+        if near_contact_problem:
+            raise FemRegionMeshError(near_contact_problem)
         # Check all regions before assigning implicit walls or interfaces.
         # A shared air/air face is neither a wall nor an exterior interface.
         for tag in _boundary(gmsh, sorted(air_owners)):
@@ -514,8 +574,12 @@ def build_coupled_mesh(
                 and not (domain_planes and tag in free_surfaces)
             }
             if naked and interfaces:
+                interface_labels = ', '.join(
+                    f"group {group.get('name', group['group_id'])!r}"
+                    for group in region['surface_groups'] if group['kind'] == 'interface')
                 raise FemRegionMeshError(
-                    f"{_label(region)} has uncovered air boundary faces; the exterior is not closed by declared interfaces."
+                    f"{_label(region)}, {interface_labels} has uncovered air boundary faces; "
+                    "the exterior is not closed by declared interfaces."
                 )
             prepared.append((region, volumes, boundary, groups))
         detached = []
@@ -530,7 +594,7 @@ def build_coupled_mesh(
             for group in region['surface_groups']:
                 tags = groups[physical_name(region['region_id'], group['group_id'], group['kind'])]
                 sizing.append((tags, float(group['mesh_size_mm']), float(region['mesh_size_mm']),
-                               boundary, volumes))
+                               boundary, volumes, group['kind'] == 'moving'))
         prepared = detached
         for name, faces in source_descendants.items():
             selected = faces & exterior_surfaces
@@ -551,7 +615,7 @@ def build_coupled_mesh(
             float(sizes["rigid_size_mm"]),
             *map(float, sizes["source_size_mm"].values()),
             *(float(region["mesh_size_mm"]) for region, *_rest in prepared),
-            *(size for _tags, size, _base, _boundary_tags, _volumes in sizing),
+            *(size for _tags, size, _base, _boundary_tags, _volumes, _moving in sizing),
         ]
         gmsh.option.setNumber("Mesh.MeshSizeMin", min(all_sizes))
         gmsh.option.setNumber("Mesh.MeshSizeMax", max(all_sizes))
@@ -577,7 +641,7 @@ def build_coupled_mesh(
             constant(float(region["mesh_size_mm"]), boundary, volumes)
         for tags, size in port_sizes:
             constant(size, tags)
-        for tags, size, base, boundary, volumes in sizing:
+        for tags, size, base, boundary, volumes, moving in sizing:
             if size >= base:
                 continue
             distance = gmsh.model.mesh.field.add("Distance")
@@ -593,7 +657,7 @@ def build_coupled_mesh(
                 "StopAtDistMax": 1,
             }.items():
                 gmsh.model.mesh.field.setNumber(threshold, key, value)
-            if not touching_regions:
+            if not touching_regions or not moving:
                 fields.append(threshold)
                 continue
             restrict = gmsh.model.mesh.field.add('Restrict')
@@ -720,7 +784,10 @@ def build_coupled_mesh(
             "regions": built_regions,
         }
     except FemRegionMeshError as exc:
-        raise FemRegionMeshError(f"{labels}: {exc}", symmetry_plane=exc.symmetry_plane) from exc
+        message = str(exc)
+        if "FEM region" not in message:
+            message = f"{labels}: {message}"
+        raise FemRegionMeshError(message, symmetry_plane=exc.symmetry_plane) from exc
     except Exception as exc:
         raise FemRegionMeshError(f"{labels}: coupled meshing failed: {exc}") from exc
     finally:

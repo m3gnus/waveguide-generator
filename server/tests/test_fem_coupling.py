@@ -130,7 +130,7 @@ def _coupling_bundle(root: Path, **geometry):
 
 def _coupled(
     bundle, manifest, region, *, mutate_recipe=None, normalisation=None, options=None, source=False,
-    source_center=None, source_centers=None, extra_regions=(),
+    source_center=None, source_centers=None, extra_regions=(), contacts_only=False,
 ):
     assembly = bundle / manifest["assembly"]["file"]
     exterior = build_imported_mesh_isolated(
@@ -167,6 +167,7 @@ def _coupled(
         else exterior["normalisation"]["matrix"],
         sizes=SIZES,
         exterior_names=names,
+        contacts_only=contacts_only,
     )
 
 
@@ -1118,6 +1119,127 @@ def test_touching_regions_refuse_by_both_names_before_implicit_walls(tmp_path, i
         _ingest(bundle, tmp_path)
     assert caught.value.stage == "stage 7 meshing"
     assert "uncovered air" not in str(caught.value)
+    assert str(caught.value).count("Rear chamber") == 1
+    assert str(caught.value).count("Front chamber") == 1
+
+
+@pytest.mark.parametrize('gap', [0., 1e-5, 1e-3, .1])
+@pytest.mark.parametrize('interface', [False, True])
+def test_near_contact_requires_both_moving_faces_before_interface_matching(tmp_path, gap, interface):
+    from server.cadlink.intake.ingest import IngestRefusal
+    from server.tests.test_fem_regions import _face
+
+    bundle, manifest, first = _coupling_bundle(tmp_path / 'returns', cavity_width=80)
+    second = _add_region(bundle, manifest, origin=(0, 30 + gap, 0), interface=interface)
+    first['surface_groups'][0]['faces'] = [
+        _face(800, (20, 30, 10), [0, 1, 0], (0, 30, 0), (40, 30, 20))]
+    second['surface_groups'][0].update(kind='rigid', faces=[
+        _face(800, (20, 30 + gap, 10), [0, -1, 0], (0, 30 + gap, 0), (40, 30 + gap, 20))])
+    second['surface_groups'][0].pop('drive_channel_id')
+    if not interface:
+        first['surface_groups'][1]['kind'] = 'rigid'
+    (bundle / 'wgreturn.json').write_text(json.dumps(manifest))
+    if gap == .1:
+        # Test separation through the contact gate, without requiring the
+        # synthetic assembly to close each independently ported chamber.
+        assert _coupled(bundle, manifest, first, extra_regions=[second], contacts_only=True) == {
+            'exterior': None, 'regions': {}}
+        if not interface:
+            assert len(_ingest(bundle, tmp_path)['fem_regions']) == 2
+        return
+    with pytest.raises(IngestRefusal) as caught:
+        _ingest(bundle, tmp_path)
+    message = str(caught.value)
+    assert 'Rear chamber' in message and 'Front chamber' in message
+    assert 'same electrodynamic channel' in message
+    assert 'did not survive' not in message
+    assert message.count('Rear chamber') == message.count('Front chamber') == 1
+    if gap:
+        assert 'near-contact' in message and 'tolerance 0.001 mm' in message
+        assert message.count("group 'Cone'") == 2
+
+
+@pytest.mark.parametrize('gap', [1e-5, 1e-3])
+@pytest.mark.parametrize('other_channel', [False, True])
+def test_near_contact_moving_pair_requires_same_channel(tmp_path, gap, other_channel):
+    from server.cadlink.intake.ingest import IngestRefusal
+    from server.tests.test_fem_regions import _face
+
+    bundle, manifest, first = _coupling_bundle(tmp_path / 'returns', cavity_width=80)
+    second = _add_region(bundle, manifest, origin=(0, 30 + gap, 0), interface=False)
+    first['surface_groups'][1]['kind'] = 'rigid'
+    for region, y, normal in ((first, 30., 1), (second, 30 + gap, -1)):
+        region['surface_groups'][0]['faces'] = [
+            _face(800, (20, y, 10), [0, normal, 0], (0, y, 0), (40, y, 20))]
+    if other_channel:
+        second['surface_groups'][0]['drive_channel_id'] = 'drive-hf'
+    (bundle / 'wgreturn.json').write_text(json.dumps(manifest))
+    if other_channel:
+        with pytest.raises(IngestRefusal, match='near-contact.*same electrodynamic channel'):
+            _ingest(bundle, tmp_path)
+    else:
+        assert len(_ingest(bundle, tmp_path)['fem_regions']) == 2
+
+
+def test_touching_moving_fields_are_restricted_but_port_grading_reaches_exterior(tmp_path, monkeypatch):
+    import gmsh
+    from server.mesh import fem_coupling
+    from server.tests.test_fem_regions import _face
+
+    bundle, manifest, first = _coupling_bundle(tmp_path / 'returns', cavity_width=60)
+    second = _add_region(bundle, manifest, origin=(0, 30, 0))
+    for region, normal in ((first, 1), (second, -1)):
+        region['surface_groups'][0]['faces'] = [
+            _face(800, (20, 30, 10), [0, normal, 0], (0, 30, 0), (40, 30, 20))]
+    exterior = build_imported_mesh_isolated(
+        bundle / manifest['assembly']['file'], manifest, SIZES, include_viewport_mesh=False)
+    field_types, inputs, surfaces, background = {}, {}, {}, []
+    add, number, numbers = (
+        gmsh.model.mesh.field.add, gmsh.model.mesh.field.setNumber,
+        gmsh.model.mesh.field.setNumbers)
+
+    def record_add(kind, *args):
+        tag = add(kind, *args)
+        field_types[tag] = kind
+        return tag
+
+    def record_number(tag, key, value):
+        if key == 'InField':
+            inputs[tag] = int(value)
+        return number(tag, key, value)
+
+    def record_numbers(tag, key, values):
+        if key == 'FieldsList':
+            background.extend(values)
+        if key == 'SurfacesList':
+            surfaces[tag] = set(values)
+        return numbers(tag, key, values)
+
+    monkeypatch.setattr(gmsh.model.mesh.field, 'add', record_add)
+    monkeypatch.setattr(gmsh.model.mesh.field, 'setNumber', record_number)
+    monkeypatch.setattr(gmsh.model.mesh.field, 'setNumbers', record_numbers)
+    built = _run_in_gmsh_session(lambda: fem_coupling.build_coupled_mesh(
+        bundle / manifest['assembly']['file'], [(bundle / r['file'], r) for r in (first, second)],
+        recipe=exterior['viewport_recipe'], expected_geometry_hash=exterior['transformed_geometry_hash'],
+        normalisation_matrix=exterior['normalisation']['matrix'], sizes=SIZES, exterior_names={}))
+    thresholds = [tag for tag, kind in field_types.items() if kind == 'Threshold']
+    assert len(thresholds) == 4
+    # The two ports remain in the global minimum, grading the adjoining BEM
+    # skin. Only the two diaphragm thresholds are wrapped in a region Restrict.
+    global_thresholds = set(thresholds).intersection(background)
+    assert len(global_thresholds) == 2
+    restricted = [tag for tag in background if field_types[tag] == 'Restrict'
+                  and inputs[tag] in thresholds]
+    assert len(restricted) == 2
+    port_faces, moving_faces = set(), set()
+    for result in built['regions'].values():
+        for spec in result['physical_names'].values():
+            if spec.get('kind') == 'interface':
+                port_faces.update(spec['entities'])
+            elif spec.get('kind') == 'moving':
+                moving_faces.update(spec['entities'])
+    assert set().union(*(surfaces[inputs[tag]] for tag in global_thresholds)) == port_faces
+    assert set().union(*(surfaces[inputs[inputs[tag]]] for tag in restricted)) == moving_faces
 
 
 @pytest.mark.parametrize("partial", [False, True], ids=["fully-covered", "partly-covered"])

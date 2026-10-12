@@ -2173,7 +2173,12 @@ def _mesh_coupled_regions(
     sizes: Mapping[str, Any], options: Mapping[str, Any], applied_planes: Any,
     *, deadline: float | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    """Retain a separate closed surface for F8; the exterior-only mesh is unchanged."""
+    """Gate all air/material contacts; retain a coupled skin only for interfaces.
+
+    Even one interior-only region replays/fingerprints the assembly and runs
+    Boolean overlap checks. That child exits before mesh generation, leaving
+    the independent FEM child responsible for its retained mesh.
+    """
     regions = bundle.manifest["scope"].get("fem_regions", [])
     if not regions:
         return None, {}
@@ -2183,8 +2188,6 @@ def _mesh_coupled_regions(
     ))
     interfaces = [region for region in regions
                   if any(group["kind"] == "interface" for group in region["surface_groups"])]
-    if not interfaces and len(regions) < 2:
-        return None, {}
     if deadline is None:
         deadline = time.monotonic() + FEM_REGIONS_WALL_TIME_S
 
@@ -2228,7 +2231,15 @@ def _mesh_coupled_regions(
             contacts_only=not interfaces,
         )
     except Exception as exc:
-        raise IngestRefusal("stage 7 meshing", f"{labels}: {exc}",
+        message = exc.detail if isinstance(exc, ChildRefusal) else str(exc)
+        # STEP staging knows member ids; present the declared region names
+        # without adding a second label around the child's existing refusal.
+        for region in regions:
+            message = message.replace(f"FEM region {region['region_id']!r}",
+                                      f"FEM region {region['name']!r}")
+        if "FEM region" not in message:
+            message = f"{labels}: {message}"
+        raise IngestRefusal("stage 7 meshing", message,
                             symmetry_plane=getattr(exc, "symmetry_plane", None)) from exc
     check_deadline()
     if not interfaces:

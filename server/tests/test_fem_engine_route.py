@@ -691,6 +691,28 @@ def test_ideal_admission_requires_one_fem_region_per_channel(fem_admission, same
     assert "give this channel an electrodynamic driver to share a diaphragm between regions" in message
 
 
+@pytest.mark.parametrize('planes', [['x0'], ['x0', 'y0']])
+def test_shared_ideal_channel_under_symmetry_explains_full_domain_remedy(planes, monkeypatch):
+    from server.jobs.models import DriveChannel
+    from server.solver.coupled_admission import fem_request_problem
+    from server.tests.test_fem_electrodynamic import driver
+
+    monkeypatch.setenv('WG2_FEM_REGIONS', '1')
+    record = {'fem_regions': [region_input('front', 'left').record, region_input('rear', 'left').record],
+              'symmetry': {'domain_planes': planes}}
+    channel = DriveChannel(id='left', source_ids=['painted'])
+    code, message = fem_request_problem(record, [channel])
+    assert code == 'fem_multiple_diaphragms_unsupported'
+    assert 'electrodynamic driver' in message
+    assert 'full model' in message and 'Force full domain' in message
+    channel.exterior_transducer = driver()
+    code, message = fem_request_problem(record, [channel])
+    assert code == 'fem_domain_unsupported'
+    assert 'full model' in message
+    record['symmetry']['domain_planes'] = []
+    assert fem_request_problem(record, [channel]) is None
+
+
 def test_painted_front_and_one_fem_rear_share_one_ideal_port(fem_admission, monkeypatch):
     # Admission proceeds beyond the cheap drive checks; avoid unrelated mesh/frame checks.
     from server.jobs.runtime import imported_refusals
