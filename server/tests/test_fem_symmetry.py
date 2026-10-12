@@ -335,7 +335,20 @@ def test_coupled_request_matches_exterior_image_options_and_observations(tmp_pat
     exterior_outputs = [o for o in coupled.wire["outputs"] if o["quantity"] == "exterior_pressure"]
     assert exterior_outputs == [o for o in ordinary.wire["outputs"] if o["quantity"] == "exterior_pressure"]
     radiation_outputs = [o for o in coupled.wire["outputs"] if o["quantity"] == "interface_radiated_pressure"]
-    assert [o["options"] for o in radiation_outputs] == [o["options"] for o in exterior_outputs]
+    assert [o["options"] for o in radiation_outputs] == [
+        o["options"] for o in exterior_outputs if o["id"] != "pressure:sphere"]
+    from server.solver.beat_adapter.results import map_coupled_sweep
+    from server.solver.result_mapping import map_coupled_port_response
+    sweep = map_coupled_sweep(events(coupled), coupled)
+    response = {"frequencies": [100.], "metadata": {}}
+    map_coupled_port_response(response, sweep, coupled, next(iter(coupled.channel_ports)))
+    ports = response["metadata"]["fem_ports"]
+    multiplier = 2 ** len(planes)
+    assert ports["radiation_symmetry"] == "includes_symmetry_images"
+    assert ports["represented_area_scope"] == "fundamental_domain_patch"
+    for port in ports["interfaces"]:
+        assert port["symmetry_multiplier"] == multiplier
+        assert port["full_model_area_m2"] == pytest.approx(port["represented_area_m2"] * multiplier)
 
 
 @pytest.mark.parametrize("planes", [("x0",), ("x0", "y0")])

@@ -146,7 +146,7 @@ it('uses recorded RMS input power and current for FEM channels, including zero a
   const result = driven({ frequencies: [100, 200, 300], impedance: undefined }, {
     driver: { input_power_w: {
       frequencies: [100, 200, 300], units: 'W', amplitude_convention: 'rms',
-      values: [2.83, 0, -2.83], current_rms_a: [
+      reference_voltage_rms_v: 5.66, values: [2.83, 0, -2.83], current_rms_a: [
         { real: 1, imaginary: 2 }, { real: 0, imaginary: 0 }, { real: -1, imaginary: 0 },
       ],
     } },
@@ -154,5 +154,16 @@ it('uses recorded RMS input power and current for FEM channels, including zero a
   const series = drivePowerSeries(result)!;
   expect(series.watts).toEqual([2.83, 0, -2.83]);
   expect(series.amps).toEqual([Math.sqrt(5), 0, 1]);
-  expect(series.voltAmps).toEqual([2.83 * Math.sqrt(5), 0, 2.83]);
+  expect(series.voltAmps).toEqual([5.66 * Math.sqrt(5), 0, 5.66]);
+  delete result.metadata!.drive;
+  expect(drivePowerSeries(result)?.voltAmps).toEqual(series.voltAmps);
+});
+
+
+it('keeps native watts and current but leaves VA missing without a reference RMS voltage', () => {
+  const result = driven({}, { driver: { input_power_w: {
+    frequencies: [100], units: 'W', amplitude_convention: 'rms', values: [1],
+    current_rms_a: [{ real: 1, imaginary: 0 }],
+  } } });
+  expect(drivePowerSeries(result)).toMatchObject({ watts: [1], amps: [1], voltAmps: [null] });
 });

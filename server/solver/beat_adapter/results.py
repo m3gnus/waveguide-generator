@@ -446,6 +446,7 @@ class CoupledSweep:
     interface_velocity: np.ndarray | None = None  # frequency, basis, interface; solver convention
     interface_radiation: dict[str, np.ndarray] = field(default_factory=dict)  # layout, frequency/basis/source/point
     interface_areas_m2: list[float] = field(default_factory=list)
+    interface_radiation_source_ids: list[str] = field(default_factory=list)
 
 
 def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_result=None,
@@ -607,8 +608,9 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                              np.empty((0, len(ports), len(interface_ids)), complex)) if interface_ids else None,
                             {name: np.stack([row[f"interface:radiation:{name}"] for row in rows]) if rows else
                              np.empty((0, len(ports), len(radiation_ids), len(points)), complex)
-                             for name, points in request.layout.points_m.items()} if interface_ids else {},
-                            interface_areas)
+                             for name, points in request.layout.points_m.items()
+                             if any(o["id"] == f"interface:radiation:{name}" for o in outputs)} if interface_ids else {},
+                            interface_areas, radiation_ids if interface_ids else [])
     finally:
         close = getattr(events, "close", None) or getattr(stream, "close", None)
         if close:

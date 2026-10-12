@@ -343,6 +343,18 @@ Electrodynamic voltage drives are supported on full models, including FEM
 and painted exterior diaphragms and mixed ideal/voltage channels. Driver symmetry
 is pending and reduced models with drivers refuse clearly. Legacy driver models,
 patch weights, ideal axial motion and passive-cardioid campaigns remain unsupported.
+
+Interface outputs include area-weighted complex normal velocity and radiated
+pressure on the polar cuts, per drive channel. Radiation phasors use lossless
+base64 complex128 arrays (little endian, C order, frequency by observation);
+observation points are shared by all sources in the ports block. The represented
+area is the reduced patch area; symmetry multiplier and full model area are recorded beside
+it, and port radiation includes symmetry images, including off-plane ports.
+Other exterior radiation is shown only when the engine supplies that source
+column. Combined results refer users to the individual drive channels for ports.
+Voltage drives retain RMS input power and current, with the reference voltage
+in the result metadata. The normal exterior sphere pressure still supplies DI
+and balloon views; per-source interface radiation does not replay the sphere.
 With painted sources present, each FEM diaphragm channel must exist in the
 setup; renaming, regrouping or skipping the front source cannot silently create
 a separate rear driver. Designs without painted sources retain FEM-only channel

@@ -28,12 +28,13 @@ function PortPlots({ data }: { data: FemPorts }) {
   const selectedPlane = planes.includes(plane) ? plane : planes[0];
   const selectedAngle = angle < data.observation_angles_deg.length ? angle : 0;
   const units = display === 'spl' ? 'SPL [dB]' : display === 'phase' ? 'Phase [°]' : 'Pressure [Pa]';
+  const unitChip = display === 'spl' ? 'dB' : display === 'phase' ? '°' : 'Pa';
   return <>
     <div className="results-toolbar">
-      <label>Plane <select aria-label="Port radiation plane" value={selectedPlane} onChange={(e) => setPlane(e.target.value)}>
+      <label>Plane <select aria-label="Port radiation plane" disabled={!planes.length} value={selectedPlane ?? ''} onChange={(e) => setPlane(e.target.value)}>
         {planes.map((p) => <option key={p} value={p}>{p}</option>)}
       </select></label>
-      <label>Angle <select aria-label="Port radiation angle" value={selectedAngle} onChange={(e) => setAngle(Number(e.target.value))}>
+      <label>Angle <select aria-label="Port radiation angle" disabled={!planes.length} value={selectedAngle} onChange={(e) => setAngle(Number(e.target.value))}>
         {data.observation_angles_deg.map((a, i) => <option key={i} value={i}>{a}°</option>)}
       </select></label>
       <label>Display <select aria-label="Port radiation display" value={display} onChange={(e) => setDisplay(e.target.value as PortRadiationDisplay)}>
@@ -48,7 +49,7 @@ function PortPlots({ data }: { data: FemPorts }) {
       </section>
       <section className="result-card" style={{ height: 240 }} aria-label="Port radiation">
         <EChart label="Port radiation by frequency" option={portChartOption(data.frequencies, portRadiationTraces(data, selectedPlane, selectedAngle, display), units, tokens)}/>
-        <div className="result-chrome"><span className="result-title"><b>Port radiation</b></span></div>
+        <div className="result-chrome"><span className="result-title"><b>Port radiation</b><em>{unitChip}</em></span></div>
       </section>
     </div>
   </>;
@@ -57,8 +58,12 @@ function PortPlots({ data }: { data: FemPorts }) {
 export function FemPortsPanel({ result }: { result: ResultPayload }) {
   const data = femPortsOf(result);
   const [open, setOpen] = useState(false);
-  if (!data) return null;
-  return <details className="result-diagnostics" onToggle={(e) => setOpen(e.currentTarget.open)}>
+  if (!data) {
+    const fem = result.metadata?.fem as { interface_diagnostics?: { interfaces?: unknown[] } } | undefined;
+    return result.metadata?.derived_from_channels && fem?.interface_diagnostics?.interfaces?.length
+      ? <p className="result-fem-ports-note">Ports are available per drive channel. Select a drive channel to view them.</p> : null;
+  }
+  return <details className="result-diagnostics result-fem-ports" onToggle={(e) => setOpen(e.currentTarget.open)}>
     <summary>Ports · {data.interfaces.length} {data.interfaces.length === 1 ? 'interface' : 'interfaces'}</summary>
     {open && <div className="result-power-details"><PortPlots data={data}/></div>}
   </details>;

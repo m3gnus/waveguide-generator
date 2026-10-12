@@ -405,6 +405,8 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 
 /* result dock */
 .results-panel { position: relative; display: flex; flex-direction: column; overflow: hidden; }
+.result-fem-ports { flex: none; max-height: min(300px, 45%); overflow: auto; }
+.result-fem-ports-note { flex: none; margin: 4px 6px; color: var(--fg3); font-size: var(--text-micro); }
 .results-toolbar { display: flex; align-items: center; gap: 4px; min-height: 26px; padding: 0 6px; border-bottom: 1px solid var(--hair-soft); color: var(--fg3); font-size: var(--text-micro); text-transform: uppercase; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
 .results-toolbar::-webkit-scrollbar { display: none; }
 .results-toolbar button { height: 19px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg2); font-size: var(--text-micro); text-transform: none; white-space: nowrap; }

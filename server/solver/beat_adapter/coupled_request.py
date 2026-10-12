@@ -141,10 +141,11 @@ def build_coupled_request(
     channels = {port["name"]: (port["id"],) for port in system["excitation_ports"]}
     outputs = transformed_layout.exterior_outputs() if exterior is not None else []
     if system["interfaces"]:
-        # Empty targets select all interfaces. Radiation uses the same transformed
-        # observation points as total pressure, including the sampled sphere.
+        # Empty targets select all interfaces. Replay only the displayed polar
+        # cuts; total sphere pressure remains available for DI and the balloon.
         outputs.extend({**output, "id": output["id"].replace("pressure:", "interface:radiation:"),
-                        "quantity": "interface_radiated_pressure"} for output in list(outputs))
+                        "quantity": "interface_radiated_pressure"} for output in list(outputs)
+                       if output["id"].removeprefix("pressure:") in layout.planes)
         outputs.append({"id": "interface:velocity", "quantity": "interface_average_normal_velocity",
                         "target_ids": [], "options": {}})
     outputs.append({"id": "fem:pressure", "quantity": "fem_nodal_pressure",

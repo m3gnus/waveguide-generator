@@ -1453,8 +1453,18 @@ def coupled_interface_diagnostics(sweep, request):
             values.append(_finite(samples[index]) if 0 <= index < len(samples) else None)
         return values
 
+    def reconstruction_error(row):
+        # The engine returns one reconstruction error per excitation basis.
+        samples = row.get("interface_radiation_boundary_reconstruction_relative_error")
+        if not isinstance(samples, list):
+            return _finite(samples)
+        values = [_finite(sample) for sample in samples]
+        return max(values) if values and all(value is not None for value in values) else None
+
     return {"frequencies": native.frequencies_hz.tolist(), "source": "beat_engine",
             "aggregation": "maximum_over_excitation_bases", "units": "relative_error",
+            "interface_radiation_boundary_reconstruction_relative_error": [
+                reconstruction_error(row) for row in logs],
             "interfaces": [{"id": identity,
                             "pressure_continuity_error": errors("interface_pressure_continuity_errors", identity),
                             "flux_conservation_error": errors("interface_flux_conservation_errors", identity)}
@@ -1464,6 +1474,7 @@ def coupled_interface_diagnostics(sweep, request):
 def map_coupled_port_response(response, sweep, request, channel):
     """Expose port phasors in engineering convention on the channel drive basis."""
     from server.contracts.conventions import ENGINEERING_PHASE_CONVENTION, solver_to_engineering
+    import base64
 
     interfaces = request.wire["compiled_system"]["interfaces"]
     if not interfaces:
@@ -1473,8 +1484,17 @@ def map_coupled_port_response(response, sweep, request, channel):
     radiation = {name: solver_to_engineering(values[:, indices].sum(axis=1))
                  for name, values in sweep.interface_radiation.items()}
 
-    def pressure(source_index):
-        return {name: json_safe_native_value(values[:, source_index]) for name, values in radiation.items()}
+    def pressure(source_id):
+        source_index = sweep.interface_radiation_source_ids.index(source_id)
+        # Lossless packed phasors avoid a JSON object and repeated property names
+        # per sample. The panel decodes the selected plane and reads one observation.
+        return {name: {"encoding": "base64", "dtype": "complex128",
+                       "shape": list(values[:, source_index].shape), "order": "C", "byte_order": "little",
+                       "content_base64": base64.b64encode(np.asarray(
+                           values[:, source_index], dtype="<c16").tobytes()).decode("ascii")}
+                for name, values in radiation.items() if name in request.layout.planes}
+
+    symmetry_multiplier = {"off": 1, "x": 2, "xy": 4}[request.wire["solver_options"]["symmetry"]]
 
     response["metadata"]["fem_ports"] = {
         "frequencies": response["frequencies"], "drive_normalization": request.drive_normalization[channel],
@@ -1486,14 +1506,16 @@ def map_coupled_port_response(response, sweep, request, channel):
         "observation_points_m": {output["id"].removeprefix("interface:radiation:"): output["options"]["points_m"]
                                  for output in request.wire["outputs"]
                                  if output["quantity"] == "interface_radiated_pressure"},
-        "sphere_theta_deg": json_safe_native_value(request.layout.sphere_theta_deg),
-        "sphere_phi_deg": json_safe_native_value(request.layout.sphere_phi_deg),
+        "radiation_symmetry": "includes_symmetry_images",
+        "represented_area_scope": "fundamental_domain_patch",
         "interfaces": [{"id": item["id"], "label": item["id"].removeprefix("interface:"),
                         "represented_area_m2": sweep.interface_areas_m2[i] if sweep.interface_areas_m2 else None,
+                        "symmetry_multiplier": symmetry_multiplier,
+                        "full_model_area_m2": sweep.interface_areas_m2[i] * symmetry_multiplier
+                        if sweep.interface_areas_m2 else None,
                         "average_normal_velocity": json_safe_native_value(velocity[:, i]),
-                        "radiated_pressure": pressure(i)} for i, item in enumerate(interfaces)],
-        "diaphragm_radiated_pressure": {
-            name: json_safe_native_value(values[:, -1] - values[:, :len(interfaces)].sum(axis=1))
-            for name, values in radiation.items()},
-        "total_radiated_pressure": pressure(-1),
+                        "radiated_pressure": pressure(item["id"])} for i, item in enumerate(interfaces)],
+        **({"other_exterior_radiated_pressure": pressure("radiation:other-exterior")}
+           if "radiation:other-exterior" in sweep.interface_radiation_source_ids else {}),
+        "total_radiated_pressure": pressure("radiation:total"),
         "decomposition": "fixed_operating_flux_full_exterior_replay"}

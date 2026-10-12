@@ -66,13 +66,23 @@ def test_coupled_wire_passes_pinned_engine_contract():
     assert request.wire["compiled_system"]["contract_version"] == 2
     assert list(request.channel_ports) == ["exterior", "fem"]
     assert [o["quantity"] for o in request.wire["outputs"]] == (
-        ["exterior_pressure"] * 3 + ["interface_radiated_pressure"] * 3
+        ["exterior_pressure"] * 3 + ["interface_radiated_pressure"] * 2
         + ["interface_average_normal_velocity", "fem_nodal_pressure"])
     options = request.wire["solver_options"]
     assert options["precision"] == "float64"
     assert options["regular_quadrature_mode"] == "fixed"
     assert options["quadrature_order"] == options["singular_order"] == 4
     assert options["validation_diagnostics"] is False
+
+
+def test_coupled_route_documentation_describes_supported_drives_and_outputs():
+    from pathlib import Path
+
+    text = (Path(__file__).parents[2] / "docs/plans/CADLINK-FEM-REGIONS.md").read_text()
+    assert "supports electrodynamic drivers on full models" in text
+    assert "RMS input power and current" in text
+    assert "Interface outputs include area-weighted complex normal velocity" in text
+    assert "drives only. Any `exterior_transducer`" not in text
 
 
 @pytest.mark.parametrize("options,message", [
