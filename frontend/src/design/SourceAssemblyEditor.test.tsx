@@ -71,7 +71,8 @@ describe('shared source and passage authoring', () => {
     await mount();
     await act(async () => field('Enclosure width').focus());
     await act(async () => resolve(profile)); await settle();
-    expect(field('Enclosure width').value).toBe('70.00');
+    // The focused field edits its stored value; the unseeded draft is still 70 x 40 mm.
+    expect(field('Enclosure width').value).toBe('70');
     expect(field('Enclosure depth').value).toBe('40.00');
     expect(storage.getItem('')).toBeNull();
   });

@@ -69,6 +69,10 @@ export function NumberField({
   const help = useHelpTip({ title: titled, text: description, hint: 'Drag the label sideways to adjust.' });
   const shown = Math.min(displayPrecision ?? precision, precision);
   const displayed = expression?.raw ?? (value === undefined ? '' : value.toFixed(shown));
+  // A field shown coarser than it stores edits its stored value, so typing the
+  // rounded number on screen is a real change, not a no-op.
+  const exact = expression?.raw ?? (value === undefined ? '' : String(Number(value.toFixed(precision))));
+  const editBaseline = useRef<string | null>(null);
   const [draft, setDraft] = useState(displayed);
   const [editing, setEditing] = useState(false);
   const [expandedDraft, setExpandedDraft] = useState(false);
@@ -198,10 +202,13 @@ export function NumberField({
     setExpandedDraft(false);
     if (cancelBlur.current) {
       cancelBlur.current = false;
+      editBaseline.current = null;
       setDraft(displayed);
       return;
     }
-    if (draft === displayed) return;
+    const baseline = editBaseline.current ?? displayed;
+    editBaseline.current = null;
+    if (draft === baseline) { setDraft(displayed); return; }
     if (draftInvalid) {
       setDraft(displayed);
       return;
@@ -369,7 +376,13 @@ export function NumberField({
           title={formulaLayout ? draft : undefined}
           value={draft}
           onChange={changeDraft}
-          onFocus={() => setEditing(true)}
+          onFocus={() => {
+            setEditing(true);
+            if (shown < precision && !holdsExpression && exact !== displayed) {
+              editBaseline.current = exact;
+              setDraft(exact);
+            }
+          }}
           onBlur={commit}
           onKeyDown={onKeyDown}
           onCompositionStart={onCompositionStart}

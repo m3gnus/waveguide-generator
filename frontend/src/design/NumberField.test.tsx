@@ -320,6 +320,22 @@ describe('NumberField', () => {
     expect(commitExpression).toHaveBeenCalledExactlyOnceWith({ raw: '4*pi', value: null });
   });
 
+  it('edits the stored value of a field shown coarser than it stores', () => {
+    const commit = vi.fn();
+    act(() => root.render(<NumberField label="Rim" value={9.525} precision={9} displayPrecision={2} onCommit={commit} />));
+    const input = host.querySelector('input')!;
+    expect(input.value).toBe('9.53');
+    act(() => input.focus());
+    expect(input.value).toBe('9.525');
+    act(() => input.blur());
+    expect(commit).not.toHaveBeenCalled();
+    expect(input.value).toBe('9.53');
+    act(() => input.focus());
+    act(() => setValue(input, '9.53'));
+    act(() => input.blur());
+    expect(commit).toHaveBeenCalledExactlyOnceWith(9.53);
+  });
+
   it('commits with Enter and cancels with Escape in the formula editor', () => {
     const commitExpression = vi.fn();
     const render = () => root.render(<NumberField label="Radius" value={4} expression={{ raw: '4*p', value: 4 }} allowExpression onCommit={vi.fn()} onCommitExpression={commitExpression} />);
