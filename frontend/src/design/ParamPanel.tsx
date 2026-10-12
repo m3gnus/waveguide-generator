@@ -29,7 +29,8 @@ import {
 } from '../stores/cadReturn';
 import { ChannelDriverPicker } from './DriverPicker';
 import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
-import { NATIVE_FAMILIES, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
+import { NATIVE_FAMILIES, defaultWallThickness, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
+import { athControlError, isAthV2, opusClampNote, opusMountingReason } from './athImportControls';
 import { namespaceStorage } from '../stores/durableSettings';
 import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -225,10 +226,9 @@ type SelectableOuterBodyMode = Exclude<OuterBodyMode, 'infinite-baffle'>;
  *
  * The two implementations have to agree on "unset" as well as on a value. The
  * server keeps `mesh.wall_thickness` nullable so a CFG round-trip is lossless
- * and resolves an omitted one to ATH's 5 mm; the store never holds a null,
- * because hydration keeps the family default of 5 for an absent wire field
- * (api/designIo.ts `merge`) and only records the path in `_absent`. So both
- * sides read 5 for an unset wall, and only an explicit 0 is a bare shell.
+ * and resolves an omitted wall using the imported geometry's dependent
+ * default. Hydration and edits refresh that display value while `_absent`
+ * keeps the document unset. Only an explicit 0 means a bare shell.
  */
 export function resolveOuterBodyMode(design: DesignDocument): OuterBodyMode {
   if (design.simulation.sim_type === 'infinite-baffle') return 'infinite-baffle';
@@ -252,7 +252,7 @@ const outerModeLabels: Record<OuterBodyMode, string> = {
 
 function WallEnclosureModeControl({ design, mounting = false, serverError }: { design: DesignDocument; mounting?: boolean; serverError?: string }) {
   const updateValues = useDesignStore((state) => state.updateValues);
-  const [lastWallThickness, setLastWallThickness] = useState(() => design.mesh.wall_thickness > 0 ? design.mesh.wall_thickness : 5);
+  const [lastWallThickness, setLastWallThickness] = useState<number | null>(null);
   const [lastEnclosureDepth, setLastEnclosureDepth] = useState(() => design.enclosure.depth > 0 ? design.enclosure.depth : 280);
   const backend = useActiveBackendCapability();
   const backendPlan = usePlannedBackendCapabilities();
@@ -266,8 +266,8 @@ function WallEnclosureModeControl({ design, mounting = false, serverError }: { d
   const resolvedMode = resolveOuterBodyMode(design);
 
   useEffect(() => {
-    if (design.mesh.wall_thickness > 0) setLastWallThickness(design.mesh.wall_thickness);
-  }, [design.mesh.wall_thickness]);
+    if (design.mesh.wall_thickness > 0 && !design._absent?.includes('mesh.wall_thickness')) setLastWallThickness(design.mesh.wall_thickness);
+  }, [design.mesh.wall_thickness, design._absent]);
   useEffect(() => {
     if (design.enclosure.depth > 0) setLastEnclosureDepth(design.enclosure.depth);
   }, [design.enclosure.depth]);
@@ -280,7 +280,7 @@ function WallEnclosureModeControl({ design, mounting = false, serverError }: { d
     const updates = mode === 'bare'
       ? { 'mesh.wall_thickness': 0, 'enclosure.depth': 0 }
       : mode === 'freestanding'
-        ? { 'mesh.wall_thickness': lastWallThickness, 'enclosure.depth': 0 }
+        ? { 'mesh.wall_thickness': lastWallThickness ?? defaultWallThickness(design), 'enclosure.depth': 0 }
         : { 'mesh.wall_thickness': 0, 'enclosure.depth': lastEnclosureDepth };
     updateValues({ ...updates, ...(mounting && design.simulation.sim_type === 'infinite-baffle' ? { 'simulation.sim_type': 'freestanding' } : {}) });
   };
@@ -383,6 +383,8 @@ function storedValueError(field: ParameterDefinition, design: DesignDocument): s
 function prospectiveValidation(field: ParameterDefinition, design: DesignDocument, value: number): string | undefined {
   if (['icw.kappa_abs_max', 'icw.dkappa_ds_abs_max', 'icw.icw_S'].includes(field.id) && value <= 0) return 'Must be greater than zero.';
   if (field.id === 'icw.theta_max_deg' && value <= 90) return 'Must be greater than 90° and at most 180°.';
+  const athError = athControlError(field.path, value);
+  if (athError) return athError;
   if (field.id.startsWith('cross_section.') && value <= 0) return 'Must be greater than zero.';
   if (field.id === 'simulation.f1' && value >= design.simulation.f2) return 'Must be below sweep end.';
   if (field.id === 'simulation.f2' && value <= design.simulation.f1) return 'Must exceed sweep start.';
@@ -447,6 +449,19 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
   const disabled = Boolean(disabledReason);
   const commit = (next: DesignValue) => {
     if (!field.path || disabled) return;
+    if (field.id === 'mesh.ath_roundover') {
+      updateValue(field.path, next === 1 ? { radius: Math.max(10, design.mesh.wall_thickness + 5), segments: 5 } : null);
+      return;
+    }
+    if (field.id === 'mesh.ath_rear_shape') {
+      if (next === 3 && opusMountingReason(design)) return;
+      updateValues({
+        [field.path]: next === '' ? null : next,
+        'mesh.ath_rear_front_offset': next === 3 ? design.mesh.ath_rear_front_offset ?? 40 : null,
+        'mesh.ath_rear_step': next === 3 ? design.mesh.ath_rear_step ?? 25 : null,
+      });
+      return;
+    }
     if (field.mirrorPaths?.length) {
       updateValues(Object.fromEntries([field.path, ...field.mirrorPaths].map((path) => [path, next])));
     } else {
@@ -472,7 +487,9 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
     </div>;
   }
   if (field.kind === 'select' || field.kind === 'toggle') {
-    const options = fieldOptionsForBackend(field, value, backend, backendPlan, hostEngines);
+    const options = fieldOptionsForBackend(field, value, backend, backendPlan, hostEngines).map((option) =>
+      field.id === 'mesh.ath_rear_shape' && option.value === 3 ? { ...option, unavailableReason: opusMountingReason(design) } : option);
+    const selectedValue = field.id === 'mesh.ath_roundover' ? value ? 1 : 0 : value;
     const unsupported = fieldUnsupportedFeature(field, value, backend, backendPlan);
     const ibEngine = field.id === 'simulation.sim_type'
       ? backendPlan.find((candidate) => candidate.mountings?.includes('infinite-baffle'))
@@ -480,7 +497,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
     return <>
       <SelectRow className={disabled ? 'field-disabled' : undefined} text={field.description}>
         <label htmlFor={`parameter-${field.id}`} title={disabledReason}>{field.label}</label>
-        <select id={`parameter-${field.id}`} value={optionKey(value)} disabled={disabled} onChange={(event) => {
+        <select id={`parameter-${field.id}`} value={optionKey(selectedValue)} disabled={disabled} onChange={(event) => {
           const option = field.options?.find((item) => optionKey(item.value) === event.target.value);
           commit(option ? option.value : event.target.value);
         }}>
@@ -492,6 +509,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
       {/* Listed but disabled: no engine on this host can run it. Say why here,
           because a title tooltip on a disabled option is easy to miss. */}
       {options.filter((option) => option.unavailableReason).map((option) => <div key={`unavailable-${String(option.value)}`} className="field-warning" role="status">{option.label}: {option.unavailableReason}</div>)}
+      {field.id === 'mesh.ath_rear_shape' && opusClampNote(design) && <p className="section-note" role="status">{opusClampNote(design)}</p>}
       {/* The value survived the filter only because the design already holds
           it, so say plainly what will happen rather than leaving a control
           that looks ordinary and then fails a minute into the solve. */}
@@ -507,20 +525,20 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
       label={field.label}
       symbol={field.symbol}
       description={field.description}
-      value={typeof value === 'number' ? value : field.path === 'enclosure.depth_margin_mm' ? 1 : optional ? undefined : 0}
+      value={typeof value === 'number' ? value : field.id === 'mesh.ath_rear_front_offset' ? 40 : field.id === 'mesh.ath_rear_step' ? 25 : field.path === 'enclosure.depth_margin_mm' ? 1 : optional ? undefined : 0}
       expression={field.path ? design._expressions?.[field.path] : undefined}
       allowExpression={fieldAcceptsExpression(field)}
       unit={field.unit}
       min={field.min}
       exclusiveMin={field.exclusiveMin}
-      max={field.max}
+      max={field.id === 'mesh.wall_thickness' && isAthV2(design) && design.mesh.ath_rear_shape === 3 ? undefined : field.max}
       step={field.step}
       precision={field.precision}
       disabled={disabled}
       disabledReason={disabledReason}
       invalidMessage={error ?? serverError}
       validate={(next) => prospectiveValidation(field, design, next)}
-      formatRangeError={field.path === 's1' || field.path === 's2'
+      formatRangeError={field.id.startsWith('mesh.ath_') ? (next) => athControlError(field.path, next) : field.path === 's1' || field.path === 's2'
         ? (next) => throatStretchError(field.path as 's1' | 's2', next) : undefined}
       onCommit={(next) => commit(next)}
       optional={optional}
@@ -1200,6 +1218,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const fieldsBySection = useMemo(() => new Map(definitions.map(({ title }) => {
     const fields = (workspaceMode === 'cad' ? LEGACY_PARAMETER_REGISTRY : PARAMETER_REGISTRY).filter((field) => field.section === title)
       .filter((field) => field.section !== 'Imported ATH values' || fieldIsVisible(field, design))
+      .filter((field) => !field.id.startsWith('mesh.ath_') || fieldIsVisible(field, design))
       .filter((field) => query.trim() ? fieldAppliesToFamily(field, design.formula) : fieldIsVisible(field, design))
       .filter((field) => fieldMatchesQuery(field, query));
     return [title, fields] as const;
@@ -1259,12 +1278,6 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   </div>;
 
   const importedAthValues = design.text_import_version === 'ath-2026-09a-v2' ? <>
-        {design.mesh.ath_roundover && <div className="passthrough-row"><span>Mesh.Roundover</span><b>{design.mesh.ath_roundover.radius} mm · {design.mesh.ath_roundover.segments} segments</b></div>}
-        {design.mesh.ath_rear_shape != null && <div className="passthrough-row"><span>Mesh.RearShape</span><b>{design.mesh.ath_rear_shape === 3 ? '3 (Opus)' : '1 (full rear)'}</b></div>}
-        {design.mesh.ath_rear_shape === 3 && <>
-          <div className="passthrough-row"><span>Mesh.RearShape.FrontOffset</span><b>{design.mesh.ath_rear_front_offset ?? 40} mm</b></div>
-          <div className="passthrough-row"><span>Mesh.RearShape.Step</span><b>{design.mesh.ath_rear_step ?? 25} mm</b></div>
-        </>}
         {design.ath_nac_present && <div className="passthrough-row"><span>NAC</span><b>{design.ath_nac ?? 'Present'} · preserves angular samples</b></div>}
   </> : null;
 

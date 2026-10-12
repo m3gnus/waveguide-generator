@@ -361,22 +361,102 @@ describe('ParamPanel inventory UX', () => {
     expect(serializeDesign(useDesignStore.getState().design)).toMatchObject({ throat_profile: 1, circ_arc_radius: 123.456, circ_arc_term_angle: 35 });
   });
 
-  it('shows imported ATH lip, Opus rear and NAC values as read-only geometry', () => {
+  it('edits imported ATH lip and rear on Geometry while keeping NAC read-only', () => {
     act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
       formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', ath_nac_present: true, ath_nac: 10,
       mesh: { ath_roundover: { radius: 42, segments: 6 }, ath_rear_shape: 3,
         ath_rear_front_offset: 40, ath_rear_step: 50 },
     })));
-    expect(host.textContent).toContain('Imported ATH values');
-    expect(host.textContent).toContain('42 mm · 6 segments');
-    expect(host.textContent).toContain('3 (Opus)');
-    expect(host.textContent).toContain('Mesh.RearShape.FrontOffset');
-    expect(host.textContent).toContain('50 mm');
-    expect(host.textContent).toContain('10 · preserves angular samples');
-    for (const label of ['Mesh.Roundover', 'Mesh.RearShape', 'NAC']) {
-      const row = [...host.querySelectorAll('.passthrough-row')].find((item) => item.querySelector('span')?.textContent === label)!;
-      expect(row.querySelector('input, select, button')).toBeNull();
+    expect(host.querySelector<HTMLInputElement>('[data-parameter-id="mesh.ath_roundover.radius"] input')!.value).toBe('42.00');
+    expect(host.querySelector('[data-parameter-id="mesh.ath_roundover"]')!.closest('section')!.dataset.section).toBe('Mouth');
+    expect(host.querySelector('[data-parameter-id="mesh.ath_rear_shape"]')!.closest('section')!.dataset.section).toBe('Mounting');
+    const imported = host.querySelector('[data-section="Imported ATH values"]')!;
+    expect(imported.textContent).toContain('10 · preserves angular samples');
+    expect(imported.textContent).not.toContain('Mesh.Roundover');
+    expect(imported.textContent).not.toContain('Mesh.RearShape');
+    for (const [id, draft] of [['mesh.ath_roundover.radius', '48'], ['mesh.ath_roundover.segments', '7'], ['mesh.ath_rear_front_offset', '35'], ['mesh.ath_rear_step', '30']]) {
+      const input = host.querySelector<HTMLInputElement>(`[data-parameter-id="${id}"] input`)!;
+      act(() => input.focus());
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, draft);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      act(() => input.blur());
     }
+    expect(serializeDesign(useDesignStore.getState().design).mesh).toMatchObject({
+      ath_roundover: { radius: 48, segments: 7 }, ath_rear_shape: 3, ath_rear_front_offset: 35, ath_rear_step: 30,
+    });
+    const choose = (id: string, value: string) => act(() => {
+      const select = host.querySelector<HTMLSelectElement>(`[data-parameter-id="${id}"] select`)!;
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    choose('mesh.ath_roundover', '0');
+    expect(useDesignStore.getState().design.mesh.ath_roundover).toBeNull();
+    expect(host.querySelector('[data-parameter-id="mesh.ath_roundover.radius"]')).toBeNull();
+    choose('mesh.ath_roundover', '1');
+    expect(useDesignStore.getState().design.mesh.ath_roundover).toEqual({ radius: 10, segments: 5 });
+    choose('mesh.ath_rear_shape', '1');
+    expect(useDesignStore.getState().design.mesh.ath_rear_front_offset).toBeNull();
+    expect(useDesignStore.getState().design.mesh.ath_rear_step).toBeNull();
+    expect(host.querySelector('[data-parameter-id="mesh.ath_rear_step"]')).toBeNull();
+    choose('mesh.ath_rear_shape', '3');
+    expect(useDesignStore.getState().design.mesh.ath_rear_front_offset).toBe(40);
+    expect(useDesignStore.getState().design.mesh.ath_rear_step).toBe(25);
+  });
+
+  it.each([undefined, 'ath-2026-08c-v1'] as const)('hides ATH lip and rear for %s, including search', (version) => {
+    act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({ formula: 'OSSE', text_import_version: version })));
+    const search = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'ATH');
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(host.querySelector('[data-parameter-id^="mesh.ath_"]')).toBeNull();
+  });
+
+  it.each(['bare', 'enclosure', 'infinite-baffle'])('disables Opus for %s with the required Mounting change', (mode) => {
+    act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2',
+      mesh: { wall_thickness: mode === 'bare' ? 0 : 6 },
+      enclosure: { depth: mode === 'enclosure' ? 200 : 0 },
+      simulation: { sim_type: mode === 'infinite-baffle' ? mode : 'freestanding' },
+    })));
+    expect(host.querySelector<HTMLOptionElement>('[data-parameter-id="mesh.ath_rear_shape"] option[value="3"]')!.disabled).toBe(true);
+    expect(host.textContent).toContain('Mesh.RearShape = 3 requires a free-standing wall. Change Mounting to Thickened waveguide (freestanding).');
+  });
+
+  it.each([[.05, .1], [1200, 1000]])('shows Opus wall clamp for %s mm without altering the document', (wall, effective) => {
+    act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', mesh: { ath_rear_shape: 3, wall_thickness: wall },
+    })));
+    expect(host.textContent).toContain(`Mesh.RearShape = 3 clamps Mesh.WallThickness to ${effective} mm`);
+    expect(useDesignStore.getState().design.mesh.wall_thickness).toBe(wall);
+    expect(serializeDesign(useDesignStore.getState().design).mesh).toMatchObject({ wall_thickness: wall });
+  });
+
+  it.each([
+    ['mesh.ath_roundover.radius', '0', 'Mesh.Roundover.Radius must be finite and > 0'],
+    ['mesh.ath_roundover.radius', '-1', 'Mesh.Roundover.Radius must be finite and > 0'],
+    ['mesh.ath_roundover.segments', '1.5', 'Mesh.Roundover.Segments must be a finite integer >= 1'],
+    ['mesh.ath_roundover.segments', '0', 'Mesh.Roundover.Segments must be a finite integer >= 1'],
+    ['mesh.ath_rear_front_offset', '-1', 'negative offsets have no qualified ATH ring fit'],
+    ['mesh.ath_rear_step', '0', 'Mesh.RearShape.Step must be finite and > 0'],
+  ])('validates %s input %s with the mesher diagnostic', (id, draft, message) => {
+    act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', mesh: { ath_rear_shape: 3, ath_roundover: { radius: 10, segments: 5 } },
+    })));
+    const before = serializeDesign(useDesignStore.getState().design);
+    const input = host.querySelector<HTMLInputElement>(`[data-parameter-id="${id}"] input`)!;
+    act(() => input.focus());
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, draft);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(host.textContent).toContain(message);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    act(() => input.blur());
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
   });
 
   it('switches to experimental LOOKUP and shows its whole-meridian editor', () => {

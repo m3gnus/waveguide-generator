@@ -11,7 +11,7 @@ export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM' | 'LOOKUP' | N
 export const isNativeFamily = (family: DesignFamily): family is NativeFamily => (NATIVE_FAMILIES as readonly string[]).includes(family);
 export type MutationReason = 'edit' | 'drag' | 'undo' | 'redo' | 'load' | 'family';
 export type DesignLoadSource = 'ordinary' | 'cad-project-switch';
-export type DesignValue = number | string | boolean | null | number[] | [number, number][] | FreeformPoint[] | CrossSectionStation[];
+export type DesignValue = number | string | boolean | null | { radius: number; segments: number } | number[] | [number, number][] | FreeformPoint[] | CrossSectionStation[];
 
 export interface ExprNumber {
   value: number | null;
@@ -176,10 +176,10 @@ export interface DesignDocument {
     baffle_margin: number;
   };
   mesh: {
-    ath_roundover?: { radius: number; segments: number };
-    ath_rear_shape?: 1 | 3;
-    ath_rear_front_offset?: number;
-    ath_rear_step?: number;
+    ath_roundover?: { radius: number; segments: number } | null;
+    ath_rear_shape?: 1 | 3 | null;
+    ath_rear_front_offset?: number | null;
+    ath_rear_step?: number | null;
     mouth_roundover_radius_mm?: number;
     size_mm?: number;
     angular_segments: number;
@@ -219,6 +219,22 @@ export interface DesignDocument {
   _expressions?: Record<string, ExprNumber>;
   /** Schema paths omitted by the source config; restored to null on the wire. */
   _absent?: string[];
+}
+
+/** Match config_builder's dependent default for imported dictionary geometry. */
+/**
+ * ATH's default for an omitted wall. It is 5 mm for every imported design, and
+ * matches what the translation sends, so a lip or an Opus rear changes nothing here.
+ */
+export function defaultWallThickness(_design: DesignDocument): number {
+  return 5;
+}
+
+export function refreshAbsentWall(design: DesignDocument): DesignDocument {
+  if (design.text_import_version === 'ath-2026-09a-v2' && design._absent?.includes('mesh.wall_thickness')) {
+    design.mesh.wall_thickness = design.simulation.sim_type === 'infinite-baffle' ? 0 : defaultWallThickness(design);
+  }
+  return design;
 }
 
 const common = {
@@ -799,14 +815,14 @@ export const useDesignStore = create<DesignStore>()(
       updateField: (path, value) => get().updateValue(path, value),
       updateValue: (path, value) => {
         set((state) => ({
-          design: withoutPreservedMetadata(setAtPath(state.design, path, value), path),
+          design: refreshAbsentWall(withoutPreservedMetadata(setAtPath(state.design, path, value), path)),
           designRevision: state.designRevision + 1,
         }));
         bump(get().dragSnapshot ? 'drag' : 'edit', false);
       },
       updateValues: (updates) => {
         set((state) => ({
-          design: Object.keys(updates).reduce((next, path) => withoutPreservedMetadata(next, path), setMany(state.design, updates)),
+          design: refreshAbsentWall(Object.keys(updates).reduce((next, path) => withoutPreservedMetadata(next, path), setMany(state.design, updates))),
           designRevision: state.designRevision + 1,
         }));
         bump(get().dragSnapshot ? 'drag' : 'edit', false);

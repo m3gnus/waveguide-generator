@@ -23,6 +23,268 @@
   },
   "parameters": [
     {
+      "id": "mesh.ath_roundover",
+      "legacy_key": "Mesh.Roundover",
+      "path": "mesh.ath_roundover",
+      "mirror_paths": [],
+      "label": "ATH mouth lip",
+      "section": "Morph Target",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": 0,
+          "label": "Off",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null,
+          "current_only": false
+        },
+        {
+          "value": 1,
+          "label": "On",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null,
+          "current_only": false
+        }
+      ],
+      "description": "Append an ATH mouth lip to the imported profile. Off removes Mesh.Roundover. Requires the supported ATH import combinations; preview reports incompatible shapes.",
+      "visible_when": {
+        "path": "text_import_version",
+        "operator": "equals",
+        "value": "ath-2026-09a-v2"
+      }
+    },
+    {
+      "id": "mesh.ath_roundover.radius",
+      "legacy_key": "Mesh.Roundover.Radius",
+      "path": "mesh.ath_roundover.radius",
+      "mirror_paths": [],
+      "label": "ATH lip radius",
+      "section": "Morph Target",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Positive finite lip radius. With full rear and a free-standing wall, Radius must exceed Mesh.WallThickness.",
+      "visible_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "text_import_version",
+            "operator": "equals",
+            "value": "ath-2026-09a-v2"
+          },
+          {
+            "path": "mesh.ath_roundover.radius",
+            "operator": "greater_than",
+            "value": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "mesh.ath_roundover.segments",
+      "legacy_key": "Mesh.Roundover.Segments",
+      "path": "mesh.ath_roundover.segments",
+      "mirror_paths": [],
+      "label": "ATH lip segments",
+      "section": "Morph Target",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": 1,
+      "precision": 0,
+      "options": [],
+      "description": "Finite integer at least 1. The mesher default is 5. These authored rings change the lip geometry and its chord angles.",
+      "visible_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "text_import_version",
+            "operator": "equals",
+            "value": "ath-2026-09a-v2"
+          },
+          {
+            "path": "mesh.ath_roundover.radius",
+            "operator": "greater_than",
+            "value": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "mesh.ath_rear_shape",
+      "legacy_key": "Mesh.RearShape",
+      "path": "mesh.ath_rear_shape",
+      "mirror_paths": [],
+      "label": "ATH rear shape",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": "",
+          "label": "Default (full rear)",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null,
+          "current_only": false
+        },
+        {
+          "value": 1,
+          "label": "1 (full rear)",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null,
+          "current_only": false
+        },
+        {
+          "value": 3,
+          "label": "3 (Opus)",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null,
+          "current_only": false
+        }
+      ],
+      "description": "Full rear follows the offset profile. Opus uses an independent rear loft and requires a free-standing wall.",
+      "visible_when": {
+        "path": "text_import_version",
+        "operator": "equals",
+        "value": "ath-2026-09a-v2"
+      }
+    },
+    {
+      "id": "mesh.ath_rear_front_offset",
+      "legacy_key": "Mesh.RearShape.FrontOffset",
+      "path": "mesh.ath_rear_front_offset",
+      "mirror_paths": [],
+      "label": "Opus front offset",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Finite, nonnegative distance behind the mouth. Defaults to 40 mm. Must leave at least one body row for the rear loft.",
+      "visible_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "text_import_version",
+            "operator": "equals",
+            "value": "ath-2026-09a-v2"
+          },
+          {
+            "path": "mesh.ath_rear_shape",
+            "operator": "equals",
+            "value": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "mesh.ath_rear_step",
+      "legacy_key": "Mesh.RearShape.Step",
+      "path": "mesh.ath_rear_step",
+      "mirror_paths": [],
+      "label": "Opus rear step",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Positive finite spacing used to select rear rings. Defaults to 25 mm. Only used by Opus.",
+      "visible_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "text_import_version",
+            "operator": "equals",
+            "value": "ath-2026-09a-v2"
+          },
+          {
+            "path": "mesh.ath_rear_shape",
+            "operator": "equals",
+            "value": 3
+          }
+        ]
+      }
+    },
+    {
       "id": "native.L",
       "legacy_key": "L",
       "path": "L",
@@ -5554,7 +5816,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Thickness of the shell built around a free-standing horn, offset from its surface and closed by a disc behind the throat. Used only when Enclosure depth is 0 and the simulation is free-standing; infinite baffle ignores it. Unset means ATH's 5 mm default free-standing, and 0 in infinite baffle.",
+      "description": "Thickness of the free-standing wall. Unset means ATH's 5 mm default. Infinite baffle ignores the wall. Opus clamps the geometry wall to 0.1–1000 mm while preserving the saved value.",
       "visible_when": {
         "operator": "all",
         "conditions": [

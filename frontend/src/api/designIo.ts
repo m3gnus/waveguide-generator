@@ -3,6 +3,7 @@ import {
   designForFamily,
   decodeQuadrants,
   normalizeNativeCrossSection,
+  refreshAbsentWall,
   serializeDesign,
   type CrossSectionStation,
   type DesignDocument,
@@ -244,6 +245,7 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
     throw new Error(`Unsupported design formula: ${String(unwrapped.formula)}`);
   }
   const document = merge(designForFamily(formula), unwrapped);
+  if (document.text_import_version === 'ath-2026-09a-v2' && (wire.mesh as Record<string, unknown> | undefined)?.wall_thickness == null) absent.push('mesh.wall_thickness');
   normalizeNativeCrossSection(document);
   // R is optional on ICW: an absent rollback R enables r_aperture fallback.
   // Do not substitute the new-design default for a file that deliberately omits it.
@@ -258,7 +260,7 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
   if (document.mesh.z_map_points.trim()) document.mesh.sampling_mode = 'zmap';
   if (Object.keys(expressions).length) document._expressions = expressions;
   if (absent.length) document._absent = [...new Set(absent)];
-  return document;
+  return refreshAbsentWall(document);
 }
 
 /** A converted FREEFORM design, and what the conversion could not carry over. */

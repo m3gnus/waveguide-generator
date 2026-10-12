@@ -49,6 +49,24 @@ const CROSS_SECTION_CONDITIONS: FieldConditions = {
 };
 
 const FIELD_CONDITIONS: Record<string, FieldConditions> = {
+  'mesh.ath_roundover': { visible_when: { path: 'text_import_version', operator: 'equals', value: 'ath-2026-09a-v2' } },
+  'mesh.ath_roundover.radius': { visible_when: { operator: 'all', conditions: [
+    { path: 'text_import_version', operator: 'equals', value: 'ath-2026-09a-v2' },
+    { path: 'mesh.ath_roundover.radius', operator: 'greater_than', value: 0 },
+  ] } },
+  'mesh.ath_roundover.segments': { visible_when: { operator: 'all', conditions: [
+    { path: 'text_import_version', operator: 'equals', value: 'ath-2026-09a-v2' },
+    { path: 'mesh.ath_roundover.radius', operator: 'greater_than', value: 0 },
+  ] } },
+  'mesh.ath_rear_shape': { visible_when: { path: 'text_import_version', operator: 'equals', value: 'ath-2026-09a-v2' } },
+  'mesh.ath_rear_front_offset': { visible_when: { operator: 'all', conditions: [
+    { path: 'text_import_version', operator: 'equals', value: 'ath-2026-09a-v2' },
+    { path: 'mesh.ath_rear_shape', operator: 'equals', value: 3 },
+  ] } },
+  'mesh.ath_rear_step': { visible_when: { operator: 'all', conditions: [
+    { path: 'text_import_version', operator: 'equals', value: 'ath-2026-09a-v2' },
+    { path: 'mesh.ath_rear_shape', operator: 'equals', value: 3 },
+  ] } },
   'cross_section.exponent': CROSS_SECTION_CONDITIONS,
   'cross_section.aspect_ratio': CROSS_SECTION_CONDITIONS,
   'enclosure.front_resolution': { visible_when: { path: 'enclosure.depth', operator: 'greater_than', value: 0 } },

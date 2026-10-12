@@ -17,6 +17,24 @@ describe('NumberField', () => {
     host.remove();
   });
 
+  it('validates rounded commits and keyboard steps at a strict lower bound', () => {
+    const commit = vi.fn();
+    act(() => root.render(<NumberField label="Lip radius" value={.1} min={0} step={.1} precision={2}
+      validate={(value) => value <= 0 ? 'Radius must be > 0' : undefined} onCommit={commit} />));
+    const input = host.querySelector('input')!;
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '.001');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => input.blur());
+    expect(commit).not.toHaveBeenCalled();
+    expect(input.value).toBe('0.10');
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })));
+    expect(commit).not.toHaveBeenCalled();
+    expect(input.value).toBe('0.10');
+  });
+
   it('commits a valid edit on blur and rejects an invalid value', () => {
     const commit = vi.fn();
     act(() => root.render(<NumberField label="Coverage" value={42} min={10} max={90} precision={1} onCommit={commit}/>));

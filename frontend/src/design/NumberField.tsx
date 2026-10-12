@@ -233,6 +233,10 @@ export function NumberField({
       return;
     }
     const rounded = Number(parsed.toFixed(precision));
+    if (validate?.(rounded)) {
+      setDraft(displayed);
+      return;
+    }
     setDraft(rounded.toFixed(shown));
     if (rounded !== value) onCommit(rounded);
   };
@@ -254,6 +258,7 @@ export function NumberField({
     if (base === undefined || !Number.isFinite(base)) return false;
     const next = Math.min(max, floorAt(base + step * multiplier));
     const rounded = Number(next.toFixed(precision));
+    if (validate?.(rounded)) return false;
     setDraft(rounded.toFixed(shown));
     if (rounded !== value) onCommit(rounded);
     return true;
@@ -299,6 +304,7 @@ export function NumberField({
     const delta = event.clientX - drag.current.x;
     const next = Math.min(max, floorAt(drag.current.value + delta * step));
     const rounded = Number(next.toFixed(precision));
+    if (validate?.(rounded)) return;
     setDraft(rounded.toFixed(shown));
     setDragDelta(rounded - drag.current.value);
     pendingDragValue.current = rounded;
