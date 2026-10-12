@@ -1,5 +1,7 @@
 # Solver release qualification
 
+Historical evidence: HBB routes and comparison commands recorded here were removed; these are not current run instructions.
+
 Run these gates once for every release wave that changes solver pins, solver
 routing, symmetry, meshing, observation mapping, or cancellation. Hosted WG CI
 does not own real GPU/OpenCL devices, so passing unit tests is necessary but not

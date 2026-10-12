@@ -32,9 +32,8 @@ Within the budget, in this order:
    and waits for their next checkpoint only as long as the budget allows.
 4. The gmsh worker drops queued work and stops waiting for a running OCC call
    once the budget says so.
-5. The BEMPP worker is closed. Legacy HBB BEAT workers and persistent hosts
-   are stopped; the official BEAT manager detaches idle hosts as described
-   below. BEAT cleanup waits at most 5 s, logs failures or timeouts, and lets
+5. The BEMPP worker is closed. The official BEAT manager detaches idle hosts
+   as described below. BEAT cleanup waits at most 5 s, logs failures or timeouts, and lets
    shutdown continue.
 6. The instance lock is released and the logs are flushed.
 
@@ -124,38 +123,8 @@ when later clients need a backend that survives that job.
 
 ## BEAT's persistent host on Windows
 
-BEAT keeps its Julia worker in a *persistent host* process. Slice 10 removes
-the HBB rollback switch and route only after CPU and Metal performance is proven as fast as HBB or faster.
-
-With the one-release HBB rollback
-(`WG2_BEAT_PROVIDER=hbb` or `legacy`, set before launch), WG's clean server
-shutdown calls `shutdown_workers()` to stop the workers in this server's
-registry, including these hosts, rather than leaving them until the 30-minute
-idle timeout. This applies on macOS, Linux and Windows, including a server
-run directly outside the status window.
-
-- **macOS and Linux:** the host starts its own session (`setsid`), so stopping
-  the server alone is insufficient; the clean shutdown hook stops the host.
-- **Windows, packaged app:** the Job Object remains a backstop if cleanup
-  fails or the server crashes. The HBB host is started with
-  `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` and without
-  `CREATE_BREAKAWAY_FROM_JOB`, so it joins the status window's kill-on-close
-  Job Object, and the status window closes that job at the end of every stop.
-  The next launch pays one cold BEAT start.
-
-The status window's job is `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
-JOB_OBJECT_LIMIT_BREAKAWAY_OK`, never `SILENT_BREAKAWAY_OK`: only a child
-that asks for `CREATE_BREAKAWAY_FROM_JOB` leaves it. The server, the mesher
-and gmsh, BEMPP workers and the CAD Link child do not ask, so they die when
-the job closes. The CAD Link child nests its own kill-on-close job inside the
-status window's.
-
-`server/tests/test_beat_host_windows_quit.py` reproduces the mechanism on
-Windows with the launcher's real job and the package's exact flags, and checks
-that clean exit requests host shutdown through the pinned package's registry.
-
-By default (unset/empty `WG2_BEAT_PROVIDER`, or explicit `official`),
-the Quit hook calls
+The official BEAT host keeps its Julia worker between completed solves.
+The clean server Quit hook calls
 `get_manager().detach()` (`server/app.py`, `shutdown_beat_worker`;
 `server/solver/beat_runtime/manager.py`, `WorkerManager.detach`). Idle hosts,
 including those whose prewarm has completed, retain their Julia worker and
@@ -270,7 +239,7 @@ itself, and it runs no BEAT solve. Before a stable release, on each platform:
    warm): Quit from the status window. With the official provider and
    `job breakaway: granted` in the host log, the host and its `julia.exe`
    remain; start again, and the next BEAT solve reuses the same host PID
-   without a cold start. With `refused`, or with the HBB provider, no
+   without a cold start. With `refused`, no
    `julia.exe` from the application remains and the next BEAT solve pays a
    cold start. Either way `python -m server.solver.beat_runtime.cli status`
    afterwards shows no stale record. Then, with a warm host left by a Quit,

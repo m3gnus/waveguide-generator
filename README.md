@@ -97,10 +97,10 @@ without the interface; see the [CLI reference](docs/reference/CLI.md).
 
 AGPL-3.0-or-later. See [LICENSE](LICENSE).
 
-The solver, mesher and plotting modules live in separate HornLab repositories,
-pinned by commit in [pins.json](pins.json). They are AGPL-3.0-or-later too,
-except `hornlab-beat-bem`, which is **GPL-3.0-or-later** because it includes
-the solver from [boundary-lab](https://github.com/m3gnus/boundary-lab). The two
-licenses are compatible. The Fusion add-in (WGLink) comes from the
+The solver, mesher and plotting modules are pinned by commit in
+[pins.json](pins.json). BEAT uses only the official `beat-engine` package from
+[m3gnus/BEAT_Engine](https://github.com/m3gnus/BEAT_Engine), under GPL-3.0;
+the other HornLab modules use AGPL-3.0-or-later. These licenses are compatible.
+The Fusion add-in (WGLink) comes from the
 AGPL-3.0-or-later [`wglink`](https://github.com/m3gnus/wglink) repository, at the
 commit recorded in [`integrations/wglink/source.json`](integrations/wglink/source.json).

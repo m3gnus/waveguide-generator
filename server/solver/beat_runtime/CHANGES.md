@@ -1,5 +1,16 @@
 # Review slices
 
+## WG 0.3.6: one BEAT engine route
+
+The bundled HBB dependency and rollback route are removed. Every BEAT backend
+uses the official `beat-engine` pin: CPU, Metal, CUDA and ROCm retain their
+routes. Obsolete provider settings warn and use the official engine. Existing
+HBB runtime directories are left on disk; the user guide explains manual
+space reclamation. Paired comparison commands are retired; official-only
+conformance and historical validation evidence remain.
+
+Historical implementation record: HBB routes and comparison commands below have since been removed.
+
 All paths are relative to the WG repository root. The optional official
 provider uses beat-engine; pins and HBB state are unchanged.
 

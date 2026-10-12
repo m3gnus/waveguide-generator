@@ -1,15 +1,12 @@
 # Official BEAT production bridge
 
-By default (unset or empty `WG2_BEAT_PROVIDER`), WG routes the registered `beat-cpu`, `beat-metal`, `beat-cuda` and `beat-rocm`
-engines, including AUTO readiness and warm-up, through `official_beat.solve_compiled`.
-The legacy explicit `WG2_BEAT_PROVIDER=official` remains accepted. For one
-release, set `WG2_BEAT_PROVIDER=hbb` (alias `legacy`) before launch to roll back
-solves, readiness, preparation, warm-up and Quit to hornlab-beat-bem. Unknown
-values warn once and use the official default. Slice 10 removes the HBB route,
-selector and installed rollback gates only after CPU and Metal performance
-is proven as fast as HBB or faster.
-The optional official distribution is
-`beat-engine` from JWSound/BEAT_Engine; imports remain lazy. Pins are unchanged.
+Status: current architecture, for WG developers.
+
+WG routes `beat-cpu`, `beat-metal`, `beat-cuda` and `beat-rocm`, including
+AUTO readiness, preparation, warm-up and Quit, through the official engine.
+The only BEAT distribution is `beat-engine`, pinned to the m3gnus/BEAT_Engine
+fork in `pins.json`; imports remain lazy. Production solves use
+`official_beat.solve_compiled`.
 
 WG's `beat_adapter` owns compiled requests, source frames, observations,
 unit-acceleration conversion, historical pressure loading and result mapping.
@@ -25,7 +22,7 @@ manager and thread policy. Each SolveSession stages a request and cancellation
 marker, forwards startup/compile status, closes its public stream and releases
 its lease. A monitor requests cooperative cancellation and retires blocked work
 after its grace period; caller exceptions propagate unchanged. Idle workers
-remain reusable. Runtime and host directories never overlap HBB's directories.
+remain reusable. Runtime and host directories live outside swept solve sessions.
 
 The explicit `solve_official_beat_from_msh_text` entry uses this production
 route and supports an input mesh scale; frames, response artifacts and retained
@@ -36,7 +33,7 @@ CPU/Metal numerical, cold/warm/Quit/relaunch and platform qualification remain
 separate rollout gates; these tests do not establish those gates.
 
 CUDA (NVIDIA) and ROCm (AMD) are offered on Linux and Windows, never macOS.
-Hardware detection follows HBB: CUDA, then ROCm, then Metal. NVIDIA detection
+Hardware detection prefers CUDA, then ROCm, then Metal. NVIDIA detection
 uses `nvidia-smi -L` with a 15 s timeout; ROCm detection checks the configured
 runtime directories or `rocminfo`/`hipinfo`/`hipInfo` on PATH. Launch-time checks
 use only PATH/directory hints; the preparation worker runs the NVIDIA check
@@ -56,8 +53,7 @@ is required for readiness. Their first solve warms slower than a compiled
 bundle. These backends are **not hardware-qualified**. Mocked unit/integration
 tests and existing CI qualify this routing change; real-GPU qualification is
 not a gate for enabling it. CAD solves on CUDA/ROCm still require Accurate;
-explicit BEAT Metal also accepts Fast. The official provider is the default;
-HBB remains available through the explicit rollback selector.
+explicit BEAT Metal also accepts Fast. The official engine is the sole BEAT route.
 
 The conformance and agreement tools in `scripts/beat_conformance` cover CPU
 and Metal only. There is no CUDA/ROCm corpus.

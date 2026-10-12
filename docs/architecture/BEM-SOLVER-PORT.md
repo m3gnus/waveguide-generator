@@ -11,10 +11,9 @@ for Metal to implement BEAT's Julia protocol. Registered adapters opt in with
 `FULL3D_SOLVER_PORT_MARKER`; the runner never infers the contract from an
 engine-name prefix.
 
-The installed BEAT pin still uses the `hornlab-beat-bem` `SolveConfig` API.
-Replacing that pin with official `beat_engine` requires a separate adapter,
-not an import rename. Keep the existing BEAT adapter and Metal adapter
-selectable while that bridge is developed.
+The installed `beat-engine` pin uses the official compiled-system worker API.
+WG's `beat_adapter` builds requests and maps responses; `beat_runtime` owns
+readiness, provisioning and worker lifetime. Metal-BEM remains a separate adapter.
 
 ## Official BEAT worker bridge
 

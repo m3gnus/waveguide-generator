@@ -46,6 +46,6 @@ No production request, routing, default or Boundary Lab behavior is changed.
 
 This evidence qualifies installed legacy adapters on the platform actually run.
 It does not qualify an installed WG application, a remote consumer pin, an
-official-default switch, or HBB retirement. Dependency-first publication,
+change to WG engine routing. Dependency-first publication,
 consumer pin adoption, consumer integration checks and other platform evidence
 remain separate landing work.
