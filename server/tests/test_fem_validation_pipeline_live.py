@@ -88,8 +88,8 @@ def _pipeline(tmp_path, case, frequencies, *, engine_registry=None):
             RESULT_ENVELOPE_ADAPTER.validate_python(envelope)
             assert envelope["channel_order"] == ["drive-lf"]
             assert envelope["frequencies"] == list(frequencies)
-            assert envelope["metadata"]["fem"] == {
-                "engine": "beat-cpu", "precision": "float64"}
+            fem = envelope["metadata"]["fem"]
+            assert (fem["engine"], fem["backend"], fem["precision"]) == ("beat-cpu", "cpu", "float64")
             assert envelope["metadata"]["solve_path"] == (
                 "coupled-fem-bem" if case in {"open", "ported"} else "interior-fem")
             with np.load(BytesIO(runtime.store.get_fem_field(job_id)), allow_pickle=False) as stored:

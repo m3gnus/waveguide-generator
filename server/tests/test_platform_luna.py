@@ -651,6 +651,7 @@ def test_capability_probe_runs_off_thread_and_is_cached(
             # The fake catalog has no official runtime inventory.
             "officialBeatRuntime": None,
             "cpuPreparationInFlight": False,
+            "femRegions": True,
             "opencl_qualification_max_seconds": 460.0,
             "engines": [
                 {

@@ -231,6 +231,8 @@ def test_wg_advertises_its_delivery_versions_at_startup(
         "sourceIdentity": 1,
         "documentUp": 1,
         "automaticDomain": 1,
+        # FEM regions are on by default (WG2_FEM_REGIONS=0 withdraws them).
+        "femRegions": 1,
     }
 
 

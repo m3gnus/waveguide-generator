@@ -428,7 +428,7 @@ def test_the_registry_declares_imported_geometry_for_every_beat_backend(
     assert imported == ["beat-cpu", "metal"]
     assert engines["beat-cpu"].symmetry_domains == ("full", "half-yz", "quarter")
     assert engines["metal"].imported_features == ("passive-cardioid",)
-    assert engines["beat-cpu"].imported_features == ("exterior-transducers",)
+    assert engines["beat-cpu"].imported_features == ("exterior-transducers", "fem-regions")
 
 
 @pytest.mark.parametrize("parts", [((1, 3), (-1, 2)), ((-1, 3),)])
