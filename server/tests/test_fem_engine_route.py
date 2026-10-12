@@ -108,7 +108,7 @@ def test_malformed_events_refuse(mutate):
 
 
 def test_managed_bridge_uses_fake_worker_and_reuses_session(runtime, monkeypatch):
-    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
     request = compiled()
     def mutate(raw):
         frequency = runtime.requests[-1]["frequencies_hz"][runtime.result_count % 2]
@@ -189,7 +189,7 @@ def test_envelope_validates_and_contains_fem_only_drive():
     envelope = RESULT_ENVELOPE_ADAPTER.validate_python(enriched)
     assert envelope.result_contract_version == 2
     assert envelope.channels["fem"]["metadata"]["source_ids"] == []
-    assert enriched["metadata"]["fem"] == {"experimental": True, "engine": "beat-cpu", "precision": "float64"}
+    assert enriched["metadata"]["fem"] == {"engine": "beat-cpu", "precision": "float64"}
     assert "impedance" not in envelope.channels["fem"]
 
 
@@ -228,14 +228,17 @@ def test_fusion_defaults_accept_fem_only_design():
 
 
 @pytest.mark.parametrize("backend,provider,flag,expected", [
-    ("cpu", "official", "1", True), ("cpu", "hbb", "1", False),
+    ("cpu", "official", None, True), ("cpu", "official", "1", True), ("cpu", "hbb", "1", False),
     ("cpu", "official", "0", False), ("metal", "official", "1", False),
     ("cuda", "official", "1", False), ("rocm", "official", "1", False),
 ])
 def test_registry_only_offers_official_cpu_fem(monkeypatch, backend, provider, flag, expected):
     from server.engines.registry import _beat_engine_info
     monkeypatch.setenv("WG2_BEAT_PROVIDER", provider)
-    monkeypatch.setenv("WG2_FEM_REGIONS", flag)
+    if flag is None:
+        monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
+    else:
+        monkeypatch.setenv("WG2_FEM_REGIONS", flag)
     info = _beat_engine_info(backend, {"available": True, "state": "ready"})
     assert ("fem-regions" in info.imported_features) is expected
 
@@ -410,6 +413,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
             envelope = RESULT_ENVELOPE_ADAPTER.validate_python(job_runtime.store.get_results(first))
             assert envelope.channel_order == ["exterior"]
             with np.load(BytesIO(job_runtime.store.get_fem_field(first)), allow_pickle=False) as field:
+                assert "experimental" not in field.files
                 assert field["schema"].item() == "wg-fem-field-store-v1"
                 assert field["pressure"].shape == (3, 1, 4)
                 np.testing.assert_array_equal(field["tetrahedra_0"], [[0, 1, 2, 3]])
@@ -746,3 +750,38 @@ def test_registry_uses_shared_fem_flag_helper(monkeypatch, enabled):
     monkeypatch.setattr(feature_flags, "fem_regions_enabled", lambda: enabled)
     info = _beat_engine_info("cpu", {"available": True, "state": "ready"})
     assert ("fem-regions" in info.imported_features) is enabled
+
+
+@pytest.mark.parametrize("engine,available,features", [
+    (None, False, ()), ("beat-cpu", False, ("fem-regions",)),
+    ("beat-metal", True, ()), ("beat-cpu", True, ()),
+])
+def test_default_fem_admission_refuses_without_a_capable_engine(
+    tmp_path, monkeypatch, engine, available, features,
+):
+    import asyncio
+    from server.engines.registry import EngineInfo
+    from server.jobs.runtime.core import EngineUnavailableError, resolve_imported_submission
+    from server.tests.test_imported_jobs import _request, _record
+    from server.tests.test_imported_beat import MESH
+
+    monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    class Registry:
+        async def capabilities(self):
+            return () if engine is None else (EngineInfo(
+                engine, available, "fixture", None, geometry_sources=("imported",),
+                imported_features=features, symmetry_domains=("full",)),)
+        async def get_engine(self, name):
+            pytest.fail("a refused FEM job must not acquire an engine")
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = "auto"
+    request.geometry.drive_channels = request.geometry.drive_channels[:1]
+    path = tmp_path / "exterior.msh"
+    path.write_text(MESH)
+    record = _record(path)
+    record["fem_regions"] = [region_input(channel="left").record]
+    record["symmetry"] = {"applied": {"cut_planes": [], "quadrants": 1234}}
+    with pytest.raises(EngineUnavailableError, match="available official BEAT CPU engine"):
+        asyncio.run(resolve_imported_submission(request, Registry(), imported_record=record,
+                                                imported_msh_text=MESH))

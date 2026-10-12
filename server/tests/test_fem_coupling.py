@@ -392,7 +392,7 @@ def test_reduced_domain_refuses_before_starting_a_region_child(tmp_path, monkeyp
 def test_coupled_child_is_disabled_without_the_flag(tmp_path, monkeypatch):
     from server.cadlink.intake import isolated
 
-    monkeypatch.delenv("WG2_FEM_REGIONS")
+    monkeypatch.setenv("WG2_FEM_REGIONS", "0")
 
     def unexpected(*args, **kwargs):
         pytest.fail("flag-off coupled mesh must not start a child")
@@ -1047,7 +1047,7 @@ def test_flag_off_uses_f6_wording_before_coupled_meshing(tmp_path, monkeypatch):
 
     bundle_path, _manifest_record, _region_record = _coupling_bundle(tmp_path / "returns")
     bundle = read_wgreturn(bundle_path)
-    monkeypatch.delenv("WG2_FEM_REGIONS")
+    monkeypatch.setenv("WG2_FEM_REGIONS", "0")
 
     def unexpected(*args, **kwargs):
         pytest.fail("flag-off FEM must refuse before coupled meshing")

@@ -1,16 +1,19 @@
 # Coupled FEM/BEM solves of CAD Link geometry
 
-Status: proposed, 2026-10-11. Slices F1 to F5 are implemented on topic
-branches and tested. F6 ingest, F7 geometry preparation and the F8 CPU engine route are implemented;
-live acoustic qualification remains pending. `femRegions` is advertised only
-when `WG2_FEM_REGIONS=1`; FX owns the default choice.
+Status: implemented through F9, 2026-10-12. Declared FEM regions and the
+interior field view are visible by default in the Fusion CAD Link workflow,
+without an Experimental label. Live acoustic qualification remains pending.
 
-The same flag gates bundle admission and the isolated `fem_region` task. When
-unset, WG refuses `fem-regions-v1` as an unknown required feature before STEP
-inspection or meshing; it never silently solves only the exterior. The shared
-protocol remains flag-independent. The frontend has no FEM capability feed or
-result route yet, so `FemFieldView` has no production importer or mount, even
-in an opted-in backend. F9 owns that wiring; the public API remains unchanged.
+`WG2_FEM_REGIONS=0` is the operator kill switch; `false`, `no` and `off`
+(case-insensitive, with surrounding whitespace ignored) also disable the feature.
+Unset or empty enables it. The shared flag gates WGLink's static `femRegions`
+protocol capability, bundle admission, isolated `fem_region`/`coupled_mesh` tasks,
+engine eligibility, the public field route and the frontend's region list and
+field marker. A disabled receiver refuses declared regions before inspecting
+or meshing STEP. It never silently drops FEM physics. The protocol stays
+flag-independent, and Onshape and Fusion document capture do not control FEM.
+Job admission separately requires an available official BEAT CPU engine;
+unsupported providers and unavailable engines refuse clearly.
 
 The aim is Boundary Lab's interior capability for geometry drawn in Fusion.
 Bounded air (a rear chamber, a port, a phase plug, a compression driver's
@@ -108,13 +111,13 @@ count and mesh density remain user-selected.
 |---|---|---|---|
 | F1 | wglink | done | `fem-regions-v1` protocol, shared validator, `wglink_fem.py` decisions |
 | F2 | wglink | done | Declare FEM Region dialog, attributes, Send export, pre-flight, return-state hash |
-| F3 | waveguide-generator | done | protocol mirror, bundle reader, gmsh tetrahedral mesher with face matching, isolated child task, opt-in capability |
+| F3 | waveguide-generator | done | protocol mirror, bundle reader, gmsh tetrahedral mesher with face matching, isolated child task, default-on capability with kill switch |
 | F4 | waveguide-generator | done | coupled `compiled_system` builder, validated by `beat_engine.beat_contract` |
 | F5 | waveguide-generator | done | frontend exact slice, element mode, ghost, role colours, `wg-fem-field-v1` decoder, `FemFieldView` |
-| F6 | waveguide-generator | open | ingest: mesh each region in the child at stage 7, retain region meshes, record `evidence.fem_regions`, list regions in the CAD Link panel |
+| F6 | waveguide-generator | done | ingest: mesh each region in the child at stage 7, retain region meshes, record `evidence.fem_regions`, list regions in the CAD Link panel |
 | F7 | waveguide-generator | preparation implemented; live qualification pending | exterior closure: mesh the exterior with each interface patch conforming to the FEM interface, by fragmenting the shell with the region's interface face so OCC shares the rim |
-| F8 | waveguide-generator | CPU route implemented; qualification pending | official CPU float64 coupled jobs (`coupled_fem_bem_lem` / `interior_fem`), multi-channel results and FEM field sidecars; declared regions solve with `WG2_FEM_REGIONS=1`; FX owns default advertisement |
-| F9 | waveguide-generator | open | result route `/api/results/{id}/fem-field`, then mount `FemFieldView` with the field-plane gizmo, a frequency slider, system or channel response, phase animation, and a combined interior and exterior plane |
+| F8 | waveguide-generator | CPU route implemented; qualification pending | official CPU float64 coupled jobs (`coupled_fem_bem_lem` / `interior_fem`), multi-channel results and FEM field sidecars; declared regions solve by default; explicit kill switch remains |
+| F9 | waveguide-generator | interior field implemented | result route `/api/results/{id}/fem-field`, then mount `FemFieldView` with the field-plane gizmo, a frequency slider, system or channel response, phase animation, interior slice plane (combined exterior display remains follow-up) |
 | F10 | both | open | electrodynamic drivers on FEM diaphragms (voltage ports, T/S parameters), aligned with [DRIVER-REAR-LOAD](DRIVER-REAR-LOAD.md)'s meshed front chambers; candidate: coupled front and rear chambers sharing one moving diaphragm |
 | F11 | waveguide-generator | open | validation: sealed box against the lumped model; Boundary Lab's Simple_Sealed and compression_driver solved from the same meshes |
 | F12 | wglink | open | live Fusion verification of the dialog and the temporary-component export in a parametric timeline; regions under reduced domains and non-root frames |
@@ -132,8 +135,7 @@ F6 to F9 must land in order. F10 and F11 can follow F8.
 3. Should F7 conform the exterior to the FEM interface (as written here), or
    remesh the interface patch and conform the FEM side? Boundary Lab treats
    the FEM facets as authoritative.
-4. Should `femRegions` ship enabled in the release that includes F8, or only
-   after F11's validation?
+
 
 ## F7 preparation and F8 artifact contract
 
@@ -240,7 +242,7 @@ and requires interior peak pressure between 1 and 100 Pa at 100 Hz for a
 
 ## F8 engine and field sidecar contract
 
-With `WG2_FEM_REGIONS=1`, declared regions use the official BEAT CPU backend
+By default, declared regions use the official BEAT CPU backend
 with float64 and contract 2. Auto skips other engines for this feature, including
 in Accurate. Explicit exterior-only solves retain the original surface and
 solver route. Legacy required `fem_air_volumes` remain refused unless explicitly
@@ -279,12 +281,14 @@ cancellation, interrupted-job recovery, job deletion and result retention remove
 the sidecar. Rated results retain it, and disabling automatic result cleanup
 retains it with completed results. F9 owns the public route and display.
 
+Older retained sidecars may include an `experimental` scalar; readers ignore
+it. New sidecars and public field/result metadata omit that label.
+
 The NPZ is readable with `numpy.load(..., allow_pickle=False)`:
 
 - `schema`: scalar string `wg-fem-field-store-v1`;
 - `phasor_convention`: scalar string `exp(-i omega t)`;
 - `drive_normalization`: scalar string `unit_acceleration_m_per_s2`;
-- `experimental`: scalar boolean, true;
 - `frequencies_hz`: float64 frequency axis in execution order;
 - `channel_ids`: string drive-channel ids, in excitation order;
 - `region_ids`: string region ids, in compiled FEM-domain order;

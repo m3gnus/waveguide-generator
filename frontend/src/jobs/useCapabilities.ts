@@ -62,6 +62,7 @@ const qualificationClocks = new WeakMap<QueryClient, {
 }>();
 
 export interface CapabilitiesSnapshot {
+  femRegionsOffered: boolean;
   hostPlatform: string | null;
   engines: readonly EngineCapability[];
   engineSelection: Readonly<EngineSelection>;
@@ -151,6 +152,7 @@ export function useCapabilities(): CapabilitiesSnapshot {
   }, [client, plannerSupport]);
   return {
     hostPlatform: data?.hostPlatform ?? null,
+    femRegionsOffered: data?.femRegions === true,
     engines: data?.engines ?? NO_ENGINES,
     engineSelection: data?.engineSelection ?? NO_ENGINE_SELECTION,
     error: backendLost ? 'Backend connection interrupted. Reconnecting; refresh capabilities when it returns.'

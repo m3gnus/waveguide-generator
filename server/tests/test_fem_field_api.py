@@ -26,7 +26,6 @@ def field_arrays():
         "schema": np.array("wg-fem-field-store-v1"),
         "phasor_convention": np.array("exp(-i omega t)"),
         "drive_normalization": np.array("unit_acceleration_m_per_s2"),
-        "experimental": np.array(True),
         "frequencies_hz": np.array([100., 1000.]),
         "channel_ids": np.array(["front", "rear"]),
         "region_ids": np.array(["chamber", "port"]),
@@ -42,7 +41,7 @@ def field_arrays():
 
 @pytest.fixture
 def field_app(tmp_path, monkeypatch, field_arrays):
-    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
     store = JobStore(tmp_path / "jobs.db")
     store.initialize()
     store.create_job(_job("field", "complete"))
@@ -85,7 +84,7 @@ def test_route_decodes_selected_frequency_channel_and_rebases_regions(field_app,
                                   np.array([0, 1, 2, 3, 4, 5, 6, 7]))
     np.testing.assert_array_equal(np.frombuffer(base64.b64decode(payload["surfaces"][1]["triangles"]), dtype="<u4"),
                                   np.array([4, 5, 6]))
-    assert payload["experimental"] is True
+    assert "experimental" not in payload
     assert payload["phasor_convention"] == "exp(-i omega t)"
 
 
@@ -223,3 +222,14 @@ def test_fortran_pressure_is_subset_without_changing_the_wire_shape(field_app, f
     np.testing.assert_array_equal(
         np.frombuffer(base64.b64decode(payload["pressure_real"]), dtype="<f4"),
         field_arrays["pressure"][1, 1].real)
+
+
+@pytest.mark.parametrize("legacy_marker", [True, False])
+def test_older_sidecars_remain_readable_without_exposing_experimental(
+    field_app, field_arrays, legacy_marker,
+):
+    app, store = field_app
+    store.store_fem_field_arrays("field", {**field_arrays, "experimental": np.array(legacy_marker)})
+    status, payload, _ = _get(app)
+    assert status == 200
+    assert "experimental" not in payload

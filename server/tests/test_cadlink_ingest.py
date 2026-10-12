@@ -1260,7 +1260,7 @@ def test_legacy_ingest_api_derives_fem_evidence_from_verified_manifest(
     elif manifest_state == "unlinked":
         record.pop("bundle_store_path")
     # Accepted evidence remains readable even after the intake feature is disabled.
-    monkeypatch.delenv("WG2_FEM_REGIONS")
+    monkeypatch.setenv("WG2_FEM_REGIONS", "0")
     store = CadLinkStore(tmp_path / "cadlink.db")
     row = store.allocate_ingest(
         manifest_sha256=bundle.manifest_sha256,

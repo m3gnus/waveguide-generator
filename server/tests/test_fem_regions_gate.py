@@ -1,4 +1,4 @@
-"""Declared FEM regions stay unreachable until an explicit development opt-in."""
+"""Declared FEM regions are enabled by default with an operator kill switch."""
 
 from __future__ import annotations
 
@@ -22,23 +22,30 @@ from server.cadlink.wgreturn import WgReturnError, read_wgreturn
 from server.tests.test_cadlink_wgreturn import _manifest, write_bundle
 
 
-@pytest.mark.parametrize("value", [None, "", "0", "true", "yes", "2", "1", " 1 "])
-def test_only_one_enables_fem_regions(value: str | None) -> None:
+@pytest.mark.parametrize("value,enabled", [
+    (None, True), ("", True), ("1", True), (" 1 ", True), ("true", True),
+    ("yes", True), ("2", True), ("0", False), ("false", False),
+    ("off", False), ("no", False), (" FALSE ", False), (" OFF ", False),
+])
+def test_fem_regions_default_on_with_explicit_kill_switch(value, enabled):
     env = {} if value is None else {FEM_REGIONS_ENV: value}
-    assert fem_regions_enabled(environ=env) is (value in {"1", " 1 "})
+    assert fem_regions_enabled(environ=env) is enabled
 
 
 def test_capabilities_file_removes_fem_after_disabling_the_flag(tmp_path, monkeypatch):
-    monkeypatch.setenv(FEM_REGIONS_ENV, "1")
+    monkeypatch.delenv(FEM_REGIONS_ENV, raising=False)
     advertise_fusion_delivery(tmp_path)
     path = ipc_folder(tmp_path) / CAPABILITIES_FILENAME
     assert json.loads(path.read_text())["femRegions"] == 1
 
-    monkeypatch.delenv(FEM_REGIONS_ENV)
+    monkeypatch.setenv(FEM_REGIONS_ENV, "0")
     advertise_fusion_delivery(tmp_path)
     enabled = json.loads(path.read_text())
     assert "femRegions" not in enabled
     assert enabled["solveCommandDelivery"] == 4
+    monkeypatch.delenv(FEM_REGIONS_ENV)
+    advertise_fusion_delivery(tmp_path)
+    assert json.loads(path.read_text())["femRegions"] == 1
 
 
 def _fem_bundle(root: Path) -> Path:
@@ -62,13 +69,13 @@ def _fem_bundle(root: Path) -> Path:
     return bundle
 
 
-def test_bundle_is_refused_off_and_accepted_only_with_the_flag(tmp_path, monkeypatch):
+def test_bundle_is_refused_off_and_accepted_by_default(tmp_path, monkeypatch):
     bundle = _fem_bundle(tmp_path)
-    monkeypatch.delenv(FEM_REGIONS_ENV, raising=False)
+    monkeypatch.setenv(FEM_REGIONS_ENV, "0")
     with pytest.raises(WgReturnError, match="This return declares FEM regions; this Waveguide Generator has FEM regions turned off\\."):
         read_wgreturn(bundle)
 
-    monkeypatch.setenv(FEM_REGIONS_ENV, "1")
+    monkeypatch.delenv(FEM_REGIONS_ENV)
     accepted = read_wgreturn(bundle)
     assert accepted.manifest["scope"]["fem_regions"][0]["region_id"] == "rear-chamber"
     assert "fem-regions/rear-chamber.step" in accepted.members
@@ -86,7 +93,7 @@ def test_ingest_refuses_fem_before_inspection_or_meshing(tmp_path, monkeypatch, 
         manifest = json.loads(path.read_text())
         manifest["required_features"].remove("fem-regions-v1")
         path.write_text(json.dumps(manifest))
-    monkeypatch.delenv(FEM_REGIONS_ENV)
+    monkeypatch.setenv(FEM_REGIONS_ENV, "0")
 
     def unexpected(*_args, **_kwargs):
         pytest.fail("flag-off FEM intake must not inspect or mesh geometry")
@@ -101,7 +108,7 @@ def test_ingest_refuses_fem_before_inspection_or_meshing(tmp_path, monkeypatch, 
 def test_isolated_fem_does_not_start_a_child_without_the_flag(tmp_path, monkeypatch):
     from server.cadlink.intake import isolated
 
-    monkeypatch.delenv(FEM_REGIONS_ENV, raising=False)
+    monkeypatch.setenv(FEM_REGIONS_ENV, "0")
 
     def unexpected(*_args, **_kwargs):
         pytest.fail("flag-off FEM meshing must not start a child")
@@ -112,15 +119,20 @@ def test_isolated_fem_does_not_start_a_child_without_the_flag(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("system", ["Darwin", "Linux", "Windows"])
-def test_child_receives_only_the_explicit_fem_opt_in(tmp_path, system):
-    assert FEM_REGIONS_ENV not in child_environment(tmp_path, environ={}, system=system)
+def test_child_preserves_default_and_explicit_fem_override(tmp_path, system):
+    default = child_environment(tmp_path, environ={}, system=system)
+    assert FEM_REGIONS_ENV not in default
+    assert fem_regions_enabled(environ=default)
     env = child_environment(tmp_path, environ={FEM_REGIONS_ENV: "1"}, system=system)
     assert env[FEM_REGIONS_ENV] == "1"
+    for value in ("0", "false", "off", "no", " OFF "):
+        env = child_environment(tmp_path, environ={FEM_REGIONS_ENV: value}, system=system)
+        assert not fem_regions_enabled(environ=env)
 
 
 @pytest.mark.parametrize("task", ["fem_region", "coupled_mesh"])
 def test_flag_off_child_and_default_imports_never_load_fem_dependencies(tmp_path, monkeypatch, task):
-    monkeypatch.delenv(FEM_REGIONS_ENV, raising=False)
+    monkeypatch.setenv(FEM_REGIONS_ENV, "0")
     result_path = tmp_path / "result.json"
     # A clean interpreter catches imports even when another test already used FEM.
     script = """
@@ -148,3 +160,30 @@ assert not any(module in sys.modules for module in blocked)
         capture_output=True, text=True, timeout=30,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("value", ["0", "false", "off", "no"])
+def test_kill_switch_refuses_job_admission_before_engine_probe(monkeypatch, value):
+    import asyncio
+    from server.jobs.runtime import ImportedSolveRefusal, resolve_imported_submission
+    from server.tests.test_imported_jobs import _request
+
+    monkeypatch.setenv(FEM_REGIONS_ENV, value)
+    class Registry:
+        async def capabilities(self):
+            pytest.fail("disabled FEM must refuse before engine probing")
+    request = _request("wgi_" + "0" * 26)
+    with pytest.raises(ImportedSolveRefusal, match="FEM regions are disabled"):
+        asyncio.run(resolve_imported_submission(request, Registry(), imported_record={"fem_regions": [{}]}))
+
+
+def test_frontend_capability_tracks_the_kill_switch(monkeypatch):
+    import asyncio
+    from server.diagnostics.capabilities import capabilities_payload
+    class Registry:
+        async def capabilities(self):
+            return ()
+    monkeypatch.delenv(FEM_REGIONS_ENV, raising=False)
+    assert asyncio.run(capabilities_payload(Registry()))["femRegions"] is True
+    monkeypatch.setenv(FEM_REGIONS_ENV, "0")
+    assert asyncio.run(capabilities_payload(Registry()))["femRegions"] is False

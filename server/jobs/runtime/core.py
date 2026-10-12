@@ -1123,6 +1123,14 @@ async def resolve_imported_submission(
         raise UnknownEngineError(f"Unknown solve engine: {requested}")
 
     detected = await engine_registry.capabilities()
+    if (imported_record and imported_record.get("fem_regions")
+            and not request.geometry.exterior_only
+            and not any(info.available and "fem-regions" in info.imported_features
+                        for info in detected)):
+        raise EngineUnavailableError(
+            "FEM regions require an available official BEAT CPU engine. "
+            "Prepare BEAT CPU, or explicitly choose exterior-only to exclude the FEM regions."
+        )
     if requested == "bempp" and any(info.name == "bempp" and info.qualification == "pending"
                                     for info in detected):
         detected = await engine_registry.wait_for_bempp()
@@ -3826,7 +3834,6 @@ class JobRuntime:
             arrays = {"schema": np.asarray("wg-fem-field-store-v1"),
                       "phasor_convention": np.asarray(compiled.wire["solver_options"]["phasor_convention"]),
                       "drive_normalization": np.asarray("unit_acceleration_m_per_s2"),
-                      "experimental": np.asarray(True),
                       "frequencies_hz": next(iter(sweep.channels.values())).frequencies_hz,
                       "channel_ids": np.asarray(list(compiled.channel_ports)),
                       "region_ids": np.asarray([r.domain.region_id for r in compiled.regions]),

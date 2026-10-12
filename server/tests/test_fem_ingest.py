@@ -197,7 +197,7 @@ def test_no_regions_ingest_is_identical_with_flag_on_or_off(tmp_path, monkeypatc
                         lambda *args, **kwargs: _built_for_source(source["id"]))
     _ingest(bundle, tmp_path)  # Prime the exterior cache for both comparisons.
     enabled = _ingest(bundle, tmp_path)
-    monkeypatch.delenv("WG2_FEM_REGIONS")
+    monkeypatch.setenv("WG2_FEM_REGIONS", "0")
     disabled = _ingest(bundle, tmp_path)
     assert "fem_regions" not in enabled
     assert "fem_regions" not in disabled

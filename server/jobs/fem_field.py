@@ -83,8 +83,7 @@ def load_fem_field_payload(path: Path, frequency: float | None,
             if str(arrays["schema"].item()) != "wg-fem-field-store-v1":
                 raise FemFieldCorrupt("Unsupported FEM sidecar schema")
             if (str(arrays["phasor_convention"].item()) != "exp(-i omega t)"
-                    or str(arrays["drive_normalization"].item()) != "unit_acceleration_m_per_s2"
-                    or not bool(arrays["experimental"].item())):
+                    or str(arrays["drive_normalization"].item()) != "unit_acceleration_m_per_s2"):
                 raise FemFieldCorrupt("Unsupported FEM field conventions")
             frequencies = np.asarray(arrays["frequencies_hz"])
             channels = arrays["channel_ids"].tolist()
@@ -144,7 +143,6 @@ def load_fem_field_payload(path: Path, frequency: float | None,
                 "channel_id": selected_channel,
                 "phasor_convention": "exp(-i omega t)",
                 "drive_normalization": "unit_acceleration_m_per_s2",
-                "experimental": True,
             }
     except (FemFieldCorrupt, FemFieldInvalidSelection):
         raise

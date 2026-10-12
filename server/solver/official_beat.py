@@ -305,14 +305,14 @@ def solve_transducer_compiled(
 
 def solve_coupled_compiled(request, **callbacks):
     """CPU float64 FEM route using the production session, progress and cancel marker."""
-    import os
+    from server.platform.feature_flags import fem_regions_enabled
     from .beat_adapter.coupled_request import CoupledRequest
     from .beat_runtime.provider import official_selected
 
     if not isinstance(request, CoupledRequest):
         raise TypeError("Expected a CoupledRequest")
-    if os.environ.get("WG2_FEM_REGIONS", "").strip() != "1":
-        raise ValueError("FEM regions are disabled; enable WG2_FEM_REGIONS")
+    if not fem_regions_enabled():
+        raise ValueError("FEM regions are disabled by WG2_FEM_REGIONS; remove the override to enable them")
     if not official_selected():
         raise ValueError("FEM regions require the official BEAT provider")
     options = request.wire["solver_options"]

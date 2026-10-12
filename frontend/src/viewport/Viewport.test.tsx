@@ -312,8 +312,8 @@ describe('Viewport preview errors', () => {
     });
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
     expect(host.querySelector('[aria-label="FEM field controls"]')).not.toBeNull();
-    expect(host.querySelector('.experimental-badge')?.getAttribute('title')).toContain('FEM region');
-    expect(host.querySelector('.experimental-badge')?.getAttribute('role')).toBe('note');
+    expect(host.querySelector('.experimental-badge')).toBeNull();
+    expect(host.textContent).not.toContain('Experimental');
     expect(host.querySelector('[aria-label="FEM field plane presets"]')?.getAttribute('role')).toBe('group');
     expect(host.querySelector('[aria-label="FEM interior field overlay"]')?.getAttribute('aria-pressed')).toBe('true');
     expect(host.querySelector('[aria-label="Field plane controls"]')).toBeNull();

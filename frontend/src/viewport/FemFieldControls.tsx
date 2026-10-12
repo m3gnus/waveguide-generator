@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import { ExperimentalBadge, FEM_EXPERIMENTAL_NOTE } from '../design/ExperimentalBadge';
 import { FIELD_PLANE_DISPLAY_MODES, fieldPlaneColormap, fieldPlaneWindowForMode, type FieldPlaneDisplayMode } from './fieldPlaneColor';
 import { useFieldPlaneStore } from './fieldPlaneStore';
 import type { FemFieldRendering } from './FemFieldView';
@@ -16,7 +15,7 @@ export function FemFieldControls({ field, rendering, setRendering, sequential, c
   const colormap = fieldPlaneColormap(mode, sequential);
   const window = field.field ? fieldPlaneWindowForMode(mode, field.field.values.real, field.field.values.imag) : null;
   return <div className="field-plane-legend" role="group" aria-label="FEM field controls">
-    <div className="field-plane-legend-title"><b>FEM interior field</b><ExperimentalBadge note={FEM_EXPERIMENTAL_NOTE}/></div>
+    <div className="field-plane-legend-title"><b>FEM interior field</b></div>
     <p className="field-plane-note" role="note">Pressure per unit acceleration (Pa per m/s²). Interior regions only.</p>
     {field.frequencies.length > 0 && <label className="field-plane-frequency">
       Frequency <output>{hz === undefined ? '—' : `${hz.toLocaleString()} Hz`}</output>

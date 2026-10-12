@@ -54,6 +54,8 @@ export interface Capabilities {
   cpuPreparationInFlight: boolean;
   /** Build flag: false in a packaged build. Absent on an older server, which means off. */
   onshape?: boolean;
+  /** FEM protocol support; absent on older servers means off. */
+  femRegions?: boolean;
 }
 /**
  * What the server ran instead of the engine the request named, and why.

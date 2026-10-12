@@ -319,7 +319,7 @@ def _imported_request_refusal(
         from server.solver.beat_runtime.provider import official_selected
 
         if not fem_regions_enabled():
-            return "fem_required", "FEM regions are disabled; enable WG2_FEM_REGIONS"
+            return "fem_required", "FEM regions are disabled by WG2_FEM_REGIONS; remove the override to enable them"
         if not official_selected():
             return "fem_provider_unsupported", "FEM regions require the official BEAT provider"
         if imported_domain_planes(record) or request.options.symmetry not in {"auto", "full"}:

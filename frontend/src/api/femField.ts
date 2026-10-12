@@ -7,7 +7,6 @@ export interface FemFieldResponse extends FemFieldPayload {
   channel_id: string;
   phasor_convention: 'exp(-i omega t)';
   drive_normalization: 'unit_acceleration_m_per_s2';
-  experimental: true;
 }
 
 export async function fetchFemField(jobId: string, frequency?: number, channel?: string, signal?: AbortSignal) {
@@ -25,8 +24,7 @@ export async function fetchFemField(jobId: string, frequency?: number, channel?:
     || !payload.frequencies_hz.includes(payload.frequency_hz)
     || !payload.channel_ids.includes(payload.channel_id)
     || payload.phasor_convention !== 'exp(-i omega t)'
-    || payload.drive_normalization !== 'unit_acceleration_m_per_s2'
-    || payload.experimental !== true) throw new Error('Invalid FEM field selection metadata');
+    || payload.drive_normalization !== 'unit_acceleration_m_per_s2') throw new Error('Invalid FEM field selection metadata');
   return { ...decodeFemFieldPayload(payload), payload };
 }
 

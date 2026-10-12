@@ -4103,11 +4103,6 @@
             "title": "Drive Normalization",
             "type": "string"
           },
-          "experimental": {
-            "const": true,
-            "title": "Experimental",
-            "type": "boolean"
-          },
           "frequencies_hz": {
             "items": {
               "type": "number"
@@ -4170,8 +4165,7 @@
           "channel_ids",
           "channel_id",
           "phasor_convention",
-          "drive_normalization",
-          "experimental"
+          "drive_normalization"
         ],
         "title": "FemFieldPresentation",
         "type": "object"

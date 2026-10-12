@@ -114,6 +114,29 @@ BEMPP refuses free edges away from mirror planes. A fully enclosed void inside a
 solid can also be refused during STEP healing; re-export it with the cavity
 opened to the outside or as separate boundary shells, as the error advises.
 
+### FEM regions
+
+FEM regions solve the bounded air inside chambers and ports, with interfaces
+coupled to the exterior BEM field. They are available by default in CAD Link.
+In Fusion, create one closed solid air body per region and use WGLink's
+**Declare FEM Region…** command. Set the region mesh size and group its faces
+as moving diaphragms, exterior interfaces, plane-wave terminations or rigid
+walls. Ungrouped faces are rigid. Hide each declared air body before Send/Solve
+so it is exported separately from the speaker assembly. Check Pre-flight.
+WG lists the prepared regions and shows retained interior pressure on a slice
+plane after solving; select a frequency and drive channel in the field controls.
+
+This release requires official BEAT CPU in float64, a full free-space domain,
+and ideal normal-velocity drives. Reduced domains, ground planes,
+electrodynamic drivers, passive cardioid and two FEM diaphragms sharing a drive
+channel are unsupported. With painted exterior sources, a FEM diaphragm must
+use a channel in that source setup. A missing compatible engine refuses the job;
+choose exterior-only explicitly if the interior should be excluded.
+
+Operators can disable FEM regions with `WG2_FEM_REGIONS=0` and restart WG;
+`false`, `no` and `off` also disable it. This removes the capability and FEM UI
+and refuses FEM intake and coupled jobs. Unset the override to enable it again.
+
 ## 4. Mark the faces that produce sound
 
 1. Select the throat or diaphragm face that drives the air, rather than a magnet,

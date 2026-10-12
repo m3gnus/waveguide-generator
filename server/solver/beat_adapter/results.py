@@ -556,7 +556,7 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
     solver_engine = {"provider": "official", "engine": "beat-cpu", "package": "beat-engine",
                      "package_version": engine_version(), "device": "cpu", "precision": "double",
                      "formulation": formulation}
-    fem_metadata = {"experimental": True, "engine": "beat-cpu", "precision": "float64"}
+    fem_metadata = {"engine": "beat-cpu", "precision": "float64"}
 
     specs = {c.id: c for c in geometry.drive_channels}
     identity = channel_source_identity(geometry, record)

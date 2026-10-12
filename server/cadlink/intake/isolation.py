@@ -198,6 +198,8 @@ def child_environment(
         else _POSIX_PASSTHROUGH + _LINKER_PASSTHROUGH
     ) + _MEMORY_PASSTHROUGH + (FEM_REGIONS_ENV,)
     env = {name: source[name] for name in names if source.get(name)}
+    # Unset and empty mean enabled; preserve explicit kill-switch values.
+    # Parent and child use the same shared parser. No native imports are needed.
 
     scratch = str(staging / "tmp")
     home = str(staging / "home")

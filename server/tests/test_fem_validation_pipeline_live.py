@@ -89,7 +89,7 @@ def _pipeline(tmp_path, case, frequencies, *, engine_registry=None):
             assert envelope["channel_order"] == ["drive-lf"]
             assert envelope["frequencies"] == list(frequencies)
             assert envelope["metadata"]["fem"] == {
-                "experimental": True, "engine": "beat-cpu", "precision": "float64"}
+                "engine": "beat-cpu", "precision": "float64"}
             assert envelope["metadata"]["solve_path"] == (
                 "coupled-fem-bem" if case in {"open", "ported"} else "interior-fem")
             with np.load(BytesIO(runtime.store.get_fem_field(job_id)), allow_pickle=False) as stored:

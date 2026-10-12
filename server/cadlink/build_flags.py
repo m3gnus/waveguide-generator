@@ -11,9 +11,9 @@ release channel too, so a source tree is not treated as a development build;
 developers opt in explicitly (see ``docs/DEVELOPMENT.md``). Any other value,
 including unset, means off.
 
-Declared FEM regions are also development-only (``WG2_FEM_REGIONS=1``).
-That flag gates the WGLink capability, bundle reader, isolated mesh tasks and
-the official CPU coupled solver route. The frontend field mount belongs to F9.
+Declared FEM regions are enabled by default. ``WG2_FEM_REGIONS=0`` (or
+``false``, ``no``, ``off``) disables the WGLink capability, bundle reader,
+isolated mesh tasks, official CPU coupled solver route and frontend FEM UI.
 """
 
 from __future__ import annotations

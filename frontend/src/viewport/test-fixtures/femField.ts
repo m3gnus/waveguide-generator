@@ -19,6 +19,6 @@ export function femFieldFixture(frequency = 100, channel = 'front'): FemFieldRes
     surfaces: [{ name: 'wg-fem-v1|region=chamber|group=walls|kind=rigid', triangles: encode([0, 1, 2], 'u32') }],
     pressure_real: encode([1, 2, 3, 4], 'f32'), pressure_imag: encode([-1, -2, -3, -4], 'f32'),
     frequencies_hz: [100, 1000], channel_ids: ['front', 'rear'], channel_id: channel,
-    phasor_convention: 'exp(-i omega t)', drive_normalization: 'unit_acceleration_m_per_s2', experimental: true,
+    phasor_convention: 'exp(-i omega t)', drive_normalization: 'unit_acceleration_m_per_s2',
   };
 }

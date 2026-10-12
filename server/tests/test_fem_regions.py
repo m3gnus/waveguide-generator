@@ -178,14 +178,14 @@ def test_the_isolated_child_meshes_a_region_and_keeps_typed_refusals(tmp_path, m
         build_fem_region_mesh_isolated(step, region)
 
 
-def test_fem_regions_are_advertised_only_to_an_opted_in_build(monkeypatch):
+def test_fem_regions_are_advertised_by_default_and_can_be_disabled(monkeypatch):
     from server.cadlink.build_flags import FEM_REGIONS_ENV
     from server.cadlink.fusion.fusion_delivery import capabilities
 
     monkeypatch.delenv(FEM_REGIONS_ENV, raising=False)
-    assert "femRegions" not in capabilities()
-    monkeypatch.setenv(FEM_REGIONS_ENV, "1")
     assert capabilities()["femRegions"] == 1
+    monkeypatch.setenv(FEM_REGIONS_ENV, "0")
+    assert "femRegions" not in capabilities()
 
 
 @pytest.mark.parametrize("kind", ["rigid", "moving"])

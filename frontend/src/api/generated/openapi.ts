@@ -3672,11 +3672,6 @@ export interface components {
              * @constant
              */
             drive_normalization: "unit_acceleration_m_per_s2";
-            /**
-             * Experimental
-             * @constant
-             */
-            experimental: true;
             /** Frequencies Hz */
             frequencies_hz: number[];
             /** Frequency Hz */

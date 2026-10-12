@@ -13,7 +13,7 @@ import platform
 from dataclasses import asdict
 from typing import Any, Protocol
 
-from server.cadlink.build_flags import onshape_enabled
+from server.cadlink.build_flags import fem_regions_enabled, onshape_enabled
 from server.engines.registry import full3d_engine_order
 from server.integration.installed import measure_installed_stack
 from server.integration.provenance import pinned_dependency_shas
@@ -97,6 +97,7 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
         "storage": journal_mode_statuses(),
         # The one advertisement the interface reads to show or hide Onshape.
         "onshape": onshape_enabled(),
+        "femRegions": fem_regions_enabled(),
     }
 
 

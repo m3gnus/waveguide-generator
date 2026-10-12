@@ -169,7 +169,6 @@ class FemFieldPresentation(BaseModel):
     channel_id: str
     phasor_convention: Literal["exp(-i omega t)"]
     drive_normalization: Literal["unit_acceleration_m_per_s2"]
-    experimental: Literal[True]
 
 
 class EngineSubstitution(BaseModel):

@@ -112,7 +112,7 @@ def _write_addin_bundle(addin, root, assembly, air, bounds, *, coupled):
 
 @pytest.mark.parametrize("coupled", [False, True], ids=["interior", "coupled"])
 def test_pinned_fem_writer_reader_mesh_and_fake_job(packaged, runtime, tmp_path, monkeypatch, coupled):
-    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
     bundle, manifest, members = _addin_bundle(packaged, tmp_path / "returns", coupled=coupled)
     read = read_wgreturn(bundle)
     assert read.manifest == manifest
@@ -166,7 +166,7 @@ def test_pinned_fem_writer_reader_mesh_and_fake_job(packaged, runtime, tmp_path,
             assert envelope["metadata"]["solve_path"] == (
                 "coupled-fem-bem" if coupled else "interior-fem")
             assert envelope["metadata"]["fem"] == {
-                "experimental": True, "engine": "beat-cpu", "precision": "float64"}
+                "engine": "beat-cpu", "precision": "float64"}
             with np.load(BytesIO(jobs.store.get_fem_field(job_id)), allow_pickle=False) as field:
                 assert field["schema"].item() == "wg-fem-field-store-v1"
                 assert field["channel_ids"].tolist() == ["drive-lf"]
@@ -203,7 +203,7 @@ def test_pinned_fem_writer_reader_mesh_and_fake_job(packaged, runtime, tmp_path,
     ("unprefixed-drive", "must use the exterior source drive-id pattern"),
 ])
 def test_pinned_fem_strict_refusals_agree_at_both_endpoints(packaged, monkeypatch, mutation, expected):
-    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
     manifest = _manifest(b"STEP")
     for body in manifest["scope"]["included"]:
         body.update(component="Cabinet", external_reference="none")

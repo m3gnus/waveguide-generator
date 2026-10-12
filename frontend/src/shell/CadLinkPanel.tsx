@@ -673,7 +673,7 @@ export function CadLinkPanel() {
   // letting someone discover it after exporting and preparing the model.
   // Once a return is prepared, the server's per-engine verdict on it decides;
   // before that, only what the engine select offers.
-  const { engines: solverEngines, isLoading: capabilitiesLoading } = useCapabilities();
+  const { engines: solverEngines, isLoading: capabilitiesLoading, femRegionsOffered } = useCapabilities();
   const importedEngines = solverEngines.filter(choosableForImportedGeometry);
   const planVerdicts = useImportedSolvePlan(true).plan?.engines ?? null;
   const importedSolverUnavailable = planVerdicts
@@ -886,8 +886,8 @@ export function CadLinkPanel() {
         onClick={() => { void cadWorkspaceView.ingest(); }}
       >{ingesting ? 'Preparing…' : record ? 'Prepare again' : 'Prepare simulation'}</button>}
       {record && <ChecksSection record={record}/>}
-      {!!record?.fem_regions?.length && <section className="cad-fem-regions" aria-label="FEM regions">
-        <h4>FEM regions <ExperimentalBadge/></h4>
+      {femRegionsOffered && !!record?.fem_regions?.length && <section className="cad-fem-regions" aria-label="FEM regions">
+        <h4>FEM regions</h4>
         {record.fem_regions.map((region) => <div key={region.region_id}>
           <b>{region.name}</b>
           <p className="cad-detail">{region.stats.tetrahedra.toLocaleString()} tetrahedra · {region.stats.nodes.toLocaleString()} nodes · {region.mesh_size_mm} mm region size</p>

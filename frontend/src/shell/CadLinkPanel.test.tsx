@@ -123,6 +123,7 @@ describe('CadLinkPanel', () => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
+      if (path.endsWith('/api/capabilities')) return json({ engines: [], femRegions: true });
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
@@ -917,7 +918,7 @@ describe('CadLinkPanel', () => {
     expect(badge?.getAttribute('title')).toContain('not yet acoustically qualified');
   });
 
-  it('lists retained FEM regions with group kinds, mesh counts and an Experimental badge', async () => {
+  it('lists retained FEM regions with group kinds and mesh counts', async () => {
     await renderAndSelect();
     await clickIngest();
     expect(host.querySelector('.cad-fem-regions')).toBeNull();
@@ -943,7 +944,8 @@ describe('CadLinkPanel', () => {
       }],
     } }));
     const regions = host.querySelector('.cad-fem-regions')!;
-    expect(regions.querySelector('.experimental-badge')?.textContent).toBe('Experimental');
+    expect(regions.querySelector('.experimental-badge')).toBeNull();
+    expect(regions.textContent).not.toContain('Experimental');
     expect(regions.textContent).toContain('Rear chamber');
     expect(regions.textContent).toContain('1,234 tetrahedra · 456 nodes · 8 mm region size');
     for (const kind of ['moving', 'interface', 'plane wave termination', 'rigid']) {
@@ -955,6 +957,8 @@ describe('CadLinkPanel', () => {
     expect(regions.textContent).toContain('rigid · 130 triangles · 1,000 mm²');
     expect(regions.textContent).toContain('Unclaimed walls');
     expect(regions.textContent).toContain('rigid · 400 triangles · 3,400 mm²');
+    await act(async () => capabilityClient.setQueryData(['capabilities'], { engines: [], femRegions: false }));
+    await vi.waitFor(() => expect(host.querySelector('.cad-fem-regions')).toBeNull());
     await act(async () => useCadReturnStore.setState({ ingestRecord: { ...record, fem_regions: [] } }));
     expect(host.querySelector('.cad-fem-regions')).toBeNull();
   });
