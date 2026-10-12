@@ -86,11 +86,9 @@ UsePreviousAppDir=yes
 ; that decision to ShouldSkipPage in [Code], which keeps auto's rule except for
 ; an interactive upgrade from a non-standard folder (see ChooseInstallDir).
 DisableDirPage=no
-; A prior interactive selection must never become consent for an unattended
-; upgrade. With Inno's default UsePreviousTasks=yes, /VERYSILENT could restore
-; the old wglink task even when this invocation names no /TASKS option. The
-; interactive wizard still makes a fresh Fusion-aware recommendation below;
-; silent deployment must opt in on every invocation.
+; Do not restore stale task choices. The interactive wizard makes a fresh
+; Fusion-aware recommendation; silent setup updates an existing owned WGLink
+; copy unless this invocation supplies an explicit task choice.
 UsePreviousTasks=no
 ; One setup per user at a time, and the name the launcher looks for: the
 ; per-user launcher refuses to start while this mutex exists (OpenMutexW), so
@@ -133,9 +131,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 ; WGLink changes Fusion's per-user AddIns directory, so it is a separate,
 ; visible choice rather than a side effect of starting Waveguide Generator.
-; It is preselected only in the interactive wizard and only when an existing
-; Fusion AddIns directory was found. Silent installs must name /TASKS="wglink"
-; explicitly; otherwise they preserve the user's non-consent.
+; The interactive wizard preselects it when Fusion's AddIns directory exists.
+; Silent fresh installs must opt in with /TASKS="wglink"; silent upgrades keep
+; an existing managed copy current unless an explicit task choice says otherwise.
 Name: "wglink"; Description: "Install the &WGLink add-in for Autodesk Fusion"; GroupDescription: "Fusion integration:"; Flags: unchecked
 
 [Files]
@@ -727,6 +725,26 @@ begin
       Result := True;
       exit;
     end;
+  end;
+end;
+
+procedure SelectManagedWGLinkForSilentUpgrade();
+var
+  AddInsDirectory: String;
+begin
+  { Run after the new app/runtime is committed, when the tasks list exists and
+    the current ownership validator is available. WGLink has no [Files] or
+    [Icons] entries: its only installation action follows this selection.
+    Explicit /TASKS or /MERGETASKS and interactive checkbox choices win. }
+  if not WizardSilent() or TaskChoiceOnCommandLine() then
+    exit;
+  AddInsDirectory := WgLinkAddInsDirectory();
+  if AddInsDirectory = '' then
+    exit;
+  if WgLinkManagedByThisInstall(WgLinkTarget(AddInsDirectory)) then
+  begin
+    WizardSelectTasks(WgLinkTaskName);
+    WgLog('WGLink: task selected for silent upgrade of an existing managed copy.');
   end;
 end;
 
@@ -1384,9 +1402,9 @@ begin
     OpenClHelpButton.Anchors := [akLeft, akBottom];
     OpenClHelpButton.OnClick := @OpenClHelpClick;
   end;
-  { A normal interactive setup may make the Fusion-aware recommendation. A
-    silent invocation has no user to make that choice, so it must opt in with
-    /TASKS="wglink" instead. The tasks list is still empty here: Inno builds it
+  { A normal interactive setup may make the Fusion-aware recommendation.
+    Silent fresh installs opt in with /TASKS="wglink"; managed silent upgrades
+    are selected at ssPostInstall. The tasks list is still empty here: Inno builds it
     only when the wizard moves to the tasks page, so WizardSelectTasks would
     have nothing to select. CurPageChanged applies the choice on that page. An
     explicit /TASKS or /MERGETASKS on the command line is the user's choice and
@@ -1786,6 +1804,7 @@ begin
     RewriteShortcutIcons();
     SettleDesktopShortcut();
     NotePreviousCopy();
+    SelectManagedWGLinkForSilentUpgrade();
     if WizardIsTaskSelected(WgLinkTaskName) then
     begin
       RecordWGLinkSetupChoice();

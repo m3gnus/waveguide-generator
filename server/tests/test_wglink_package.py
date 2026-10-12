@@ -480,6 +480,73 @@ def test_developer_marker_wins_over_a_stale_wg_ownership_marker(
     assert (target / installer.INSTALL_MARKER).is_file()
 
 
+@pytest.mark.parametrize("ownership", [
+    "managed", "hand-copied", "developer", "wrong-root", "invalid-schema",
+    "invalid-pin", "malformed", "symlink-target", "symlink-marker",
+])
+def test_windows_upgrade_query_and_install_share_the_ownership_gate(
+    short_tmp_path: Path, ownership: str, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Exercise the query setup uses, then the actual offline update it gates."""
+    from server.tests._symlinks import requires_symlinks
+
+    installer = _load_installer()
+    root, archive = _package(short_tmp_path, "a" * 40)
+    addins = short_tmp_path / "AddIns"
+    options = dict(root=root, platform="windows", addins_dir=addins, archive_path=archive)
+    assert installer.install(**options)[0] == "installed"
+    target = addins.resolve() / "WGLink"
+    marker_path = target / installer.INSTALL_MARKER
+    marker = json.loads(marker_path.read_text())
+    # An older version/pin is still owned and must be refreshed, not refused.
+    marker.update(waveguideGeneratorVersion="0.3.5", addinVersion="0.2.1", sourceCommit="b" * 40)
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    sentinel = target / "old-payload.txt"
+    sentinel.write_bytes(b"keep only for unowned copies")
+    if ownership == "hand-copied":
+        marker_path.unlink()
+    elif ownership == "developer":
+        (target / installer.DEVELOPER_MARKER).write_text("{}", encoding="utf-8")
+    elif ownership in {"wrong-root", "invalid-schema", "invalid-pin"}:
+        field, value = {
+            "wrong-root": ("waveguideGeneratorRoot", str(short_tmp_path / "other-WG")),
+            "invalid-schema": ("schema", True),
+            "invalid-pin": ("sourceCommit", "not-a-pin"),
+        }[ownership]
+        marker_path.write_text(json.dumps({**marker, field: value}), encoding="utf-8")
+    elif ownership == "malformed":
+        marker_path.write_text("{", encoding="utf-8")
+    elif ownership.startswith("symlink-"):
+        requires_symlinks(short_tmp_path)
+        link = target if ownership == "symlink-target" else marker_path
+        original = link.with_name(link.name + ".original")
+        link.rename(original)
+        link.symlink_to(original, target_is_directory=ownership == "symlink-target")
+    before = {path.relative_to(target): path.read_bytes() for path in target.rglob("*") if path.is_file()}
+    query = installer.main([
+        "--print-managed-target", "--root", str(root), "--platform", "windows",
+        "--addins-dir", str(addins),
+    ])
+    assert query == (0 if ownership == "managed" else 1)
+    capsys.readouterr()
+    status, observed = installer.install(**options, offline_only=True)
+    assert observed == target
+    if ownership == "managed":
+        assert status == "installed" and not sentinel.exists()
+        updated = json.loads(marker_path.read_text())
+        assert updated["sourceCommit"] == "a" * 40
+        assert updated["waveguideGeneratorVersion"] == "9.8.7"
+        assert updated["addinVersion"] == "0.1.1"
+    else:
+        assert status == "preserved-external" and sentinel.exists()
+        after = {path.relative_to(target): path.read_bytes() for path in target.rglob("*") if path.is_file()}
+        assert after == before
+        if ownership == "symlink-target":
+            assert target.is_symlink()
+        elif ownership == "symlink-marker":
+            assert marker_path.is_symlink()
+
+
 def test_symlinked_ownership_marker_is_never_treated_as_managed(
     short_tmp_path: Path, monkeypatch
 ):

@@ -83,8 +83,14 @@ says on its last page how to remove the old copy, which it never deletes itself.
 Setup also offers an explicit
 **Install WGLink for Autodesk Fusion** task. It is preselected only when Fusion's
 AddIns folder already exists, installs entirely from the verified bundle without
-network access, and never replaces a developer or externally managed WGLink.
-Silent installs opt in with `/TASKS="wglink"`.
+network access, and never replaces a developer, hand-copied, symlinked or externally
+managed WGLink. Silent fresh installs opt in with `/TASKS="wglink"`. Silent upgrades,
+including in-app updates, automatically update a WGLink copy whose
+`wglink_install.json` passes the ownership checks for this WG installation.
+The in-app updater supplies no `/TASKS` option, so setup keeps that managed copy
+current. An explicit `/TASKS` or `/MERGETASKS` choice takes precedence; for example,
+`/TASKS=""` leaves WGLink untouched even on a managed upgrade. With no managed copy,
+silent setup leaves WGLink off unless explicitly selected.
 
 For a self-contained Linux install, download
 **Waveguide.Generator-&lt;version&gt;-linux-x86_64.tar.gz**, extract it, and run

@@ -44,17 +44,22 @@ The build refuses, correctly, on four things worth knowing before you blame it: 
 | 9 | Uninstall clears the tree, including bytecode the installer never wrote | `[UninstallDelete]` removes `runtime` and `app` wholesale and `{app}` only if empty, so a planted `__pycache__` is the case worth testing. It also verifies that the managed WGLink target and any replacement journal/workspace are gone before the disposable AddIns fixture is removed. |
 | 10 | The real setup task installs WGLink with the packaged runtime | The gate creates a disposable Fusion AddIns directory, selects the explicit WGLink task, and verifies a zero setup exit, add-in source, ownership root, exact 40-character source pin, runtime pointer, and absence of a transaction journal/workspace. It never needs a real Fusion installation. |
 | 11 | Setup preserves a developer-marked WGLink copy | The gate repeats setup against a separate disposable AddIns directory containing a developer marker and source file, then verifies both are byte-for-byte unchanged. |
-| 12 | A silent upgrade needs a current WGLink opt-in | After an opted-in setup, the gate plants a unique sentinel in the managed add-in, reruns setup silently without `/TASKS="wglink"`, and verifies both the sentinel and entire tree are unchanged. This prevents Inno's remembered-task default from silently turning old consent into new consent even when the payload version is identical. |
+| 12 | A silent upgrade refreshes an existing managed WGLink | After an opted-in setup, the gate plants a unique sentinel in the managed add-in, reruns setup silently without `/TASKS`, and requires the sentinel to be removed, the marker to carry the current package pin, and no replacement journal/workspace to remain. |
 | 13 | An upgrade leaves exactly the package, and reports it | Plants a module in `app\` and a package in `runtime\`, upgrades with the same setup, and requires both to be gone and `app\` + `runtime\` (ignoring bytecode) to equal the freshly installed package. Inno's `[Files]` only overlays, so without the rename-aside in `bundle-setup.iss` a file the package dropped survives every upgrade. Also requires no `.app.old`, `.runtime.old` or `.upgrade-in-progress` left behind, and an `/OUTCOME` record with `result: ok`. |
 | 14 | `/WAITPID` holds setup before rename-aside until the named process exits | Starts a live stand-in and setup with `/WAITPID=<its pid>`. Waits at most 30 s for the log to confirm entry into the PID wait, then checks 8 s later for unchanged layers, a planted sentinel, no rename-aside/marker and no outcome. Ends the stand-in and requires exit 0, `result: ok`, sentinel removed and layers equal to the installed package. The 120 s timeout is opt-in gate 16 below. |
 | 15 | SetupMutex excludes another setup during `/WAITPID` | Shares gate 14's live wait, probes `WaveguideGeneratorSetup` with `OpenExisting` (disposing the probe immediately), then starts a second silent setup at a disposable `/DIR`. Within 8 s it must either fail non-zero or still be waiting, with no destination tree and no successful outcome. The first must finish correctly after the stand-in exits, and the second must settle after mutex release. |
 | 16 | Silent timeout exits by itself without a window | Opt-in `-RunWaitPidTimeout` keeps a stand-in alive through the real 120 s cap. Requires self-exit within 150 s of launch, a non-zero exit code, no visible window in the setup loader or its descendants, one failed outcome write, unchanged layers, no rename-aside/marker or restore, and no `[Run]` entry despite `/RELAUNCH`. Reports the actual exit code for Windows measurement. |
+| 20 | Silent fresh setup leaves WGLink off | Runs without `/TASKS` against an empty disposable AddIns folder and requires no WGLink target to be created. |
+| 21 | Explicit task choice wins on a managed upgrade | Reruns setup with `/TASKS=""` and requires the complete managed WGLink tree to remain byte-identical. |
+| 22 | Silent upgrade preserves unmanaged WGLink | Runs without `/TASKS` against the developer fixture and requires its complete tree to remain byte-identical. Gate 11 also checks preservation when WGLink is explicitly selected. |
 
 ## Silent upgrade contract (used by the in-app updater)
 
 The in-app updater starts `setup.exe` detached and silently, passing `/DIR=` (the exact
-install location), and none of `/TASKS`, so WGLink is never installed or refreshed by an
-update. Every switch below is optional and ignored by an interactive install.
+install location), and no `/TASKS` option. Setup refreshes an existing WGLink only
+when its structured ownership marker validates for that installation; a fresh or
+unmanaged target stays untouched. Explicit `/TASKS` or `/MERGETASKS` choices take
+precedence. Every switch below is optional and ignored by an interactive install.
 
 | Switch | Effect |
 |---|---|
@@ -139,14 +144,17 @@ Gate 7 remains its separate manual release check on a UAC-enabled machine.
 
 WGLink is an explicit Fusion-integration task. In the interactive wizard it is
 preselected only when an existing Fusion AddIns directory is found; unchecking
-it prevents installation. Silent deployment preserves that consent boundary:
-name `/TASKS="wglink"` to opt in. If Fusion is absent, the task does not create
+it prevents installation. Silent fresh deployment must name `/TASKS="wglink"`
+to opt in. If Fusion is absent, the task does not create
 an AddIns directory and the final setup page says that WGLink was not installed.
 An existing non-Waveguide Generator copy is preserved rather than overwritten.
-Every silent upgrade needs that current `/TASKS="wglink"` opt-in; a prior setup
-selection is deliberately not reused.
+Silent upgrades without an explicit task choice keep an existing managed WGLink
+current, using `install_wglink.py`'s ownership validator after committing the new
+WG app/runtime. A prior setup task selection is deliberately not reused.
 Selecting the task records CAD Link use in WG's data directory before attempting
-the add-in install, even if Fusion is absent or installation fails; gates 10 and 12 check that record and its preservation by an unticked upgrade.
+the add-in install, even if Fusion is absent or installation fails; gate 10 checks
+that record. Gates 12 and 20–22 check refresh, fresh-install defaults, explicit
+opt-out and unmanaged preservation.
 
 ## The install folder on an upgrade
 

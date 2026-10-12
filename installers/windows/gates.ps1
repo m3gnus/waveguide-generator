@@ -171,6 +171,10 @@ Gate 3 "silent run exits with a code, never a modal box" ($longReturned -and $lo
 # exists, so it cannot accidentally create a Fusion-looking directory for a
 # typo in a normal deployment command.
 if (Test-Path $installRoot) { Remove-Item -Recurse -Force $installRoot }
+$freshSilent = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART" -Wait
+$freshWGLinkAbsent = -not (Test-Path (Join-Path $wglinkAddins "WGLink"))
+Gate 20 "silent fresh install leaves WGLink off without explicit selection" ($freshSilent.ExitCode -eq 0 -and $freshWGLinkAbsent) `
+    "setup exit $($freshSilent.ExitCode); WGLink absent despite existing AddIns folder: $freshWGLinkAbsent"
 $p = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART", "/TASKS=`"wglink`"" -Wait
 $installExit = $p.ExitCode
 # The package as installed on a clean machine: what every later upgrade of the
@@ -214,20 +218,24 @@ $wglinkOk = ($installExit -eq 0) -and (Test-Path (Join-Path $wglinkTarget "WGLin
 $wglinkDetail = "setup exit $installExit; target: $wglinkTarget; marker root: $markerRootOk; full pin: $fullPinOk; runtime pointer: $runtimePointerOk ($($runtimeData.python)); journal absent: $(-not (Test-Path $journal)); staging directories: $($staging.Count); setup choice recorded: $setupChoiceOk"
 Gate 10 "setup task installs packaged WGLink into a disposable AddIns directory" $wglinkOk $wglinkDetail
 
-# --- Gate 12: a silent upgrade must name WGLink again -------------------------
-# Use the same AddIns override as gate 10 but omit /TASKS. Inno's default
-# UsePreviousTasks=yes would silently restore the previous task selection on an
-# upgrade; the setup script sets UsePreviousTasks=no so this tree must remain
-# byte-identical.
+# --- Gate 12: a managed WGLink follows a silent in-app upgrade ---------------
+# Like launchers/full_installer.py, omit /TASKS. Ownership, rather than a
+# remembered wizard choice, must select the task and replace this old payload.
 $silentSentinel = Join-Path $wglinkTarget ".gate-silent-opt-in-sentinel"
 Set-Content -LiteralPath $silentSentinel -Value ([guid]::NewGuid().ToString("N")) -NoNewline
 $beforeSilentUpgrade = TreeFingerprint $wglinkTarget
+$optOutUpgrade = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART", "/TASKS=`"`"" -Wait
+$afterOptOutUpgrade = TreeFingerprint $wglinkTarget
+Gate 21 "explicit empty TASKS preserves a managed WGLink on silent upgrade" ($optOutUpgrade.ExitCode -eq 0 -and $beforeSilentUpgrade -eq $afterOptOutUpgrade) `
+    "setup exit $($optOutUpgrade.ExitCode); tree unchanged: $($beforeSilentUpgrade -eq $afterOptOutUpgrade)"
 $silentUpgrade = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART" -Wait
 $afterSilentUpgrade = TreeFingerprint $wglinkTarget
-$usageUnchanged = $setupChoiceOk -and (Test-Path $usageRecord) -and ((Get-Content -Raw $usageRecord) -eq $usageBefore)
-$silentUpgradeOk = ($silentUpgrade.ExitCode -eq 0) -and (Test-Path $silentSentinel) -and ($beforeSilentUpgrade -eq $afterSilentUpgrade) -and -not (Test-Path $journal) -and $staging.Count -eq 0 -and $usageUnchanged
-Gate 12 "silent upgrade leaves WGLink untouched without current /TASKS opt-in" $silentUpgradeOk `
-    "setup exit $($silentUpgrade.ExitCode); sentinel preserved: $(Test-Path $silentSentinel); tree unchanged: $($beforeSilentUpgrade -eq $afterSilentUpgrade); journal absent: $(-not (Test-Path $journal)); staging directories: $($staging.Count); setup choice unchanged: $usageUnchanged"
+$upgradedMarker = if (Test-Path $wglinkMarker) { Get-Content -Raw $wglinkMarker | ConvertFrom-Json } else { $null }
+$upgradedPinOk = $null -ne $upgradedMarker -and $upgradedMarker.sourceCommit -eq $sourceSpec.commit -and $upgradedMarker.addinVersion -eq $sourceSpec.addinVersion
+$upgradeStaging = @(Get-ChildItem -LiteralPath $wglinkAddins -Directory -Filter ".WGLink-install-*" -ErrorAction SilentlyContinue)
+$silentUpgradeOk = ($silentUpgrade.ExitCode -eq 0) -and -not (Test-Path $silentSentinel) -and ($beforeSilentUpgrade -ne $afterSilentUpgrade) -and $upgradedPinOk -and -not (Test-Path $journal) -and $upgradeStaging.Count -eq 0
+Gate 12 "silent upgrade refreshes an existing managed WGLink without TASKS" $silentUpgradeOk `
+    "setup exit $($silentUpgrade.ExitCode); sentinel removed: $(-not (Test-Path $silentSentinel)); current pin: $upgradedPinOk; journal absent: $(-not (Test-Path $journal)); staging directories: $($upgradeStaging.Count)"
 
 # --- Gate 13: an upgrade leaves exactly the package, and reports it ----------
 # The layers are renamed aside and replaced, so a file the package no longer
@@ -498,6 +506,11 @@ Set-Content -LiteralPath $developerMarker -Value '{"sourceCommit":"local"}' -NoN
 Set-Content -LiteralPath $developerFile -Value 'keep me' -NoNewline
 $developerBefore = Get-Content -Raw $developerMarker
 $managedBefore = Get-Content -Raw $managedMarker
+$developerTreeBefore = TreeFingerprint (Join-Path $developerAddins "WGLink")
+$developerSilent = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART" -AddIns $developerAddins -Wait
+$developerTreeAfter = TreeFingerprint (Join-Path $developerAddins "WGLink")
+Gate 22 "silent upgrade leaves unmanaged WGLink untouched without TASKS" ($developerSilent.ExitCode -eq 0 -and $developerTreeBefore -eq $developerTreeAfter) `
+    "setup exit $($developerSilent.ExitCode); tree unchanged: $($developerTreeBefore -eq $developerTreeAfter)"
 $developerRun = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART", "/TASKS=`"wglink`"" -AddIns $developerAddins -Wait
 $developerPreserved = ($developerRun.ExitCode -eq 0) -and (Test-Path $developerFile) -and ((Get-Content -Raw $developerMarker) -eq $developerBefore) -and ((Get-Content -Raw $managedMarker) -eq $managedBefore)
 Gate 11 "setup preserves a developer-marked WGLink copy" $developerPreserved `

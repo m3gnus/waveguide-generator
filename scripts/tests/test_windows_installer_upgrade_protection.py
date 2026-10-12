@@ -87,20 +87,53 @@ def test_setup_mutex_and_relaunch_entry_are_declared(script: str) -> None:
     assert "function RelaunchRequested(): Boolean;" in script
 
 
-def test_silent_upgrade_still_never_reuses_or_forces_wglink(script: str) -> None:
+def test_fresh_install_task_defaults_and_interactive_recommendation(script: str) -> None:
     assert "\nUsePreviousTasks=no\n" in script
-    # No task is defaulted on by the installer for a silent run.
+    # Fresh silent installs have no owned copy, so WGLink stays off.
     assert "Flags: unchecked" in script.split('Name: "wglink"', 1)[1].splitlines()[0]
     # The Fusion-aware preselection is armed only for an interactive run that
-    # named no task choice of its own; the only other selection setup makes is
-    # the desktop shortcut the user already asked for (see
-    # test_windows_installer_desktop_shortcut.py).
+    # named no task choice of its own.
     init = _body(script, "procedure InitializeWizard();")
     assert "WgLinkPreselectPending := False;" in init
     assert "WgLinkPreselectPending := not WizardSilent() and not TaskChoiceOnCommandLine();" in init
+    assert "if FusionDetected() then" in init
     assert "WizardSelectTasks(" not in init
-    assert script.count("WizardSelectTasks(WgLinkTaskName)") == 1
-    assert script.count("WizardSelectTasks(") == 2
+    assert script.count("WizardSelectTasks(WgLinkTaskName)") == 2
+    assert script.count("WizardSelectTasks(") == 3
+
+
+def test_silent_upgrade_selection_uses_current_ownership_validator(code: str) -> None:
+    selection = _body(code, "procedure SelectManagedWGLinkForSilentUpgrade();")
+    plain = _strip_comments_and_strings(selection)
+    assert "if not WizardSilent() or TaskChoiceOnCommandLine() then\n    exit;" in plain
+    assert "AddInsDirectory := WgLinkAddInsDirectory();" in selection
+    assert "if AddInsDirectory = '' then\n    exit;" in selection
+    guard = "if WgLinkManagedByThisInstall(WgLinkTarget(AddInsDirectory)) then"
+    assert guard in selection
+    assert selection.index(guard) < selection.index("WizardSelectTasks(WgLinkTaskName);")
+    assert "WgLinkHasMarker(" not in selection
+    ownership = _body(code, "function WgLinkManagedByThisInstall(Target: String): Boolean;")
+    assert " --print-managed-target --root " in ownership
+    assert "Result := ExitCode = 0" in ownership
+    step = _body(code, "procedure CurStepChanged(CurStep: TSetupStep);")
+    post = step.split("if CurStep = ssPostInstall then", 1)[1]
+    assert post.index("CommitProtectedReplace();") < post.index("SelectManagedWGLinkForSilentUpgrade();")
+    assert post.index("SelectManagedWGLinkForSilentUpgrade();") < post.index("if WizardIsTaskSelected(WgLinkTaskName) then")
+    assert code.count("SelectManagedWGLinkForSilentUpgrade();") == 2
+
+
+def test_windows_gates_cover_silent_fresh_managed_unmanaged_and_opt_out(gates: str) -> None:
+    fresh = gates.split('$freshSilent =', 1)[1].split('$p =', 1)[0]
+    assert '/TASKS=' not in fresh and 'Gate 20 ' in fresh
+    assert '-not (Test-Path (Join-Path $wglinkAddins "WGLink"))' in fresh
+    upgrade = gates.split('# --- Gate 12:', 1)[1].split('# --- Gate 13:', 1)[0]
+    assert '$optOutUpgrade = Start-SandboxedSetup' in upgrade and '"/TASKS=`"`""' in upgrade
+    assert '$beforeSilentUpgrade -eq $afterOptOutUpgrade' in upgrade
+    assert '$silentUpgrade = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART" -Wait' in upgrade
+    assert '-not (Test-Path $silentSentinel)' in upgrade and '$upgradedPinOk' in upgrade
+    developer = gates.split('# --- Gate 11:', 1)[1].split('# --- Gate 5:', 1)[0]
+    assert '$developerSilent = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART" -AddIns $developerAddins -Wait' in developer
+    assert '$developerTreeBefore -eq $developerTreeAfter' in developer and 'Gate 22 ' in developer
 
 
 def test_fusion_preselection_runs_on_the_first_interactive_tasks_page(script: str) -> None:
