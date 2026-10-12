@@ -697,8 +697,8 @@ def _refuse_imported_fem(
         )
         raise ImportedSolveRefusal(
             "fem_required",
-            f"The CAD return declares {declared}. Choose exterior-only to solve "
-            "without the FEM air, or wait for coupled FEM solving.",
+            f"The CAD return declares {declared}. Declare these volumes as FEM regions "
+            "in WGLink and send again, or choose exterior-only to solve without the FEM air.",
         )
     return evidence
 

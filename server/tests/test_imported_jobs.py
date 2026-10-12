@@ -1554,7 +1554,7 @@ def test_required_fem_volume_needs_exterior_only_override(tmp_path: Path, eviden
                 assert "FEM regions" in str(caught.value)
             if any(volume.get("required", True) for volume in evidence.get("fem_air_volumes", [])):
                 assert "required FEM air volumes" in str(caught.value)
-            assert "Choose exterior-only to solve without the FEM air, or wait for coupled FEM solving." in str(caught.value)
+            assert "Declare these volumes as FEM regions in WGLink and send again, or choose exterior-only to solve without the FEM air." in " ".join(str(caught.value).split())
             request = _request(ingest_id, exterior_only=True)
             assert await runtime.submit(request)
         finally:

@@ -338,9 +338,8 @@ def _imported_request_refusal(
     if not request.geometry.drive_channels and not coupled_regions:
         return "drive_source_coverage", "The return has no driven exterior source or FEM diaphragm"
     if not coupled_regions and any(c.exterior_transducer is not None for c in request.geometry.drive_channels):
-        backend_refusal = _imported_backend_refusal(request, record)
-        if backend_refusal:
-            return backend_refusal
+        # The engine choice is refused at submit and run (_imported_backend_refusal),
+        # never here: the planner applies this refusal to every engine's verdict.
         if not all(c.exterior_transducer is not None for c in request.geometry.drive_channels):
             return "exterior_transducer_mixed_channels", "Exterior-only transducer jobs require a model on every drive channel; mixed drives require FEM regions"
         if any(not c.source_ids for c in request.geometry.drive_channels):

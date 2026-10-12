@@ -104,7 +104,7 @@ export function importedSubmissionBlocker(
   if (state.needsIngest) return state.ingestStaleReason ?? 'Sizing or source selection changed. Re-ingest before solving.';
   if (requiredFem && femRegions.length === 0 && !state.exteriorOnly) {
     const declared = 'required FEM air volumes';
-    return `This return includes ${declared}. Choose exterior-only to solve without the FEM air, or wait for coupled FEM solving.`;
+    return `This return includes ${declared}. Declare these volumes as FEM regions in WGLink and send again, or choose exterior-only to solve without the FEM air.`;
   }
   if (rangeInvalid || listInvalid) return 'Enter a valid explicit frequency sweep.';
   if (!state.driveChannels.length) return 'At least one drive channel is required.';

@@ -1213,8 +1213,10 @@ def test_non_fem_driver_engine_refusal_is_preserved(engine, exterior_only, accur
             SolveRequest.model_validate(job.model_dump(mode="json"))
     else:
         validated = SolveRequest.model_validate(job.model_dump(mode="json"))
+        # Not a refusal every engine shares: the planner must keep BEAT CPU and
+        # Metal selectable, and the engine choice is refused at submit instead.
         refusal = _imported_request_refusal(validated, {})
-        assert refusal == ("exterior_transducer_engine_unsupported", message)
+        assert refusal is None or refusal[0] != "exterior_transducer_engine_unsupported"
         import asyncio
         from server.jobs.runtime import ImportedSolveRefusal, resolve_imported_submission
         class Registry:
@@ -1222,3 +1224,41 @@ def test_non_fem_driver_engine_refusal_is_preserved(engine, exterior_only, accur
                 pytest.fail("non-FEM Auto drivers must refuse before accuracy resolves the engine")
         with pytest.raises(ImportedSolveRefusal, match=message):
             asyncio.run(resolve_imported_submission(validated, Registry(), imported_record={}))
+
+
+def test_planner_keeps_beat_cpu_and_metal_selectable_for_auto_exterior_drivers(monkeypatch, tmp_path):
+    """A non-FEM driver job on Auto is refused at submit, but the selector must
+    still offer the engines the refusal names (review: selector lock)."""
+    import asyncio
+    from server.engines.registry import EngineInfo
+    from server.jobs.models import DriveChannel
+    from server.jobs.runtime import plan_imported_submission
+    from server.tests.test_fem_electrodynamic import driver
+    from server.tests.test_imported_beat import MESH
+    from server.tests.test_imported_jobs import _record, _request
+
+    path = tmp_path / "exterior.msh"
+    path.write_text(MESH)
+    record = _record(path)
+    record["symmetry"] = {"applied": {"cut_planes": [], "quadrants": 1234}}
+    infos = [EngineInfo(name=name, version=None, available=True, reason="fixture", geometry_sources=("imported",),
+                        imported_features=("exterior-transducers",), symmetry_domains=("full",))
+             for name in ("beat-metal", "beat-cpu")]
+
+    class Registry:
+        async def capabilities(self):
+            return infos
+
+        async def get_engine(self, name):
+            return SimpleNamespace(name=name)
+
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = "auto"
+    request.geometry.drive_channels = [DriveChannel(id="left", source_ids=["source-a", "source-b", "source-c"],
+                                                    exterior_transducer=driver(), motion="axial")]
+    plan = asyncio.run(plan_imported_submission(
+        request, Registry(), imported_record=record, imported_msh_text=MESH,
+        symmetry_metadata={"resolved_quadrants": 1234}))
+    verdicts = {verdict["name"]: verdict for verdict in plan["engines"]}
+    assert verdicts["beat-cpu"]["solves"] is True
+    assert verdicts["beat-metal"]["solves"] is True
