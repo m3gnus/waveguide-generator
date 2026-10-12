@@ -240,7 +240,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   includeSampling?: boolean;
   mode?: WorkspaceMode;
   ingestRecord?: CadReturnIngestRecord | null;
-  /** The parameter panel already shows this block beside its IB numba notice. */
+  /** A caller that already renders driver guidance can suppress duplicates. */
   showOpenclGuidance?: boolean;
 } = {}) {
   const store = useSolveOptionsStore();

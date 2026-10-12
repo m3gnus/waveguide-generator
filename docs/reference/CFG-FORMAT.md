@@ -127,7 +127,7 @@ New editor designs use `Simulation.F1 = 50`, `Simulation.F2 = 16000`, and
 `ABEC.NumFrequencies` aliases retain stated values. An omitted F1 uses 50 Hz
 in both the editor and headless solve; no migration is applied for this default.
 The editor fills omitted end/count fields with 16 kHz/32, while headless
-requests retain their 20 kHz/24 fallback. Solve options can override the range,
+requests retain their 20 kHz/24 fallback. Frequency sweep can override the range,
 count, or supply an explicit frequency list.
 
 ## Directivity / ATH polar blocks
@@ -226,6 +226,9 @@ the file gave, and where to choose the setting instead:
 
 > `WG.Solve.Engine` states `'metal'`. Which backend runs a solve depends on the
 > host, so the solve ignores it. Choose the engine in Solve options.
+
+The current parametric panel calls this destination **Simulation → Solver**;
+the quoted note retains the server's wording.
 
 That note reaches the interface's open report, `POST /api/design/open`,
 `POST /api/design/import-report`, and `wg validate` in both its JSON and text

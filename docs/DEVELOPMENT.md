@@ -471,37 +471,37 @@ reads it directly.
 
 ### Live design dimensions (C2)
 
-The parametric Geometry panel displays accepted preview metadata directly:
+The parametric viewport displays accepted preview metadata directly, next to the
+live timing readout, alongside either parameter tab:
 `previewMetadata.dimensions_mm`: `mouth_opening` is `[W, H]`,
 `horn_overall` and optional `enclosure_overall` are `[W, H, D]` in millimetres.
-The card is labelled "Design size": canonical `resolve_geometry` design controls
-supply these values, displayed to one decimal place. The sampling method is
-`resolved-design-geometry`; these are not measured CAD or STEP bounds. Exported
-surfaces on morphed mouths can differ by the mesher's documented fitting tolerance.
+Canonical `resolve_geometry` design controls supply the values, displayed to one
+decimal place as Mouth W × H, Depth D, Overall W × H only when either differs from
+the mouth by more than 0.05 mm, and Enclosure W × H × D when present. One mm unit
+ends the readout. The header wraps and reserves room above banners and stats.
+The sampling method is `resolved-design-geometry`; these are not measured CAD or
+STEP bounds. Exported morphed mouths can differ by the mesher's fitting tolerance.
 Optional `dimensions_requested_mm.mouth_opening` supplies the requested morph
-target; the card shows requested and effective sizes together when they differ.
+target; the title tooltip shows requested and effective sizes when they differ.
 Each requested axis is formatted separately: zero displays as "auto" beside an
 explicit axis. Both implicit axes omit the requested pair.
-The card displays no revision text; revision and sequence checks still reject old responses.
-New/Open retains the previous viewport frame as a fallback while hiding its
-readouts, even when live updates are paused. An accepted replacement carries a
-client document identity so the viewport and card can replace a high revision
-from the old document with a lower revision from the new one. Matching error-only
-responses end the document wait with unavailable sizes. Retained readout
-ownership also tracks the client's connection generation:
-backend restarts may repeat a server epoch and reset request sequences. An
-accepted replacement connection without dimension keys clears the old readouts.
-Document observation while paused and document-scoped error filtering apply only
-to dimension metadata.
-With older meshers that omit dimension keys, shared errors, badges, stale fields
-and subscriber notifications follow the established behavior, and the card stays hidden.
-A coarse `dimensions_status: "pending"` frame shows the same document's previous
-canonical values as "Updating dimensions", or "updating" when no values exist.
-The card uses the viewport's lane-selection policy, so a late coarse frame
-cannot downgrade settled sizes for the same revision. `"current"` shows the
-values plainly; `"unavailable"` clears values and shows unavailable.
+The readout displays no revision text; revision and sequence checks still reject
+old responses. New/Open retains the previous viewport frame while hiding its
+readouts until an accepted frame belongs to the new client document identity.
+Matching error-only responses end the document wait with unavailable sizes.
+Ownership also tracks connection generation: backend restarts may repeat a server
+epoch and reset request sequences. A replacement connection without dimension keys
+clears the old readouts. Document observation while paused and document-scoped
+error filtering apply only to dimension metadata. Older meshers without dimension
+keys retain established errors, badges and notifications and hide the readout.
+A coarse `dimensions_status: "pending"` frame retains the same document's canonical
+values, dimmed with "Updating dimensions" in the title and accessible label. The
+viewport's lane-selection policy prevents late coarse frames from downgrading
+settled sizes. "current" displays values plainly; "unavailable" clears them.
 Invalid drafts and failed edits label retained values "Last valid preview".
-Older meshers without the additive metadata hide the card.
+Only mounted parameter panels are observed for invalid drafts; observer cleanup
+and reattachment follow panel lifecycle. A separate visually hidden live region
+announces freshness changes, without announcing every frame's dimension digits.
 Completed run summaries continue using that run's `mesh_stats.dimensions_m`.
 The fine producer metadata and a coarse pending example are captured in
 `shared/preview-fixtures/c2-dimensions-metadata.json` and

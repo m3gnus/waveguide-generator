@@ -32,6 +32,8 @@ export interface ParameterSectionDefinition {
   title: ParameterSection;
   tab: ParameterTab;
   description: string;
+  /** Complete presentation order, including custom-control slots. Legacy consumers ignore it. */
+  fieldOrder?: readonly string[];
   /** Section policy is deliberately data-aware rather than a mode list. CAD
    * is the first consumer; later sections can use the same gate when their
    * presence depends on actual design content. */
@@ -463,7 +465,7 @@ function importedValueIsVisible(field: ParameterDefinition, design: DesignDocume
     value && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined, document);
   return read(design) !== read(designForFamily(design.formula));
 }
-export const PARAMETER_REGISTRY: ParameterDefinition[] = LEGACY_PARAMETER_REGISTRY.map((field) => {
+const parametricFields: ParameterDefinition[] = LEGACY_PARAMETER_REGISTRY.map((field) => {
   let section = sectionMoves[field.section] ?? field.section;
   if (['common.s1', 'common.s2', 'source.shape', 'source.radius', 'source.curvature'].includes(field.id)) section = 'Throat';
   if (field.id.startsWith('cross_section.')) section = 'Cross-section';
@@ -473,13 +475,14 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = LEGACY_PARAMETER_REGIST
   if (importedOnlyIds.has(field.id)) section = 'Imported ATH values';
   return { ...field, section,
     ...(field.id === 'simulation.sim_type' ? { label: 'Mounting' } : {}),
+    ...(field.section === 'Frequency Sweep' ? { description: field.description?.replaceAll('Solve options', 'Frequency sweep') } : {}),
     ...(importedOnlyIds.has(field.id) ? { visibleWhen: (design: DesignDocument) => importedValueIsVisible(field, design) } : {}),
   };
 });
 
 export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[] = [
   { title: 'Profile', tab: 'geometry', description: 'Primary dimensions for the selected horn family. OSSE and R-OSSE labels carry their ATH formula symbol in parentheses.', visibleWhen: waveguideDefinitionOnly },
-  { title: 'Throat', tab: 'geometry', description: 'Throat stretch, extension, straight slot and source surface cap.', visibleWhen: waveguideDefinitionOnly },
+  { title: 'Throat', fieldOrder: ['common.s1', 'common.s2', 'common.throat_ext_angle', 'common.throat_ext_length', 'common.slot_length', 'common.length_mode', 'source.shape', 'source.radius', 'source.curvature'], tab: 'geometry', description: 'Throat stretch, extension, straight slot and source surface cap.', visibleWhen: waveguideDefinitionOnly },
   { title: 'Mouth', tab: 'geometry', description: CAD_PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === 'Morph Target')!.description, visibleWhen: waveguideDefinitionOnly },
   { title: 'Cross-section', tab: 'geometry', description: 'Base cross-section shape and OSSE guiding-curve controls.', visibleWhen: waveguideDefinitionOnly },
   { title: 'Mounting', tab: 'geometry', description: 'Bare shell, thickened waveguide, enclosure or infinite baffle, with wall and enclosure dimensions.', visibleWhen: waveguideDefinitionOnly },
@@ -487,11 +490,26 @@ export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[
   { title: 'Imported ATH values', tab: 'geometry', description: 'Imported geometry values and legacy fields preserved for file round-trip.', visibleWhen: parametricWorkspaceOnly },
   { title: 'Frequency sweep', tab: 'simulation', description: 'Frequency range, output points, spacing and adaptive sampling.', visibleWhen: parametricWorkspaceOnly },
   { title: 'Directivity map', tab: 'simulation', description: 'Polar planes and angular sampling used for directivity exports and plots.', visibleWhen: parametricWorkspaceOnly },
-  { title: 'Source excitation', tab: 'simulation', description: 'Source velocity convention and legacy amplitude.', visibleWhen: parametricWorkspaceOnly },
+  { title: 'Source excitation', fieldOrder: ['source.velocity_convention', 'source.velocity'], tab: 'simulation', description: 'Source velocity convention and legacy amplitude.', visibleWhen: parametricWorkspaceOnly },
   { title: 'Solver', tab: 'simulation', description: 'Solve accuracy, backend engine, ground plane and diagnostic logging.', visibleWhen: parametricWorkspaceOnly },
-  { title: 'Mesh', tab: 'simulation', description: CAD_PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === 'Surface sampling')!.description, visibleWhen: parametricWorkspaceOnly },
-  { title: 'Export', tab: 'simulation', description: 'Export placement and imported-file round-trip values; none change the preview or the solve.', visibleWhen: parametricWorkspaceOnly },
+  { title: 'Mesh', fieldOrder: ['control.solveDomain', 'mesh.angular_segments', 'mesh.length_segments', 'mesh.corner_segments', 'mesh.sampling_mode', 'mesh.z_map_points', 'mesh.throat_resolution', 'mesh.mouth_resolution', 'mesh.rear_resolution', 'enclosure.front_resolution', 'enclosure.back_resolution', 'mesh.aperture_resolution_scale', 'schema-gap.max_edge', 'mesh.max_triangles', 'mesh.allow_large_mesh', 'control.meshValidation', 'freeform.inflectionPolicy', 'native.source.size', 'native.mesh.throat', 'native.mesh.mouth', 'native.mesh.rear', 'native.mesh.budget', 'native.mesh.allow_large'], tab: 'simulation', description: CAD_PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === 'Surface sampling')!.description, visibleWhen: parametricWorkspaceOnly },
+  { title: 'Export', fieldOrder: ['mesh.vertical_offset', 'native.mesh.offset', 'mesh.quadrants', 'mesh.throat_segments', 'mesh.throat_slice_density', 'output.stl', 'output.msh', 'passthrough.abec', 'passthrough.report', 'passthrough.extra', 'passthrough.keys'], tab: 'simulation', description: 'Export placement and imported-file round-trip values; none change the preview or the solve.', visibleWhen: parametricWorkspaceOnly },
 ];
+
+/** Fail closed when an ordered section gains an undeclared field. */
+export function orderSectionFields(fields: readonly ParameterDefinition[], definition: ParameterSectionDefinition): ParameterDefinition[] {
+  const order = definition.fieldOrder;
+  if (!order) return [...fields];
+  for (const field of fields) {
+    if (!order.includes(field.id)) throw new Error(`${definition.title}: missing presentation order for ${field.id}`);
+  }
+  return [...fields].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+}
+
+// Only the parametric presentation is reordered. CAD and the catalog retain the
+// legacy registry, including its original help text and field order.
+export const PARAMETER_REGISTRY: ParameterDefinition[] = PARAMETER_SECTION_DEFINITIONS.flatMap((definition) =>
+  orderSectionFields(parametricFields.filter((field) => field.section === definition.title), definition));
 
 export function parameterSectionIsVisible(
   definition: ParameterSectionDefinition,

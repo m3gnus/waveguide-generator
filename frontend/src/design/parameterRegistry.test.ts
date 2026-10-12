@@ -11,6 +11,7 @@ import {
   fieldOptionsForBackend,
   fieldMatchesQuery,
   parameterSectionIsVisible,
+  orderSectionFields,
   traceEntryIsRegistered,
 } from './parameterRegistry';
 
@@ -50,6 +51,31 @@ describe('complete parameter registry', () => {
         expect(fieldAppliesToFamily(field, legacy), `${legacy}: ${field.id}`).toBe(true);
       }
     }
+  });
+
+  it('declares every Mesh field and refuses an undeclared field', () => {
+    const section = PARAMETER_SECTION_DEFINITIONS.find((item) => item.title === 'Mesh')!;
+    const fields = PARAMETER_REGISTRY.filter((field) => field.section === 'Mesh');
+    expect(section.fieldOrder).toBeDefined();
+    expect(new Set(section.fieldOrder).size).toBe(section.fieldOrder!.length);
+    expect(section.fieldOrder!.filter((id) => !id.startsWith('control.'))).toEqual(fields.map((field) => field.id));
+    expect(orderSectionFields([...fields].reverse(), section)).toEqual(fields);
+    const undeclared = { ...fields[0], id: 'mesh.new_field' };
+    expect(() => orderSectionFields([...fields, undeclared], section)).toThrow('missing presentation order for mesh.new_field');
+    const omitted = { ...section, fieldOrder: section.fieldOrder!.filter((id) => id !== fields[0].id) };
+    expect(() => orderSectionFields(fields, omitted)).toThrow(`missing presentation order for ${fields[0].id}`);
+  });
+
+  it('uses Frequency sweep help in parametric mode and preserves legacy catalog help', () => {
+    for (const id of ['simulation.f1', 'simulation.f2', 'simulation.num_frequencies']) {
+      const editor = PARAMETER_REGISTRY.find((field) => field.id === id)!;
+      const legacy = LEGACY_PARAMETER_REGISTRY.find((field) => field.id === id)!;
+      expect(editor.description).toContain('Frequency sweep');
+      expect(editor.description).not.toContain('Solve options');
+      expect(legacy.description).toContain('Solve options');
+    }
+    expect(PARAMETER_REGISTRY).toHaveLength(LEGACY_PARAMETER_REGISTRY.length);
+    expect(new Set(PARAMETER_REGISTRY.map((field) => field.id))).toEqual(new Set(LEGACY_PARAMETER_REGISTRY.map((field) => field.id)));
   });
 
   it('covers every current family-qualified traceability entry with no deferrals', () => {
@@ -102,12 +128,13 @@ describe('complete parameter registry', () => {
   });
 
   it('preserves all document fields, paths, bounds, defaults and family gates across the presentation moves', () => {
-    expect(PARAMETER_REGISTRY.map((field) => field.id)).toEqual(LEGACY_PARAMETER_REGISTRY.map((field) => field.id));
+    expect(PARAMETER_REGISTRY.map((field) => field.id).sort()).toEqual(LEGACY_PARAMETER_REGISTRY.map((field) => field.id).sort());
     for (const original of LEGACY_PARAMETER_REGISTRY) {
       const moved = PARAMETER_REGISTRY.find((field) => field.id === original.id)!;
-      const { section: _oldSection, label: _oldLabel, visibleWhen: oldVisibility, ...oldSemantics } = original;
-      const { section: _section, label: _label, visibleWhen: visibility, ...semantics } = moved;
+      const { section: _oldSection, label: _oldLabel, description: oldDescription, visibleWhen: oldVisibility, ...oldSemantics } = original;
+      const { section: _section, label: _label, description, visibleWhen: visibility, ...semantics } = moved;
       expect(semantics, original.id).toEqual(oldSemantics);
+      expect(description, original.id).toBe(original.section === 'Frequency Sweep' ? oldDescription?.replaceAll('Solve options', 'Frequency sweep') : oldDescription);
       if (moved.section !== 'Imported ATH values') expect(visibility, original.id).toBe(oldVisibility);
     }
   });
@@ -294,7 +321,7 @@ describe('complete parameter registry', () => {
     for (const family of ['R-OSSE', 'OSSE'] as const) {
       const scalars = PARAMETER_REGISTRY
         .filter((item) => (item.section === 'Profile' || ['common.s1', 'common.s2'].includes(item.id)) && item.families?.includes(family) && item.id !== 'common.scale' && !item.id.startsWith('cross_section.'));
-      expect(scalars.map((item) => item.symbol)).toEqual(['s1', 's2', ...TRACEABILITY_KEYS[family].filter((key) => key !== 'scale')]);
+      expect(scalars.map((item) => item.symbol)).toEqual([...TRACEABILITY_KEYS[family].filter((key) => key !== 'scale'), 's1', 's2']);
       expect(scalars.every((item) => item.symbol === item.legacyKey), family).toBe(true);
     }
   });

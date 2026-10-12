@@ -40,9 +40,9 @@ describe('live design dimensions', () => {
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   });
-  afterEach(() => { act(() => root.unmount()); host.remove(); queryClient.clear(); preview.listeners.clear(); });
-  function render(tab: 'geometry' | 'simulation' = 'geometry') {
-    act(() => root.render(<QueryClientProvider client={queryClient}><div className="wg2-viewport"><LiveDimensions /></div><ParamPanel tab={tab} /></QueryClientProvider>));
+  afterEach(() => { act(() => root.unmount()); host.remove(); queryClient.clear(); preview.listeners.clear(); vi.restoreAllMocks(); });
+  function render(tab: 'geometry' | 'simulation' = 'geometry', showPanel = true) {
+    act(() => root.render(<QueryClientProvider client={queryClient}><div className="wg2-viewport"><LiveDimensions /></div>{showPanel && <ParamPanel key={tab} tab={tab} />}</QueryClientProvider>));
   }
   function publish(patch: Partial<PreviewSnapshot>) {
     act(() => { preview.snapshot = { ...preview.snapshot, ...patch }; preview.listeners.forEach((listener) => listener()); });
@@ -140,6 +140,51 @@ describe('live design dimensions', () => {
     expect(input.getAttribute('aria-invalid')).toBe('true');
     expect(dimensions()?.getAttribute('title')).toContain('Last valid preview');
   });
+  it('observes only mounted parameter panels and reattaches after tab replacement', async () => {
+    const observe = vi.spyOn(MutationObserver.prototype, 'observe');
+    render(); valid();
+    const panel = host.querySelector('.param-panel')!;
+    expect(observe.mock.calls.map(([target]) => target)).toEqual([panel]);
+    const query = vi.spyOn(panel, 'querySelector');
+    await act(async () => {
+      const unrelated = document.createElement('input');
+      unrelated.setAttribute('aria-invalid', 'true');
+      host.querySelector('.wg2-viewport')!.append(unrelated);
+    });
+    expect(query).not.toHaveBeenCalled();
+    expect(dimensions()?.getAttribute('title')).toContain('Current preview');
+    await act(async () => panel.querySelector('input')!.setAttribute('aria-invalid', 'true'));
+    expect(dimensions()?.getAttribute('title')).toContain('Last valid preview');
+    render('simulation');
+    const nextPanel = host.querySelector('.param-panel')!;
+    expect(nextPanel).not.toBe(panel);
+    expect(observe.mock.calls.map(([target]) => target)).toEqual([panel, nextPanel]);
+    expect(dimensions()?.getAttribute('title')).toContain('Current preview');
+    await act(async () => nextPanel.querySelector('input')!.setAttribute('aria-invalid', 'true'));
+    expect(dimensions()?.getAttribute('title')).toContain('Last valid preview');
+    render('simulation', false);
+    expect(dimensions()?.getAttribute('title')).toContain('Current preview');
+  });
+
+  it('announces freshness changes without announcing per-frame digits', () => {
+    render(); valid();
+    const status = host.querySelector('[data-testid="dimensions-status"]')!;
+    expect(status.classList.contains('sr-only')).toBe(true);
+    expect(status.textContent).toBe('Current preview');
+    const observer = new MutationObserver(() => {});
+    observer.observe(status, { subtree: true, childList: true, characterData: true });
+    const data = structuredClone(metadata);
+    data.dimensions_mm!.mouth_opening = [500, 400];
+    valid(data);
+    expect(dimensions()?.textContent).toContain('Mouth 500.0 × 400.0');
+    expect(observer.takeRecords()).toHaveLength(0);
+    publish({ stale: true });
+    expect(status.textContent).toBe('Last valid preview');
+    expect(observer.takeRecords().length).toBeGreaterThan(0);
+    expect(status.textContent).not.toContain('500');
+    observer.disconnect();
+  });
+
   it('shows unavailable for rejected canonical geometry and malformed values', () => {
     render(); valid({ dimensions_mm: null, dimensions_error: 'Cannot fit geometry' });
     expect(dimensions()?.getAttribute('title')).toContain('unavailable');
@@ -161,7 +206,8 @@ describe('live design dimensions', () => {
     expect(dimensions()?.classList.contains('stale')).toBe(false);
     data.dimensions_mm.horn_overall = [421.7, 330, 176.5]; valid(data);
     expect(dimensions()?.textContent).toBe('Mouth 411.7 × 320.0 · Depth 176.5 · Overall 421.7 × 330.0 mm');
-    expect(dimensions()?.getAttribute('aria-live')).toBe('polite');
+    expect(dimensions()?.hasAttribute('aria-live')).toBe(false);
+    expect(host.querySelector('[data-testid="dimensions-status"]')?.getAttribute('aria-live')).toBe('polite');
   });
   it('dims pending retained values and keeps the status in accessible metadata only', () => {
     render(); valid();

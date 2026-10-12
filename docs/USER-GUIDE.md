@@ -1,6 +1,6 @@
 # Waveguide Generator user guide
 
-Status: current overview, verified against the application on 2026-10-11.
+Status: current overview, verified against the application on 2026-10-12.
 
 ## Launching
 
@@ -30,9 +30,33 @@ Edits update the live preview. Viewer controls change the display, not the desig
 parameters. A solve always receives a revisioned design snapshot, so later editor changes
 cannot alter an existing run.
 
+### Parameter tabs and size readout
+
+The parametric **Geometry** tab contains **Model Type**, **Profile**, **Throat**
+(including the source surface cap), **Mouth**, **Cross-section**, **Mounting**, and
+**Experimental**. **Imported ATH values** appears for imported or non-default
+legacy values. **Mounting** offers **Bare shell**, **Thickened waveguide
+(freestanding)**, **Waveguide in enclosure**, or **Infinite baffle**. Infinite
+baffle ignores the wall and enclosure while preserving them for switching back.
+
+The parametric **Simulation** tab contains **Frequency sweep**, **Directivity map**,
+**Source excitation**, **Solver**, **Mesh**, and **Export**. Frequency sweep includes
+point selection, spacing and adaptive sampling. Solver contains accuracy, backend,
+ground plane and logging. Mesh contains Solve domain, surface sampling, resolution
+and validation policy; density settings do not change the geometry. Export contains
+placement and file round-trip values and is collapsed by default.
+
+The viewport shows mouth width × height and horn depth beside the timing readout,
+with one **mm** unit at the end. It adds overall width × height when either differs
+from the mouth by more than 0.05 mm, and enclosure width × height × depth when present.
+The readout wraps as needed. Hover over a dimension for freshness and any requested
+versus effective morph size. Updating or last-valid sizes are dimmed; unavailable
+sizes are cleared. Freshness changes are announced to screen readers. The readout
+stays visible alongside either parametric tab.
+
 ### Experimental source editors
 
-The **Geometry** tab offers **Edit source contour…** and **Edit horn + woofer
+The **Geometry → Experimental** section offers **Edit source contour…** and **Edit horn + woofer
 assembly…**. Both are **Experimental**. In the source-contour editor, start from
 a flat, dome or cone shape, draw lines, or edit points and arcs in the drawing
 and table. Assign moving or rigid patches and their drive weights, then save a
@@ -57,13 +81,13 @@ options, then run the design. Automatic symmetry evaluates the actual geometry a
 uses the smallest valid domain. The stored job records the requested and resolved
 choices without rewriting the design file.
 
-**Solve options** disables controls the selected or automatically resolved engine
+**Simulation → Solver** disables controls the selected or automatically resolved engine
 cannot use and explains why. Check those reasons after changing engines or
-simulation type. The **Simulation Summary** records the engine that actually ran,
+Mounting. The **Simulation Summary** records the engine that actually ran,
 the requested engine when it differs, routing and any fallback reason. BEAT runs
 also show their provider, package version and precision when those were recorded.
 
-**Adaptive frequency sampling** in Solve options is **Experimental** and available
+**Adaptive frequency sampling** in **Simulation → Frequency sweep** is **Experimental** and available
 only for BEAT, with at least 24 output frequencies, a free-standing
 solve and the ground plane off. It solves selected frequencies and interpolates
 others, retaining the requested output grid and adding coverage solves as needed.
@@ -233,7 +257,7 @@ This requires an internet connection and can take several minutes. Offline
 users need connectivity once to complete preparation; later launches reuse the
 prepared runtime without downloading it again. If preparation fails (for
 example because you were offline), WG does not retry it automatically on later
-launches. In **Solve options**, beside **Advanced backend**, the selected BEAT
+launches. In **Simulation → Solver**, beside **Advanced backend**, the selected BEAT
 runtime and runtimes that can prepare, are preparing or have failed show their
 state and a readable reason. Click **Prepare** for an
 unprepared or stale runtime, or **Retry** after a failure, once you are online.
@@ -361,7 +385,7 @@ CPU-OpenCL-first rule. If no CPU device passes, the numba fallback remains
 available and the IB selector shows the “correct but slow” notice. Imported
 CAD still requires a compute-qualified CPU OpenCL device.
 
-The **ground plane** in Solve options is a different boundary, not another name
+The **ground plane** in **Simulation → Solver** is a different boundary, not another name
 for the baffle, and the difference matters because picking the wrong one still
 returns a believable result. An infinite baffle lets the mouth into an
 unbounded rigid wall level with the mouth and removes every cabinet edge. A

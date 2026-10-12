@@ -211,6 +211,20 @@ describe('solver-backend parameter gating', () => {
     expect(block.textContent).toContain(guidance.notices.infinite_baffle_numba);
   });
 
+  it.each(['freestanding', 'infinite-baffle'])('keeps OpenCL guidance in Simulation with an IB numba plan (%s)', async (simType) => {
+    useDesignStore.getState().updateValue('simulation.sim_type', simType);
+    const payload = capabilities(false);
+    payload.engines[1].assembly_backend = 'numba';
+    payload.engines[1].opencl_unavailable_reason = 'no_device';
+    await mount(payload);
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><ParamPanel tab="simulation" /></QueryClientProvider>));
+    expect(host.querySelector('[data-section="Mounting"]')).toBeNull();
+    const block = host.querySelector('[data-section="Solver"] .opencl-guidance')!;
+    expect(block).not.toBeNull();
+    expect(block.textContent).toContain(guidance.platforms.windows.summary);
+    expect(block.textContent).toContain(guidance.reasons.no_device);
+  });
+
   it.each(['opencl', null] as const)('omits the notice for a BEMPP backend of %s', async (backend) => {
     const payload = capabilities(false);
     payload.engines[1].assembly_backend = backend;

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { previewSocket, type WebSocketLike } from './previewSocket';
 import { selectPreferredFrame } from '../viewport/lodPolicy';
+import { registerParameterPanel } from '../design/parameterPanelValidity';
 import { LiveDimensions } from '../design/LiveDimensions';
 
 class Socket implements WebSocketLike {
@@ -38,7 +39,12 @@ describe('document-scoped design size regressions',()=>{
     expect(dimensions()?.classList.contains('stale')).toBe(state!=='Current preview');
     expect(dimensions()?.textContent).not.toContain(state);
   }
-  function render(){act(()=>root.render(createElement('div',{className:'param-panel'},createElement('input',{'aria-invalid':false}),createElement(LiveDimensions))))}
+  function render() {
+    act(() => root.render(createElement('div', null,
+      createElement('div', { className: 'param-panel', ref: registerParameterPanel },
+        createElement('input', { 'aria-invalid': false })),
+      createElement(LiveDimensions))));
+  }
   function msg(data:unknown,index=sockets.length-1){act(()=>sockets[index].message(data))}
   function request(){return JSON.parse(sockets.at(-1)!.sent.at(-1)!)}
   function answer(metadata:unknown,override:Record<string,unknown>={}){const r=request();msg(frame({epoch:r.epoch,seq:r.seq,designRevision:r.designRevision,lod:r.lod,previewMetadata:metadata,...override}))}
@@ -139,7 +145,7 @@ describe('document-scoped design size regressions',()=>{
     const old=manager.getSnapshot().frame;act(()=>resetDesignStore());expect(manager.getSnapshot().frame).toBe(old);expect(dimensions()).toBeNull();
     answer(PENDING);expect(manager.getSnapshot().frame).not.toBe(old);expectState('Updating dimensions');expect(host.textContent).not.toContain('111.0');
   });
-  it('mounting card during document replacement still observes invalid drafts',async()=>{
+  it('mounting the readout during document replacement still observes invalid drafts',async()=>{
     act(()=>root.render(null));act(()=>resetDesignStore());render();answer(NEW);
     await act(async()=>host.querySelector('input')!.setAttribute('aria-invalid','true'));
     expectState('Last valid preview');

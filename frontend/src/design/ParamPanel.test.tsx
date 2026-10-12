@@ -1,3 +1,4 @@
+import { PARAMETER_REGISTRY, PARAMETER_SECTION_DEFINITIONS, fieldIsVisible } from './parameterRegistry';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -1378,6 +1379,42 @@ describe('ParamPanel inventory UX', () => {
     expect(useDesignStore.getState().design.enclosure.depth).toBe(0);
   });
 
+  it.each(['bare', 'freestanding', 'enclosure'])('preserves an omitted SimType when choosing %s', (mode) => {
+    const wire = serializeDesign(designForFamily('OSSE'));
+    const imported = hydrateDesignDocument({ ...wire, simulation: { ...wire.simulation as object, sim_type: null } });
+    expect(imported._absent).toContain('simulation.sim_type');
+    act(() => useDesignStore.getState().loadDesign(imported));
+    const select = host.querySelector<HTMLSelectElement>('#outer-body-mode')!;
+    act(() => { select.value = mode; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(useDesignStore.getState().design.simulation.sim_type).toBe('freestanding');
+    expect(useDesignStore.getState().design._absent).toContain('simulation.sim_type');
+    expect((serializeDesign(useDesignStore.getState().design).simulation as Record<string, unknown>).sim_type).toBeNull();
+    act(() => { select.value = 'infinite-baffle'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    act(() => { select.value = mode; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(useDesignStore.getState().design._absent ?? []).not.toContain('simulation.sim_type');
+    expect((serializeDesign(useDesignStore.getState().design).simulation as Record<string, unknown>).sim_type).toBe('freestanding');
+  });
+
+  it.each(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES] as const)('renders every visible Mesh field in declared order for %s', (family) => {
+    const design = designForFamily(family);
+    design.mesh.sampling_mode = 'zmap';
+    design.enclosure.depth = 120;
+    design.simulation.sim_type = 'infinite-baffle';
+    act(() => {
+      useDesignStore.getState().loadDesign(design);
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const loaded = useDesignStore.getState().design;
+    const visible = PARAMETER_REGISTRY.filter((field) => field.section === 'Mesh' && fieldIsVisible(field, loaded));
+    const definition = PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === 'Mesh')!;
+    for (const field of visible) expect(definition.fieldOrder, field.id).toContain(field.id);
+    const expected = definition.fieldOrder!.filter((id) => id.startsWith('control.') || visible.some((field) => field.id === id));
+    const mesh = host.querySelector('[data-section="Mesh"]')!;
+    const rendered = [...mesh.querySelectorAll<HTMLElement>('[data-parameter-id], #solve-symmetry, #mesh-validation-mode')]
+      .map((node) => node.dataset.parameterId ?? (node.id === 'solve-symmetry' ? 'control.solveDomain' : 'control.meshValidation'));
+    expect(rendered).toEqual(expected);
+  });
+
   it('uses Mounting for all four choices, preserves the body under infinite baffle and restores it', () => {
     const choose = (value: string) => act(() => {
       const select = host.querySelector<HTMLSelectElement>('#outer-body-mode')!;
@@ -1415,6 +1452,9 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelectorAll('[data-parameter-id="simulation.sim_type"] select')).toHaveLength(1);
     expect(host.textContent).not.toContain('Resolved mode');
     expect(useDesignStore.getState().design.enclosure.depth).toBe(210);
+    const mounting = host.querySelector('[data-parameter-id="simulation.sim_type"]')!;
+    expect(mounting.querySelector('.section-note')?.textContent).toBe('Infinite baffle ignores the wall and enclosure; they are kept for when you switch back.');
+    expect(host.querySelector('[data-parameter-id="enclosure.depth"] input')?.hasAttribute('disabled')).toBe(false);
   });
 
   it('keeps Experimental and Export collapsed by default, with normal labelled launcher rows', () => {

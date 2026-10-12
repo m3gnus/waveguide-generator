@@ -81,6 +81,18 @@ describe('ParamPanel preview field errors', () => {
     expect(row.textContent).not.toContain('Increase morphCorner to at least 15 mm.');
   });
 
+  it('renders qualified SimType preview errors inside Mounting and clears them after an edit', () => {
+    render();
+    publish({ 'design.root.simulation.sim_type': 'Choose a supported mounting.' });
+    const mounting = host.querySelector('[data-parameter-id="simulation.sim_type"]')!;
+    expect(mounting.querySelector('[role="alert"]')?.textContent).toBe('Choose a supported mounting.');
+    const select = mounting.querySelector<HTMLSelectElement>('select')!;
+    expect(select.getAttribute('aria-invalid')).toBe('true');
+    act(() => { select.value = 'bare'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(mounting.querySelector('[role="alert"]')).toBeNull();
+    expect(select.hasAttribute('aria-invalid')).toBe(false);
+  });
+
   it('matches schema-qualified paths without attaching unknown keys to a row', () => {
     render();
     publish({ 'design.root.morph.corner_radius': 'Qualified detail', future_field: 'Global detail' });

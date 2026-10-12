@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useState, useSyncExternalStore } from 'react';
+import { parameterPanelValidity } from './parameterPanelValidity';
+import { Fragment, useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { currentDocumentLoad, useDesignStore } from '../stores/design';
@@ -22,24 +23,13 @@ export function LiveDimensions() {
   const formula = useDesignStore((state) => state.design.formula);
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
-  const [invalidDraft, setInvalidDraft] = useState(false);
+  const invalidDraft = useSyncExternalStore(parameterPanelValidity.subscribe, parameterPanelValidity.getSnapshot, parameterPanelValidity.getSnapshot);
   const frame = preview.dimensionsFrame ?? preview.frame;
   const metadata = frame?.header.previewMetadata;
   const supported = metadata !== undefined && 'dimensions_mm' in metadata;
   const ownsDocument = frame?.documentLoad === undefined || frame.documentLoad === currentDocumentLoad();
   const visible = supported && !preview.awaitingDocumentFrame
     && (ownsDocument || preview.dimensionsUnavailable);
-
-  // NumberField keeps rejected drafts outside the design store. Observe its
-  // public validity state so dimensions cannot look current beside an invalid
-  // uncommitted input (including fields in the FREEFORM editors).
-  useEffect(() => {
-    const update = () => setInvalidDraft(Boolean(document.querySelector('.param-panel [aria-invalid="true"]')));
-    const observer = new MutationObserver(update);
-    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-invalid'] });
-    update();
-    return () => observer.disconnect();
-  }, [visible]);
 
   // After New/Open the retained frame is the previous document's: show nothing
   // until this document has a frame of its own.
@@ -71,9 +61,9 @@ export function LiveDimensions() {
   const morphDetail = mouth && requested && requested !== `${mouth} mm`
     ? `Mouth requested ${requested}, effective ${mouth} mm.` : '';
   const title = [state, morphDetail].filter(Boolean).join('. ');
-  return <span className={`viewport-dimensions${!current || !content ? ' stale' : ''}`}
-    data-testid="design-dimensions" title={title} aria-live="polite"
+  return <><span className={`viewport-dimensions${!current || !content ? ' stale' : ''}`}
+    data-testid="design-dimensions" title={title}
     aria-label={`Design dimensions. ${content ? `${content} mm. ` : ''}${title}`}>
     {content && <>{parts.filter(Boolean).map((part, index) => <Fragment key={index}>{index > 0 && ' · '}<span>{part}</span></Fragment>)} mm</>}
-  </span>;
+  </span><span className="sr-only" data-testid="dimensions-status" aria-live="polite" aria-atomic="true">{state}</span></>;
 }

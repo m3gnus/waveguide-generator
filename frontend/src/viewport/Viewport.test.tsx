@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -701,9 +702,9 @@ describe('Viewport geometry warnings', () => {
   let root: Root;
   const savedError = previewSnapshot.error;
 
-  const render = (warnings: string[] | undefined, { error = null as string | null } = {}) => {
+  const render = (warnings: string[] | undefined, { error = null as string | null, dimensions = false } = {}) => {
     previewSnapshot.error = error;
-    frame.header.previewMetadata = warnings ? { warnings } : undefined;
+    frame.header.previewMetadata = warnings ? { warnings, ...(dimensions ? { dimensions_mm: { mouth_opening: [411.7, 320], horn_overall: [421.7, 330, 176.5], enclosure_overall: [500, 400, 200] } } : {}) } : undefined;
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -746,6 +747,58 @@ describe('Viewport geometry warnings', () => {
     expect(warning?.open).toBe(true);
     expect(warning?.textContent).toContain('guiding curve unreachable');
     expect(warning?.textContent).toContain('581.3 mm instead of the requested 500.0 mm');
+  });
+
+  it('anchors wrapped dimensions in the timing header, separately from warnings, errors and stats', () => {
+    render([UNREACHABLE], { error: 'Invalid draft', dimensions: true });
+    const dimensions = host.querySelector('[data-testid="design-dimensions"]')!;
+    const header = dimensions.closest('.viewport-header')!;
+    expect(dimensions.closest('.viewport-live')).not.toBeNull();
+    expect(header).not.toBeNull();
+    expect(dimensions.textContent).toContain('Enclosure 500.0 × 400.0 × 200.0');
+    for (const selector of ['.viewport-warning', '.viewport-error-banner']) {
+      const banner = host.querySelector(selector)!;
+      expect(banner).not.toBeNull();
+      expect(header.contains(banner)).toBe(false);
+    }
+    const css = new TextDecoder().decode(readFileSync('src/viewport/viewport.css'));
+    const rule = css.match(/\.viewport-dimensions \{([^}]+)\}/)![1];
+    expect(rule).toContain('width: max-content');
+    expect(rule).toContain('max-width: 100%');
+    expect(rule).toContain('pointer-events: none');
+    expect(rule).not.toMatch(/position: absolute|top:|right:/);
+    expect(css).toContain('top: calc(var(--viewport-header-height, 34px) + 9px)');
+    expect(css).toContain('.parametric-viewport .wg2-stats { top: calc(var(--viewport-header-height, 34px) + 18px)');
+  });
+
+  it('moves the HUD below the measured header when dimensions wrap', () => {
+    let resize: () => void = () => {};
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resize = callback; }
+      observe = observe;
+      disconnect = disconnect;
+    });
+    try {
+      render([UNREACHABLE], { dimensions: true });
+      const header = host.querySelector<HTMLElement>('.viewport-header')!;
+      const viewport = host.querySelector<HTMLElement>('.wg2-viewport')!;
+      expect(observe).toHaveBeenCalledWith(header);
+      const bounds = vi.spyOn(header, 'getBoundingClientRect');
+      bounds.mockReturnValue(new DOMRect(0, 0, 600, 86));
+      act(() => resize());
+      expect(viewport.style.getPropertyValue('--viewport-header-height')).toBe('86px');
+      bounds.mockReturnValue(new DOMRect(0, 0, 1200, 34));
+      act(() => resize());
+      expect(viewport.style.getPropertyValue('--viewport-header-height')).toBe('34px');
+      act(() => workspaceModeStore.setMode('cad'));
+      expect(disconnect).toHaveBeenCalledOnce();
+      expect(viewport.style.getPropertyValue('--viewport-header-height')).toBe('');
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('groups all geometry warnings under one compact indicator', () => {

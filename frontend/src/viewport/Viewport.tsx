@@ -298,7 +298,7 @@ export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
     case 'size_cap_exceeded': return 'Field plane unavailable — reduce the mesh or sweep size, then re-solve';
     case 'trace_output_missing': return 'Field plane unavailable — the solver returned no field traces; re-solve the design';
     case 'unsupported_axisymmetric_formulation': return 'This historical Axisymmetric result has no field-plane traces. Re-solve with a field-plane-capable configuration.';
-    case 'unsupported_coupled_infinite_baffle': return 'Field plane unavailable — switch Simulation type to Free-standing and re-solve with Metal or BEMPP';
+    case 'unsupported_coupled_infinite_baffle': return 'Field plane unavailable — set Mounting to Bare shell, Thickened waveguide (freestanding), or Waveguide in enclosure and re-solve with Metal or BEMPP';
     case 'unsupported_per_band_mesh_ladder': return 'Field plane unavailable — this run used multiple per-band meshes. Load its design, enable Keep field plane data, and submit a new solve from the UI';
     case 'unsupported_ground_plane': return 'Field plane unavailable — the field carries no ground image; turn the ground plane off and re-solve. Polar and impedance results do include the ground';
     case 'unsupported_solve_mode': return 'Field plane unavailable — use a supported full-3D solve';
@@ -357,6 +357,18 @@ export function refitsCamera(
   if (previous?.source === 'cad' && next?.source === 'cad'
     && previous.ingestId !== null && previous.ingestId === next.ingestId) return false;
   return true;
+}
+
+function trackHeaderHeight(header: HTMLDivElement | null) {
+  if (!header || typeof ResizeObserver === 'undefined') return;
+  const update = () => header.parentElement?.style.setProperty('--viewport-header-height', `${header.getBoundingClientRect().height}px`);
+  const observer = new ResizeObserver(update);
+  observer.observe(header);
+  update();
+  return () => {
+    observer.disconnect();
+    header.parentElement?.style.removeProperty('--viewport-header-height');
+  };
 }
 
 export function Viewport() {
@@ -963,7 +975,7 @@ export function Viewport() {
     if (fineRequestTimer.current) clearTimeout(fineRequestTimer.current);
   }, []);
 
-  return <div className="viewport-panel wg2-viewport">
+  return <div className={`viewport-panel wg2-viewport${workspaceMode === 'parametric' ? ' parametric-viewport' : ''}`}>
     {activeScene && hasSurfaces && webgl && <ViewportCanvas
       scene={activeScene}
       sceneMarker={sceneMarker}
@@ -983,38 +995,40 @@ export function Viewport() {
       onCameraDirection={setCameraDirection}
     />}
 
-    <div className="viewport-title">
-      <b>{importedMesh?.source === 'solver'
-        ? designName || 'Untitled design'
-        : importedMesh?.name ?? (workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
-      <span>{importedMesh
-        ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
-        : workspaceMode === 'cad' ? (cadWorkspaceView.ingesting && cadBundleReadable ? `Preparing ${cadName}…` : cadWorkspaceView.ingestError && cadBundleReadable ? 'CAD preparation failed' : 'No ingested CAD viewport mesh') : viewportSubtitle(design, nativeOpening)}</span>
-    </div>
-    {workspaceMode === 'parametric' && <LiveDimensions />}
-    <div className="viewport-live">
-      {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
-      {workspaceMode === 'parametric' && behindDesign && !importedMesh && <button
-        type="button"
-        className="viewport-refresh"
-        disabled={refreshRequestedAt !== null}
-        title={staleReason(preferences.liveUpdate, preview.connection, preview.error)}
-        aria-label={`Rebuild the preview. ${staleReason(preferences.liveUpdate, preview.connection, preview.error)}`}
-        onClick={refresh}
-      ><Icon name="reset"/>{preferences.liveUpdate ? 'Refresh' : 'Resume'}</button>}
-      {workspaceMode === 'parametric'
-        ? solverViewSelected
-          ? <span>{solverMeshState.building
-            ? 'building solver mesh…'
-            : importedMesh
-              ? solverMeshState.stale ? 'solver mesh out of date' : 'solver mesh current'
-              : 'solver mesh pending'}</span>
-          : <span>geometry <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> ms · on screen <b>{formatClientLatency(clientFrameMs)}</b></span>
-        : cadSolverViewSelected
-          ? <span>{cadSolverLoading
-            ? 'loading solve mesh…'
-            : cadSolverMesh ? 'ingested solve mesh' : 'solve mesh unavailable'}</span>
-          : <span>CAD Link workspace</span>}
+    <div className="viewport-header" ref={workspaceMode === 'parametric' ? trackHeaderHeight : undefined}>
+      <div className="viewport-title">
+        <b>{importedMesh?.source === 'solver'
+          ? designName || 'Untitled design'
+          : importedMesh?.name ?? (workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
+        <span>{importedMesh
+          ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
+          : workspaceMode === 'cad' ? (cadWorkspaceView.ingesting && cadBundleReadable ? `Preparing ${cadName}…` : cadWorkspaceView.ingestError && cadBundleReadable ? 'CAD preparation failed' : 'No ingested CAD viewport mesh') : viewportSubtitle(design, nativeOpening)}</span>
+      </div>
+      <div className="viewport-live">
+        {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
+        {workspaceMode === 'parametric' && behindDesign && !importedMesh && <button
+          type="button"
+          className="viewport-refresh"
+          disabled={refreshRequestedAt !== null}
+          title={staleReason(preferences.liveUpdate, preview.connection, preview.error)}
+          aria-label={`Rebuild the preview. ${staleReason(preferences.liveUpdate, preview.connection, preview.error)}`}
+          onClick={refresh}
+        ><Icon name="reset"/>{preferences.liveUpdate ? 'Refresh' : 'Resume'}</button>}
+        {workspaceMode === 'parametric'
+          ? solverViewSelected
+            ? <span>{solverMeshState.building
+              ? 'building solver mesh…'
+              : importedMesh
+                ? solverMeshState.stale ? 'solver mesh out of date' : 'solver mesh current'
+                : 'solver mesh pending'}</span>
+            : <span>geometry <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> ms · on screen <b>{formatClientLatency(clientFrameMs)}</b></span>
+          : cadSolverViewSelected
+            ? <span>{cadSolverLoading
+              ? 'loading solve mesh…'
+              : cadSolverMesh ? 'ingested solve mesh' : 'solve mesh unavailable'}</span>
+            : <span>CAD Link workspace</span>}
+        {workspaceMode === 'parametric' && <LiveDimensions />}
+      </div>
     </div>
 
     {!activeScene && <div className="viewport-empty" role="status" aria-live="polite">

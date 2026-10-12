@@ -229,7 +229,18 @@
   .source-role-legend > b { display: none; }
 }
 
-/* Below the timing readout, clear of the bottom axis gizmo and mode toolbar. */
-.viewport-dimensions { position: absolute; top: 40px; left: 12px; right: 12px; z-index: 3; text-align: right; color: var(--fg2); font: var(--text-micro)/1.6 var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: normal; pointer-events: auto; }
-.viewport-dimensions > span { display: inline-block; white-space: nowrap; }
+/* The parametric header grows with wrapped timing/dimensions. Its measured
+   height keeps warnings, banners and stats in their own band below it. */
+.parametric-viewport .viewport-header { position: relative; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; padding: 0 12px; background: var(--surface-panel); border-bottom: 1px solid var(--border-subtle); pointer-events: none; }
+.parametric-viewport .viewport-title { position: static; min-height: 34px; height: auto; flex-wrap: wrap; }
+.parametric-viewport .viewport-live { position: static; width: max-content; max-width: 100%; height: auto; min-height: 34px; display: flex; flex-wrap: wrap; padding: 6px 0; box-sizing: border-box; pointer-events: none; }
+.parametric-viewport .viewport-refresh { pointer-events: auto; }
+.parametric-viewport .viewport-warning,
+.parametric-viewport .viewport-error-banner,
+.parametric-viewport .viewport-connection-banner { top: calc(var(--viewport-header-height, 34px) + 9px); }
+.parametric-viewport .viewport-connection-banner.below-error { top: calc(var(--viewport-header-height, 34px) + 48px); }
+.parametric-viewport .wg2-stats { top: calc(var(--viewport-header-height, 34px) + 18px); }
+.viewport-dimensions { width: max-content; max-width: 100%; color: var(--fg2); font: var(--text-micro)/1.6 var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: normal; pointer-events: none; }
+/* Only the dimension text needs hover for its native title tooltip. */
+.viewport-dimensions > span { display: inline-block; white-space: nowrap; pointer-events: auto; }
 .viewport-dimensions.stale { opacity: .45; }
