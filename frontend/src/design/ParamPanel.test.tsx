@@ -1216,7 +1216,7 @@ describe('ParamPanel inventory UX', () => {
     }
   });
 
-  it('offers explicit exterior-only selection for a return with regions and no FEM air volumes', () => {
+  it('solves a return with FEM regions coupled, and still offers explicit exterior-only selection', () => {
     act(() => {
       setCadReady();
       useCadReturnStore.setState({
@@ -1229,7 +1229,9 @@ describe('ParamPanel inventory UX', () => {
     const toggle = host.querySelector<HTMLInputElement>('#cad-exterior-only');
     expect(toggle).not.toBeNull();
     expect(toggle!.checked).toBe(false);
-    expect(importedSubmissionBlocker()).toContain('FEM regions');
+    // Declared FEM regions solve coupled; they no longer block submission.
+    expect(importedSubmissionBlocker()).toBeNull();
+    expect(buildImportedSubmission().geometry.exterior_only).toBe(false);
     act(() => toggle!.click());
     expect(useCadReturnStore.getState().exteriorOnly).toBe(true);
     expect(importedSubmissionBlocker()).toBeNull();
