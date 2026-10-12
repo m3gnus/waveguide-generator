@@ -1426,6 +1426,7 @@ class JobItem(JobModel):
     persistence_warnings: list[str] = Field(default_factory=list)
     # Field-plane readiness distinguishes retained traces from jobs that must
     # be re-solved or use a solve mode unsupported by post-solve evaluation.
+    has_fem_field_artifact: bool = False
     field_plane_available: bool = False
     field_trace_bytes: int | None = None
     unavailable_reason: str | None = None

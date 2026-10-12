@@ -11,19 +11,21 @@ import {
   type FemFieldPayload,
 } from './femField';
 
-describe('parked FEM field view', () => {
-  it('has no production importer or mount while the frontend has no FEM capability', () => {
-    // F9 owns the result route and capability wiring. Until then no production
-    // entry point may reach the experimental view or its payload decoder.
+describe('FEM field entry points', () => {
+  it('keeps the view and decoder behind the result scene and API boundary', () => {
+    // F9 enables the selected-result scene. Other production components must
+    // still go through that scene and the validated result API.
     const sources = import.meta.glob('../**/*.{ts,tsx}', {
       query: '?raw', import: 'default', eager: true,
     });
     const consumers = Object.entries(sources).filter(([path]) => (
       !path.includes('.test.') && !path.endsWith('/FemFieldView.tsx') && !path.endsWith('/femField.ts')
+      && !path.endsWith('/FemFieldScene.tsx')
     ));
     expect(consumers.length).toBeGreaterThan(0);
     for (const [path, source] of consumers) {
-      expect(source, path).not.toMatch(/\bFemFieldView\b|['"][^'"]*\/femField['"]/);
+      const runtimeSource = String(source).replace(/^import type[^\n]*\n/gm, '');
+      expect(runtimeSource, path).not.toMatch(/\bFemFieldView\b|['"](?:\.\/|\.\.\/viewport\/)femField['"]/);
     }
   });
 });

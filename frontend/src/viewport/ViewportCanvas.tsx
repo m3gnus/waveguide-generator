@@ -27,6 +27,7 @@ export interface ZoomRequest {
 }
 
 interface ViewportCanvasProps {
+  children?: ReactNode;
   scene: FrameScene;
   sceneMarker: string;
   mode: DisplayMode;
@@ -701,7 +702,7 @@ function useRepaintWhenShown(scheduler: DemandRenderScheduler): void {
   useEffect(() => observeCanvasVisibility(gl.domElement, () => scheduler.schedule()), [gl, scheduler]);
 }
 
-function Scene({ scene, sceneMarker, mode, showEnclosure, clipMode, sectionAxis, invertFieldClip, cameraRequest, zoomRequest, cameraProjection, preferences, frameStartedAt, onClientFrame, theme, onCameraDirection }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
+function Scene({ children, scene, sceneMarker, mode, showEnclosure, clipMode, sectionAxis, invertFieldClip, cameraRequest, zoomRequest, cameraProjection, preferences, frameStartedAt, onClientFrame, theme, onCameraDirection }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
   const invalidate = useThree((state) => state.invalidate);
   const scheduler = useMemo(() => new DemandRenderScheduler(invalidate), [invalidate]);
   useFrame(() => scheduler.flush(), 0);
@@ -778,6 +779,7 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, clipMode, sectionAxis,
       colormap={fieldColormap}
       scheduler={scheduler}
     />
+    {children}
     <ObservationOverlay unitsPerMetre={scene.unitsPerMetre} scheduler={scheduler}/>
     {scene.surfaces.map((surface) => <SurfaceMesh
       key={surface.key}

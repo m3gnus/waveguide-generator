@@ -84,6 +84,7 @@ export interface JobItem extends JobNullableFields {
   persistence_warnings?: string[];
   has_pressure_basis_artifact?: boolean;
   pressure_basis_artifact_bytes?: number | null;
+  has_fem_field_artifact?: boolean;
   field_plane_available?: boolean;
   field_trace_bytes?: number | null;
   unavailable_reason?: string | null;
@@ -408,6 +409,7 @@ function isJobItem(value: unknown): value is JobItem {
   if (hasOwn(value, 'pressure_basis_artifact_bytes') && !(
     value.pressure_basis_artifact_bytes === null || isNonNegativeInteger(value.pressure_basis_artifact_bytes)
   )) return false;
+  if (hasOwn(value, 'has_fem_field_artifact') && typeof value.has_fem_field_artifact !== 'boolean') return false;
   if (hasOwn(value, 'field_plane_available') && typeof value.field_plane_available !== 'boolean') return false;
   if (hasOwn(value, 'field_trace_bytes') && !(
     value.field_trace_bytes === null || isNonNegativeInteger(value.field_trace_bytes)
@@ -583,7 +585,7 @@ function sanitizeMetadataChanges(value: unknown): Partial<JobItem> & JsonRecord 
     if (!(value.script_snapshot === null || (isRecord(value.script_snapshot) && isSafeJson(value.script_snapshot)))) return null;
     patch.script_snapshot = value.script_snapshot;
   }
-  for (const key of ['has_results', 'has_mesh_artifact'] as const) {
+  for (const key of ['has_results', 'has_mesh_artifact', 'has_fem_field_artifact'] as const) {
     if (!hasOwn(value, key)) continue;
     if (typeof value[key] !== 'boolean') return null;
     patch[key] = value[key];

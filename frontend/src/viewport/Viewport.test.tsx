@@ -17,6 +17,7 @@ import { parseMSH } from './mshParser';
 import { useFieldPlaneStore } from './fieldPlaneStore';
 import { useFieldPlaneProbeStore } from './fieldPlaneProbe';
 import meshFixture from './test-fixtures/tagged_sources-small.msh?raw';
+import { femFieldFixture } from './test-fixtures/femField';
 
 const frame: DecodedFrame = {
   header: {
@@ -105,7 +106,7 @@ vi.mock('../api/previewSocket', () => ({
   },
 }));
 
-import { fieldPlaneUnavailableTooltip, cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
+import { femFieldJob, fieldPlaneUnavailableTooltip, cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
 
 describe('CAD viewport empty-state copy', () => {
   it('reports automatic preparation progress with the selected bundle name', () => {
@@ -295,6 +296,91 @@ describe('Viewport preview errors', () => {
     expect(section?.getAttribute('aria-pressed')).toBe('false');
     expect(axis()).toBeNull();
     expect(section?.getAttribute('aria-label')).toContain('Section cut off');
+  });
+
+  it('mounts FEM controls and selects only the requested frequency/channel', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname.endsWith('/fem-field')) return new Response(JSON.stringify(femFieldFixture(
+        Number(url.searchParams.get('frequency') ?? 100), url.searchParams.get('channel') ?? 'front')));
+      return new Response('', { status: 404 });
+    });
+    act(() => {
+      compareSelection.setPrimary('fem');
+      publishJobs([{ ...completeJob('fem', false), has_fem_field_artifact: true }]);
+      useFieldPlaneStore.getState().enableFem('fem', fieldPlane);
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(host.querySelector('[aria-label="FEM field controls"]')).not.toBeNull();
+    expect(host.querySelector('.experimental-badge')?.getAttribute('title')).toContain('FEM region');
+    expect(host.querySelector('[aria-label="Field plane controls"]')).toBeNull();
+    const slider = host.querySelector<HTMLInputElement>('[aria-label="FEM field frequency"]')!;
+    act(() => { setInputValue(slider, '1'); slider.dispatchEvent(new Event('input', { bubbles: true })); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('frequency=1000'))).toBe(true);
+    expect(slider.getAttribute('aria-valuetext')).toBe('1000 Hz');
+    const channel = host.querySelector<HTMLSelectElement>('[aria-label="FEM field channel"]')!;
+    act(() => { channel.value = 'rear'; channel.dispatchEvent(new Event('change', { bubbles: true })); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('frequency=1000&channel=rear'))).toBe(true);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/field-plane'))).toBe(false);
+    const rendering = host.querySelector<HTMLSelectElement>('[aria-label="FEM field rendering"]')!;
+    act(() => { rendering.value = 'element'; rendering.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(rendering.value).toBe('element');
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Play FEM phase animation"]')!.click());
+    expect(useFieldPlaneStore.getState()).toMatchObject({ animating: true, displayMode: 'instantaneous' });
+    expect(host.querySelector('[aria-label="FEM phase animation speed"]')).not.toBeNull();
+
+    act(() => {
+      publishJobs([completeJob('ordinary', false)]);
+      compareSelection.setPrimary('ordinary');
+    });
+    expect(host.querySelector('[aria-label="FEM field controls"]')).toBeNull();
+  });
+
+  it.each(['no-marker', 'flag-off', 'running', 'stale', 'unselected'] as const)(
+    'does not load a FEM field for a %s result', async (reason) => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 404 }));
+      const job = { ...completeJob('fem', false), has_fem_field_artifact: true };
+      if (reason === 'no-marker') delete (job as Partial<JobItem>).has_fem_field_artifact;
+      if (reason === 'flag-off') job.has_fem_field_artifact = false;
+      if (reason === 'running') job.status = 'running';
+      if (reason === 'stale') job.script_snapshot = null;
+      act(() => {
+        publishJobs([job]);
+        compareSelection.setPrimary(reason === 'unselected' ? 'other' : 'fem');
+        useFieldPlaneStore.getState().enableFem('fem', fieldPlane);
+      });
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      expect(host.querySelector('[aria-label="FEM field controls"]')).toBeNull();
+      expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/fem-field'))).toBe(false);
+    },
+  );
+
+  it.each([undefined, false])('makes zero FEM-field requests for a non-FEM CAD result (marker %s)', async (marker) => {
+    const ingestId = 'wgi_non_fem_field';
+    const job: JobItem = {
+      ...completeJob('ordinary-cad', false),
+      config_summary: { geometry_type: 'imported' },
+      cad_source: { ingest_id: ingestId, archive_stem: null, design_id: null,
+        document_name: null, lineage_id: null, manifest_sha256: null, return_state_hash: null },
+      has_fem_field_artifact: marker,
+    };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 404 }));
+    act(() => {
+      useCadReturnStore.setState({ ingestRecord: { ingest_id: ingestId } as CadReturnIngestRecord });
+      importedMeshStore.setCad(createImportedMeshScene('CAD model', parseMSH(meshFixture), 'cad', ingestId));
+      workspaceModeStore.setMode('cad');
+      publishJobs([job]);
+      compareSelection.setPrimary(job.id);
+      useFieldPlaneStore.getState().enableFem(job.id, fieldPlane);
+    });
+    await act(async () => { await Promise.resolve(); });
+    // It is selected, complete and coherent; only the field advertisement is absent.
+    expect(femFieldJob([{ ...job, has_fem_field_artifact: true }], job.id)?.id).toBe(job.id);
+    expect(fetchSpy.mock.calls.filter(([url]) => String(url).includes('/fem-field'))).toHaveLength(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(host.querySelector('[aria-label="FEM field controls"]')).toBeNull();
   });
 
   it('shows overlay alone until enabled, then shows clip and invert', () => {

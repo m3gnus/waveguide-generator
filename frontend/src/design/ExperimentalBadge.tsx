@@ -7,6 +7,8 @@
  */
 export const EXPERIMENTAL_NOTE = 'Experimental: results are geometry-checked only and not yet acoustically qualified.';
 
-export function ExperimentalBadge() {
-  return <span className="experimental-badge" title={EXPERIMENTAL_NOTE}>Experimental</span>;
+export const FEM_EXPERIMENTAL_NOTE = 'Experimental: FEM region results are not yet acoustically qualified for general designs.';
+
+export function ExperimentalBadge({ note = EXPERIMENTAL_NOTE }: { note?: string } = {}) {
+  return <span className="experimental-badge" title={note} aria-label={note}>Experimental</span>;
 }

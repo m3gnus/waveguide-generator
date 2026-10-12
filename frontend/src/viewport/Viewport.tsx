@@ -47,6 +47,10 @@ import { useFieldPlaneProbeStore } from './fieldPlaneProbe';
 import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskStore';
 import { defaultFieldPlane, nearestFieldPlaneFrequencyIndex, useFieldPlaneStore } from './fieldPlaneStore';
 import { useObservationStore } from './observationStore';
+import { FemFieldControls } from './FemFieldControls';
+import { FemFieldScene } from './FemFieldScene';
+import type { FemFieldRendering } from './FemFieldView';
+import { useFemField } from './useFemField';
 import type { FieldPlaneResponseId } from '../api/fieldPlane';
 import type { ImportedMeshScene } from './importedMesh';
 import { importedMeshStore, type ImportedMeshShowing } from './importedMeshStore';
@@ -288,6 +292,16 @@ export function fieldPlaneJob(
     : null;
 }
 
+export function femFieldJob(
+  jobs: readonly JobItem[], selectedJobId: string | null, context: RunContext = runContext(),
+): JobItem | null {
+  const candidate = jobs.find((job) => job.id === selectedJobId && job.status === 'complete');
+  // The server projects this marker from task metadata AND WG2_FEM_REGIONS.
+  // Geometry with declared FEM regions alone does not advertise a field.
+  return candidate?.has_fem_field_artifact === true && runMatchesContext(candidate, context) === 'current'
+    ? candidate : null;
+}
+
 export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
   const completed = jobs.find((job) => job.status === 'complete');
   if (!completed) return 'Field plane unavailable — complete a full-3D solve first';
@@ -401,12 +415,19 @@ export function Viewport() {
     () => fieldPlaneJob(jobs, resultSelection.primary, coherenceContext),
     [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.mode, jobs, resultSelection.primary],
   );
+  const availableFemJob = useMemo(
+    () => femFieldJob(jobs, resultSelection.primary, coherenceContext),
+    [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.mode, jobs, resultSelection.primary],
+  );
+  const availablePlaneJob = availableFemJob ?? availableFieldJob;
   const observationVisible = useObservationStore((state) => state.visible);
   const observationBasis = useObservationStore((state) => state.basis);
   const observationSource = useObservationStore((state) => state.sourceLabel);
   const observationHovered = useObservationStore((state) => state.hovered);
   const polar = useSolveOptionsStore((state) => state.polar);
   const fieldEnabled = useFieldPlaneStore((state) => state.enabled);
+  const fieldSource = useFieldPlaneStore((state) => state.source);
+  const [femRendering, setFemRendering] = useState<FemFieldRendering>('smooth');
   const fieldJobId = useFieldPlaneStore((state) => state.jobId);
   const fieldStatus = useFieldPlaneStore((state) => state.status);
   const fieldError = useFieldPlaneStore((state) => state.error);
@@ -426,6 +447,8 @@ export function Viewport() {
   const fieldAnimating = useFieldPlaneStore((state) => state.animating);
   const fieldIsolines = useFieldPlaneStore((state) => state.isolines);
   const storedFieldWindow = useFieldPlaneStore((state) => state.windows[state.displayMode]);
+  const femActive = fieldEnabled && fieldSource === 'fem' && fieldJobId === availableFemJob?.id;
+  const femField = useFemField(femActive ? fieldJobId : null);
   const selectedRef = useRef<DecodedFrame | null>(null);
   const solveWasRunningOrQueued = useRef(solveRunningOrQueued);
   const latencyClock = useRef(new ClientLatencyClock());
@@ -682,8 +705,10 @@ export function Viewport() {
       useFieldPlaneStore.getState().disable();
       return;
     }
-    if (!availableFieldJob || !activeScene) return;
-    useFieldPlaneStore.getState().enable(availableFieldJob.id, defaultFieldPlane(activeScene));
+    if (!availablePlaneJob || !activeScene) return;
+    const store = useFieldPlaneStore.getState();
+    if (availableFemJob) store.enableFem(availableFemJob.id, defaultFieldPlane(activeScene));
+    else store.enable(availablePlaneJob.id, defaultFieldPlane(activeScene));
   };
 
   const applyFieldPlanePreset = (preset: 'h' | 'v' | 'mouth') => {
@@ -879,15 +904,18 @@ export function Viewport() {
   }, [design, solveSolverMode, solveSymmetry, solverViewSelected]);
 
   useEffect(() => {
-    if (availableFieldJob || !fieldEnabled) return;
+    if (availablePlaneJob || !fieldEnabled) return;
     useFieldPlaneStore.getState().reportUnavailable('re-solve to enable field planes');
-  }, [availableFieldJob, fieldEnabled]);
+  }, [availablePlaneJob, fieldEnabled]);
 
   useEffect(() => {
-    if (!fieldEnabled || !availableFieldJob) return;
-    if (!activeScene || fieldJobId === availableFieldJob.id) return;
-    useFieldPlaneStore.getState().selectJob(availableFieldJob.id, defaultFieldPlane(activeScene));
-  }, [activeScene, availableFieldJob, fieldEnabled, fieldJobId]);
+    if (!fieldEnabled || !availablePlaneJob || !activeScene) return;
+    const source = availableFemJob ? 'fem' : 'exterior';
+    if (fieldJobId === availablePlaneJob.id && fieldSource === source) return;
+    const store = useFieldPlaneStore.getState();
+    if (source === 'fem') store.enableFem(availablePlaneJob.id, defaultFieldPlane(activeScene));
+    else store.selectJob(availablePlaneJob.id, defaultFieldPlane(activeScene));
+  }, [activeScene, availablePlaneJob, availableFemJob, fieldEnabled, fieldJobId, fieldSource]);
 
   useEffect(() => {
     const wasRunningOrQueued = solveWasRunningOrQueued.current;
@@ -898,10 +926,10 @@ export function Viewport() {
   }, [solveRunningOrQueued]);
 
   useEffect(() => {
-    if (availableFieldJob && fieldEnabled && fieldPlane) return;
+    if (availablePlaneJob && fieldEnabled && fieldPlane) return;
     if (clipMode === 'field-plane') setClipMode('off');
-    if (!availableFieldJob && invertFieldClip) setInvertFieldClip(false);
-  }, [availableFieldJob, clipMode, fieldEnabled, fieldPlane, invertFieldClip]);
+    if (!availablePlaneJob && invertFieldClip) setInvertFieldClip(false);
+  }, [availablePlaneJob, clipMode, fieldEnabled, fieldPlane, invertFieldClip]);
 
   useEffect(() => {
     useFieldPlaneStore.getState().applyRenderingPreferences({
@@ -993,7 +1021,10 @@ export function Viewport() {
       theme={theme}
       onRenderFailure={setRenderFailure}
       onCameraDirection={setCameraDirection}
-    />}
+    >
+      {femActive && femField.field && <FemFieldScene field={femField.field} rendering={femRendering}
+        sequential={fieldColormap} unitsPerMetre={activeScene.unitsPerMetre}/>}
+    </ViewportCanvas>}
 
     <div className="viewport-header" ref={workspaceMode === 'parametric' ? trackHeaderHeight : undefined}>
       <div className="viewport-title">
@@ -1119,7 +1150,15 @@ export function Viewport() {
       </li>)}</ul>
     </div>}
 
-    {fieldEnabled && <div
+    {femActive && <FemFieldControls field={femField} rendering={femRendering} setRendering={setFemRendering} sequential={fieldColormap}>
+      <div className="field-plane-presets" aria-label="FEM field plane presets">
+        <button type="button" onClick={() => applyFieldPlanePreset('h')}>H-plane</button>
+        <button type="button" onClick={() => applyFieldPlanePreset('v')}>V-plane</button>
+        <button type="button" onClick={() => applyFieldPlanePreset('mouth')}>Mouth</button>
+      </div>
+      <FieldPlaneTransformInputs/>
+    </FemFieldControls>}
+    {fieldEnabled && fieldSource === 'exterior' && <div
       className="field-plane-legend"
       role="group"
       aria-label="Field plane controls"
@@ -1263,7 +1302,7 @@ export function Viewport() {
       </div>}
     </div>}
 
-    {fieldEnabled && <FieldPlaneProbeTooltip fieldMaxSplDb={fieldMaxSplDb}/>}
+    {fieldEnabled && fieldSource === 'exterior' && <FieldPlaneProbeTooltip fieldMaxSplDb={fieldMaxSplDb}/>}
 
     {observationVisible && observationBasis && <div className="observation-readout" role="status" aria-live="polite">
       <b>{observationHovered
@@ -1328,11 +1367,11 @@ export function Viewport() {
           onClick={() => useObservationStore.getState().toggle()}
         ><Icon name="microphone-arc"/></button>
       </div>}
-      {availableFieldJob && <div className="viewport-tool-group">
+      {availablePlaneJob && <div className="viewport-tool-group">
         <button
           type="button"
           className={fieldEnabled ? 'on' : ''}
-          title={!activeScene ? 'Field plane unavailable — waiting for viewport geometry' : 'Toggle acoustic field plane'}
+          title={!activeScene ? 'Field plane unavailable — waiting for viewport geometry' : availableFemJob ? 'Toggle FEM interior field' : 'Toggle acoustic field plane'}
           aria-label="Acoustic field plane overlay"
           aria-pressed={fieldEnabled}
           disabled={!fieldEnabled && !activeScene}

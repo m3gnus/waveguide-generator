@@ -57,6 +57,7 @@ from server.jobs.cad_intent import (
     intent_of,
     solve_again_intent,
 )
+from server.platform.feature_flags import fem_regions_enabled
 from server.jobs.design_availability import resolve_job_design
 from server.jobs.retention import MAX_RETAINED_RESULTS, RESULT_RETENTION_DAYS
 from server.jobs.models import (
@@ -4907,6 +4908,7 @@ class JobRuntime:
             "radiation_impedance_artifact_bytes": metadata.get(
                 "radiation_impedance_artifact_bytes"
             ),
+            "has_fem_field_artifact": bool(metadata.get("has_fem_field_artifact")) and fem_regions_enabled(),
             "field_plane_available": bool(metadata.get("field_plane_available")),
             "field_trace_bytes": metadata.get("field_trace_bytes"),
             "unavailable_reason": field_unavailable_reason,

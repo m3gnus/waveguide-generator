@@ -14,9 +14,12 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
+from server.jobs.fem_field import FemFieldCorrupt, FemFieldInvalidSelection
+from server.platform.feature_flags import fem_regions_enabled
 from server.jobs.events import CLOSE_ORIGIN_REJECTED, JobsProtocol
 from server.integration.contracts import ErrorEnvelope, error_envelope
 from server.jobs.models import (
@@ -145,6 +148,28 @@ class RadiationImpedancePresentation(BaseModel):
     apertures: list[RadiationImpedanceAperture]
     engineering_matrix: RadiationImpedanceMatrix
     in_phase_termination: RadiationImpedanceTermination
+
+
+class FemFieldSurface(BaseModel):
+    name: str
+    triangles: str
+
+
+class FemFieldPresentation(BaseModel):
+    schema_: Literal["wg-fem-field-v1"] = Field(alias="schema")
+    region_id: str
+    frequency_hz: float
+    points_mm: str
+    tetrahedra: str
+    surfaces: list[FemFieldSurface]
+    pressure_real: str
+    pressure_imag: str
+    frequencies_hz: list[float]
+    channel_ids: list[str]
+    channel_id: str
+    phasor_convention: Literal["exp(-i omega t)"]
+    drive_normalization: Literal["unit_acceleration_m_per_s2"]
+    experimental: Literal[True]
 
 
 class EngineSubstitution(BaseModel):
@@ -942,6 +967,36 @@ def create_jobs_router(
             media_type="text/plain",
             headers=headers,
         )
+
+    @router.get("/api/results/{job_id}/fem-field", response_model=FemFieldPresentation)
+    async def fem_field(
+        job_id: str,
+        frequency: float | None = Query(default=None, gt=0, allow_inf_nan=False),
+        channel: str | None = Query(default=None, min_length=1),
+    ) -> Response:
+        """Selected FEM basis pressure, little-endian float32/uint32 base64.
+
+        Frequency is in Hz; omitted selectors use the first retained entry.
+        Channels are raw Pa per unit acceleration, without system synthesis.
+        The view contains every FEM region, with rebased topology indices.
+        """
+        if not fem_regions_enabled():
+            raise HTTPException(status_code=404, detail="FEM fields are turned off")
+        row = await asyncio.to_thread(runtime.store.get_job_row, job_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if row["status"] != "complete":
+            raise HTTPException(status_code=404, detail="No completed FEM field for this job")
+        try:
+            payload = await asyncio.to_thread(runtime.store.load_fem_field, job_id, frequency, channel)
+        except FemFieldCorrupt as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except FemFieldInvalidSelection as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if payload is None:
+            raise HTTPException(status_code=404, detail="No retained FEM field for this job")
+        return StreamingResponse(_json_chunks(payload), media_type="application/json",
+                                 headers={"Cache-Control": "no-store"})
 
     @router.get("/api/radiation-impedance/{job_id}", response_model=None)
     async def radiation_impedance_artifact(job_id: str) -> Response:

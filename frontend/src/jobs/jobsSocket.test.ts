@@ -38,6 +38,20 @@ describe('jobs websocket state machine', () => {
   beforeEach(() => { vi.useFakeTimers(); compareSelection.clear(); provisionalResults.clear(); });
   afterEach(() => { provisionalResults.clear(); vi.useRealTimers(); });
 
+  it('accepts FEM artifact availability and removes it on a retention metadata event', () => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1,
+      jobs: [job({ status: 'complete', has_fem_field_artifact: true })] });
+    expect(manager.getSnapshot().jobs[0].has_fem_field_artifact).toBe(true);
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'job-1', type: 'metadata',
+      payload: { changed: { has_fem_field_artifact: false } } });
+    expect(manager.getSnapshot().jobs[0].has_fem_field_artifact).toBe(false);
+    manager.stop();
+  });
+
   it('routes live frequency deltas outside the jobs list and recovers a revision gap', async () => {
     const socket = new MockSocket();
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {

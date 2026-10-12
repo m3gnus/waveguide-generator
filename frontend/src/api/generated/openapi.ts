@@ -1703,6 +1703,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/results/{job_id}/fem-field": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fem Field
+         * @description Selected FEM basis pressure, little-endian float32/uint32 base64.
+         *
+         *     Frequency is in Hz; omitted selectors use the first retained entry.
+         *     Channels are raw Pa per unit acceleration, without system synthesis.
+         *     The view contains every FEM region, with rebased topology indices.
+         */
+        get: operations["fem_field_api_results__job_id__fem_field_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/results/{job_id}/field-plane": {
         parameters: {
             query?: never;
@@ -3637,6 +3661,56 @@ export interface components {
              */
             version?: 1;
         };
+        /** FemFieldPresentation */
+        FemFieldPresentation: {
+            /** Channel Id */
+            channel_id: string;
+            /** Channel Ids */
+            channel_ids: string[];
+            /**
+             * Drive Normalization
+             * @constant
+             */
+            drive_normalization: "unit_acceleration_m_per_s2";
+            /**
+             * Experimental
+             * @constant
+             */
+            experimental: true;
+            /** Frequencies Hz */
+            frequencies_hz: number[];
+            /** Frequency Hz */
+            frequency_hz: number;
+            /**
+             * Phasor Convention
+             * @constant
+             */
+            phasor_convention: "exp(-i omega t)";
+            /** Points Mm */
+            points_mm: string;
+            /** Pressure Imag */
+            pressure_imag: string;
+            /** Pressure Real */
+            pressure_real: string;
+            /** Region Id */
+            region_id: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "wg-fem-field-v1";
+            /** Surfaces */
+            surfaces: components["schemas"]["FemFieldSurface"][];
+            /** Tetrahedra */
+            tetrahedra: string;
+        };
+        /** FemFieldSurface */
+        FemFieldSurface: {
+            /** Name */
+            name: string;
+            /** Triangles */
+            triangles: string;
+        };
         /** FieldPlaneRequest */
         FieldPlaneRequest: {
             /** Frequency Index */
@@ -4180,6 +4254,11 @@ export interface components {
             field_plane_available?: boolean;
             /** Field Trace Bytes */
             field_trace_bytes?: number | null;
+            /**
+             * Has Fem Field Artifact
+             * @default false
+             */
+            has_fem_field_artifact?: boolean;
             /** Has Mesh Artifact */
             has_mesh_artifact: boolean;
             /**
@@ -4373,6 +4452,11 @@ export interface components {
             field_plane_available?: boolean;
             /** Field Trace Bytes */
             field_trace_bytes?: number | null;
+            /**
+             * Has Fem Field Artifact
+             * @default false
+             */
+            has_fem_field_artifact?: boolean;
             /** Has Mesh Artifact */
             has_mesh_artifact: boolean;
             /**
@@ -8805,6 +8889,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fem_field_api_results__job_id__fem_field_get: {
+        parameters: {
+            query?: {
+                frequency?: number | null;
+                channel?: string | null;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FemFieldPresentation"];
                 };
             };
             /** @description Validation Error */

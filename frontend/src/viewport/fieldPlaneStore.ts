@@ -40,6 +40,7 @@ export interface FieldPlaneRenderingPreferences {
 
 export interface FieldPlaneStore {
   enabled: boolean;
+  source: 'exterior' | 'fem';
   dragging: boolean;
   jobId: string | null;
   geometrySha256: string | null;
@@ -65,6 +66,7 @@ export interface FieldPlaneStore {
   isolines: boolean;
   windows: FieldPlaneWindows;
   enable: (jobId: string, defaultPlane: FieldPlaneSpec) => void;
+  enableFem: (jobId: string, defaultPlane: FieldPlaneSpec) => void;
   selectJob: (jobId: string, defaultPlane: FieldPlaneSpec) => void;
   disable: () => void;
   setFrequencyIndex: (frequencyIndex: number) => void;
@@ -548,7 +550,7 @@ export function createFieldPlaneStore(
     };
 
     const requestCurrentPlane = (current: FieldPlaneStore, plane: FieldPlaneSpec): void => {
-      if (!current.jobId) return;
+      if (!current.jobId || current.source === 'fem') return;
       const coarsened = current.dragging;
       const requestPlane = coarsened
         ? { ...clonePlane(plane), nx: DRAG_GRID_SIZE, ny: DRAG_GRID_SIZE }
@@ -580,6 +582,9 @@ export function createFieldPlaneStore(
       const plane = clonePlane(saved?.plane ?? suppliedDefault);
       set({
         enabled: true,
+        source: 'exterior',
+        displayMode: get().source === 'fem' ? preferenceStore.getSnapshot().fieldPlaneDisplayMode : get().displayMode,
+        animating: get().source !== 'fem' && get().animating,
         dragging: false,
         jobId,
         geometrySha256: cacheGeometrySha256,
@@ -627,6 +632,7 @@ export function createFieldPlaneStore(
 
     return {
       enabled: false,
+      source: 'exterior',
       dragging: false,
       jobId: null,
       geometrySha256: null,
@@ -652,9 +658,22 @@ export function createFieldPlaneStore(
       isolines: false,
       windows: initialFieldPlaneWindows(),
       enable: activate,
+      enableFem: (jobId, defaultPlane) => {
+        activationGeneration += 1;
+        cancelRequests();
+        displayedRequest = null;
+        set({
+          enabled: true, source: 'fem', dragging: false, jobId,
+          plane: clonePlane(defaultPlane), field: null,
+          geometrySha256: null, synthesisRevision: null,
+          frequenciesHz: [], frequencyStatus: null, frequencyIndex: 0,
+          responseId: 'system', memberResponses: [], status: 'ready', error: null,
+          lastErrorCode: null, lastSupersededBy: null, animating: false,
+        });
+      },
       selectJob: (jobId, suppliedDefault) => {
         const current = get();
-        if (current.enabled && current.jobId === jobId) return;
+        if (current.enabled && current.source === 'exterior' && current.jobId === jobId) return;
         activate(jobId, suppliedDefault);
       },
       disable: () => {
@@ -663,6 +682,8 @@ export function createFieldPlaneStore(
         displayedRequest = null;
         set({
           enabled: false,
+          source: 'exterior',
+          displayMode: get().source === 'fem' ? preferenceStore.getSnapshot().fieldPlaneDisplayMode : get().displayMode,
           dragging: false,
           jobId: null,
           geometrySha256: null,
@@ -762,7 +783,7 @@ export function createFieldPlaneStore(
       },
       resume: () => {
         const current = get();
-        if (!current.enabled || !current.jobId || !current.plane) return;
+        if (!current.enabled || !current.jobId || !current.plane || current.source === 'fem') return;
         if (!current.frequenciesHz.length) {
           activate(current.jobId, current.plane);
           return;
@@ -775,6 +796,8 @@ export function createFieldPlaneStore(
         displayedRequest = null;
         set({
           enabled: false,
+          source: 'exterior',
+          displayMode: get().source === 'fem' ? preferenceStore.getSnapshot().fieldPlaneDisplayMode : get().displayMode,
           dragging: false,
           jobId: null,
           geometrySha256: null,
@@ -842,7 +865,9 @@ export function createFieldPlaneStore(
         if (!current.enabled || (animating === current.animating && (!animating || current.displayMode === 'instantaneous'))) return;
         if (animating) {
           set({ animating: true, displayMode: 'instantaneous' });
-          if (current.displayMode !== 'instantaneous') {
+          // Playing an interior field must not change the saved exterior mode
+          // or schedule a viewer-settings upload for ordinary CAD results.
+          if (current.source === 'exterior' && current.displayMode !== 'instantaneous') {
             preferenceStore.update({ fieldPlaneDisplayMode: 'instantaneous' });
           }
           return;

@@ -66,6 +66,48 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe('field-plane state', () => {
+  it.each(['disable', 'unavailable', 'exterior'] as const)(
+    'keeps FEM phase playback local and restores the saved mode on %s', (exit) => {
+      const updatePreferences = vi.fn();
+      const store = createFieldPlaneStore({
+        fetchPlane: vi.fn(),
+        fetchResults: async () => ({ frequencies: [800] }),
+        preferences: {
+          getSnapshot: () => ({ ...DEFAULT_VIEWER_PREFERENCES, fieldPlaneDisplayMode: 'phase' }),
+          update: updatePreferences,
+        },
+      });
+      store.getState().enableFem('fem', plane);
+      store.getState().setAnimating(true);
+      expect(store.getState()).toMatchObject({ animating: true, displayMode: 'instantaneous' });
+      expect(updatePreferences).not.toHaveBeenCalled();
+      if (exit === 'disable') store.getState().disable();
+      else if (exit === 'unavailable') store.getState().reportUnavailable('no field');
+      else store.getState().enable('ordinary', plane);
+      expect(store.getState()).toMatchObject({ source: 'exterior', displayMode: 'phase', animating: false });
+    },
+  );
+
+  it('shares the plane and display state for FEM without exterior evaluation', async () => {
+    const fetchPlane = vi.fn();
+    const fetchResults = vi.fn();
+    const store = createFieldPlaneStore({ fetchPlane, fetchResults,
+      preferences: { getSnapshot: () => ({ ...DEFAULT_VIEWER_PREFERENCES }), update: vi.fn() } });
+    store.getState().enableFem('fem-one', plane);
+    store.getState().setPlane({ ...plane, origin_m: [0, 0, 0.01] });
+    store.getState().beginPlaneDrag();
+    store.getState().updatePlaneDrag({ ...plane, origin_m: [0, 0, 0.02] });
+    store.getState().endPlaneDrag();
+    store.getState().resume();
+    store.getState().setAnimating(true);
+    await Promise.resolve();
+    expect(store.getState()).toMatchObject({ enabled: true, source: 'fem', jobId: 'fem-one',
+      plane: { origin_m: [0, 0, 0.02] }, displayMode: 'instantaneous', animating: true });
+    expect(fetchPlane).not.toHaveBeenCalled();
+    expect(fetchResults).not.toHaveBeenCalled();
+    store.getState().disable();
+  });
+
   it('keeps display, lock, animation, and isoline state client-side', async () => {
     const updatePreferences = vi.fn();
     const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => response(jobId, request));

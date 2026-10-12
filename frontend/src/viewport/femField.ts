@@ -337,6 +337,7 @@ function decode<T extends Float32Array | Uint32Array>(text: string, kind: 'f32' 
 
 export function decodeFemFieldPayload(payload: FemFieldPayload): { domain: FemFieldDomain; values: ComplexNodal; frequencyHz: number } {
   if (payload.schema !== 'wg-fem-field-v1') throw new Error(`Unsupported FEM field schema ${String(payload.schema)}`);
+  if (!Number.isFinite(payload.frequency_hz) || payload.frequency_hz <= 0) throw new Error('FEM field frequency must be positive and finite');
   const points = decode<Float32Array>(payload.points_mm, 'f32');
   const tetrahedra = decode<Uint32Array>(payload.tetrahedra, 'u32');
   const vertexCount = points.length / 3;
@@ -348,6 +349,9 @@ export function decodeFemFieldPayload(payload: FemFieldPayload): { domain: FemFi
   };
   if (values.real.length !== vertexCount || values.imag.length !== vertexCount) {
     throw new Error('FEM field pressure must have one value per vertex');
+  }
+  if ([points, values.real, values.imag].some((array) => array.some((value) => !Number.isFinite(value)))) {
+    throw new Error('FEM field values must be finite');
   }
   const surfaces = payload.surfaces.map((surface) => {
     const triangles = decode<Uint32Array>(surface.triangles, 'u32');

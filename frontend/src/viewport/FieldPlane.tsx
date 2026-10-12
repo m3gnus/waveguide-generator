@@ -254,7 +254,7 @@ function ReadyFieldPlane({ plane, field, unitsPerMetre, clipPlane, colormap, sch
 }
 
 function FieldPlaneMaskController({ scheduler }: Pick<FieldPlaneProps, 'scheduler'>) {
-  const enabled = useFieldPlaneStore((state) => state.enabled);
+  const enabled = useFieldPlaneStore((state) => state.enabled && state.source === 'exterior');
   const dragging = useFieldPlaneStore((state) => state.dragging);
   const jobId = useFieldPlaneStore((state) => state.jobId);
   const geometrySha256 = useFieldPlaneStore((state) => state.geometrySha256);

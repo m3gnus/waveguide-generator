@@ -1,6 +1,8 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+import { useFrame, useThree } from '@react-three/fiber';
 import { BufferAttribute, BufferGeometry, DoubleSide } from 'three';
 import {
+  advanceFieldPlanePhase,
   fieldPlaneWindowForMode,
   maxFieldSplDb,
   type FieldPlaneDisplayMode,
@@ -72,6 +74,8 @@ export function buildFemFieldGeometries(
   const slice = new BufferGeometry();
   slice.setAttribute('position', new BufferAttribute(cut.positions, 3));
   slice.setAttribute('color', new BufferAttribute(colors, 3));
+  slice.setAttribute('pressureReal', new BufferAttribute(shown.real, 1));
+  slice.setAttribute('pressureImag', new BufferAttribute(shown.imag, 1));
   const ghost = new BufferGeometry();
   ghost.setAttribute('position', new BufferAttribute(clippedGhostEdges(domain, options.plane), 3));
   return { surfaces, slice, ghost, window };
@@ -87,6 +91,8 @@ interface FemFieldViewProps {
   /** Scene units per metre; the FEM domain is in millimetres. */
   unitsPerMetre: number;
   phaseRadians?: number;
+  animating?: boolean;
+  animationSpeed?: number;
 }
 
 /**
@@ -96,12 +102,42 @@ interface FemFieldViewProps {
  * the kept half-volume with the walls hidden.
  */
 export function FemFieldView({
-  domain, values, plane, mode, rendering, sequential, unitsPerMetre, phaseRadians,
+  domain, values, plane, mode, rendering, sequential, unitsPerMetre, phaseRadians, animating = false, animationSpeed = 1,
 }: FemFieldViewProps) {
   const built = useMemo(
     () => buildFemFieldGeometries(domain, values, { plane, mode, rendering, sequential, phaseRadians }),
     [domain, values, plane, mode, rendering, sequential, phaseRadians],
   );
+  const invalidate = useThree((state) => state.invalidate);
+  const phase = useRef(0);
+  const fieldMaxSplDb = useMemo(() => maxFieldSplDb(values.real, values.imag), [values]);
+  // Animation recolours the existing cut; it never recuts tetrahedra or
+  // rebuilds ghost geometry on every frame.
+  const recolor = (phaseRadians: number) => {
+    if (!built.slice || !built.window) return;
+    const shown = {
+      real: built.slice.getAttribute('pressureReal').array as Float32Array,
+      imag: built.slice.getAttribute('pressureImag').array as Float32Array,
+    };
+    const { colors } = femFieldColors(shown, mode, {
+      sequential, phaseRadians, window: built.window,
+      fieldMaxSplDb,
+    });
+    const attribute = built.slice.getAttribute('color');
+    attribute.array.set(colors);
+    attribute.needsUpdate = true;
+  };
+  useFrame((_state, delta) => {
+    if (!animating) return;
+    phase.current = advanceFieldPlanePhase(phase.current, delta, animationSpeed);
+    recolor(phase.current);
+    invalidate();
+  });
+  useEffect(() => {
+    phase.current = 0;
+    recolor(phaseRadians ?? 0);
+    invalidate();
+  }, [built, animating, animationSpeed, invalidate]);
   useEffect(() => () => {
     for (const surface of built.surfaces) surface.geometry.dispose();
     built.slice?.dispose();

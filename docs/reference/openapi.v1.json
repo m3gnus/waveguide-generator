@@ -4085,6 +4085,115 @@
         "title": "ExteriorTransducerSpec",
         "type": "object"
       },
+      "FemFieldPresentation": {
+        "properties": {
+          "channel_id": {
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "channel_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Channel Ids",
+            "type": "array"
+          },
+          "drive_normalization": {
+            "const": "unit_acceleration_m_per_s2",
+            "title": "Drive Normalization",
+            "type": "string"
+          },
+          "experimental": {
+            "const": true,
+            "title": "Experimental",
+            "type": "boolean"
+          },
+          "frequencies_hz": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Frequencies Hz",
+            "type": "array"
+          },
+          "frequency_hz": {
+            "title": "Frequency Hz",
+            "type": "number"
+          },
+          "phasor_convention": {
+            "const": "exp(-i omega t)",
+            "title": "Phasor Convention",
+            "type": "string"
+          },
+          "points_mm": {
+            "title": "Points Mm",
+            "type": "string"
+          },
+          "pressure_imag": {
+            "title": "Pressure Imag",
+            "type": "string"
+          },
+          "pressure_real": {
+            "title": "Pressure Real",
+            "type": "string"
+          },
+          "region_id": {
+            "title": "Region Id",
+            "type": "string"
+          },
+          "schema": {
+            "const": "wg-fem-field-v1",
+            "title": "Schema",
+            "type": "string"
+          },
+          "surfaces": {
+            "items": {
+              "$ref": "#/components/schemas/FemFieldSurface"
+            },
+            "title": "Surfaces",
+            "type": "array"
+          },
+          "tetrahedra": {
+            "title": "Tetrahedra",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "region_id",
+          "frequency_hz",
+          "points_mm",
+          "tetrahedra",
+          "surfaces",
+          "pressure_real",
+          "pressure_imag",
+          "frequencies_hz",
+          "channel_ids",
+          "channel_id",
+          "phasor_convention",
+          "drive_normalization",
+          "experimental"
+        ],
+        "title": "FemFieldPresentation",
+        "type": "object"
+      },
+      "FemFieldSurface": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "triangles": {
+            "title": "Triangles",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "triangles"
+        ],
+        "title": "FemFieldSurface",
+        "type": "object"
+      },
       "FieldPlaneRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5980,6 +6089,11 @@
             ],
             "title": "Field Trace Bytes"
           },
+          "has_fem_field_artifact": {
+            "default": false,
+            "title": "Has Fem Field Artifact",
+            "type": "boolean"
+          },
           "has_mesh_artifact": {
             "title": "Has Mesh Artifact",
             "type": "boolean"
@@ -6654,6 +6768,11 @@
               }
             ],
             "title": "Field Trace Bytes"
+          },
+          "has_fem_field_artifact": {
+            "default": false,
+            "title": "Has Fem Field Artifact",
+            "type": "boolean"
           },
           "has_mesh_artifact": {
             "title": "Has Mesh Artifact",
@@ -15464,6 +15583,80 @@
           }
         },
         "summary": "Recombine Job Results"
+      }
+    },
+    "/api/results/{job_id}/fem-field": {
+      "get": {
+        "description": "Selected FEM basis pressure, little-endian float32/uint32 base64.\n\nFrequency is in Hz; omitted selectors use the first retained entry.\nChannels are raw Pa per unit acceleration, without system synthesis.\nThe view contains every FEM region, with rebased topology indices.",
+        "operationId": "fem_field_api_results__job_id__fem_field_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Frequency"
+            }
+          },
+          {
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Channel"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FemFieldPresentation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fem Field"
       }
     },
     "/api/results/{job_id}/field-plane": {

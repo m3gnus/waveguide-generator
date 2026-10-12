@@ -2410,6 +2410,21 @@ class JobStore:
             except FileNotFoundError:
                 return None
 
+    def load_fem_field(self, job_id: str, frequency: float | None = None,
+                       channel: str | None = None) -> dict[str, Any] | None:
+        """Subset the sidecar without copying its ZIP or full pressure tensor."""
+        from server.jobs.fem_field import load_fem_field_payload
+
+        with self._lock:
+            row = self.get_job_row(job_id)
+            if row is None or not row["task_metadata"].get("has_fem_field_artifact"):
+                return None
+            path = self._fem_field_path(job_id)
+        try:
+            return load_fem_field_payload(path, frequency, channel)
+        except FileNotFoundError:
+            return None
+
     def delete_fem_field(self, job_id: str) -> bool:
         with self._lock, self._transaction() as conn:
             path = self._fem_field_path(job_id)
