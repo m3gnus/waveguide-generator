@@ -61,9 +61,18 @@ import unicodedata
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-# Direct script invocation must find the WG-owned provider selector.
+# Direct script invocation must find the WG-owned provider selector and job probe.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from server.platform import process_tree  # noqa: E402
 from server.solver.beat_runtime import provider  # noqa: E402
+
+
+# Kept here because server.tests.backend_breakaway imports pytest, while this
+# qualifier runs with only the standard library. A test checks they stay equal.
+WINDOWS_BREAKAWAY_REFUSAL = (
+    "The caller's Windows job does not allow backend breakaway. "
+    "Start Waveguide Generator outside that job, or enable job breakaway."
+)
 
 
 #: Small, finite and quick: two frequencies over a coarse mesh. The gate is
@@ -756,6 +765,41 @@ def stop_detached_backend(base: str, pid: int, data_dir: Path) -> None:
             return True
 
     wait_for(stopped, SHUTDOWN_TIMEOUT_S, "the cold-start backend to stop")
+
+
+def backend_breakaway_permitted() -> bool:
+    """Use the product's job probe; non-Windows hosts need no breakaway."""
+    if sys.platform != "win32":
+        return True
+    # We start the launcher with plain subprocess.run. Neither the native
+    # launcher nor launchers/ensure_backend.py creates a Windows job, so the
+    # backend owner inherits this process's immediate job, which this probes.
+    try:
+        process_tree.windows_backend_breakaway_flags()
+    except OSError as exc:
+        if str(exc) == WINDOWS_BREAKAWAY_REFUSAL:
+            return False
+        raise  # A failed job query is not evidence that breakaway is forbidden.
+    return True
+
+
+def ensure_backend_cold_start_phase(
+    interpreter: Path, app: Path, work: Path, output: Path, *, beat_provider: str | None = None,
+) -> dict[str, Any]:
+    """Exercise detached startup when allowed, otherwise record the GUI start."""
+    if not backend_breakaway_permitted():
+        result = "cold start via --ensure-backend: not exercised (host refuses breakaway)"
+        print(result, file=sys.stderr, flush=True)
+        return {
+            "exercised": False,
+            "result": result,
+            "start_path": "launch/serve.py --status-control (the status window's start)",
+            "probe": "server.platform.process_tree.windows_backend_breakaway_flags",
+            "refusal": WINDOWS_BREAKAWAY_REFUSAL,
+        }
+    return {"exercised": True, **check_ensure_backend_cold_start(
+        interpreter, app, work, output, beat_provider=beat_provider,
+    )}
 
 
 def check_ensure_backend_cold_start(
@@ -2298,7 +2342,7 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
     # Recorded before anything can start a worker, so the cleanup in ``main``
     # knows where to look even if the very next call raises.
     arguments.cleanup = (interpreter, environment, output)
-    report["ensure_backend_cold_start"] = check_ensure_backend_cold_start(
+    report["ensure_backend_cold_start"] = ensure_backend_cold_start_phase(
         interpreter, app, work, output, beat_provider=arguments.beat_provider,
     )
     control = work / "status" / "stop-1"

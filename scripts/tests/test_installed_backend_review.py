@@ -2,6 +2,7 @@
 
 import builtins
 import ast
+import ctypes
 import json
 import types
 import os
@@ -16,6 +17,168 @@ import pytest
 
 from launchers import full_installer
 from scripts import build_bundle, qualify_installed_cpu as gate
+from server.platform import process_tree
+from server.tests.backend_breakaway import WINDOWS_BREAKAWAY_REFUSAL
+
+
+NOT_EXERCISED = {
+    "exercised": False,
+    "result": "cold start via --ensure-backend: not exercised (host refuses breakaway)",
+    "start_path": "launch/serve.py --status-control (the status window's start)",
+    "probe": "server.platform.process_tree.windows_backend_breakaway_flags",
+    "refusal": WINDOWS_BREAKAWAY_REFUSAL,
+}
+
+
+def test_cold_start_phase_records_refused_breakaway(tmp_path, monkeypatch, capsys):
+    def refuse():
+        raise OSError(WINDOWS_BREAKAWAY_REFUSAL)
+    monkeypatch.setattr(gate, "sys", SimpleNamespace(platform="win32", stderr=sys.stderr))
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", refuse)
+    monkeypatch.setattr(gate, "check_ensure_backend_cold_start",
+                        lambda *args, **kwargs: pytest.fail("refused job entered cold-start harness"))
+    assert gate.ensure_backend_cold_start_phase(
+        tmp_path / "python", tmp_path / "app", tmp_path / "work", tmp_path / "output",
+        beat_provider="official",
+    ) == NOT_EXERCISED
+    assert capsys.readouterr().err.splitlines() == [NOT_EXERCISED["result"]]
+
+
+@pytest.mark.parametrize("platform,flags", [("win32", 0), ("win32", 0x01000000),
+                                           ("linux", None), ("darwin", None)])
+@pytest.mark.parametrize("beat_provider", ["official", "hbb"])
+def test_cold_start_phase_runs_when_breakaway_permitted(tmp_path, monkeypatch, capsys, platform, flags, beat_provider):
+    probes, calls = [], []
+    def probe():
+        assert platform == "win32", "non-Windows must not query Windows jobs"
+        probes.append(True)
+        return flags
+    result = {"argv": ["installed-launcher"], "survives_caller": True,
+              "gui_defaults_match": True, "stopped_by_pid": 123}
+    def cold_start(*args, **kwargs):
+        calls.append((args, kwargs))
+        return result
+    monkeypatch.setattr(gate, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", probe)
+    monkeypatch.setattr(gate, "check_ensure_backend_cold_start", cold_start)
+    args = (tmp_path / "python", tmp_path / "app", tmp_path / "work", tmp_path / "output")
+    assert gate.ensure_backend_cold_start_phase(*args, beat_provider=beat_provider) == {"exercised": True, **result}
+    assert calls == [(args, {"beat_provider": beat_provider})]
+    assert probes == ([True] if platform == "win32" else [])
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("message", [
+    "Could not check the caller's Windows job; cannot detach the backend",
+    "Could not query the caller's Windows job; cannot detach the backend",
+    WINDOWS_BREAKAWAY_REFUSAL + " extra detail",
+])
+def test_cold_start_phase_propagates_job_query_errors(tmp_path, monkeypatch, capsys, message):
+    error = OSError(message)
+    def fail_query():
+        raise error
+    monkeypatch.setattr(gate, "sys", SimpleNamespace(platform="win32", stderr=sys.stderr))
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", fail_query)
+    monkeypatch.setattr(gate, "check_ensure_backend_cold_start",
+                        lambda *args, **kwargs: pytest.fail("failed job query entered cold-start harness"))
+    with pytest.raises(OSError) as raised:
+        gate.ensure_backend_cold_start_phase(tmp_path, tmp_path, tmp_path, tmp_path)
+    assert raised.value is error
+    assert capsys.readouterr().err == ""
+
+
+def test_breakaway_refusal_matches_product_probe(monkeypatch):
+    assert gate.WINDOWS_BREAKAWAY_REFUSAL == WINDOWS_BREAKAWAY_REFUSAL
+    calls = []
+    def in_job(process, job, result):
+        assert process == 42 and job is None
+        result._obj.value = True
+        calls.append("membership")
+        return True
+    def query(job, kind, result, size, returned):
+        assert job is None and kind == 2
+        result._obj.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE, without breakaway.
+        calls.append("limits")
+        return True
+    kernel = SimpleNamespace(GetCurrentProcess=lambda: 42, IsProcessInJob=in_job, QueryInformationJobObject=query)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: kernel, raising=False)
+    monkeypatch.setattr(gate, "sys", SimpleNamespace(platform="win32"))
+    assert not gate.backend_breakaway_permitted()
+    assert calls == ["membership", "limits"]
+
+
+@pytest.mark.parametrize("via_main", [False, True])
+@pytest.mark.parametrize("permitted", [False, True])
+@pytest.mark.parametrize("beat_provider", ["official", "hbb"])
+def test_qualify_breakaway_decision_keeps_server_start_adoption_and_report(
+    tmp_path, monkeypatch, capsys, via_main, permitted, beat_provider,
+):
+    app, interpreter = tmp_path / "payload/app", tmp_path / "python"
+    work, output = tmp_path / "work", tmp_path / "output"
+    environment = {"WG2_BEAT_PROVIDER": beat_provider, "WG2_BEAT_RUNTIME_DIR": "runtime",
+                   "WG2_BEAT_WORKER_DIR": "workers", "HORNLAB_BEAT_RUNTIME_DIR": "runtime",
+                   "HORNLAB_BEAT_WORKER_DIR": "workers", "JULIA_DEPOT_PATH": "julia",
+                   "PYTHONPYCACHEPREFIX": "python-cache", "NUMBA_CACHE_DIR": "numba-cache"}
+    starts, adoptions, cold_starts = [], [], []
+    cold_result = {"argv": ["installed-launcher"], "survives_caller": True}
+    def probe():
+        if not permitted:
+            raise OSError(WINDOWS_BREAKAWAY_REFUSAL)
+        return 0
+    def cold_start(*args, **kwargs):
+        assert permitted, "refused job entered cold-start harness"
+        cold_starts.append((args, kwargs))
+        return cold_result
+    class Server:
+        base = "http://127.0.0.1:3199"
+        def __init__(self, *args):
+            starts.append(args)
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+    def adopt(*args, **kwargs):
+        adoptions.append((args, kwargs))
+        return {"same_owner": True}
+    def stop_after_adoption(*args):
+        raise gate.QualificationError("sentinel after warm adoption")
+    def forbidden(*args, **kwargs):
+        pytest.fail("test must not start any real process")
+    monkeypatch.setattr(gate, "sys", SimpleNamespace(platform="win32", stderr=sys.stderr))
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", probe)
+    monkeypatch.setattr(gate.subprocess, "run", forbidden)
+    monkeypatch.setattr(gate.subprocess, "Popen", forbidden)
+    monkeypatch.setattr(gate, "resolve_payload", lambda *args: (app.parent, app, interpreter))
+    monkeypatch.setattr(gate, "isolated_environment", lambda *args, **kwargs: environment)
+    monkeypatch.setattr(gate, "pins_from_file", lambda *args: {"beat-engine": "pinned"})
+    monkeypatch.setattr(gate, "expectations_from_build_manifest", lambda *args: {})
+    monkeypatch.setattr(gate, "check_manifest", lambda *args: {})
+    monkeypatch.setattr(gate, "check_pins", lambda *args: {})
+    monkeypatch.setattr(gate, "check_ensure_backend_cold_start", cold_start)
+    monkeypatch.setattr(gate, "Server", Server)
+    monkeypatch.setattr(gate, "check_ensure_backend", adopt)
+    monkeypatch.setattr(gate, "await_cpu_row", stop_after_adoption)
+    monkeypatch.setattr(gate, "stop_our_workers", lambda *args: {"contained": True})
+    argv = ["--payload", str(app.parent), "--work", str(work), "--output", str(output),
+            "--beat-provider", beat_provider]
+    if via_main:
+        assert gate.main(argv) == 1
+        report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+        assert report["qualified"] is False
+        assert report["error"] == "sentinel after warm adoption"
+    else:
+        arguments = gate.build_parser().parse_args(argv)
+        report = {}
+        with pytest.raises(gate.QualificationError, match="sentinel after warm adoption"):
+            gate.qualify(arguments, report)
+        assert arguments.cleanup == (interpreter, environment, output)
+    assert starts == [(interpreter, app, environment, work / "data", work / "status/stop-1", output / "server.log")]
+    assert adoptions == [((app, work / "data", environment, Server.base), {"cwd": output})]
+    assert report["ensure_backend"] == {"same_owner": True}
+    assert report["ensure_backend_cold_start"] == ({"exercised": True, **cold_result} if permitted else NOT_EXERCISED)
+    assert cold_starts == ([((interpreter, app, work, output), {"beat_provider": beat_provider})] if permitted else [])
+    lines = capsys.readouterr().err.splitlines()
+    assert lines.count(NOT_EXERCISED["result"]) == (0 if permitted else 1)
 
 
 def test_desktop_installer_guard_reports_json_before_importing_gui(monkeypatch, capsys):
