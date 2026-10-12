@@ -1060,8 +1060,8 @@ async def resolve_submission(
     )
 
 
-async def _imported_request_refusal_async(request, record=None, msh_text=None):
-    """Inspect geometry before admission/solve permits, with cooperative stop."""
+async def _imported_request_refusal_async(request, record=None, msh_text=None, *, cancel_check=None):
+    """Inspect geometry off-loop, sharing admission and job cancellation checks."""
     import threading
     from server.solver.component_symmetry import (GeometryCheckCancelled,
                                                  geometry_cancellation)
@@ -1070,6 +1070,8 @@ async def _imported_request_refusal_async(request, record=None, msh_text=None):
     def check():
         if stopped.is_set():
             raise GeometryCheckCancelled()
+        if cancel_check is not None:
+            cancel_check()
     def inspect():
         with geometry_cancellation(check):
             check()
@@ -1084,7 +1086,7 @@ async def _imported_request_refusal_async(request, record=None, msh_text=None):
         # Drain the worker so cancellation cannot leave geometry work running.
         try:
             await asyncio.shield(work)
-        except GeometryCheckCancelled:
+        except (GeometryCheckCancelled, _CancelledAtCheckpoint):
             pass
         raise
 
@@ -3635,7 +3637,9 @@ class JobRuntime:
             if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
                 refusal = (
                     _imported_backend_refusal(request, imported_record)
-                    or _imported_request_refusal(request, imported_record, job_msh_text)
+                    or await _imported_request_refusal_async(
+                        request, imported_record, job_msh_text,
+                        cancel_check=lambda: self._check_cancelled(job_id))
                 )
                 if refusal:
                     raise ImportedSolveRefusal(*refusal)
@@ -3898,7 +3902,8 @@ class JobRuntime:
         from server.solver.beat_adapter.results import coupled_envelope
         from server.solver.official_beat import solve_coupled_compiled, response_config
 
-        refusal = _imported_request_refusal(request, record)
+        refusal = await _imported_request_refusal_async(
+            request, record, cancel_check=lambda: self._check_cancelled(job_id))
         if refusal:
             raise ImportedSolveRefusal(*refusal)
         from server.solver.beat import beat_engine_backend

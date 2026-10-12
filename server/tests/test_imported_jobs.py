@@ -5043,3 +5043,127 @@ def test_imported_geometry_wait_is_off_loop_cancellable_and_holds_no_lane(monkey
             assert not runtime._queue
             store.close()
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize('entrypoint', ['_run_job', '_run_coupled_regions'])
+@pytest.mark.parametrize('cancel_task', [False, True], ids=['job-stop', 'task-cancel'])
+def test_job_geometry_recheck_is_off_loop_and_cancellable(monkeypatch, tmp_path, entrypoint, cancel_task):
+    import threading
+    import time
+    from server.jobs.runtime import core
+    from server.solver.component_symmetry import check_geometry
+    from server.solver.metal_permit import MetalPermit
+
+    started, ended = threading.Event(), threading.Event()
+    thread_ids = []
+    def inspect(*args):
+        thread_ids.append(threading.get_ident())
+        started.set()
+        try:
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline:
+                check_geometry()
+                time.sleep(.001)
+            raise AssertionError('job geometry did not receive cancellation')
+        finally:
+            ended.set()
+    monkeypatch.setattr(core, '_imported_request_refusal', inspect)
+    # Reach the recovered-job geometry seam without invoking unrelated ingest
+    # policy; the worker below stands in for a slow FEM mesh read.
+    monkeypatch.setattr(core, '_refuse_imported_fem', lambda *a: {})
+    monkeypatch.setattr(core, '_refuse_inverted_reduced_mesh', lambda *a: None)
+    monkeypatch.setattr(core, '_imported_decision_refusal', lambda *a: None)
+    monkeypatch.setattr(core, '_imported_job_decision_refusal', lambda *a: None)
+    monkeypatch.setattr(core, '_imported_side_identity_refusal', lambda *a: None)
+    monkeypatch.setattr(core, '_imported_open_half_refusal', lambda *a: None)
+
+    async def exercise():
+        runtime, ingest_id, record = await _runtime_fixture(tmp_path, {'fem_regions': [{}]})
+        request = _request(ingest_id)
+        request.options.engine = 'beat-cpu'
+        runtime.store.initialize()
+        now = datetime.now(timezone.utc).isoformat()
+        runtime.store.create_job({
+            'id': 'geometry-check', 'status': 'running', 'created_at': now,
+            'updated_at': now, 'queued_at': now,
+            'config_json': request.model_dump(mode='json'), 'config_summary_json': {},
+            'task_metadata': {}, 'progress': 0, 'stage': 'setup',
+            'has_results': False, 'has_mesh_artifact': False,
+        })
+        async def already_started():
+            pass
+        monkeypatch.setattr(runtime, 'start', already_started)
+        permit = MetalPermit()
+        task = None
+        try:
+            async with permit.solve():
+                if entrypoint == '_run_job':
+                    coroutine = runtime._run_job('geometry-check', runtime.store.get_job_row('geometry-check'))
+                else:
+                    coroutine = runtime._run_coupled_regions('geometry-check', request, record, lambda *a: None)
+                task = asyncio.create_task(coroutine)
+                async with asyncio.timeout(.5):
+                    while not started.is_set():
+                        await asyncio.sleep(.001)
+                assert thread_ids[0] != threading.get_ident()
+                # This callback runs while geometry is pending and the job's
+                # solve lane remains held by its existing lifecycle.
+                await asyncio.sleep(.01)
+                assert not ended.is_set()
+                if cancel_task:
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await asyncio.wait_for(task, .5)
+                else:
+                    assert (await runtime.stop('geometry-check'))['status'] == 'cancelling'
+                    if entrypoint == '_run_job':
+                        await asyncio.wait_for(task, .5)
+                        assert runtime.store.get_job_row('geometry-check')['status'] == 'cancelled'
+                    else:
+                        with pytest.raises(core._CancelledAtCheckpoint):
+                            await asyncio.wait_for(task, .5)
+                assert ended.is_set()
+        finally:
+            if task is not None:
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            runtime.store.close()
+            runtime.cadlink_store.close()
+    asyncio.run(exercise())
+
+
+def test_async_job_recheck_reuses_admission_verdict_by_mesh_content(monkeypatch):
+    from server.jobs.models import DriveChannel
+    from server.jobs.runtime import core
+    from server.solver import component_symmetry
+    from server.tests.test_fem_electrodynamic import driver
+    from server.tests.test_fem_engine_route import region_input
+    from server.tests.test_fem_termination import _closed_domain
+
+    item = region_input()
+    record = {'fem_regions': [dict(item.record, mesh_store_path='admitted.msh')],
+              'domain_interpretation': _closed_domain()}
+    request = _request('wgi_' + '0' * 26)
+    request.options.engine = 'beat-cpu'
+    request.geometry.drive_channels = [DriveChannel(id='fem', source_ids=[], motion='axial',
+                                                    exterior_transducer=driver())]
+    monkeypatch.setattr('server.mesh.artifact.read_verified_fem_region_mesh', lambda *a: 'verified')
+    monkeypatch.setattr('server.mesh.fem_regions.read_fem_region_domain', lambda *a: item.domain)
+    component_symmetry._verdicts.clear()
+    original = component_symmetry._infer_component_symmetry
+    calls = []
+    def infer(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(component_symmetry, '_infer_component_symmetry', infer)
+    async def exercise():
+        assert await core._imported_request_refusal_async(request, record) is None
+        record['fem_regions'][0]['mesh_store_path'] = 'execution.msh'
+        assert await core._imported_request_refusal_async(request, record, cancel_check=lambda: None) is None
+        assert len(calls) == 1
+        # A new mesh at the same artifact path must receive its own verdict.
+        item.domain.points_mm[:] += [0., 0., 1.]
+        assert await core._imported_request_refusal_async(request, record, cancel_check=lambda: None) is None
+        assert len(calls) == 2
+    asyncio.run(exercise())

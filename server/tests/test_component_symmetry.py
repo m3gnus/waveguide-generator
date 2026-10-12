@@ -713,7 +713,8 @@ def revolved_patch(radius, z=0., *, reverse=False, cone=False, rings=10, sectors
 
 
 @pytest.mark.parametrize('two_meshes', [False, True])
-@pytest.mark.parametrize('case', ['coax', 'dome-over-cone', 'isobaric', 'opposed-isobaric', 'force-cancelling'])
+@pytest.mark.parametrize('case', ['coax', 'dome-over-cone', 'isobaric', 'opposed-isobaric',
+                                'clamshell', 'opposed-flat', 'force-cancelling'])
 def test_overlapping_independent_drivers_are_refused(case, two_meshes):
     front = revolved_patch(.1, cone=True)
     axis = [0, 0, 1]
@@ -721,6 +722,15 @@ def test_overlapping_independent_drivers_are_refused(case, two_meshes):
         rear = revolved_patch(.015 if case == 'coax' else .03, .04, cone=case == 'dome-over-cone')
     elif case in ('isobaric', 'opposed-isobaric'):
         rear = revolved_patch(.1, -.08, cone=True, reverse=case == 'opposed-isobaric')
+    elif case == 'clamshell':
+        # 200 mm cones opening toward each other, about 40 mm apart along
+        # the motion axis (area-weighted centres), with a 20 mm rim gap.
+        rear = revolved_patch(.1, cone=True)
+        rear = rear[0], rear[1] * [1, 1, -1] + [0, 0, .08]
+        front = front[0][:, ::-1], front[1][:, ::-1]
+    elif case == 'opposed-flat':
+        front = revolved_patch(.1)
+        rear = revolved_patch(.1, .03, reverse=True)
     else:
         front = revolved_patch(.1)
         rear = revolved_patch(.1, reverse=True)
@@ -733,14 +743,43 @@ def test_overlapping_independent_drivers_are_refused(case, two_meshes):
     assert caught.value.code == 'driver_disconnected_patches'
 
 
-@pytest.mark.parametrize('layout', ['two-chambers', 'fem-exterior', 'dipole-rigid-rim'])
+@pytest.mark.parametrize('layout', ['two-chambers', 'compression-dome', 'fem-exterior', 'dipole-rigid-rim'])
 def test_close_opposed_diaphragm_faces_remain_one_driver(layout):
     front = revolved_patch(.025, cone=layout == 'two-chambers')
+    if layout == 'compression-dome':
+        triangles = front[1].copy()
+        triangles[:, :, 2] = .02 * np.sqrt(np.maximum(0., 1 - (np.linalg.norm(triangles[:, :, :2], axis=2) / .025)**2))
+        front = front[0], triangles
     rear = front[0][:, ::-1], front[1][:, ::-1] - [0, 0, .0005]
-    meshes = ({'front-chamber': [front], 'rear-chamber': [rear]} if layout == 'two-chambers'
+    meshes = ({'front-chamber': [front], 'rear-chamber': [rear]} if layout in ('two-chambers', 'compression-dome')
               else {'exterior': [front], 'fem:rear': [rear]} if layout == 'fem-exterior'
               else {'exterior': [front, rear]})
     assert infer_component_symmetry(meshes, [0, 0, 1])['physical_driver_orbit_count'] == 1
+
+
+@pytest.mark.parametrize('two_meshes', [False, True])
+def test_200mm_cone_skins_one_mm_apart_remain_one_driver(two_meshes):
+    front = revolved_patch(.1, cone=True)
+    rear = front[0][:, ::-1], front[1][:, ::-1] - [0, 0, .001]
+    meshes = {'front': [front], 'rear': [rear]} if two_meshes else {'mesh': [front, rear]}
+    assert infer_component_symmetry(meshes, [0, 0, 1])['physical_driver_orbit_count'] == 1
+
+
+@pytest.mark.parametrize('radius', [.025, .1])
+@pytest.mark.parametrize('extra_gap,allowed', [(0., True), (1e-6, False)])
+def test_diaphragm_skin_axial_bound(radius, extra_gap, allowed):
+    front = revolved_patch(radius)
+    triangles = front[1]
+    area = np.abs(np.cross(triangles[:, 1] - triangles[:, 0],
+                           triangles[:, 2] - triangles[:, 0])[:, 2]).sum() / 2
+    gap = max(.005, .05 * 2 * np.sqrt(area / np.pi)) + extra_gap
+    rear = front[0][:, ::-1], front[1][:, ::-1] - [0, 0, gap]
+    if allowed:
+        assert infer_component_symmetry({'front': [front], 'rear': [rear]}, [0, 0, 1])['physical_driver_orbit_count'] == 1
+    else:
+        with pytest.raises(DriverSymmetryError) as caught:
+            infer_component_symmetry({'front': [front], 'rear': [rear]}, [0, 0, 1])
+        assert caught.value.code == 'driver_disconnected_patches'
 
 
 def test_geometry_verdict_cache_uses_content_and_grouping_not_artifact_path(monkeypatch):

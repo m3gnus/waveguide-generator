@@ -166,8 +166,10 @@ def _infer_component_symmetry(
                 check_geometry()
                 sign_i, center_i, size_i = projections[i]
                 sign_j, center_j, size_j = projections[j]
+                # Only nearby skins of one diaphragm may merge by footprint;
+                # opposed drivers can share a footprint across an air gap.
                 if (not connected and sign_i * sign_j < 0
-                        and abs(center_i - center_j) <= .25 * min(size_i, size_j) + tolerance_m):
+                        and abs(center_i - center_j) <= max(.005, .05 * min(size_i, size_j)) + tolerance_m):
                     for k in (i, j):
                         if k not in footprints:
                             footprints[k] = _footprint(patches[k][0] @ basis)
