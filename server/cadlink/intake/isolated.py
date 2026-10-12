@@ -287,18 +287,19 @@ def build_coupled_mesh_isolated(
     expected_sha256: str | None = None, expected_size_bytes: int | None = None,
     deadline: float | None = None,
     domain_planes: tuple[str, ...] = (), cut_planes: tuple[str, ...] = (),
+    contacts_only: bool = False,
 ) -> dict[str, Any]:
     """Stage and verify all STEP members inside the existing mesh confinement."""
     if not fem_regions_enabled():
         raise ChildRefusal(MESH_STAGE, "declared FEM regions are disabled")
-    allowed = ("coupled.msh", *(f"region-{region['region_id']}.msh" for region in regions))
+    allowed = () if contacts_only else ("coupled.msh", *(f"region-{region['region_id']}.msh" for region in regions))
     try:
         with isolated_step_task(
             "coupled_mesh", {"regions": [dict(region) for region in regions],
                              "recipe": dict(recipe), "expected_geometry_hash": expected_geometry_hash,
                              "normalisation_matrix": normalisation_matrix, "sizes": dict(sizes),
                              "exterior_names": dict(exterior_names), "domain_planes": list(domain_planes),
-                             "cut_planes": list(cut_planes)},
+                             "cut_planes": list(cut_planes), "contacts_only": contacts_only},
             step_path=assembly_path, budget=MESH_BUDGET, deadline=deadline, allowed_artifacts=allowed,
             stage=MESH_STAGE, expected_sha256=expected_sha256,
             expected_size_bytes=expected_size_bytes, additional_steps=members,
@@ -306,6 +307,10 @@ def build_coupled_mesh_isolated(
             built = outcome.result.get("built")
             if not isinstance(built, dict) or not isinstance(built.get("regions"), dict):
                 raise ChildRefusal(MESH_STAGE, "the coupled mesh child returned no meshes")
+            if contacts_only:
+                if built.get("exterior") is not None or built["regions"]:
+                    raise ChildRefusal(MESH_STAGE, "the FEM contact check unexpectedly returned meshes")
+                return built
             built["exterior"]["msh_text"] = outcome.artifacts["coupled.msh"].read_text(encoding="utf-8")
             for region in regions:
                 if region["region_id"] not in built["regions"]:

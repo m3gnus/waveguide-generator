@@ -2150,6 +2150,9 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
     if problem:
         code, message = problem
         raise IngestRefusal("stage 2 scope gate", message, reason_code=code)
+    # Shared moving groups are retained here: the CAD declaration does not
+    # carry WG's driver spec. Admission checks multi-region channels against
+    # the chosen electrodynamic drivers before any solve can start.
     labels = "; ".join(
         f"FEM region {region['name']!r}" + "".join(
             f", group {group['name']!r}" for group in region["surface_groups"]
@@ -2180,7 +2183,7 @@ def _mesh_coupled_regions(
     ))
     interfaces = [region for region in regions
                   if any(group["kind"] == "interface" for group in region["surface_groups"])]
-    if not interfaces:
+    if not interfaces and len(regions) < 2:
         return None, {}
     if deadline is None:
         deadline = time.monotonic() + FEM_REGIONS_WALL_TIME_S
@@ -2222,11 +2225,14 @@ def _mesh_coupled_regions(
             cut_planes=tuple((exterior.get("symmetry") or {}).get("cut_planes") or ()),
             expected_sha256=bundle.artifact_sha256, expected_size_bytes=bundle.artifact_size_bytes,
             deadline=deadline,
+            contacts_only=not interfaces,
         )
     except Exception as exc:
         raise IngestRefusal("stage 7 meshing", f"{labels}: {exc}",
                             symmetry_plane=getattr(exc, "symmetry_plane", None)) from exc
     check_deadline()
+    if not interfaces:
+        return None, {}
     built = coupled["exterior"]
     digest = mesh_text_sha256(built["msh_text"])
     lookup_key = hashlib.sha256(_canonical({

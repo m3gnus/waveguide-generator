@@ -673,17 +673,22 @@ def fem_admission(monkeypatch):
 
 
 @pytest.mark.parametrize("same_region", [False, True])
-def test_admission_refuses_multiple_fem_diaphragms_on_one_channel(fem_admission, same_region):
+def test_ideal_admission_requires_one_fem_region_per_channel(fem_admission, same_region, monkeypatch):
     regions = [region_input("front", "left"), region_input("rear", "left")]
     if same_region:
         regions = regions[:1]
         regions[0].record["surface_groups"].append({
             "group_id": "second", "kind": "moving", "drive_channel_id": "left"})
+    if same_region:
+        from server.jobs.runtime import imported_refusals
+        monkeypatch.setattr(imported_refusals, "_imported_open_half_refusal", lambda *args: None)
+        assert admission(fem_admission, regions) is None
+        return
     code, message = admission(fem_admission, regions)
     assert code == "fem_multiple_diaphragms_unsupported"
     assert "left" in message and "front/cone" in message
     assert ("front/second" if same_region else "rear/cone") in message
-    assert "more than one FEM diaphragm on one drive channel is not supported yet" in message
+    assert "give this channel an electrodynamic driver to share a diaphragm between regions" in message
 
 
 def test_painted_front_and_one_fem_rear_share_one_ideal_port(fem_admission, monkeypatch):
@@ -706,7 +711,7 @@ def test_painted_front_and_one_fem_rear_share_one_ideal_port(fem_admission, monk
 
 def test_runtime_builder_backstop_refuses_two_fem_diaphragms():
     request = compiled(coupled=False)
-    with pytest.raises(ValueError, match="more than one FEM diaphragm"):
+    with pytest.raises(ValueError, match="give this channel an electrodynamic driver"):
         build_coupled_request(None, [region_input("front", "left"), region_input("rear", "left")],
                               layout=request.layout, frame=FRAME, frequencies_hz=[100.])
 

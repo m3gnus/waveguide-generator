@@ -130,8 +130,24 @@ FEM has been validated against closed-form references (sealed box, open box,
 ported box, plane-wave and closed tubes) on official BEAT CPU float64.
 Declared FEM regions use official BEAT CPU float64 or Metal/CUDA/ROCm float32.
 Auto and interior-only systems use CPU float64. Electrodynamic drivers require a full free-space domain; their symmetry support
-is pending. Ideal drives also support x0 and x0+y0 symmetry. Ground planes,
-passive cardioid and two FEM diaphragms sharing a drive channel are unsupported.
+is pending. Ideal drives also support x0 and x0+y0 symmetry. Ground planes
+and passive cardioid are unsupported. Several moving groups in one region
+can share a drive channel, for example a dome and surround. To share one
+diaphragm across front and rear FEM chambers, give that channel an
+electrodynamic driver in WG. The driver owns every moving FEM and painted BEM
+boundary on its channel and uses one rigid translation coordinate. This also
+supports a meshed rear chamber with a painted exterior front, with or without
+an exterior port. An ideal-source channel spanning FEM regions is refused:
+“give this channel an electrodynamic driver to share a diaphragm between regions”.
+
+Two air regions may touch only on faces both declare moving on that same
+channel. Each diaphragm side has an independent mesh; no matching nodes are
+required between chambers. Other touching faces remain refused. Enter Sd in
+the driver options for a lumped rear chamber; declared Sd controls its stiffness.
+Moving geometry supplies only an acoustic-impedance fallback and cross-check.
+Opposite-side areas differing by more than 10 % are ambiguous, so enter Sd to
+get acoustic impedance. Disable the lumped rear chamber when the rear already
+radiates through the moving geometry.
 FEM-only channels can coexist with painted exterior sources. A missing
 compatible engine refuses the job; choose exterior-only explicitly if the
 interior should be excluded.
@@ -245,15 +261,17 @@ chamber stiffness ρc²Sd²/V and acoustic impedance Z/(ρcSd).
 
 Moving-face geometry supplies acoustic-impedance normalization when Sd is
 undeclared and geometry is unambiguous. Same-sign mesh net projections are
-summed as one side; opposite sides are averaged, with a warning above 10%
-disagreement. Geometry is also a cross-check when unambiguous: it includes
+summed as one side; opposite sides are averaged only for this normalization.
+More than 10% disagreement makes geometry ambiguous and produces a warning.
+Geometry is also a cross-check when unambiguous: it includes
 everything that moves, including the surround roll, so 10–20% above datasheet
-Sd is normal. Results warn above 25% difference from declared Sd and record
+Sd is normal. Results warn on a geometric cross-check mismatch and record
 the value and its source per channel. Ambiguous geometry without Sd omits
 acoustic impedance with “Sd not determined; enter Sd to get acoustic impedance”.
-A channel whose moving faces lie in multiple meshes cannot also use a lumped
-rear chamber: admission refuses `lumped_chamber_double_rear_load` because the
-rear already radiates.
+An enabled lumped rear chamber refuses `lumped_chamber_double_rear_load` when
+moving mesh nets or disconnected moving patches have opposite signs, or when
+geometry is ambiguous. Same-sign meshes may contribute to one side. The
+meshed rear load and lumped rear stiffness must never be applied together.
 
 ## 6. Ports and rear chambers
 

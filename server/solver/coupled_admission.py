@@ -61,12 +61,13 @@ def fem_termination_problem(regions: Sequence[Mapping[str, Any]], *,
 def fem_drive_problem(regions: Sequence[Mapping[str, Any]],
                       channels: Mapping[str, Sequence[str]], *,
                       painted_sources: set[str],
-                      combine_id: str | None = None,
-                      transducer_channels: set[str] | None = None) -> tuple[str, str] | None:
+                      electrodynamic_channels: set[str] | frozenset[str] = frozenset(),
+                      combine_id: str | None = None) -> tuple[str, str] | None:
     problem = fem_group_options_problem(regions)
     if problem:
         return problem
     moving: dict[str, list[str]] = {}
+    moving_regions: dict[str, set[str]] = {}
     for region in regions:
         for group in region.get("surface_groups", ()):
             if group.get("kind") != "moving":
@@ -76,11 +77,13 @@ def fem_drive_problem(regions: Sequence[Mapping[str, Any]],
             if not channel:
                 return "fem_missing_channel", f"FEM diaphragm {diaphragm!r} names no drive channel"
             moving.setdefault(channel, []).append(diaphragm)
+            moving_regions.setdefault(channel, set()).add(region['region_id'])
     for channel, diaphragms in moving.items():
-        if len(diaphragms) > 1 and channel not in (transducer_channels or set()):
+        if len(moving_regions[channel]) > 1 and channel not in electrodynamic_channels:
             return "fem_multiple_diaphragms_unsupported", (
                 f"Channel {channel!r}, regions/diaphragms {', '.join(diaphragms)}: "
-                "more than one FEM diaphragm on one drive channel is not supported yet")
+                "an ideal source cannot drive FEM moving groups in more than one region; "
+                "give this channel an electrodynamic driver to share a diaphragm between regions")
     driven = {channel for channel, sources in channels.items()
               if painted_sources.intersection(sources)} | set(moving)
     if combine_id in driven:
@@ -121,9 +124,10 @@ def fem_request_problem(record: Mapping[str, Any], channels: Sequence[Any] | Non
     """One ordered declaration refusal for admission and request compilation.
 
     Feature availability, termination/exterior conflicts, domain restrictions,
-    channel physics, passive synthesis, then drive coverage/media. Callers with
+    channel physics, passive synthesis, drive coverage/media, then chamber Sd
+    (required declaration, double rear load, invalid geometry). Callers with
     already compiled boundaries can omit setup channels; their boundary-level
-    coverage is checked by the coupled system builder.
+    coverage and Sd are checked by the coupled system builder.
     """
     from server.solver.imported import imported_domain_planes
     from server.solver.beat_adapter.coupled_transducers import FEM_DRIVER_SYMMETRY_MESSAGE, channel_problem
@@ -158,7 +162,7 @@ def fem_request_problem(record: Mapping[str, Any], channels: Sequence[Any] | Non
     if channels is not None:
         problem = fem_drive_problem(record.get("fem_regions", ()), {c.id: c.source_ids for c in channels},
                                     painted_sources=sources, combine_id=combine_id,
-                                    transducer_channels={c.id for c in channels
+                                    electrodynamic_channels={c.id for c in channels
                                                          if getattr(c, "exterior_transducer", None) is not None})
         if problem:
             return problem

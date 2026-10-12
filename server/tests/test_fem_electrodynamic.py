@@ -30,6 +30,116 @@ def driver(**options):
                                   motion_axis=(0., 0., 1.), **options)
 
 
+def _shared_regions(*, two_regions, split=True, rear_scale=1.):
+    from server.mesh.fem_regions import FemRegionDomain, physical_name
+    from server.solver.coupled_system import FemRegionInput
+
+    front = region_input('front')
+    if split:
+        points = np.vstack([front.domain.points_mm, [5., 0., 0.]])
+        surfaces = {
+            physical_name('front', 'cone', 'moving'): np.array([[0, 2, 4]]),
+            physical_name('front', 'surround', 'moving'): np.array([[4, 2, 1]]),
+            physical_name('front', 'walls', 'rigid'): np.array([[0, 4, 3], [4, 1, 3], [1, 2, 3], [2, 0, 3]]),
+        }
+        front.record['surface_groups'].append({'group_id': 'surround', 'kind': 'moving', 'drive_channel_id': 'fem'})
+        front = FemRegionInput(front.record, FemRegionDomain('front', points,
+                               np.array([[0, 4, 2, 3], [4, 1, 2, 3]]), surfaces))
+    if not two_regions:
+        return [front]
+    rear = region_input('rear')
+    points = rear.domain.points_mm * [rear_scale, 1., -1.]
+    return [front, FemRegionInput(rear.record, FemRegionDomain('rear', points,
+                                 rear.domain.tetrahedra, rear.domain.surfaces))]
+
+
+@pytest.mark.parametrize('two_regions', [False, True])
+@pytest.mark.parametrize('split', [False, True])
+@pytest.mark.parametrize('electrodynamic', [False, True])
+def test_shared_diaphragm_admission_and_compilation_matrix(monkeypatch, two_regions, split, electrodynamic):
+    from beat_engine.beat_contract import validate_compiled_system
+    from server.solver.coupled_admission import fem_request_problem
+    from server.solver.coupled_system import build_coupled_system
+
+    monkeypatch.delenv('WG2_FEM_REGIONS', raising=False)
+    regions = _shared_regions(two_regions=two_regions, split=split)
+    channels = [DriveChannel(id='fem', source_ids=['painted-front'], motion='axial' if electrodynamic else 'normal',
+                             exterior_transducer=driver() if electrodynamic else None)]
+    record = {'fem_regions': [r.record for r in regions]}
+    specs = {'fem': driver()} if electrodynamic else {}
+    problem = fem_request_problem(record, channels)
+    if two_regions and not electrodynamic:
+        assert problem[0] == 'fem_multiple_diaphragms_unsupported'
+        assert 'front/cone' in problem[1] and 'rear/cone' in problem[1]
+        assert 'give this channel an electrodynamic driver to share a diaphragm between regions' in problem[1]
+        with pytest.raises(ValueError, match='give this channel an electrodynamic driver'):
+            build_coupled_system(None, regions, transducers=specs)
+        return
+    assert problem is None
+    system = build_coupled_system(None, regions, transducers=specs)
+    validate_compiled_system(system)
+    component, = system['components']
+    moving = {b['id'] for b in system['boundaries'] if b['kind'] == 'moving'}
+    assert set(component['boundary_ids']) == moving
+    assert len(moving) == 1 + split + two_regions
+    port, = system['excitation_ports']
+    assert port['kind'] == ('voltage' if electrodynamic else 'normal_velocity')
+    assert component['kind'] == ('electrodynamic_transducer' if electrodynamic else 'ideal_velocity_source')
+    if electrodynamic:
+        assert system['metadata']['projected_areas_m2']['fem'] == pytest.approx(.00005)
+    # Reverting the driver spec restores the multi-region ideal refusal.
+    channels[0].exterior_transducer = None
+    channels[0].motion = 'normal'
+    reverted = fem_request_problem(record, channels)
+    assert bool(reverted) is two_regions
+
+
+@pytest.mark.parametrize('rear_scale', [1., .6, .1])
+def test_two_fem_sides_use_declared_sd_or_unambiguous_geometry_and_refuse_chamber(monkeypatch, rear_scale):
+    from server.solver.coupled_admission import fem_request_problem
+    from server.solver.coupled_system import build_coupled_system
+
+    monkeypatch.delenv('WG2_FEM_REGIONS', raising=False)
+    regions = _shared_regions(two_regions=True, rear_scale=rear_scale)
+    if rear_scale != 1.:
+        with pytest.warns(UserWarning, match="Channel 'fem'.*geometry is ambiguous"):
+            system = build_coupled_system(None, regions, transducers={'fem': driver()})
+    else:
+        system = build_coupled_system(None, regions, transducers={'fem': driver()})
+    metadata = system['metadata']['driver_sd']['fem']
+    assert metadata['geometric_sd_m2'] == pytest.approx(.00005 * (1 + rear_scale) / 2)
+    assert metadata['geometry_ambiguous'] is (rear_scale != 1.)
+    assert metadata['sd_source'] == ('geometry' if rear_scale == 1. else None)
+    assert system['metadata']['projected_areas_m2']['fem'] == (pytest.approx(.00005) if rear_scale == 1. else None)
+    # A declared area stays authoritative even when the two mesh nets disagree.
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', UserWarning)
+        declared = build_coupled_system(None, regions, transducers={'fem': driver(sd_m2=.00007)})
+    assert declared['metadata']['driver_sd']['fem']['sd_source'] == 'declared'
+    assert declared['metadata']['projected_areas_m2']['fem'] == .00007
+    spec = driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+    channel = DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=spec)
+    record = {'fem_regions': [r.record for r in regions]}
+    problem = fem_request_problem(record, [channel])
+    assert problem[0] == 'driver_sd_required'
+    with pytest.raises(ValueError) as raised:
+        build_coupled_system(None, regions, transducers={'fem': spec})
+    assert str(raised.value) == f'{problem[0]}: {problem[1]}'
+    spec = driver(sd_m2=.00007, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+    channel.exterior_transducer = spec
+    # Feed admission the same oriented triangles that compilation will use.
+    from server.solver.coupled_system import _fem_driver_triangles
+    moving_meshes = {'fem': {r.record['region_id']: [
+        (faces, np.asarray([_fem_driver_triangles(r.domain)[tuple(sorted(face))] for face in faces]))
+        for name, faces in r.domain.surfaces.items() if 'kind=moving' in name
+    ] for r in regions}}
+    problem = fem_request_problem(record, [channel], moving_meshes=moving_meshes)
+    assert problem[0] == 'lumped_chamber_double_rear_load'
+    with pytest.raises(ValueError) as raised:
+        build_coupled_system(None, regions, transducers={'fem': spec})
+    assert str(raised.value) == f'{problem[0]}: {problem[1]}'
+
+
 @pytest.mark.parametrize('coupled', [True, False])
 def test_voltage_request_passes_engine_contract_and_owns_all_boundaries(coupled):
     from beat_engine.beat_contract import validate_solve_request

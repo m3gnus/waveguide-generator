@@ -116,9 +116,20 @@ def _closed(points: np.ndarray, triangles: np.ndarray, planes: Sequence[str] = (
 
 
 def _check_interface(points: np.ndarray, fem: np.ndarray, bem: np.ndarray, label: str) -> None:
-    if not np.array_equal(np.sort(fem, axis=1), np.sort(bem, axis=1)):
+    from scipy.spatial import cKDTree
+
+    # Detached air volumes keep their own nodes; only acoustic ports require
+    # a coordinate/connectivity map to the original exterior skin.
+    vertices = np.unique(bem)
+    distances, nearest = cKDTree(points[vertices]).query(points[np.unique(fem)])
+    if np.any(distances > 1e-6) or len(set(nearest)) != len(nearest):
         raise FemRegionMeshError(f"{label} interface triangles are not shared.")
-    a, b = points[fem], points[bem]
+    mapping = dict(zip(np.unique(fem), vertices[nearest]))
+    rows = {tuple(sorted(face)): index for index, face in enumerate(bem)}
+    indices = [rows.get(tuple(sorted(mapping[v] for v in face))) for face in fem]
+    if len(fem) != len(bem) or None in indices or len(set(indices)) != len(indices):
+        raise FemRegionMeshError(f"{label} interface triangles are not shared.")
+    a, b = points[fem], points[bem[indices]]
     dots = np.einsum(
         "ij,ij->i",
         np.cross(a[:, 1] - a[:, 0], a[:, 2] - a[:, 0]),
@@ -126,6 +137,37 @@ def _check_interface(points: np.ndarray, fem: np.ndarray, bem: np.ndarray, label
     )
     if np.any(dots <= 0):
         raise FemRegionMeshError(f"{label} interface winding disagrees with the exterior.")
+
+
+def _detach_region(gmsh: Any, region: Mapping[str, Any], volumes: Sequence[int],
+                   boundary: set[int], groups: Mapping[str, set[int]]
+                   ) -> tuple[list[int], set[int], dict[str, set[int]]]:
+    """Copy a touching air domain; constrain only its FEM/BEM port meshes."""
+    copies = gmsh.model.occ.copy([(3, v) for v in volumes])
+    gmsh.model.occ.synchronize()
+    new_volumes = [int(tag) for dim, tag in copies if dim == 3]
+    new_boundary = _boundary(gmsh, new_volumes)
+    old_faces = _surface_descriptors(gmsh, sorted(boundary))
+    new_faces = _surface_descriptors(gmsh, sorted(new_boundary))
+    mapping = {}
+    for old in old_faces:
+        matches = [new.tag for new in new_faces
+                   if np.isclose(new.area_mm2, old.area_mm2, rtol=1e-9, atol=1e-7)
+                   and np.allclose(new.centroid_mm, old.centroid_mm, rtol=0, atol=1e-7)
+                   and np.allclose(new.bbox_mm, old.bbox_mm, rtol=0, atol=1e-7)]
+        if len(matches) != 1:
+            raise FemRegionMeshError(f"{_label(region)} could not detach its diaphragm mesh.")
+        mapping[old.tag] = matches[0]
+    if len(set(mapping.values())) != len(boundary):
+        raise FemRegionMeshError(f"{_label(region)} has ambiguous copied boundary faces.")
+    identity = np.eye(4).ravel().tolist()
+    for group in region['surface_groups']:
+        if group['kind'] == 'interface':
+            name = physical_name(region['region_id'], group['group_id'], 'interface')
+            for tag in sorted(groups[name]):
+                gmsh.model.mesh.setPeriodic(2, [mapping[tag]], [tag], identity)
+    return new_volumes, new_boundary, {name: {mapping[tag] for tag in tags}
+                                       for name, tags in groups.items()}
 
 
 def _msh(
@@ -201,6 +243,7 @@ def build_coupled_mesh(
     exterior_names: Mapping[str, Mapping[str, Any]],
     scratch_dir: str | Path | None = None,
     domain_planes: Sequence[str] = (), cut_planes: Sequence[str] = (),
+    contacts_only: bool = False,
 ) -> dict[str, Any]:
     """Replay, fragment, mesh 2D once, then tetrahedralise only bounded air.
 
@@ -220,7 +263,7 @@ def build_coupled_mesh(
         for _path, region in regions
         for group in region["surface_groups"]
         if group["kind"] == "interface"
-    )
+    ) or "; ".join(_label(region) for _path, region in regions)
     try:
         gmsh.clear()
         gmsh.model.add("wg-coupled")
@@ -334,7 +377,9 @@ def build_coupled_mesh(
             region["region_id"]: str(region.get("name", region["region_id"]))
             for region, *_rest in region_data
         }
-        moving_claims: dict[str, dict[int, str]] = {}
+        moving_claims: dict[str, dict[int, Mapping[str, Any]]] = {}
+        touching_regions: set[str] = set()
+        port_sizes = []
         region_volumes = []
         for region, original_volumes, _boundary_tags, assigned in region_data:
             volumes = sorted(set().union(*(descendants[(3, tag)] for tag in original_volumes)))
@@ -355,7 +400,7 @@ def build_coupled_mesh(
                 for group in region["surface_groups"]
             }
             moving_claims[region["region_id"]] = {
-                tag: str(group.get("name", group["group_id"]))
+                tag: group
                 for group in region["surface_groups"] if group["kind"] == "moving"
                 for tag in groups[physical_name(region["region_id"], group["group_id"], "moving")]
             }
@@ -372,17 +417,22 @@ def build_coupled_mesh(
                 )
             if len(owners) > 1:
                 first, second = owners[:2]
-                if tag in moving_claims[first] and tag in moving_claims[second]:
-                    raise FemRegionMeshError(
-                        f"FEM regions {region_names[first]!r} and {region_names[second]!r} "
-                        f"share the diaphragm {moving_claims[first][tag]!r}. "
-                        "Solving both sides of one diaphragm is not supported yet; "
-                        "declare one of the two chambers."
-                    )
+                a, b = moving_claims[first].get(tag), moving_claims[second].get(tag)
+                if (len(owners) == 2 and a and b and a.get('drive_channel_id')
+                        and a.get('drive_channel_id') == b.get('drive_channel_id')):
+                    # Intake has no driver spec. Solve admission must require
+                    # an electrodynamic component for this multi-region channel.
+                    touching_regions.update(owners)
+                    continue
                 raise FemRegionMeshError(
                     f"FEM regions {region_names[first]!r} and {region_names[second]!r} touch at boundary "
-                    f"face {tag}; shared FEM air boundaries are unsupported in 0.3.6."
+                    f"face {tag}; shared FEM air boundaries require moving faces on both sides "
+                    "of the same electrodynamic channel."
                 )
+        if contacts_only:
+            # Interior-only regions still need the same overlap/contact gate,
+            # then each region is meshed by its independent FEM child.
+            return {"exterior": None, "regions": {}}
         for region, volumes, groups in region_volumes:
             boundary = _boundary(gmsh, volumes)
             caps = symmetry_surfaces(gmsh, sorted(boundary), domain_planes)
@@ -405,7 +455,8 @@ def build_coupled_mesh(
                     f"Exterior source {source!r} is covered by {_label(region)}'s moving group; "
                     "unsupported in 0.3.6: unpaint the source; the region's diaphragm group drives it."
                 )
-            if not domain_planes and not any(g["kind"] == "interface" for g in region["surface_groups"]):
+            if (not domain_planes and region['region_id'] not in touching_regions
+                    and not any(g["kind"] == "interface" for g in region["surface_groups"])):
                 continue
             claimed = set().union(*groups.values())
             if caps:
@@ -422,7 +473,6 @@ def build_coupled_mesh(
                     raise FemRegionMeshError(
                         f"{_label(region, group)} did not survive as a shared OCC surface."
                     )
-                sizing.append((tags, float(group["mesh_size_mm"]), float(region["mesh_size_mm"])))
                 if group["kind"] == "interface":
                     if tags & free_surfaces:
                         sheet = min(tags & free_surfaces)
@@ -468,6 +518,20 @@ def build_coupled_mesh(
                     f"{_label(region)} has uncovered air boundary faces; the exterior is not closed by declared interfaces."
                 )
             prepared.append((region, volumes, boundary, groups))
+        detached = []
+        for region, volumes, boundary, groups in prepared:
+            if region['region_id'] in touching_regions:
+                for group in region['surface_groups']:
+                    if group['kind'] == 'interface':
+                        tags = groups[physical_name(region['region_id'], group['group_id'], 'interface')]
+                        port_sizes.append((tags, min(float(group['mesh_size_mm']), float(region['mesh_size_mm']))))
+                volumes, boundary, groups = _detach_region(gmsh, region, volumes, boundary, groups)
+            detached.append((region, volumes, boundary, groups))
+            for group in region['surface_groups']:
+                tags = groups[physical_name(region['region_id'], group['group_id'], group['kind'])]
+                sizing.append((tags, float(group['mesh_size_mm']), float(region['mesh_size_mm']),
+                               boundary, volumes))
+        prepared = detached
         for name, faces in source_descendants.items():
             selected = faces & exterior_surfaces
             if not selected:
@@ -487,7 +551,7 @@ def build_coupled_mesh(
             float(sizes["rigid_size_mm"]),
             *map(float, sizes["source_size_mm"].values()),
             *(float(region["mesh_size_mm"]) for region, *_rest in prepared),
-            *(size for _tags, size, _base in sizing),
+            *(size for _tags, size, _base, _boundary_tags, _volumes in sizing),
         ]
         gmsh.option.setNumber("Mesh.MeshSizeMin", min(all_sizes))
         gmsh.option.setNumber("Mesh.MeshSizeMax", max(all_sizes))
@@ -511,7 +575,9 @@ def build_coupled_mesh(
             constant(float(spec["size_mm"]), exterior_groups[name])
         for region, volumes, boundary, _groups in prepared:
             constant(float(region["mesh_size_mm"]), boundary, volumes)
-        for tags, size, base in sizing:
+        for tags, size in port_sizes:
+            constant(size, tags)
+        for tags, size, base, boundary, volumes in sizing:
             if size >= base:
                 continue
             distance = gmsh.model.mesh.field.add("Distance")
@@ -527,7 +593,14 @@ def build_coupled_mesh(
                 "StopAtDistMax": 1,
             }.items():
                 gmsh.model.mesh.field.setNumber(threshold, key, value)
-            fields.append(threshold)
+            if not touching_regions:
+                fields.append(threshold)
+                continue
+            restrict = gmsh.model.mesh.field.add('Restrict')
+            gmsh.model.mesh.field.setNumber(restrict, 'InField', threshold)
+            gmsh.model.mesh.field.setNumbers(restrict, 'SurfacesList', sorted(boundary))
+            gmsh.model.mesh.field.setNumbers(restrict, 'VolumesList', volumes)
+            fields.append(restrict)
         minimum = gmsh.model.mesh.field.add("Min")
         gmsh.model.mesh.field.setNumbers(minimum, "FieldsList", fields)
         gmsh.model.mesh.field.setAsBackgroundMesh(minimum)
@@ -537,6 +610,7 @@ def build_coupled_mesh(
         gmsh.model.setVisibility([(3, tag) for tag in material_volumes], 0)
         meshed_air = {v for _region, volumes, *_rest in prepared for v in volumes}
         gmsh.model.setVisibility([(3, v) for v in air_owners if v not in meshed_air], 0)
+        gmsh.model.setVisibility([(3, v) for v in meshed_air], 1)
         gmsh.option.setNumber("Mesh.MeshOnlyVisible", 1)
         gmsh.model.mesh.generate(3)
         if any(

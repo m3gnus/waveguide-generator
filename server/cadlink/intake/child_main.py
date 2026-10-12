@@ -399,7 +399,10 @@ def _task_coupled_mesh(
         normalisation_matrix=payload["normalisation_matrix"], sizes=payload["sizes"],
         exterior_names=payload["exterior_names"], scratch_dir=out_dir.parent / "tmp",
         domain_planes=payload.get("domain_planes", ()), cut_planes=payload.get("cut_planes", ()),
+        contacts_only=payload.get("contacts_only", False),
     )
+    if payload.get("contacts_only", False):
+        return {"built": built}, {}
     artifacts = {"coupled.msh": _stage(out_dir, "coupled.msh", built["exterior"].pop("msh_text"))}
     for region in regions:
         if region["region_id"] not in built["regions"]:

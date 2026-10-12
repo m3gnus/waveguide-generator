@@ -301,20 +301,40 @@ def test_pinned_zero_relative_level_is_accepted(packaged, tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize("shared", ["one-region", "two-regions"])
-def test_pinned_shared_diaphragm_writer_keeps_wg_existing_refusal(packaged, tmp_path, monkeypatch, shared):
+@pytest.mark.parametrize('electrodynamic', [False, True])
+def test_pinned_shared_diaphragm_round_trips_and_requires_driver_across_regions(
+    packaged, tmp_path, monkeypatch, shared, electrodynamic,
+):
+    from server.jobs.models import DriveChannel
+    from server.solver.coupled_admission import fem_request_problem
+    from server.tests.test_fem_electrodynamic import driver
+
     monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
     bundle, manifest, _ = _addin_bundle(packaged, tmp_path / "returns", coupled=False, shared=shared)
     assert read_wgreturn(bundle).manifest == manifest
     regions = manifest["scope"]["fem_regions"]
     diaphragms = ("rear-chamber/cone, rear-chamber/surround" if shared == "one-region"
                   else "front-chamber/cone, rear-chamber/cone")
-    expected = ("fem_multiple_diaphragms_unsupported",
+    expected = None if shared == 'one-region' or electrodynamic else ("fem_multiple_diaphragms_unsupported",
                 f"Channel 'drive-lf', regions/diaphragms {diaphragms}: "
-                "more than one FEM diaphragm on one drive channel is not supported yet")
-    assert fem_drive_problem(regions, {}, painted_sources=set()) == expected
+                "an ideal source cannot drive FEM moving groups in more than one region; "
+                "give this channel an electrodynamic driver to share a diaphragm between regions")
+    assert fem_drive_problem(regions, {}, painted_sources=set(),
+                             electrodynamic_channels={'drive-lf'} if electrodynamic else set()) == expected
+    assert ingest._refuse_fem_domain(manifest, {}, [])
     request = _request("wgi_" + "0" * 26, drive_channels=[],
                        mesh={"rigid_size_mm": 12., "transition_mm": 12., "source_size_mm": {}})
-    assert _imported_request_refusal(request, {"fem_regions": regions}) == expected
+    if electrodynamic:
+        request.geometry.drive_channels = [DriveChannel(
+            id='drive-lf', source_ids=[], motion='axial', exterior_transducer=driver())]
+    assert fem_request_problem({'fem_regions': regions}, request.geometry.drive_channels) == expected
+    record = {'fem_regions': regions, 'domain_interpretation': {'observations': {'planes': {
+        plane: {'rigid_cut_rim_edges': 0, 'solver_plane': plane} for plane in ('x0', 'y0', 'z0')}}}}
+    assert _imported_request_refusal(request, record) == expected
+    # Removing the driver cannot turn a two-chamber declaration into an ideal solve.
+    request.geometry.drive_channels = []
+    reverted = _imported_request_refusal(request, record)
+    assert bool(reverted) is (shared == 'two-regions')
 
 
 @pytest.mark.parametrize("mutation,expected", [

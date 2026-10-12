@@ -139,6 +139,23 @@ def test_real_ingest_meshes_every_region_and_retains_verified_artifacts(tmp_path
     second = _interior_region(region_id="front-chamber", name="Front chamber", object_id="air-2",
                      file="fem-regions/front-chamber.step", mesh_size_mm=10)
     bundle = _bundle(tmp_path / "returns", regions=[_interior_region(), second])
+    # These are independent chambers, not two declarations of the same air.
+    # Keep the stand-in exterior material outside both air volumes too.
+    manifest = json.loads((bundle / 'wgreturn.json').read_text())
+    for member, origin in ((manifest['assembly']['file'], (200, 0, 0)),
+                           (second['file'], (100, 0, 0))):
+        path = bundle / member
+        _write_step(path, boxes=(origin,))
+        manifest['files'][member].update(
+            sha256='sha256:' + hashlib.sha256(path.read_bytes()).hexdigest(),
+            size_bytes=path.stat().st_size)
+    manifest['assembly']['bbox_mm'] = [[200, 0, 0], [240, 30, 20]]
+    for group in manifest['scope']['fem_regions'][1]['surface_groups']:
+        for face in group['faces']:
+            face['centroid_mm'][0] += 100
+            for corner in face['bbox_mm']:
+                corner[0] += 100
+    (bundle / 'wgreturn.json').write_text(json.dumps(manifest))
     calls = []
     exterior = ingest.build_imported_mesh_isolated
     region_mesh = ingest.build_fem_region_mesh_isolated

@@ -313,7 +313,8 @@ def build_coupled_system(
     if problem:
         raise CoupledSystemError(f"{problem[0]}: {problem[1]}")
     problem = fem_drive_problem([r.record for r in regions], {}, painted_sources=set(),
-                                transducer_channels=set(transducers or {}))
+                               electrodynamic_channels={channel for channel, spec in (transducers or {}).items()
+                                                        if spec is not None})
     if problem and problem[0] in {"fem_lining_unsupported", "fem_motion_weight_unsupported"}:
         raise CoupledSystemError(f"{problem[0]}: {problem[1]}")
     if problem and problem[0] in {"fem_multiple_diaphragms_unsupported", "fem_missing_channel"}:

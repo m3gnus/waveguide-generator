@@ -36,7 +36,7 @@ SIZES = {"rigid_size_mm": 12, "transition_mm": 12, "source_size_mm": {}}
 
 def _write_assembly(
     path: Path, *, baffle=False, missing_wall=False, second_box=False,
-    sealed_chamber=False, cavity_width=30, second_sealed=False,
+    sealed_chamber=False, cavity_width=30, second_sealed=False, sealed_half=False,
 ) -> Path:
     def build():
         import gmsh
@@ -46,6 +46,9 @@ def _write_assembly(
             outer = gmsh.model.occ.addBox(-2, -2, -2, 42, cavity_width + 4, 24)
             cavity = gmsh.model.occ.addBox(0, 0, 0, 42, cavity_width, 20)
             material, _ = gmsh.model.occ.cut([(3, outer)], [(3, cavity)])
+            if sealed_half:
+                cap = gmsh.model.occ.addBox(40, 30, -2, 2, cavity_width - 28, 24)
+                material, _ = gmsh.model.occ.fuse(material, [(3, cap)])
             if sealed_chamber:
                 chamber = gmsh.model.occ.addBox(10, 5, -1.6, 10, 10, 0.8)
                 material, _ = gmsh.model.occ.cut(material, [(3, chamber)])
@@ -96,6 +99,8 @@ def _coupling_bundle(root: Path, **geometry):
             "external_reference": "local",
         }
     ]
+    if geometry.get('sealed_half'):
+        manifest['assembly']['bbox_mm'][1][0] = 42
     if geometry.get("second_box"):
         manifest["assembly"]["n_bodies_expected"] = 2
         manifest["assembly"]["bbox_mm"][1][0] = 142 if geometry.get("second_sealed") else 140
@@ -946,27 +951,120 @@ def test_components_touching_at_a_concave_vertex_are_not_nested(into_body):
 
 
 @pytest.mark.parametrize("interface", [True, False], ids=["two-interface-regions", "interior-only-neighbour"])
-def test_two_chambers_sharing_a_moving_diaphragm_have_a_specific_refusal(tmp_path, interface):
-    from server.cadlink.intake import ingest
+def test_two_chambers_share_independent_moving_meshes_and_one_driver(tmp_path, interface):
     from server.tests.test_fem_regions import _face
+    from server.tests.test_fem_electrodynamic import driver
+    from beat_engine.beat_contract import validate_compiled_system
 
-    bundle, manifest, first = _coupling_bundle(tmp_path / "returns", cavity_width=60)
+    bundle, manifest, first = _coupling_bundle(tmp_path / "returns", cavity_width=60, sealed_half=not interface)
     second = _add_region(bundle, manifest, origin=(0, 30, 0), interface=interface)
     diaphragm = _face(800, (20, 30, 10), [0, 1, 0], (0, 30, 0), (40, 30, 20))
     first["surface_groups"][0]["faces"] = [diaphragm]
     second["surface_groups"][0]["faces"] = [{**diaphragm, "normal": [0, -1, 0]}]
+    first['surface_groups'][0]['mesh_size_mm'] = 2.
+    second['surface_groups'][0]['mesh_size_mm'] = 7.
     (bundle / "wgreturn.json").write_text(json.dumps(manifest))
-    message = (
-        "FEM regions 'Rear chamber' and 'Front chamber' share the diaphragm 'Cone'. "
-        "Solving both sides of one diaphragm is not supported yet; declare one of the two chambers."
-    )
-    with pytest.raises(FemRegionMeshError) as caught:
-        _coupled(bundle, manifest, first, extra_regions=[second])
-    assert message in str(caught.value)
-    with pytest.raises(ingest.IngestRefusal) as caught:
+    built = _coupled(bundle, manifest, first, extra_regions=[second])
+    inputs = [FemRegionInput(region, read_fem_region_domain(
+        built['regions'][region['region_id']]['msh_text'], region['region_id']))
+        for region in (first, second)]
+    a, b = (built['regions'][region['region_id']] for region in (first, second))
+    assert a['stats']['surface_groups']['cone']['triangle_count'] > b['stats']['surface_groups']['cone']['triangle_count']
+    name_a = physical_name(first['region_id'], 'cone', 'moving')
+    name_b = physical_name(second['region_id'], 'cone', 'moving')
+    assert set(a['physical_names'][name_a]['entities']).isdisjoint(b['physical_names'][name_b]['entities'])
+    points, groups = read_coupled_exterior(built['exterior']['msh_text'])
+    exterior = ExteriorSurface(points, groups, built['exterior']['physical_names'])
+    system = build_coupled_system(exterior, inputs, transducers={'drive-lf': driver().model_copy(update={'motion_axis': (0., 1., 0.)})})
+    validate_compiled_system(system)
+    component, = system['components']
+    assert component['kind'] == 'electrodynamic_transducer'
+    assert set(component['boundary_ids']) == {'boundary:fem:rear-chamber:cone', 'boundary:fem:front-chamber:cone'}
+    assert system['metadata']['projected_areas_m2']['drive-lf'] == pytest.approx(.0008)
+    assert len(system['interfaces']) == (2 if interface else 1)
+    assert all(item['topology']['max_coordinate_error'] < 1e-9 for item in system['interfaces'])
+    with pytest.raises(ValueError, match='give this channel an electrodynamic driver'):
+        build_coupled_system(exterior, inputs)
+    # Removing the driver's spec must also refuse through normal job admission.
+    from server.jobs.models import DriveChannel
+    from server.solver.coupled_admission import fem_request_problem
+    record = {'fem_regions': [first, second]}
+    assert fem_request_problem(record, [DriveChannel(id='drive-lf', source_ids=['painted-front'])])[0] == 'fem_multiple_diaphragms_unsupported'
+    retained = _ingest(bundle, tmp_path)
+    assert len(retained['fem_regions']) == 2
+    assert all(region['stats']['tetrahedra'] > 0 for region in retained['fem_regions'])
+
+
+@pytest.mark.parametrize('mutation', ['other-channel', 'rigid', 'unclaimed', 'partial'])
+@pytest.mark.parametrize('interior_only', [False, True])
+def test_shared_contact_requires_same_channel_on_every_touching_face(tmp_path, mutation, interior_only):
+    from server.tests.test_fem_regions import _face
+    bundle, manifest, first = _coupling_bundle(tmp_path / 'returns', cavity_width=60)
+    second = _add_region(bundle, manifest, origin=(0, 30, 0))
+    diaphragm = _face(800, (20, 30, 10), [0, 1, 0], (0, 30, 0), (40, 30, 20))
+    first['surface_groups'][0]['faces'] = [diaphragm]
+    second['surface_groups'][0]['faces'] = [{**diaphragm, 'normal': [0, -1, 0]}]
+    if mutation == 'other-channel':
+        second['surface_groups'][0]['drive_channel_id'] = 'drive-hf'
+    elif mutation == 'rigid':
+        second['surface_groups'][0]['kind'] = 'rigid'
+        second['surface_groups'][0].pop('drive_channel_id')
+    elif mutation == 'unclaimed':
+        second['surface_groups'] = second['surface_groups'][1:]
+    else:
+        first['surface_groups'][0]['faces'] = [_face(1200, (20, 15, 0), [0, 0, 1], (0, 0, 0), (40, 30, 0))]
+    if interior_only:
+        for region in (first, second):
+            for group in region['surface_groups']:
+                if group['kind'] == 'interface':
+                    group['kind'] = 'rigid'
+    (bundle / 'wgreturn.json').write_text(json.dumps(manifest))
+    if not interior_only:
+        with pytest.raises(FemRegionMeshError, match='Rear chamber.*Front chamber.*same electrodynamic channel'):
+            _coupled(bundle, manifest, first, extra_regions=[second])
+    from server.cadlink.intake.ingest import IngestRefusal
+    with pytest.raises(IngestRefusal, match='Rear chamber.*Front chamber.*same electrodynamic channel'):
         _ingest(bundle, tmp_path)
-    assert message in str(caught.value)
-    assert caught.value.stage == "stage 7 meshing"
+
+
+def test_interior_only_touching_diaphragms_use_independent_region_children(tmp_path):
+    from server.tests.test_fem_regions import _face
+    from server.tests.test_fem_electrodynamic import driver
+    from beat_engine.beat_contract import validate_compiled_system
+    from server.mesh.artifact import read_verified_fem_region_mesh
+
+    bundle, manifest, first = _coupling_bundle(tmp_path / 'returns', cavity_width=60)
+    second = _add_region(bundle, manifest, origin=(0, 30, 0), interface=False)
+    diaphragm = _face(800, (20, 30, 10), [0, 1, 0], (0, 30, 0), (40, 30, 20))
+    first['surface_groups'][0]['faces'] = [diaphragm]
+    second['surface_groups'][0]['faces'] = [{**diaphragm, 'normal': [0, -1, 0]}]
+    first['surface_groups'][0]['mesh_size_mm'] = 2.
+    second['surface_groups'][0]['mesh_size_mm'] = 7.
+    first['surface_groups'][1]['kind'] = 'rigid'
+    (bundle / 'wgreturn.json').write_text(json.dumps(manifest))
+    retained = _ingest(bundle, tmp_path)
+    assert not retained.get('coupled_exterior')
+    a, b = retained['fem_regions']
+    assert a['stats']['surface_groups']['cone']['triangle_count'] > b['stats']['surface_groups']['cone']['triangle_count']
+    inputs = [FemRegionInput(region, read_fem_region_domain(
+        read_verified_fem_region_mesh(retained, region['region_id']), region['region_id']))
+        for region in retained['fem_regions']]
+    system = build_coupled_system(None, inputs, transducers={
+        'drive-lf': driver().model_copy(update={'motion_axis': (0., 1., 0.)})})
+    validate_compiled_system(system)
+    assert len(system['components']) == len(system['excitation_ports']) == 1
+    assert not system['interfaces']
+    assert system['metadata']['projected_areas_m2']['drive-lf'] == pytest.approx(.0008)
+
+
+def test_interior_only_overlapping_regions_remain_refused(tmp_path):
+    from server.cadlink.intake.ingest import IngestRefusal
+    bundle, manifest, first = _coupling_bundle(tmp_path / 'returns', cavity_width=60)
+    _add_region(bundle, manifest, origin=(0, 0, 0), interface=False)
+    first['surface_groups'][1]['kind'] = 'rigid'
+    (bundle / 'wgreturn.json').write_text(json.dumps(manifest))
+    with pytest.raises(IngestRefusal, match="Front chamber.*overlaps FEM region.*Rear chamber"):
+        _ingest(bundle, tmp_path)
 
 
 def test_region_split_by_a_rigid_sheet_has_a_single_region_refusal(tmp_path):

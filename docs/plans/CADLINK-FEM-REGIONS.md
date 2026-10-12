@@ -63,13 +63,14 @@ Two existing tools set the shape of the work:
    matches no surface, or more than one, in WG. A lost diaphragm would solve
    to silence, and a lost interface would seal the chamber.
 5. **The engine is the official BEAT worker,** through the contract-2
-   `compiled_system` that Boundary Lab also uses. One painted exterior front and one FEM rear diaphragm may share
-   one ideal velocity source per drive channel. Two FEM moving groups on an
-   ideal channel are refused in 0.3.6 because positive FEM load weights would
-   make both chambers breathe rather than move as a piston. An electrodynamic
-   channel uses the rigid translation axis and may own moving faces in two
-   separate meshes; same-sign net projections sum as one side and opposite
-   sides are averaged for Sd.
+   `compiled_system` that Boundary Lab also uses. One painted exterior front
+   and one FEM rear diaphragm may share an ideal velocity source per channel.
+   Several FEM moving groups in one region may also share an ideal source.
+   Moving groups in several regions require an electrodynamic driver on that
+   channel: one component owns all its FEM and BEM boundaries and one rigid
+   translation coordinate. Ideal sources across regions are refused with the
+   remedy “give this channel an electrodynamic driver to share a diaphragm
+   between regions”.
 6. **The display slices exactly.** Boundary Lab samples a grid and locates
    points in tetrahedra. WG cuts each crossed tetrahedron and interpolates
    along its edges, which is exact for P1 elements and leaves no gaps. Smooth
@@ -130,7 +131,7 @@ count and mesh density remain user-selected.
 | F7 | waveguide-generator | preparation implemented; live qualification pending | exterior closure: mesh the exterior with each interface patch conforming to the FEM interface, by fragmenting the shell with the region's interface face so OCC shares the rim |
 | F8 | waveguide-generator | CPU and GPU routes implemented; GPU qualification pending | official CPU float64 and Metal/CUDA/ROCm float32 coupled jobs (`coupled_fem_bem_lem` / `interior_fem`), multi-channel results and FEM field sidecars; declared regions solve by default; explicit kill switch remains |
 | F9 | waveguide-generator | interior field implemented | result route `/api/results/{id}/fem-field`, then mount `FemFieldView` with the field-plane gizmo, a frequency slider, system or channel response, phase animation, interior slice plane (combined exterior display remains follow-up) |
-| F10 | both | full-model drivers implemented; symmetry pending | electrodynamic drivers on FEM diaphragms (voltage ports, T/S parameters), aligned with [DRIVER-REAR-LOAD](DRIVER-REAR-LOAD.md)'s meshed front chambers; candidate: coupled front and rear chambers sharing one moving diaphragm |
+| F10 | both | full-model drivers implemented; symmetry pending | electrodynamic drivers on FEM diaphragms (voltage ports, T/S parameters), aligned with [DRIVER-REAR-LOAD](DRIVER-REAR-LOAD.md)'s meshed front chambers; shared diaphragm across front and rear chambers implemented |
 | F11 | waveguide-generator | CPU float64 reference validated; GPU qualification pending | validation: sealed box against the lumped model; Boundary Lab's Simple_Sealed and compression_driver solved from the same meshes |
 | F12 | wglink | open | live Fusion verification of the dialog and the temporary-component export in a parametric timeline; regions under reduced domains and non-root frames |
 
@@ -253,6 +254,8 @@ The child replays the exterior's winning OCC healing recipe and verifies its
 geometry fingerprint. Region faces are matched in the export frame before
 applying the same rigid rotation, translation and recentring operations as the
 assembly. A missing recipe, fingerprint mismatch or transform mismatch refuses.
+With several interior-only regions, this task checks contacts and overlaps
+without generating an exterior mesh, then each region uses its own FEM child.
 
 BooleanFragments supplies surface ancestry, including split region faces.
 Painted assembly faces are copied as explicit fragment tools to preserve their
@@ -262,13 +265,25 @@ excluded, exposed interface faces are included under their FEM physical names,
 and free assembly wall sheets are retained. A rigid sheet coinciding with an
 interface refuses rather than losing its closure. Nested closed skin components
 refuse with their location and area: a sealed chamber does not border unbounded
-exterior air and requires an explicit modelling decision. Touching regions
-refuse naming both regions rather than acquiring a silent rigid partition.
-In 0.3.6, two regions claiming their shared face as a `moving` group also
-refuse, with a specific message naming both chambers and the diaphragm:
-solving both sides of one diaphragm is not supported yet; declare one of the
-two chambers. Supporting this compression-driver front/rear configuration is
-a candidate for F10. A region fragmented into pieces by another body refuses
+exterior air and requires an explicit modelling decision. Two regions may
+meet only where both declare moving faces on the same channel. All other
+contacts refuse naming both regions, including a rigid or unclaimed face or
+different drive channels. Intake retains these declarations because the return
+has no driver spec; solve admission and direct compilation require an
+electrodynamic driver for a channel spanning regions.
+
+Touching regions use separate copies of their air volumes, so their diaphragm
+surfaces are independently triangulated with their own local node numbering
+and mesh sizes. There is no diaphragm node map or FEM–FEM acoustic interface:
+the regions communicate through one mechanical coordinate. Only FEM–BEM port
+surfaces retain a conforming mesh map to the exterior. Declared Sd controls
+lumped rear-chamber stiffness. Geometry supplies only an
+acoustic-impedance fallback and cross-check, using signed mesh projections;
+ambiguous geometry does not supply Sd. Several tags in one mesh, such as dome
+and surround, contribute together. An enabled lumped rear chamber requires
+declared Sd and is refused when the moving geometry already loads the rear.
+
+A region fragmented into pieces by another body refuses
 with a single-region message asking for one closed solid.
 Painted sources covered wholly or partly by a region refuse; when a diaphragm
 group owns the same faces, unpaint the source because the region's diaphragm
@@ -488,9 +503,10 @@ source coordinates before any backend rotation or float32 packing. Admission
 and compilation orient coupled exterior shells with the same helper; raw OCC
 face winding is not used for projection. Connected surround folds subtract
 from each mesh's signed net. Mesh nets with the same sign sum as one side;
-opposite-sign side totals are averaged, with a warning above 10% disagreement.
+opposite-sign side totals are averaged only for the acoustic-impedance fallback,
+which is ambiguous above 10% disagreement.
 Declared Sd remains in use for ambiguous geometry. Only unambiguous geometry
-produces a declared-vs-geometric cross-check warning, above 25% of declared Sd.
+produces a declared-vs-geometric cross-check warning.
 Geometry includes everything that moves, such as the surround roll, so a value
 10–20% above datasheet Sd is normal.
 
@@ -506,7 +522,10 @@ impedance and records “Sd not determined; enter Sd to get acoustic impedance�
 Admission does not read FEM tetrahedral meshes for Sd when no chamber is enabled.
 
 F10a refuses `lumped_chamber_double_rear_load` at admission and compilation
-when an enabled lumped rear chamber shares a channel with moving faces in
-multiple meshes (two FEM regions, or FEM plus exterior), even with declared Sd.
-The rear already radiates; its FEM load and lumped stiffness must never be
-applied together.
+when an enabled lumped rear chamber shares a channel with opposite-sign
+moving mesh nets or disconnected opposite-sign patches, even with declared Sd.
+Ambiguous geometry also refuses the chamber. Same-sign meshes can contribute
+to one side without a double load. Admission counts meshes from declarations
+and inspects verified moving geometry when a chamber is enabled. The rear
+already radiates; its FEM load and lumped stiffness must never be applied
+together.
