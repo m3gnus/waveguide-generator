@@ -103,7 +103,16 @@ class ActivityTracker:
     def retire_if_idle(
         self, request_stop: Callable[[str], None], reason: str,
         *, requested: Callable[[], bool] = lambda: True,
+        stop_started: Callable[[], bool] = lambda: False,
     ) -> bool:
+        """Hold-checked commit: re-check, mark retiring, then ask the server to stop.
+
+        ``stop_started`` says whether shutdown has begun. If ``request_stop``
+        raises after that point the server is stopping anyway, so ``retiring``
+        stays set and no client adopts a dying backend; it is rolled back only
+        when shutdown never started.
+        """
+
         async def commit() -> bool:
             if getattr(self.app.state, "retiring", False):
                 return True
@@ -114,7 +123,12 @@ class ActivityTracker:
             try:
                 request_stop(reason)
             except BaseException:
-                self.app.state.retiring = False
+                try:
+                    started = bool(stop_started())
+                except Exception:  # noqa: BLE001 - unknown means the stop may be under way
+                    started = True
+                if not started:
+                    self.app.state.retiring = False
                 raise
             return True
 
@@ -175,10 +189,11 @@ class InstallerRetireThread:
 
     def __init__(
         self, tracker: ActivityTracker, request_stop: Callable[[str], None], signal: retire.RetireSignal,
-        *, initially_requested: bool,
+        *, initially_requested: bool, stop_started: Callable[[], bool] = lambda: False,
     ):
         self.tracker = tracker
         self.request_stop = request_stop
+        self.stop_started = stop_started
         self.stop = StopSignal()
         self.thread: threading.Thread | None = None
         self.signal = signal
@@ -216,6 +231,7 @@ class InstallerRetireThread:
                 self.request_stop, RETIRE_REASON,
                 requested=lambda: self.signal.requested() and watcher.held_since is not None
                 and watcher.clock() - watcher.held_since < watcher.cap,
+                stop_started=self.stop_started,
             ),
             armed=not self.initially_requested,
         )

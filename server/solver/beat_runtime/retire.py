@@ -10,9 +10,9 @@ that mutex (``installers/windows/bundle-setup.iss``,
 on idle expiry: only with no client and no peer mid-handshake. A running app
 keeps its connection, so its host stays, and the installer still refuses.
 
-An idle headless (ensure-started) backend also holds this event for its process
-lifetime. ``launch/backend_lifetime.py`` holds new work while it is set and
-exits when the backend has no client.
+An ensure- or CLI-started backend (``lifetime`` headless or contained) also
+holds this event for its process lifetime. ``launch/backend_lifetime.py``
+holds new work while it is set and exits when the backend has no client.
 
 The name is a contract with the installer; ``bundle-setup.iss`` spells it too.
 Off Windows this does nothing.

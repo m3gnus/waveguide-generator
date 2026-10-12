@@ -151,18 +151,19 @@ def test_health_and_placeholder_shell(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("marker", [None, "", "0", "1"])
-def test_health_lifetime_only_for_contained_marker(tmp_path, monkeypatch, marker):
+def test_health_reports_one_lifetime_field(tmp_path, monkeypatch, marker):
     if marker is None:
         monkeypatch.delenv("WG2_BACKEND_CONTAINED", raising=False)
     else:
         monkeypatch.setenv("WG2_BACKEND_CONTAINED", marker)
     client = TestClient(create_app(data_dir=tmp_path))
     payload = client.get("/health").json()
-    expected = {"version", "build", "commit", "uptime", "data_dir", "pid"}
-    if marker == "1":
-        expected.add("lifetime")
-        assert payload["lifetime"] == "contained"
+    expected = {"version", "build", "commit", "uptime", "data_dir", "pid", "lifetime", "retiring"}
     assert set(payload) == expected
+    # Only the contained marker says "contained"; an app built without
+    # launch/serve.py has nobody to call it headless.
+    assert payload["lifetime"] == ("contained" if marker == "1" else "attached")
+    assert payload["retiring"] is False
 
 
 def test_windows_acl_repair_status_is_published_after_startup(tmp_path: Path) -> None:

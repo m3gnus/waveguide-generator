@@ -46,6 +46,7 @@ from server.platform.acl_migration import (
     legacy_acl_repair_feedback,
     repair_legacy_acls,
 )
+from server.platform.backend_owner import CONTAINED_ENV
 from server.platform.paths import DATA_DIR_ENV, app_root, default_runs_dir, legacy_default_runs_dir, default_folder_root, resolve_data_dir
 from shared.build_identity import build_identity, build_label
 from server.preview.service import mount_preview
@@ -876,11 +877,13 @@ def create_app(
             # Lets a client check that the port answers as the process that holds
             # the instance lock (server/platform/backend_owner.py).
             "pid": os.getpid(),
-            "lifetime": getattr(application.state, "lifetime", "standalone"),
+            # One field: attached, headless or contained (``launch/serve.py``
+            # sets it; an app built without serve reads the contained marker).
+            "lifetime": getattr(application.state, "lifetime", None) or (
+                "contained" if os.environ.get(CONTAINED_ENV) == "1" else "attached"
+            ),
             "retiring": getattr(application.state, "retiring", False),
         }
-        if os.environ.get("WG2_BACKEND_CONTAINED") == "1":
-            payload["lifetime"] = "contained"
         return payload
 
     @application.get("/api/capabilities")

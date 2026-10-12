@@ -34,6 +34,7 @@ from launch.serve_options import (  # noqa: E402
     add_server_arguments,
 )
 from server.app import BUILD, create_app  # noqa: E402
+from server.platform.backend_owner import CONTAINED_ENV  # noqa: E402
 from server.platform.console import harden_console  # noqa: E402
 from server.platform.instance import (  # noqa: E402
     DEFAULT_PID_POLL_INTERVAL,
@@ -625,6 +626,22 @@ def _capture_shutdown_signals(
             signal.signal(signum, handler)  # type: ignore[arg-type]
 
 
+#: The one ``lifetime`` field ``/health`` reports. ``attached`` lives as long as
+#: whoever started it (the status window, or a terminal); ``headless`` is an
+#: ensure or CLI start (``--lifetime=headless``) that outlives its client; and
+#: ``contained`` is a CLI start whose caller's Windows job refused breakaway, so
+#: it ends with that job (``WG2_BACKEND_CONTAINED``, set by
+#: ``server/platform/backend_owner.py``). Both of the last two have no owner to
+#: stop them, so both answer the installer's retire request.
+RETIRABLE_LIFETIMES = frozenset({"headless", "contained"})
+
+
+def _backend_lifetime(args: argparse.Namespace, environ: MutableMapping[str, str]) -> str:
+    if environ.get(CONTAINED_ENV) == "1":
+        return "contained"
+    return "headless" if args.lifetime == "headless" else "attached"
+
+
 def _start_temporary_session() -> TemporarySession | None:
     """Give this process a temporary directory of its own, and sweep dead ones.
 
@@ -781,7 +798,8 @@ def main(argv: list[str] | None = None) -> int:
     # Setup runs -- so the watcher waits to see it clear before honouring it.
     retire_signal = None
     retire_initially_requested = False
-    if args.lifetime == "headless" and os.name == "nt":
+    lifetime = _backend_lifetime(args, os.environ)
+    if lifetime in RETIRABLE_LIFETIMES and os.name == "nt":
         from server.solver.beat_runtime.retire import RetireSignal
 
         retire_signal = RetireSignal()
@@ -808,10 +826,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         state = getattr(app, "state", None)
         if state is not None:
-            state.lifetime = args.lifetime or ("attached" if args.status_control is not None else "standalone")
+            state.lifetime = lifetime
             state.retiring = False
         tracker = None
-        if args.lifetime == "headless":
+        if lifetime in RETIRABLE_LIFETIMES:
             from launch.backend_lifetime import ActivityTracker
 
             tracker = ActivityTracker(app)
@@ -871,6 +889,9 @@ def main(argv: list[str] | None = None) -> int:
             retire_thread = InstallerRetireThread(
                 tracker, request_stop, retire_signal,
                 initially_requested=retire_initially_requested,
+                # A stop that began keeps /health saying retiring, even if
+                # starting its budget then failed (backend_lifetime.py).
+                stop_started=lambda: bool(server.should_exit),
             )
             retire_thread.start()
 

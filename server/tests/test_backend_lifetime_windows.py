@@ -31,8 +31,9 @@ def _until(check, deadline, message):
     pytest.fail(message)
 
 
-@pytest.fixture
-def backend(tmp_path, retire_event):
+@pytest.fixture(params=["headless"])
+def backend(request, tmp_path, retire_event):
+    lifetime = request.param
     require_backend_breakaway()
     from ctypes import wintypes
 
@@ -62,10 +63,13 @@ def backend(tmp_path, retire_event):
     watchdog = None
     expired = threading.Event()
     try:
-        process, log = backend_owner._spawn([
+        argv = [
             sys.executable, str(ROOT / "server" / "tests" / "backend_lifetime_main.py"),
             "--lifetime=headless", "--no-browser", "--data-dir", str(data), "--port", str(port),
-        ], data, env)
+        ]
+        # A contained start is the CLI's fallback: inside the caller's job, marked
+        # by the owner's environment. It must retire exactly as a headless one.
+        process, log = backend_owner._spawn_attempt(argv, data, env, contained=lifetime == "contained")
 
         def timeout():
             expired.set()
@@ -96,7 +100,7 @@ def backend(tmp_path, retire_event):
                 status, health = request()
             except (OSError, ValueError):
                 return False
-            return status == 200 and health.get("lifetime") == "headless"
+            return status == 200 and health.get("lifetime") == lifetime
 
         # Application imports can be slow on hosted Windows runners.
         _until(healthy, time.monotonic() + 90, "backend never became healthy")
@@ -118,6 +122,7 @@ def backend(tmp_path, retire_event):
         control.close()
 
 
+@pytest.mark.parametrize("backend", ["headless", "contained"], indirect=True)
 def test_idle_backend_retires_within_installer_grace(backend):
     process, data, port, _request, signal = backend
     started = time.monotonic()

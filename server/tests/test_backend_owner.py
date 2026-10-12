@@ -558,7 +558,7 @@ def test_discovery_reads_lifetime_without_changing_owner(data_dir, monkeypatch, 
 
 
 def test_ensure_forwards_contained_permission_only_when_requested(data_dir, monkeypatch):
-    found = backend_owner.BackendHandle("http://127.0.0.1:4000", 1, 4000, data_dir, "", "", True)
+    found = backend_owner.BackendHandle("http://127.0.0.1:4000", 1, 4000, data_dir, "", "", "contained")
     monkeypatch.setattr(backend_owner, "_discover", lambda root: None)
     def start(root, argv, deadline, env, *, allow_contained=False):
         assert allow_contained is True
@@ -773,6 +773,51 @@ def test_exit_2_respawns_after_a_retiring_owner_disappears(data_dir, monkeypatch
     assert [call[3] for call in calls] == [0.0, 0.5, 1.0]
     assert waited == [321, 654] and closed == [321, 654, 456]
     assert all(call[2] == {"KEEP": "yes"} for call in calls)
+
+
+def test_respawn_after_a_retiring_owner_keeps_the_contained_permission(data_dir, monkeypatch):
+    """A CLI start that accepted a contained backend accepts one again on respawn."""
+    from types import SimpleNamespace
+
+    clock = [0.0]
+    calls = []
+    owner = SimpleNamespace(pid=123, port=3100)
+    replacement = SimpleNamespace(pid=456, port=3101)
+    observations = iter([
+        (owner, {"pid": 123, "data_dir": str(data_dir), "retiring": True, "lifetime": "contained"}),
+        (replacement, {"pid": 456, "data_dir": str(data_dir), "lifetime": "contained"}),
+    ])
+    children = iter([
+        SimpleNamespace(pid=321, poll=lambda: 2, wait=lambda: None, _wg_start_job=None),
+        SimpleNamespace(pid=456, poll=lambda: None, wait=lambda: None, _wg_start_job=None),
+    ])
+
+    def spawn(argv, root, env=None, **kwargs):
+        calls.append(kwargs)
+        return next(children), data_dir / "start.log"
+
+    monkeypatch.setattr(backend_owner, "_spawn", spawn)
+    monkeypatch.setattr(backend_owner, "_observe", lambda _: next(observations))
+    monkeypatch.setattr(backend_owner, "pid_is_running", lambda _: True)
+    monkeypatch.setattr(backend_owner.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(backend_owner.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    handle = backend_owner._start_and_wait(data_dir, ["backend"], 5.0, None, allow_contained=True)
+    assert handle.pid == 456 and handle.contained and handle.lifetime == "contained"
+    assert calls == [{"allow_contained": True}, {"allow_contained": True}]
+
+
+@pytest.mark.parametrize("reported, lifetime", [
+    (None, "attached"), ("", "attached"), ("attached", "attached"),
+    ("headless", "headless"), ("contained", "contained"),
+])
+def test_handle_carries_the_one_lifetime_field(data_dir, reported, lifetime):
+    from types import SimpleNamespace
+
+    health = {"pid": 7, "data_dir": str(data_dir)}
+    if reported is not None:
+        health["lifetime"] = reported
+    handle = backend_owner._validate(data_dir, SimpleNamespace(pid=7, port=3100), health)
+    assert handle.lifetime == lifetime and handle.contained is (lifetime == "contained")
 
 
 @pytest.mark.parametrize("metadata", [False, True])

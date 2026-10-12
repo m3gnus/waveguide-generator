@@ -32,6 +32,7 @@ from server.platform.backend_owner import (
     BackendDataDirMismatch, BackendSpawnError, BackendStartTimeout, discover_backend,
 )
 from server.platform.instance import InstanceLock
+from server.platform.paths import display_path
 from server.tests.test_cli_solve import MESH, TinyEngine, _design, _registry, _request
 from server.tests.backend_breakaway import (
     require_backend_breakaway,
@@ -176,7 +177,7 @@ def test_cli_contained_notice_and_outcome_for_start_and_adoption(tmp_path, monke
 
     async def scenario():
         async with _transports(data_dir, monkeypatch) as (_, _, detached):
-            handle = replace(detached, contained=contained)
+            handle = replace(detached, lifetime="contained" if contained else "headless")
             monkeypatch.setattr(cli, "discover_backend", lambda root: handle if adopt else None)
             def ensure(root, argv, *, start_env, allow_contained):
                 assert allow_contained is True
@@ -331,7 +332,7 @@ def test_cli_reports_job_query_failure_without_contained_fallback(tmp_path, monk
     monkeypatch.setattr(backend_owner, "_discover", lambda root: None)
     result, messages, stderr = asyncio.run(_solve(args))
     expected = (
-        f"Could not start the backend ({sys.executable!r}): "
+        f'Could not start the backend ("{display_path(sys.executable)}"): '
         f"Could not check the {subject}'s Windows job; cannot detach the backend. "
         "Check the installation, or start Waveguide Generator manually."
     )

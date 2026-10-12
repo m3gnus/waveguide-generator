@@ -1232,8 +1232,9 @@ Only the CLI opts into `ensure_backend(..., allow_contained=True)`. After a
 breakaway refusal it retries without the breakaway flag or outer-job check,
 still admitting the suspended child to the same non-killing nested start job.
 The child receives `WG2_BACKEND_CONTAINED=1`, and `backend-start.log` records
-`job breakaway: refused (contained)`. Its `/health` adds `lifetime: "contained"`;
-discovery reads this into `BackendHandle.contained`. The CLI warns once on stderr
+`job breakaway: refused (contained)`. Its `/health` reports `lifetime: "contained"`
+(one field: `attached`, `headless` or `contained`); discovery reads it into
+`BackendHandle.lifetime`, and `BackendHandle.contained` derives from it. The CLI warns once on stderr
 for either a newly started or adopted contained owner, and adds
 `backend_lifetime: "contained"` only to that owner's NDJSON outcome. Detached
 health and outcome payloads retain their previous fields.

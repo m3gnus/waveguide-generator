@@ -68,7 +68,8 @@ skips is crash-safe by construction:
 
 When a Windows job refuses backend breakaway, `wg solve` can start
 the shared backend inside that job. The nested admission job remains in place;
-`GET /health` adds `lifetime: "contained"`, and the CLI prints one stderr notice
+`GET /health` reports `lifetime: "contained"` (otherwise `headless` for an
+ensure or CLI start, `attached` for any other), and the CLI prints one stderr notice
 and includes `backend_lifetime: "contained"` in the terminal NDJSON outcome.
 The installed `--ensure-backend` entry and WGLink cold start refuse this fallback
 and explain how to start WG from the Start menu or outside the forbidding job.

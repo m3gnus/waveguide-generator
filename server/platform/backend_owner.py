@@ -46,6 +46,9 @@ from .instance import (
 from .paths import display_path
 
 START_LOCK_FILENAME = "backend-start.lock"
+#: Set to "1" in the environment of a backend started inside its caller's job
+#: (the CLI's contained fallback); ``/health`` then reports ``lifetime: contained``.
+CONTAINED_ENV = "WG2_BACKEND_CONTAINED"
 LOG_FILENAME = "backend-start.log"
 HEALTH_TIMEOUT = 2.0
 POLL_INTERVAL = 0.1
@@ -61,7 +64,16 @@ class BackendHandle:
     data_dir: Path
     version: str
     commit: str
-    contained: bool = False
+    #: What ``/health`` reports: ``attached``, ``headless`` or ``contained``.
+    #: A backend too old to report one is ``attached``: nothing may assume it
+    #: can be retired.
+    lifetime: str = "attached"
+
+    @property
+    def contained(self) -> bool:
+        """It ends with its caller's Windows job (the CLI's contained fallback)."""
+
+        return self.lifetime == "contained"
 
 
 class BackendOwnerError(RuntimeError):
@@ -140,7 +152,7 @@ def _validate(
         data_dir=data_dir,
         version=str(health.get("version", "")),
         commit=str(health.get("commit", "")),
-        contained=health.get("lifetime") == "contained",
+        lifetime=str(health.get("lifetime") or "attached"),
     )
 
 
@@ -245,11 +257,11 @@ def _spawn_attempt(
     job = None
     process = None
     child_env = env
-    if contained or "WG2_BACKEND_CONTAINED" in (os.environ if env is None else env):
+    if contained or CONTAINED_ENV in (os.environ if env is None else env):
         child_env = dict(os.environ if env is None else env)
-        child_env.pop("WG2_BACKEND_CONTAINED", None)
+        child_env.pop(CONTAINED_ENV, None)
         if contained:
-            child_env["WG2_BACKEND_CONTAINED"] = "1"
+            child_env[CONTAINED_ENV] = "1"
     try:
         if sys.platform == "win32":
             from server.platform.process_tree import windows_backend_breakaway_flags
@@ -404,10 +416,14 @@ def _start_and_wait(
     root: Path, argv: Sequence[str], deadline: float, env: Mapping[str, str] | None = None,
     *, allow_contained: bool = False,
 ) -> BackendHandle:
-    if allow_contained:
-        process, log_path = _spawn(argv, root, env, allow_contained=True)
-    else:
-        process, log_path = _spawn(argv, root) if env is None else _spawn(argv, root, env)
+    def spawn() -> tuple[subprocess.Popen[bytes], Path]:
+        # A respawn after a retiring owner is the same start: a CLI client that
+        # accepted a contained backend accepts one again.
+        if allow_contained:
+            return _spawn(argv, root, env, allow_contained=True)
+        return _spawn(argv, root) if env is None else _spawn(argv, root, env)
+
+    process, log_path = spawn()
     try:
         while True:
             info, health = _observe(root)
@@ -453,7 +469,7 @@ def _start_and_wait(
                     process._wg_start_job = None
                 time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
                 if time.monotonic() < deadline:
-                    process, log_path = _spawn(argv, root) if env is None else _spawn(argv, root, env)
+                    process, log_path = spawn()
                 continue
             time.sleep(POLL_INTERVAL)
     except BaseException:

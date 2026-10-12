@@ -32,7 +32,7 @@ def test_launcher_keeps_contained_fallback_disabled(tmp_path, monkeypatch, capsy
 
 @pytest.mark.parametrize("contained", [False, True])
 def test_launcher_reports_adopted_owner_lifetime_only_when_contained(tmp_path, monkeypatch, capsys, contained):
-    found = replace(handle(tmp_path), contained=contained)
+    found = replace(handle(tmp_path), lifetime="contained" if contained else "headless")
     monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
     monkeypatch.setattr(backend_owner, "_discover", lambda root: found)
     monkeypatch.setattr(backend_owner, "_spawn", lambda *a, **kw: pytest.fail("must adopt owner"))

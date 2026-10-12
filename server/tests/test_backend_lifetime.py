@@ -360,6 +360,29 @@ def test_commit_rolls_back_retiring_when_stop_raises():
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("started, kept", [
+    (lambda: True, True),
+    (lambda: False, False),
+    # Not knowing whether shutdown began counts as begun.
+    (lambda: (_ for _ in ()).throw(RuntimeError("unknown")), True),
+])
+def test_retiring_survives_a_failed_stop_once_shutdown_began(started, kept):
+    async def scenario():
+        app = SimpleNamespace(state=SimpleNamespace(jobs_runtime=None, retiring=False))
+        tracker = ActivityTracker(app)
+
+        def failed_stop(_reason):
+            # serve.py sets should_exit first; the budget's thread start then fails.
+            raise RuntimeError("could not start the shutdown budget")
+
+        tracker._on_loop = lambda check, **_kwargs: check()
+        with pytest.raises(RuntimeError, match="shutdown budget"):
+            await tracker.retire_if_idle(failed_stop, "test", stop_started=started)
+        assert app.state.retiring is kept
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("result", [False, True])
 def test_loop_returns_completed_result_after_timeout(monkeypatch, result):
     from concurrent.futures import Future
@@ -445,7 +468,7 @@ def retire_thread_driver(monkeypatch, retire_event):
         monkeypatch.setattr(backend_lifetime, "threading", SimpleNamespace(Thread=InlineThread))
         monkeypatch.setattr(retire, "RetireSignal", lambda: pytest.fail("must use the early signal"))
 
-        def commit(request_stop, reason, *, requested):
+        def commit(request_stop, reason, *, requested, stop_started):
             assert requested()
             state.retiring = True
             request_stop(reason)
@@ -493,9 +516,10 @@ def test_retire_thread_does_not_release_hold_when_retiring(retire_thread_driver)
     assert observations == [(True, True, 0)]
 
 
+@pytest.mark.parametrize("lifetime", ["headless", "contained"])
 @pytest.mark.parametrize("initially_set", [False, True])
 @pytest.mark.parametrize("failure", [None, "interface", "port", "temporary", "app", "thread start"])
-def test_serve_creates_and_passes_early_signal(tmp_path, monkeypatch, retire_event, initially_set, failure):
+def test_serve_creates_and_passes_early_signal(tmp_path, monkeypatch, retire_event, initially_set, failure, lifetime):
     from launch import backend_lifetime, serve
     from server.solver.beat_runtime import retire
 
@@ -516,9 +540,11 @@ def test_serve_creates_and_passes_early_signal(tmp_path, monkeypatch, retire_eve
             raise OSError(stage)
 
     class Thread:
-        def __init__(self, tracker, request_stop, early_signal, *, initially_requested):
+        def __init__(self, tracker, request_stop, early_signal, *, initially_requested, stop_started):
             assert early_signal is signal and initially_requested is initially_set
-            assert tracker.app.state.lifetime == "headless"
+            # A contained CLI backend answers the installer exactly as a headless one.
+            assert tracker.app.state.lifetime == lifetime
+            assert stop_started() is False
             events.append("thread create")
 
         def start(self):
@@ -541,7 +567,8 @@ def test_serve_creates_and_passes_early_signal(tmp_path, monkeypatch, retire_eve
 
     monkeypatch.setattr(retire, "RetireSignal", create_signal)
     monkeypatch.setattr(backend_lifetime, "InstallerRetireThread", Thread)
-    monkeypatch.setattr(serve, "os", SimpleNamespace(name="nt", environ={}, getpid=lambda: 123))
+    environ = {"WG2_BACKEND_CONTAINED": "1"} if lifetime == "contained" else {}
+    monkeypatch.setattr(serve, "os", SimpleNamespace(name="nt", environ=environ, getpid=lambda: 123))
     monkeypatch.setattr(serve, "ensure_data_layout", lambda: SimpleNamespace(root=tmp_path, locks=tmp_path))
     for name in ("setup_logging", "flush_logs", "_no_gui_healthy_start", "_start_beat_cpu_provisioning",
                  "harden_console", "_publish_status_ready"):
@@ -555,7 +582,7 @@ def test_serve_creates_and_passes_early_signal(tmp_path, monkeypatch, retire_eve
     monkeypatch.setattr(serve, "reserve_port", reserve)
     monkeypatch.setattr(serve, "create_app", create_app)
     monkeypatch.setattr(serve.uvicorn, "Config", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(serve.uvicorn, "Server", lambda _config: SimpleNamespace(run=run))
+    monkeypatch.setattr(serve.uvicorn, "Server", lambda _config: SimpleNamespace(run=run, should_exit=False))
     monkeypatch.setattr(serve, "ShutdownBackstop", lambda: SimpleNamespace(
         activate=lambda: None, deactivate=lambda: None, begun=False,
     ))
@@ -624,7 +651,7 @@ def test_health_defaults_and_submission_routes(tmp_path, monkeypatch):
         try:
             status, raw = await _post(app, "/health", None, method="GET")
             assert status == 200
-            assert (json.loads(raw)["lifetime"], json.loads(raw)["retiring"]) == ("standalone", False)
+            assert (json.loads(raw)["lifetime"], json.loads(raw)["retiring"]) == ("attached", False)
             hold = app.state.retirement_hold
             hold.hold("test")
             for path, body in (("/api/solve", SOLVE_BODY), ("/api/cadlink/ingest", {})):
@@ -756,3 +783,20 @@ def test_websocket_blocks_the_retirement_machine():
         assert stops == ["test"] and app.state.retiring
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("flag, marker, expected", [
+    (None, None, "attached"),
+    ("headless", None, "headless"),
+    ("headless", "1", "contained"),
+    (None, "1", "contained"),
+    ("headless", "0", "headless"),
+])
+def test_serve_reports_one_lifetime(flag, marker, expected):
+    from launch import serve
+
+    args = SimpleNamespace(lifetime=flag)
+    environ = {} if marker is None else {"WG2_BACKEND_CONTAINED": marker}
+    assert serve._backend_lifetime(args, environ) == expected
+    # Both lifetimes nobody owns answer the installer's retire request.
+    assert (expected in serve.RETIRABLE_LIFETIMES) is (expected != "attached")
