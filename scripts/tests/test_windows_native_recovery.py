@@ -360,6 +360,51 @@ def _old_root(tmp_path: Path, native: Path) -> tuple[Path, Path]:
     return root, outcome
 
 
+OWNER_LOG_TAIL = 4096  # Characters of native transcript quoted in a failure message.
+
+
+def _tail_text(text: str, limit: int = OWNER_LOG_TAIL) -> str:
+    """The last `limit` characters, saying how much was dropped."""
+    if len(text) <= limit:
+        return text
+    return f"[{len(text) - limit} earlier characters omitted]\n{text[-limit:]}"
+
+
+def _owner_failure_message(pid: int, returncode: int | None, owner_log: str,
+                           outcome_text: str | None = None, root_entries: list[str] | None = None,
+                           limit: int = OWNER_LOG_TAIL) -> str:
+    """Explain a prepare owner that never published readiness, from its own evidence.
+
+    The native prepare reports failure only as exit code 3 and prints nothing,
+    so the owner-log (its stdout+stderr plus the wrapper traceback), the outcome
+    record it may have written and the install root's entries are all there is.
+    """
+    lines = [f"prepare owner {pid} exit code: {returncode}",
+             f"owner-log (last {limit} characters of {len(owner_log)}):",
+             _tail_text(owner_log, limit) if owner_log else "<empty: the native prepare printed nothing>"]
+    lines.append("outcome record: " + (_tail_text(outcome_text, limit) if outcome_text else "<not written>"))
+    if root_entries is not None:
+        lines.append("install root entries: " + ", ".join(root_entries[:40]) + (" ..." if len(root_entries) > 40 else ""))
+    return "\n".join(lines)
+
+
+def _read_if_present(path: Path) -> str | None:
+    try:
+        return path.read_text(errors="replace")
+    except OSError:
+        return None
+
+
+def _owner_failure_detail(pid: int, returncode: int | None, diagnostic: Path, outcome: Path,
+                          command: list[str]) -> str:
+    try:
+        entries = sorted(os.listdir(command[2])) if os.path.isdir(command[2]) else None
+    except (OSError, IndexError):
+        entries = None
+    return _owner_failure_message(pid, returncode, _read_if_present(diagnostic) or "",
+                                  _read_if_present(outcome), entries)
+
+
 def _prepare_owner(command: list[str], outcome: Path) -> subprocess.Popen[str]:
     diagnostic = outcome.with_name(f"{outcome.name}.{uuid.uuid4().hex}.owner-log")
     code = ("import subprocess,sys;"
@@ -384,11 +429,48 @@ def _prepare_owner(command: list[str], outcome: Path) -> subprocess.Popen[str]:
         assert line.strip() == "ready", f"prepare owner {owner.pid} exited before readiness"
     except BaseException as error:
         _kill_owner(owner)
-        error.add_note(diagnostic.read_text(errors="replace"))
+        detail = _owner_failure_detail(owner.pid, owner.returncode, diagnostic, outcome, command)
+        if isinstance(error, AssertionError):
+            # The summary line pytest prints is the message, so carry the native
+            # transcript there rather than only in a note under the traceback.
+            raised = AssertionError(f"{error}\n{detail}")
+            raised.add_note(detail)  # callers that read __notes__ keep working
+            raise raised from error
+        error.add_note(detail)
         raise
     finally:
         reader.join(timeout=EXIT_TIMEOUT)
     return owner
+
+
+def test_owner_failure_message_quotes_a_bounded_tail_and_the_evidence() -> None:
+    log = "head-marker\n" + "x" * 10000 + "\nnative tail marker"
+    message = _owner_failure_message(7796, 1, log, '{"result":"failed"}', ["app", ".wg-install-old"], limit=64)
+    assert "prepare owner 7796 exit code: 1" in message
+    assert "native tail marker" in message and "head-marker" not in message
+    assert "earlier characters omitted" in message
+    assert len(message) < 64 + 400
+    assert '{"result":"failed"}' in message and "app, .wg-install-old" in message
+    quiet = _owner_failure_message(1, 3, "")
+    assert "printed nothing" in quiet and "outcome record: <not written>" in quiet
+    assert "install root entries" not in quiet
+
+
+def test_prepare_owner_failure_message_carries_the_native_transcript(tmp_path: Path) -> None:
+    root = tmp_path / "WG"
+    root.mkdir()
+    (root / ".wg-install-old").mkdir()
+    outcome = tmp_path / "outcome.json"
+    outcome.write_text('{"result":"rollback_incomplete"}')
+    fake = tmp_path / "fake_native.py"
+    fake.write_text("\n".join(["import sys", "sys.stderr.write('native refused: sharing violation')", "sys.exit(3)", ""]))
+    with pytest.raises(AssertionError) as caught:
+        _prepare_owner([sys.executable, str(fake), str(root)], outcome)
+    text = str(caught.value)
+    assert "exited before readiness" in text
+    assert "native refused: sharing violation" in text
+    assert "prepare exited 3" in text
+    assert "rollback_incomplete" in text and ".wg-install-old" in text
 
 
 def _prepare(native: Path, root: Path, outcome: Path, *, dead_owner: bool) -> subprocess.Popen[str] | None:
