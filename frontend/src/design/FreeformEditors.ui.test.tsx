@@ -205,6 +205,26 @@ describe('FREEFORM numeric tables', () => {
     expect(stored()[1]).toEqual({ t: 1, shape: 'ellipse' });
   });
 
+  it('offers circle at the throat and every station with no outline parameters', () => {
+    const stored = () => useDesignStore.getState().design.cross_sections!;
+    const render = () => act(() => root.render(<EditableStationTable field={stationField} stations={stored()}/>));
+    act(() => useDesignStore.getState().updateValue('cross_sections', [
+      { t: 0, shape: 'ellipse' }, { t: .5, shape: 'superellipse', exponent: 4 },
+      { t: 1, shape: 'rounded_rectangle', corner_radius_mm: 10 },
+    ]));
+    render();
+    const throat = host.querySelector<HTMLSelectElement>('select[aria-label="Station 1 shape"]')!;
+    expect(throat.disabled).toBe(false);
+    expect([...throat.options].map((option) => option.value)).toEqual(['circle', 'ellipse']);
+    for (const index of [1, 2, 3]) {
+      act(() => chooseShape(host, `Station ${index} shape`, 'circle'));
+      render();
+      expect(stored()[index - 1]).toEqual({ t: [0, .5, 1][index - 1], shape: 'circle' });
+    }
+    expect(host.textContent).not.toContain('exponent');
+    expect(host.textContent).not.toContain('corner radius');
+  });
+
   it('shows the value the mesher will use for a loaded station that omits its parameter', () => {
     const stations: CrossSectionStation[] = [
       { t: 0, shape: 'ellipse' },

@@ -223,7 +223,7 @@ def test_freeform_family_golden_uses_rows_and_station_camel_case() -> None:
         "profileH": {"points": [[0.0, 12.7, 10.0], [120.0, 100.0]], "mouthAngleDeg": 0.0},
         "profileV": {"points": [[0.0, 12.7], [120.0, 80.0]]},
         "crossSections": [
-            {"t": 0.0, "shape": "ellipse"},
+            {"t": 0.0, "shape": "circle"},
             {"t": 0.5, "shape": "superellipse", "exponent": 4.0},
             {"t": 1.0, "shape": "rounded_rectangle", "cornerRadiusMm": 12.0},
         ],

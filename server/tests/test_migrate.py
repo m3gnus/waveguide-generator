@@ -189,7 +189,7 @@ def test_removed_freeform_controls_migrate_once_and_validate() -> None:
         assert "throat_tangent_scale" not in migrated[profile_name]
         assert "mouth_tangent_scale" not in migrated[profile_name]
     assert "overshoot_policy" not in migrated
-    assert migrated["cross_sections"][0]["shape"] == "ellipse"
+    assert migrated["cross_sections"][0]["shape"] == "circle"
     DesignConfig.model_validate(migrated)
 
 

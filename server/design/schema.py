@@ -842,6 +842,13 @@ class ROSSEConfig(StretchDesign):
     tmax: Expr | None = None
 
 
+ICW_ADVANCED_KEYS = (
+    "r_aperture", "x_aperture", "x_setback", "kappa0", "kappa_abs_max",
+    "dkappa_ds_abs_max", "theta_max_deg", "pin_mouth_radius", "icw_seed",
+    "icw_coeffs", "icw_S",
+)
+
+
 class ICWConfig(DesignCommon):
     formula: Literal["ICW"]
     r0: Expr | None = None
@@ -859,6 +866,37 @@ class ICWConfig(DesignCommon):
     theta1_deg: Expr | None = None
     depth: Expr | None = None
     curl: Expr | None = None
+
+    # Omit new absent fields from both API JSON and semantic hashes. Existing
+    # designs must keep their exact serialization and mesher defaults.
+    r_aperture: Expr | None = Field(default=None, exclude_if=lambda v: v is None)
+    x_aperture: Expr | None = Field(default=None, exclude_if=lambda v: v is None)
+    x_setback: Expr | None = Field(default=None, exclude_if=lambda v: v is None)
+    kappa0: Expr | None = Field(default=None, exclude_if=lambda v: v is None)
+    kappa_abs_max: Expr | None = Field(default=None, exclude_if=lambda v: v is None)
+    dkappa_ds_abs_max: Expr | None = Field(default=None, exclude_if=lambda v: v is None)
+    theta_max_deg: Expr | None = Field(default=None, exclude_if=lambda v: v is None)
+    pin_mouth_radius: bool | None = Field(default=None, strict=True, exclude_if=lambda v: v is None)
+    icw_seed: dict[str, Any] | None = Field(default=None, exclude_if=lambda v: v is None)
+    icw_coeffs: list[int | Annotated[float, Field(allow_inf_nan=False)] | str] | None = Field(default=None, exclude_if=lambda v: v is None)
+    icw_S: Expr | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @field_validator(
+        "r_aperture", "x_aperture", "x_setback", "kappa0", "kappa_abs_max",
+        "dkappa_ds_abs_max", "theta_max_deg", "icw_S",
+    )
+    @classmethod
+    def _advanced_scalar(cls, value: Expr | None, info: ValidationInfo) -> Expr | None:
+        if value is None:
+            return value
+        scalar = value.constant_value()
+        if scalar is None:
+            raise ValueError(f"{info.field_name} must be a finite scalar; ICW is axisymmetric")
+        if info.field_name in {"kappa_abs_max", "dkappa_ds_abs_max", "icw_S"} and scalar <= 0:
+            raise ValueError(f"{info.field_name} must be greater than 0")
+        if info.field_name == "theta_max_deg" and not 90 < scalar <= 180:
+            raise ValueError("theta_max_deg must be in (90, 180] degrees")
+        return value
 
 
 class LookupConfig(DesignCommon):
@@ -968,7 +1006,7 @@ class CornerGrid(StrictModel):
 
 class CrossSectionStation(StrictModel):
     t: Expr
-    shape: Literal["ellipse", "superellipse", "rounded_rectangle"]
+    shape: Literal["circle", "ellipse", "superellipse", "rounded_rectangle"]
     exponent: Expr | None = None
     corner_radius_mm: Expr | None = None
     corner_grid: list[list[Expr]] | None = None
@@ -981,6 +1019,12 @@ class CrossSectionStation(StrictModel):
                 "FREEFORM cross-section corner_grid is not supported by design format 2"
             )
         return corner_grid
+
+    @model_validator(mode="after")
+    def _circle_parameters(self) -> "CrossSectionStation":
+        if self.shape == "circle" and (self.exponent is not None or self.corner_radius_mm is not None):
+            raise ValueError("circle stations take no exponent or corner radius; local H/V radii set the outline")
+        return self
 
 
 class FreeformConfig(DesignCommon):
@@ -1015,8 +1059,8 @@ class FreeformConfig(DesignCommon):
             raise ValueError("cross-section station t values must be between 0 and 1")
         if any(right <= left for left, right in zip(scalars, scalars[1:])):
             raise ValueError("cross-section station t values must be strictly increasing")
-        if scalars[0] != 0 or stations[0].shape != "ellipse":
-            raise ValueError('the first cross-section station must be "0 ellipse"')
+        if scalars[0] != 0 or stations[0].shape not in {"circle", "ellipse"}:
+            raise ValueError('the first cross-section station must be "0 circle" or "0 ellipse"')
         if scalars[-1] != 1:
             raise ValueError("the last cross-section station must have t = 1")
         return stations

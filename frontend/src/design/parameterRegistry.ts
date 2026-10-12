@@ -86,6 +86,8 @@ export interface ParameterDefinition {
   options?: ParameterOption[];
   description?: string;
   disabledReason?: string;
+  optional?: boolean;
+  group?: 'Advanced ICW';
   visibleWhen?: (design: DesignDocument) => boolean;
   disabledWhen?: (design: DesignDocument) => string | undefined;
 }
@@ -137,6 +139,18 @@ const select = (
   options: ParameterOption[],
   rest: Partial<ParameterDefinition> = {},
 ): ParameterDefinition => ({ id, legacyKey, path, section, label, kind: 'select', options, ...rest });
+
+export const ICW_ADVANCED_FIELD_IDS = [
+  'icw.r_aperture', 'icw.x_aperture', 'icw.x_setback', 'icw.kappa0',
+  'icw.kappa_abs_max', 'icw.dkappa_ds_abs_max', 'icw.theta_max_deg',
+  'icw.pin_mouth_radius', 'icw.icw_S', 'icw.icw_seed', 'icw.icw_coeffs',
+] as const;
+const icwInputReason = (design: DesignDocument) => design.icw_seed != null
+  ? 'Imported seed mode fits the seed profile; target controls are ignored.'
+  : design.icw_coeffs != null ? 'Imported coefficients define the curve directly; target controls are ignored.' : undefined;
+const advancedIcw = { families: ['ICW'] as DesignFamily[], optional: true, group: 'Advanced ICW' as const };
+const rollbackIcwReason = (design: DesignDocument) => icwInputReason(design)
+  ?? (design.termination !== 'rollback' ? 'Used only for rollback termination.' : undefined);
 
 const yesNo: ParameterOption[] = [{ value: 0, label: 'No' }, { value: 1, label: 'Yes' }];
 
@@ -228,7 +242,7 @@ export const LEGACY_PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('icw.r0', 'r0', 'r0', profile, 'Throat radius', { families: ['ICW'], unit: 'mm', min: .1, max: 200, description: 'Radius at the throat, where the driver attaches. The curvature solver starts the wall here.' }),
   number('icw.a0', 'a0', 'a0', profile, 'Throat half-angle', { families: ['ICW'], unit: '°', min: -90, max: 90, description: "Wall angle where the curve leaves the throat, measured from the horn axis. This is the curve's starting angle, not a target." }),
   number('icw.L', 'L', 'L', profile, 'Horn length', { families: ['ICW'], unit: 'mm', min: 1, max: 1_000, visibleWhen: (design) => design.termination !== 'rollback', description: 'Target axial length. The curvature solver sizes the curve to reach it. Rollback terminations use Rollback depth instead.' }),
-  number('icw.R', 'R', 'R', profile, 'Mouth radius', { families: ['ICW'], unit: 'mm', min: .1, max: 1_000, disabledWhen: (design) => (design.coverage_angle ?? 0) > 0 ? 'Emergent while coverage hold is enabled.' : undefined, description: 'Target mouth radius the curvature solver sizes the curve to reach. On a rollback it is the aperture radius where the wall first turns through 90°, not the radius at the curled tip. Ignored while a coverage hold is enabled, which makes the mouth radius an output.' }),
+  number('icw.R', 'R', 'R', profile, 'Mouth radius', { families: ['ICW'], unit: 'mm', min: .1, max: 1_000, optional: true, disabledWhen: (design) => (design.coverage_angle ?? 0) > 0 && !design.pin_mouth_radius ? 'Emergent while coverage hold is enabled; enable Pin mouth radius to target R.' : undefined, description: 'Target mouth radius the curvature solver sizes the curve to reach. On a rollback it is the aperture radius where the wall first turns through 90°, not the radius at the curled tip. During coverage hold it is emergent unless Pin mouth radius is enabled. Clear R to use the advanced Aperture radius on rollback.' }),
   number('icw.coverage_angle', 'coverage_angle', 'coverage_angle', profile, 'Coverage angle', { families: ['ICW'], unit: '°', min: 0, max: 80, step: 1, precision: 0, disabledWhen: (design) => design.termination === 'rollback' ? 'Coverage hold applies to flat-baffle termination only.' : undefined, description: 'Above 0 this holds a constant wall angle — the constant-directivity plateau — between the hold start and end, and Mouth radius becomes an emergent output rather than a target. 0 turns the hold off and sizes the curve from Horn length and Mouth radius alone. Flat baffle only.' }),
   number('icw.hold_start', 'hold_start', 'hold_start', profile, 'Coverage hold start', { families: ['ICW'], unit: 'σ', min: .05, max: .9, step: .01, visibleWhen: (design) => design.termination !== 'rollback', description: 'Where the constant-angle plateau begins, as a fraction of arc length from throat (0) to mouth (1). Only used when Coverage angle is above 0.' }),
   number('icw.hold_end', 'hold_end', 'hold_end', profile, 'Coverage hold end', { families: ['ICW'], unit: 'σ', min: .1, max: .95, step: .01, visibleWhen: (design) => design.termination !== 'rollback', description: 'Where the constant-angle plateau ends, as a fraction of arc length. Must be past the hold start. Only used when Coverage angle is above 0.' }),
@@ -237,6 +251,22 @@ export const LEGACY_PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('icw.theta1_deg', 'theta1_deg', 'theta1_deg', profile, 'Rollback curl angle', { families: ['ICW'], unit: '°', min: 91, max: 179, step: 1, precision: 0, visibleWhen: (design) => design.termination === 'rollback', description: 'Wall angle at the curled tip, measured from the forward horn axis. 90° points straight out sideways and larger values turn the tip further back. Rollback terminations only.' }),
   number('icw.depth', 'depth', 'depth', profile, 'Rollback depth', { families: ['ICW'], unit: 'mm', min: 1, max: 1_000, step: 1, visibleWhen: (design) => design.termination === 'rollback', description: 'Axial position of the curled tip, measured forward from the throat — not the frontmost point of the horn, since the 90° crossing sits further forward. A rollback is sized by this instead of Horn length, with Mouth radius setting the aperture.' }),
   // ICW schema additions not present in the v1 centralized inventory. The
+  // mesher's ICW builder never reads these four (they are absent from
+  // _ICW_PARAM_KEYS), so the tooltip has to say they are inert rather than
+  // implying they shape the curve.
+  number('icw.r_aperture', 'r_aperture', 'r_aperture', profile, 'Aperture radius', { ...advancedIcw, unit: 'mm', disabledWhen: (design) => rollbackIcwReason(design) ?? (design.R != null ? 'R takes precedence; clear Mouth radius to use this fallback.' : undefined), description: 'Rollback radius at the foremost 90° wall-angle crossing. Used only when R is absent. Unset adds no radial target; rollback needs a radial target. Feasibility is checked by the mesher.' }),
+  number('icw.x_aperture', 'x_aperture', 'x_aperture', profile, 'Aperture axial position', { ...advancedIcw, unit: 'mm', disabledWhen: rollbackIcwReason, description: 'Rollback axial coordinate of the foremost 90° crossing, measured from the throat. Unset adds no target. At least one of this, Rollback depth or Tip setback is needed; setting several adds simultaneous constraints.' }),
+  number('icw.x_setback', 'x_setback', 'x_setback', profile, 'Tip setback', { ...advancedIcw, unit: 'mm', disabledWhen: rollbackIcwReason, description: 'Rollback aperture axial position minus the curled tip axial position. Positive means the tip sits behind the aperture. Unset adds no target. May be combined with depth and aperture position if all targets are feasible.' }),
+  number('icw.kappa0', 'kappa0', 'kappa0', profile, 'Throat curvature', { ...advancedIcw, unit: '1/mm', step: .001, precision: 6, disabledWhen: icwInputReason, description: 'Signed wall curvature at the throat. Unset uses 0, a locally conical throat. There is no fixed scalar range; the requested shape must remain feasible.' }),
+  number('icw.kappa_abs_max', 'kappa_abs_max', 'kappa_abs_max', profile, 'Maximum absolute curvature', { ...advancedIcw, unit: '1/mm', min: 0, step: .001, precision: 6, disabledWhen: icwInputReason, description: 'Strictly positive cap on sampled absolute wall curvature. Unset leaves it unbounded. Guides the target solve and is checked afterwards; a violated cap fails rather than silently changing the requested targets.' }),
+  number('icw.dkappa_ds_abs_max', 'dkappa_ds_abs_max', 'dkappa_ds_abs_max', profile, 'Maximum curvature slope', { ...advancedIcw, unit: '1/mm per σ', min: 0, step: .001, precision: 6, disabledWhen: icwInputReason, description: 'Strictly positive cap on sampled |dκ/dσ|. Despite the key name, the pinned mesher differentiates with respect to normalized arc length σ, not physical s. Unset leaves it unbounded. Guides the target solve and is verified afterwards.' }),
+  number('icw.theta_max_deg', 'theta_max_deg', 'theta_max_deg', profile, 'Maximum wall angle', { ...advancedIcw, unit: '°', min: 90, max: 180, disabledWhen: rollbackIcwReason, description: 'Rollback cap on the sampled wall angle, strictly above 90° and at most 180°. Unset leaves it unbounded. It must allow the terminal angle; it does not choose that angle. Flat-baffle mode ignores it.' }),
+  select('icw.pin_mouth_radius', 'pin_mouth_radius', 'pin_mouth_radius', profile, 'Pin mouth radius', [{ value: '', label: 'Default (No)' }, { value: 'false', label: 'No' }, { value: 'true', label: 'Yes' }], { ...advancedIcw, disabledWhen: (design) => icwInputReason(design) ?? (design.termination === 'rollback' || !((design.coverage_angle ?? 0) > 0) ? 'Used only with a flat-baffle coverage hold.' : undefined), description: 'Default is false: coverage hold lets mouth radius emerge. Yes adds R as a hard target during a flat-baffle coverage hold, which can make the targets infeasible. No effect without coverage or on rollback.' }),
+  number('icw.icw_S', 'icw_S', 'icw_S', profile, 'Direct curve arc length', { ...advancedIcw, unit: 'mm', min: 0, disabledWhen: (design) => design.icw_seed != null ? 'Seed mode takes precedence over direct coefficients.' : design.icw_coeffs == null ? 'Used only with imported direct coefficients.' : undefined, description: 'Required strictly positive total arc length for imported icw_coeffs. There is no default. Ignored by the target solver and by seed mode.' }),
+  { id: 'icw.icw_seed', legacyKey: 'icw_seed', path: 'icw_seed', section: profile, label: 'Imported ICW seed', kind: 'indicator', ...advancedIcw, visibleWhen: (design) => design.icw_seed != null, description: 'Preserved nested OSSE/R-OSSE seed. The mesher fits it in preference to direct coefficients and targets. Edit the native file to change the seed.' },
+  { id: 'icw.icw_coeffs', legacyKey: 'icw_coeffs', path: 'icw_coeffs', section: profile, label: 'Imported ICW coefficients', kind: 'indicator', ...advancedIcw, visibleWhen: (design) => design.icw_coeffs != null, description: 'Preserved direct curvature coefficient list; requires Direct curve arc length. Seed mode takes precedence if both are present. Edit the native file to change the list.' },
+
+  // Imported v1 ICW scalars preserved for .cfg round-trip only. The
   // mesher's ICW builder never reads these four (they are absent from
   // _ICW_PARAM_KEYS), so the tooltip has to say they are inert rather than
   // implying they shape the curve.
@@ -256,7 +286,7 @@ export const LEGACY_PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('freeform.mouthRadiusV', 'mouthRadiusV', 'profile_v.points.$last.r', profile, 'Vertical mouth radius', { families: ['FREEFORM'], unit: 'mm', min: .1, max: 1_000, step: 1, description: 'Half-height of the mouth in the vertical plane.' }),
   number('freeform.mouthAngleV', 'mouthAngleV', 'profile_v.mouth_angle_deg', profile, 'Vertical mouth angle', { families: ['FREEFORM'], unit: '°', min: -90, max: 90, description: 'Wall angle the vertical spline arrives at the mouth with, fixing the spline tangent there. An angle set on the last vertical point overrides it.' }),
   { id: 'freeform.interiorV', legacyKey: 'interiorV', path: 'profile_v.points', section: profile, label: 'Vertical spline points', kind: 'table', families: ['FREEFORM'], description: 'Optional anchors the vertical spline must pass through, placed strictly between throat and mouth. Give each a position and radius; set its angle to pin the wall direction there, or leave it blank for an automatic tangent.' },
-  { id: 'freeform.crossSections', legacyKey: 'crossSections', path: 'cross_sections', section: profile, label: 'Cross-section stations', kind: 'table', families: ['FREEFORM'], description: 'Cross-section outline at increasing positions along the throat-to-mouth axis, blended between the stations you list; the H and V splines still set each section\'s half-width and half-height. The station at 0 must be an ellipse. Superellipse exponents run 2 to 16, and a corner radius has to fit the local half-size.' },
+  { id: 'freeform.crossSections', legacyKey: 'crossSections', path: 'cross_sections', section: profile, label: 'Cross-section stations', kind: 'table', families: ['FREEFORM'], description: 'Cross-section outline at increasing positions along the throat-to-mouth axis, blended between the stations you list; the H and V splines still set each section\'s half-width and half-height. The station at 0 must be a circle or ellipse. Circle uses the local H/V radii just like Ellipse, so it is circular only when they are equal. Superellipse exponents run 2 to 16, and a corner radius has to fit the local half-size.' },
   select('freeform.inflectionPolicy', 'inflectionPolicy', 'inflection_policy', profile, 'Curve direction', [{ value: 'warn', label: 'Warn on S-curves' }, { value: 'reject', label: 'Enforce one-way' }], { families: ['FREEFORM'], description: "An S-curve is a stretch where the wall's outward angle falls back by more than a degree before opening again. Warn records it and builds anyway; Enforce one-way rejects the profile instead." }),
 
   // Throat extension, morph, coverage/length modes, and complete OSSE guide controls.
@@ -353,10 +383,22 @@ export const LEGACY_PARAMETER_REGISTRY: ParameterDefinition[] = [
   { id: 'passthrough.keys', legacyKey: 'extraKeys', section: 'Output & Passthrough', label: 'Unknown flat keys', kind: 'indicator', description: 'Top-level settings in the imported file that this app does not model. They are preserved verbatim and written back out on export, so nothing is lost in a round-trip.' },
 ];
 
+const icwSeedReason = (design: DesignDocument) => design.icw_seed != null
+  ? 'Seed mode uses the throat values stored in the imported seed.' : undefined;
+const icwTargetIds = new Set(['icw.L', 'icw.R', 'icw.coverage_angle', 'icw.hold_start', 'icw.hold_end', 'icw.termination', 'icw.theta1_deg', 'icw.depth']);
+LEGACY_PARAMETER_REGISTRY.forEach((field) => {
+  if (['icw.r0', 'icw.a0'].includes(field.id)) field.disabledWhen = icwSeedReason;
+  if (field.id === 'icw.n_coeff') field.disabledWhen = (design) => design.icw_seed == null && design.icw_coeffs != null
+    ? 'Direct mode uses the imported coefficient list without a fitted basis.' : undefined;
+  if (!icwTargetIds.has(field.id)) return;
+  const prior = field.disabledWhen;
+  field.disabledWhen = (design) => icwInputReason(design) ?? prior?.(design);
+});
+
 const familyTraceKeys: Record<Exclude<DesignFamily, NativeFamily>, readonly string[]> = {
   'R-OSSE': ['scale', 'R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
   OSSE: ['scale', 'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h'],
-  ICW: ['scale', 'r0', 'a0', 'L', 'R', 'coverage_angle', 'hold_start', 'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth'],
+  ICW: ['scale', 'r0', 'a0', 'L', 'R', 'coverage_angle', 'hold_start', 'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth', ...ICW_ADVANCED_FIELD_IDS.map((id) => id.slice(4))],
   LOOKUP: ['scale', 'lookupProfile', 'lookupSourceAngle'],
   FREEFORM: ['scale', 'length', 'throatRadius', 'throatAngle', 'mouthRadiusH', 'mouthAngleH', 'interiorH', 'mouthRadiusV', 'mouthAngleV', 'interiorV', 'crossSections', 'inflectionPolicy'],
 };
@@ -484,7 +526,7 @@ const parametricFields: ParameterDefinition[] = LEGACY_PARAMETER_REGISTRY.map((f
 });
 
 export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[] = [
-  { title: 'Profile', tab: 'geometry', description: 'Primary dimensions for the selected horn family. OSSE and R-OSSE labels carry their ATH formula symbol in parentheses.', visibleWhen: waveguideDefinitionOnly },
+  { title: 'Profile', fieldOrder: [...parametricFields.filter((field) => field.section === 'Profile' && !field.group).map((field) => field.id), ...ICW_ADVANCED_FIELD_IDS], tab: 'geometry', description: 'Primary dimensions for the selected horn family. OSSE and R-OSSE labels carry their ATH formula symbol in parentheses.', visibleWhen: waveguideDefinitionOnly },
   { title: 'Throat', fieldOrder: ['common.s1', 'common.s2', 'common.throat_ext_angle', 'common.throat_ext_length', 'common.slot_length', 'common.length_mode', 'source.shape', 'source.radius', 'source.curvature'], tab: 'geometry', description: 'Throat stretch, extension, straight slot and source surface cap.', visibleWhen: waveguideDefinitionOnly },
   { title: 'Mouth', tab: 'geometry', description: CAD_PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === 'Morph Target')!.description, visibleWhen: waveguideDefinitionOnly },
   { title: 'Cross-section', tab: 'geometry', description: 'Base cross-section shape and OSSE guiding-curve controls.', visibleWhen: waveguideDefinitionOnly },

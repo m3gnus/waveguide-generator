@@ -28,6 +28,7 @@ from .schema import (
     Expr,
     FreeformConfig,
     ICWConfig,
+    ICW_ADVANCED_KEYS,
     OSSEConfig,
     ROSSEConfig,
 )
@@ -1534,8 +1535,15 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             raise TextConfigError("WG.Geometry requires a stamped WG design and exactly one JSON Payload")
         try:
             controls = json.loads(geometry_controls.items["Payload"])
-            if not isinstance(controls, dict) or set(controls) - {"cross_section", "depth_margin_mm"}:
+            if not isinstance(controls, dict) or set(controls) - {"cross_section", "depth_margin_mm", "icw"}:
                 raise ValueError("unknown WG.Geometry controls")
+            if "icw" in controls:
+                advanced = controls["icw"]
+                if version != NATIVE_GEOMETRY_VERSION or payload["formula"] != "ICW":
+                    raise ValueError("advanced ICW controls require a native ICW design")
+                if not isinstance(advanced, dict) or set(advanced) - set(ICW_ADVANCED_KEYS):
+                    raise ValueError("unknown advanced ICW controls")
+                payload.update(advanced)
             if "cross_section" in controls:
                 payload["cross_section"] = controls["cross_section"]
             if "depth_margin_mm" in controls:
@@ -1803,8 +1811,14 @@ def _serialize_canonical(
         controls["cross_section"] = config.cross_section.model_dump()
     if config.enclosure is not None and config.enclosure.depth_margin_mm is not None:
         controls["depth_margin_mm"] = config.enclosure.depth_margin_mm
+    if isinstance(config, ICWConfig):
+        advanced = {key: value for key, value in config.model_dump(mode="json").items() if key in ICW_ADVANCED_KEYS}
+        if advanced:
+            if config.text_import_version is not None:
+                raise TextConfigError("advanced ICW inputs are native WG/JSON only; ATH has no equivalent keys")
+            controls["icw"] = advanced
     if controls:
-        encoded = json.dumps(controls, allow_nan=False, separators=(",", ":"))
+        encoded = json.dumps(controls, ensure_ascii=True, allow_nan=False, separators=(",", ":")).replace(";", "\\u003b")
         _block(lines, "WG.Geometry", [("Payload", encoded)])
     # The design's name leads the file.
     #

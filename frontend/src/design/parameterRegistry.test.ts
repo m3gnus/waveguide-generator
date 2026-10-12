@@ -20,7 +20,7 @@ import {
 const TRACEABILITY_KEYS = {
   'R-OSSE': ['scale', 'R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
   OSSE: ['scale', 'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h'],
-  ICW: ['scale', 'r0', 'a0', 'L', 'R', 'coverage_angle', 'hold_start', 'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth'],
+  ICW: ['scale', 'r0', 'a0', 'L', 'R', 'coverage_angle', 'hold_start', 'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth', 'r_aperture', 'x_aperture', 'x_setback', 'kappa0', 'kappa_abs_max', 'dkappa_ds_abs_max', 'theta_max_deg', 'pin_mouth_radius', 'icw_S', 'icw_seed', 'icw_coeffs'],
   LOOKUP: ['scale', 'lookupProfile', 'lookupSourceAngle'],
   FREEFORM: ['scale', 'length', 'throatRadius', 'throatAngle', 'mouthRadiusH', 'mouthAngleH', 'interiorH', 'mouthRadiusV', 'mouthAngleV', 'interiorV', 'crossSections', 'inflectionPolicy'],
   COMMON: [
@@ -81,8 +81,8 @@ describe('complete parameter registry', () => {
 
   it('covers every current family-qualified traceability entry with no deferrals', () => {
     const encodedCount = Object.values(TRACEABILITY_KEYS).reduce<number>((count, keys) => count + keys.length, 0);
-    expect(encodedCount).toBe(108);
-    expect(TRACEABILITY_PARAMETER_INVENTORY).toHaveLength(108);
+    expect(encodedCount).toBe(119);
+    expect(TRACEABILITY_PARAMETER_INVENTORY).toHaveLength(119);
     expect(TRACEABILITY_PARAMETER_INVENTORY.every(traceEntryIsRegistered)).toBe(true);
 
     for (const [family, keys] of Object.entries(TRACEABILITY_KEYS)) {
@@ -411,5 +411,44 @@ describe('complete parameter registry', () => {
       useDesignStore.getState().loadDesign(saved);
       expect(useDesignStore.getState().design.mesh.aperture_resolution_scale).toBe(1.5);
     });
+  });
+});
+
+describe('advanced ICW registry', () => {
+  it('places optional controls at the end of Geometry Profile for ICW only', () => {
+    const advanced = PARAMETER_REGISTRY.filter((field) => field.group === 'Advanced ICW');
+    expect(advanced).toHaveLength(11);
+    expect(PARAMETER_REGISTRY.filter((field) => field.section === 'Profile').slice(-11)).toEqual(advanced);
+    for (const field of advanced) {
+      expect(field.section).toBe('Profile');
+      expect(field.families).toEqual(['ICW']);
+      for (const family of ['OSSE', 'R-OSSE', 'FREEFORM', ...NATIVE_FAMILIES] as const) {
+        expect(fieldIsVisible(field, designForFamily(family))).toBe(false);
+      }
+    }
+  });
+
+  it('honours R precedence, pinning and seed/direct modes without dropping stored values', () => {
+    const field = (id: string) => PARAMETER_REGISTRY.find((item) => item.id === id)!;
+    const design = designForFamily('ICW');
+    design.termination = 'rollback';
+    expect(field('icw.r_aperture').disabledWhen!(design)).toContain('R takes precedence');
+    delete design.R;
+    expect(field('icw.r_aperture').disabledWhen!(design)).toBeUndefined();
+    design.termination = 'flat_baffle';
+    design.coverage_angle = 45;
+    expect(field('icw.R').disabledWhen!(design)).toContain('Emergent');
+    design.pin_mouth_radius = true;
+    expect(field('icw.R').disabledWhen!(design)).toBeUndefined();
+    expect(field('icw.icw_S').disabledWhen!(design)).toContain('only with imported');
+    design.icw_coeffs = [0, 0, 0, 0];
+    expect(field('icw.icw_S').disabledWhen!(design)).toBeUndefined();
+    expect(field('icw.kappa0').disabledWhen!(design)).toContain('directly');
+    design.icw_seed = { type: 'OSSE' };
+    expect(field('icw.icw_S').disabledWhen!(design)).toContain('Seed mode');
+    expect(fieldIsVisible(field('icw.icw_seed'), design)).toBe(true);
+    expect(fieldIsVisible(field('icw.icw_coeffs'), design)).toBe(true);
+    expect(field('icw.icw_seed').kind).toBe('indicator');
+    expect(field('icw.icw_coeffs').kind).toBe('indicator');
   });
 });

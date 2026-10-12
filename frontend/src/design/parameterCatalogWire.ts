@@ -7,7 +7,7 @@ import { NATIVE_FAMILIES, designForFamily, type DesignDocument, type DesignFamil
 
 type Condition = {
   path?: string;
-  operator: 'equals' | 'not_equals' | 'greater_than' | 'less_than_or_equal' | 'never' | 'all';
+  operator: 'equals' | 'not_equals' | 'greater_than' | 'less_than_or_equal' | 'never' | 'all' | 'any' | 'present' | 'absent';
   value?: unknown;
   conditions?: Condition[];
 };
@@ -55,8 +55,8 @@ const FIELD_CONDITIONS: Record<string, FieldConditions> = {
   'enclosure.back_resolution': { visible_when: { path: 'enclosure.depth', operator: 'greater_than', value: 0 } },
   'icw.L': { visible_when: { path: 'termination', operator: 'not_equals', value: 'rollback' } },
   'icw.R': {
-    disabled_when: { path: 'coverage_angle', operator: 'greater_than', value: 0 },
-    disabled_reason: 'Emergent while coverage hold is enabled.',
+    disabled_when: { operator: 'all', conditions: [{ path: 'coverage_angle', operator: 'greater_than', value: 0 }, { path: 'pin_mouth_radius', operator: 'not_equals', value: true }] },
+    disabled_reason: 'Emergent while coverage hold is enabled; enable Pin mouth radius to target R.',
   },
   'icw.coverage_angle': {
     disabled_when: { path: 'termination', operator: 'equals', value: 'rollback' },
@@ -106,6 +106,39 @@ const FIELD_CONDITIONS: Record<string, FieldConditions> = {
     },
   },
 };
+
+const ICW_IMPORTED_INPUT: Condition = { operator: 'any', conditions: [
+  { path: 'icw_seed', operator: 'present' }, { path: 'icw_coeffs', operator: 'present' },
+] };
+for (const id of ['icw.r0', 'icw.a0']) {
+  FIELD_CONDITIONS[id] = { disabled_when: { path: 'icw_seed', operator: 'present' } };
+}
+FIELD_CONDITIONS['icw.n_coeff'] = { disabled_when: { operator: 'all', conditions: [
+  { path: 'icw_seed', operator: 'absent' }, { path: 'icw_coeffs', operator: 'present' },
+] } };
+const ICW_ROLLBACK_ONLY: Condition = { path: 'termination', operator: 'not_equals', value: 'rollback' };
+for (const id of ['icw.L', 'icw.R', 'icw.coverage_angle', 'icw.hold_start', 'icw.hold_end', 'icw.termination', 'icw.theta1_deg', 'icw.depth']) {
+  const prior = FIELD_CONDITIONS[id] ?? {};
+  FIELD_CONDITIONS[id] = { ...prior, disabled_when: { operator: 'any', conditions: [ICW_IMPORTED_INPUT, ...(prior.disabled_when ? [prior.disabled_when] : [])] } };
+}
+for (const id of ['icw.kappa0', 'icw.kappa_abs_max', 'icw.dkappa_ds_abs_max']) {
+  FIELD_CONDITIONS[id] = { disabled_when: ICW_IMPORTED_INPUT };
+}
+for (const id of ['icw.x_aperture', 'icw.x_setback', 'icw.theta_max_deg', 'icw.r_aperture']) {
+  FIELD_CONDITIONS[id] = { disabled_when: { operator: 'any', conditions: [ICW_IMPORTED_INPUT, ICW_ROLLBACK_ONLY,
+    ...(id === 'icw.r_aperture' ? [{ path: 'R', operator: 'present' } as Condition] : []),
+  ] } };
+}
+FIELD_CONDITIONS['icw.pin_mouth_radius'] = { disabled_when: { operator: 'any', conditions: [
+  ICW_IMPORTED_INPUT, { path: 'termination', operator: 'equals', value: 'rollback' },
+  { path: 'coverage_angle', operator: 'less_than_or_equal', value: 0 },
+  { path: 'coverage_angle', operator: 'absent' },
+] } };
+FIELD_CONDITIONS['icw.icw_S'] = { disabled_when: { operator: 'any', conditions: [
+  { path: 'icw_seed', operator: 'present' }, { path: 'icw_coeffs', operator: 'absent' },
+] } };
+FIELD_CONDITIONS['icw.icw_seed'] = { visible_when: { path: 'icw_seed', operator: 'present' } };
+FIELD_CONDITIONS['icw.icw_coeffs'] = { visible_when: { path: 'icw_coeffs', operator: 'present' } };
 
 function serializeField(field: ParameterDefinition) {
   const conditions = FIELD_CONDITIONS[field.id] ?? {};

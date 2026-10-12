@@ -15,6 +15,18 @@ describe('design hydration', () => {
     },
   );
 
+  it('preserves all advanced ICW inputs across hydration and wire export', () => {
+    const seed = { type: 'OSSE', nested: { value: 7, raw: 'kept verbatim' }, L: 120 };
+    const advanced = { r_aperture: 110, x_aperture: 120, x_setback: 10, kappa0: -.001,
+      kappa_abs_max: .05, dkappa_ds_abs_max: .1, theta_max_deg: 170, pin_mouth_radius: false,
+      icw_seed: seed, icw_coeffs: [0, '0.001', .002, 0], icw_S: 180 };
+    const design = hydrateDesignDocument({ formula: 'ICW', R: null, ...advanced });
+    expect(design.R).toBeUndefined();
+    expect(serializeDesign(design)).toMatchObject({ ...advanced, R: null });
+    const empty = serializeDesign(hydrateDesignDocument({ formula: 'ICW' }));
+    for (const key of Object.keys(advanced)) expect(empty).not.toHaveProperty(key);
+  });
+
   it('decodes ATH quadrant digits and derives custom zmap sampling', () => {
     const design = hydrateDesignDocument({
       formula: 'OSSE',

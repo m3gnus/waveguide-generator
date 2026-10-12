@@ -298,7 +298,7 @@ export function EditableStationTable({ field, stations }: { field: ParameterDefi
     <table><thead><tr><th>t</th><th>shape</th><th>n / radius</th><th /></tr></thead><tbody>
       {stations.map((station, index) => <tr key={`${index}-${station.t}`}>
         <td><NumberField label={`Station ${index + 1} position`} value={station.t} min={0} max={1} step={.01} precision={4} disabled={index === 0 || index === stations.length - 1} validate={index === 0 || index === stations.length - 1 ? undefined : (value) => positionMessage(index, value)} onCommit={(value) => update(index, { t: value })} /></td>
-        <td><select aria-label={`Station ${index + 1} shape`} value={station.shape} disabled={index === 0} onChange={(event) => write(index, withStationShape(station, event.target.value as CrossSectionStation['shape']))}><option value="ellipse">Ellipse</option><option value="superellipse">Superellipse</option><option value="rounded_rectangle">Rounded rectangle</option></select></td>
+        <td><select aria-label={`Station ${index + 1} shape`} value={station.shape} onChange={(event) => write(index, withStationShape(station, event.target.value as CrossSectionStation['shape']))}><option value="circle">Circle (local H/V radii)</option><option value="ellipse">Ellipse</option>{index > 0 && <><option value="superellipse">Superellipse</option><option value="rounded_rectangle">Rounded rectangle</option></>}</select></td>
         {/* A value missing from a loaded file shows what the mesher will use: its
             default exponent, or an empty required corner radius, which it has no
             default for and rejects the station without. */}

@@ -389,11 +389,7 @@ def _has_removed_freeform_controls(payload: Payload) -> bool:
             for point in points
         ):
             return True
-    stations = payload.get("cross_sections")
-    return isinstance(stations, (list, tuple)) and any(
-        isinstance(station, Mapping) and station.get("shape") == "circle"
-        for station in stations
-    )
+    return False
 
 
 def _migrate_removed_freeform_controls(payload: Payload) -> None:
@@ -414,11 +410,6 @@ def _migrate_removed_freeform_controls(payload: Payload) -> None:
                 del point[3]
             elif isinstance(point, tuple) and len(point) >= 4:
                 points[index] = [*point[:3], *point[4:]]
-    stations = payload.get("cross_sections")
-    if isinstance(stations, list):
-        for station in stations:
-            if isinstance(station, dict) and station.get("shape") == "circle":
-                station["shape"] = "ellipse"
 
 
 def _has_freeform_millimetre_axis(payload: Payload) -> bool:
@@ -570,7 +561,7 @@ MIGRATIONS: tuple[Migration, ...] = (
         transform=_migrate_removed_freeform_controls,
         note=(
             "Removed obsolete FREEFORM tangent scales, per-anchor strengths, and "
-            "overshoot policy, and normalized circle cross-section stations to ellipse."
+            "and overshoot policy."
         ),
     ),
     Migration(

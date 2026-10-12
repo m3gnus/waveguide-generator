@@ -566,13 +566,12 @@ Freeform.CrossSections = {
         "strength",
         " 1.5",
         " 0.7",
-        "circle",
     ):
         assert removed not in emitted
     assert "; FREEFORM point rows in mm: z r [angleDeg]" in emitted
     assert "50 25 20" in emitted
     assert "50 22 15" in emitted
-    assert "0 ellipse" in emitted
+    assert "0 circle" in emitted
     assert parse(emitted).migration_names == []
 
 

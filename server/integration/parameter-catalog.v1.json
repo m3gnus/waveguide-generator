@@ -1698,7 +1698,11 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Radius at the throat, where the driver attaches. The curvature solver starts the wall here."
+      "description": "Radius at the throat, where the driver attaches. The curvature solver starts the wall here.",
+      "disabled_when": {
+        "path": "icw_seed",
+        "operator": "present"
+      }
     },
     {
       "id": "icw.a0",
@@ -1725,7 +1729,11 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Wall angle where the curve leaves the throat, measured from the horn axis. This is the curve's starting angle, not a target."
+      "description": "Wall angle where the curve leaves the throat, measured from the horn axis. This is the curve's starting angle, not a target.",
+      "disabled_when": {
+        "path": "icw_seed",
+        "operator": "present"
+      }
     },
     {
       "id": "icw.L",
@@ -1757,6 +1765,24 @@
         "path": "termination",
         "operator": "not_equals",
         "value": "rollback"
+      },
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "icw_seed",
+                "operator": "present"
+              },
+              {
+                "path": "icw_coeffs",
+                "operator": "present"
+              }
+            ]
+          }
+        ]
       }
     },
     {
@@ -1784,13 +1810,41 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Target mouth radius the curvature solver sizes the curve to reach. On a rollback it is the aperture radius where the wall first turns through 90°, not the radius at the curled tip. Ignored while a coverage hold is enabled, which makes the mouth radius an output.",
+      "description": "Target mouth radius the curvature solver sizes the curve to reach. On a rollback it is the aperture radius where the wall first turns through 90°, not the radius at the curled tip. During coverage hold it is emergent unless Pin mouth radius is enabled. Clear R to use the advanced Aperture radius on rollback.",
       "disabled_when": {
-        "path": "coverage_angle",
-        "operator": "greater_than",
-        "value": 0
+        "operator": "any",
+        "conditions": [
+          {
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "icw_seed",
+                "operator": "present"
+              },
+              {
+                "path": "icw_coeffs",
+                "operator": "present"
+              }
+            ]
+          },
+          {
+            "operator": "all",
+            "conditions": [
+              {
+                "path": "coverage_angle",
+                "operator": "greater_than",
+                "value": 0
+              },
+              {
+                "path": "pin_mouth_radius",
+                "operator": "not_equals",
+                "value": true
+              }
+            ]
+          }
+        ]
       },
-      "disabled_reason": "Emergent while coverage hold is enabled."
+      "disabled_reason": "Emergent while coverage hold is enabled; enable Pin mouth radius to target R."
     },
     {
       "id": "icw.coverage_angle",
@@ -1819,9 +1873,27 @@
       "options": [],
       "description": "Above 0 this holds a constant wall angle — the constant-directivity plateau — between the hold start and end, and Mouth radius becomes an emergent output rather than a target. 0 turns the hold off and sizes the curve from Horn length and Mouth radius alone. Flat baffle only.",
       "disabled_when": {
-        "path": "termination",
-        "operator": "equals",
-        "value": "rollback"
+        "operator": "any",
+        "conditions": [
+          {
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "icw_seed",
+                "operator": "present"
+              },
+              {
+                "path": "icw_coeffs",
+                "operator": "present"
+              }
+            ]
+          },
+          {
+            "path": "termination",
+            "operator": "equals",
+            "value": "rollback"
+          }
+        ]
       },
       "disabled_reason": "Coverage hold applies to flat-baffle termination only."
     },
@@ -1855,6 +1927,24 @@
         "path": "termination",
         "operator": "not_equals",
         "value": "rollback"
+      },
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "icw_seed",
+                "operator": "present"
+              },
+              {
+                "path": "icw_coeffs",
+                "operator": "present"
+              }
+            ]
+          }
+        ]
       }
     },
     {
@@ -1887,6 +1977,24 @@
         "path": "termination",
         "operator": "not_equals",
         "value": "rollback"
+      },
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "icw_seed",
+                "operator": "present"
+              },
+              {
+                "path": "icw_coeffs",
+                "operator": "present"
+              }
+            ]
+          }
+        ]
       }
     },
     {
@@ -1914,7 +2022,20 @@
       "step": 1,
       "precision": 0,
       "options": [],
-      "description": "How many spline coefficients describe the wall curvature. More gives the solver more freedom to shape the wall, and a slower solve. A coverage hold needs at least 9; values from 5 to 8 are dropped and the solver uses 16 instead."
+      "description": "How many spline coefficients describe the wall curvature. More gives the solver more freedom to shape the wall, and a slower solve. A coverage hold needs at least 9; values from 5 to 8 are dropped and the solver uses 16 instead.",
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "icw_seed",
+            "operator": "absent"
+          },
+          {
+            "path": "icw_coeffs",
+            "operator": "present"
+          }
+        ]
+      }
     },
     {
       "id": "icw.termination",
@@ -1955,7 +2076,25 @@
           "current_only": false
         }
       ],
-      "description": "How the mouth ends. Flat baffle meets the baffle tangentially at 90° with continuous curvature; Rollback carries the lip past 90° so it curls back on itself."
+      "description": "How the mouth ends. Flat baffle meets the baffle tangentially at 90° with continuous curvature; Rollback carries the lip past 90° so it curls back on itself.",
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "icw_seed",
+                "operator": "present"
+              },
+              {
+                "path": "icw_coeffs",
+                "operator": "present"
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "id": "icw.theta1_deg",
@@ -1987,6 +2126,24 @@
         "path": "termination",
         "operator": "equals",
         "value": "rollback"
+      },
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "icw_seed",
+                "operator": "present"
+              },
+              {
+                "path": "icw_coeffs",
+                "operator": "present"
+              }
+            ]
+          }
+        ]
       }
     },
     {
@@ -2019,6 +2176,482 @@
         "path": "termination",
         "operator": "equals",
         "value": "rollback"
+      },
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "icw_seed",
+                "operator": "present"
+              },
+              {
+                "path": "icw_coeffs",
+                "operator": "present"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "icw.r_aperture",
+      "legacy_key": "r_aperture",
+      "path": "r_aperture",
+      "mirror_paths": [],
+      "label": "Aperture radius",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Rollback radius at the foremost 90° wall-angle crossing. Used only when R is absent. Unset adds no radial target; rollback needs a radial target. Feasibility is checked by the mesher.",
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "icw_seed",
+                "operator": "present"
+              },
+              {
+                "path": "icw_coeffs",
+                "operator": "present"
+              }
+            ]
+          },
+          {
+            "path": "termination",
+            "operator": "not_equals",
+            "value": "rollback"
+          },
+          {
+            "path": "R",
+            "operator": "present"
+          }
+        ]
+      }
+    },
+    {
+      "id": "icw.x_aperture",
+      "legacy_key": "x_aperture",
+      "path": "x_aperture",
+      "mirror_paths": [],
+      "label": "Aperture axial position",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Rollback axial coordinate of the foremost 90° crossing, measured from the throat. Unset adds no target. At least one of this, Rollback depth or Tip setback is needed; setting several adds simultaneous constraints.",
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "icw_seed",
+                "operator": "present"
+              },
+              {
+                "path": "icw_coeffs",
+                "operator": "present"
+              }
+            ]
+          },
+          {
+            "path": "termination",
+            "operator": "not_equals",
+            "value": "rollback"
+          }
+        ]
+      }
+    },
+    {
+      "id": "icw.x_setback",
+      "legacy_key": "x_setback",
+      "path": "x_setback",
+      "mirror_paths": [],
+      "label": "Tip setback",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Rollback aperture axial position minus the curled tip axial position. Positive means the tip sits behind the aperture. Unset adds no target. May be combined with depth and aperture position if all targets are feasible.",
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "icw_seed",
+                "operator": "present"
+              },
+              {
+                "path": "icw_coeffs",
+                "operator": "present"
+              }
+            ]
+          },
+          {
+            "path": "termination",
+            "operator": "not_equals",
+            "value": "rollback"
+          }
+        ]
+      }
+    },
+    {
+      "id": "icw.kappa0",
+      "legacy_key": "kappa0",
+      "path": "kappa0",
+      "mirror_paths": [],
+      "label": "Throat curvature",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "1/mm",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Signed wall curvature at the throat. Unset uses 0, a locally conical throat. There is no fixed scalar range; the requested shape must remain feasible.",
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "icw_seed",
+            "operator": "present"
+          },
+          {
+            "path": "icw_coeffs",
+            "operator": "present"
+          }
+        ]
+      }
+    },
+    {
+      "id": "icw.kappa_abs_max",
+      "legacy_key": "kappa_abs_max",
+      "path": "kappa_abs_max",
+      "mirror_paths": [],
+      "label": "Maximum absolute curvature",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "1/mm",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Strictly positive cap on sampled absolute wall curvature. Unset leaves it unbounded. Guides the target solve and is checked afterwards; a violated cap fails rather than silently changing the requested targets.",
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "icw_seed",
+            "operator": "present"
+          },
+          {
+            "path": "icw_coeffs",
+            "operator": "present"
+          }
+        ]
+      }
+    },
+    {
+      "id": "icw.dkappa_ds_abs_max",
+      "legacy_key": "dkappa_ds_abs_max",
+      "path": "dkappa_ds_abs_max",
+      "mirror_paths": [],
+      "label": "Maximum curvature slope",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "1/mm per σ",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": 0.001,
+      "precision": 6,
+      "options": [],
+      "description": "Strictly positive cap on sampled |dκ/dσ|. Despite the key name, the pinned mesher differentiates with respect to normalized arc length σ, not physical s. Unset leaves it unbounded. Guides the target solve and is verified afterwards.",
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "icw_seed",
+            "operator": "present"
+          },
+          {
+            "path": "icw_coeffs",
+            "operator": "present"
+          }
+        ]
+      }
+    },
+    {
+      "id": "icw.theta_max_deg",
+      "legacy_key": "theta_max_deg",
+      "path": "theta_max_deg",
+      "mirror_paths": [],
+      "label": "Maximum wall angle",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": {
+        "minimum": 90,
+        "maximum": 180
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Rollback cap on the sampled wall angle, strictly above 90° and at most 180°. Unset leaves it unbounded. It must allow the terminal angle; it does not choose that angle. Flat-baffle mode ignores it.",
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "icw_seed",
+                "operator": "present"
+              },
+              {
+                "path": "icw_coeffs",
+                "operator": "present"
+              }
+            ]
+          },
+          {
+            "path": "termination",
+            "operator": "not_equals",
+            "value": "rollback"
+          }
+        ]
+      }
+    },
+    {
+      "id": "icw.pin_mouth_radius",
+      "legacy_key": "pin_mouth_radius",
+      "path": "pin_mouth_radius",
+      "mirror_paths": [],
+      "label": "Pin mouth radius",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": "",
+          "label": "Default (No)",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null,
+          "current_only": false
+        },
+        {
+          "value": "false",
+          "label": "No",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null,
+          "current_only": false
+        },
+        {
+          "value": "true",
+          "label": "Yes",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null,
+          "current_only": false
+        }
+      ],
+      "description": "Default is false: coverage hold lets mouth radius emerge. Yes adds R as a hard target during a flat-baffle coverage hold, which can make the targets infeasible. No effect without coverage or on rollback.",
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "icw_seed",
+                "operator": "present"
+              },
+              {
+                "path": "icw_coeffs",
+                "operator": "present"
+              }
+            ]
+          },
+          {
+            "path": "termination",
+            "operator": "equals",
+            "value": "rollback"
+          },
+          {
+            "path": "coverage_angle",
+            "operator": "less_than_or_equal",
+            "value": 0
+          },
+          {
+            "path": "coverage_angle",
+            "operator": "absent"
+          }
+        ]
+      }
+    },
+    {
+      "id": "icw.icw_S",
+      "legacy_key": "icw_S",
+      "path": "icw_S",
+      "mirror_paths": [],
+      "label": "Direct curve arc length",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Required strictly positive total arc length for imported icw_coeffs. There is no default. Ignored by the target solver and by seed mode.",
+      "disabled_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "icw_seed",
+            "operator": "present"
+          },
+          {
+            "path": "icw_coeffs",
+            "operator": "absent"
+          }
+        ]
+      }
+    },
+    {
+      "id": "icw.icw_seed",
+      "legacy_key": "icw_seed",
+      "path": "icw_seed",
+      "mirror_paths": [],
+      "label": "Imported ICW seed",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "indicator",
+      "unit": null,
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": false,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [],
+      "description": "Preserved nested OSSE/R-OSSE seed. The mesher fits it in preference to direct coefficients and targets. Edit the native file to change the seed.",
+      "visible_when": {
+        "path": "icw_seed",
+        "operator": "present"
+      }
+    },
+    {
+      "id": "icw.icw_coeffs",
+      "legacy_key": "icw_coeffs",
+      "path": "icw_coeffs",
+      "mirror_paths": [],
+      "label": "Imported ICW coefficients",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "indicator",
+      "unit": null,
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": false,
+      "default_by_family": {},
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [],
+      "description": "Preserved direct curvature coefficient list; requires Direct curve arc length. Seed mode takes precedence if both are present. Edit the native file to change the list.",
+      "visible_when": {
+        "path": "icw_coeffs",
+        "operator": "present"
       }
     },
     {
@@ -2475,7 +3108,7 @@
       "step": null,
       "precision": null,
       "options": [],
-      "description": "Cross-section outline at increasing positions along the throat-to-mouth axis, blended between the stations you list; the H and V splines still set each section's half-width and half-height. The station at 0 must be an ellipse. Superellipse exponents run 2 to 16, and a corner radius has to fit the local half-size."
+      "description": "Cross-section outline at increasing positions along the throat-to-mouth axis, blended between the stations you list; the H and V splines still set each section's half-width and half-height. The station at 0 must be a circle or ellipse. Circle uses the local H/V radii just like Ellipse, so it is circular only when they are equal. Superellipse exponents run 2 to 16, and a corner radius has to fit the local half-size."
     },
     {
       "id": "freeform.inflectionPolicy",

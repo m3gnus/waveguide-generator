@@ -306,18 +306,20 @@ Freeform.CrossSections = {
 
 `Freeform.V` and `.V.Points` have the same form. Point rows are interior anchors in
 `z_mm r_mm [angleDeg]`; throat and mouth endpoints are implicit. Cross-section rows are
-`t shape [exponent|cornerRadiusMm]`, where `t` is in `[0,1]` and shape is `ellipse`,
-`superellipse`, or `rounded_rectangle`.
+`t shape [exponent|cornerRadiusMm]`, where `t` is in `[0,1]` and shape is `circle`, `ellipse`,
+`superellipse`, or `rounded_rectangle`. Circle is an alias for the local H/V
+ellipse; unequal local radii still produce an ellipse. Circle takes no exponent
+or corner radius.
 
 After parsing/migration, the typed API stores both complete meridians as
 `{t, r, angle_deg?}` with a shared top-level length. Each profile begins at `t=0`, ends
-at `t=1`, and is strictly increasing. The first cross-section is `0 ellipse`; the last
-is at `t=1`.
+at `t=1`, and is strictly increasing. The first cross-section is `0 circle` or `0 ellipse`; the last
+is at `t=1`. Circle is accepted at any station and retains its spelling.
 
-The reader accepts retired tangent scales, per-anchor strength, overshoot policy, and
-`circle` stations only long enough to migrate old files. The canonical writer never
-emits them: tangent speed is solved automatically and `ellipse` represents the round
-endpoint.
+The reader accepts retired tangent scales, per-anchor strength and overshoot policy
+only long enough to migrate old files. The canonical writer never emits those
+removed controls: tangent speed is solved automatically. Circle stations remain valid
+and survive canonical writing.
 
 ## Ordered migrations
 
@@ -329,7 +331,7 @@ Migrations run before validation and are independently reported:
 3. `003_js_undefined_lines_dropped` removes `undefined`, `NaN`, and `null` assignments
    only at known numeric-schema paths so ordinary unknown text is preserved.
 4. `004_freeform_solved_tangent_contract` removes tangent scales, per-anchor strength,
-   and overshoot policy, and converts `circle` stations to `ellipse`.
+   and overshoot policy. Circle stations are preserved.
 5. `005_freeform_normalized_axis` converts legacy absolute-z anchors to the shared
    normalized `t` axis and moves physical length to the top-level design.
 
@@ -398,7 +400,8 @@ serialized result must retain the same validated API meaning.
 
 WG stores additional geometry controls in a `WG.Geometry` block in stamped
 WG design files, including rewritten ATH imports. The block has exactly one
-JSON `Payload`, with only `cross_section` and `depth_margin_mm` supported:
+JSON `Payload`, supporting `cross_section`, `depth_margin_mm`, and native-only
+`icw` advanced inputs:
 
 ATH ignores `WG.Geometry`. Opening a saved WG `.cfg` in ATH therefore uses
 the default circular base section and default rear clearance, even when WG
@@ -429,3 +432,16 @@ corresponding symmetry reduction.
 Older expression-valued resolutions remain loadable and editable. Preview,
 solve and export require one to four finite numbers and explain which
 unsupported expression must be replaced.
+
+
+## Advanced ICW inputs
+
+Native WG text saves store the optional ICW keys `r_aperture`, `x_aperture`,
+`x_setback`, `kappa0`, `kappa_abs_max`, `dkappa_ds_abs_max`, `theta_max_deg`,
+`pin_mouth_radius`, `icw_seed`, `icw_coeffs`, and `icw_S` as a JSON object under
+`WG.Geometry.Payload.icw`. This requires the native WG geometry stamp and ICW
+family; it has no ATH equivalent. JSON designs carry the keys directly in the
+ICW model. Absent advanced fields are omitted, preserving existing bytes and
+mesher defaults. Nested seeds and coefficient lists round-trip without editors.
+See [ICW advanced controls](ICW-ADVANCED-AND-FREEFORM-CIRCLE.md) for units,
+bounds, input-mode precedence, and coverage/rollback target interactions.

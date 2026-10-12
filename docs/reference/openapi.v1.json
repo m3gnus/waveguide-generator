@@ -2383,6 +2383,7 @@
           },
           "shape": {
             "enum": [
+              "circle",
               "ellipse",
               "superellipse",
               "rounded_rectangle"
@@ -5073,6 +5074,16 @@
               }
             ]
           },
+          "dkappa_ds_abs_max": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "enclosure": {
             "anyOf": [
               {
@@ -5122,7 +5133,73 @@
               }
             ]
           },
+          "icw_S": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "icw_coeffs": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icw Coeffs"
+          },
+          "icw_seed": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icw Seed"
+          },
           "k": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kappa0": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kappa_abs_max": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/Expr"
@@ -5166,6 +5243,17 @@
           "output": {
             "$ref": "#/components/schemas/OutputConfig"
           },
+          "pin_mouth_radius": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pin Mouth Radius"
+          },
           "q": {
             "anyOf": [
               {
@@ -5177,6 +5265,16 @@
             ]
           },
           "r0": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "r_aperture": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/Expr"
@@ -5252,6 +5350,16 @@
               }
             ]
           },
+          "theta_max_deg": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "throat_ext_angle": {
             "anyOf": [
               {
@@ -5263,6 +5371,26 @@
             ]
           },
           "throat_ext_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "x_aperture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "x_setback": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/Expr"

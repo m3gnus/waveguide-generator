@@ -40,7 +40,7 @@ export interface FreeformProfile {
 
 export interface CrossSectionStation {
   t: number;
-  shape: 'ellipse' | 'superellipse' | 'rounded_rectangle';
+  shape: 'circle' | 'ellipse' | 'superellipse' | 'rounded_rectangle';
   exponent?: number;
   corner_radius_mm?: number;
   corner_grid?: number[][];
@@ -100,6 +100,17 @@ export interface DesignDocument {
   theta1_deg?: number;
   depth?: number;
   curl?: number;
+  r_aperture?: number;
+  x_aperture?: number;
+  x_setback?: number;
+  kappa0?: number;
+  kappa_abs_max?: number;
+  dkappa_ds_abs_max?: number;
+  theta_max_deg?: number;
+  pin_mouth_radius?: boolean;
+  icw_seed?: Record<string, unknown>;
+  icw_coeffs?: (number | string)[];
+  icw_S?: number;
   length?: number;
   lookup_profile?: [number, number][];
   throat_profile?: number;
@@ -348,6 +359,8 @@ const FAMILY_SPECIFIC_FIELDS = {
   ICW: [
     'R', 'L', 'r0', 'a0', 'a', 'k', 'q', 'coverage_angle', 'hold_start',
     'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth', 'curl',
+    'r_aperture', 'x_aperture', 'x_setback', 'kappa0', 'kappa_abs_max',
+    'dkappa_ds_abs_max', 'theta_max_deg', 'pin_mouth_radius', 'icw_seed', 'icw_coeffs', 'icw_S',
   ],
   LOOKUP: ['lookup_profile', 'a0'],
   FREEFORM: [

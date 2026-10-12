@@ -3040,7 +3040,7 @@ export interface components {
              * Shape
              * @enum {string}
              */
-            shape: "ellipse" | "superellipse" | "rounded_rectangle";
+            shape: "circle" | "ellipse" | "superellipse" | "rounded_rectangle";
             t: components["schemas"]["Expr"];
         };
         /**
@@ -3931,6 +3931,7 @@ export interface components {
             cross_section?: components["schemas"]["CrossSectionConfig"];
             curl?: components["schemas"]["Expr"] | null;
             depth?: components["schemas"]["Expr"] | null;
+            dkappa_ds_abs_max?: components["schemas"]["Expr"] | null;
             enclosure?: components["schemas"]["EnclosureConfig"] | null;
             /** Extra Blocks */
             extra_blocks?: {
@@ -3947,15 +3948,27 @@ export interface components {
             formula: "ICW";
             hold_end?: components["schemas"]["Expr"] | null;
             hold_start?: components["schemas"]["Expr"] | null;
+            icw_S?: components["schemas"]["Expr"] | null;
+            /** Icw Coeffs */
+            icw_coeffs?: (number | string)[] | null;
+            /** Icw Seed */
+            icw_seed?: {
+                [key: string]: unknown;
+            } | null;
             k?: components["schemas"]["Expr"] | null;
+            kappa0?: components["schemas"]["Expr"] | null;
+            kappa_abs_max?: components["schemas"]["Expr"] | null;
             /** Length Mode */
             length_mode?: ("profile" | "total") | null;
             mesh?: components["schemas"]["MeshConfig"];
             morph?: components["schemas"]["MorphConfig"];
             n_coeff?: components["schemas"]["Expr"] | null;
             output?: components["schemas"]["OutputConfig"];
+            /** Pin Mouth Radius */
+            pin_mouth_radius?: boolean | null;
             q?: components["schemas"]["Expr"] | null;
             r0?: components["schemas"]["Expr"] | null;
+            r_aperture?: components["schemas"]["Expr"] | null;
             scale?: components["schemas"]["Expr"] | null;
             simulation?: components["schemas"]["SimulationConfig"];
             slot_length?: components["schemas"]["Expr"] | null;
@@ -3965,8 +3978,11 @@ export interface components {
             /** Text Import Version */
             text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
             theta1_deg?: components["schemas"]["Expr"] | null;
+            theta_max_deg?: components["schemas"]["Expr"] | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
+            x_aperture?: components["schemas"]["Expr"] | null;
+            x_setback?: components["schemas"]["Expr"] | null;
         };
         /**
          * ImportedEngineVerdictResponse

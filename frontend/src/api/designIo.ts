@@ -197,6 +197,7 @@ export async function sendDesignToCad(
 }
 
 function unwrapExpressions(value: unknown, path = '', expressions: Record<string, ExprNumber> = {}, absent: string[] = []): unknown {
+  if (path === 'icw_seed' || path === 'icw_coeffs') return structuredClone(value);
   if (Array.isArray(value)) return value.map((item, index) => unwrapExpressions(item, path ? `${path}.${index}` : String(index), expressions, absent));
   if (value === null) {
     if (path) absent.push(path);
@@ -244,6 +245,9 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
   }
   const document = merge(designForFamily(formula), unwrapped);
   normalizeNativeCrossSection(document);
+  // R is optional on ICW: an absent rollback R enables r_aperture fallback.
+  // Do not substitute the new-design default for a file that deliberately omits it.
+  if (formula === 'ICW' && wire.R == null) delete document.R;
   if (formula === 'OSSE' || formula === 'R-OSSE') {
     for (const key of ['s1', 's2']) if (!(key in wire)) absent.push(key);
   }

@@ -142,7 +142,7 @@ migrateLegacySectionKeys();
 
 function storedSectionState(title: string): boolean {
   const stored = readSectionMap()[title];
-  return stored === undefined ? !['Export', 'Experimental'].includes(title) : stored;
+  return stored === undefined ? !['Export', 'Experimental', 'Advanced ICW'].includes(title) : stored;
 }
 
 function writeSectionState(title: string, open: boolean): void {
@@ -344,6 +344,8 @@ function passthroughStatus(field: ParameterDefinition, design: DesignDocument): 
   // back a second apparent domain control even though solve and export discard
   // it; the value remains visible so imported config fidelity is inspectable.
   if (field.id === 'mesh.quadrants') return String(getAtPath(design, field.path) ?? 'Not present');
+  if (field.id === 'icw.icw_seed') return design.icw_seed != null ? 'Seed present' : 'Not present';
+  if (field.id === 'icw.icw_coeffs') return design.icw_coeffs != null ? `${design.icw_coeffs.length} coefficients present` : 'Not present';
   const names = Object.keys(design.extra_blocks);
   if (field.id === 'passthrough.abec') {
     const count = names.filter((name) => (
@@ -369,6 +371,8 @@ function validationMessage(field: ParameterDefinition, design: DesignDocument): 
 }
 
 function prospectiveValidation(field: ParameterDefinition, design: DesignDocument, value: number): string | undefined {
+  if (['icw.kappa_abs_max', 'icw.dkappa_ds_abs_max', 'icw.icw_S'].includes(field.id) && value <= 0) return 'Must be greater than zero.';
+  if (field.id === 'icw.theta_max_deg' && value <= 90) return 'Must be greater than 90° and at most 180°.';
   if (field.id.startsWith('cross_section.') && value <= 0) return 'Must be greater than zero.';
   if (field.id === 'simulation.f1' && value >= design.simulation.f2) return 'Must be below sweep end.';
   if (field.id === 'simulation.f2' && value <= design.simulation.f1) return 'Must exceed sweep start.';
@@ -468,7 +472,8 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
         <label htmlFor={`parameter-${field.id}`} title={disabledReason}>{field.label}</label>
         <select id={`parameter-${field.id}`} value={String(value ?? '')} disabled={disabled} onChange={(event) => {
           const option = field.options?.find((item) => String(item.value) === event.target.value);
-          commit(option?.value ?? event.target.value);
+          if (field.id === 'icw.pin_mouth_radius') commit(event.target.value === '' ? null : event.target.value === 'true');
+          else commit(option?.value ?? event.target.value);
         }}>
           {options.map((option) => <option key={String(option.value)} value={String(option.value)} disabled={Boolean(option.unavailableReason)} title={option.unavailableReason}>{option.label}</option>)}
         </select>
@@ -487,7 +492,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
   if (field.id === 'enclosure.front_resolution' || field.id === 'enclosure.back_resolution') return <EnclosureResolutionField field={field} design={design} value={value} onCommit={commit} />;
   if (field.kind === 'text') return <TextField field={field} value={String(value ?? '')} disabled={disabled} onCommit={commit} />;
   const error = validationMessage(field, design);
-  const optional = field.path === 'mesh.max_edge';
+  const optional = field.optional || field.path === 'mesh.max_edge';
   return <>
     <NumberField
       label={field.label}
@@ -1282,8 +1287,9 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         if (id === 'control.solveDomain') return showSolveDomain ? <SolveDomainControl key={id} design={design} /> : null;
         if (id === 'control.meshValidation') return showCustom ? <MeshValidationControl key={id} /> : null;
         const field = fields.find((candidate) => candidate.id === id);
-        return field && (workspaceMode === 'cad' || id !== 'simulation.sim_type') ? <Fragment key={id}>{renderField(field)}</Fragment> : null;
+        return field && !field.group && (workspaceMode === 'cad' || id !== 'simulation.sim_type') ? <Fragment key={id}>{renderField(field)}</Fragment> : null;
       })}
+      {fields.some((field) => field.group === 'Advanced ICW') && <Section title="Advanced ICW" forceOpen={searching} description="Optional native ICW inputs. Blank uses the mesher default.">{fields.filter((field) => field.group === 'Advanced ICW').map(renderField)}</Section>}
       {custom}
       {definition.title === 'Imported ATH values' && importedAthValues}
       {searching && fields.some((field) => !fieldIsVisible(field, design)) && <p className="filter-note">Some matches are normally hidden by the active mode; they are shown here for discoverability.</p>}

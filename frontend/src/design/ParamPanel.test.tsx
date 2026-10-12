@@ -152,6 +152,48 @@ describe('ParamPanel inventory UX', () => {
     vi.unstubAllGlobals();
   });
 
+  it('keeps Advanced ICW collapsed, optional and ICW-only, with read-only imported inputs', () => {
+    act(() => useDesignStore.getState().setFamily('ICW'));
+    let group = host.querySelector<HTMLElement>('[data-section="Advanced ICW"]')!;
+    expect(group).not.toBeNull();
+    expect(group.querySelector('button')!.getAttribute('aria-expanded')).toBe('false');
+    expect(group.querySelector('input')).toBeNull();
+    act(() => group.querySelector<HTMLButtonElement>('button')!.click());
+    group = host.querySelector<HTMLElement>('[data-section="Advanced ICW"]')!;
+    const kappa = [...group.querySelectorAll('label')].find((label) => label.textContent === 'Throat curvature')!;
+    const input = document.getElementById(kappa.htmlFor) as HTMLInputElement;
+    expect(input.value).toBe('');
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '.001');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => input.blur());
+    expect(useDesignStore.getState().design.kappa0).toBe(.001);
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => input.blur());
+    expect(useDesignStore.getState().design.kappa0).toBeNull();
+    act(() => useDesignStore.getState().updateValue('coverage_angle', 45));
+    const pin = group.querySelector<HTMLSelectElement>('[id="parameter-icw.pin_mouth_radius"]')!;
+    expect(pin.disabled).toBe(false);
+    act(() => { pin.value = 'true'; pin.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(useDesignStore.getState().design.pin_mouth_radius).toBe(true);
+    act(() => { pin.value = ''; pin.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(useDesignStore.getState().design.pin_mouth_radius).toBeNull();
+    act(() => useDesignStore.getState().loadDesign({ ...designForFamily('ICW'), icw_seed: { type: 'OSSE' }, icw_coeffs: [0, 0, 0, 0] }));
+    expect(group.textContent).toContain('Seed present');
+    expect(group.textContent).toContain('4 coefficients present');
+    expect(group.querySelector('[data-parameter-id="icw.icw_seed"] input')).toBeNull();
+    for (const family of ['OSSE', 'R-OSSE', 'FREEFORM'] as const) {
+      act(() => useDesignStore.getState().setFamily(family));
+      expect(host.querySelector('[data-section="Advanced ICW"]')).toBeNull();
+    }
+  });
+
   it('stacks long selects and text while keeping short selects inline', () => {
     // Native formula names such as OSSE-ADAPTER-CONTROLS do not fit the numeric column.
     expect(host.querySelector('#family')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(true);
