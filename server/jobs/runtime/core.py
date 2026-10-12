@@ -655,6 +655,15 @@ async def _accuracy_engine(request: SolveRequest, registry: EngineRegistry) -> t
             request = request.model_copy(deep=True)
             request.options.engine = name
             return request, _ACCURATE_CPU_FALLBACK if name == "beat-cpu" else None
+    beat_runtimes = [info for name, info in capabilities.items() if name.startswith("beat-")]
+    if any(info.runtime_state == "preparing" for info in beat_runtimes) or (
+        any(info.runtime_state == "unprepared" for info in beat_runtimes)
+        and registry.cpu_preparation_in_flight()
+    ):
+        raise EngineUnavailableError(
+            "BEAT is still being prepared (this happens once after installing or updating "
+            "and can take several minutes). Wait for it to finish, or choose Fast."
+        )
     raise EngineUnavailableError(
         "Accurate requires a ready BEAT GPU or BEAT CPU backend. "
         "Enable BEAT, or choose Fast."

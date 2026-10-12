@@ -267,6 +267,9 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   return <>
     <HelpTipRow className="select-row" text={accuracyHelp}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></HelpTipRow>
     <AccuracyExplainer fastEngine={explainerFast} accurateEngine={explainerAccurate} />
+    {store.engine === 'auto' && store.accuracy === 'fast' && explainerFast === 'bempp'
+      && engines.some((engine) => engine.name.startsWith('beat-') && engine.runtime_state === 'preparing')
+      && <p className="section-note" role="status">Solves use BEMPP until BEAT is ready.</p>}
     <HelpTipRow className="toggle-row" text="BEAT exterior sweeps with at least 24 frequencies. Fits unsolved points to a 0.1 dB equivalent disagreement target. Completed native acquisition has gaps no wider than 1/6 octave. Narrow resonances can be missed when narrower than the largest solved-frequency gap; this spacing bound does not guarantee interpolation accuracy."><label htmlFor="adaptive-frequency-sampling">Adaptive frequency sampling (experimental)</label><input id="adaptive-frequency-sampling" type="checkbox" checked={store.adaptiveFrequencySampling} disabled={Boolean(adaptiveReason) && !store.adaptiveFrequencySampling} aria-describedby={adaptiveReason ? 'adaptive-sampling-reason' : undefined} onChange={(event) => store.setAdaptiveFrequencySampling(event.target.checked)} /></HelpTipRow>
     {adaptiveReason && <p id="adaptive-sampling-reason" className="section-note">{adaptiveReason}</p>}
     {store.accuracy === 'accurate' && !beatGpu && beatCpu && <p className="section-note" role="status">No BEAT GPU backend is ready; Accurate will use BEAT CPU.</p>}

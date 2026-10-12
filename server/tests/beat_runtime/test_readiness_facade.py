@@ -27,6 +27,22 @@ def official(monkeypatch, tmp_path):
         assert not thread.is_alive()
 
 
+@pytest.mark.parametrize("backend,label", [
+    ("cpu", "BEAT · CPU"),
+    ("metal", "BEAT · Metal"),
+    ("cuda", "BEAT · CUDA"),
+    ("rocm", "BEAT · ROCm"),
+])
+def test_preparation_status_uses_backend_display_label(official, monkeypatch, backend, label):
+    monkeypatch.setattr(facade, "_preparation_in_flight", True)
+    monkeypatch.setattr(facade, "_requested_backend", backend)
+    monkeypatch.setattr(facade, "_provision_step", "precompile")
+    monkeypatch.setattr(facade, "_gpu_stage_step", "precompile")
+    assert facade.runtime_preparation_status(backend) == (
+        "preparing", f"Preparing {label} (step: precompile).",
+    )
+
+
 def test_official_presentation_does_not_load_hbb(official, monkeypatch):
     monkeypatch.setattr(readiness, "backend_readiness", lambda backend, *args, **kwargs:
                         readiness.BackendReadiness(backend == "cpu", "ready", "compiled proof"))

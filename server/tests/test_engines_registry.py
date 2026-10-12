@@ -83,6 +83,37 @@ def test_accurate_refuses_missing_beat_instead_of_switching_to_metal() -> None:
         asyncio.run(resolve_submission(request, engine_registry))
 
 
+@pytest.mark.parametrize("name", ["beat-cpu", "beat-metal", "beat-cuda", "beat-rocm"])
+@pytest.mark.parametrize(
+    ("runtime_state", "in_flight", "preparing"),
+    [("preparing", False, True), ("unprepared", True, True),
+     ("unprepared", False, False), ("failed", True, False), ("unavailable", True, False)],
+)
+def test_accurate_refusal_explains_only_active_beat_preparation(
+    monkeypatch, name: str, runtime_state: str, in_flight: bool, preparing: bool,
+) -> None:
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("bempp", True, "ready", "1"),
+            registry.EngineInfo(name, False, "not ready", "1", runtime_state=runtime_state),
+        ],
+        factory=lambda _name: object(),
+    )
+    monkeypatch.setattr(engine_registry, "cpu_preparation_in_flight", lambda: in_flight)
+    request = _planner_request()
+    request.options.accuracy = "accurate"
+    with pytest.raises(EngineUnavailableError) as refused:
+        asyncio.run(resolve_submission(request, engine_registry))
+    assert str(refused.value) == (
+        "BEAT is still being prepared (this happens once after installing or updating "
+        "and can take several minutes). Wait for it to finish, or choose Fast."
+        if preparing else
+        "Accurate requires a ready BEAT GPU or BEAT CPU backend. Enable BEAT, or choose Fast."
+    )
+    assert request.options.engine == "auto"
+    assert request.options.accuracy == "accurate"
+
+
 def test_explicit_engine_overrides_accuracy_and_accurate_refuses_coupled_baffle() -> None:
     engine_registry = registry.EngineRegistry(
         detector=lambda: [

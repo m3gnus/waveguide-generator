@@ -112,6 +112,56 @@ describe('solve and directivity control help', () => {
     expect(pollCount).toBe(completedPolls);
   });
 
+  it.each([
+    ['parametric', 'Windows'], ['parametric', 'Linux'], ['cad', 'Windows'], ['cad', 'Linux'],
+  ] as const)('shows one temporary BEMPP notice in %s on %s until BEAT is ready', (mode, hostPlatform) => {
+    const engines = [
+      { name: 'bempp', available: true, formulations: ['full-3d'], geometry_sources: ['parametric', 'imported'] },
+      ...['beat-cpu', 'beat-cuda'].map((name) => ({ name, available: false, runtime_state: 'preparing' })),
+    ];
+    const payload = { engines, hostPlatform, engineSelection: {
+      default: 'auto', resolvedDefault: 'bempp', full3dOrder: ['beat-cuda', 'beat-cpu', 'bempp'],
+    } };
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, payload);
+    importedPlan.current = { plan: { ingest_id: 'cad-test', requested: 'auto', engine: 'bempp', reason: 'Ready', engines: [] }, error: null, isPending: false };
+    render(<SolveOptionsControls mode={mode} />);
+    const notices = () => [...host.querySelectorAll('p[role="status"]')]
+      .filter((node) => node.textContent === 'Solves use BEMPP until BEAT is ready.');
+    expect(notices()).toHaveLength(1);
+    act(() => {
+      queryClient.setQueryData(CAPABILITIES_QUERY_KEY, { ...payload,
+        engines: engines.map((engine) => ({ ...engine, available: true, runtime_state: 'ready' })),
+        engineSelection: { ...payload.engineSelection, resolvedDefault: 'beat-cpu' },
+      });
+      vi.advanceTimersByTime(1);
+    });
+    expect(notices()).toHaveLength(0);
+  });
+
+  it.each([
+    { resolved: 'metal', name: 'beat-cpu', state: 'preparing', engine: 'auto', accuracy: 'fast' },
+    { resolved: 'bempp', name: 'beat-cpu', state: 'unprepared', engine: 'auto', accuracy: 'fast' },
+    { resolved: 'bempp', name: 'beat-cpu', state: 'failed', engine: 'auto', accuracy: 'fast' },
+    { resolved: 'bempp', name: 'beat-cpu', state: 'unavailable', engine: 'auto', accuracy: 'fast' },
+    { resolved: 'bempp', name: 'other', state: 'preparing', engine: 'auto', accuracy: 'fast' },
+    { resolved: 'bempp', name: 'beat-cpu', state: 'preparing', engine: 'bempp', accuracy: 'fast' },
+    { resolved: 'bempp', name: 'beat-cpu', state: 'preparing', engine: 'auto', accuracy: 'accurate' },
+  ] as const)('omits the BEMPP notice for $resolved / $name / $state / $engine / $accuracy', ({ resolved, name, state, engine, accuracy }) => {
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      engines: [
+        { name: resolved, available: true, formulations: ['full-3d'], geometry_sources: ['parametric', 'imported'] },
+        { name, available: false, runtime_state: state },
+      ],
+      engineSelection: { default: 'auto', resolvedDefault: resolved, full3dOrder: [resolved] },
+    });
+    useSolveOptionsStore.setState({ engine, accuracy });
+    importedPlan.current = { plan: { ingest_id: 'cad-test', requested: engine, engine: resolved, reason: 'Ready', engines: [] }, error: null, isPending: false };
+    for (const mode of ['parametric', 'cad'] as const) {
+      render(<SolveOptionsControls mode={mode} />);
+      expect(host.textContent).not.toContain('Solves use BEMPP until BEAT is ready.');
+    }
+  });
+
   const render = (node: React.ReactNode) => act(() => root.render(<QueryClientProvider client={queryClient}>{node}</QueryClientProvider>));
   const hoverText = (element: Element) => {
     act(() => { element.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' })); vi.advanceTimersByTime(400); });
