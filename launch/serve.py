@@ -775,6 +775,17 @@ def main(argv: list[str] | None = None) -> int:
     stop_reason = "the --no-gui server stopped before it confirmed a healthy start"
     # What ``main`` returns, for an exit that has to end the process itself.
     exit_status = 1
+    # A headless backend publishes the installer's retire event before the slow
+    # app build, so an install that starts meanwhile can find it. An event that
+    # is already set here is stale -- the bundle launcher does not start while
+    # Setup runs -- so the watcher waits to see it clear before honouring it.
+    retire_signal = None
+    retire_initially_requested = False
+    if args.lifetime == "headless" and os.name == "nt":
+        from server.solver.beat_runtime.retire import RetireSignal
+
+        retire_signal = RetireSignal()
+        retire_initially_requested = retire_signal.requested()
     retire_thread = None
     try:
         backstop.activate()
@@ -854,10 +865,13 @@ def main(argv: list[str] | None = None) -> int:
             server.should_exit = True
             backstop.begin(reason)
 
-        if tracker is not None:
+        if tracker is not None and retire_signal is not None:
             from launch.backend_lifetime import InstallerRetireThread
 
-            retire_thread = InstallerRetireThread(tracker, request_stop)
+            retire_thread = InstallerRetireThread(
+                tracker, request_stop, retire_signal,
+                initially_requested=retire_initially_requested,
+            )
             retire_thread.start()
 
         # Windows-only, and a no-op anywhere else or without a console.
@@ -918,6 +932,8 @@ def main(argv: list[str] | None = None) -> int:
             stop_status_watch.set()
             if retire_thread is not None:
                 retire_thread.close()
+            elif retire_signal is not None:
+                retire_signal.close()
             _not_confirmed(no_gui_start, stop_reason)
             if listener is not None:
                 listener.close()

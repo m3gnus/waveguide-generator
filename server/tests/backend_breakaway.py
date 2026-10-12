@@ -1,5 +1,6 @@
 """Environment admission for tests that start a detached backend."""
 
+import os
 import sys
 
 import pytest
@@ -36,8 +37,10 @@ def require_backend_breakaway() -> None:
 
 
 def backend_spawn_refusal_message(executable: str) -> str:
+    text = WINDOWS_BREAKAWAY_REFUSAL.strip()
+    detail = text if text.endswith(("!", "?")) else text.rstrip(".") + "."
     return (
-        f'Could not start the backend ("{display_path(executable)}"): {WINDOWS_BREAKAWAY_REFUSAL} '
+        f'Could not start the backend ("{display_path(os.fspath(executable))}"): {detail} '
         "Open Waveguide Generator from the Start menu and try again, "
         "or run outside the CI/IDE job that forbids breakaway."
     )

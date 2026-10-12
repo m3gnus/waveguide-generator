@@ -312,15 +312,23 @@ def _spawn_attempt(
         from server.platform.job_start import ContainedStartError
         if not isinstance(exc, (OSError, ContainedStartError)):
             raise
-        detail = str(exc).rstrip().rstrip(".") + "."
+        try:
+            text = str(exc).strip() or type(exc).__name__
+            executable = display_path(os.fspath(argv[0]))
+        except Exception:  # noqa: BLE001 - formatting must preserve the spawn failure
+            try:
+                executable, text = str(argv[0]), repr(exc)
+            except Exception:  # noqa: BLE001 - even the fallback must preserve it
+                raise exc
+        detail = text if text.endswith(("!", "?")) else text.rstrip(".") + "."
         if _breakaway_refusal(exc) is not None:
             raise BackendSpawnError(
-                f'Could not start the backend ("{display_path(argv[0])}"): {detail} '
+                f'Could not start the backend ("{executable}"): {detail} '
                 "Open Waveguide Generator from the Start menu and try again, "
                 "or run outside the CI/IDE job that forbids breakaway."
             ) from exc
         raise BackendSpawnError(
-            f'Could not start the backend ("{display_path(argv[0])}"): {detail} Check the installation, '
+            f'Could not start the backend ("{executable}"): {detail} Check the installation, '
             "or start Waveguide Generator manually."
         ) from exc
     return process, log_path

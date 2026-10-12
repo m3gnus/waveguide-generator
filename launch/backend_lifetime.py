@@ -53,6 +53,13 @@ class ActivityTracker:
                 self.last_activity = self.clock()
 
     async def holds_work(self) -> bool:
+        delivery_in_flight = getattr(self.app.state, "cad_delivery_in_flight", None)
+        if delivery_in_flight is not None:
+            try:
+                if delivery_in_flight():
+                    return True
+            except Exception:  # noqa: BLE001 - uncertain delivery activity owns work
+                return True
         runtime = getattr(self.app.state, "jobs_runtime", None)
         if runtime is not None:
             if runtime.running_job_ids or getattr(runtime, "_prep_running", ()) or getattr(runtime, "_prep_queue", ()):
@@ -77,7 +84,12 @@ class ActivityTracker:
             coroutine = check()
             future = asyncio.run_coroutine_threadsafe(coroutine, self.loop)
             return future.result(timeout=self.timeout)
-        except Exception:  # noqa: BLE001 - retirement must fail closed on any doubt
+        except Exception as exc:  # noqa: BLE001 - retirement must fail closed on any doubt
+            if (
+                isinstance(exc, TimeoutError) and future is not None and future.done()
+                and not future.cancelled() and future.exception() is None
+            ):
+                return future.result()
             if future is not None:
                 future.cancel()
             elif coroutine is not None:
@@ -93,11 +105,17 @@ class ActivityTracker:
         *, requested: Callable[[], bool] = lambda: True,
     ) -> bool:
         async def commit() -> bool:
+            if getattr(self.app.state, "retiring", False):
+                return True
             if await self._has_client() or not requested():
                 return False
             self.app.state.retiring = True
             log.info("Retiring idle headless backend (%s)", reason)
-            request_stop(reason)
+            try:
+                request_stop(reason)
+            except BaseException:
+                self.app.state.retiring = False
+                raise
             return True
 
         return self._on_loop(commit, on_error=False)
@@ -109,7 +127,7 @@ class RetirementWatcher:
     def __init__(
         self, hold: RetirementHold, has_client: Callable[[], bool], commit: Callable[[], bool],
         *, clock: Callable[[], float] = time.monotonic, cap: float = 130.0,
-        poll_interval: float = 1.0, reason: str = RETIRE_REASON,
+        poll_interval: float = 1.0, reason: str = RETIRE_REASON, armed: bool = True,
     ):
         self.hold = hold
         self.has_client = has_client
@@ -118,7 +136,7 @@ class RetirementWatcher:
         self.cap = cap
         self.poll_interval = poll_interval
         self.reason = reason
-        self.armed = True
+        self.armed = armed
         self.held_since: float | None = None
         self.retired = False
 
@@ -155,12 +173,16 @@ class RetirementWatcher:
 class InstallerRetireThread:
     """Own the named event and park in a kernel wait while it is clear."""
 
-    def __init__(self, tracker: ActivityTracker, request_stop: Callable[[str], None]):
+    def __init__(
+        self, tracker: ActivityTracker, request_stop: Callable[[str], None], signal: retire.RetireSignal,
+        *, initially_requested: bool,
+    ):
         self.tracker = tracker
         self.request_stop = request_stop
         self.stop = StopSignal()
         self.thread: threading.Thread | None = None
-        self.signal = None
+        self.signal = signal
+        self.initially_requested = initially_requested
 
     def start(self) -> None:
         if os.name != "nt":
@@ -169,7 +191,6 @@ class InstallerRetireThread:
         from ctypes import wintypes
 
         event_name = retire.RETIRE_IDLE_EVENT
-        self.signal = retire.RetireSignal()
         if self.signal.error is not None:
             log.warning("Could not create backend retire event (WinError %s)", self.signal.error)
             return
@@ -196,6 +217,7 @@ class InstallerRetireThread:
                 requested=lambda: self.signal.requested() and watcher.held_since is not None
                 and watcher.clock() - watcher.held_since < watcher.cap,
             ),
+            armed=not self.initially_requested,
         )
 
         def run():
@@ -216,12 +238,17 @@ class InstallerRetireThread:
                         log.warning("Backend retire wait failed (WinError %s)", ctypes.get_last_error())
                         break
             finally:
-                if not watcher.retired:
+                if not watcher.retired and not getattr(self.tracker.app.state, "retiring", False):
                     watcher.hold.release()
                 kernel32.CloseHandle(event)
 
-        self.thread = threading.Thread(target=run, name="wg2-backend-retire", daemon=True)
-        self.thread.start()
+        try:
+            self.thread = threading.Thread(target=run, name="wg2-backend-retire", daemon=True)
+            self.thread.start()
+        except BaseException:
+            self.thread = None
+            kernel32.CloseHandle(event)
+            raise
 
     def close(self) -> None:
         self.stop.set()

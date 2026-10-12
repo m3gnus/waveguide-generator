@@ -2224,6 +2224,10 @@ def _deliver_solve_commands(application: FastAPI):
             )
             return
         running: set[str] = set()
+        # A pass in progress, or an operation it started, is work a retiring
+        # headless backend must wait for (``launch/backend_lifetime.py``).
+        pass_active = [False]
+        state.cad_delivery_in_flight = lambda: pass_active[0] or bool(running)
 
         def announce() -> None:
             # The consumer's state changed in a way the user sees: pushed on
@@ -2251,6 +2255,16 @@ def _deliver_solve_commands(application: FastAPI):
             status.started()
             try:
                 while True:
+                    hold = getattr(state, "retirement_hold", None)
+                    if hold is not None and hold.held:
+                        # A retiring backend takes no new Fusion solves; the
+                        # files stay on disk for the next backend, as during an
+                        # update. The check and the mark below have no await
+                        # between them, so a retirement check on this loop
+                        # either sees the pass or the pass sees the hold.
+                        await asyncio.sleep(_DELIVERY_INTERVAL_S)
+                        continue
+                    pass_active[0] = True
                     try:
                         status.pass_started()
                         workspace_root = await asyncio.to_thread(selected_workspace_root, state)
@@ -2316,6 +2330,8 @@ def _deliver_solve_commands(application: FastAPI):
                             # Each distinct failure once, not every second.
                             logger.warning("Delivering CAD solve commands failed.", exc_info=True)
                             reported = error
+                    finally:
+                        pass_active[0] = False
                     # Backs off to half a minute while a failure persists.
                     await asyncio.sleep(min(_DELIVERY_INTERVAL_S * 2 ** min(failures, 5), 30.0))
             finally:

@@ -801,13 +801,20 @@ def test_exit_2_retries_when_owner_metadata_is_missing_or_dead(data_dir, monkeyp
     (r"\\?\C:\Program Files\WG\python.exe", r"C:\Program Files\WG\python.exe"),
     (r"\\?\UNC\server\share\python.exe", r"\\server\share\python.exe"),
 ])
-@pytest.mark.parametrize("punctuation", ["", ".", ".."])
-def test_spawn_refusal_uses_display_path_and_one_period(data_dir, monkeypatch, executable, displayed, punctuation):
+@pytest.mark.parametrize("message, detail", [
+    ("Breakaway refused", "Breakaway refused."),
+    ("Breakaway refused.", "Breakaway refused."),
+    ("Breakaway refused..", "Breakaway refused."),
+    ("", "OSError."),
+    ("Breakaway refused?", "Breakaway refused?"),
+    ("  Breakaway refused!  ", "Breakaway refused!"),
+])
+def test_spawn_refusal_uses_display_path_and_one_period(data_dir, monkeypatch, executable, displayed, message, detail):
     from types import SimpleNamespace
     from server.platform import paths, process_tree
 
     def refused():
-        raise OSError("Breakaway refused" + punctuation)
+        raise OSError(message)
 
     monkeypatch.setattr(backend_owner.sys, "platform", "win32")
     monkeypatch.setattr(paths, "os", SimpleNamespace(name="nt"))
@@ -815,10 +822,39 @@ def test_spawn_refusal_uses_display_path_and_one_period(data_dir, monkeypatch, e
     with pytest.raises(BackendSpawnError) as error:
         backend_owner._spawn([executable], data_dir)
     assert str(error.value) == (
-        f'Could not start the backend ("{displayed}"): Breakaway refused. '
+        f'Could not start the backend ("{displayed}"): {detail} '
         "Check the installation, or start Waveguide Generator manually."
     )
     assert ".." not in str(error.value) and "\\\\?\\" not in str(error.value)
+
+
+@pytest.mark.parametrize("format_failure", ["path", "exception"])
+def test_spawn_refusal_formatting_preserves_original_exception(data_dir, monkeypatch, format_failure):
+    from server.platform import process_tree
+
+    class Refusal(OSError):
+        def __str__(self):
+            if format_failure == "exception":
+                raise ValueError("bad exception formatting")
+            return super().__str__()
+
+    original = Refusal("Breakaway refused")
+
+    def refused():
+        raise original
+
+    def bad_path(_path):
+        raise ValueError("bad path formatting")
+
+    monkeypatch.setattr(backend_owner.sys, "platform", "win32")
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", refused)
+    if format_failure == "path":
+        monkeypatch.setattr(backend_owner, "display_path", bad_path)
+    executable = data_dir / "python.exe"
+    with pytest.raises(BackendSpawnError) as error:
+        backend_owner._spawn([executable], data_dir)
+    assert error.value.__cause__ is original
+    assert f'("{executable}"): {original!r}.' in str(error.value)
 
 
 @pytest.mark.parametrize("failure", ["timeout", "cancel"])

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from types import SimpleNamespace
 
 import pytest
 
-from launch.backend_lifetime import ActivityTracker, RetirementWatcher
+from launch.backend_lifetime import ActivityTracker, InstallerRetireThread, RetirementWatcher
 from launchers.backend_start import backend_argv
 from launchers.update_lock import ordinary_path
 from server.app import QUIET_REQUEST_ROUTES, create_app
@@ -198,6 +199,108 @@ def test_runtime_lanes_hold_work_without_store_reads(field):
     assert asyncio.run(tracker.holds_work())
 
 
+@pytest.mark.parametrize("delivery", ["absent", "idle", "active", "error"])
+def test_delivery_activity_holds_work(delivery):
+    state = SimpleNamespace(jobs_runtime=None)
+
+    def in_flight():
+        if delivery == "error":
+            raise RuntimeError("delivery state unavailable")
+        return delivery == "active"
+
+    if delivery != "absent":
+        state.cad_delivery_in_flight = in_flight
+    tracker = ActivityTracker(SimpleNamespace(state=state))
+    assert asyncio.run(tracker.holds_work()) is (delivery in {"active", "error"})
+
+
+@pytest.mark.parametrize("pass_fails", [False, True])
+def test_delivery_loop_honours_hold_and_counts_in_flight_work(tmp_path, monkeypatch, pass_fails):
+    from server.cadlink import api
+
+    async def scenario():
+        hold = RestartApproval().retirement_hold
+        hold.hold("test")
+        state = SimpleNamespace(jobs_runtime=None, retirement_hold=hold)
+        app = SimpleNamespace(state=state)
+        tracker = ActivityTracker(app)
+        sleeping, resume = asyncio.Queue(), asyncio.Queue()
+        collecting, collect_release = asyncio.Event(), asyncio.Event()
+        entered, pass_release = asyncio.Event(), asyncio.Event()
+        operation_entered, operation_release = asyncio.Event(), asyncio.Event()
+        passes = []
+
+        async def sleep(_seconds):
+            sleeping.put_nowait(True)
+            await resume.get()
+
+        async def collect(function, *args):
+            assert state.cad_delivery_in_flight()
+            collecting.set()
+            await collect_release.wait()
+            return function(*args)
+
+        async def operation():
+            operation_entered.set()
+            await operation_release.wait()
+
+        async def delivery_pass(_context, *, spawn, **_kwargs):
+            passes.append(True)
+            entered.set()
+            await pass_release.wait()
+            if pass_fails:
+                raise RuntimeError("pass failed")
+            spawn("operation", operation())
+
+        api_asyncio = SimpleNamespace(**vars(asyncio))
+        api_asyncio.sleep = sleep
+        api_asyncio.to_thread = collect
+        monkeypatch.setattr(api, "asyncio", api_asyncio)
+        monkeypatch.setenv("WG2_CAD_DELIVERY", "1")
+        monkeypatch.setattr(api, "selected_workspace_root", lambda _state: tmp_path)
+        monkeypatch.setattr(api, "addin_inbox_session_signature", lambda _root: None)
+        monkeypatch.setattr(api, "_preparation_context", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(api, "run_delivery_pass", delivery_pass)
+        await api._deliver_solve_commands(app)()
+        task = state.cad_delivery_task
+        try:
+            for _ in range(2):
+                await asyncio.wait_for(sleeping.get(), 2)
+                assert not passes and not state.cad_delivery_in_flight()
+                assert not collecting.is_set()
+                resume.put_nowait(True)
+            await asyncio.wait_for(sleeping.get(), 2)
+            hold.release()
+            resume.put_nowait(True)
+            await asyncio.wait_for(collecting.wait(), 2)
+            assert state.cad_delivery_in_flight() and await tracker.holds_work()
+            collect_release.set()
+            await asyncio.wait_for(entered.wait(), 2)
+            assert passes == [True]
+            assert state.cad_delivery_in_flight() and await tracker.holds_work()
+            hold.hold("test")
+            pass_release.set()
+            await asyncio.wait_for(sleeping.get(), 2)
+            if not pass_fails:
+                await asyncio.wait_for(operation_entered.wait(), 2)
+                assert state.cad_delivery_in_flight() and await tracker.holds_work()
+                operation_release.set()
+                await asyncio.gather(*state.cad_preparations)
+            assert not state.cad_delivery_in_flight()
+            resume.put_nowait(True)
+            await asyncio.wait_for(sleeping.get(), 2)
+            assert passes == [True]
+        finally:
+            task.cancel()
+            operations = list(getattr(state, "cad_preparations", ()))
+            for pending in operations:
+                pending.cancel()
+            await asyncio.gather(task, *operations, return_exceptions=True)
+        assert not state.cad_delivery_in_flight()
+
+    asyncio.run(scenario())
+
+
 def test_loop_timeout_and_error_fail_closed():
     async def scenario():
         tracker = ActivityTracker(SimpleNamespace(state=SimpleNamespace(jobs_runtime=None)), timeout=0.01)
@@ -230,8 +333,248 @@ def test_commit_marks_retiring_before_requesting_stop():
             tracker.retire_if_idle, lambda reason: stops.append((app.state.retiring, reason)), "test"
         )
         assert stops == [(True, "test")]
+        tracker.http_requests = 1
+        assert await asyncio.to_thread(tracker.retire_if_idle, stops.append, "again", requested=lambda: False)
+        assert stops == [(True, "test")]
 
     asyncio.run(scenario())
+
+
+def test_commit_rolls_back_retiring_when_stop_raises():
+    async def scenario():
+        app = SimpleNamespace(state=SimpleNamespace(jobs_runtime=None, retiring=False))
+        tracker = ActivityTracker(app)
+        stops = []
+
+        def failed_stop(reason):
+            stops.append(reason)
+            assert app.state.retiring
+            raise RuntimeError("stop failed")
+
+        # Run the actual commit coroutine directly so its raised exception is visible.
+        tracker._on_loop = lambda check, **_kwargs: check()
+        with pytest.raises(RuntimeError, match="stop failed"):
+            await tracker.retire_if_idle(failed_stop, "test")
+        assert not app.state.retiring and stops == ["test"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("result", [False, True])
+def test_loop_returns_completed_result_after_timeout(monkeypatch, result):
+    from concurrent.futures import Future
+
+    class TimedOutFuture(Future):
+        def result(self, timeout=None):
+            if timeout is not None:
+                self.set_result(result)
+                raise TimeoutError
+            return super().result()
+
+    future = TimedOutFuture()
+
+    def submit(coroutine, _loop):
+        coroutine.close()
+        return future
+
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", submit)
+    tracker = ActivityTracker(SimpleNamespace(state=SimpleNamespace(jobs_runtime=None)))
+    tracker.loop = SimpleNamespace(is_running=lambda: True)
+    assert tracker._on_loop(tracker._has_client, on_error=not result) is result
+    assert not future.cancelled()
+
+
+@pytest.fixture
+def retire_thread_driver(monkeypatch, retire_event):
+    import ctypes
+    from launch import backend_lifetime
+    from server.solver.beat_runtime import retire
+
+    def drive(requests, *, retiring=False, wait_failure=False, initially_requested=None, start_failure=False):
+        requests = list(requests)
+        hold = RestartApproval().retirement_hold
+        if retiring:
+            hold.hold("test")
+        state = SimpleNamespace(retirement_hold=hold, retiring=retiring)
+        stops, observations, closed = [], [], []
+        signal = SimpleNamespace(
+            error=None, requested=lambda: requests[0], close=lambda: closed.append("signal"),
+        )
+
+        class Stop(threading.Event):
+            win32_handle = 10
+
+            def close(self):
+                closed.append("stop")
+
+        class InlineThread:
+            def __init__(self, *, target, **_kwargs):
+                self.target = target
+
+            def start(self):
+                if start_failure:
+                    raise RuntimeError("thread start failed")
+                self.target()
+
+            def join(self, **_kwargs):
+                assert not start_failure, "cannot join an unstarted thread"
+
+            def is_alive(self):
+                return False
+
+        def open_event(_access, _inherit, name):
+            assert name == retire_event
+            return 11
+
+        def wait(_count, _handles, _all, _timeout):
+            observations.append((requests[0], hold.held, len(stops)))
+            if wait_failure:
+                return 0xFFFFFFFF
+            assert len(requests) > 1, "watcher did not retire after the clear/set sequence"
+            requests.pop(0)
+            return 0
+
+        kernel32 = SimpleNamespace(
+            OpenEventW=open_event, WaitForMultipleObjects=wait,
+            CloseHandle=lambda _event: closed.append("wait event"),
+        )
+        monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: kernel32, raising=False)
+        monkeypatch.setattr(ctypes, "get_last_error", lambda: 0, raising=False)
+        monkeypatch.setattr(backend_lifetime, "os", SimpleNamespace(name="nt"))
+        monkeypatch.setattr(backend_lifetime, "StopSignal", Stop)
+        monkeypatch.setattr(backend_lifetime, "threading", SimpleNamespace(Thread=InlineThread))
+        monkeypatch.setattr(retire, "RetireSignal", lambda: pytest.fail("must use the early signal"))
+
+        def commit(request_stop, reason, *, requested):
+            assert requested()
+            state.retiring = True
+            request_stop(reason)
+            worker.stop.set()
+            return True
+
+        tracker = SimpleNamespace(
+            app=SimpleNamespace(state=state), has_client=lambda: retiring,
+            retire_if_idle=commit, timeout=0.01,
+        )
+        if initially_requested is None:
+            initially_requested = signal.requested()
+        worker = InstallerRetireThread(tracker, stops.append, signal, initially_requested=initially_requested)
+        if start_failure:
+            with pytest.raises(RuntimeError, match="thread start failed"):
+                worker.start()
+        else:
+            worker.start()
+        worker.close()
+        assert closed == ["wait event", "signal", "stop"]
+        return hold, stops, observations
+
+    return drive
+
+
+def test_initially_set_event_is_disarmed_until_clear(retire_thread_driver):
+    hold, stops, observations = retire_thread_driver([True, True, False, True])
+    assert observations == [(True, False, 0), (True, False, 0), (False, False, 0)]
+    assert hold.held and len(stops) == 1
+
+
+def test_event_set_after_creation_is_honoured(retire_thread_driver):
+    hold, stops, observations = retire_thread_driver([True], initially_requested=False)
+    assert hold.held and len(stops) == 1 and not observations
+
+
+def test_retire_thread_start_failure_closes_early_signal(retire_thread_driver):
+    hold, stops, observations = retire_thread_driver([False], start_failure=True)
+    assert not hold.held and not stops and not observations
+
+
+def test_retire_thread_does_not_release_hold_when_retiring(retire_thread_driver):
+    hold, stops, observations = retire_thread_driver([True], retiring=True, wait_failure=True)
+    assert hold.held and not stops
+    assert observations == [(True, True, 0)]
+
+
+@pytest.mark.parametrize("initially_set", [False, True])
+@pytest.mark.parametrize("failure", [None, "interface", "port", "temporary", "app", "thread start"])
+def test_serve_creates_and_passes_early_signal(tmp_path, monkeypatch, retire_event, initially_set, failure):
+    from launch import backend_lifetime, serve
+    from server.solver.beat_runtime import retire
+
+    events = []
+    requested = [initially_set]
+    signal = SimpleNamespace(
+        requested=lambda: requested[0], close=lambda: events.append("signal close"),
+    )
+
+    def create_signal():
+        assert retire.RETIRE_IDLE_EVENT == retire_event
+        events.append("signal create")
+        return signal
+
+    def fail_at(stage):
+        events.append(stage)
+        if failure == stage:
+            raise OSError(stage)
+
+    class Thread:
+        def __init__(self, tracker, request_stop, early_signal, *, initially_requested):
+            assert early_signal is signal and initially_requested is initially_set
+            assert tracker.app.state.lifetime == "headless"
+            events.append("thread create")
+
+        def start(self):
+            fail_at("thread start")
+
+        def close(self):
+            events.append("thread close")
+            signal.close()
+
+    def reserve(*_args, **_kwargs):
+        fail_at("port")
+        return SimpleNamespace(close=lambda: events.append("listener close")), 3100
+
+    def create_app(**_kwargs):
+        fail_at("app")
+        return SimpleNamespace(state=SimpleNamespace(jobs_runtime=None))
+
+    def run(**_kwargs):
+        events.append("run")
+
+    monkeypatch.setattr(retire, "RetireSignal", create_signal)
+    monkeypatch.setattr(backend_lifetime, "InstallerRetireThread", Thread)
+    monkeypatch.setattr(serve, "os", SimpleNamespace(name="nt", environ={}, getpid=lambda: 123))
+    monkeypatch.setattr(serve, "ensure_data_layout", lambda: SimpleNamespace(root=tmp_path, locks=tmp_path))
+    for name in ("setup_logging", "flush_logs", "_no_gui_healthy_start", "_start_beat_cpu_provisioning",
+                 "harden_console", "_publish_status_ready"):
+        monkeypatch.setattr(serve, name, lambda *_args: None)
+    monkeypatch.setattr(serve, "_release_interface_error", lambda: "interface" if failure == "interface" else None)
+    monkeypatch.setattr(serve, "_start_temporary_session", lambda: fail_at("temporary"))
+    monkeypatch.setattr(serve, "InstanceLock", lambda *_args: SimpleNamespace(
+        acquire=lambda *_args: events.append("lock acquire"), update_port=lambda *_args: None,
+        release=lambda: events.append("lock release"),
+    ))
+    monkeypatch.setattr(serve, "reserve_port", reserve)
+    monkeypatch.setattr(serve, "create_app", create_app)
+    monkeypatch.setattr(serve.uvicorn, "Config", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(serve.uvicorn, "Server", lambda _config: SimpleNamespace(run=run))
+    monkeypatch.setattr(serve, "ShutdownBackstop", lambda: SimpleNamespace(
+        activate=lambda: None, deactivate=lambda: None, begun=False,
+    ))
+    if failure == "temporary":
+        with pytest.raises(OSError, match="temporary"):
+            serve.main(["--lifetime=headless", "--no-browser"])
+    else:
+        assert serve.main(["--lifetime=headless", "--no-browser"]) == (0 if failure is None else 1)
+    assert events[0] == "lock acquire"
+    if failure in {"interface", "port", "temporary"}:
+        # These exits come before the event exists, so there is nothing to close.
+        assert "signal create" not in events and "signal close" not in events
+        return
+    # Created after the cheap early exits and before the slow app build.
+    assert events.index("temporary") < events.index("signal create") < events.index("app")
+    assert events.count("signal close") == 1
+    if failure is None:
+        assert events.index("app") < events.index("thread create")
+        assert "run" in events and "thread close" in events
 
 
 def test_retirement_release_wakes_listeners_without_update_bookkeeping():
