@@ -195,7 +195,7 @@ The opt-in full-versus-reduced CPU far-field qualification is written but must
 be run through the compute broker (complex pressure within 1% for x and xy):
 
 ```bash
-WG2_RUN_LIVE=1 WG2_FEM_REGIONS=1 WG2_BEAT_PROVIDER=official python scripts/run_tests.py \
+WG2_RUN_LIVE=1 WG2_FEM_REGIONS=1 python scripts/run_tests.py \
   server/tests/test_fem_symmetry.py::test_live_full_and_reduced_box_far_field_agree_within_one_percent \
   -m live -q
 ```
@@ -327,7 +327,7 @@ exterior sources; next to painted sources it must use one of their channels.
 `validation_diagnostics` is sent as false, which in the pinned engine also selects
 the statically condensed (Schur) solver; interior nodal pressure is still
 reconstructed.
-Ground planes, infinite baffles, HBB and other backends refuse. The official
+Ground planes, infinite baffles and backends other than CPU refuse. The official
 CPU route accepts off/x/xy symmetry.
 
 **0.3.6 limitation:** the contract-2 coupled route supports ideal normal-velocity
@@ -394,7 +394,7 @@ without regions keep their existing exterior-only behavior.
 The opt-in managed CPU bridge qualification runs through the compute broker:
 
 ```bash
-WG2_RUN_LIVE=1 WG2_FEM_REGIONS=1 WG2_BEAT_PROVIDER=official python scripts/run_tests.py \
+WG2_RUN_LIVE=1 WG2_FEM_REGIONS=1 python scripts/run_tests.py \
   server/tests/test_fem_coupled_beat_live.py::test_f8_managed_cpu_bridge_maps_f7_fields \
   -m live -q
 ```

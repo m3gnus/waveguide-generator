@@ -125,11 +125,9 @@ def test_managed_bridge_uses_fake_worker_and_reuses_session(runtime, monkeypatch
     assert statuses and all(not p.exists() for p in runtime.paths)
 
 
-@pytest.mark.parametrize("provider,flag,message", [("hbb", "1", "official"), ("official", "0", "disabled")])
-def test_bridge_refuses_before_worker_acquisition(runtime, monkeypatch, provider, flag, message):
-    monkeypatch.setenv("WG2_FEM_REGIONS", flag)
-    monkeypatch.setenv("WG2_BEAT_PROVIDER", provider)
-    with pytest.raises(ValueError, match=message):
+def test_bridge_refuses_before_worker_acquisition(runtime, monkeypatch):
+    monkeypatch.setenv("WG2_FEM_REGIONS", "0")
+    with pytest.raises(ValueError, match="disabled"):
         bridge.solve_coupled_compiled(compiled())
     assert not runtime.requests
 
@@ -228,11 +226,11 @@ def test_fusion_defaults_accept_fem_only_design():
 
 
 @pytest.mark.parametrize("backend,provider,flag,expected", [
-    ("cpu", "official", None, True), ("cpu", "official", "1", True), ("cpu", "hbb", "1", False),
+    ("cpu", "official", None, True), ("cpu", "official", "1", True), ("cpu", "hbb", "1", True),
     ("cpu", "official", "0", False), ("metal", "official", "1", False),
     ("cuda", "official", "1", False), ("rocm", "official", "1", False),
 ])
-def test_registry_only_offers_official_cpu_fem(monkeypatch, backend, provider, flag, expected):
+def test_registry_only_offers_cpu_fem(monkeypatch, backend, provider, flag, expected):
     from server.engines.registry import _beat_engine_info
     monkeypatch.setenv("WG2_BEAT_PROVIDER", provider)
     if flag is None:
@@ -244,14 +242,13 @@ def test_registry_only_offers_official_cpu_fem(monkeypatch, backend, provider, f
 
 
 @pytest.mark.parametrize("change,code", [
-    ("provider", "fem_provider_unsupported"), ("ground", "fem_domain_unsupported"),
+    ("ground", "fem_domain_unsupported"),
     ("reduced", "fem_domain_unsupported"), ("reduced_transducer", "fem_domain_unsupported"),
 ])
 def test_job_refusals(monkeypatch, change, code):
     from server.jobs.runtime.imported_refusals import _imported_request_refusal
     from server.tests.test_imported_jobs import _request
     monkeypatch.setenv("WG2_FEM_REGIONS", "1")
-    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb" if change == "provider" else "official")
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "beat-cpu"
     record = {"fem_regions": [region_input(channel="left").record]}

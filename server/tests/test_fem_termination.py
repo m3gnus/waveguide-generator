@@ -185,7 +185,6 @@ def test_exterior_only_choice_excludes_declared_termination():
 
 @pytest.mark.parametrize("override,engine,code", [
     ({"WG2_FEM_REGIONS": "0"}, "beat-cpu", "fem_required"),
-    ({"WG2_BEAT_PROVIDER": "hbb"}, "beat-cpu", "fem_provider_unsupported"),
     ({}, "beat-metal", "fem_backend_unsupported"),
 ])
 def test_operator_and_backend_refusals_precede_termination(monkeypatch, override, engine, code):
@@ -203,8 +202,6 @@ def test_operator_and_backend_refusals_precede_termination(monkeypatch, override
     with pytest.raises(ImportedSolveRefusal) as caught:
         asyncio.run(resolve_imported_submission(request, NoEngine(), imported_record=record))
     assert caught.value.reason_code == code
-    if code == "fem_provider_unsupported":
-        assert "unset WG2_BEAT_PROVIDER, or choose exterior-only" in str(caught.value)
 
 
 def test_disabled_ingest_precedes_termination(monkeypatch):
@@ -214,7 +211,7 @@ def test_disabled_ingest_precedes_termination(monkeypatch):
                                   "sources": [{"id": "source-a"}]}, {}, [])
 
 
-@pytest.mark.parametrize("reason", ["termination", "disabled", "provider", "backend"])
+@pytest.mark.parametrize("reason", ["termination", "disabled", "backend"])
 def test_recovered_declared_fem_refuses_before_unavailable_engine(tmp_path, monkeypatch, reason):
     from datetime import datetime, timezone
     from server.jobs.runtime import JobRuntime
@@ -223,7 +220,6 @@ def test_recovered_declared_fem_refuses_before_unavailable_engine(tmp_path, monk
     from server.tests.test_imported_jobs import _runtime_fixture
 
     monkeypatch.setenv("WG2_FEM_REGIONS", "0" if reason == "disabled" else "1")
-    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb" if reason == "provider" else "official")
     item = _termination_input().record
     calls = []
 
@@ -255,7 +251,7 @@ def test_recovered_declared_fem_refuses_before_unavailable_engine(tmp_path, monk
             await recovered.wait_idle()
             row = recovered.store.get_job_row("fem-queued")
             assert row["status"] == "error"
-            code = {"termination": CODE, "disabled": "fem_required", "provider": "fem_provider_unsupported",
+            code = {"termination": CODE, "disabled": "fem_required",
                     "backend": "fem_backend_unsupported"}[reason]
             assert row["error_message"].startswith(code + ":")
             if reason == "termination":

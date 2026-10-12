@@ -333,13 +333,9 @@ def _imported_request_refusal(
     if coupled_regions:
         from server.solver.coupled_admission import fem_termination_problem, painted_source_ids
         from server.cadlink.build_flags import fem_regions_enabled
-        from server.solver.beat_runtime.provider import official_selected
 
         if not fem_regions_enabled():
             return "fem_required", "FEM regions are disabled by WG2_FEM_REGIONS; remove the override to enable them"
-        if not official_selected():
-            return "fem_provider_unsupported", ("FEM regions require the official BEAT provider; "
-                                                "unset WG2_BEAT_PROVIDER, or choose exterior-only")
         problem = fem_termination_problem(record["fem_regions"], has_exterior=bool(
             any(c.source_ids for c in request.geometry.drive_channels) or painted_source_ids(record)))
         if problem:
