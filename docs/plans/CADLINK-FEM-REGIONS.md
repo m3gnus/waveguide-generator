@@ -146,7 +146,7 @@ count and mesh density remain user-selected.
 | F7 | waveguide-generator | preparation implemented; live qualification pending | exterior closure: mesh the exterior with each interface patch conforming to the FEM interface, by fragmenting the shell with the region's interface face so OCC shares the rim |
 | F8 | waveguide-generator | CPU and GPU routes implemented; GPU qualification pending | official CPU float64 and Metal/CUDA/ROCm float32 coupled jobs (`coupled_fem_bem_lem` / `interior_fem`), multi-channel results and FEM field sidecars; declared regions solve by default; explicit kill switch remains |
 | F9 | waveguide-generator | interior field implemented | result route `/api/results/{id}/fem-field`, then mount `FemFieldView` with the field-plane gizmo, a frequency slider, system or channel response, phase animation, interior slice plane (combined exterior display remains follow-up) |
-| F10 | both | full-model drivers implemented; symmetry pending | electrodynamic drivers on FEM diaphragms (voltage ports, T/S parameters), aligned with [DRIVER-REAR-LOAD](DRIVER-REAR-LOAD.md)'s meshed front chambers; shared diaphragm across front and rear chambers implemented |
+| F10 | both | full and reduced drivers implemented; live symmetry qualification pending | electrodynamic drivers on FEM diaphragms (voltage ports, T/S parameters), aligned with [DRIVER-REAR-LOAD](DRIVER-REAR-LOAD.md)'s meshed front chambers; shared diaphragm across front and rear chambers implemented |
 | F11 | waveguide-generator | CPU float64 reference validated; GPU qualification pending | validation: sealed box against the lumped model; Boundary Lab's Simple_Sealed and compression_driver solved from the same meshes |
 | F12 | wglink | open | live Fusion verification of the dialog and the temporary-component export in a parametric timeline; regions under reduced domains and non-root frames |
 
@@ -372,9 +372,9 @@ as false, which in the pinned engine also selects the statically condensed
 Ground planes and infinite baffles refuse. Ideal drives accept off/x/xy symmetry
 on the official BEAT backends.
 
-Electrodynamic voltage drives are supported on full models, including FEM
-and painted exterior diaphragms and mixed ideal/voltage channels. Driver symmetry
-is pending and reduced models with drivers refuse clearly. Legacy driver models,
+Electrodynamic voltage drives support full, half and quarter models, including
+FEM and painted exterior diaphragms and mixed ideal/voltage channels.
+Moving-surface perimeters determine each driver's completion and image orbit. Legacy driver models,
 ideal axial motion and passive-cardioid campaigns remain unsupported. Positive
 painted-patch weights and FEM relative motion levels are supported.
 
@@ -508,6 +508,13 @@ Driver options expose **Sd** in cm² and store it as `sd_m2` in SI m². The
 selected library driver's `Sd_cm2` replaces the field; users may edit it.
 Explicit picks replace all mapped T/S fields and clear unavailable values. A
 spec declaring Sd requires v2; absent options preserve v1 serialization.
+Declared Sd describes the full physical driver even on a half or quarter mesh;
+it is never scaled. The inferred surface completion factor multiplies only
+geometric Sd before fallback or cross-check. Component inference retains
+fractional axes, completion and physical-driver orbit count. Electrical
+current, impedance and power aggregate by orbit; excursion remains per driver.
+Exterior-only transducers require the motion axis in every active image plane.
+
 Declared Sd alone controls sealed-chamber stiffness Kbox = ρc²Sd²/V and
 acoustic impedance normalization Z/(ρcSd) for unit motion weights. Results record `sd_m2`,
 `sd_source` (`declared` or `geometry`), `geometric_sd_m2` and

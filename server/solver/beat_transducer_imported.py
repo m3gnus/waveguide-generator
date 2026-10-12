@@ -1,7 +1,7 @@
 """Explicit voltage-driven CAD jobs on the official BEAT v3 contract.
 
 Legacy CAD/Boundary Lab paths never enter this module. The first adoption is
-complete outward solids, no images, bare drivers and independently driven RMS
+outward solids, including x/xy symmetry, bare drivers and independently driven RMS
 voltage bases with all other transducers shorted.
 """
 
@@ -23,13 +23,15 @@ from server.contracts.conventions import (
 )
 from typing import Any
 from .beat_adapter.mesh import read_surface
-from .beat_adapter.request import _layout
+from .beat_adapter.request import _axis, _layout
 from .beat_adapter.results import SweepResult
-from .beat_adapter.transducers import ExteriorDriver, TransducerSweep, build_transducer_request, resolve_driver_sd
+from .beat_adapter.transducers import (
+    EXTERIOR_AXIS_SYMMETRY_MESSAGE, ExteriorDriver, TransducerSweep, build_transducer_request, resolve_driver_sd,
+)
 
 from .context import SolverContext
 from .frequency_sweep import canonical_frequencies
-from .imported import imported_anchor_frame, imported_domain_planes
+from .imported import imported_anchor_frame, imported_domain_planes, imported_symmetry_from_cut_planes
 from .imported_channels import channel_source_identity
 from .result_mapping import build_solver_response, json_safe_native_value
 
@@ -42,11 +44,38 @@ def preflight(record: Mapping, msh_text: str, channels: Sequence, *, backend: st
     try:
         if (backend not in {"cpu", "metal"}):
             raise ValueError("Exterior transducers require the official BEAT CPU or Metal runtime")
-        if imported_domain_planes(record):
-            raise ValueError("Exterior transducers require complete solids without symmetry cuts")
+        planes = imported_domain_planes(record)
+        if any(p not in {"x0", "y0"} for p in planes):
+            raise ValueError("Exterior transducers support only x0 and y0 symmetry planes")
         if not channels or any(channel.exterior_transducer is None for channel in channels):
             raise ValueError("Every channel must carry an exterior transducer in this mode")
         mesh = read_surface(msh_text)
+        if planes:
+            from server.mesh.surface_topology import orient_closed_surface
+            from server.solver.component_symmetry import infer_component_symmetry
+
+            axes = tuple({"x0": 0, "y0": 1}[p] for p in planes)
+            tolerance = max(1e-9, float(np.linalg.norm(np.ptp(mesh.points_m, axis=0))) * 1e-6)
+            points = mesh.points_m.copy()
+            for axis in axes:
+                if points[:, axis].min() < -tolerance:
+                    raise ValueError("Mesh is outside the positive symmetry fundamental domain")
+                points[np.abs(points[:, axis]) <= tolerance, axis] = 0.
+            oriented = orient_closed_surface(points * 1000, mesh.faces, into_body=False,
+                                             symmetry_plane_axes=axes)
+            if not np.array_equal(oriented, mesh.faces):
+                raise ValueError("Exterior transducers require consistently outward face orientation")
+            for driver in drivers_for(record, channels):
+                faces = mesh.faces[np.isin(mesh.tags, driver.tags)]
+                moving = {"exterior": [(faces, points[faces])]}
+                inferred = infer_component_symmetry(moving, driver.axis, axes, channel_id=driver.id)
+                resolve_driver_sd({"sd_m2": driver.sd_m2,
+                                   "lumped_sealed_rear_chamber": driver.lumped_sealed_rear_chamber},
+                                  moving, driver.axis, driver.id,
+                                  surface_completion_factor=inferred["surface_completion_factor"])
+                if any(abs(_axis(driver.axis)[a]) > 1e-8 for a in axes):
+                    raise ValueError(f"Channel {driver.id!r}: {EXTERIOR_AXIS_SYMMETRY_MESSAGE}")
+            return None
         edges = defaultdict(list)
         for index, triangle in enumerate(mesh.faces):
             for a, b in zip(triangle, np.roll(triangle, -1)):
@@ -115,7 +144,8 @@ def package_sweep(
 ) -> dict:
     """Retain native RMS pressure; use the common display mapper without a LEM."""
     geometry = request.geometry
-    context = SolverContext.from_imported_request(request, quadrants=1234, source_motion="axial")
+    symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
+    context = SolverContext.from_imported_request(request, quadrants=symmetry.quadrants, source_motion="axial")
     layout, frequencies = compiled.layout, sweep.frequencies_hz
     from .official_beat import engine_version
 
@@ -136,7 +166,7 @@ def package_sweep(
             ),
         ),
         frame_override=SimpleNamespace(**imported_anchor_frame(record)),
-        native_symmetry_plane=None,
+        native_symmetry_plane=symmetry.native_plane,
     )
     identity = channel_source_identity(geometry, record)
     channels = {}
@@ -246,6 +276,8 @@ def package_sweep(
                 "phasor_convention": SOLVER_TIME_CONVENTION,
                 "amplitude_convention": "rms",
                 "undriven_transducers": "shorted",
+                "surface_completion_factors": list(sweep.rows[0].radiation.metadata["surface_completion_factors"]),
+                "physical_driver_orbit_counts": list(sweep.rows[0].radiation.metadata["physical_driver_orbit_counts"]),
                 "velocity_rms_m_per_s": [
                     json_safe_native_value(row.velocity_rms_m_per_s[port_index])
                     for row in sweep.rows
@@ -306,7 +338,8 @@ def solve(
     refusal = preflight(record, msh_text, request.geometry.drive_channels, backend=backend)
     if refusal:
         raise ValueError(refusal)
-    context = SolverContext.from_imported_request(request, quadrants=1234, source_motion="axial")
+    symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
+    context = SolverContext.from_imported_request(request, quadrants=symmetry.quadrants, source_motion="axial")
     precision = "float64" if backend == "cpu" else "float32"
     frame = imported_anchor_frame(record)
     compiled = build_transducer_request(
@@ -318,6 +351,7 @@ def solve(
         reference_voltage_rms_v=request.geometry.drive_voltage_v,
         backend=backend,
         precision=precision,
+        symmetry=symmetry.native_plane or "full",
     )
     started = time.time()
 

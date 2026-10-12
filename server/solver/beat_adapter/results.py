@@ -544,8 +544,9 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                     if transducer:
                         expected_meta = {"component_ids": [c["id"] for c in drivers]}
                         if backend_key == "bem_backend":
-                            expected_meta.update(surface_completion_factors=[1] * len(drivers),
-                                                 physical_driver_orbit_counts=[1] * len(drivers))
+                            expected_meta.update(
+                                surface_completion_factors=[c["parameters"].get("surface_completion_factor", 1) for c in drivers],
+                                physical_driver_orbit_counts=[c["parameters"].get("physical_driver_orbit_count", 1) for c in drivers])
                         if item.get("metadata") != expected_meta:
                             raise ResultContractError("Coupled transducer identity or physical-copy accounting changed")
                     if interface or radiation:

@@ -139,7 +139,11 @@ def build_coupled_request(
                             if exterior is not None else None)
     transformed_layout = replace(layout, points_m={
         name: (points + translation) @ rotation.T for name, points in layout.points_m.items()})
-    system = build_coupled_system(transformed_exterior, transformed_regions, transducers=transducers,
+    transformed_transducers = {}
+    for channel, spec in (transducers or {}).items():
+        raw = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
+        transformed_transducers[channel] = dict(raw, motion_axis=(rotation @ np.asarray(raw["motion_axis"])).tolist())
+    system = build_coupled_system(transformed_exterior, transformed_regions, transducers=transformed_transducers,
                                   symmetry_plane_axes=axes)
     channels = {port["name"]: (port["id"],) for port in system["excitation_ports"]}
     outputs = transformed_layout.exterior_outputs() if exterior is not None else []

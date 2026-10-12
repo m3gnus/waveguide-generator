@@ -216,7 +216,8 @@ def coupled_result(request, frequency):
             unit = "m/s" if output["quantity"] == "diaphragm_velocity" else "A"
             meta = {"component_ids": [c["id"] for c in drivers]}
             if any(r["kind"] == "unbounded_air" for r in request["compiled_system"]["regions"]):
-                meta.update(surface_completion_factors=[1] * len(drivers), physical_driver_orbit_counts=[1] * len(drivers))
+                meta.update(surface_completion_factors=[c["parameters"].get("surface_completion_factor", 1) for c in drivers],
+                            physical_driver_orbit_counts=[c["parameters"].get("physical_driver_orbit_count", 1) for c in drivers])
             extra = {"metadata": meta}
         else:
             unit = "Pa"

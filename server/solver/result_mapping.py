@@ -1382,7 +1382,8 @@ def map_coupled_transducer_response(response, sweep, request, channel, spec):
     voltage = request.wire["solver_options"]["transducer_reference_voltage_v"]
     # Electrical currents of physical drivers connected to one voltage channel
     # add in parallel; induced currents in other shorted channels stay separate.
-    current = sweep.current[:, basis_indices][:, :, driver_indices].sum(axis=(1, 2))
+    orbits = np.asarray([c["parameters"].get("physical_driver_orbit_count", 1) for c in drivers])
+    current = (sweep.current[:, basis_indices][:, :, driver_indices] * orbits[driver_indices]).sum(axis=(1, 2))
     with np.errstate(divide="ignore", invalid="ignore"):
         zin = voltage / current
     frequencies = response["frequencies"]
@@ -1441,6 +1442,8 @@ def map_coupled_transducer_response(response, sweep, request, channel, spec):
                          "transducer_ids": [c["id"] for c in drivers],
                          "phasor_convention": SOLVER_TIME_CONVENTION, "amplitude_convention": "rms",
                          "undriven_transducers": "shorted",
+                         "surface_completion_factors": [c["parameters"].get("surface_completion_factor", 1) for c in drivers],
+                         "physical_driver_orbit_counts": orbits.tolist(),
                          "velocity_rms_m_per_s": json_safe_native_value(velocity),
                          "current_rms_a": json_safe_native_value(sweep.current[:, basis_indices].sum(axis=1)),
                          "excursion_peak_mm": (np.sqrt(2) * 1000 * np.abs(velocity)

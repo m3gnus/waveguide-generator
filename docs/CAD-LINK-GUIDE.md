@@ -141,9 +141,10 @@ plane after solving; select a frequency and drive channel in the field controls.
 FEM has been validated against closed-form references (sealed box, open box,
 ported box, plane-wave and closed tubes) on official BEAT CPU float64.
 Declared FEM regions use official BEAT CPU float64 or Metal/CUDA/ROCm float32.
-Auto and interior-only systems use CPU float64. Electrodynamic drivers require a full free-space domain; their symmetry support
-is pending. Ideal drives also support x0 and x0+y0 symmetry. Ground planes
-and passive cardioid are unsupported. Several moving groups in one region
+Auto and interior-only systems use CPU float64. Ideal and electrodynamic drives
+support x0, y0 and x0+y0 symmetry in free space. A reduced driver must move
+within every plane that cuts its moving surface. Ground planes and passive
+cardioid are unsupported. Several moving groups in one region
 can share a drive channel, for example a dome and surround. To share one
 diaphragm across front and rear FEM chambers, give that channel an
 electrodynamic driver in WG. The driver owns every moving FEM and painted BEM
@@ -270,6 +271,12 @@ substituted). Sd is stored in m² in a v2 transducer spec. Every enabled lumped
 sealed rear chamber requires an entered Sd, at admission and compilation,
 on both exterior-only and coupled FEM routes. The declared value controls
 chamber stiffness ρc²Sd²/V and, for unit motion weights, acoustic impedance Z/(ρcSd).
+Declared Sd is the full physical driver area, including on half and quarter
+models; WG never scales it. Geometry on a reduced mesh is completed to the
+full driver area before the fallback or cross-check. Mirrored complete drivers
+share the channel voltage; their currents and powers add while excursion
+remains per driver. Exterior-only drivers must move within every active
+symmetry plane, including complete mirrored drivers.
 
 Motion weights enter the geometric cross-check and fallback as per-face weights.
 If any moving boundary of a channel has a weight other than 1, results retain
@@ -313,7 +320,7 @@ meshed rear load and lumped rear stiffness must never be applied together.
 
 Passive cardioid is Metal-only. Declared FEM regions use official BEAT CPU
 float64 or Metal/CUDA/ROCm float32; Auto uses CPU float64. Electrodynamic driver
-models are supported on full models, with driver symmetry pending. FEM regions
+models support full, half and quarter models. FEM regions
 cannot be combined with passive cardioid in this release.
 **Exterior-only (leave FEM regions out)** excludes the interior air. Legacy declared air volumes also require this explicit exclusion.
 The sealed rear-volume driver model and passive-cardioid model above add chamber

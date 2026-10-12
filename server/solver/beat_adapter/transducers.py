@@ -1,7 +1,7 @@
 """Opt-in exterior voltage bases, kept separate from WG's acceleration results.
 
-This opt-in slice supports complete closed solids, CPU Float64 or Metal
-Float32 and no image symmetry. Mmd is bare moving mass, supplied explicitly in SI units. No
+This opt-in slice supports full or x/xy reduced solids, CPU Float64 or Metal
+Float32. Mmd is bare moving mass, supplied explicitly in SI units. No
 Thiele/Small inference, extra radiation mass, or second driver network is added.
 """
 from __future__ import annotations
@@ -19,12 +19,17 @@ from server.contracts.conventions import SOLVER_TIME_CONVENTION
 from .mesh import SurfaceMesh, read_surface
 from .observations import ObservationLayout
 from .preflight import UnsupportedPhysics, validate_exterior_physics
-from .request import SourceBasis, build_request
+from .request import SourceBasis, build_request, _axis, _image_frame
+from server.solver.component_symmetry import SYMMETRY_FIELDS, infer_component_symmetry
 from .results import ResultContractError, decode_complex_values
 
 DRIVER_SCALARS = ("re_ohm", "le_h", "bl_n_per_a", "mmd_kg", "cms_m_per_n", "rms_n_s_per_m")
 MATRIX_DEFINITION = "force_per_unit_velocity; per-row physical-copy weighting in row_weights"
 AREA_DEFINITION = "signed integral of motion factor over physical moving surfaces; real symmetry copies included; ground images excluded"
+EXTERIOR_AXIS_SYMMETRY_MESSAGE = (
+    "Exterior BEAT transducers require motion_axis to lie in every active symmetry plane, "
+    "including complete mirrored drivers"
+)
 
 
 @dataclass(frozen=True)
@@ -211,7 +216,8 @@ def moving_meshes_have_opposite_nets(meshes_m, axis) -> bool:
 
 
 def resolve_driver_sd(raw: Mapping[str, Any], meshes_m, axis, channel_id: str, *,
-                      face_weights: Mapping[str, Sequence[np.ndarray]] | None = None
+                      face_weights: Mapping[str, Sequence[np.ndarray]] | None = None,
+                      surface_completion_factor: int = 1
                       ) -> tuple[float | None, dict[str, Any], list[str]]:
     chamber_sd_problem(raw, channel_id)
     geometric, ambiguous, notes = (geometric_driver_area(meshes_m, axis, face_weights=face_weights)
@@ -222,6 +228,8 @@ def resolve_driver_sd(raw: Mapping[str, Any], meshes_m, axis, channel_id: str, *
                              if face_weights is not None else ambiguous)
         chamber_sd_problem(raw, channel_id, both_sides_radiate=(
             chamber_ambiguous or moving_meshes_have_opposite_nets(meshes_m, axis)))
+    # Declared Sd describes the full driver; complete only the reduced geometry.
+    geometric *= surface_completion_factor
     declared = raw.get("sd_m2")
     area = _positive(declared, "sd_m2") if declared is not None else (None if ambiguous else geometric)
     source = "declared" if declared is not None else ("geometry" if area is not None else None)
@@ -288,6 +296,7 @@ def build_transducer_request(
     reference_voltage_rms_v: float = 2.83, mesh_scale_to_m: float = 1.,
     sound_speed_m_per_s: float = 343., density_kg_per_m3: float = 1.2041,
     backend: str = "cpu", precision: str = "float64",
+    symmetry: str = "full",
 ) -> TransducerRequest:
     """Build independent voltage/RMS and ideal 1 m/s RMS bases in requested order.
 
@@ -306,7 +315,7 @@ def build_transducer_request(
             raise UnsupportedPhysics("Driver requires an identity and unique physical tags")
         for name in DRIVER_SCALARS:
             _positive(getattr(driver, name), name, zero=name == "le_h")
-        surrogate.extend(SourceBasis(f"driver:{driver.id}:{tag}", tag, "axial", driver.axis,
+        surrogate.extend(SourceBasis(f"driver:{driver.id}:{tag}", tag, "normal", None,
                                      f"driver-patch:{quote(driver.id, safe='')}:{tag}")
                          for tag in driver.tags)
     # Reuse unchanged geometry/packing/observation preparation. The temporary
@@ -317,27 +326,35 @@ def build_transducer_request(
         frame=frame, frequencies_hz=frequencies_hz, precision=precision, engine_id=f"beat-{backend}",
         mesh_scale_to_m=mesh_scale_to_m, sound_speed_m_per_s=sound_speed_m_per_s,
         density_kg_per_m3=density_kg_per_m3,
+        symmetry=symmetry,
     )
     wire = prepared.wire
     system = wire["compiled_system"]
     components = system["components"][:len(ideal_sources)]
     ports = system["excitation_ports"][:len(ideal_sources)]
-    offset = len(ideal_sources)
     source_mesh = read_surface(msh_text, scale_to_m=mesh_scale_to_m)
     sd_metadata = {}
     channel_warnings = {}
+    mode, rotation, _ = _image_frame(symmetry, None)
+    axes = (0,) if mode == "x" else (0, 1) if mode == "xy" else ()
     for driver in drivers:
-        axis = system["components"][offset]["parameters"]["motion_axis"]
-        offset += len(driver.tags)
+        axis = (rotation @ _axis(driver.axis)).tolist()
+        faces = prepared.mesh.faces[np.isin(prepared.mesh.tags, driver.tags)]
+        moving = {"exterior": [(faces, prepared.mesh.points_m[faces])]}
+        inferred = infer_component_symmetry(moving, axis, axes, channel_id=driver.id)
+        if any(abs(axis[a]) > 1e-8 for a in axes):
+            raise UnsupportedPhysics(f"Channel {driver.id!r}: {EXTERIOR_AXIS_SYMMETRY_MESSAGE}")
         selected = source_mesh.faces[np.isin(source_mesh.tags, driver.tags)]
         area, sd_metadata[driver.id], notes = resolve_driver_sd(
             {"sd_m2": driver.sd_m2, "lumped_sealed_rear_chamber": driver.lumped_sealed_rear_chamber},
-            {"exterior": [(selected, source_mesh.points_m[selected])]}, driver.axis, driver.id)
+            {"exterior": [(selected, source_mesh.points_m[selected])]}, driver.axis, driver.id,
+            surface_completion_factor=inferred["surface_completion_factor"])
         channel_warnings[driver.id] = notes
         components.append({"id": driver.component_id, "name": driver.id,
                            "kind": "electrodynamic_transducer",
                            "boundary_ids": [f"boundary:tag:{tag}" for tag in driver.tags],
-                           "parameters": driver_parameters(driver, axis, projected_area_m2=area)})
+                           "parameters": {**driver_parameters(driver, axis, projected_area_m2=area),
+                                          **(inferred if mode != "off" else {})}})
         ports.append({"id": driver.port_id, "name": driver.id,
                       "component_id": driver.component_id, "kind": "voltage"})
     requested = list(excitation_port_ids) if excitation_port_ids is not None else [d.port_id for d in drivers]
@@ -359,8 +376,8 @@ def validate_transducer_request(request: TransducerRequest) -> None:
     wire = request.wire
     system, options = wire["compiled_system"], wire["solver_options"]
     if (system["contract_version"] != 3 or (options.get("bem_backend"), options.get("precision")) not in
-            {("cpu", "float64"), ("metal", "float32")} or options.get("symmetry") != "off"):
-        raise UnsupportedPhysics("WG transducer adoption currently requires v3 CPU float64 or Metal float32, symmetry off")
+            {("cpu", "float64"), ("metal", "float32")} or options.get("symmetry") not in {"off", "x", "xy"}):
+        raise UnsupportedPhysics("WG transducers require v3 CPU float64 or Metal float32 with off, x or xy symmetry")
     _positive(options.get("transducer_reference_voltage_v"), "transducer_reference_voltage_v")
     if wire["outputs"] != outputs(request.layout):
         raise UnsupportedPhysics("WG transducer outputs must match the requested voltage-basis layout")
@@ -384,7 +401,7 @@ def validate_transducer_request(request: TransducerRequest) -> None:
         owned.update(physical)
         if component["kind"] == "electrodynamic_transducer":
             params = component["parameters"]
-            if (set(params) - {*DRIVER_SCALARS, "motion_profile", "motion_axis", "semi_inductance", "lumped_sealed_rear_chamber"}
+            if (set(params) - {*DRIVER_SCALARS, *SYMMETRY_FIELDS, "motion_profile", "motion_axis", "semi_inductance", "lumped_sealed_rear_chamber"}
                     or {*DRIVER_SCALARS, "motion_profile", "motion_axis"} - set(params)):
                 raise UnsupportedPhysics("WG supports explicit bare driver scalars and rigid translation only")
             for name in DRIVER_SCALARS:
@@ -395,6 +412,16 @@ def validate_transducer_request(request: TransducerRequest) -> None:
                     validate_driver_option(params[name], name, scalars)
             if params["motion_profile"] != "rigid_translation":
                 raise UnsupportedPhysics("WG transducers require rigid_translation")
+            axes = (0,) if options["symmetry"] == "x" else (0, 1) if options["symmetry"] == "xy" else ()
+            tags = [groups[b][2] for b in boundaries]
+            faces = request.mesh.faces[np.isin(request.mesh.tags, tags)]
+            inferred = infer_component_symmetry({"exterior": [(faces, request.mesh.points_m[faces])]},
+                                                params["motion_axis"], axes, channel_id=component["name"])
+            if any(abs(_axis(params["motion_axis"])[a]) > 1e-8 for a in axes):
+                raise UnsupportedPhysics(f"Channel {component['name']!r}: {EXTERIOR_AXIS_SYMMETRY_MESSAGE}")
+            if any(params.get(key, value if options["symmetry"] == "off" else None) != value
+                   for key, value in inferred.items()):
+                raise UnsupportedPhysics("Driver symmetry parameters differ from moving surface inference")
             component["kind"] = "ideal_velocity_source"
             component["parameters"] = {name: params[name] for name in ("motion_profile", "motion_axis")}
     if not request.transducer_ids:
@@ -451,7 +478,9 @@ class TransducerFrequency:
         component = self.voltage_component_ids[index]
         if component is None:
             raise ValueError("An ideal velocity port has no electrical input impedance")
-        current = self.current_rms_a[index, self.transducer_ids.index(component)]
+        driver = self.transducer_ids.index(component)
+        orbits = self.radiation.metadata["physical_driver_orbit_counts"]
+        current = self.current_rms_a[index, driver] * orbits[self.radiation.component_ids.index(component)]
         return complex(self.reference_voltage_rms_v / current) if current != 0 else None
 
     def spl_db(self, observation: str) -> np.ndarray:
@@ -499,9 +528,10 @@ def parse_transducer_frequency(raw: Any, request: TransducerRequest, frequency_h
         if kind == "exterior_pressure":
             pressure[output["id"].removeprefix("pressure:")] = values
         elif kind in {"diaphragm_velocity", "voice_coil_current"}:
+            params = [c["parameters"] for c in wire["compiled_system"]["components"] if c["id"] in drivers]
             if (metadata.get("component_ids") != list(drivers)
-                    or metadata.get("surface_completion_factors") != [1] * len(drivers)
-                    or metadata.get("physical_driver_orbit_counts") != [1] * len(drivers)):
+                    or metadata.get("surface_completion_factors") != [p.get("surface_completion_factor", 1) for p in params]
+                    or metadata.get("physical_driver_orbit_counts") != [p.get("physical_driver_orbit_count", 1) for p in params]):
                 raise ResultContractError(f"{kind} transducer identity or physical-copy accounting changed")
             if kind == "diaphragm_velocity":
                 velocity = values
@@ -520,10 +550,13 @@ def parse_transducer_frequency(raw: Any, request: TransducerRequest, frequency_h
 
 def _validate_matrix_metadata(metadata: dict, request: TransducerRequest) -> None:
     ids = request.matrix_ids
-    components = {c["id"]: c["kind"] for c in request.wire["compiled_system"]["components"]}
-    expected = {"component_ids": list(ids), "kinds": [components[i] for i in ids],
-                "row_weights": [1] * len(ids), "surface_completion_factors": [1] * len(ids),
-                "physical_driver_orbit_counts": [1] * len(ids), "definition": MATRIX_DEFINITION,
+    components = {c["id"]: c for c in request.wire["compiled_system"]["components"]}
+    copies = {"off": 1, "x": 2, "xy": 4}[request.wire["solver_options"]["symmetry"]]
+    orbits = [components[i]["parameters"].get("physical_driver_orbit_count", 1) for i in ids]
+    expected = {"component_ids": list(ids), "kinds": [components[i]["kind"] for i in ids],
+                "row_weights": orbits,
+                "surface_completion_factors": [components[i]["parameters"].get("surface_completion_factor", copies) for i in ids],
+                "physical_driver_orbit_counts": orbits, "definition": MATRIX_DEFINITION,
                 "phasor_convention": SOLVER_TIME_CONVENTION,
                 "effective_volume_area_definition": AREA_DEFINITION,
                 "effective_volume_area_cancellation_relative_tolerance": 1e-2}

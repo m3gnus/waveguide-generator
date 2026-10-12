@@ -470,7 +470,7 @@ def test_direct_builder_prioritizes_termination_like_admission(monkeypatch):
         build_imported_coupled_request(record, request.geometry, None, frequencies_hz=[100.])
 
 
-def test_driver_symmetry_refusal_names_actual_preparation_control(monkeypatch):
+def test_driver_symmetry_is_admitted_and_compiled(monkeypatch):
     from server.jobs.runtime.imported_refusals import _imported_request_refusal
     from server.tests.test_imported_jobs import _request
     monkeypatch.setenv('WG2_FEM_REGIONS', '1')
@@ -478,14 +478,12 @@ def test_driver_symmetry_refusal_names_actual_preparation_control(monkeypatch):
     request.geometry.drive_channels = [DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=driver())]
     problem = _imported_request_refusal(request, {'fem_regions': [region_input().record],
                                                'symmetry': {'domain_planes': ['x0']}})
-    assert problem[0] == 'fem_domain_unsupported'
-    assert 'until driver symmetry is supported' in problem[1]
-    assert 'Force full domain' in problem[1]
-    assert 'CAD author cut it' in problem[1]
-    with pytest.raises(ValueError, match='Force full domain') as raised:
-        build_coupled_request(None, [region_input()], layout=compiled().layout, frame=FRAME,
-                             frequencies_hz=[100.], symmetry='yz', transducers={'fem': driver()})
-    assert str(raised.value) == problem[1]
+    assert problem is None
+    built = build_coupled_request(None, [region_input()], layout=compiled().layout, frame=FRAME,
+                                 frequencies_hz=[100.], symmetry='yz', transducers={'fem': driver()})
+    params = built.wire['compiled_system']['components'][0]['parameters']
+    assert params['fractional_symmetry_axes'] == ['x']
+    assert params['surface_completion_factor'] == 2
 
 
 def _closed_moving_skin(*, dome=False, rear_fraction=1.):
@@ -901,8 +899,9 @@ def test_non_neutral_rear_connection_always_requires_chamber_sd(rear_fraction, k
     assert str(raised.value) == f'{problem[0]}: {problem[1]}'
 
 
+@pytest.mark.parametrize('planes', [[], ['x0'], ['x0', 'y0']])
 @pytest.mark.parametrize('second', ['fem-rear', 'exterior'])
-def test_declared_chamber_double_load_refused_at_admission_and_compile(second):
+def test_declared_chamber_double_load_refused_at_admission_and_compile(second, planes):
     from server.solver.beat_adapter.coupled_transducers import parameters
     from server.solver.coupled_admission import fem_request_problem
     faces = np.array([[0, 1, 2]])
@@ -910,7 +909,8 @@ def test_declared_chamber_double_load_refused_at_admission_and_compile(second):
     meshes = {'fem-front': [(faces, front)], second: [(faces, front[:, [0, 2, 1]])]}
     spec = driver(sd_m2=.0001, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
     channel = DriveChannel(id='speaker', source_ids=[], motion='axial', exterior_transducer=spec)
-    problem = fem_request_problem({'fem_regions': [region_input(channel='speaker').record]},
+    problem = fem_request_problem({'fem_regions': [region_input(channel='speaker').record],
+                                   'symmetry': {'domain_planes': planes}},
                                   [channel], enabled=True, moving_meshes={'speaker': meshes})
     assert problem[0] == 'lumped_chamber_double_rear_load'
     assert 'rear already radiates' in problem[1]

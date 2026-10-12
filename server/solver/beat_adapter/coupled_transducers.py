@@ -13,11 +13,13 @@ from .transducers import DRIVER_SCALARS, ExteriorDriver, driver_parameters, reso
 def parameters(spec: Any, meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.ndarray]]], *,
                collected_warnings: list[str] | None = None, channel_id: str = "unknown",
                sd_metadata: dict[str, Any] | None = None,
-               face_weights: Mapping[str, Sequence[np.ndarray]] | None = None) -> tuple[dict[str, Any], float | None]:
+               face_weights: Mapping[str, Sequence[np.ndarray]] | None = None,
+               surface_completion_factor: int = 1) -> tuple[dict[str, Any], float | None]:
     """Use declared Sd, with per-mesh geometry as a fallback and cross-check."""
     raw = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
     axis = _axis(raw["motion_axis"])
-    area, metadata, notes = resolve_driver_sd(raw, meshes_m, axis, channel_id, face_weights=face_weights)
+    area, metadata, notes = resolve_driver_sd(raw, meshes_m, axis, channel_id, face_weights=face_weights,
+                                              surface_completion_factor=surface_completion_factor)
     if sd_metadata is not None:
         sd_metadata.update(metadata)
     for note in notes:
@@ -68,11 +70,6 @@ def recover_load(components: Sequence[Mapping[str, Any]], ports: Sequence[Mappin
             or singular[-1] <= singular[0] * 1e-10):
         return np.full((len(drivers), len(components)), complex(np.nan, np.nan))
     return force @ np.linalg.pinv(motion, rcond=1e-10)
-
-
-FEM_DRIVER_SYMMETRY_MESSAGE = (
-    "Electrodynamic drivers on FEM regions need a full model until driver symmetry is supported; prepare the return with Force full domain enabled, or export without symmetry planes if the CAD author cut it"
-)
 
 
 def channel_problem(channel: Any) -> tuple[str, str] | None:

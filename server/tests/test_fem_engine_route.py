@@ -79,7 +79,7 @@ def test_coupled_route_documentation_describes_supported_drives_and_outputs():
     from pathlib import Path
 
     text = (Path(__file__).parents[2] / "docs/plans/CADLINK-FEM-REGIONS.md").read_text()
-    assert "Electrodynamic voltage drives are supported on full models" in text
+    assert "Electrodynamic voltage drives support full, half and quarter models" in text
     assert "RMS input power and current" in text
     assert "Interface outputs include area-weighted complex normal velocity" in text
     assert "drives only. Any `exterior_transducer`" not in text
@@ -256,7 +256,7 @@ def test_registry_offers_fem_on_all_official_backends(monkeypatch, backend, flag
 
 @pytest.mark.parametrize("change,code", [
     ("ground", "fem_domain_unsupported"),
-    ("reduced", "fem_domain_unsupported"), ("reduced_transducer", "fem_domain_unsupported"),
+    ("reduced", "fem_domain_unsupported"), ("reduced_transducer", "fem_missing_channels"),
 ])
 def test_job_refusals(monkeypatch, change, code):
     from server.jobs.runtime.imported_refusals import _imported_request_refusal
@@ -270,13 +270,13 @@ def test_job_refusals(monkeypatch, change, code):
     if change == "reduced":
         record["symmetry"] = {"domain_planes": ["z0"]}
     if change == "reduced_transducer":
-        # x0 alone is admitted; a transducer on the reduced model is not yet.
+        # Reduced drivers are admitted; incomplete channel coverage still refuses.
         record["symmetry"] = {"domain_planes": ["x0"]}
         request.geometry.drive_channels[0].exterior_transducer = object()
     refusal = _imported_request_refusal(request, record)
     assert refusal and refusal[0] == code
     if change == "reduced_transducer":
-        assert "full model" in refusal[1]
+        assert "right" in refusal[1]
 
 
 
@@ -692,7 +692,7 @@ def test_ideal_admission_requires_one_fem_region_per_channel(fem_admission, same
 
 
 @pytest.mark.parametrize('planes', [['x0'], ['x0', 'y0']])
-def test_shared_ideal_channel_under_symmetry_explains_full_domain_remedy(planes, monkeypatch):
+def test_shared_ideal_channel_under_symmetry_requires_electrodynamic_driver(planes, monkeypatch):
     from server.jobs.models import DriveChannel
     from server.solver.coupled_admission import fem_request_problem
     from server.tests.test_fem_electrodynamic import driver
@@ -704,11 +704,9 @@ def test_shared_ideal_channel_under_symmetry_explains_full_domain_remedy(planes,
     code, message = fem_request_problem(record, [channel])
     assert code == 'fem_multiple_diaphragms_unsupported'
     assert 'electrodynamic driver' in message
-    assert 'full model' in message and 'Force full domain' in message
+    assert 'more than one region' in message
     channel.exterior_transducer = driver()
-    code, message = fem_request_problem(record, [channel])
-    assert code == 'fem_domain_unsupported'
-    assert 'full model' in message
+    assert fem_request_problem(record, [channel]) is None
     record['symmetry']['domain_planes'] = []
     assert fem_request_problem(record, [channel]) is None
 

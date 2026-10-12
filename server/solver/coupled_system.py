@@ -514,13 +514,21 @@ def build_coupled_system(
         params = {}
         if spec is not None:
             from server.solver.beat_adapter.coupled_transducers import parameters
+            from server.solver.component_symmetry import infer_component_symmetry
+            from server.solver.beat_adapter.transducers import chamber_sd_problem
 
+            raw = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
+            chamber_sd_problem(raw, channel)
+            symmetry = infer_component_symmetry(moving_triangles[channel], raw["motion_axis"],
+                                                symmetry_plane_axes, channel_id=channel)
             channel_warnings[channel] = []
             driver_sd[channel] = {}
             params, projected_areas[channel] = parameters(
                 spec, moving_triangles[channel], collected_warnings=channel_warnings[channel],
                 channel_id=channel, sd_metadata=driver_sd[channel],
-                face_weights=moving_triangle_weights[channel])
+                face_weights=moving_triangle_weights[channel],
+                surface_completion_factor=symmetry["surface_completion_factor"])
+            params.update(symmetry)
             area_warnings.extend(channel_warnings[channel])
         # Only a non-unit weight is sent, so a system without levels or patch
         # weights compiles exactly as before weights existed.

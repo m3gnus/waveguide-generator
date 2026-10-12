@@ -115,7 +115,7 @@ def fem_request_problem(record: Mapping[str, Any], channels: Sequence[Any] | Non
     coverage and Sd are checked by the coupled system builder.
     """
     from server.solver.imported import imported_domain_planes
-    from server.solver.beat_adapter.coupled_transducers import FEM_DRIVER_SYMMETRY_MESSAGE, channel_problem
+    from server.solver.beat_adapter.coupled_transducers import channel_problem
 
     from server.platform.feature_flags import fem_regions_enabled
 
@@ -133,8 +133,6 @@ def fem_request_problem(record: Mapping[str, Any], channels: Sequence[Any] | Non
     planes = imported_domain_planes(record)
     if any(p not in {"x0", "y0"} for p in planes):
         return "fem_domain_unsupported", "FEM regions support only x0 and y0 symmetry planes"
-    if planes and (has_transducers or any(getattr(c, "exterior_transducer", None) is not None for c in channels or ())):
-        return "fem_domain_unsupported", FEM_DRIVER_SYMMETRY_MESSAGE
     if ground or record.get("infinite_baffle"):
         return "fem_domain_unsupported", "FEM regions require free space without a ground plane"
     for channel in channels or ():
@@ -149,8 +147,6 @@ def fem_request_problem(record: Mapping[str, Any], channels: Sequence[Any] | Non
                                     painted_sources=sources, combine_id=combine_id,
                                     electrodynamic_channels={c.id for c in channels
                                                          if getattr(c, "exterior_transducer", None) is not None})
-        if planes and problem and problem[0] == "fem_multiple_diaphragms_unsupported":
-            return problem[0], f"{problem[1]}. {FEM_DRIVER_SYMMETRY_MESSAGE}"
         if problem:
             return problem
         return driver_sd_problem(record, channels, moving_meshes=moving_meshes,
@@ -182,7 +178,14 @@ def driver_sd_problem(record: Mapping[str, Any], channels: Sequence[Any], *,
                 continue
             meshes = (moving_meshes[channel.id] if moving_meshes is not None
                       else _channel_moving_meshes(record, channel, exterior_msh_text=exterior_msh_text))
-            resolve_driver_sd(raw, meshes, spec.motion_axis, channel.id)
+            from server.solver.component_symmetry import infer_component_symmetry
+            from server.solver.imported import imported_domain_planes
+
+            axes = tuple({"x0": 0, "y0": 1}[p] for p in imported_domain_planes(record))
+            completion = (infer_component_symmetry(meshes, spec.motion_axis, axes, channel_id=channel.id)
+                          ["surface_completion_factor"] if axes else 1)
+            resolve_driver_sd(raw, meshes, spec.motion_axis, channel.id,
+                              surface_completion_factor=completion)
         except (DriverSdRequired, LumpedChamberDoubleRearLoad) as exc:
             return exc.reason_code, exc.message
         except (ValueError, KeyError, IndexError, TypeError) as exc:
@@ -211,6 +214,9 @@ def _channel_moving_meshes(record, channel, *, exterior_msh_text=None):
     from server.solver.coupled_system import _fem_driver_triangles, _oriented_exterior_surfaces
     from server.solver.beat_adapter.mesh import read_surface
 
+    from server.solver.imported import imported_domain_planes
+
+    axes = tuple({"x0": 0, "y0": 1}[p] for p in imported_domain_planes(record))
     meshes = {}
     for region in record.get("fem_regions", ()):
         groups = {g["group_id"] for g in region.get("surface_groups", ())
@@ -235,7 +241,7 @@ def _channel_moving_meshes(record, channel, *, exterior_msh_text=None):
     if channel.source_ids:
         if record.get("coupled_exterior"):
             points, groups = read_coupled_exterior(read_verified_coupled_exterior_mesh(record))
-            boundaries = [(faces, points[faces] * .001) for name, faces in _oriented_exterior_surfaces(points, groups)
+            boundaries = [(faces, points[faces] * .001) for name, faces in _oriented_exterior_surfaces(points, groups, symmetry_plane_axes=axes)
                           if any(f"source_id={source}" in name.split("|") for source in channel.source_ids)]
         else:
             mesh = read_surface(exterior_msh_text if exterior_msh_text is not None else read_verified_import_mesh(record))
