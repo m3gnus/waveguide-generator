@@ -166,11 +166,11 @@ def driver_surface_problem(record: Mapping[str, Any], channels: Sequence[Any], *
 
     Declaration-only callers have no retained meshes yet; compilation validates
     their concrete inputs. Retained artifacts are verified before inspection.
-    Connectivity is per mesh, so a shared diaphragm may span air regions.
+    Welded edges or coincident motion footprints identify one diaphragm across meshes.
     """
     import numpy as np
 
-    from server.mesh.artifact import (read_verified_coupled_exterior_mesh,
+    from server.mesh.artifact import (ImportedMeshArtifactError, read_verified_coupled_exterior_mesh,
                                       read_verified_fem_region_mesh, read_verified_import_mesh)
     from server.mesh.fem_coupling import read_coupled_exterior
     from server.mesh.fem_regions import parse_physical_name, read_fem_region_domain
@@ -186,6 +186,8 @@ def driver_surface_problem(record: Mapping[str, Any], channels: Sequence[Any], *
     geometry_points = []
 
     def add(channel, mesh, points, faces):
+        if channel in meshes and not len(faces):
+            raise ValueError(f"group {mesh!r} has no faces in the prepared mesh")
         if channel in meshes and len(faces):
             meshes[channel].setdefault(mesh, []).append((faces, points[faces]))
 
@@ -199,6 +201,10 @@ def driver_surface_problem(record: Mapping[str, Any], channels: Sequence[Any], *
                 geometry_points.append(domain.points_mm * .001)
                 assignments = {g["group_id"]: g.get("drive_channel_id")
                                for g in region.get("surface_groups", ()) if g.get("kind") == "moving"}
+                present = {fields['group'] for name, faces in domain.surfaces.items()
+                           if len(faces) and (fields := parse_physical_name(name))}
+                for group in sorted(set(assignments) - present):
+                    raise ValueError(f"group {group!r} has no faces in the prepared mesh")
                 for name, faces in domain.surfaces.items():
                     fields = parse_physical_name(name) or {}
                     add(assignments.get(fields.get("group")), f"mesh:fem:{region_id}",
@@ -251,6 +257,8 @@ def driver_surface_problem(record: Mapping[str, Any], channels: Sequence[Any], *
                         snapped[mesh_id].append((faces, corners))
                 infer_component_symmetry(snapped, drivers[channel].motion_axis, axes,
                                          channel_id=channel)
+    except ImportedMeshArtifactError as exc:
+        return "ingest_mesh_unavailable", str(exc)
     except DriverSymmetryError as exc:
         return exc.code, str(exc)
     except ValueError as exc:
@@ -263,6 +271,7 @@ def driver_sd_problem(record: Mapping[str, Any], channels: Sequence[Any], *,
                       exterior_msh_text: str | None = None,
                       inspect_geometry: bool = True) -> tuple[str, str] | None:
     """Require declared chamber Sd; inspect geometry only for enabled chambers."""
+    from server.mesh.artifact import ImportedMeshArtifactError
     from server.solver.beat_adapter.transducers import (
         DriverSdRequired, LumpedChamberDoubleRearLoad, chamber_sd_problem)
 
@@ -283,6 +292,8 @@ def driver_sd_problem(record: Mapping[str, Any], channels: Sequence[Any], *,
             meshes = (moving_meshes[channel.id] if moving_meshes is not None
                       else _channel_moving_meshes(record, channel, exterior_msh_text=exterior_msh_text))
             validate_driver_sd_geometry(raw, meshes, spec.motion_axis, channel.id)
+        except ImportedMeshArtifactError as exc:
+            return "ingest_mesh_unavailable", str(exc)
         except (DriverSdRequired, LumpedChamberDoubleRearLoad) as exc:
             return exc.reason_code, exc.message
         except (ValueError, KeyError, IndexError, TypeError) as exc:
@@ -301,6 +312,9 @@ def validate_driver_sd_geometry(raw, meshes, axis, channel_id):
     from server.solver.beat_adapter.transducers import chamber_sd_problem, resolve_driver_sd
 
     chamber_sd_problem(raw, channel_id)
+    for mesh_id, boundaries in meshes.items():
+        if not boundaries or any(not len(faces) for faces, _ in boundaries):
+            raise ValueError(f"group {mesh_id!r} has no faces in the prepared mesh")
     if (raw.get("lumped_sealed_rear_chamber") or {}).get("enabled", False):
         resolve_driver_sd(raw, meshes, axis, channel_id)
 
@@ -348,14 +362,24 @@ def _channel_moving_meshes(record, channel, *, exterior_msh_text=None):
 
                     raise CoupledSystemError(f"Diaphragm {name!r} is not on the tetrahedral boundary") from exc
                 boundaries.append((faces, triangles))
+        present = {fields['group'] for name, faces in domain.surfaces.items()
+                   if len(faces) and (fields := parse_physical_name(name))}
+        for group in sorted(groups - present):
+            raise ValueError(f"group {group!r} has no faces in the prepared mesh")
         meshes[f"fem:{region['region_id']}"] = boundaries
     if channel.source_ids:
         if record.get("coupled_exterior"):
             points, groups = read_coupled_exterior(read_verified_coupled_exterior_mesh(record))
+            for source in channel.source_ids:
+                if not any(len(faces) and f"source_id={source}" in name.split('|') for name, faces in groups.items()):
+                    raise ValueError(f"group {source!r} has no faces in the prepared mesh")
             boundaries = [(faces, points[faces] * .001) for name, faces in _oriented_exterior_surfaces(points, groups, symmetry_plane_axes=axes)
                           if any(f"source_id={source}" in name.split("|") for source in channel.source_ids)]
         else:
             mesh = read_surface(exterior_msh_text if exterior_msh_text is not None else read_verified_import_mesh(record))
+            for source in channel.source_ids:
+                if not np.any(mesh.tags == record['source_tags'][source]):
+                    raise ValueError(f"group {source!r} has no faces in the prepared mesh")
             tags = [record["source_tags"][source] for source in channel.source_ids]
             faces = mesh.faces[np.isin(mesh.tags, tags)]
             boundaries = [(faces, mesh.points_m[faces])]

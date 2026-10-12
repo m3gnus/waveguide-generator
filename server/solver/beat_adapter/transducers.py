@@ -120,8 +120,8 @@ def chamber_sd_problem(raw: Mapping[str, Any], channel_id: str, *, both_sides_ra
 
 
 def _projected_patch_nets(faces, projections, total) -> list[float]:
-    """Connected signed projections, excluding numerically neutral rims."""
-    remaining = set(np.flatnonzero(np.abs(projections) > total * 1e-12))
+    """Signed patch nets; zero-projection faces still carry edge connectivity."""
+    remaining = set(range(len(faces)))
     owners: dict[tuple[int, int], list[int]] = {}
     neighbours = [set() for _ in faces]
     for index in sorted(remaining):
@@ -148,7 +148,7 @@ def geometric_driver_area(meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.n
                           axis: Sequence[float],
                           face_weights: Mapping[str, Sequence[np.ndarray]] | None = None
                           ) -> tuple[float, bool, list[str]]:
-    """Sum same-sign mesh nets; average opposite sides. Neutral rims do not join skins.
+    """Sum same-sign mesh nets; average opposite sides. Neutral faces join folds.
 
     Connected folds keep their signed subtraction. Only edge connectivity is
     used: there is no normal-angle separator or inferred front/rear classifier.
@@ -161,6 +161,8 @@ def geometric_driver_area(meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.n
             continue
         faces = np.concatenate([faces for faces, _ in boundaries])
         triangles = np.concatenate([triangles for _, triangles in boundaries])
+        _, inverse = np.unique(np.rint(triangles.reshape(-1, 3) / 1e-9), axis=0, return_inverse=True)
+        faces = inverse.reshape(-1, 3)
         projections = _projected_face_areas(triangles, axis)
         if face_weights is not None and mesh_id in face_weights:
             blocks = face_weights[mesh_id]
@@ -177,8 +179,7 @@ def geometric_driver_area(meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.n
         net = float(projections.sum())
         nets_by_mesh.append(net)
         ambiguous |= total <= 0 or abs(net) < .2 * total
-        # Numerically neutral faces carry no projected area and cannot hide an
-        # independently tagged rear patch behind a connecting cylindrical rim.
+        # Neutral faces carry connectivity; folds keep their signed subtraction.
         nets = _projected_patch_nets(faces, projections, total)
         majority = max(nets, key=abs, default=0.)
         ambiguous |= any(value * majority < 0 and abs(value) >= .05 * abs(majority)
@@ -204,7 +205,10 @@ def moving_meshes_have_opposite_nets(meshes_m, axis) -> bool:
         if not boundaries:
             continue
         faces = np.concatenate([faces for faces, _ in boundaries])
-        projections = _projected_face_areas(np.concatenate([t for _, t in boundaries]), axis)
+        triangles = np.concatenate([t for _, t in boundaries])
+        _, inverse = np.unique(np.rint(triangles.reshape(-1, 3) / 1e-9), axis=0, return_inverse=True)
+        faces = inverse.reshape(-1, 3)
+        projections = _projected_face_areas(triangles, axis)
         total = float(np.abs(projections).sum())
         patches = _projected_patch_nets(faces, projections, total)
         # A tiny disconnected rear still radiates. Ignore only numerical zero,

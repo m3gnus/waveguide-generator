@@ -8,7 +8,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from server.jobs.fem_field import FemFieldCorrupt, FemFieldInvalidSelection, _encode
-from server.solver.field_plane import field_plane_points, FieldPlaneTimedOut
+from server.solver.field_plane import field_plane_points, FieldPlaneTimedOut, FieldPlaneEvaluationFailed
 
 
 def _decode(value, dtype, width=1):
@@ -108,15 +108,20 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
             # The official operation returns pressure. A centred difference of
             # that same potential gives normal exterior velocity; P1 interior
             # velocity above remains exact, with no averaging between elements.
-            # Bound both wavelength and near-surface curvature. The float32
-            # floor follows coordinate ULPs, including sub-metre coordinates.
+            # Bound wavelength and curvature; float32 pressure noise also
+            # requires a resolvable phase difference, beyond coordinate ULPs.
             step = np.full(len(selected), min(speed / frequency / 50, 0.1))
             evaluation_points = selected
             if request.quantity == "velocity_normal":
-                distance = SkinDistanceIndex(triangles, check).query(selected, check)
+                distance, element_size = SkinDistanceIndex(triangles, check).query(selected, check, return_sizes=True)
                 step = np.minimum(step, distance * 0.05)
                 rounding = np.max(np.abs(np.spacing(selected.astype(np.float32))), axis=1).astype(float)
-                safe = step >= 32 * rounding
+                # BEAT pressure evaluations are complex64 even for CPU solves.
+                # Relative pressure noise ~1e-5 needs k*h >= 1e-2 rad.
+                k = 2 * np.pi * frequency / speed
+                minimum_step = max(.001, .01 / k)
+                safe = ((distance >= np.maximum(.002, .25 * element_size))
+                        & (step >= np.maximum(32 * rounding, minimum_step)))
                 mask_reason[np.flatnonzero(exterior)[~safe]] = 2
                 indices = np.flatnonzero(exterior)[safe]
                 exterior[:] = False
@@ -128,7 +133,8 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
                                           evaluation_points, symmetry_plane={"off": None, "x": "yz", "xy": "yz+xz"}[symmetry],
                                           cancellation_callback=check)) if len(evaluation_points) else np.empty(0, complex))
             if result.shape != (len(evaluation_points),) or not np.isfinite(result).all():
-                raise FemFieldCorrupt("Invalid exterior field evaluation")
+                raise FieldPlaneEvaluationFailed(
+                    "BEAT runtime returned invalid exterior field values; retry the field evaluation")
             if request.quantity == "pressure":
                 values[exterior] = result
             else:

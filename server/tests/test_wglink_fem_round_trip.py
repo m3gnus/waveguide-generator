@@ -219,9 +219,13 @@ def test_pinned_fem_writer_reader_mesh_and_fake_job(packaged, runtime, tmp_path,
         from beat_engine.beat_contract import validate_solve_request
         validate_solve_request(wire)
         component, = wire["compiled_system"]["components"]
-        weights = component["parameters"]["boundary_motion_weights"]
-        assert weights == {"boundary:fem:rear-chamber:cone": pytest.approx(
-            10 ** ((level if isinstance(level, (int, float)) else 0) / 20))}
+        # Unit motion is implicit in the compiled contract; only non-unit
+        # weights are sent, including the very quiet but still moving boundary.
+        if isinstance(level, (int, float)) and level != 0:
+            assert component['parameters']['boundary_motion_weights'] == {
+                'boundary:fem:rear-chamber:cone': pytest.approx(10 ** (level / 20))}
+        else:
+            assert 'boundary_motion_weights' not in component['parameters']
         walls = [b for b in wire["compiled_system"]["boundaries"] if b["parameters"]]
         if level == "lining":
             assert len(walls) == 1

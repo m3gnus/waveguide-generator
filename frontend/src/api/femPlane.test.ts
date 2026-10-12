@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { decodeFemPlane, fetchFemPlane } from './femField';
+import { decodeFemPlane, fetchFemPlane, FEM_PLANE_MASK_REASONS } from './femField';
 
 const encode = (values: Float32Array | Uint8Array) => btoa(Array.from(new Uint8Array(values.buffer), (v) => String.fromCharCode(v)).join(''));
 const payload = (mask = [1, 1, 1, 1]) => ({ nx: 2, ny: 2, unit: 'Pa' as const,
@@ -36,7 +36,7 @@ it('preserves server error detail for unavailable runtimes and corrupt traces', 
   const plane = { origin_m: [0, 0, 0] as [number, number, number], axis_u: [1, 0, 0] as [number, number, number],
     axis_v: [0, 1, 0] as [number, number, number], width_m: 1, height_m: 1, nx: 2, ny: 2 };
   const spy = vi.spyOn(globalThis, 'fetch');
-  for (const status of [409, 410]) {
+  for (const status of [409, 410, 500]) {
     spy.mockResolvedValue(new Response(JSON.stringify({ detail: 'BEAT runtime unavailable' }), { status }));
     await expect(fetchFemPlane('one', plane, 100, 'front', 'combined', 'pressure', new AbortController().signal))
       .rejects.toThrow('BEAT runtime unavailable');
@@ -47,6 +47,7 @@ it('retains per-point mask reasons and original positions for probes and legends
   const grid = { ...payload([1, 0, 0, 1]), mask_reason: encode(new Uint8Array([0, 1, 2, 0])) };
   const decoded = decodeFemPlane(grid);
   expect(Array.from(decoded.maskReasons)).toEqual([0, 1, 2, 0]);
+  expect(FEM_PLANE_MASK_REASONS[decoded.maskReasons[2]]).toBe('Too close to a surface for a reliable velocity');
   expect(Array.from(decoded.samplePositions)).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0]);
   expect(decoded.positions.length).toBe(0);
   expect(Array.from(decodeFemPlane(payload([1, 0, 1, 1])).maskReasons)).toEqual([0, 1, 0, 0]);

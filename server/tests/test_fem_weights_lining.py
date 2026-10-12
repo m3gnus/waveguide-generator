@@ -259,7 +259,7 @@ def test_boundary_physics_cannot_disappear_on_a_missing_mesh_group(options):
     kind = "rigid" if "lining" in options else "moving"
     region.record["surface_groups"] = [{"group_id": "missing", "kind": kind,
                                         "drive_channel_id": "fem", **options}]
-    with pytest.raises(CoupledSystemError, match="no matching mesh group"):
+    with pytest.raises(CoupledSystemError, match="has no faces in the prepared mesh" if kind == "moving" else "no matching mesh group"):
         build_coupled_system(None, [region])
 
 

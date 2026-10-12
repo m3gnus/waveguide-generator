@@ -156,4 +156,4 @@ def evaluate_exterior_from_traces(
     except SessionCancelled:
         raise
     except (OSError, ValueError, RuntimeError) as exc:
-        raise FieldPlaneEvaluationFailed(f"BEAT field evaluation failed: {exc}") from exc
+        raise FieldPlaneEvaluationFailed(f"BEAT field evaluation failed; retry the field evaluation / BEAT runtime: {exc}") from exc

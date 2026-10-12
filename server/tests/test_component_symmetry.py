@@ -65,10 +65,11 @@ def test_front_and_rear_meshes_do_not_cancel_cut_perimeters():
 def test_disconnected_patches_in_one_mesh_are_refused_by_channel(axes):
     groups = [skin([[.03, 0, 0], [.05, 0, 0], [.03, .02, 0]], [[0, 1, 2]]),
               skin([[.1, 0, 0], [.12, 0, 0], [.1, .02, 0]], [[0, 1, 2]])]
-    with pytest.raises(DriverSymmetryError, match="Channel 'woofer': its moving faces form 2 separate surfaces in mesh") as caught:
+    with pytest.raises(DriverSymmetryError, match="Channel 'woofer': its moving faces form 2 separate drivers") as caught:
         infer_component_symmetry({'mesh': groups}, [0, 0, 1], axes, channel_id='woofer')
     assert caught.value.code == 'driver_disconnected_patches'
-    assert 'give each driver its own drive channel (or connect the surfaces)' in str(caught.value)
+    assert 'give each driver its own drive channel' in str(caught.value)
+    assert 'make them overlap along the motion axis / paint the rim as moving' in str(caught.value)
 
 
 @pytest.mark.parametrize('axes,axis,plane', [((0,), [1, 0, 1], 'x0'), ((0, 1), [0, 1, 1], 'y0')])
@@ -600,3 +601,90 @@ def test_admission_plane_tolerance_uses_the_whole_mesh(monkeypatch):
     problem = driver_surface_problem(record, [channel])
     assert problem[0] == 'driver_symmetry_unsupported'
     assert 'Force full domain' in problem[1]
+
+
+@pytest.mark.parametrize('two_meshes', [False, True])
+@pytest.mark.parametrize('axes', [(), (0,)])
+def test_front_rear_identity_uses_motion_footprints_in_every_mesh_layout(two_meshes, axes):
+    front = skin([[0, 0, 0], [.02, 0, 0], [0, .02, 0]], [[0, 1, 2]])
+    rear = (front[0][:, ::-1], front[1][:, ::-1] + [0, 0, -.002])
+    meshes = {'front': [front], 'rear': [rear]} if two_meshes else {'mesh': [front, rear]}
+    result = infer_component_symmetry(meshes, [0, 0, 1], axes)
+    assert result['surface_completion_factor'] == 2 ** len(axes)
+
+
+@pytest.mark.parametrize('fraction,allowed', [(.49, False), (.5, True), (.75, True)])
+def test_driver_footprint_overlap_threshold(fraction, allowed):
+    points = np.array([[0, 0, 0], [.02, 0, 0], [.02, .02, 0], [0, .02, 0]])
+    front = skin(points, [[0, 1, 2], [0, 2, 3]])
+    rear = skin(points + [.02 * (1 - fraction), 0, -.002], [[0, 2, 1], [0, 3, 2]])
+    if allowed:
+        assert infer_component_symmetry({'front': [front], 'rear': [rear]}, [0, 0, 1])['physical_driver_orbit_count'] == 1
+    else:
+        with pytest.raises(DriverSymmetryError) as caught:
+            infer_component_symmetry({'front': [front], 'rear': [rear]}, [0, 0, 1])
+        assert caught.value.code == 'driver_disconnected_patches'
+
+
+def test_coax_footprint_preserves_annular_hole():
+    from server.tests.test_fem_electrodynamic import _revolved_moving
+    disc = _revolved_moving([([(0, 0), (.01, 0)], False)])
+    annulus = _revolved_moving([([(.02, 0), (.03, 0)], False)])
+    with pytest.raises(DriverSymmetryError) as caught:
+        infer_component_symmetry({'mesh': disc + annulus}, [0, 0, 1])
+    assert caught.value.code == 'driver_disconnected_patches'
+
+
+def test_dome_surround_cap_connect_across_separately_indexed_noisy_tags():
+    from server.tests.test_fem_electrodynamic import _revolved_moving
+    blocks = _revolved_moving([([(0, .002), (.01, 0)], False),
+                              ([(.01, 0), (.02, .01)], False),
+                              ([(.02, .01), (.03, .01)], False)])
+    blocks = [(np.arange(len(t) * 3).reshape(-1, 3), t + i * 1e-13) for i, (_, t) in enumerate(blocks)]
+    assert infer_component_symmetry({'mesh': blocks}, [0, 0, 1])['physical_driver_orbit_count'] == 1
+
+
+@pytest.mark.parametrize('same_mesh', [False, True])
+def test_full_mirrored_drivers_refused_at_admission_and_compile(monkeypatch, same_mesh):
+    from server.solver.coupled_admission import driver_surface_problem
+    right = region_input('right')
+    right = replace(right, domain=replace(right.domain, points_mm=right.domain.points_mm + [20, 0, 0]))
+    if same_mesh:
+        _, item = reflect_inputs(None, right, 0)
+        items = [item]
+    else:
+        left = region_input('left')
+        xyz = left.domain.points_mm + [20, 0, 0]
+        xyz[:, 0] *= -1
+        left = replace(left, domain=replace(left.domain, points_mm=xyz,
+            surfaces={k: v[:, ::-1] for k, v in left.domain.surfaces.items()},
+            tetrahedra=left.domain.tetrahedra[:, [0, 2, 1, 3]]))
+        items = [right, left]
+    domains = {i.record['region_id']: i.domain for i in items}
+    monkeypatch.setattr('server.mesh.artifact.read_verified_fem_region_mesh', lambda record, identity: identity)
+    monkeypatch.setattr('server.mesh.fem_regions.read_fem_region_domain', lambda text, identity: domains[identity])
+    records = [dict(i.record, mesh_store_path='retained.msh') for i in items]
+    channel = DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=driver())
+    problem = driver_surface_problem({'fem_regions': records}, [channel])
+    assert problem[0] == 'driver_disconnected_patches'
+    assert 'own drive channel' in problem[1] and 'paint the rim as moving' in problem[1]
+    with pytest.raises(DriverSymmetryError) as caught:
+        build_coupled_request(None, items, layout=compiled().layout, frame=FRAME,
+                              frequencies_hz=[100.], transducers={'fem': driver()})
+    assert caught.value.code == problem[0]
+    # A reduced representative still creates its physical driver orbit.
+    reduced = build_coupled_request(None, [right], layout=compiled().layout, frame=FRAME,
+                                   frequencies_hz=[100.], symmetry='yz', transducers={'fem': driver()})
+    assert reduced.wire['compiled_system']['components'][0]['parameters']['physical_driver_orbit_count'] == 2
+
+
+
+def test_projected_footprint_union_counts_folds_once_and_skips_degenerate_faces():
+    from server.solver.component_symmetry import _footprint, _footprints_overlap
+    square = np.array([[[0., 0.], [1., 0.], [1., 1.]], [[0., 0.], [1., 1.], [0., 1.]]])
+    collapsed = np.array([[[0., 0.], [.5, .5], [1., 1.]]])
+    for offset in (0., 1e6):
+        folded = _footprint(np.concatenate([square, collapsed, square[:, ::-1]]) + offset)
+        assert folded[1] == pytest.approx(1.)
+        assert _footprints_overlap(folded, _footprint(square + [.5, 0] + offset))
+        assert not _footprints_overlap(folded, _footprint(square + [.51, 0] + offset))

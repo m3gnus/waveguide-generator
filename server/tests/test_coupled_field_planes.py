@@ -472,7 +472,7 @@ def test_interior_location_batches_tetrahedra_and_preserves_shared_face_priority
 def test_velocity_step_shrinks_to_nearest_surface_distance(stored):
     store, _, _, _, _ = stored
     request = plane_request("exterior", quantity="velocity_normal", frequency=100.)
-    request.plane.origin_m = (.001, .001, -.002)
+    request.plane.origin_m = (.001, .001, -.2)
     request.plane.width_m = request.plane.height_m = .001
     steps = []
     def evaluate(mesh, f, k, p, q, points, **kwargs):
@@ -482,7 +482,7 @@ def test_velocity_step_shrinks_to_nearest_surface_distance(stored):
         return np.exp(1j * k * points[:, 2].astype(np.float32))
     result = evaluate_coupled_plane(store, "field", request, evaluator=evaluate)
     assert decode(result, "valid_mask", "u1").all()
-    np.testing.assert_allclose(steps, .002 * .05, rtol=1e-9)
+    np.testing.assert_allclose(steps, .2 * .05, rtol=1e-9)
 
 
 @pytest.mark.parametrize("frequency", [50., 100., 200., 500.])
@@ -502,6 +502,10 @@ def test_near_field_monopole_velocity_error_below_one_percent(stored, frequency,
         r = np.linalg.norm(points.astype(np.float32).astype(float), axis=1)
         return np.exp(1j * k * r) / r
     result = evaluate_coupled_plane(replay, "field", request, evaluator=monopole)
+    if frequency * (radius - .01) * .05 * 2 * np.pi / 343 < .01:
+        assert not decode(result, "valid_mask", "u1").any()
+        assert (decode(result, "mask_reason", "u1") == 2).all()
+        return
     assert decode(result, "valid_mask", "u1").all()
     assert not decode(result, "mask_reason", "u1").any()
     from server.solver.field_plane import field_plane_points
@@ -524,7 +528,7 @@ def test_nearest_skin_distance_checks_faces_edges_and_remote_centroids():
     np.testing.assert_allclose(SkinDistanceIndex(triangles).query(points), [.01, .1, np.sqrt(.02)])
 
 
-def test_velocity_ulp_floor_tracks_small_coordinates(stored):
+def test_float32_pressure_noise_masks_submicron_stencil_even_at_small_coordinates(stored):
     store, _, _, _, _ = stored
     request = plane_request("exterior", quantity="velocity_normal", frequency=100.)
     request.plane.origin_m = (.001, .001, -5e-6)
@@ -535,8 +539,9 @@ def test_velocity_ulp_floor_tracks_small_coordinates(stored):
         steps.extend((points[:n, 2] - points[n:, 2]) / 2)
         return np.exp(1j * k * points[:, 2].astype(np.float32).astype(float))
     result = evaluate_coupled_plane(store, "field", request, evaluator=wave)
-    assert decode(result, "valid_mask", "u1").all()
-    np.testing.assert_allclose(steps, 5e-6 * .05)
+    assert not decode(result, "valid_mask", "u1").any()
+    assert (decode(result, "mask_reason", "u1") == 2).all()
+    assert steps == []
 
 
 def test_remote_near_surface_velocity_is_masked_with_reason(stored):
@@ -652,3 +657,82 @@ def test_corrupt_retained_bem_trace_route_returns_gone(stored):
         body=plane_request("exterior").model_dump(mode="json")))
     assert status == 410
     assert "corrupt" in json.loads(body)["detail"]
+
+
+@pytest.mark.parametrize('fault', ['nan', 'shape'])
+def test_evaluator_fault_returns_retryable_500(stored, monkeypatch, fault):
+    store, _, _, _, _ = stored
+    def evaluate(mesh, f, k, p, q, points, **kwargs):
+        return np.full(len(points), np.nan) if fault == 'nan' else np.ones((len(points), 1))
+    monkeypatch.setattr('server.solver.beat_field.evaluate_exterior_from_traces', evaluate)
+    app = FastAPI()
+    app.include_router(create_jobs_router(JobRuntime(store)))
+    status, body, _ = asyncio.run(_request_with_headers(app, 'POST', '/api/results/field/fem-field/plane',
+        body=plane_request('exterior').model_dump(mode='json')))
+    assert status == 500
+    message = json.loads(body)['detail']
+    assert 'BEAT runtime' in message and 'retry' in message
+
+
+@pytest.mark.parametrize('distance', [.0003, .001, .002, .003, .005])
+def test_float32_near_skin_velocity_is_conservatively_masked(stored, distance):
+    store, _, _, _, _ = stored
+    request = plane_request('exterior', quantity='velocity_normal', frequency=100.)
+    request.plane.origin_m = (.001, .001, -distance)
+    request.plane.width_m = request.plane.height_m = .001
+    result = evaluate_coupled_plane(store, 'field', request,
+        evaluator=lambda *a, **k: pytest.fail('unreliable float32 stencil evaluated'))
+    assert not decode(result, 'valid_mask', 'u1').any()
+    assert (decode(result, 'mask_reason', 'u1') == 2).all()
+
+
+def test_near_degenerate_triangle_uses_segment_distance_at_every_scale():
+    from server.jobs.body_index import point_triangle_distances
+    # Collinear to roundoff: cancellation in barycentrics must not manufacture
+    # a spurious interior projection much nearer than all three segments.
+    a = np.array([-.05392527, -.07520606, -.00212985])
+    b = np.array([-.03934518, -.08409726, .01996619])
+    c = b + (b - a) * .7 + [1e-16, -1e-16, 1e-16]
+    p = np.array([.02, .03, .05])
+    for scale in (1e-6, 1., 1e6):
+        triangle, point = np.array([a, b, c]) * scale, p * scale
+        expected = min(np.linalg.norm(point - (start + np.clip((point - start) @ (end - start)
+            / ((end - start) @ (end - start)), 0, 1) * (end - start)))
+            for start, end in zip(triangle, np.roll(triangle, -1, axis=0)))
+        assert point_triangle_distances(point, triangle) == pytest.approx(expected, rel=1e-12)
+
+
+def test_best_first_distance_100k_sphere_256_plane_bounds_visited_pairs():
+    from server.jobs.body_index import SkinDistanceIndex, MAX_WORK_PAIRS
+    theta, phi = np.meshgrid(np.linspace(0, np.pi, 201), np.linspace(0, 2 * np.pi, 251), indexing='ij')
+    xyz = np.column_stack([(np.sin(theta) * np.cos(phi)).ravel(),
+                           (np.sin(theta) * np.sin(phi)).ravel(), np.cos(theta).ravel()])
+    row, col = np.meshgrid(np.arange(200), np.arange(250), indexing='ij')
+    a = (row * 251 + col).ravel()
+    faces = np.concatenate([np.column_stack([a, a + 1, a + 252]),
+                            np.column_stack([a, a + 252, a + 251])])
+    grid = np.linspace(-1.2, 1.2, 256)
+    x, y = np.meshgrid(grid, grid)
+    points = np.column_stack([x.ravel(), y.ravel(), np.full(x.size, 1.01)])
+    index = SkinDistanceIndex(xyz[faces])
+    distance = index.query(points)
+    expected = np.linalg.norm(points, axis=1) - 1
+    np.testing.assert_allclose(distance, expected, atol=.0002)
+    assert index.bins.max_candidates <= 16
+    assert index.peak_pairs <= MAX_WORK_PAIRS
+    assert index.pair_count < len(points) * 100
+
+
+
+def test_velocity_mask_uses_local_skin_element_size(stored):
+    store, _, _, _, arrays = stored
+    # Coarse skin: the pressure-noise step would be adequate at 1000 Hz,
+    # but a 0.1 m clearance is below one quarter of the local element size.
+    store.store_bem_trace_arrays('field', {**arrays, 'points_m': arrays['points_m'] * 100})
+    request = plane_request('exterior', quantity='velocity_normal', frequency=1000.123456)
+    request.plane.origin_m = (.1, .1, -.1)
+    request.plane.width_m = request.plane.height_m = .001
+    result = evaluate_coupled_plane(store, 'field', request,
+        evaluator=lambda *a, **k: pytest.fail('coarse-skin near-wall velocity evaluated'))
+    assert not decode(result, 'valid_mask', 'u1').any()
+    assert (decode(result, 'mask_reason', 'u1') == 2).all()

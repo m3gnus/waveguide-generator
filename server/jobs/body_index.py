@@ -1,6 +1,8 @@
 """Spatially indexed closed-skin queries, shared by a plane and its stencil."""
 from __future__ import annotations
 
+import heapq
+
 import numpy as np
 from scipy.spatial import cKDTree
 
@@ -15,21 +17,34 @@ class TriangleBins:
     Each triangle belongs to one leaf. Overlapping leaf bounds are queried
     separately, avoiding duplication of long triangles into many grid bins.
     """
-    def __init__(self, triangles, dimensions, check):
+    def __init__(self, triangles, dimensions, check, leaf_faces=MAX_BIN_FACES, oriented=False):
         xyz = triangles[:, :, :dimensions]
         lower, upper = xyz.min(axis=1), xyz.max(axis=1)
         centers = xyz.mean(axis=1)
         self.max_candidates = 0
+        self.oriented_bounds = {}
         def build(indices):
             check()
             lo, hi = lower[indices].min(axis=0), upper[indices].max(axis=0)
-            if len(indices) <= MAX_BIN_FACES:
+            if len(indices) <= leaf_faces:
                 self.max_candidates = max(self.max_candidates, len(indices))
-                return lo, hi, indices, None
-            axis = np.argmax(np.ptp(centers[indices], axis=0))
-            middle = len(indices) // 2
-            order = np.argpartition(centers[indices, axis], middle)
-            return lo, hi, build(indices[order[:middle]]), build(indices[order[middle:]])
+                node = lo, hi, indices, None
+            else:
+                axis = np.argmax(np.ptp(centers[indices], axis=0))
+                middle = len(indices) // 2
+                order = np.argpartition(centers[indices, axis], middle)
+                node = lo, hi, build(indices[order[:middle]]), build(indices[order[middle:]])
+            if oriented:
+                # A local box avoids the empty AABB corners around curved skins.
+                # All triangle vertices are enclosed, so this remains a strict
+                # lower bound for best-first nearest-triangle traversal.
+                vertices = xyz[indices].reshape(-1, dimensions)
+                origin = vertices.mean(axis=0)
+                delta = vertices - origin
+                _, basis = np.linalg.eigh(delta.T @ delta)
+                projected = delta @ basis
+                self.oriented_bounds[id(node)] = origin, basis, projected.min(axis=0), projected.max(axis=0)
+            return node
         self.root = build(np.arange(len(triangles))) if len(triangles) else None
 
     def leaves(self, points, check, distances=None):
@@ -63,7 +78,7 @@ def point_triangle_distances(points, triangles):
     de, df = np.sum(delta * e, axis=-1), np.sum(delta * f, axis=-1)
     denominator = np.maximum(area2, 1e-100)
     beta, gamma = (de * ff - df * ef) / denominator, (df * ee - de * ef) / denominator
-    within = (area2 > 0) & (beta >= 0) & (gamma >= 0) & (beta + gamma <= 1)
+    within = (area2 > 1e-24 * ee * ff) & (beta >= 0) & (gamma >= 0) & (beta + gamma <= 1)
     squared = np.where(within, np.sum(delta * normal, axis=-1) ** 2 / denominator, np.inf)
     for start, end in ((a, b), (b, c), (c, a)):
         edge = end - start
@@ -74,20 +89,21 @@ def point_triangle_distances(points, triangles):
 
 
 class SkinDistanceIndex:
-    """Centroid seed plus exact nearest-triangle BVH traversal in 3-D."""
+    """Best-first exact nearest-triangle traversal, with small distance leaves."""
     def __init__(self, triangles, check=lambda: None):
-        self.triangles = triangles
-        self.bins = TriangleBins(triangles, 3, check)
-        self.centroids = cKDTree(triangles.mean(axis=1))
+        self.triangles = np.asarray(triangles)
+        self.bins = TriangleBins(self.triangles, 3, check, leaf_faces=16, oriented=True)
+        self.centroids = cKDTree(self.triangles.mean(axis=1))
         self.peak_pairs = 0
         self.pair_count = 0
 
-    def query(self, points, check=lambda: None):
+    def query(self, points, check=lambda: None, *, return_sizes=False):
         points = np.asarray(points, float)
         if not len(self.triangles):
-            return np.full(len(points), np.inf)
+            distances = np.full(len(points), np.inf)
+            return (distances, distances.copy()) if return_sizes else distances
         check()
-        nearest = self.centroids.query(points)[1]
+        nearest = np.asarray(self.centroids.query(points)[1])
         distances = np.empty(len(points))
         for start in range(0, len(points), MAX_WORK_PAIRS):
             check()
@@ -95,7 +111,33 @@ class SkinDistanceIndex:
             self.peak_pairs = max(self.peak_pairs, end - start)
             self.pair_count += end - start
             distances[start:end] = point_triangle_distances(points[start:end], self.triangles[nearest[start:end]])
-        for indices, candidates in self.bins.leaves(points, check, distances):
+        pending, serial = [], 0
+        def push(node, indices):
+            nonlocal serial
+            origin, basis, lo, hi = self.bins.oriented_bounds[id(node)]
+            xyz = (points[indices] - origin) @ basis
+            delta = np.maximum(np.maximum(lo - xyz, xyz - hi), 0)
+            bound = np.einsum("ij,ij->i", delta, delta)
+            keep = bound <= distances[indices] ** 2
+            if keep.any():
+                serial += 1
+                heapq.heappush(pending, (float(bound[keep].min()), serial, node, indices[keep], bound[keep]))
+        if self.bins.root is not None and len(points):
+            push(self.bins.root, np.arange(len(points)))
+        while pending:
+            check()
+            _, _, node, indices, bound = heapq.heappop(pending)
+            # Bounds are reconsidered after every nearer leaf. For each point,
+            # traversal stops once the next box is farther than its best hit.
+            indices = indices[bound <= distances[indices] ** 2]
+            if not len(indices):
+                continue
+            _, _, left, right = node
+            if right is not None:
+                push(left, indices)
+                push(right, indices)
+                continue
+            candidates = left
             chunk = max(1, MAX_WORK_PAIRS // len(candidates))
             for start in range(0, len(indices), chunk):
                 check()
@@ -103,7 +145,15 @@ class SkinDistanceIndex:
                 self.peak_pairs = max(self.peak_pairs, len(selected) * len(candidates))
                 self.pair_count += len(selected) * len(candidates)
                 exact = point_triangle_distances(points[selected, None], self.triangles[candidates][None])
-                distances[selected] = np.minimum(distances[selected], exact.min(axis=1))
+                closest = exact.argmin(axis=1)
+                best = exact[np.arange(len(selected)), closest]
+                improved = best < distances[selected]
+                nearest[selected[improved]] = candidates[closest[improved]]
+                distances[selected] = np.minimum(distances[selected], best)
+        if return_sizes:
+            triangles = self.triangles[nearest]
+            sizes = np.linalg.norm(triangles - np.roll(triangles, -1, axis=1), axis=2).max(axis=1)
+            return distances, sizes
         return distances
 
 

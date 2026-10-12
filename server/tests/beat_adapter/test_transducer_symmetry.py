@@ -155,7 +155,7 @@ def test_exterior_disconnected_moving_tags_refused_at_compile_and_admission(make
     tags[:] = 3
     tags[[0, 2]] = 2
     mesh = make_mesh(parsed.points_m.tolist(), parsed.faces.tolist(), tags.tolist())
-    with pytest.raises(UnsupportedPhysics, match='2 separate surfaces in exterior') as caught:
+    with pytest.raises(UnsupportedPhysics, match='2 separate drivers') as caught:
         t.build_transducer_request(mesh, drivers=[driver(tags=(2,), axis=[0, 0, 1])],
                                   layout=layout, frame=FRAME, frequencies_hz=[100.], symmetry=mode)
     assert caught.value.code == 'driver_disconnected_patches'
@@ -165,7 +165,7 @@ def test_exterior_disconnected_moving_tags_refused_at_compile_and_admission(make
     record = {'source_tags': {'cone': 2}, 'symmetry': {'domain_planes': [] if mode == 'full' else ['x0']}}
     from server.solver.coupled_admission import driver_surface_problem
     assert driver_surface_problem(record, [channel], exterior_only=True, msh_text=mesh)[0] == 'driver_disconnected_patches'
-    assert '2 separate surfaces' in jobs.preflight(record, mesh, [channel], backend='cpu')
+    assert '2 separate drivers' in jobs.preflight(record, mesh, [channel], backend='cpu')
 
 
 @pytest.mark.live

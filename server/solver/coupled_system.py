@@ -356,6 +356,9 @@ def build_coupled_system(
             "mesh_ids": [EXTERIOR_MESH_ID], "volume_groups": [],
             "sound_speed_m_per_s": 343.0, "density_kg_per_m3": 1.21, "loss_model": {},
         })
+        for name, declaration in exterior.kinds.items():
+            if declaration.get('kind') == 'moving' and (name not in exterior.groups or not len(exterior.groups[name])):
+                raise CoupledSystemError(f"group {name!r} has no faces in the prepared mesh")
         exterior_rows = _rows(surfaces)
         for index, (group_name, block) in enumerate(surfaces):
             kind_record = exterior.kinds.get(group_name) or {}
@@ -417,6 +420,10 @@ def build_coupled_system(
             for group in record.get("surface_groups") or ()
         }
         for group_id, declaration in declarations.items():
+            if declaration['kind'] == 'moving':
+                expected = f"wg-fem-v1|region={region_id}|group={group_id}|kind=moving"
+                if expected not in domain.surfaces or not len(domain.surfaces[expected]):
+                    raise CoupledSystemError(f"group {group_id!r} has no faces in the prepared mesh")
             if "lining" in declaration or "relative_level_db" in declaration:
                 expected = f"wg-fem-v1|region={region_id}|group={group_id}|kind={declaration['kind']}"
                 if expected not in domain.surfaces:

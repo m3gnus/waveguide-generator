@@ -362,12 +362,23 @@ other than model +Z are not supported for mirror recovery. Send the complete
 model instead. Full/half/quarter describe the acoustic domain, not how much of
 the model you happen to display in the viewport.
 
-Electrodynamic drivers support transverse half and quarter domains. Connected
-moving faces across cone/cap/surround groups form one driver; disconnected patches
-in one FEM region or exterior mesh need separate drive channels. Front and rear
-skins in different meshes may share a driver. An off-plane representative stands
-for separate mirrored drivers with parallel electrical currents. For a full-domain
-comparison, give each mirrored driver its own channel and combine the channels.
+Electrodynamic drivers support transverse half and quarter domains. A channel
+represents one driver when its moving patches connect through shared edges after
+coordinate welding, or their footprints projected along the motion axis overlap
+by at least 50% of the smaller patch's projected area. Zero-projection faces still
+carry connectivity. Shared edges join separately tagged dome, surround and cap
+surfaces; overlapping front and rear skins may share a driver in one mesh or
+across FEM chambers and the exterior mesh. Separate diaphragms, including a coax
+or an off-plane mirrored pair, need separate channels even across different meshes.
+Otherwise WG refuses `driver_disconnected_patches`: give each driver its own drive
+channel, or, if these are the two faces of one diaphragm, make them overlap along
+the motion axis / paint the rim as moving.
+
+Full and reduced models use the same rule. Under symmetry it judges the
+representative; orbit images are separate physical drivers by construction,
+each with its own mass and electrical parameters and parallel current contribution.
+For a full-domain comparison, give each mirrored driver its own channel and
+combine their voltage bases.
 
 A moving perimeter edge on a mirror plane is treated as a driver cut, including
 an edge that only touches the plane. The driver's motion axis must lie in each

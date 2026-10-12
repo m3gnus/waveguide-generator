@@ -535,9 +535,11 @@ cross-check warns outside 0.8–1.6 times the declared Sd.
 
 Geometry is ambiguous if any mesh's absolute net is less than 20% of its sum
 of absolute face projections, or a minority opposite-sign connected patch
-has at least 5% of the majority patch's absolute net. Numerically neutral rim
-faces do not join independent skins. This heuristic is used only for acoustic
-impedance; connected non-neutral rims can hide partly tagged rear faces.
+has at least 5% of the majority patch's absolute net. Zero-projection rim
+faces carry connectivity, so a connected under-fold retains its net subtraction. This heuristic is used only for acoustic
+impedance; connected rims can hide partly tagged rear faces. A partial rear
+skin connected through neutral faces retains the same signed-net heuristic as
+a fold; fully opposed skins remain ambiguous.
 Every enabled lumped chamber therefore requires declared Sd at admission and
 compilation with `driver_sd_required`, regardless of geometry or solve route.
 With no chamber and ambiguous geometry, the solve continues, omits acoustic
@@ -589,16 +591,22 @@ evaluation deadline.
 FEM tetrahedra take priority in combined samples. The completed BEM skin masks
 remaining points inside bodies and on boundary faces using ray parity with a
 projected spatial index. The per-plane classification is reused for velocity;
-a normal-ray clearance query bounds the stencil without remasking 2N points. Symmetry images preserve
+a best-first nearest-triangle query bounds the stencil without remasking 2N points.
+Small leaves and local oriented boxes keep distance queries local on large skins. Symmetry images preserve
 scalar pressure and reflect vector components through geometry, including the
 image rotation needed for a Y-only half model. The exterior potential is
 computed by WG's official BEAT `bem_field` operation without another solve.
 In `exp(-i omega t)`, velocity is `grad(p)/(i omega rho)`. Interior gradients
 are exact and constant per P1 tetrahedron; exterior normal velocity uses a
 centred difference of the same potential with h ≈ wavelength/50, capped at
-0.1 m and 45% of the nearest normal-ray boundary distance. Plane-wave truncation
-is approximately (kh)²/6 (0.26% at wavelength/50). Samples whose safe step is too
-small to resolve in Float32 coordinates are masked.
+0.1 m and 5% of the nearest skin distance. Plane-wave truncation
+is approximately (kh)²/6 (0.26% at wavelength/50). BEAT field evaluations return Float32 pressure. Velocity samples are masked
+when skin clearance is below max(2 mm, one quarter of the nearest skin element's
+longest edge), or when h is below max(1 mm, 0.01/k, 32 coordinate ULPs). The phase
+floor k·h ≥ 0.01 rad accounts for relative pressure noise around 1e-5; coordinate
+resolution alone is insufficient. Mask code 2 displays “Too close to a surface
+for a reliable velocity”. Corrupt retained sidecars return 410; evaluator NaN or
+invalid shapes return 500 with retry and BEAT runtime guidance.
 
 The viewport offers pressure SPL, normalized level, phase, real, imaginary,
 instantaneous animation and manual colour limits. Normal particle velocity
@@ -620,14 +628,23 @@ fake-worker regression gate.
 
 ### Driver connectivity and full-domain comparison
 
-A transducer channel must own one connected moving patch in each mesh. Shared
-edges join cone, cap and surround faces across group/tag boundaries. Disconnected
-patches in one FEM region or in the exterior refuse as
-`driver_disconnected_patches`; give each driver its own drive channel or connect
-the surfaces. A shared diaphragm spanning different FEM meshes, or a FEM rear
-and exterior front, remains allowed. In reduced models this rule applies to the
-representative: off-plane orbit images are separate physical drivers, each with
-its own Mmd/Re/Bl and parallel current contribution.
+Electrodynamic drivers support transverse half and quarter domains. A channel
+represents one driver when its moving patches connect through shared edges after
+coordinate welding, or their footprints projected along the motion axis overlap
+by at least 50% of the smaller patch's projected area. Zero-projection faces still
+carry connectivity. Shared edges join separately tagged dome, surround and cap
+surfaces; overlapping front and rear skins may share a driver in one mesh or
+across FEM chambers and the exterior mesh. Separate diaphragms, including a coax
+or an off-plane mirrored pair, need separate channels even across different meshes.
+Otherwise WG refuses `driver_disconnected_patches`: give each driver its own drive
+channel, or, if these are the two faces of one diaphragm, make them overlap along
+the motion axis / paint the rim as moving.
+
+Full and reduced models use the same rule. Under symmetry it judges the
+representative; orbit images are separate physical drivers by construction,
+each with its own mass and electrical parameters and parallel current contribution.
+For a full-domain comparison, give each mirrored driver its own channel and
+combine their voltage bases.
 
 For an orbit-two half-model comparison, prepare the complete model with **Force
 full domain**, assign the two mirrored drivers separate channels, and combine

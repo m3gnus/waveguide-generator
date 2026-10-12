@@ -511,6 +511,17 @@ def _closed_moving_skin(*, dome=False, rear_fraction=1.):
 def test_connected_front_rim_rear_skin_requires_declared_sd(dome, rear_fraction):
     from server.solver.beat_adapter.coupled_transducers import parameters
     meshes = _closed_moving_skin(dome=dome, rear_fraction=rear_fraction)
+    if rear_fraction != 1.:
+        # Neutral rim connectivity now preserves the single patch's signed net,
+        # just like an under-fold. Partly painted skins cannot be distinguished
+        # from folds by this net heuristic; declared Sd remains authoritative.
+        expected = .0004 * (1 - rear_fraction)
+        metadata = {}
+        assert parameters(driver(), meshes, sd_metadata=metadata)[1] == pytest.approx(expected)
+        assert not metadata['geometry_ambiguous']
+        spec = driver(sd_m2=expected, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+        assert parameters(spec, meshes)[1] == pytest.approx(expected)
+        return
     with pytest.warns(UserWarning, match="Sd not determined; enter Sd to get acoustic impedance"):
         assert parameters(driver(), meshes, channel_id='skin')[1] is None
     with pytest.raises(ValueError, match="driver_sd_required: Enter Sd.*channel 'skin'"):
@@ -1136,3 +1147,92 @@ def test_chamber_refuses_even_small_disconnected_rear_patch(rear_fraction):
     assert driver_sd_problem({}, [channel], moving_meshes={'speaker': meshes})[0] == 'lumped_chamber_double_rear_load'
     with pytest.raises(ValueError, match='lumped_chamber_double_rear_load'):
         parameters(spec, meshes)
+
+
+
+def test_zero_projection_vertical_band_keeps_270_degree_roll_connected():
+    from server.solver.beat_adapter.transducers import geometric_driver_area, moving_meshes_have_opposite_nets
+    from server.solver.beat_adapter.coupled_transducers import parameters
+    cap = [(.02 * np.sin(t), .015 * np.cos(t)) for t in np.linspace(0, np.pi / 2, 10)]
+    cone = [(.02 + .08 * s, .06 * s) for s in np.linspace(0, 1, 12)]
+    roll_a = [(.11 + .01 * np.cos(t), .06 + .01 * np.sin(t)) for t in np.linspace(np.pi, 0, 24)]
+    band = [(.12, .06), (.12, .055)]
+    roll_b = [(.11 + .01 * np.cos(t), .055 + .01 * np.sin(t)) for t in np.linspace(0, -np.pi / 2, 24)]
+    boundaries = _revolved_moving([(profile, False) for profile in (cap, cone, roll_a, band, roll_b)])
+    meshes = {'fem': boundaries}
+    expected = 48 / 2 * np.sin(2 * np.pi / 48) * .11 ** 2
+    assert geometric_driver_area(meshes, [0, 0, 1])[:2] == pytest.approx((expected, False))
+    assert not moving_meshes_have_opposite_nets(meshes, [0, 0, 1])
+    spec = driver(sd_m2=expected, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+    assert parameters(spec, meshes)[1] == pytest.approx(expected)
+    from server.solver.coupled_admission import driver_sd_problem
+    channel = DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=spec)
+    assert driver_sd_problem({}, [channel], moving_meshes={'fem': meshes}) is None
+
+
+@pytest.mark.parametrize('failure', ['missing-group', 'empty-group', 'artifact'])
+def test_sd_admission_distinguishes_missing_faces_and_unavailable_artifact(monkeypatch, failure):
+    from server.mesh.artifact import ImportedMeshArtifactError
+    from server.solver.coupled_admission import driver_sd_problem, driver_surface_problem
+    region = region_input()
+    record = {'fem_regions': [dict(region.record, mesh_store_path='retained.msh')]}
+    spec = driver(sd_m2=.0001, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+    channel = DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=spec)
+    if failure == 'artifact':
+        def read(*args):
+            raise ImportedMeshArtifactError('ingestion mesh unavailable; re-ingest')
+        monkeypatch.setattr('server.mesh.artifact.read_verified_fem_region_mesh', read)
+    else:
+        surfaces = dict(region.domain.surfaces)
+        name = next(name for name in surfaces if 'kind=moving' in name)
+        if failure == 'missing-group':
+            del surfaces[name]
+        else:
+            surfaces[name] = np.empty((0, 3), dtype=int)
+        domain = replace(region.domain, surfaces=surfaces)
+        monkeypatch.setattr('server.mesh.artifact.read_verified_fem_region_mesh', lambda *a: 'mesh')
+        monkeypatch.setattr('server.mesh.fem_regions.read_fem_region_domain', lambda *a: domain)
+        with pytest.raises(ValueError, match='group .* has no faces in the prepared mesh'):
+            build_coupled_request(None, [replace(region, domain=domain)], layout=compiled().layout,
+                                  frame=FRAME, frequencies_hz=[100.], transducers={'fem': spec})
+    problem = driver_sd_problem(record, [channel])
+    if failure == 'artifact':
+        assert problem[0] == 'ingest_mesh_unavailable'
+        assert driver_surface_problem(record, [channel])[0] == 'ingest_mesh_unavailable'
+    else:
+        assert 'group ' in problem[1] and 'has no faces in the prepared mesh' in problem[1]
+        assert 'rear already radiates' not in problem[1]
+
+
+@pytest.mark.parametrize('exterior_front', [False, True])
+@pytest.mark.parametrize('mode,planes', [('full', []), ('yz', ['x0'])])
+def test_coincident_diaphragm_skins_allowed_at_retained_admission_and_compile(monkeypatch, exterior_front, mode, planes):
+    from server.solver.coupled_admission import driver_surface_problem
+    regions = _shared_regions(two_regions=True, split=False)
+    front, rear = regions
+    domains = {i.record['region_id']: i.domain for i in regions}
+    monkeypatch.setattr('server.mesh.artifact.read_verified_fem_region_mesh', lambda record, identity: identity)
+    monkeypatch.setattr('server.mesh.fem_regions.read_fem_region_domain', lambda text, identity: domains[identity])
+    records = [dict(i.record, mesh_store_path='retained.msh') for i in regions]
+    record = {'fem_regions': records, 'symmetry': {'domain_planes': planes}}
+    sources, exterior = [], None
+    if exterior_front:
+        record['fem_regions'] = records[1:]
+        groups = {'source_id=front': next(v for k, v in front.domain.surfaces.items() if 'kind=moving' in k),
+                  'walls': np.concatenate([v for k, v in front.domain.surfaces.items() if 'kind=rigid' in k])}
+        if planes:
+            groups['walls'] = groups['walls'][~np.all(front.domain.points_mm[groups['walls'], 0] == 0, axis=1)]
+        exterior = ExteriorSurface(front.domain.points_mm, groups,
+            {'source_id=front': {'kind': 'moving', 'drive_channel_id': 'fem'}, 'walls': {'kind': 'rigid'}})
+        monkeypatch.setattr('server.mesh.artifact.read_verified_coupled_exterior_mesh', lambda *a: 'exterior')
+        monkeypatch.setattr('server.mesh.fem_coupling.read_coupled_exterior', lambda *a: (front.domain.points_mm, groups))
+        record['coupled_exterior'] = {'mesh_store_path': 'retained.msh'}
+        sources = ['front']
+        regions = [rear]
+    channel = DriveChannel(id='fem', source_ids=sources, motion='axial', exterior_transducer=driver())
+    assert driver_surface_problem(record, [channel]) is None
+    request = build_coupled_request(exterior, regions, layout=compiled().layout, frame=FRAME,
+                                   frequencies_hz=[100.], symmetry=mode, transducers={'fem': driver()})
+    assert len(request.wire['compiled_system']['components']) == 1
+    params = request.wire['compiled_system']['components'][0]['parameters']
+    assert params['surface_completion_factor'] == (1 if mode == 'full' else 2)
