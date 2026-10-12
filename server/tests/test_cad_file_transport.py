@@ -189,7 +189,10 @@ def test_snapshot_file_retains_before_ack_and_replays_without_preparing(tmp_path
         solve_command.collect_solve_deliveries(app.data_dir, app.store, refuse=refused.append)
         assert refused and refused[0]["operationId"] == body["operationId"]
         assert app.row(body["operationId"])["request_digest"] == row["request_digest"]
-        assert json.loads(ack_path.read_text()) == ack
+        # A replay republishes the same outcome; only its second-resolution
+        # timestamp may move, so the passes may straddle a second boundary.
+        replayed = json.loads(ack_path.read_text())
+        assert {k: v for k, v in replayed.items() if k != "at"} == {k: v for k, v in ack.items() if k != "at"}
 
 
 def test_invalid_snapshot_file_is_rejected_without_retaining_or_preparing(tmp_path):
