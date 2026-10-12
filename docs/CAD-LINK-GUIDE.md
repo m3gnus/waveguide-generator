@@ -133,6 +133,12 @@ channel are unsupported. With painted exterior sources, a FEM diaphragm must
 use a channel in that source setup. A missing compatible engine refuses the job;
 choose exterior-only explicitly if the interior should be excluded.
 
+Plane-wave terminations are supported only in interior-only solves. A return
+with a termination and any painted exterior source or interface in any region
+is refused before meshing, with a message naming the termination's region and
+group. Job admission also refuses if setup drive channels introduce an exterior.
+Remove the painted sources and interfaces, or model the horn as exterior.
+
 Operators can disable FEM regions with `WG2_FEM_REGIONS=0` and restart WG;
 `false`, `no` and `off` also disable it. This removes the capability and FEM UI
 and refuses FEM intake and coupled jobs. Unset the override to enable it again.

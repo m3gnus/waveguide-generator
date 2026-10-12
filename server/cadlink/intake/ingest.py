@@ -2089,6 +2089,11 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
     regions = manifest["scope"].get("fem_regions", [])
     if not regions:
         return ""
+    from server.solver.coupled_admission import fem_termination_problem
+
+    problem = fem_termination_problem(regions, has_exterior=bool(manifest.get("sources")))
+    if problem:
+        raise IngestRefusal("stage 7 meshing", f"{problem[0]}: {problem[1]}")
     if not fem_regions_enabled():
         raise IngestRefusal(
             "stage 7 meshing",

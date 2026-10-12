@@ -263,8 +263,11 @@ def build_coupled_system(
 
     if not regions:
         raise CoupledSystemError("A coupled system needs at least one FEM region.")
-    from server.solver.coupled_admission import fem_drive_problem
+    from server.solver.coupled_admission import fem_drive_problem, fem_termination_problem
 
+    problem = fem_termination_problem([r.record for r in regions], has_exterior=exterior is not None)
+    if problem:
+        raise CoupledSystemError(f"{problem[0]}: {problem[1]}")
     problem = fem_drive_problem([r.record for r in regions], {}, painted_sources=set())
     if problem and problem[0] in {"fem_multiple_diaphragms_unsupported", "fem_missing_channel"}:
         raise CoupledSystemError(problem[1])

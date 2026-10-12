@@ -315,6 +315,12 @@ def _imported_request_refusal(
     if not request.geometry.drive_channels and not coupled_regions:
         return "drive_source_coverage", "The return has no driven exterior source or FEM diaphragm"
     if coupled_regions:
+        from server.solver.coupled_admission import fem_termination_problem, painted_source_ids
+
+        problem = fem_termination_problem(record["fem_regions"], has_exterior=bool(
+            request.geometry.drive_channels or painted_source_ids(record)))
+        if problem:
+            return problem
         from server.cadlink.build_flags import fem_regions_enabled
         from server.solver.beat_runtime.provider import official_selected
 
@@ -335,7 +341,7 @@ def _imported_request_refusal(
                 return "fem_drive_unsupported", f"{ideal_message}; channel {channel.id!r} is unsupported"
         if request.geometry.passive_cardioid_enabled:
             return "fem_drive_unsupported", f"{ideal_message}; passive-cardioid synthesis is unsupported"
-        from server.solver.coupled_admission import fem_drive_problem, painted_source_ids
+        from server.solver.coupled_admission import fem_drive_problem
 
         problem = fem_drive_problem(record["fem_regions"],
             {c.id: c.source_ids for c in request.geometry.drive_channels},

@@ -5,6 +5,26 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
+def fem_termination_problem(regions: Sequence[Mapping[str, Any]], *,
+                            has_exterior: bool = False) -> tuple[str, str] | None:
+    """Refuse interior-only terminations when any region or source needs BEM."""
+    if not has_exterior and not any(
+        group.get("kind") == "interface"
+        for region in regions for group in region.get("surface_groups", ())
+    ):
+        return None
+    for region in regions:
+        for group in region.get("surface_groups", ()):
+            if group.get("kind") == "plane-wave-termination":
+                return "fem_termination_with_exterior", (
+                    f"FEM region {region.get('name') or region['region_id']!r} "
+                    f"({region['region_id']!r}), group {group.get('name') or group['group_id']!r} "
+                    f"({group['group_id']!r}): "
+                    "A plane-wave termination is supported only in an interior-only solve. "
+                    "Remove the painted sources and interfaces, or model the horn as exterior.")
+    return None
+
+
 def fem_drive_problem(regions: Sequence[Mapping[str, Any]],
                       channels: Mapping[str, Sequence[str]], *,
                       painted_sources: set[str],

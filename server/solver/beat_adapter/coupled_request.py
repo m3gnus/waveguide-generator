@@ -67,8 +67,12 @@ def build_coupled_request(
 
 def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any, *,
                                    frequencies_hz: Sequence[float]) -> CoupledRequest:
-    from server.solver.coupled_admission import fem_drive_problem, painted_source_ids
+    from server.solver.coupled_admission import fem_drive_problem, fem_termination_problem, painted_source_ids
 
+    problem = fem_termination_problem(record.get("fem_regions", ()), has_exterior=bool(
+        geometry.drive_channels or painted_source_ids(record)))
+    if problem:
+        raise ValueError(f"{problem[0]}: {problem[1]}")
     problem = fem_drive_problem(record.get("fem_regions", ()),
         {c.id: c.source_ids for c in geometry.drive_channels},
         painted_sources=painted_source_ids(record),

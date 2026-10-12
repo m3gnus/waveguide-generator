@@ -220,6 +220,14 @@ their domain refusal is enforced at F8 job admission. A finite, explicitly
 modelled baffle is supported. F8 must also refuse reduced domains at admission,
 since a later solve setup can introduce them after ingest.
 
+Plane-wave terminations are interior-only. A termination combined with a
+painted exterior source or an interface in any region is a blocking ingest
+refusal before meshing. Job admission also refuses when setup drive channels
+introduce an exterior; request construction enforces the same backstop. Each
+refusal names the termination's region and group and asks to remove painted
+sources and interfaces, or model the horn as exterior. An interior-only tube
+with no painted sources, setup drive channels or interfaces remains supported.
+
 Qualification covers synthetic ported and finite-baffle boxes, closure,
 interface topology and winding, the compiled-system contract, verified storage,
 painted source ancestry, multiple interface regions, rotated/translated/recentred

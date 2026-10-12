@@ -881,7 +881,9 @@ def _add_region(bundle, manifest, *, origin=(40, 0, 0), interface=True):
             face["centroid_mm"] = (np.asarray(face["centroid_mm"]) + origin).tolist()
             face["bbox_mm"] = (np.asarray(face["bbox_mm"]) + origin).tolist()
         if group["kind"] == "interface" and not interface:
-            group["kind"] = "plane-wave-termination"
+            # The neighbouring interface region selects an exterior solve;
+            # use a rigid end so these fixtures exercise geometry refusals.
+            group["kind"] = "rigid"
     path = _write_step(bundle / second["file"], boxes=(origin,))
     manifest["scope"]["fem_regions"].append(second)
     manifest["files"][second["file"]] = {
