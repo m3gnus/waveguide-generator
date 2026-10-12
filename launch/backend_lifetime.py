@@ -1,4 +1,4 @@
-"""Activity and installer retirement for ensure-started backends."""
+"""Activity and installer retirement for ensure- and CLI-started backends (headless or contained)."""
 
 from __future__ import annotations
 
@@ -119,7 +119,9 @@ class ActivityTracker:
             if await self._has_client() or not requested():
                 return False
             self.app.state.retiring = True
-            log.info("Retiring idle headless backend (%s)", reason)
+            log.info(
+                "Retiring idle %s backend (%s)", getattr(self.app.state, "lifetime", "headless"), reason,
+            )
             try:
                 request_stop(reason)
             except BaseException:

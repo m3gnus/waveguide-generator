@@ -34,7 +34,10 @@ def _until(check, deadline, message):
 @pytest.fixture(params=["headless"])
 def backend(request, tmp_path, retire_event):
     lifetime = request.param
-    require_backend_breakaway()
+    if lifetime == "headless":
+        # A contained start never asks for breakaway: it is the fallback for a
+        # job that forbids it, so it runs exactly where the headless case skips.
+        require_backend_breakaway()
     from ctypes import wintypes
 
     home = tmp_path / "home"

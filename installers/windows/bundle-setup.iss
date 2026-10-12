@@ -1668,9 +1668,10 @@ end;
   admitted while this check runs. Running is retained by both parent and child
   until the app/worker exits, including a killed native parent.
   Idle official BEAT hosts left by an earlier Quit are asked to exit first,
-  and given RetireIdleGraceMs to do so even without /WAITPID. Headless
-  (ensure-started) backends also hold this event: launch/backend_lifetime.py
-  holds new work while it is set and exits when there is no client. }
+  and given RetireIdleGraceMs to do so even without /WAITPID. Ensure- and
+  CLI-started backends (lifetime headless or contained) also hold this event:
+  launch/backend_lifetime.py holds new work while it is set and exits when
+  there is no client. }
 function WaitForRunningApplicationExit(): Boolean;
 var
   Handle, Error, Start, Elapsed, Slice, Limit, Retire: Integer;
@@ -1678,7 +1679,7 @@ var
 begin
   Result := False;
   WaitRequested := ExpandConstant('{param:WAITPID|0}') <> '0';
-  { The event exists while an official host or headless backend holds it. }
+  { The event exists while an official host or an ensure- or CLI-started backend holds it. }
   Retire := OpenEventW(EVENT_MODIFY_STATE, 0, RetireIdleBeatHostsEvent);
   if Retire <> 0 then
   begin

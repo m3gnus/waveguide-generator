@@ -1236,8 +1236,9 @@ The child receives `WG2_BACKEND_CONTAINED=1`, and `backend-start.log` records
 (one field: `attached`, `headless` or `contained`); discovery reads it into
 `BackendHandle.lifetime`, and `BackendHandle.contained` derives from it. The CLI warns once on stderr
 for either a newly started or adopted contained owner, and adds
-`backend_lifetime: "contained"` only to that owner's NDJSON outcome. Detached
-health and outcome payloads retain their previous fields.
+`backend_lifetime: "contained"` only to that owner's NDJSON outcome. Other
+owners' outcomes retain their previous fields; every `/health` carries
+`lifetime` and `retiring`.
 
 One owner per folder still holds; only its lifetime changes. A contained backend
 can end when the caller's job or an ancestor job closes or is terminated, potentially interrupting
