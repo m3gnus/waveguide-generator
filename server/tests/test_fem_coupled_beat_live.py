@@ -206,7 +206,7 @@ def test_f8_managed_cpu_bridge_maps_f7_fields(worker, tmp_path, monkeypatch):
     sweep = solve_coupled_compiled(request, worker_manager=SimpleNamespace(get_worker=lambda *a, **k: worker),
                                    progress_callback=lambda *args: progress.append(args))
     assert progress == [(0, 1, 100.)] and not sweep.cancelled
-    response = sweep.channels["drive-LF"]
+    response = sweep.channels["drive-lf"]
     monopole = RHO * AREA_M2 / (4 * math.pi * 2.)
     assert np.abs(response.pressure_complex[0, 0]) == pytest.approx([monopole, monopole], rel=.05)
     velocity_pressure = np.abs(sweep.nodal_pressure / acceleration_scale(100.))

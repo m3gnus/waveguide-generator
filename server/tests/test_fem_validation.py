@@ -345,5 +345,5 @@ def test_pipeline_harness_reads_real_job_envelope_and_sidecar_with_fake_worker(r
     assert details["job_id"] and details["job_elapsed_s"] > 0
     assert len(runtime.requests) == 1
     if case == "open":
-        assert envelope["channels"]["drive-LF"]["metadata"]["observation_frame_basis"]["axis"] == [0., 0., 1.]
+        assert envelope["channels"]["drive-lf"]["metadata"]["observation_frame_basis"]["axis"] == [0., 0., 1.]
         np.testing.assert_allclose(surface_centroid(field, 0, "port"), [.040, .015, .010], atol=1e-12)

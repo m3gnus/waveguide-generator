@@ -1197,9 +1197,16 @@ def _fem_identifier(record: Mapping[str, Any], key: str, path: str) -> str:
     return value
 
 
+def _fem_keys(record: Mapping[str, Any], allowed: set[str], path: str) -> None:
+    extra = sorted(set(record) - allowed)
+    if extra:
+        _fem_fail(path, "unknown member(s): " + ", ".join(extra))
+
+
 def _fem_face(value: Any, path: str) -> None:
     if not isinstance(value, Mapping):
         _fem_fail(path, 'must be an object')
+    _fem_keys(value, {'area_mm2', 'centroid_mm', 'normal', 'bbox_mm'}, path)
     _fem_number(value.get('area_mm2'), f'{path}.area_mm2', positive=True)
     _fem_vector(value.get('centroid_mm'), f'{path}.centroid_mm')
     normal = value.get('normal')
@@ -1247,6 +1254,8 @@ def validate_fem_regions(scope: Mapping[str, Any], files: Mapping[str, Any],
         if not isinstance(raw_region, Mapping):
             _fem_fail(path, 'must be an object')
         region = raw_region
+        _fem_keys(region, {'region_id', 'name', 'object_id', 'file', 'n_bodies_expected',
+                           'mesh_size_mm', 'medium', 'surface_groups'}, path)
         region_id = _fem_identifier(region, 'region_id', path)
         if region_id in region_ids:
             _fem_fail(f'{path}.region_id', 'must be unique')
@@ -1263,12 +1272,13 @@ def validate_fem_regions(scope: Mapping[str, Any], files: Mapping[str, Any],
         if file_name in region_files:
             _fem_fail(f'{path}.file', 'must be unique')
         region_files.add(file_name)
-        if region.get('n_bodies_expected') != 1:
+        if type(region.get('n_bodies_expected')) is not int or region['n_bodies_expected'] != 1:
             _fem_fail(f'{path}.n_bodies_expected', 'must be exactly 1')
         _fem_number(region.get('mesh_size_mm'), f'{path}.mesh_size_mm', positive=True)
         medium = region.get('medium')
         if not isinstance(medium, Mapping):
             _fem_fail(f'{path}.medium', 'must be an object')
+        _fem_keys(medium, {'sound_speed_m_per_s', 'density_kg_per_m3', 'bulk_loss_factor'}, f'{path}.medium')
         _fem_number(medium.get('sound_speed_m_per_s'), f'{path}.medium.sound_speed_m_per_s', positive=True)
         _fem_number(medium.get('density_kg_per_m3'), f'{path}.medium.density_kg_per_m3', positive=True)
         _fem_number(medium.get('bulk_loss_factor'), f'{path}.medium.bulk_loss_factor', minimum=0.0, maximum=1.0)
@@ -1282,6 +1292,7 @@ def validate_fem_regions(scope: Mapping[str, Any], files: Mapping[str, Any],
             if not isinstance(raw_group, Mapping):
                 _fem_fail(group_path, 'must be an object')
             group = raw_group
+            _fem_keys(group, {'group_id', 'name', 'kind', 'mesh_size_mm', 'faces', 'drive_channel_id'}, group_path)
             group_id = _fem_identifier(group, 'group_id', group_path)
             if group_id in group_ids:
                 _fem_fail(f'{group_path}.group_id', 'must be unique within its region')
@@ -1297,6 +1308,8 @@ def validate_fem_regions(scope: Mapping[str, Any], files: Mapping[str, Any],
             if kind == 'moving':
                 if not isinstance(channel, str) or not channel.strip():
                     _fem_fail(f'{group_path}.drive_channel_id', 'is required for a moving group')
+                if re.fullmatch(r'drive-[a-z0-9]+(?:-[a-z0-9]+)*', channel) is None:
+                    _fem_fail(f'{group_path}.drive_channel_id', 'must use the exterior source drive-id pattern (drive- followed by lower-case letters, digits and hyphens)')
                 drive_channels.append(channel)
             elif channel is not None:
                 _fem_fail(f'{group_path}.drive_channel_id', 'is accepted only on a moving group')

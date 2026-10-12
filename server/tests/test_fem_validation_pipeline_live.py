@@ -86,7 +86,7 @@ def _pipeline(tmp_path, case, frequencies, *, engine_registry=None):
             assert row["task_metadata"]["has_fem_field_artifact"]
             envelope = runtime.store.get_results(job_id)
             RESULT_ENVELOPE_ADAPTER.validate_python(envelope)
-            assert envelope["channel_order"] == ["drive-LF"]
+            assert envelope["channel_order"] == ["drive-lf"]
             assert envelope["frequencies"] == list(frequencies)
             assert envelope["metadata"]["fem"] == {
                 "experimental": True, "engine": "beat-cpu", "precision": "float64"}
@@ -97,7 +97,7 @@ def _pipeline(tmp_path, case, frequencies, *, engine_registry=None):
             assert field["schema"].item() == "wg-fem-field-store-v1"
             assert field["phasor_convention"].item() == "exp(-i omega t)"
             assert field["drive_normalization"].item() == "unit_acceleration_m_per_s2"
-            assert field["channel_ids"].tolist() == ["drive-LF"]
+            assert field["channel_ids"].tolist() == ["drive-lf"]
             assert field["region_ids"].tolist() == ["rear-chamber"]
             np.testing.assert_array_equal(field["frequencies_hz"], frequencies)
             assert field["pressure"].dtype == np.complex128
@@ -128,7 +128,7 @@ def test_f11_sealed_box_compliance(managed_cpu, tmp_path):
 def test_f11_open_box_monopole(managed_cpu, tmp_path):
     frequencies = [100.]
     record, envelope, field, details = _pipeline(tmp_path, "open", frequencies)
-    channel = envelope["channels"]["drive-LF"]
+    channel = envelope["channels"]["drive-lf"]
     # Absolute on-axis SPL anchors the normalized polar plane. Reconstruct
     # both observation amplitudes from the durable envelope (20 uPa reference).
     level = channel["metadata"]["spl_on_axis"]["plane_reference_spl_db"]["horizontal"][0]

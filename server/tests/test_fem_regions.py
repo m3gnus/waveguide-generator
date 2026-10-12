@@ -60,7 +60,7 @@ def _region(**overrides):
         "medium": {"sound_speed_m_per_s": 343.0, "density_kg_per_m3": 1.21, "bulk_loss_factor": 0.0},
         "surface_groups": [
             {"group_id": "cone", "name": "Cone", "kind": "moving", "mesh_size_mm": 4.0,
-             "drive_channel_id": "drive-LF", "faces": [CONE]},
+             "drive_channel_id": "drive-lf", "faces": [CONE]},
             {"group_id": "port", "name": "Port", "kind": "interface", "mesh_size_mm": 4.0,
              "faces": [PORT]},
         ],
@@ -95,7 +95,7 @@ def test_a_box_meshes_with_its_groups_and_walls(tmp_path):
         "wg-fem-v1|region=rear-chamber|group=port|kind=interface",
         "wg-fem-v1|region=rear-chamber|group=_walls|kind=rigid",
     }
-    assert names["wg-fem-v1|region=rear-chamber|group=cone|kind=moving"]["drive_channel_id"] == "drive-LF"
+    assert names["wg-fem-v1|region=rear-chamber|group=cone|kind=moving"]["drive_channel_id"] == "drive-lf"
     assert built["stats"]["boundary_surfaces"] == 6
     assert built["stats"]["wall_surfaces"] == 4
     assert built["stats"]["size_fields"] == 2

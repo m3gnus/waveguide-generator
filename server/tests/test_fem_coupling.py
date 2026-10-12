@@ -146,7 +146,7 @@ def _coupled(
         names["wg-import-v1|source=outer-cone|role=LF"] = {
             "indices": indices,
             "size_mm": 8,
-            "kind": {"kind": "moving", "drive_channel_id": "drive-LF"},
+            "kind": {"kind": "moving", "drive_channel_id": "drive-lf"},
         }
     return build_coupled_mesh_isolated(
         assembly,
@@ -329,7 +329,7 @@ def test_painted_exterior_face_keeps_its_ancestry_and_drive(tmp_path):
     bundle, manifest, region = _coupling_bundle(tmp_path / "returns")
     built = _coupled(bundle, manifest, region, source=True)
     name = "wg-import-v1|source=outer-cone|role=LF"
-    assert built["exterior"]["physical_names"][name]["drive_channel_id"] == "drive-LF"
+    assert built["exterior"]["physical_names"][name]["drive_channel_id"] == "drive-lf"
     system, _domain = _system(built, region)
     assert len(system["components"][0]["boundary_ids"]) == 2
 
@@ -1117,7 +1117,7 @@ def test_covered_painted_source_is_a_named_blocking_ingest_finding(tmp_path, mov
         region["surface_groups"][0].pop("drive_channel_id")
     manifest["sources"] = [{
         "id": "outer-cone", "role": "LF", "instance_id": None, "required": True,
-        "default_drive_channel_id": "drive-LF",
+        "default_drive_channel_id": "drive-lf",
         "patch_policy": "explicit-disconnected" if partial else "single-connected",
         "expected_connected_components": len(faces), "selectors": {"advanced_face_indices": list(identifiers)},
         "observed": {"face_count": len(faces), "total_area_mm2": sum(areas),

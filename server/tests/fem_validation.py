@@ -264,7 +264,7 @@ def validation_bundle(root, case):
         size = .75 if ported else 2.5 if case == "closed-tube" else 5.
         region = _region(mesh_size_mm=10. if ported else size)
         region["surface_groups"] = [
-            {"group_id": "cone", "name": "Diaphragm", "kind": "moving", "drive_channel_id": "drive-LF",
+            {"group_id": "cone", "name": "Diaphragm", "kind": "moving", "drive_channel_id": "drive-lf",
              "mesh_size_mm": 10. if ported else size,
              "faces": [_face(width**2, (width / 2, width / 2, 0), [0, 0, 1], (0, 0, 0), (width, width, 0))]},
             {"group_id": "port", "name": "Outlet", "kind": (

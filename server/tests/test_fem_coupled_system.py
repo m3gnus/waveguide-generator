@@ -47,7 +47,7 @@ def _exterior_from(domain, *, cone_kind="moving"):
     groups = {name: remap[block] for name, block in domain.surfaces.items()}
     kinds = {
         PORT: {"kind": "interface"},
-        CONE: {"kind": cone_kind, "drive_channel_id": "drive-LF"} if cone_kind == "moving" else {"kind": cone_kind},
+        CONE: {"kind": cone_kind, "drive_channel_id": "drive-lf"} if cone_kind == "moving" else {"kind": cone_kind},
         WALLS: {"kind": "rigid"},
     }
     return ExteriorSurface(points_mm=domain.points_mm[order], groups=groups, kinds=kinds)
@@ -79,8 +79,8 @@ def test_a_coupled_chamber_passes_beats_contract(chamber):
                          if boundary["name"] == CONE and boundary["region_id"] == "region:exterior-air")
     assert component["boundary_ids"] == [exterior_cone, "boundary:fem:rear-chamber:cone"]
     assert system["excitation_ports"] == [{
-        "id": "port:drive-LF", "name": "drive-LF",
-        "component_id": "component:drive-LF", "kind": "normal_velocity",
+        "id": "port:drive-lf", "name": "drive-lf",
+        "component_id": "component:drive-lf", "kind": "normal_velocity",
     }]
     (interface,) = system["interfaces"]
     topology = interface["topology"]

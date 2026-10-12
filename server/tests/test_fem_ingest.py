@@ -232,7 +232,7 @@ def test_ingest_user_walls_preserves_declared_group_and_unclaimed_boundary(tmp_p
     if kind == "rigid":
         region["surface_groups"][0].pop("drive_channel_id")
         # Keep an actual diaphragm in this interior-only return.
-        region["surface_groups"][1].update(kind="moving", drive_channel_id="drive-LF")
+        region["surface_groups"][1].update(kind="moving", drive_channel_id="drive-lf")
     record = _ingest(_bundle(tmp_path / "returns", regions=[region]), tmp_path)
     retained = record["fem_regions"][0]
     groups = retained["stats"]["surface_groups"]
