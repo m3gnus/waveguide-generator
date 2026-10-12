@@ -1420,3 +1420,51 @@ def test_default_off_adaptive_option_replays_a_stored_pre_change_submission_hash
             store.resolve_submission("legacy-adaptive-replay", canonical_json_sha256(_submission_identity(request)))
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("delete_during_write", [False, True])
+@pytest.mark.parametrize("other_artifact", [False, True])
+def test_deleted_fem_publication_removes_only_empty_directory(tmp_path, delete_during_write, other_artifact):
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    if delete_during_write:
+        store.create_job(_job("gone"))
+    directory = store._fem_field_path("gone").parent
+    if other_artifact:
+        directory.mkdir(parents=True)
+        (directory / "other-trace").write_bytes(b"retain")
+    def write(stream):
+        stream.write(b"field")
+        if delete_during_write:
+            store.delete_job_with_event("gone")
+    assert store._publish_fem_field("gone", write) is False
+    assert directory.exists() is other_artifact
+    if other_artifact:
+        assert [p.name for p in directory.iterdir()] == ["other-trace"]
+    assert store.get_job_row("gone") is None
+
+
+def test_startup_sweeps_stale_fem_staging_and_keeps_published_fields(tmp_path):
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("queued"))
+    assert store.store_fem_field("queued", b"published")
+    live = store._fem_field_path("queued").parent
+    (live / ".fem-interrupted").write_bytes(b"partial")
+    (live / "other-trace").write_bytes(b"trace")
+    orphan = store._fem_field_path("deleted").parent
+    orphan.mkdir(parents=True)
+    (orphan / ".fem-crash").write_bytes(b"partial")
+    # Recovery covers fields for terminal jobs too, independently of rows.
+    terminal = store._fem_field_path("terminal").parent
+    terminal.mkdir(parents=True)
+    (terminal / ".fem-crash").write_bytes(b"partial")
+    (terminal / "fem-field.npz").write_bytes(b"terminal field")
+    queued, _ = store.recover_on_startup("restart")
+    assert [row["id"] for row in queued] == ["queued"]
+    assert store.get_fem_field("queued") == b"published"
+    assert (live / "other-trace").read_bytes() == b"trace"
+    assert not orphan.exists()
+    assert (terminal / "fem-field.npz").read_bytes() == b"terminal field"
+    assert not list(store.field_traces_dir.glob("*/.fem-*"))
+    store.recover_on_startup("restart")  # The sweep is idempotent.

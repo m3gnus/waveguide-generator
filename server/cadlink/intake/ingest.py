@@ -1764,6 +1764,15 @@ def ingest_bundle(
     freshness = compute_freshness(manifest, store, recompute=recompute_freshness)
 
     findings = list(scope_findings)
+    from server.solver.coupled_admission import fem_termination_problem
+
+    termination = fem_termination_problem(
+        manifest["scope"].get("fem_regions", []), has_exterior=bool(manifest.get("sources"))
+    )
+    if termination:
+        kind, reason = termination
+        findings.append({"id": _finding_id(kind, reason), "kind": kind,
+                         "blocking": False, "reason": reason})
     freshness_records = freshness.get("instances") or []
     if freshness.get("verdict") == "unlinked":
         findings.append({"id": freshness["finding_id"], "kind": "freshness", "blocking": False, "verdict": "unlinked"})
@@ -2089,11 +2098,6 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
     regions = manifest["scope"].get("fem_regions", [])
     if not regions:
         return ""
-    from server.solver.coupled_admission import fem_termination_problem
-
-    problem = fem_termination_problem(regions, has_exterior=bool(manifest.get("sources")))
-    if problem:
-        raise IngestRefusal("stage 7 meshing", f"{problem[0]}: {problem[1]}")
     if not fem_regions_enabled():
         raise IngestRefusal(
             "stage 7 meshing",

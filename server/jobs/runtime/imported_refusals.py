@@ -316,18 +316,21 @@ def _imported_request_refusal(
         return "drive_source_coverage", "The return has no driven exterior source or FEM diaphragm"
     if coupled_regions:
         from server.solver.coupled_admission import fem_termination_problem, painted_source_ids
-
-        problem = fem_termination_problem(record["fem_regions"], has_exterior=bool(
-            request.geometry.drive_channels or painted_source_ids(record)))
-        if problem:
-            return problem
         from server.cadlink.build_flags import fem_regions_enabled
         from server.solver.beat_runtime.provider import official_selected
 
         if not fem_regions_enabled():
             return "fem_required", "FEM regions are disabled by WG2_FEM_REGIONS; remove the override to enable them"
         if not official_selected():
-            return "fem_provider_unsupported", "FEM regions require the official BEAT provider"
+            return "fem_provider_unsupported", ("FEM regions require the official BEAT provider; "
+                                                "unset WG2_BEAT_PROVIDER, or choose exterior-only")
+        if request.options.engine not in {"auto", "beat", "beat-cpu"}:
+            return "fem_backend_unsupported", (
+                "FEM regions require official BEAT CPU; choose BEAT CPU, or choose exterior-only")
+        problem = fem_termination_problem(record["fem_regions"], has_exterior=bool(
+            request.geometry.drive_channels or painted_source_ids(record)))
+        if problem:
+            return problem
         if imported_domain_planes(record) or request.options.symmetry not in {"auto", "full"}:
             return "fem_domain_unsupported", "FEM regions require a full domain"
         if request.options.ground_plane.enabled or record.get("infinite_baffle"):

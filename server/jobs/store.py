@@ -2385,6 +2385,11 @@ class JobStore:
                 os.fsync(stream.fileno())
             with self._lock, self._transaction() as conn:
                 if not self._job_exists(conn, job_id):
+                    Path(name).unlink(missing_ok=True)
+                    try:
+                        path.parent.rmdir()
+                    except OSError:
+                        pass  # Another artifact may still own this directory.
                     return False
                 try:
                     os.replace(name, path)
@@ -2956,6 +2961,17 @@ class JobStore:
             )
         for job_id in running_ids:
             _unlink_or_log(self._fem_field_path(job_id))
+        # Staging files have no metadata and cannot survive a process restart.
+        for directory in self.field_traces_dir.iterdir() if self.field_traces_dir.exists() else ():
+            if not directory.is_dir() or directory.is_symlink():
+                continue
+            for staging in directory.glob(".fem-*"):
+                if staging.is_file() or staging.is_symlink():
+                    _unlink_or_log(staging)
+            try:
+                directory.rmdir()
+            except OSError:
+                pass  # Keep published fields and other trace artifacts.
         return queued_jobs, recovery_events
 
     def prune_terminal_jobs(

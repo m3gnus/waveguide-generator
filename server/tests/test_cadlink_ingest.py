@@ -2462,3 +2462,25 @@ def test_native_source_records_carry_no_fem_regions_and_read_no_manifest(tmp_pat
         "native_source": {"channel": "drive-hf"},
     }
     assert current_fem_evidence(record) == {"fem_regions": []}
+
+
+@pytest.mark.parametrize("verified", [False, True])
+def test_get_older_ingest_marks_only_unverified_evidence(tmp_path, monkeypatch, verified):
+    from server.cadlink import api
+    ingest_id = "wgi_" + "0" * 26
+    record = {"ingest_id": ingest_id, "evidence": {"fem_air_volumes": []},
+              "bundle_store_path": str(tmp_path), "manifest_sha256": "sha256:" + "0" * 64}
+    if verified:
+        raw = json.dumps({"scope": {"fem_regions": []}}).encode()
+        (tmp_path / "wgreturn.json").write_bytes(raw)
+        record["manifest_sha256"] = "sha256:" + hashlib.sha256(raw).hexdigest()
+    monkeypatch.setattr(api, "get_ingestion_record", lambda *args: record)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=None)))
+    served = asyncio.run(get_ingest(ingest_id, request))
+    if verified:
+        assert "evidence_unverified" not in served
+        assert served["evidence"]["fem_regions"] == []
+    else:
+        assert served["evidence_unverified"] is True
+        assert served["evidence"] == record["evidence"]
+    assert "evidence_unverified" not in record  # Stored/restored evidence stays immutable.

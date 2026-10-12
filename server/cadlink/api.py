@@ -1141,7 +1141,7 @@ async def get_ingest(ingest_id: str, request: Request) -> dict[str, Any]:
         evidence = await asyncio.to_thread(current_fem_evidence, record)
     except IngestRefusal:
         # Viewing and restoring stay possible; only solving refuses the record.
-        return record
+        return {**record, "evidence_unverified": True}
     return {**record, "evidence": evidence}
 
 

@@ -100,6 +100,7 @@ export function importedSubmissionBlocker(
   const directivityError = polarValidationError(solveStore.polar);
   if (directivityError) return directivityError;
   if (!state.ingestRecord) return 'Ingest a CAD return before solving.';
+  if (state.ingestRecord.evidence_unverified) return 'The retained return manifest cannot be verified; re-ingest this return before solving.';
   if (state.needsIngest) return state.ingestStaleReason ?? 'Sizing or source selection changed. Re-ingest before solving.';
   if ((femRegions.length > 0 || requiredFem) && !state.exteriorOnly) {
     const declared = requiredFem && femRegions.length > 0 ? 'required FEM air volumes and FEM regions'
@@ -289,6 +290,7 @@ export function buildImportedSubmission(
 ): ImportedSolveSubmission {
   const record = state.ingestRecord;
   if (!record) throw new Error('Ingest a CAD return before solving.');
+  if (record.evidence_unverified) throw new Error('The retained return manifest cannot be verified; re-ingest this return before solving.');
   // The readiness gate already refuses this, but the builder is the last thing
   // between the rail and the wire and an enabled-yet-incomplete form must never
   // become a silently pre-campaign submission.

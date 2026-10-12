@@ -326,6 +326,7 @@ export interface CadFemRegion {
 }
 
 export interface CadReturnIngestRecord {
+  evidence_unverified?: boolean;
   fem_regions?: CadFemRegion[];
   producer?: string;
   native_source?: {

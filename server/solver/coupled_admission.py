@@ -21,7 +21,9 @@ def fem_termination_problem(regions: Sequence[Mapping[str, Any]], *,
                     f"({region['region_id']!r}), group {group.get('name') or group['group_id']!r} "
                     f"({group['group_id']!r}): "
                     "A plane-wave termination is supported only in an interior-only solve. "
-                    "Remove the painted sources and interfaces, or model the horn as exterior.")
+                    "Remove the termination group (make it rigid) to solve the chamber coupled, "
+                    "or remove the painted sources and interfaces to solve the region interior-only, "
+                    "or choose exterior-only.")
     return None
 
 

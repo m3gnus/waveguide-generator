@@ -126,6 +126,8 @@ so it is exported separately from the speaker assembly. Check Pre-flight.
 WG lists the prepared regions and shows retained interior pressure on a slice
 plane after solving; select a frequency and drive channel in the field controls.
 
+FEM has been validated against closed-form references (sealed box, open box,
+ported box, plane-wave and closed tubes) on official BEAT CPU float64.
 This release requires official BEAT CPU in float64, a full free-space domain,
 and ideal normal-velocity drives. Reduced domains, ground planes,
 electrodynamic drivers, passive cardioid and two FEM diaphragms sharing a drive
@@ -135,9 +137,12 @@ choose exterior-only explicitly if the interior should be excluded.
 
 Plane-wave terminations are supported only in interior-only solves. A return
 with a termination and any painted exterior source or interface in any region
-is refused before meshing, with a message naming the termination's region and
-group. Job admission also refuses if setup drive channels introduce an exterior.
-Remove the painted sources and interfaces, or model the horn as exterior.
+produces a non-blocking ingest warning naming the termination's region and group.
+Coupled job admission and the builders refuse it, including when setup drive
+channels introduce an exterior; exterior-only leaves the regions out and remains
+available. Remove the termination group (make it rigid) to solve the chamber
+coupled, or remove the painted sources and interfaces to solve the region
+interior-only, or choose exterior-only.
 
 Operators can disable FEM regions with `WG2_FEM_REGIONS=0` and restart WG;
 `false`, `no` and `off` also disable it. This removes the capability and FEM UI
@@ -249,12 +254,12 @@ the driver's voltage sensitivity, electrical impedance, power or excursion.
    scaling belongs to the derived `passive_cardioid` channel; use that channel
    in the combined response instead of the raw MF reference response.
 
-Passive cardioid is Metal-only. WG does not run a general interior FEM chamber
-solve for imported CAD. If a return carries declared air volumes,
-**Exterior-only Phase 2 solve** explicitly excludes them; it does not solve them.
-The sealed rear-volume
-driver model and passive-cardioid model above are the supported ways of adding
-those chamber loads. Structural vibration and cone breakup are not modelled.
+Passive cardioid is Metal-only. Declared FEM regions use the official BEAT CPU
+route described above and cannot be combined with passive cardioid or driver
+models in this release. **Exterior-only (leave FEM regions out)** excludes the
+interior air. Legacy declared air volumes also require this explicit exclusion.
+The sealed rear-volume driver model and passive-cardioid model above add chamber
+loads without a FEM region. Structural vibration and cone breakup are not modelled.
 
 ## 7. Check the axis and symmetry
 

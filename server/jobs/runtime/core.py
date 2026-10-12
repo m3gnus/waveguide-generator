@@ -1127,9 +1127,12 @@ async def resolve_imported_submission(
             and not request.geometry.exterior_only
             and not any(info.available and "fem-regions" in info.imported_features
                         for info in detected)):
+        remedy = ("wait for BEAT CPU preparation to finish" if any(
+            info.name == "beat-cpu" and info.runtime_state == "preparing" for info in detected
+        ) else "Prepare BEAT CPU")
         raise EngineUnavailableError(
             "FEM regions require an available official BEAT CPU engine. "
-            "Prepare BEAT CPU, or explicitly choose exterior-only to exclude the FEM regions."
+            f"{remedy}, or choose exterior-only (leave FEM regions out)."
         )
     if requested == "bempp" and any(info.name == "bempp" and info.qualification == "pending"
                                     for info in detected):
@@ -3560,6 +3563,10 @@ class JobRuntime:
                         "job-artifact" if job_artifact_present else "imports-cache"
                     ),
                 }
+            if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
+                refusal = _imported_request_refusal(request, imported_record, job_msh_text)
+                if refusal:
+                    raise ImportedSolveRefusal(*refusal)
             try:
                 engine = await self.engine_registry.get_engine(request.options.engine)
             except Exception:

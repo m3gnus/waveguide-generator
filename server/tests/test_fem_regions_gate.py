@@ -187,3 +187,23 @@ def test_frontend_capability_tracks_the_kill_switch(monkeypatch):
     assert asyncio.run(capabilities_payload(Registry()))["femRegions"] is True
     monkeypatch.setenv(FEM_REGIONS_ENV, "0")
     assert asyncio.run(capabilities_payload(Registry()))["femRegions"] is False
+
+
+@pytest.mark.parametrize("value", ["unexpected-fem-value", "  TYPO  ", "2"])
+def test_unknown_kill_switch_warns_once_and_stays_enabled(caplog, monkeypatch, value):
+    from server.platform import feature_flags
+    monkeypatch.setattr(feature_flags, "_warned_fem_values", set())
+    with caplog.at_level("WARNING", logger=feature_flags.__name__):
+        assert fem_regions_enabled(environ={FEM_REGIONS_ENV: value})
+        assert fem_regions_enabled(environ={FEM_REGIONS_ENV: value})
+    assert len(caplog.records) == 1
+    assert FEM_REGIONS_ENV in caplog.text
+    assert repr(value) in caplog.text
+    assert "FEM stays enabled" in caplog.text
+
+
+@pytest.mark.parametrize("value", [None, "", "0", "false", "no", "off", "1", "true", "yes", "on"])
+def test_known_kill_switch_values_do_not_warn(caplog, value):
+    with caplog.at_level("WARNING"):
+        fem_regions_enabled(environ={} if value is None else {FEM_REGIONS_ENV: value})
+    assert not caplog.records

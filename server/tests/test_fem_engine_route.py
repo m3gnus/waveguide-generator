@@ -253,6 +253,7 @@ def test_job_refusals(monkeypatch, change, code):
     monkeypatch.setenv("WG2_FEM_REGIONS", "1")
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb" if change == "provider" else "official")
     request = _request("wgi_" + "0" * 26)
+    request.options.engine = "beat-cpu"
     record = {"fem_regions": [region_input(channel="left").record]}
     if change == "ground":
         request.options.ground_plane.enabled = True
@@ -568,7 +569,9 @@ def fem_admission(monkeypatch):
     from server.tests.test_imported_jobs import _request
     monkeypatch.setenv("WG2_FEM_REGIONS", "1")
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
-    return _request("wgi_" + "0" * 26)
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = "beat-cpu"
+    return request
 
 
 @pytest.mark.parametrize("same_region", [False, True])
@@ -785,3 +788,29 @@ def test_default_fem_admission_refuses_without_a_capable_engine(
     with pytest.raises(EngineUnavailableError, match="available official BEAT CPU engine"):
         asyncio.run(resolve_imported_submission(request, Registry(), imported_record=record,
                                                 imported_msh_text=MESH))
+
+
+@pytest.mark.parametrize("state,remedy", [
+    ("preparing", "wait for BEAT CPU preparation to finish"),
+    ("unprepared", "Prepare BEAT CPU"),
+])
+def test_fem_unavailable_remedy_tracks_cpu_preparation(monkeypatch, state, remedy):
+    import asyncio
+    from server.engines.registry import EngineInfo
+    from server.jobs.runtime import EngineUnavailableError, resolve_imported_submission
+    from server.tests.test_imported_jobs import _request
+
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    class Registry:
+        async def capabilities(self):
+            return (EngineInfo("beat-cpu", False, "fixture", None, runtime_state=state),)
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = "beat-cpu"
+    request.geometry.drive_channels = []
+    record = {"fem_regions": [region_input().record],
+              "domain_interpretation": {"observations": {"planes": {
+                  plane: {"rigid_cut_rim_edges": 0, "solver_plane": plane}
+                  for plane in ("x0", "y0", "z0")}}}}
+    with pytest.raises(EngineUnavailableError, match=remedy):
+        asyncio.run(resolve_imported_submission(request, Registry(), imported_record=record))

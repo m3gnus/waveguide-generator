@@ -199,7 +199,7 @@ export const CAD_CONTROLS = {
     ['mesh regions', 'transitionMm'], 'ingested-return', 'cad.mesh-detail',
   ),
   exteriorOnly: control(
-    'cad.mesh.exterior-only', 'Exterior-only Phase 2 solve', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
+    'cad.mesh.exterior-only', 'Exterior-only (leave FEM regions out)', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
     ['FEM air volumes', 'free space', 'exteriorOnly'], 'ingested-return', 'cad.mesh-detail',
   ),
   sourceSize: control(

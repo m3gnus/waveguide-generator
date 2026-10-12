@@ -26,6 +26,18 @@ const record = {
 describe('imported solve submission wire', () => {
   beforeEach(() => { resetCadReturnStore(); resetSolveOptionsStore(); });
 
+  it.each([false, true])('blocks unverified evidence even with exterior-only=%s', (exteriorOnly) => {
+    useCadReturnStore.setState({
+      selectedBundle: bundle, needsIngest: false, exteriorOnly,
+      ingestRecord: { ...record, evidence_unverified: true },
+      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+    });
+    expect(importedSubmissionBlocker()).toContain('re-ingest this return');
+    expect(() => buildImportedSubmission()).toThrow('re-ingest this return');
+    useCadReturnStore.setState({ ingestRecord: { ...record, evidence_unverified: false } });
+    expect(importedSubmissionBlocker()).toBeNull();
+  });
+
   it.each([{ volumes: [] }, { volumes: [{ required: false }] }, { volumes: [{ required: true }] }])('requires explicit exterior-only selection for regions with volumes $volumes', ({ volumes }) => {
     useCadReturnStore.setState({
       selectedBundle: bundle, needsIngest: false, exteriorOnly: false,
