@@ -4,6 +4,7 @@ import contextlib
 import ctypes
 from ctypes import wintypes
 import io
+import logging
 import os
 from pathlib import Path
 import subprocess
@@ -22,6 +23,7 @@ _STAGE = Path("unused-stage")
 
 class FakeChild:
     def __init__(self, returncode=0, stderr="", errors=()):
+        self.pid = 1234
         self.returncode = returncode
         self.stdin = None
         self.stdout = io.StringIO()
@@ -81,7 +83,7 @@ def test_worker_uses_contained_start_and_cleans_up_after_success(monkeypatch):
     assert child.stdout.closed and child.stderr.closed
 
 
-def test_contained_start_refusal_becomes_ingestion_value_error(monkeypatch):
+def test_contained_start_refusal_becomes_ingestion_value_error(monkeypatch, caplog):
     starts = []
 
     def refuse(command, **kwargs):
@@ -96,6 +98,10 @@ def test_contained_start_refusal_becomes_ingestion_value_error(monkeypatch):
         "native source ingestion failed: could not confine the native-source worker"
     )
     assert starts == [native_source._worker_command(_STAGE)]
+    assert caplog.record_tuples == [(
+        native_source.__name__, logging.WARNING,
+        "Native-source worker contained start refused: could not confine the native-source worker",
+    )]
 
 
 def test_timeout_stops_and_reaps_a_real_worker(monkeypatch):
@@ -109,7 +115,7 @@ def test_timeout_stops_and_reaps_a_real_worker(monkeypatch):
 
     monkeypatch.setattr(process_tree, "popen_in_windows_job", start)
     monkeypatch.setattr(native_source, "_worker_command", lambda stage: [
-        sys.executable, "-c", "import time; time.sleep(60)",
+        sys._base_executable, "-c", "import time; time.sleep(60)",
     ])
     monkeypatch.setattr(native_source, "_WORKER_TIMEOUT_S", 0.1)
     began = time.monotonic()
@@ -138,7 +144,7 @@ def test_communicate_exception_still_terminates_and_closes(monkeypatch, error):
     assert child.stdout.closed and child.stderr.closed
 
 
-def test_second_communicate_timeout_is_bounded_and_suppressed(monkeypatch):
+def test_second_communicate_timeout_is_bounded_and_suppressed(monkeypatch, caplog):
     child = FakeChild(errors=[subprocess.TimeoutExpired("worker", 0.1)] * 2)
     job = FakeJob()
     monkeypatch.setattr(process_tree, "popen_in_windows_job", lambda *a, **kw: (child, job))
@@ -146,8 +152,59 @@ def test_second_communicate_timeout_is_bounded_and_suppressed(monkeypatch):
     with pytest.raises(ValueError, match="ingestion failed:.*0.1 second deadline"):
         native_source._run_worker(_STAGE)
     assert child.timeouts == [0.1, 5]
+    assert caplog.record_tuples == [(
+        native_source.__name__, logging.WARNING,
+        "Native-source worker exceeded its 0.1 second deadline (pid 1234) and was stopped",
+    )]
     assert job.calls == ["terminate", "close"]
     assert child.stdout.closed and child.stderr.closed
+
+
+def test_ingest_native_source_bounds_real_worker(monkeypatch, tmp_path):
+    contour_artifact = pytest.importorskip("hornlab_mesher.contour_artifact")
+    from hornlab_mesher.source_contour import ContourDrive, flat
+    from server.cadlink.store import CadLinkStore
+
+    model = flat(24)
+    moving = [s.id for s in model.segments if s.role == "moving"]
+    artifact = tmp_path / "native-source"
+    contour_artifact.export_contour(
+        model,
+        ContourDrive("motor", tuple(zip(moving, [1]))),
+        artifact,
+        mouth_radius_mm=30,
+        length_mm=20,
+        mesh_size_mm=2,
+    )
+    sizes = {
+        "rigid_size_mm": 6,
+        "transition_mm": 5,
+        "source_size_mm": {source_id: 1.5 for source_id in moving},
+    }
+    monkeypatch.setattr(native_source, "_worker_command", lambda stage: [
+        sys._base_executable, "-c", "import time; time.sleep(45)",
+    ])
+    monkeypatch.setattr(native_source, "_WORKER_TIMEOUT_S", 1, raising=False)
+    store = CadLinkStore(tmp_path / "registry.sqlite")
+    outcomes = []
+
+    def run():
+        try:
+            outcomes.append(native_source.ingest_native_source(
+                artifact, store=store, data_dir=tmp_path, sizes=sizes,
+            ))
+        except BaseException as exc:
+            outcomes.append(exc)
+
+    thread = threading.Thread(target=run, daemon=True)
+    try:
+        thread.start()
+        thread.join(timeout=20)
+        assert not thread.is_alive(), "native-source ingestion did not finish"
+        assert len(outcomes) == 1 and isinstance(outcomes[0], ValueError)
+        assert "ingestion failed" in str(outcomes[0]) and "deadline" in str(outcomes[0])
+    finally:
+        store.close()
 
 
 @pytest.mark.parametrize(("stderr", "message"), [
@@ -249,7 +306,8 @@ def test_real_worker_job_stops_worker_and_grandchild(monkeypatch, tmp_path, time
     monkeypatch.setattr(native_source, "_worker_command", lambda stage: [
         sys._base_executable, "-c", script, str(pid_file), str(release),
     ])
-    monkeypatch.setattr(native_source, "_WORKER_TIMEOUT_S", 4)
+    worker_deadline = 8 if timeout else 15
+    monkeypatch.setattr(native_source, "_WORKER_TIMEOUT_S", worker_deadline)
     real_start = process_tree.popen_in_windows_job
     children, jobs, handles, outcomes = [], [], [], []
 
@@ -269,7 +327,7 @@ def test_real_worker_job_stops_worker_and_grandchild(monkeypatch, tmp_path, time
     thread = threading.Thread(target=run, daemon=True)
     try:
         thread.start()
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + (6 if timeout else 10)
         while not pid_file.exists() and time.monotonic() < deadline:
             time.sleep(0.02)
         assert pid_file.exists(), "the worker never reported its grandchild"
@@ -280,12 +338,13 @@ def test_real_worker_job_stops_worker_and_grandchild(monkeypatch, tmp_path, time
         assert jobs[0].contains(children[0].pid) and jobs[0].contains(grandchild_pid)
         if not timeout:
             release.touch()
-        thread.join(timeout=7)
+        thread.join(timeout=worker_deadline + 10)
         assert not thread.is_alive(), "the ingest helper did not finish"
         assert len(outcomes) == 1
         if timeout:
             assert isinstance(outcomes[0], ValueError)
-            assert "ingestion failed" in str(outcomes[0]) and "4 second deadline" in str(outcomes[0])
+            assert "ingestion failed" in str(outcomes[0])
+            assert f"{worker_deadline} second deadline" in str(outcomes[0])
         else:
             assert isinstance(outcomes[0], subprocess.CompletedProcess)
             assert outcomes[0].returncode == 0
@@ -303,7 +362,7 @@ def test_real_worker_job_stops_worker_and_grandchild(monkeypatch, tmp_path, time
                 child.kill()
             child.wait(timeout=5)
         if thread.ident is not None:
-            thread.join(timeout=7)
+            thread.join(timeout=worker_deadline + 10)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows job objects")

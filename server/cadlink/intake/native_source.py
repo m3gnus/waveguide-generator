@@ -7,6 +7,7 @@ weakens linked_throat. Patch identity is independent of temporary CAD selectors.
 import contextlib
 import hashlib
 import json
+import logging
 import math
 from pathlib import Path
 import shutil
@@ -18,6 +19,8 @@ from server.contracts.canonical import canonical_ascii_strict_bytes as _canonica
 from server.cadlink.intake import isolation
 from server.platform import process_tree
 from server.platform.job_start import ContainedStartError
+
+logger = logging.getLogger(__name__)
 
 _WORKER_TIMEOUT_S = isolation.MESH_BUDGET.wall_time_s
 
@@ -443,6 +446,7 @@ def _run_worker(stage):
             text=True,
         )
     except ContainedStartError as exc:
+        logger.warning("Native-source worker contained start refused: %s", exc)
         raise ValueError("native source ingestion failed: " + str(exc)) from exc
     try:
         try:
@@ -451,6 +455,11 @@ def _run_worker(stage):
             # Also stop any grandchild left behind after a normal worker exit.
             isolation.terminate_process_tree(child, job)
     except subprocess.TimeoutExpired as exc:
+        logger.warning(
+            "Native-source worker exceeded its %g second deadline (pid %s) and was stopped",
+            _WORKER_TIMEOUT_S,
+            child.pid,
+        )
         with contextlib.suppress(subprocess.TimeoutExpired):
             child.communicate(timeout=5)
         raise ValueError(
