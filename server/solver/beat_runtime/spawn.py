@@ -24,6 +24,10 @@ HOST_MODULE = "server.solver.beat_runtime.host"
 RECOVERY_INTERVAL = 0.2
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 ERROR_ACCESS_DENIED = 5
+# On Windows, opening ready.json while the host replaces it (or a scanner holds
+# it) raises PermissionError (a sharing violation). It is the same "not there
+# yet" condition as FileNotFoundError. POSIX keeps PermissionError fatal.
+READY_SHARING_RETRY = os.name == "nt"
 
 
 # The app root and the module arrive as arguments, never interpolated into
@@ -199,7 +203,11 @@ def start_host(
                 remaining_time(deadline)
                 try:
                     raw = read_private_json(ready)
-                except FileNotFoundError:
+                except (FileNotFoundError, PermissionError) as exc:
+                    # The writer is r._atomic_json (temporary file, then os.replace),
+                    # so a reader never sees a partial file; only this retry is needed.
+                    if isinstance(exc, PermissionError) and not READY_SHARING_RETRY:
+                        raise
                     if process.poll() is not None:
                         raise RuntimeError(f"BEAT host exited ({process.returncode}); see {r.log_path(identifier, directory)}")
                     time.sleep(0.02)
