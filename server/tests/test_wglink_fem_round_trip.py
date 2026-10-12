@@ -229,12 +229,13 @@ def test_pinned_fem_writer_reader_mesh_and_fake_job(packaged, runtime, tmp_path,
     (-120., "fem_motion_weight_unsupported", "Cone"),
 ])
 @pytest.mark.parametrize("coupled", [False, True], ids=["interior", "coupled"])
+@pytest.mark.parametrize("shared", [None, "two-regions"], ids=["one-region", "two-regions"])
 def test_pinned_optional_physics_round_trips_but_refuses_before_meshing_and_admission(
-    packaged, tmp_path, monkeypatch, option, code, group_name, coupled,
+    packaged, tmp_path, monkeypatch, option, code, group_name, coupled, shared,
 ):
     monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
     bundle, manifest, _ = _addin_bundle(
-        packaged, tmp_path / "returns", coupled=coupled, option=option)
+        packaged, tmp_path / "returns", coupled=coupled, option=option, shared=shared)
     assert read_wgreturn(bundle).manifest == manifest
     regions = manifest["scope"]["fem_regions"]
     group = next(g for g in regions[0]["surface_groups"] if g["name"] == group_name)
@@ -255,9 +256,16 @@ def test_pinned_optional_physics_round_trips_but_refuses_before_meshing_and_admi
                 "rigid_size_mm": 12., "transition_mm": 12., "source_size_mm": {},
             }, [], store, tmp_path / "data", defer_viewport=True)
         assert caught.value.reason_code == code
-        assert code in str(caught.value)
+        assert caught.value.stage == "stage 2 scope gate"
+        assert code not in str(caught.value)
+        assert "meshing" not in str(caught.value)
         for label in ("Rear chamber", group_name, "not supported yet in this WG build"):
             assert label in str(caught.value)
+        for region in regions:
+            assert f"{region['name']!r} ({region['region_id']!r})" in str(caught.value)
+            assert f"{group_name!r} ({group['group_id']!r})" in str(caught.value)
+        assert ("remove the lining (or set the relative level to 0 dB) "
+                "on these groups in WGLink and send again") in str(caught.value)
     finally:
         store.close()
 

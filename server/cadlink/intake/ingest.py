@@ -1496,7 +1496,9 @@ def ingest_bundle(
             except ChildRefusal as exc:
                 # A refusal from a child that ran is already in the server log with
                 # its exit and output tail; the user's refusal keeps stage and wording.
-                raise IngestRefusal(exc.stage, exc.detail) from exc
+                raise IngestRefusal(
+                    exc.stage, exc.detail, reason_code=exc.details.get("reason_code"),
+                ) from exc
             except Exception as exc:
                 message = str(exc)
                 stage = "stage 7 meshing"
@@ -2147,7 +2149,7 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
     problem = fem_group_options_problem(regions)
     if problem:
         code, message = problem
-        raise IngestRefusal("stage 7 meshing", f"{code}: {message}", reason_code=code)
+        raise IngestRefusal("stage 2 scope gate", message, reason_code=code)
     labels = "; ".join(
         f"FEM region {region['name']!r}" + "".join(
             f", group {group['name']!r}" for group in region["surface_groups"]

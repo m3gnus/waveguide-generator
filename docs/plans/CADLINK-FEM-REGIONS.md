@@ -87,10 +87,19 @@ entry has:
 | `mesh_size_mm` | region size; finer group sizes blend back over three region sizes |
 | `medium` | `sound_speed_m_per_s`, `density_kg_per_m3`, `bulk_loss_factor` in 0..1 |
 | `surface_groups[]` | `group_id`, `name`, `kind`, `mesh_size_mm`, `faces[]`, and `drive_channel_id` for `moving` only |
+| `lining` | Optional on a rigid group: `model` (`miki`), `thickness_mm`, `flow_resistivity_pa_s_per_m2` |
+| `relative_level_db` | Optional on a moving group: relative motion level in dB; defaults to 0 |
 | `faces[]` | `area_mm2`, `centroid_mm`, `normal` (unit, planes only) or null, `bbox_mm` |
 
 Both validation profiles call the shared `validate_fem_regions`. A return
 whose only driver is a FEM diaphragm is drivable without painted sources.
+
+Until the lining and motion-weight slices land, this WG build refuses any
+declared `lining` with `fem_lining_unsupported` and any nonzero
+`relative_level_db` with `fem_motion_weight_unsupported`, before meshing or
+solve admission. An explicit relative level of 0 dB is accepted. The refusal
+names every offending region and group: remove the lining (or set the relative
+level to 0 dB) on these groups in WGLink and send again.
 
 WG names its physical groups as follows:
 

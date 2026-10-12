@@ -9,6 +9,7 @@ import sqlite3
 import pytest
 
 from server.cadlink.intake import ingest
+from server.cadlink.intake.isolation import ChildRefusal
 from server.cadlink.store import CadLinkStore
 from server.mesh.artifact import ImportedMeshArtifactError, read_verified_fem_region_mesh
 from server.mesh.fem_regions import physical_name, read_fem_region_domain
@@ -66,6 +67,72 @@ def _ingest(bundle, root):
 @pytest.fixture(autouse=True)
 def enabled(monkeypatch):
     monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+
+
+def test_optional_physics_refusal_lists_all_groups_and_clears_after_remedy(tmp_path, monkeypatch):
+    regions = [_interior_region(), _interior_region(
+        region_id="front-chamber", name="Front chamber", object_id="air-2",
+        file="fem-regions/front-chamber.step")]
+    for region in regions:
+        moving, wall = region["surface_groups"]
+        moving["relative_level_db"] = -6.
+        wall.update(kind="rigid", lining={
+            "model": "miki", "thickness_mm": 30., "flow_resistivity_pa_s_per_m2": 5000.,
+        })
+        second_wall = deepcopy(wall)
+        second_wall.update(group_id="wall", name="Wall")
+        region["surface_groups"].append(second_wall)
+    bundle = _bundle(tmp_path / "returns", regions=regions)
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("unsupported FEM options must refuse before meshing")
+
+    monkeypatch.setattr(ingest, "build_imported_mesh_isolated", unexpected)
+    monkeypatch.setattr(ingest, "build_fem_region_mesh_isolated", unexpected)
+    monkeypatch.setattr(ingest, "build_coupled_mesh_isolated", unexpected)
+    with pytest.raises(ingest.IngestRefusal) as caught:
+        _ingest(bundle, tmp_path)
+    assert caught.value.reason_code == "fem_motion_weight_unsupported"
+    assert caught.value.stage == "stage 2 scope gate"
+    message = str(caught.value)
+    for region in regions:
+        for group in region["surface_groups"]:
+            assert (f"FEM region {region['name']!r} ({region['region_id']!r}), "
+                    f"group {group['name']!r} ({group['group_id']!r})") in message
+    assert "fem_motion_weight_unsupported" not in message
+    assert "fem_lining_unsupported" not in message
+    assert ("remove the lining (or set the relative level to 0 dB) "
+            "on these groups in WGLink and send again") in message
+    assert not (tmp_path / "cadlink.db").exists()
+
+    from server.solver.coupled_admission import fem_group_options_problem
+
+    for region in regions:
+        for group in region["surface_groups"]:
+            group.pop("lining", None)
+            if "relative_level_db" in group:
+                group["relative_level_db"] = 0.
+    assert fem_group_options_problem(regions) is None
+
+
+@pytest.mark.parametrize("code", [None, "fem_lining_unsupported", "fem_motion_weight_unsupported"])
+def test_rebuilt_child_refusal_preserves_reason_code(tmp_path, monkeypatch, code):
+    bundle = _bundle(tmp_path / "returns")
+    refusal = ChildRefusal("stage 7 meshing", "child refusal",
+                           details={"reason_code": code} if code else {})
+
+    def refuse(*_args, **_kwargs):
+        raise refusal
+
+    monkeypatch.setattr(ingest, "build_imported_mesh_isolated", refuse)
+    with pytest.raises(ingest.IngestRefusal) as caught:
+        _ingest(bundle, tmp_path)
+    assert caught.value.reason_code == code
+    assert str(caught.value) == "stage 7 meshing: child refusal"
+    assert caught.value.__cause__ is refusal
+    with sqlite3.connect(tmp_path / "cadlink.db") as db:
+        assert db.execute("SELECT count(*) FROM ingests").fetchone()[0] == 0
+    assert not any(path.is_file() for path in (tmp_path / "data" / "imports").rglob("*"))
 
 
 def test_real_ingest_meshes_every_region_and_retains_verified_artifacts(tmp_path, monkeypatch):
