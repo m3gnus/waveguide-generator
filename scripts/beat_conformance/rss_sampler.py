@@ -169,7 +169,8 @@ class RSSSampler:
 
     def terminate_owned(self) -> None:
         """Failure backstop for detached hosts outside the child's process group."""
-        for sig in (signal.SIGTERM, signal.SIGKILL):
+        # Windows has no SIGKILL; os.kill with SIGTERM already terminates there.
+        for sig in dict.fromkeys((signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM))):
             rows = self.reader()
             for pid, start in self.known.items():
                 if pid != self.root_pid and pid in rows and rows[pid]["start"] == start:

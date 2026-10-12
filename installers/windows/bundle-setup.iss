@@ -744,8 +744,8 @@ var
   AddInsDirectory, Current: String;
 begin
   { Run after the new app/runtime is committed, when the tasks list exists and
-    the current ownership validator is available. WGLink has no [Files] or
-    [Icons] entries: its only installation action follows this selection.
+    the current ownership validator is available. WGLink has no Files or
+    Icons section entries: its only installation action follows this selection.
     Explicit /TASKS or /MERGETASKS and interactive checkbox choices win. }
   WgLinkAutomaticAddInsDirectory := '';
   if not WizardSilent() or TaskChoiceOnCommandLine() then

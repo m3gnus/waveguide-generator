@@ -271,4 +271,6 @@ def test_sampler_terminates_only_owned_live_birth_identities(monkeypatch, exited
     monkeypatch.setattr(rss_sampler.os, 'kill', kill)
     monkeypatch.setattr(rss_sampler.time, 'sleep', lambda _: None)
     sampler.terminate_owned()
-    assert signals == [(11, rss_sampler.signal.SIGTERM), (11, rss_sampler.signal.SIGKILL)]
+    kill = getattr(rss_sampler.signal, "SIGKILL", rss_sampler.signal.SIGTERM)
+    expected = [(11, rss_sampler.signal.SIGTERM)] + ([] if kill == rss_sampler.signal.SIGTERM else [(11, kill)])
+    assert signals == expected
