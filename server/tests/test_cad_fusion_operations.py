@@ -35,11 +35,15 @@ def _result(bundle: Path, export_id: str = "wge_1") -> dict[str, object]:
     }
 
 
-def test_capabilities_advertise_source_identity_without_changing_delivery() -> None:
+def test_capabilities_advertise_source_identity_without_changing_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``sourceIdentity`` is additive: the schema and the
     Fusion-bound delivery version stay put. Solve delivery is 4: the WG request
-    inbox reads requests that name their kind (M1 transfer contract, C3)."""
+    inbox reads requests that name their kind (M1 transfer contract, C3).
+    FEM regions are on by default; WG2_FEM_REGIONS=0 withdraws ``femRegions``."""
 
+    monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
     assert fusion_delivery.capabilities() == {
         "schemaVersion": 1,
         "producer": "waveguide-generator",
@@ -49,7 +53,11 @@ def test_capabilities_advertise_source_identity_without_changing_delivery() -> N
         "sourceIdentity": 1,
         "documentUp": 1,
         "automaticDomain": 1,
+        "femRegions": 1,
     }
+    monkeypatch.setenv("WG2_FEM_REGIONS", "0")
+    assert "femRegions" not in fusion_delivery.capabilities()
+    monkeypatch.delenv("WG2_FEM_REGIONS")
     # An integer, as the add-in reads every capability value; never a bool.
     assert type(fusion_delivery.capabilities()["sourceIdentity"]) is int
     # ``documentUp``: WG reads ``document-up-v1`` (the CAD document's up axis).
