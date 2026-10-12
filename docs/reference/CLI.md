@@ -156,12 +156,12 @@ One WG backend executes a one-worker FIFO queue. Separate `--data-dir` values is
 job stores; they are not a promise that multiple solver processes are safe or faster on
 one machine. In particular, GPU and dense CPU solves can exhaust shared resources.
 Version 1 supports serial execution. The backend remains running after the CLI exits.
-On Windows, the CLI alone permits an automatic contained fallback when a
-kill-on-close caller job refuses breakaway. It omits the breakaway flag and
+On Windows, the CLI alone permits an automatic contained fallback when the
+caller's job chain forbids breakaway. It omits the breakaway flag and
 outer-job requirement, retains the nested admission job, and marks the backend's
-`/health` with `lifetime: "contained"`. A caller job without kill-on-close needs
-no breakaway or contained marker. A contained owner ends when its terminal or
-CI/IDE job closes or is terminated, potentially interrupting running work;
+`/health` with `lifetime: "contained"`. A contained owner ends when its terminal
+or CI/IDE job, or an ancestor job, closes or is terminated, potentially
+interrupting running work;
 the next owner recovers durable jobs as described in
 [shutdown and recovery](SHUTDOWN-AND-RECOVERY.md). Later GUI/add-in adopters
 currently show no lifetime warning. The installed `--ensure-backend` entry
