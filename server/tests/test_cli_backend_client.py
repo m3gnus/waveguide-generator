@@ -421,7 +421,7 @@ def test_real_headless_argv_preserves_gui_workspace_defaults(tmp_path, monkeypat
         with log_path.open("wb") as log:
             process = subprocess.Popen(command, cwd=tmp_path, env=environment, stdout=log, stderr=log)
             try:
-                deadline = time.monotonic() + 20
+                deadline = time.monotonic() + 90  # a real server's lifespan start-up is slow on hosted macOS
                 handle = None
                 while time.monotonic() < deadline:
                     assert process.poll() is None, log_path.read_text()
