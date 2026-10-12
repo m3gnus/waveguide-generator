@@ -276,8 +276,29 @@ the entry in place. On Windows, advertisement requires the full installer's
 `WG_NATIVE_ENSURE_BACKEND_V1` capability signature in the current native image.
 An app-layer update cannot publish this marker or upgrade an old native stub;
 missing, unknown or stale evidence suppresses advertisement. Reinstall with a
-current full installer to enable it. Moving or uninstalling the whole bundle requires refreshing
-that stored path by starting WG from its new installation.
+current full installer to enable it.
+
+WGLink first uses a valid launcher from that capabilities record. If no valid
+launcher is available, including when WG has never been opened and `ipc/wglink`
+does not exist yet, it falls back to `wglink_install.json` in the managed add-in
+folder. Its `waveguideGeneratorRoot` identifies the bundle's `app` folder, from
+which WGLink locates and validates the installed Windows or macOS launcher.
+This lets Fusion Send or Solve start the WG installation that manages the add-in.
+Windows setup can install WGLink before WG's first start; on macOS, WG normally
+installs the managed add-in after its first healthy start.
+
+Moving or uninstalling the bundle can leave both paths unusable. Start WG manually
+from its new installation once to refresh the capabilities record; if it was
+uninstalled, reinstall WG first. Checkout installs, developer-synced add-ins and
+hand-copied add-ins without a managed marker cannot use this fallback: start WG
+manually when no valid capabilities launcher is available.
+
+For a non-default `WG2_DATA_DIR`, Fusion must inherit the same override; WGLink
+passes it to the launcher as `--data-dir`. On a fresh overridden data folder,
+starting the backend does not choose a WG root or CAD exchange folder. Choose a
+root in WG before retrying Send or Solve; until then the resumed command reports
+that no workspace is configured. `folders.json` changes the runs and CAD exchange
+locations, while launcher discovery stays in the application data folder.
 
 For the original plain-terminal behavior, append `--no-gui`:
 

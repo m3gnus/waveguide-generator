@@ -31,6 +31,14 @@ registered location or a missing Run on Startup setting, but does not edit it.
 Windows Setup reports its install outcome and writes it to the setup log.
 See the [CAD Link guide](../../docs/CAD-LINK-GUIDE.md) for the user workflow.
 
+WGLink can cold-start a never-opened WG install by falling back from a missing or
+invalid capabilities launcher to the managed add-in's `wglink_install.json`
+`waveguideGeneratorRoot`. Moved or uninstalled bundles and checkout/developer
+installs require starting WG manually when no valid launcher is available. Fusion
+must inherit any non-default `WG2_DATA_DIR`; a fresh overridden data folder also
+needs a root selected in WG before Send or Solve can use CAD exchange. See
+[installed launcher details](../../docs/INSTALL.md) for recovery and platform behavior.
+
 To review and advance the pin:
 
 1. Land and test the compatible change in [`wglink`](https://github.com/m3gnus/wglink).

@@ -1261,6 +1261,33 @@ or stale evidence advertises no entry: an app-layer update cannot claim support
 for an older stub, and a downgrade cannot retain a positive claim via the marker.
 The CLI and installed launcher share `launchers/backend_start.py`, preserving one
 start definition.
+
+WGLink prefers a valid capabilities launcher, then falls back to the managed
+add-in's `wglink_install.json` when that launcher is missing or invalid. This also
+covers a never-opened installation with no `<data>/ipc/wglink` folder or an older
+capabilities record without a `launcher` field. The existing
+`waveguideGeneratorRoot` field names the bundle's `app` layer: Windows derives
+`root.parent / "Waveguide Generator.exe"`; macOS derives
+`root.parent.parent / "MacOS" / "Waveguide Generator"`. The same installed-entry
+validation applies, including Windows native support evidence. The marker schema
+and its exact six-field set stay unchanged; older WG ownership checks reject
+additional fields. After startup WG publishes fresh capabilities, and WGLink
+checks delivery compatibility before exporting or writing a request.
+
+If a moved or uninstalled bundle leaves neither source usable, start WG manually
+from the current installation to refresh capabilities (reinstall first if needed).
+Checkout-shaped roots and developer-synced add-ins do not support marker fallback;
+standalone copies without a managed marker also require a manual start when no
+valid capabilities launcher exists. Windows setup can install WGLink before WG
+has ever run; macOS normally installs it only after a healthy WG start.
+
+Discovery uses Fusion's application data folder, including a non-default
+`WG2_DATA_DIR` inherited by Fusion, which WGLink passes as `--data-dir`. On a fresh
+overridden data folder, the backend can start but CAD exchange remains unchosen
+until the user selects a root in WG; the resumed Send or Solve reports the existing
+no-workspace message. `folders.json` controls runs and CAD exchange locations,
+while `ipc/wglink` stays in application data, so it does not affect launcher discovery.
+
 The installed CPU qualification gate checks JSON output, owner identity, and the
 capability path through that OS entry. Where the host permits backend
 breakaway, it also cold-starts through the installed entry with no data

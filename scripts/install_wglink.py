@@ -449,6 +449,8 @@ def _marker(target: Path) -> dict[str, object] | None:
     return value if isinstance(value, dict) else None
 
 
+# WGLink reads waveguideGeneratorRoot to locate the installed launcher for a cold
+# start. Do not change this field or the bundle layout without updating the add-in.
 _INSTALL_MARKER_FIELDS = frozenset(
     {
         "schema",

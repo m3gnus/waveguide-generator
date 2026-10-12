@@ -364,6 +364,64 @@ def test_installed_copy_points_to_wgs_existing_python_and_verified_resampler(
     assert resampler.read_text(encoding="utf-8") == "# exact resampler\n"
 
 
+@pytest.mark.parametrize("platform_name,install_platform", [("win32", "windows"), ("darwin", "macos")])
+def test_install_marker_root_derives_the_advertised_installed_launcher(
+    tmp_path: Path, platform_name: str, install_platform: str,
+) -> None:
+    from launchers.backend_start import installed_launcher_argv
+
+    installer = _load_installer()
+    commit = "a" * 40
+    package_root, archive = _package(tmp_path, commit)
+    if platform_name == "win32":
+        root = tmp_path / "WG install" / "app"
+        launcher = root.parent / "Waveguide Generator.exe"
+    else:
+        root = tmp_path / "WG.app" / "Contents" / "Resources" / "app"
+        launcher = root.parent.parent / "MacOS" / "Waveguide Generator"
+    root.parent.mkdir(parents=True)
+    package_root.rename(root)
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    if platform_name == "win32":
+        signature = b"WG_NATIVE_ENSURE_BACKEND_V1"
+        launcher.write_bytes(b"MZ fixture " + signature)
+        (root.parent / "Waveguide Generator.ensure-backend-v1").write_bytes(signature)
+    else:
+        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+        launcher.chmod(0o755)
+
+    status, target = installer.install(
+        root=root,
+        platform=install_platform,
+        addins_dir=tmp_path / "AddIns",
+        archive_path=archive,
+        python=root / ".venv" / "bin" / "python",
+        data_dir=tmp_path / "data",
+    )
+    assert status == "installed"
+    assert target is not None
+    marker = json.loads((target / installer.INSTALL_MARKER).read_text(encoding="utf-8"))
+    # Pin the existing schema independently of the installer's field constant:
+    # adding a field also breaks ownership checks in older WG installations.
+    assert set(marker) == {
+        "schema", "managedBy", "waveguideGeneratorRoot",
+        "waveguideGeneratorVersion", "sourceCommit", "addinVersion",
+    }
+    assert installer._valid_install_marker(marker, root)
+    assert not installer._valid_install_marker({**marker, "launcher": str(launcher)}, root)
+    marker_root = Path(marker["waveguideGeneratorRoot"])
+    assert marker_root == root.resolve()
+    # Mirror WGLink's derivation, without calling WG's launcher helper for it.
+    if platform_name == "win32":
+        derived_launcher = marker_root.parent / "Waveguide Generator.exe"
+    else:
+        derived_launcher = marker_root.parent.parent / "MacOS" / "Waveguide Generator"
+    assert [str(derived_launcher)] == [str(launcher.resolve())] == installed_launcher_argv(
+        environ={"WG2_BUNDLE": "1", "WG2_APP_ROOT": str(root)},
+        platform_name=platform_name,
+    )
+
+
 def test_payload_directory_shortens_the_commit_without_weakening_identity(
     short_tmp_path: Path,
 ):
