@@ -157,7 +157,9 @@ def test_weighted_geometry_keeps_declared_chamber_sd_and_raw_load(level):
     system = request.wire["compiled_system"]
     params = system["components"][0]["parameters"]
     weight = 10 ** (level / 20)
-    assert params["boundary_motion_weights"] == {"boundary:fem:air:cone": weight}
+    # Unit weights are not sent at all.
+    assert params.get("boundary_motion_weights") == (
+        None if weight == 1 else {"boundary:fem:air:cone": weight})
     assert system["metadata"]["driver_sd"]["fem"]["geometric_sd_m2"] == pytest.approx(5e-5 * weight)
     assert system["metadata"]["projected_areas_m2"]["fem"] == pytest.approx(5e-5)
     assert params["lumped_sealed_rear_chamber"]["projected_area_m2"] == pytest.approx(5e-5)
