@@ -49,7 +49,7 @@ function assemblyPayload(document: SourceAssemblyDocument) {
   return { ...document, dimensions };
 }
 export const sourceEditorApi = {
-  hornProfile: async (design: Record<string, unknown>): Promise<{ horn_config: Record<string, unknown>; throat_radius_mm: number; horn_length_mm: number; mouth_radius_mm: number }> => (await response('/assembly/horn-profile', 'POST', design)).json(),
+  hornProfile: async (design: Record<string, unknown>): Promise<{ horn_config: Record<string, unknown>; throat_radius_mm: number; horn_length_mm: number; mouth_radius_mm: number; wall_max_radius_mm?: number }> => (await response('/assembly/horn-profile', 'POST', design)).json(),
   validateAssembly: async (document: SourceAssemblyDocument): Promise<AssemblyValidation> => (await response('/assembly/validate', 'POST', assemblyPayload(document))).json(),
   ingestAssembly: async (document: SourceAssemblyDocument): Promise<AssemblyIngestion> => (await response('/assembly/ingest', 'POST', assemblyPayload(document))).json(),
   exportAssembly: async (document: SourceAssemblyDocument): Promise<Blob> => (await response('/assembly/export', 'POST', assemblyPayload(document))).blob(),

@@ -40,6 +40,23 @@ describe('NumberField', () => {
     expect(commit).toHaveBeenCalledTimes(1);
   });
 
+  it('shows displayPrecision decimals but commits typed values at full precision', () => {
+    const commit = vi.fn();
+    act(() => root.render(<NumberField label="Rim" value={9.525123456} precision={9} displayPrecision={2} onCommit={commit}/>));
+    const input = host.querySelector('input')!;
+    expect(input.value).toBe('9.53');
+    act(() => input.focus());
+    act(() => input.blur());
+    expect(commit).not.toHaveBeenCalled();
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '9.525');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => input.blur());
+    expect(commit).toHaveBeenCalledExactlyOnceWith(9.525);
+  });
+
   it('rejects an empty draft instead of coercing it to zero', () => {
     const commit = vi.fn();
     act(() => root.render(<NumberField label="Margin" value={12} min={0} onCommit={commit}/>));

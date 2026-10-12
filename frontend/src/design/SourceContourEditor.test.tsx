@@ -44,6 +44,30 @@ describe('source editor interactions', () => {
     expect(readSourceDraft().contour).toEqual(doc.contour);
     expect(readSourceDraft().drive.weights).toEqual(doc.drive.weights);
   });
+  it('stores typed rim radius and arc centre exactly despite the two-decimal display', async () => {
+    const doc = structuredClone(INITIAL_SOURCE);
+    doc.contour.segments[0] = { ...doc.contour.segments[0], kind: 'arc', center_mm: [4, 0], direction: 'ccw' };
+    storage.setItem('', JSON.stringify(doc)); await mount();
+    await enter('Point 2 radius', '9.525'); await settle();
+    await enter('Arc center radius', '6.123457'); await enter('Arc center z', '-0.000123'); await settle();
+    const stored = readSourceDraft().contour;
+    expect(stored.points[1].r_mm).toBe(9.525);
+    expect(stored.segments[0].center_mm).toEqual([6.123457, -0.000123]);
+    expect(input('Point 2 radius').value).toBe('9.53');
+  });
+  it('opens Identifiers when validation names an identity or an ID is empty', async () => {
+    await mount();
+    const disclosure = host.querySelector<HTMLDetailsElement>('details.source-identifiers')!;
+    expect(disclosure.open).toBe(false);
+    vi.mocked(sourceEditorApi.validate).mockRejectedValueOnce(new Error('contour.rim_id: String should have at least 1 character'));
+    await enter('Drive channel ID', 'x'); await settle();
+    expect(disclosure.open).toBe(true);
+    await enter('Drive channel ID', 'fixed'); await settle();
+    await act(async () => { disclosure.open = false; disclosure.dispatchEvent(new Event('toggle')); });
+    expect(disclosure.open).toBe(false);
+    await enter('Drive channel ID', ''); await settle();
+    expect(disclosure.open).toBe(true);
+  });
   it.each(['Physical source ID', 'Rim ID', 'Drive channel ID'])('keeps %s editable and validated inside Identifiers', async (label) => {
     await mount();
     const disclosure = input(label).closest('details')!;

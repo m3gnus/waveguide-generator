@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sourceEditorApi, type SourceAssemblyDocument } from '../api/sourceEditor';
 import { durableSettings, namespaceStorage, SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { serializeDesign, useDesignStore } from '../stores/design';
+import { prepareNativeAssembly } from './nativeAssemblyPreparation';
 import { AssemblyEditor, INITIAL_ASSEMBLY, parseAssemblyDraft } from './SourceAssemblyEditor';
 
 vi.mock('../api/sourceEditor', () => ({ sourceEditorApi:{ validateAssembly:vi.fn(), hornProfile:vi.fn(), ingestAssembly:vi.fn(), exportAssembly:vi.fn(), validate:vi.fn(), presets:vi.fn() } }));
@@ -55,6 +56,46 @@ describe('shared source and passage authoring', () => {
     await act(async () => useDesignStore.getState().updateValue('L', 75)); await settle();
     expect(sourceEditorApi.hornProfile).toHaveBeenCalledTimes(1);
     expect(read().dimensions.horn_length_mm).toBe(130);
+  });
+  it('seeds the enclosure from the widest wall radius when a rollback exceeds the mouth', async () => {
+    vi.mocked(sourceEditorApi.hornProfile).mockResolvedValue({ ...profile, wall_max_radius_mm: 90 });
+    await mount();
+    expect(field('Enclosure width').value).toBe('200.00');
+    expect(field('Enclosure height').value).toBe('236.00');
+    await enter('Front Z', '8');
+    expect(read().dimensions).toMatchObject({ horn_xy_mm: [0, 18], woofer_xy_mm: [0, -100], mouth_radius_mm: 80 });
+  });
+  it('does not seed once the user has focused an input in the dialog', async () => {
+    let resolve!: (value: typeof profile) => void;
+    vi.mocked(sourceEditorApi.hornProfile).mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+    await mount();
+    await act(async () => field('Enclosure width').focus());
+    await act(async () => resolve(profile)); await settle();
+    expect(field('Enclosure width').value).toBe('70.00');
+    expect(field('Enclosure depth').value).toBe('40.00');
+    expect(storage.getItem('')).toBeNull();
+  });
+  it('saves a never-edited seeded draft after a successful prepare or export', async () => {
+    vi.mocked(sourceEditorApi.hornProfile).mockResolvedValue(profile);
+    vi.mocked(sourceEditorApi.exportAssembly).mockResolvedValue(new Blob(['x']));
+    vi.mocked(prepareNativeAssembly).mockResolvedValue({ mesh: { stats: { triangle_count: 12 } } } as never);
+    URL.createObjectURL = vi.fn(() => 'blob:x'); URL.revokeObjectURL = vi.fn();
+    await mount();
+    expect(storage.getItem('')).toBeNull();
+    await act(async () => button('Prepare assembly in WG').click()); await settle();
+    expect(read()).toMatchObject({ horn_config: profile.horn_config, dimensions: { width_mm: 180, mouth_radius_mm: 80 } });
+    storage.removeItem('');
+    await act(async () => button('Export assembly STEP + mesh').click()); await settle();
+    expect(read().dimensions.width_mm).toBe(180);
+  });
+  it('opens Identifiers when a passive body ID is empty or duplicated', async () => {
+    await mount(); await act(async () => button('Add central plug').click()); await settle();
+    await act(async () => button('Add annular vane').click()); await settle();
+    const disclosure = host.querySelector<HTMLDetailsElement>('details.source-identifiers')!;
+    expect(disclosure.open).toBe(false);
+    const second = host.querySelector<HTMLInputElement>('[aria-label="Passive body 2 ID"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(second, read().phase_plugs[0].id); second.dispatchEvent(new Event('input', { bubbles: true })); }); await settle();
+    expect(disclosure.open).toBe(true);
   });
   it('keeps the standalone defaults when the current horn cannot resolve', async () => {
     await mount();

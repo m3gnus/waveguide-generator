@@ -408,7 +408,8 @@ def create_router(data_dir: Path) -> APIRouter:
             config["mesh"]["verticalOffset"] = 0
             wall = GeneralHornWall.from_config(config)
             return {"horn_config": config, "throat_radius_mm": wall.throat_radius_mm,
-                    "horn_length_mm": wall.length_mm, "mouth_radius_mm": wall.mouth_radius_mm}
+                    "horn_length_mm": wall.length_mm, "mouth_radius_mm": wall.mouth_radius_mm,
+                    "wall_max_radius_mm": max(pole[0] for pole in wall.poles_mm)}
         except ImportError as exc:
             raise HTTPException(503, "This mesher does not support general horn attachment. Update the mesher.") from exc
         except (TypeError, ValueError) as exc:

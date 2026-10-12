@@ -1893,7 +1893,9 @@ def _serialize_canonical(
             ("GCurve.Rot", guide.rotation),
         ):
             _line(lines, key, value)
-        if config.throat_profile is not None and config.throat_profile.value == 3:
+        profile = config.throat_profile
+        # An expression profile (value None, raw set) may resolve to the legacy arc, so keep its keys.
+        if profile is not None and (profile.value == 3 or (profile.value is None and profile.raw is not None)):
             _line(lines, "CircArc.Radius", config.circ_arc_radius)
             _line(lines, "CircArc.TermAngle", config.circ_arc_term_angle)
 

@@ -17,6 +17,8 @@ interface NumberFieldProps {
   max?: number;
   step?: number;
   precision?: number;
+  /** Decimals shown; commits keep `precision`, so untouched and typed values are never coarsened. */
+  displayPrecision?: number;
   modified?: boolean;
   disabled?: boolean;
   disabledReason?: string;
@@ -45,6 +47,7 @@ export function NumberField({
   max = Infinity,
   step = 1,
   precision = 1,
+  displayPrecision,
   modified = false,
   disabled = false,
   disabledReason,
@@ -64,7 +67,8 @@ export function NumberField({
   const id = useId();
   const titled = symbol ? `${label} (${symbol})` : label;
   const help = useHelpTip({ title: titled, text: description, hint: 'Drag the label sideways to adjust.' });
-  const displayed = expression?.raw ?? (value === undefined ? '' : value.toFixed(precision));
+  const shown = Math.min(displayPrecision ?? precision, precision);
+  const displayed = expression?.raw ?? (value === undefined ? '' : value.toFixed(shown));
   const [draft, setDraft] = useState(displayed);
   const [editing, setEditing] = useState(false);
   const [expandedDraft, setExpandedDraft] = useState(false);
@@ -214,7 +218,7 @@ export function NumberField({
       return;
     }
     const rounded = Number(parsed.toFixed(precision));
-    setDraft(rounded.toFixed(precision));
+    setDraft(rounded.toFixed(shown));
     if (rounded !== value) onCommit(rounded);
   };
 
@@ -229,11 +233,11 @@ export function NumberField({
    */
   const stepBy = (multiplier: number) => {
     if (formulaLayout) return false;
-    const base = Number.isFinite(parsed) ? parsed : value;
+    const base = draft !== displayed && Number.isFinite(parsed) ? parsed : value ?? parsed;
     if (base === undefined || !Number.isFinite(base)) return false;
     const next = Math.min(max, Math.max(min, base + step * multiplier));
     const rounded = Number(next.toFixed(precision));
-    setDraft(rounded.toFixed(precision));
+    setDraft(rounded.toFixed(shown));
     if (rounded !== value) onCommit(rounded);
     return true;
   };
@@ -278,7 +282,7 @@ export function NumberField({
     const delta = event.clientX - drag.current.x;
     const next = Math.min(max, Math.max(min, drag.current.value + delta * step));
     const rounded = Number(next.toFixed(precision));
-    setDraft(rounded.toFixed(precision));
+    setDraft(rounded.toFixed(shown));
     setDragDelta(rounded - drag.current.value);
     pendingDragValue.current = rounded;
     if (dragFrame.current === null) {
@@ -344,7 +348,7 @@ export function NumberField({
       {showEvaluatedExpression && <span className="expr-value" title="Evaluated expression value">= {Number(expression!.value!.toPrecision(8))}{unit}</span>}
       <div className={`number-control${editing ? ' editing' : ''}${invalid ? ' invalid' : ''}${formulaLayout ? ' expression' : ''}`}>
         {dragDelta !== null && (
-          <span className="scrub-tip">drag <b>{dragDelta >= 0 ? '+' : ''}{dragDelta.toFixed(precision)}{unit}</b></span>
+          <span className="scrub-tip">drag <b>{dragDelta >= 0 ? '+' : ''}{dragDelta.toFixed(shown)}{unit}</b></span>
         )}
         <Editor
           ref={(element: HTMLInputElement | HTMLTextAreaElement | null) => { editor.current = element; }}
@@ -357,7 +361,7 @@ export function NumberField({
           aria-valuemin={formulaLayout || !Number.isFinite(min) ? undefined : min}
           aria-valuemax={formulaLayout || !Number.isFinite(max) ? undefined : max}
           aria-valuenow={formulaLayout || value === undefined ? undefined : value}
-          aria-valuetext={formulaLayout || value === undefined ? undefined : `${value.toFixed(precision)}${unit ? ` ${unit}` : ''}`}
+          aria-valuetext={formulaLayout || value === undefined ? undefined : `${value.toFixed(shown)}${unit ? ` ${unit}` : ''}`}
           inputMode={formulaLayout ? 'text' : 'decimal'}
           spellCheck={false}
           disabled={disabled}

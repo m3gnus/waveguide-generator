@@ -6,7 +6,7 @@ import { useModalDialogFocus } from '../shell/dialogFocus';
 import { NumberField } from './NumberField';
 import { serializeDesign, useDesignStore } from '../stores/design';
 import { Editor } from './SourceContourEditor';
-import { INITIAL_SOURCE } from './sourceContourEditing';
+import { identityProblem, INITIAL_SOURCE } from './sourceContourEditing';
 import { prepareNativeAssembly } from './nativeAssemblyPreparation';
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import './sourceContourEditor.css';
@@ -58,13 +58,15 @@ function seedAssembly(profile: Awaited<ReturnType<typeof sourceEditorApi.hornPro
   const draft = structuredClone(INITIAL_ASSEMBLY);
   const margin = 10;
   const mouth = profile.mouth_radius_mm;
+  // The mesher checks enclosure clearances against the widest wall radius, which exceeds the mouth with R-OSSE rollback.
+  const envelope = Math.max(mouth, profile.wall_max_radius_mm ?? 0);
   const woofer = draft.dimensions.aperture_radius_mm;
   return { ...draft, horn: flatSource('horn', profile.throat_radius_mm), horn_config: profile.horn_config,
     dimensions: { ...draft.dimensions,
-      width_mm: Math.max(draft.dimensions.width_mm, 2 * (Math.max(mouth, woofer) + margin)),
-      height_mm: Math.max(draft.dimensions.height_mm, 2 * (mouth + woofer + 2 * margin)),
+      width_mm: Math.max(draft.dimensions.width_mm, 2 * (Math.max(envelope, woofer) + margin)),
+      height_mm: Math.max(draft.dimensions.height_mm, 2 * (envelope + woofer + 2 * margin)),
       depth_mm: Math.max(draft.dimensions.depth_mm, profile.horn_length_mm + margin),
-      horn_xy_mm: [0, woofer + margin], woofer_xy_mm: [0, -mouth - margin],
+      horn_xy_mm: [0, woofer + margin], woofer_xy_mm: [0, -envelope - margin],
       horn_length_mm: profile.horn_length_mm, mouth_radius_mm: mouth } };
 }
 const visibility = { open: false, listeners: new Set<() => void>(), getSnapshot: () => visibility.open,
@@ -89,6 +91,9 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   const key = JSON.stringify(draft); const valid = accepted?.key === key;
   const close = useCallback(() => { if (!busy) onClose(); }, [busy, onClose]);
   const dialog = useModalDialogFocus<HTMLDivElement>({ open: !editing, onClose: close });
+  const [identifiersOpen, setIdentifiersOpen] = useState(false);
+  const identityIssue = identityProblem(validationError, draft.phase_plugs.map((p) => p.id));
+  useEffect(() => { if (identityIssue) setIdentifiersOpen(true); }, [identityIssue]);
   function change(next: SourceAssemblyDocument) { draftRef.current = next; setDraft(next); storage.setItem('', JSON.stringify(next)); setError(''); setNotice(''); }
   useEffect(() => durableSettings.subscribe('sourceAssemblyDraft', () => { const restored = readDraft(); draftRef.current = restored; setDraft(restored); setHornText(JSON.stringify(restored.horn_config ?? {}, null, 2)); setEditing(null); setNotice('Restored source assembly draft.'); }), []);
   useEffect(() => {
@@ -125,7 +130,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   const minZ = Math.min(0, ...draft.horn.contour.points.map((p) => p.z_mm));
   const span = Math.max(1, dimensions.horn_length_mm - minZ);
   const sectionPath = (points: [number, number][]) => points.map(([r,z], i) => `${i ? 'L' : 'M'}${25 + (z - minZ) / span * 550},${210 - r / maxR * 175}`).join(' ');
-  return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Horn and woofer assembly editor" className="source-editor">
+  return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Horn and woofer assembly editor" className="source-editor" onFocusCapture={(e) => { if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) seedAllowed.current = false; }}>
     <header><div><h2>Horn + woofer assembly</h2><ExperimentalBadge/><p>{EXPERIMENTAL_NOTE}</p><p>Shared enclosure · dimensions in mm · parallel +Z axes</p></div><button type="button" disabled={busy} onClick={close}>Close</button></header>
     <fieldset disabled={busy}><div className="source-editor-columns"><div>
       <h3>Sources</h3><p>Each diaphragm keeps one physical identity and drive channel, including its patch weights.</p>
@@ -169,21 +174,21 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
         const last = draft.phase_plugs.at(-1); const inner0 = last ? last.outer0_mm + 1 : 2; const inner1 = last ? last.outer1_mm + 1 : 2.4;
         change({ ...draft, phase_plugs: [...draft.phase_plugs, { id: `vane-${crypto.randomUUID()}`, z0_mm: last?.z0_mm ?? 2, z1_mm: last?.z1_mm ?? 6, inner0_mm: inner0, outer0_mm: inner0 + .5, inner1_mm: inner1, outer1_mm: inner1 + .5 }] });
       }}>Add annular vane</button></div>
-      {!!draft.phase_plugs.length && <div className="source-fields">{(['z0_mm','z1_mm'] as const).map((field) => <NumberField key={field} label={field === 'z0_mm' ? 'Plug inlet Z' : 'Plug outlet Z'} value={draft.phase_plugs[0][field]} unit="mm" precision={2} step={.1} onCommit={(v) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p) => ({ ...p, [field]: v })) })}/>)}</div>}
+      {!!draft.phase_plugs.length && <div className="source-fields">{(['z0_mm','z1_mm'] as const).map((field) => <NumberField key={field} label={field === 'z0_mm' ? 'Plug inlet Z' : 'Plug outlet Z'} value={draft.phase_plugs[0][field]} unit="mm" precision={6} displayPrecision={2} step={.1} onCommit={(v) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p) => ({ ...p, [field]: v })) })}/>)}</div>}
       {draft.phase_plugs.map((plug, i) => <section key={i}>
-        <div className="source-fields">{(['inner0_mm','outer0_mm','inner1_mm','outer1_mm'] as const).map((field) => <NumberField key={field} label={`Body ${i+1} ${field.startsWith('inner') ? 'inner' : 'outer'} ${field.includes('0') ? 'inlet' : 'outlet'} radius`} value={plug[field]} unit="mm" precision={2} step={.1} onCommit={(v) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p,j) => j === i ? { ...p, [field]: v } : p) })}/>)}</div><button type="button" onClick={() => change({ ...draft, phase_plugs: draft.phase_plugs.filter((_,j) => j !== i) })}>Remove body {i+1}</button></section>)}
-      {!!draft.phase_plugs.length && <details className="source-identifiers"><summary>Identifiers</summary>
+        <div className="source-fields">{(['inner0_mm','outer0_mm','inner1_mm','outer1_mm'] as const).map((field) => <NumberField key={field} label={`Body ${i+1} ${field.startsWith('inner') ? 'inner' : 'outer'} ${field.includes('0') ? 'inlet' : 'outlet'} radius`} value={plug[field]} unit="mm" precision={6} displayPrecision={2} step={.1} onCommit={(v) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p,j) => j === i ? { ...p, [field]: v } : p) })}/>)}</div><button type="button" onClick={() => change({ ...draft, phase_plugs: draft.phase_plugs.filter((_,j) => j !== i) })}>Remove body {i+1}</button></section>)}
+      {!!draft.phase_plugs.length && <details className="source-identifiers" open={identifiersOpen} onToggle={(e) => setIdentifiersOpen(e.currentTarget.open)}><summary>Identifiers</summary>
         {draft.phase_plugs.map((plug, i) => <label key={i}>Passive body {i+1} ID<input aria-label={`Passive body ${i+1} ID`} value={plug.id} onChange={(e) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p,j) => j === i ? { ...p, id:e.target.value } : p) })}/></label>)}
       </details>}
     </div><aside><h3>Enclosure and placement</h3><div className="source-fields">
-      {Object.entries(scalarLabels).filter(([field]) => (!draft.horn_config || !['horn_length_mm', 'mouth_radius_mm'].includes(field)) && (draft.woofer || field !== 'aperture_radius_mm')).map(([field,label]) => <NumberField key={field} label={label} value={dimensions[field as keyof typeof scalarLabels]} unit="mm" precision={2} step={.1} onCommit={(v) => change({ ...draft, dimensions: { ...dimensions, [field]: v } })}/>)}
-      {(['horn_xy_mm','woofer_xy_mm'] as const).filter((field) => draft.woofer || field === 'horn_xy_mm').flatMap((field) => ([0,1] as const).map((axis) => <NumberField key={`${field}-${axis}`} label={`${field === 'horn_xy_mm' ? 'Horn' : 'Woofer'} ${axis ? 'Y' : 'X'}`} value={dimensions[field][axis]} unit="mm" precision={2} step={.1} onCommit={(v) => { const xy = [...dimensions[field]] as [number,number]; xy[axis] = v; change({ ...draft, dimensions: { ...dimensions, [field]: xy } }); }}/>))}
-      <NumberField label="Enclosure mesh size" value={draft.mesh_size_mm} unit="mm" min={.001} precision={3} step={.5} onCommit={(v) => change({ ...draft, mesh_size_mm: v })}/>
+      {Object.entries(scalarLabels).filter(([field]) => (!draft.horn_config || !['horn_length_mm', 'mouth_radius_mm'].includes(field)) && (draft.woofer || field !== 'aperture_radius_mm')).map(([field,label]) => <NumberField key={field} label={label} value={dimensions[field as keyof typeof scalarLabels]} unit="mm" precision={6} displayPrecision={2} step={.1} onCommit={(v) => change({ ...draft, dimensions: { ...dimensions, [field]: v } })}/>)}
+      {(['horn_xy_mm','woofer_xy_mm'] as const).filter((field) => draft.woofer || field === 'horn_xy_mm').flatMap((field) => ([0,1] as const).map((axis) => <NumberField key={`${field}-${axis}`} label={`${field === 'horn_xy_mm' ? 'Horn' : 'Woofer'} ${axis ? 'Y' : 'X'}`} value={dimensions[field][axis]} unit="mm" precision={6} displayPrecision={2} step={.1} onCommit={(v) => { const xy = [...dimensions[field]] as [number,number]; xy[axis] = v; change({ ...draft, dimensions: { ...dimensions, [field]: xy } }); }}/>))}
+      <NumberField label="Enclosure mesh size" value={draft.mesh_size_mm} unit="mm" min={.001} precision={6} displayPrecision={3} step={.5} onCommit={(v) => change({ ...draft, mesh_size_mm: v })}/>
       <label>Passage refinement<select aria-label="Passage refinement" value={draft.passage_refinement} onChange={(e) => change({ ...draft, passage_refinement:Number(e.target.value) as 1|2|4 })}><option value="1">Standard</option><option value="2">2× finer</option><option value="4">4× finer</option></select></label>
     </div>{draft.horn_config && <p>Resolved horn length: {dimensions.horn_length_mm.toFixed(2)} mm. Mouth radius: {dimensions.mouth_radius_mm.toFixed(2)} mm.</p>}
     <p>Passages refine locally to preserve clearance. Smaller enclosure mesh sizes and finer passages use more triangles.</p>
-      <button type="button" disabled={!valid} onClick={() => void run(async () => { const record = await prepareNativeAssembly(() => sourceEditorApi.ingestAssembly(draft)); setNotice(`Prepared ${record.mesh?.stats.triangle_count ?? ''} triangles. The imported workspace now uses this assembly and its physical source channels.`); })}>Prepare assembly in WG</button>
-      <button type="button" disabled={!valid} onClick={() => void run(async () => { download(await sourceEditorApi.exportAssembly(draft), 'native-assembly.zip'); setNotice('Exported shared STEP shell, preview mesh and source recipe.'); })}>Export assembly STEP + mesh</button>
+      <button type="button" disabled={!valid} onClick={() => void run(async () => { const record = await prepareNativeAssembly(() => sourceEditorApi.ingestAssembly(draft)); storage.setItem('', JSON.stringify(draft)); setNotice(`Prepared ${record.mesh?.stats.triangle_count ?? ''} triangles. The imported workspace now uses this assembly and its physical source channels.`); })}>Prepare assembly in WG</button>
+      <button type="button" disabled={!valid} onClick={() => void run(async () => { download(await sourceEditorApi.exportAssembly(draft), 'native-assembly.zip'); storage.setItem('', JSON.stringify(draft)); setNotice('Exported shared STEP shell, preview mesh and source recipe.'); })}>Export assembly STEP + mesh</button>
       <button type="button" disabled={!valid} onClick={() => download(new Blob([JSON.stringify(draft,null,2)], { type:'application/json' }), 'source-assembly.json')}>Save assembly draft</button>
       <label>Load assembly draft<input aria-label="Load assembly draft" type="file" accept=".json,application/json" onChange={(e) => { const file = e.target.files?.[0]; if (!file) return; void run(async () => { if (file.size > 2*1024*1024) throw new Error('Assembly draft exceeds 2 MiB.'); const loaded = parseAssemblyDraft(await file.text()); setHornText(JSON.stringify(loaded.horn_config ?? {}, null, 2)); change(loaded); }); e.target.value=''; }}/></label>
       <p>Source editing includes drawing, arcs and the saved source-preset library. Assembly drafts also retain placement, passive bodies and density.</p>

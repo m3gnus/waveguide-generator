@@ -51,3 +51,10 @@ export function removePoint(document: SourceDocument, index: number): SourceDocu
   delete next.drive.weights[right.id];
   return next;
 }
+
+/** True when a validation message names an identity, or an ID is empty or repeated. */
+export function identityProblem(message: string, ids: string[]): boolean {
+  if (/identit|\bIDs?\b|\bunique\b|duplicate|_id\b/i.test(message)) return true;
+  const trimmed = ids.map((value) => value.trim());
+  return trimmed.some((value) => value === '') || new Set(trimmed).size !== trimmed.length;
+}

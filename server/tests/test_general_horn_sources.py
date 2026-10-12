@@ -149,9 +149,27 @@ def test_current_design_action_reuses_profile_and_preserves_design(client, formu
     value = response.json()
     assert value["throat_radius_mm"] == pytest.approx(4, abs=1e-9)
     assert value["horn_config"]["mode"] == "bare"
+    from hornlab_mesher.general_horn import GeneralHornWall
+    wall = GeneralHornWall.from_config(value["horn_config"])
+    assert value["wall_max_radius_mm"] == max(pole[0] for pole in wall.poles_mm)
+    assert value["wall_max_radius_mm"] >= value["mouth_radius_mm"]
     assert value["horn_config"]["mesh"]["wallThickness"] == 0
     assert value["horn_config"]["mesh"]["quadrants"] == 1234
     assert design == retained
+
+
+def test_horn_profile_reports_widest_wall_radius_beyond_a_rollback_mouth(client):
+    from hornlab_mesher.general_horn import GeneralHornWall
+
+    design = {"formula": "R-OSSE", "R": 60, "r0": 12.7, "a": 40, "a0": 15,
+              "tmax": 1.0, "r": 0.5, "b": 0.6, "m": 0.9, "q": 3.4,
+              "mesh": {"length_segments": 16, "angular_segments": 32}}
+    response = client.post("/api/source-editor/assembly/horn-profile", json=design)
+    assert response.status_code == 200, response.text
+    value = response.json()
+    wall = GeneralHornWall.from_config(value["horn_config"])
+    assert value["wall_max_radius_mm"] == max(pole[0] for pole in wall.poles_mm)
+    assert value["wall_max_radius_mm"] > value["mouth_radius_mm"]
 
 
 def test_current_design_attachment_keeps_imported_circle_interpretation(client):

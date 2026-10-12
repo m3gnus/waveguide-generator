@@ -3485,7 +3485,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Wall angle the arc reaches at the mouth. Used only when Throat profile is Circular arc and Radius override is not in play. An angle parallel to the throat-to-mouth chord has no solution and falls back to a constant mouth radius.",
+      "description": "Wall angle the arc reaches at the mouth. Used only when Throat profile is Circular arc (legacy) and Radius override is not in play. An angle parallel to the throat-to-mouth chord has no solution and falls back to a constant mouth radius.",
       "visible_when": {
         "path": "throat_profile",
         "operator": "equals",
@@ -3517,7 +3517,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Forces the arc radius and takes precedence over Terminal angle. It is honoured only when positive and at least half the throat-to-mouth chord; 0 or an impossible radius silently falls back to Terminal angle. Circular arc only.",
+      "description": "Forces the arc radius and takes precedence over Terminal angle. It is honoured only when positive and at least half the throat-to-mouth chord; 0 or an impossible radius silently falls back to Terminal angle. Circular arc (legacy) only.",
       "visible_when": {
         "path": "throat_profile",
         "operator": "equals",

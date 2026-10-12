@@ -170,6 +170,18 @@ def test_native_legacy_circular_arc_export_and_mesher_translation_are_preserved(
     assert mesher["circArcTermAngle"] == 35
 
 
+def test_expression_throat_profile_keeps_circular_arc_keys() -> None:
+    design = DesignConfig.model_validate({
+        "formula": "OSSE", "L": 120, "r0": 12.7, "a": 45,
+        "throat_profile": {"value": None, "raw": "2 + p"}, "circ_arc_radius": 200, "circ_arc_term_angle": 35,
+    })
+    assert design.root.throat_profile.value is None
+    text = serialize(design)
+    assert "Throat.Profile = 2 + p\n" in text
+    assert "CircArc.Radius = 200\n" in text
+    assert "CircArc.TermAngle = 35\n" in text
+
+
 def test_a_stated_solver_mode_is_reported_rather_than_accepted_and_ignored() -> None:
     """A machine-local setting a design states must not disappear in silence.
 
