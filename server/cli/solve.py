@@ -521,6 +521,13 @@ async def solve_path(
                 handle = await asyncio.to_thread(
                     ensure_backend, data_dir, backend_argv(port=None, data_dir=override),
                     start_env=backend_environment(os.environ, data_dir=override),
+                    allow_contained=True,
+                )
+            if handle.contained:
+                print(
+                    "Backend lifetime is contained: the backend ends when its caller's "
+                    "terminal or CI/IDE job closes or is terminated; running solves are interrupted.",
+                    file=stderr,
                 )
             runtime = BackendClient(handle)
     except BackendOwnerError as exc:
@@ -593,6 +600,8 @@ async def solve_path(
         await asyncio.gather(protocol_task, return_exceptions=True)
         if isinstance(runtime, BackendClient) and job_id is not None:
             fields["job_url"] = runtime.job_url(job_id)
+        if isinstance(runtime, BackendClient) and handle.contained:
+            fields["backend_lifetime"] = "contained"
         write_outcome(stdout, **fields)
 
     interrupted = asyncio.Event()

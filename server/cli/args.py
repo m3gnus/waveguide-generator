@@ -55,6 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     solve_parser = subparsers.add_parser(
         "solve",
         help="solve a design through the backend owning its data folder",
+        description=(
+            "Solve through the shared WG backend. On Windows, if job breakaway is "
+            "refused, the CLI starts a contained backend that ends with the caller's "
+            "terminal or CI/IDE job and prints a lifetime notice on stderr."
+        ),
         epilog=(
             "Exit codes: 0 success; 1 solve/input/output/backend failure; "
             "2 usage error; 3 backend data-folder mismatch; 4 backend start timeout; "

@@ -19,6 +19,16 @@ def handle(data):
     return BackendHandle("http://127.0.0.1:3199", 123, 3199, data.resolve(), "1.2", "abc")
 
 
+def test_launcher_keeps_contained_fallback_disabled(tmp_path, monkeypatch, capsys):
+    def ensure(root, argv, *, start_env, allow_contained=False):
+        assert allow_contained is False
+        return handle(root)
+    monkeypatch.setattr(entry, "ensure_backend", ensure)
+    monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
+    assert entry.main(["--data-dir", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
 @pytest.mark.parametrize("running", [True, False])
 def test_entry_finds_or_starts_same_owner(tmp_path, monkeypatch, capsys, running):
     data = tmp_path / "data folder"

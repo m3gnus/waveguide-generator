@@ -139,25 +139,14 @@ class WindowsJob:
             self._kernel32.CloseHandle(self._handle)
 
 
-def windows_backend_breakaway_flags() -> int:
-    """Detach a backend from the caller's job, or refuse before creating it.
+class BreakawayRefused(OSError):
+    """A Windows caller job would prevent an independent backend lifetime."""
 
-    A nested non-killing job does not release the caller's kill-on-close job.
-    Query the immediate job. The owner also checks the suspended child for
-    residual membership, because a non-breakaway outer job can retain it.
-    """
+
+def _windows_caller_job_limits(kernel: Any) -> int:
+    """Query the immediate caller job's basic limit flags."""
     import ctypes
     from ctypes import wintypes
-
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.GetCurrentProcess.restype = wintypes.HANDLE
-    kernel.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
-    kernel.IsProcessInJob.restype = wintypes.BOOL
-    member = wintypes.BOOL()
-    if not kernel.IsProcessInJob(kernel.GetCurrentProcess(), None, ctypes.byref(member)):
-        raise OSError("Could not check the caller's Windows job; cannot detach the backend")
-    if not member.value:
-        return 0
 
     class BasicLimits(ctypes.Structure):
         _fields_ = [
@@ -179,18 +168,44 @@ def windows_backend_breakaway_flags() -> int:
     limits = BasicLimits()
     if not kernel.QueryInformationJobObject(None, 2, ctypes.byref(limits), ctypes.sizeof(limits), None):
         raise OSError("Could not query the caller's Windows job; cannot detach the backend")
-    if limits.LimitFlags & 0x00000800:  # JOB_OBJECT_LIMIT_BREAKAWAY_OK
-        return 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
-    if limits.LimitFlags & 0x00001000:  # JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
+    return int(limits.LimitFlags)
+
+
+def windows_backend_breakaway_flags() -> int:
+    """Detach a backend from the caller's job, or refuse before creating it.
+
+    Query the immediate job: without kill-on-close, closing it cannot kill the
+    backend. Otherwise the owner also checks the suspended child for residual
+    membership, because a non-breakaway outer job can retain it.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
+    kernel.IsProcessInJob.restype = wintypes.BOOL
+    member = wintypes.BOOL()
+    if not kernel.IsProcessInJob(kernel.GetCurrentProcess(), None, ctypes.byref(member)):
+        raise OSError("Could not check the caller's Windows job; cannot detach the backend")
+    if not member.value:
         return 0
-    raise OSError(
+
+    flags = _windows_caller_job_limits(kernel)
+    if not flags & _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE:
+        return 0  # Closing this job cannot kill the backend.
+    if flags & 0x00000800:  # JOB_OBJECT_LIMIT_BREAKAWAY_OK
+        return 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
+    if flags & 0x00001000:  # JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
+        return 0
+    raise BreakawayRefused(
         "The caller's Windows job does not allow backend breakaway. "
         "Start Waveguide Generator outside that job, or enable job breakaway."
     )
 
 
 def require_windows_job_detached(process_handle: Any) -> None:
-    """Refuse a suspended backend retained by any caller job in the chain."""
+    """Refuse residual membership when the caller job has kill-on-close."""
     import ctypes
     from ctypes import wintypes
 
@@ -198,11 +213,15 @@ def require_windows_job_detached(process_handle: Any) -> None:
     kernel.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
     kernel.IsProcessInJob.restype = wintypes.BOOL
     member = wintypes.BOOL()
-    if not kernel.IsProcessInJob(process_handle, None, ctypes.byref(member)) or member.value:
-        raise OSError(
-            "The backend could not detach from the caller's Windows job chain. "
-            "Start Waveguide Generator outside that job, or enable breakaway in every parent job."
-        )
+    checked = kernel.IsProcessInJob(process_handle, None, ctypes.byref(member))
+    if checked and not member.value:
+        return
+    if checked and not _windows_caller_job_limits(kernel) & _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE:
+        return
+    raise BreakawayRefused(
+        "The backend could not detach from the caller's Windows job chain. "
+        "Start Waveguide Generator outside that job, or enable breakaway in every parent job."
+    )
 
 
 def confine_to_windows_job(

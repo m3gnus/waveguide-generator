@@ -54,6 +54,11 @@ exact-byte SHA-256 (excluding the self-describing `summary.json`).
 Once a job is accepted, its outcome includes `job_url`,
 `http://127.0.0.1:<port>/?job=<id>`, which opens that run in WG. Human output
 prints the same link on completion.
+For a contained Windows backend, the outcome also includes
+`backend_lifetime: "contained"`. This optional field is omitted for detached
+owners and outcomes produced before an owner is selected, preserving their
+existing fields. One stderr notice explains the contained lifetime, including
+when the CLI adopts an owner started by an earlier command.
 
 Process exits are:
 
@@ -151,6 +156,17 @@ One WG backend executes a one-worker FIFO queue. Separate `--data-dir` values is
 job stores; they are not a promise that multiple solver processes are safe or faster on
 one machine. In particular, GPU and dense CPU solves can exhaust shared resources.
 Version 1 supports serial execution. The backend remains running after the CLI exits.
+On Windows, the CLI alone permits an automatic contained fallback when a
+kill-on-close caller job refuses breakaway. It omits the breakaway flag and
+outer-job requirement, retains the nested admission job, and marks the backend's
+`/health` with `lifetime: "contained"`. A caller job without kill-on-close needs
+no breakaway or contained marker. A contained owner ends when its terminal or
+CI/IDE job closes or is terminated, potentially interrupting running work;
+the next owner recovers durable jobs as described in
+[shutdown and recovery](SHUTDOWN-AND-RECOVERY.md). Later GUI/add-in adopters
+currently show no lifetime warning. The installed `--ensure-backend` entry
+and WGLink cold start keep refusing when breakaway is required but forbidden,
+with an instruction to open WG from the Start menu or run outside that job.
 To stop a backend started by the CLI, read its `pid` from `GET /health` at the
 printed job URL's host and terminate that process: `kill -TERM PID` on macOS/Linux,
 or `Stop-Process -Id PID` in Windows PowerShell. SIGTERM uses the launcher's graceful

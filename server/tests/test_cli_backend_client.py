@@ -34,7 +34,7 @@ from server.platform.backend_owner import (
 from server.platform.instance import InstanceLock
 from server.tests.test_cli_solve import MESH, TinyEngine, _design, _registry, _request
 from server.tests.backend_breakaway import (
-    WINDOWS_BREAKAWAY_REFUSAL, backend_spawn_refusal_message, require_backend_breakaway,
+    require_backend_breakaway,
 )
 
 
@@ -163,6 +163,46 @@ def test_two_concurrent_cli_solves_use_one_owner_and_create_two_jobs(tmp_path):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("contained", [False, True])
+@pytest.mark.parametrize("adopt", [False, True])
+def test_cli_contained_notice_and_outcome_for_start_and_adoption(tmp_path, monkeypatch, contained, adopt):
+    """Exercise real HTTP/WS clients with the existing socket-free ASGI bridge."""
+    from dataclasses import replace
+    from server.integration.contracts import CliOutcome
+    from server.tests.test_cli_backend_transport import _transports
+
+    data_dir = tmp_path / "data"
+    design = _design(tmp_path)
+
+    async def scenario():
+        async with _transports(data_dir, monkeypatch) as (_, _, detached):
+            handle = replace(detached, contained=contained)
+            monkeypatch.setattr(cli, "discover_backend", lambda root: handle if adopt else None)
+            def ensure(root, argv, *, start_env, allow_contained):
+                assert allow_contained is True
+                assert root == data_dir
+                return handle
+            monkeypatch.setattr(cli, "ensure_backend", ensure if not adopt else
+                                lambda *a, **kw: pytest.fail("existing owner must be adopted"))
+            code, messages, stderr = await _solve(_args(design, data_dir))
+            assert code == 0
+            assert stderr.count("Backend lifetime is contained:") == int(contained)
+            outcome = messages[-1]
+            assert (outcome.get("backend_lifetime") == "contained") is contained
+            if not contained:
+                assert "backend_lifetime" not in outcome
+            assert CliOutcome.model_validate(outcome).backend_lifetime == ("contained" if contained else None)
+            assert outcome["job_url"].startswith(handle.base_url + "/?job=")
+            args = _args(design, data_dir)
+            args.events = "text"
+            stdout, stderr = StringIO(), StringIO()
+            assert await cli.solve_path(args, engine_registry=_registry(), stdout=stdout, stderr=stderr) == 0
+            assert stderr.getvalue().count("Backend lifetime is contained:") == int(contained)
+            assert "Backend lifetime" not in stdout.getvalue()
+
+    asyncio.run(scenario())
+
+
 def test_backend_output_matches_in_process_bundle_byte_for_byte(tmp_path):
     data_dir = tmp_path / "data"
     request_path = _request(tmp_path)
@@ -222,8 +262,8 @@ def test_no_backend_concurrent_clients_ensure_starts_exactly_one(tmp_path, monke
     real_spawn = backend_owner._spawn
     real_ensure = cli.ensure_backend
 
-    def track(argv, root, env=None):
-        process, log = real_spawn(argv, root, env)
+    def track(argv, root, env=None, **kwargs):
+        process, log = real_spawn(argv, root, env, **kwargs)
         processes.append(process)
         return process, log
 
@@ -257,11 +297,11 @@ def test_no_backend_concurrent_clients_ensure_starts_exactly_one(tmp_path, monke
                 process.wait(timeout=5)
 
 
-def test_cli_reports_windows_breakaway_refusal_without_starting_backend(tmp_path, monkeypatch):
+def test_cli_reports_job_query_failure_without_starting_backend(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     args = _args(_design(tmp_path), data_dir)
     def refuse():
-        raise OSError(WINDOWS_BREAKAWAY_REFUSAL)
+        raise OSError("Could not query the caller's Windows job; cannot detach the backend")
     def forbidden(*args, **kwargs):
         pytest.fail("a refused job must not create a backend process")
     monkeypatch.setattr(backend_owner, "sys", SimpleNamespace(platform="win32"))
@@ -270,7 +310,11 @@ def test_cli_reports_windows_breakaway_refusal_without_starting_backend(tmp_path
     monkeypatch.setattr(cli, "discover_backend", lambda root: None)
     monkeypatch.setattr(backend_owner, "_discover", lambda root: None)
     result, messages, stderr = asyncio.run(_solve(args))
-    expected = backend_spawn_refusal_message(sys.executable)
+    expected = (
+        f"Could not start the backend ({sys.executable!r}): "
+        "Could not query the caller's Windows job; cannot detach the backend. "
+        "Check the installation, or start Waveguide Generator manually."
+    )
     assert result == 5
     assert messages[-1]["status"] == "refused"
     assert messages[-1]["error"]["code"] == "backend_spawn_failed"
@@ -289,7 +333,8 @@ def test_typed_startup_errors_do_not_change_folder(tmp_path, monkeypatch, error,
     calls = []
     monkeypatch.setattr(cli, "discover_backend", lambda root: None)
 
-    def refuse(root, argv, *, start_env):
+    def refuse(root, argv, *, start_env, allow_contained):
+        assert allow_contained is True
         calls.append((root, argv, start_env))
         raise error("Check the backend installation and this data folder.")
 
@@ -489,7 +534,8 @@ def test_cli_start_matches_shared_argv_and_environment(tmp_path, monkeypatch, se
         forwarded.append(kwargs)
         return backend_argv(**kwargs)
 
-    def refuse(root, command, *, start_env):
+    def refuse(root, command, *, start_env, allow_contained):
+        assert allow_contained is True
         assert root == data_dir
         expected = [str(python), str(app_root() / "launch" / "serve.py")]
         if override is not None:

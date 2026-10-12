@@ -11,6 +11,8 @@ import textwrap
 import threading
 import time
 from pathlib import Path
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,7 +26,7 @@ from server.platform.backend_owner import (
     ensure_backend,
 )
 from server.platform.instance import LOCK_FILENAME, InstanceLock, pid_is_running, read_lock_info
-from server.tests.backend_breakaway import require_backend_breakaway
+from server.tests.backend_breakaway import WINDOWS_BREAKAWAY_REFUSAL, require_backend_breakaway
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -52,8 +54,11 @@ FAKE_BACKEND = textwrap.dedent(
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            body = json.dumps({"version": "9.9", "commit": "abc", "data_dir": reported,
-                               "pid": os.getpid()}).encode()
+            payload = {"version": "9.9", "commit": "abc", "data_dir": reported,
+                       "pid": os.getpid()}
+            if os.environ.get("WG2_BACKEND_CONTAINED") == "1":
+                payload["lifetime"] = "contained"
+            body = json.dumps(payload).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -147,8 +152,8 @@ def fake(tmp_path: Path, data_dir: Path, monkeypatch):
     processes: list[subprocess.Popen] = []
     real_spawn = backend_owner._spawn
 
-    def tracked_spawn(argv, root):
-        process, log = real_spawn(argv, root)
+    def tracked_spawn(argv, root, env=None, **kwargs):
+        process, log = real_spawn(argv, root, env, **kwargs)
         processes.append(process)
         return process, log
 
@@ -454,6 +459,208 @@ def test_windows_creation_flags(data_dir: Path, monkeypatch) -> None:
     backend_owner._spawn(["backend", "--no-browser"], data_dir)
     assert captured["creationflags"] == 0x200 | 0x8000000
     assert "start_new_session" not in captured
+
+
+@pytest.mark.parametrize("refusal_stage", ["probe", "outer"])
+@pytest.mark.parametrize("suspended", [False, True])
+@pytest.mark.parametrize("prepared_env", [False, True])
+def test_windows_contained_fallback_keeps_start_job(
+    data_dir, monkeypatch, refusal_stage, suspended, prepared_env,
+):
+    from server.platform import job_start, process_tree
+
+    calls, spawns, stopped = [], [], []
+    job = SimpleNamespace(terminate=lambda: calls.append("terminate job"), close=lambda: None)
+    active = {}
+
+    def probe():
+        calls.append("probe")
+        if refusal_stage == "probe":
+            raise process_tree.BreakawayRefused(WINDOWS_BREAKAWAY_REFUSAL)
+        return 0x01000000
+
+    def detached(handle):
+        calls.append("detached")
+        raise process_tree.BreakawayRefused("The backend could not detach from the caller's Windows job chain.")
+
+    def confine(pid, **kwargs):
+        calls.append("confine")
+        assert kwargs == {"subject": "the starting backend", "kill_on_close": False, "allow_breakaway": True}
+        return job
+
+    @contextmanager
+    def start(admit, **kwargs):
+        assert kwargs == {"required": True, "subject": "the starting backend"}
+        state = SimpleNamespace(fired=False, job=None)
+        active.update(admit=admit, state=state)
+        yield state
+
+    def popen(argv, **kwargs):
+        spawns.append(kwargs)
+        pid = 120 + len(spawns)
+        if suspended:
+            active["state"].fired = True
+            try:
+                active["state"].job = active["admit"](pid, 42)
+            except process_tree.BreakawayRefused as exc:
+                # The real suspended-start adapter discards the unrun child
+                # and wraps admission failures in ContainedStartError.
+                stopped.append(pid)
+                raise job_start.ContainedStartError("admission refused") from exc
+        code = [None]
+        return SimpleNamespace(
+            pid=pid, _handle=42, poll=lambda: code[0],
+            terminate=lambda: (stopped.append(pid), code.__setitem__(0, -1)),
+            wait=lambda **kwargs: code[0],
+        )
+
+    monkeypatch.setattr(backend_owner, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", probe)
+    monkeypatch.setattr(process_tree, "require_windows_job_detached", detached)
+    monkeypatch.setattr(process_tree, "confine_to_windows_job", confine)
+    monkeypatch.setattr(job_start, "windows_job_start", start)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setenv("WG2_BACKEND_CONTAINED", "inherited")
+    environment = {"CUSTOM": "retained"} if prepared_env else None
+    child, log = backend_owner._spawn(["backend"], data_dir, environment, allow_contained=True)
+    assert child._wg_start_job is job
+    assert calls.count("probe") == 1
+    assert calls.count("detached") == (1 if refusal_stage == "outer" else 0)
+    assert calls.count("confine") == 1
+    assert not spawns[-1]["creationflags"] & 0x01000000
+    assert spawns[-1]["env"]["WG2_BACKEND_CONTAINED"] == "1"
+    if prepared_env:
+        assert environment == {"CUSTOM": "retained"}  # Caller env was not mutated.
+        assert spawns[-1]["env"]["CUSTOM"] == "retained"
+    if refusal_stage == "outer":
+        assert len(spawns) == 2 and stopped == [121]
+        assert spawns[0]["creationflags"] & 0x01000000
+        assert "WG2_BACKEND_CONTAINED" not in spawns[0]["env"]
+    else:
+        assert len(spawns) == 1 and stopped == []
+    assert log.read_text().count("job breakaway: refused (contained)") == 1
+
+
+@pytest.mark.parametrize("lifetime,contained", [(None, False), ("contained", True), ("detached", False)])
+def test_discovery_reads_lifetime_without_changing_owner(data_dir, monkeypatch, lifetime, contained):
+    lock = InstanceLock(data_dir / "locks")
+    info = lock.acquire(4000)
+    health = {"pid": info.pid, "data_dir": str(data_dir)}
+    if lifetime is not None:
+        health["lifetime"] = lifetime
+    monkeypatch.setattr(backend_owner, "_fetch_health", lambda port: health)
+    monkeypatch.setattr(backend_owner, "_spawn", lambda *a, **kw: pytest.fail("must adopt owner"))
+    try:
+        found = ensure_backend(data_dir, ["unused"])
+        assert found.pid == info.pid and found.contained is contained
+    finally:
+        lock.release()
+
+
+def test_ensure_forwards_contained_permission_only_when_requested(data_dir, monkeypatch):
+    found = backend_owner.BackendHandle("http://127.0.0.1:4000", 1, 4000, data_dir, "", "", True)
+    monkeypatch.setattr(backend_owner, "_discover", lambda root: None)
+    def start(root, argv, deadline, env, *, allow_contained=False):
+        assert allow_contained is True
+        return found
+    monkeypatch.setattr(backend_owner, "_start_and_wait", start)
+    assert ensure_backend(data_dir, ["unused"], allow_contained=True) is found
+
+
+def test_non_killing_windows_job_starts_without_contained_marker(data_dir, monkeypatch):
+    import ctypes
+    from server.platform import process_tree
+
+    def member(process, job, result):
+        result._obj.value = True
+        return True
+    def query(job, kind, result, size, returned):
+        result._obj.LimitFlags = 0
+        return True
+    kernel = SimpleNamespace(GetCurrentProcess=lambda: 42, IsProcessInJob=member, QueryInformationJobObject=query)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: kernel, raising=False)
+    monkeypatch.setattr(backend_owner, "sys", SimpleNamespace(platform="win32"))
+    job = SimpleNamespace(terminate=lambda: None, close=lambda: None)
+    monkeypatch.setattr(process_tree, "confine_to_windows_job", lambda *a, **kw: job)
+    captured = []
+    def popen(argv, **kwargs):
+        captured.append(kwargs)
+        return SimpleNamespace(pid=123, _handle=42)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    environment = {"WG2_BACKEND_CONTAINED": "1", "CUSTOM": "retained"}
+    child, log = backend_owner._spawn(["backend"], data_dir, environment, allow_contained=True)
+    assert child._wg_start_job is job
+    assert len(captured) == 1
+    assert not captured[0]["creationflags"] & 0x01000000
+    assert captured[0]["env"] == {"CUSTOM": "retained"}
+    assert environment["WG2_BACKEND_CONTAINED"] == "1"
+    assert "contained" not in log.read_text()
+
+
+def test_contained_fallback_still_refuses_failed_nested_job(data_dir, monkeypatch):
+    from server.platform import process_tree
+
+    def refuse():
+        raise process_tree.BreakawayRefused(WINDOWS_BREAKAWAY_REFUSAL)
+    monkeypatch.setattr(backend_owner, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", refuse)
+    monkeypatch.setattr(process_tree, "require_windows_job_detached", lambda *a: pytest.fail("must skip detach check"))
+    monkeypatch.setattr(process_tree, "confine_to_windows_job", lambda *a, **kw: None)
+    stopped = []
+    code = [None]
+    def popen(argv, **kwargs):
+        assert kwargs["env"]["WG2_BACKEND_CONTAINED"] == "1"
+        return SimpleNamespace(
+            pid=123, _handle=42, poll=lambda: code[0],
+            terminate=lambda: (stopped.append(123), code.__setitem__(0, -1)),
+            wait=lambda **kwargs: code[0],
+        )
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    with pytest.raises(BackendSpawnError, match="Could not contain the backend process tree"):
+        backend_owner._spawn(["backend"], data_dir, allow_contained=True)
+    assert stopped == [123]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires real Windows job lifetime")
+def test_contained_owner_dies_with_caller_job_and_next_start_adopts_stale_lock(data_dir, tmp_path, fake):
+    from server.platform import process_tree
+
+    ready, record = tmp_path / "ready", tmp_path / "contained.json"
+    script = (
+        "import json,sys,time\nfrom pathlib import Path\n"
+        "from server.platform.backend_owner import ensure_backend\n"
+        "ready,record,data=map(Path,sys.argv[1:4])\nready.write_text('ready')\n"
+        "while not ready.with_suffix('.go').exists(): time.sleep(.01)\n"
+        "handle=ensure_backend(data,sys.argv[4:],allow_contained=True,timeout=15)\n"
+        "record.write_text(json.dumps({'pid':handle.pid,'contained':handle.contained}))\n"
+        "time.sleep(60)\n"
+    )
+    caller = fake.start([sys.executable, "-c", script, str(ready), str(record), str(data_dir), *fake()])
+    job = None
+    try:
+        _wait_until(ready.exists, process=caller)
+        job = process_tree.confine_to_windows_job(caller.pid, allow_breakaway=False)
+        assert job is not None
+        ready.with_suffix(".go").touch()
+        _wait_until(record.exists, timeout=20, process=caller)
+        first = json.loads(record.read_text())
+        assert first["contained"] is True
+        assert discover_backend(data_dir).pid == first["pid"]
+        assert discover_backend(data_dir).contained is True
+        job.close()
+        job = None
+        caller.wait(timeout=5)
+        _wait_until(lambda: not pid_is_running(first["pid"]), timeout=5)
+        assert read_lock_info(data_dir / "locks" / LOCK_FILENAME).pid == first["pid"]
+        assert discover_backend(data_dir) is None
+        second = ensure_backend(data_dir, fake(), allow_contained=True, timeout=15)
+        assert second.pid != first["pid"]
+        assert discover_backend(data_dir) == second
+        assert fake.spawns() == 2
+    finally:
+        if job is not None:
+            job.terminate()
+            job.close()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Windows SIGTERM already terminates the process")

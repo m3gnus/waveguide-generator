@@ -11,7 +11,8 @@ Starting is serialised on ``<data>/locks/backend-start.lock``. Exit 2 means
 another starter owns InstanceLock: wait for it until the overall deadline without
 respawning. A matching-pid backend reporting a different folder is a typed
 refusal only at the deadline. Never work around conflicts with a private folder.
-A timeout terminates and reaps our unconfirmed child; success leaves it detached.
+A timeout terminates and reaps our unconfirmed child; success retains the owner.
+Windows CLI clients can opt into a contained lifetime after breakaway refusal.
 
 ``start_argv`` must start the supported backend on this exact data folder with
 ``--no-browser`` (see ``launchers.backend_start``).
@@ -56,6 +57,7 @@ class BackendHandle:
     data_dir: Path
     version: str
     commit: str
+    contained: bool = False
 
 
 class BackendOwnerError(RuntimeError):
@@ -134,6 +136,7 @@ def _validate(
         data_dir=data_dir,
         version=str(health.get("version", "")),
         commit=str(health.get("commit", "")),
+        contained=health.get("lifetime") == "contained",
     )
 
 
@@ -202,7 +205,34 @@ class _StartLock:
             os.close(descriptor)
 
 
-def _spawn(argv: Sequence[str], data_dir: Path, env: Mapping[str, str] | None = None) -> tuple[subprocess.Popen[bytes], Path]:
+def _breakaway_refusal(exc: BaseException) -> BaseException | None:
+    from server.platform.process_tree import BreakawayRefused
+
+    while exc is not None:
+        if isinstance(exc, BreakawayRefused):
+            return exc
+        exc = exc.__cause__
+    return None
+
+
+def _spawn(
+    argv: Sequence[str], data_dir: Path, env: Mapping[str, str] | None = None,
+    *, allow_contained: bool = False,
+) -> tuple[subprocess.Popen[bytes], Path]:
+    try:
+        return _spawn_attempt(argv, data_dir, env, contained=False)
+    except BackendSpawnError as exc:
+        if not allow_contained or _breakaway_refusal(exc) is None:
+            raise
+        # The first attempt has already stopped its unconfirmed tree. Retry
+        # through the same suspended start and nested job, with a shorter lifetime.
+        return _spawn_attempt(argv, data_dir, env, contained=True)
+
+
+def _spawn_attempt(
+    argv: Sequence[str], data_dir: Path, env: Mapping[str, str] | None,
+    *, contained: bool,
+) -> tuple[subprocess.Popen[bytes], Path]:
     log_dir = data_dir / "logs"
     log_path = log_dir / LOG_FILENAME
     kwargs: dict[str, object] = {}
@@ -210,6 +240,12 @@ def _spawn(argv: Sequence[str], data_dir: Path, env: Mapping[str, str] | None = 
         kwargs["start_new_session"] = True
     job = None
     process = None
+    child_env = env
+    if contained or "WG2_BACKEND_CONTAINED" in (os.environ if env is None else env):
+        child_env = dict(os.environ if env is None else env)
+        child_env.pop("WG2_BACKEND_CONTAINED", None)
+        if contained:
+            child_env["WG2_BACKEND_CONTAINED"] = "1"
     try:
         if sys.platform == "win32":
             from server.platform.process_tree import windows_backend_breakaway_flags
@@ -217,10 +253,13 @@ def _spawn(argv: Sequence[str], data_dir: Path, env: Mapping[str, str] | None = 
             kwargs["creationflags"] = (
                 getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                 | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                | windows_backend_breakaway_flags()
+                | (0 if contained else windows_backend_breakaway_flags())
             )
         log_dir.mkdir(parents=True, exist_ok=True)
         with open(log_path, "ab") as log_file:
+            if contained:
+                log_file.write(b"job breakaway: refused (contained)\n")
+                log_file.flush()
             # The Windows entry is itself a stub: own its interpreter before
             # it runs, but allow a confirmed backend to survive this client.
             from server.platform.job_start import windows_job_start
@@ -229,7 +268,8 @@ def _spawn(argv: Sequence[str], data_dir: Path, env: Mapping[str, str] | None = 
             def admit(pid, process_handle):
                 from server.platform.process_tree import require_windows_job_detached
 
-                require_windows_job_detached(process_handle)
+                if not contained:
+                    require_windows_job_detached(process_handle)
                 return confine_to_windows_job(
                     pid, subject="the starting backend", kill_on_close=False, allow_breakaway=True
                 )
@@ -243,14 +283,15 @@ def _spawn(argv: Sequence[str], data_dir: Path, env: Mapping[str, str] | None = 
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     close_fds=True,
-                    env=env,
+                    env=child_env,
                     **kwargs,  # type: ignore[arg-type]
                 )
             job = started.job
             if sys.platform == "win32" and not started.fired:
                 from server.platform.process_tree import require_windows_job_detached
 
-                require_windows_job_detached(process._handle)
+                if not contained:
+                    require_windows_job_detached(process._handle)
                 job = confine_to_windows_job(
                     process.pid, subject="the starting backend", kill_on_close=False, allow_breakaway=True
                 )
@@ -267,6 +308,12 @@ def _spawn(argv: Sequence[str], data_dir: Path, env: Mapping[str, str] | None = 
         from server.platform.job_start import ContainedStartError
         if not isinstance(exc, (OSError, ContainedStartError)):
             raise
+        if _breakaway_refusal(exc) is not None:
+            raise BackendSpawnError(
+                f"Could not start the backend ({argv[0]!r}): {exc}. "
+                "Open Waveguide Generator from the Start menu and try again, "
+                "or run outside the CI/IDE job that forbids breakaway."
+            ) from exc
         raise BackendSpawnError(
             f"Could not start the backend ({argv[0]!r}): {exc}. Check the installation, "
             "or start Waveguide Generator manually."
@@ -309,6 +356,7 @@ def ensure_backend(
     *,
     timeout: float = 60,
     start_env: Mapping[str, str] | None = None,
+    allow_contained: bool = False,
 ) -> BackendHandle:
     """Find or start the owner; start_argv must use this folder and --no-browser.
 
@@ -316,7 +364,8 @@ def ensure_backend(
     mismatches are transient; a matching-pid folder mismatch refuses at deadline.
     ``start_env`` is the launcher's prepared child environment. An interrupted
     wait terminates/reaps only our unconfirmed spawned child, then releases the
-    start lock; a confirmed owner is left detached.
+    start lock; a confirmed owner is retained. ``allow_contained`` lets CLI
+    clients accept a backend tied to a Windows job that refuses breakaway.
     """
 
     root = Path(data_dir).resolve()
@@ -331,15 +380,21 @@ def ensure_backend(
         found = _discover(root)
         if found is not None:
             return found
+        if allow_contained:
+            return _start_and_wait(root, start_argv, deadline, start_env, allow_contained=True)
         return _start_and_wait(root, start_argv, deadline, start_env)
     finally:
         start_lock.release()
 
 
 def _start_and_wait(
-    root: Path, argv: Sequence[str], deadline: float, env: Mapping[str, str] | None = None
+    root: Path, argv: Sequence[str], deadline: float, env: Mapping[str, str] | None = None,
+    *, allow_contained: bool = False,
 ) -> BackendHandle:
-    process, log_path = _spawn(argv, root) if env is None else _spawn(argv, root, env)
+    if allow_contained:
+        process, log_path = _spawn(argv, root, env, allow_contained=True)
+    else:
+        process, log_path = _spawn(argv, root) if env is None else _spawn(argv, root, env)
     try:
         while True:
             info, health = _observe(root)

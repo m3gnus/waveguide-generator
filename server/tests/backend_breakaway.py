@@ -37,5 +37,6 @@ def require_backend_breakaway() -> None:
 def backend_spawn_refusal_message(executable: str) -> str:
     return (
         f"Could not start the backend ({executable!r}): {WINDOWS_BREAKAWAY_REFUSAL}. "
-        "Check the installation, or start Waveguide Generator manually."
+        "Open Waveguide Generator from the Start menu and try again, "
+        "or run outside the CI/IDE job that forbids breakaway."
     )

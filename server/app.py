@@ -878,7 +878,7 @@ def create_app(
 
     @application.get("/health")
     async def health() -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "version": VERSION,
             "build": BUILD,
             "commit": BUILD_IDENTITY["commit"],
@@ -888,6 +888,9 @@ def create_app(
             # the instance lock (server/platform/backend_owner.py).
             "pid": os.getpid(),
         }
+        if os.environ.get("WG2_BACKEND_CONTAINED") == "1":
+            payload["lifetime"] = "contained"
+        return payload
 
     @application.get("/api/capabilities")
     async def capabilities(refresh: bool = False) -> dict[str, object]:

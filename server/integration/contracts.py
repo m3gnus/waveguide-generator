@@ -66,6 +66,7 @@ class CliOutcome(IntegrationModel):
     ]
     job_id: str | None = None
     job_url: str | None = None
+    backend_lifetime: Literal["contained"] | None = None
     client_request_id: str | None = None
     output_directory: str | None = None
     result_sha256: str | None = Field(

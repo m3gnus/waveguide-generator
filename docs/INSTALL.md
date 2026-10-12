@@ -261,9 +261,11 @@ backend is retained. On Windows cancelling the public launcher also cancels its
 waiting interpreter. Concurrent calls use one backend owner, and opening WG
 later uses the same data folder, jobs, and results.
 Windows admission requests job breakaway when permitted and checks the suspended
-child has escaped every caller job before starting it. A job chain that forbids
-breakaway returns a clear startup error; start WG outside that chain or allow
-breakaway in every parent job.
+child before starting it. A caller job without kill-on-close needs no breakaway.
+If a kill-on-close job chain forbids breakaway, `--ensure-backend` (including WGLink
+cold start) returns a startup error: open Waveguide Generator from the Start menu
+and try again, or run outside the CI/IDE job that forbids breakaway. This entry
+keeps its promise to leave a backend available after the caller exits.
 
 Installed WG advertises its own absolute launcher argv and `ensureBackend: true`
 in `<data>/ipc/wglink/wg-capabilities.json`; clients can store that stable entry
@@ -408,6 +410,16 @@ designs and accepts the same strict JSON `SolveRequest` as the HTTP API:
 .venv/bin/wg validate design.mwg --json
 .venv/bin/wg solve --request request.json --events ndjson --output run-001
 ```
+
+On Windows, `wg solve` automatically accepts a contained backend when a caller's
+kill-on-close job refuses breakaway. It prints one lifetime notice on stderr;
+NDJSON's terminal outcome adds `backend_lifetime: "contained"` in this case only.
+The backend ends when that terminal or CI/IDE job closes or is terminated, which
+can interrupt running solves; exiting the CLI alone does not close the job.
+It still owns the same data folder, and later clients adopt that owner. GUI and
+add-in adopters currently show no lifetime warning. `GET /health` reports
+`lifetime: "contained"` for this owner. Start WG from the Start menu first if an
+independent backend lifetime is needed.
 
 See the canonical [CLI contract](reference/CLI.md) and
 [external evaluation API](reference/EXTERNAL-EVALUATION.md). A standard-library

@@ -1219,10 +1219,32 @@ on another starter never terminates that starter. On Windows the unconfirmed
 stub/interpreter tree is held in an explicitly terminated Job Object; cancellation
 of the public stub is observed by its admitted interpreter. Confirmation closes
 the job handle without killing the backend. The suspended child requests
-`CREATE_BREAKAWAY_FROM_JOB` when the caller job permits explicit breakaway
-(silent breakaway needs no flag), and must be outside every caller job before
-assignment to the new job. An outer job retaining it refuses startup, rather
-than handing back a backend that will die when the caller closes its job.
+`CREATE_BREAKAWAY_FROM_JOB` when a kill-on-close caller job permits explicit
+breakaway (silent breakaway needs no flag). A caller job without kill-on-close
+does not require breakaway. A retaining kill-on-close job chain produces a typed
+`BreakawayRefused` with the existing Windows refusal text. The installed entry
+and WGLink cold start still refuse, with a Start-menu / outside-CI-or-IDE-job
+instruction, because their backend must remain available to later clients.
+
+Only the CLI opts into `ensure_backend(..., allow_contained=True)`. After a
+breakaway refusal it retries without the breakaway flag or outer-job check,
+still admitting the suspended child to the same non-killing nested start job.
+The child receives `WG2_BACKEND_CONTAINED=1`, and `backend-start.log` records
+`job breakaway: refused (contained)`. Its `/health` adds `lifetime: "contained"`;
+discovery reads this into `BackendHandle.contained`. The CLI warns once on stderr
+for either a newly started or adopted contained owner, and adds
+`backend_lifetime: "contained"` only to that owner's NDJSON outcome. Detached
+health and outcome payloads retain their previous fields.
+
+One owner per folder still holds; only its lifetime changes. A contained backend
+ends when the caller's job closes or is terminated, potentially interrupting
+solves submitted by later clients too. The OS releases the instance lock; the
+next client starts a new owner and durable job recovery handles interrupted work.
+GUI and add-in adopters currently show no lifetime warning; see
+[shutdown and recovery](../reference/SHUTDOWN-AND-RECOVERY.md).
+The limit query observes the immediate caller job only. Allowing that job when
+it lacks kill-on-close does not establish the limits of hidden ancestor jobs;
+qualify nested host jobs on Windows when an independent lifetime is required.
 
 Installed WG adds `launcher: {argv: [<absolute OS entry>], ensureBackend: true}`
 to `<data>/ipc/wglink/wg-capabilities.json`. The path is derived from its own

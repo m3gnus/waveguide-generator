@@ -210,8 +210,9 @@ def test_ensure_catches_all_start_exceptions_as_one_json_line(tmp_path, monkeypa
     assert json.loads(result.out)["error"]["type"] == type(error).__name__
 
 
-@pytest.mark.parametrize("member,flags,expected", [(False, 0, 0), (True, 0x800, 0x1000000),
-                                                  (True, 0x1000, 0), (True, 0x2000, None)])
+@pytest.mark.parametrize("member,flags,expected", [(False, 0, 0), (True, 0x2800, 0x1000000),
+                                                  (True, 0x3000, 0), (True, 0x2000, None),
+                                                  (True, 0, 0), (True, 0x800, 0)])
 def test_windows_breakaway_policy_queries_job(tmp_path, monkeypatch, member, flags, expected):
     def in_job(process, job, result):
         result._obj.value = member
@@ -223,19 +224,31 @@ def test_windows_breakaway_policy_queries_job(tmp_path, monkeypatch, member, fla
     kernel = SimpleNamespace(GetCurrentProcess=lambda: 42, IsProcessInJob=in_job, QueryInformationJobObject=query)
     monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: kernel, raising=False)
     if expected is None:
-        with pytest.raises(OSError) as error:
+        with pytest.raises(process_tree.BreakawayRefused) as error:
             process_tree.windows_backend_breakaway_flags()
         assert str(error.value) == WINDOWS_BREAKAWAY_REFUSAL
     else:
         assert process_tree.windows_backend_breakaway_flags() == expected
 
 
-def test_residual_outer_job_is_refused_before_admission(monkeypatch):
+@pytest.mark.parametrize("flags", [0, 0x2000])
+def test_residual_outer_job_is_refused_before_admission(monkeypatch, flags):
     def in_job(process, job, result):
         result._obj.value = True
         return True
-    monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: SimpleNamespace(IsProcessInJob=in_job), raising=False)
-    with pytest.raises(OSError, match="job chain"):
+    def query(job, kind, result, size, returned):
+        result._obj.LimitFlags = flags
+        return True
+    kernel = SimpleNamespace(IsProcessInJob=in_job, QueryInformationJobObject=query)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: kernel, raising=False)
+    if flags:
+        with pytest.raises(process_tree.BreakawayRefused) as error:
+            process_tree.require_windows_job_detached(42)
+        assert str(error.value) == (
+            "The backend could not detach from the caller's Windows job chain. "
+            "Start Waveguide Generator outside that job, or enable breakaway in every parent job."
+        )
+    else:
         process_tree.require_windows_job_detached(42)
 
 
@@ -302,7 +315,7 @@ def test_breakaway_gate_does_not_hide_job_query_errors(monkeypatch, message):
 @pytest.mark.parametrize("launcher", [False, True])
 def test_windows_breakaway_refusal_prevents_backend_creation(tmp_path, monkeypatch, capsys, launcher):
     def refuse():
-        raise OSError(WINDOWS_BREAKAWAY_REFUSAL)
+        raise process_tree.BreakawayRefused(WINDOWS_BREAKAWAY_REFUSAL)
     monkeypatch.setattr(backend_owner, "sys", SimpleNamespace(platform="win32"))
     monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", refuse)
     _assert_breakaway_refusal(tmp_path, monkeypatch, capsys, launcher=launcher)
@@ -330,6 +343,7 @@ def _assert_breakaway_refusal(tmp_path, monkeypatch, capsys, *, launcher):
             backend_owner.ensure_backend(tmp_path, argv, timeout=1)
         assert str(error.value) == backend_spawn_refusal_message(argv[0])
         assert str(error.value.__cause__) == WINDOWS_BREAKAWAY_REFUSAL
+        assert isinstance(error.value.__cause__, process_tree.BreakawayRefused)
     assert not (tmp_path / "logs").exists()
 
 
