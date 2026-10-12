@@ -11,7 +11,8 @@ import time
 import pytest
 
 from server.platform import temp_session
-from server.solver.beat_runtime import identity, manager, paths, registry as r
+from server.solver.beat_runtime import identity, manager, paths, registry as r, spawn
+from server.solver.beat_runtime.host import CONTROL_TIMEOUT, RETIREMENT_TIMEOUT
 from server.solver.beat_runtime.client import HostedWorker
 from server.solver.beat_runtime.ipc import Endpoint
 from server.solver.beat_runtime.ownership import OwnershipClosed
@@ -433,6 +434,16 @@ def test_unresponsive_hosted_startup_cancel_bounds_successor_wait_by_respawning(
     key['environment']['TEST_START_GATE'] = str(tmp_path / 'never')
     key['environment']['TEST_START_ONCE_MARKER'] = str(tmp_path / 'startup-entered')
     monkeypatch.setattr(manager, 'resolve_key', lambda *args, **kwargs: copy.deepcopy(key))
+    launches = []
+    popen = spawn.subprocess.Popen  # The launch fixture's recording wrapper.
+
+    def timed(*args, **kwargs):
+        child = popen(*args, **kwargs)
+        if spawn.HOST_MODULE in args[0]:
+            launches.append(time.monotonic())
+        return child
+
+    monkeypatch.setattr(spawn.subprocess, 'Popen', timed)
     runtime = manager.WorkerManager(directory=directory)
     first = runtime.get_worker()
     errors, replies = [], []
@@ -455,19 +466,32 @@ def test_unresponsive_hosted_startup_cancel_bounds_successor_wait_by_respawning(
         b = threading.Thread(target=successor)
         a.start()
         try:
-            wait_until(lambda: Path(key['environment']['TEST_START_ONCE_MARKER']).exists())
+            # Synchronisation only: the first host's interpreter start-up is the
+            # runner's speed. 30 s is a hang guard, not a bound under test.
+            wait_until(lambda: Path(key['environment']['TEST_START_ONCE_MARKER']).exists(), timeout=30)
             b.start()
             started = time.monotonic()
             abandoned.request_cancel()
-            a.join(9)
-            # The cancelled caller can now return before the host's retirement
-            # backstop. Both callers still share the original recovery bound.
-            b.join(max(0, 8.5 - (time.monotonic() - started)))
+            # The cancelled caller can return before the host's retirement
+            # backstop, and never later than its own bounded startup cancel.
+            a.join(RETIREMENT_TIMEOUT + CONTROL_TIMEOUT + 2)
+            cancelled = time.monotonic() - started
+            # A hang guard only. The stuck startup gate would hold the successor
+            # for 20 s; its bound is asserted on the respawn below.
+            b.join(30)
             assert not a.is_alive() and not b.is_alive()
-            assert time.monotonic() - started < 9
+            assert cancelled < RETIREMENT_TIMEOUT + CONTROL_TIMEOUT + 2
             assert replies and replies[-1]['type'] == 'completed', [str(error) for error in errors]
             assert len(errors) == 1 and 'cancel' in str(errors[0]).lower()
             assert len(children) == 2 and children[0].poll() is not None
+            # The successor waits for the unresponsive host only until its
+            # retirement backstop closes admission, plus at most one admission
+            # connect budget (a closed Windows loopback port times out instead
+            # of refusing), and then respawns. How fast the replacement
+            # interpreter starts is the runner's speed, not this bound; the
+            # successor's own start budget covers it.
+            assert len(launches) == 2
+            assert launches[1] - started < RETIREMENT_TIMEOUT + CONTROL_TIMEOUT + 2
         finally:
             (tmp_path / 'never').touch()
             a.join(2)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import struct
@@ -271,6 +272,67 @@ def test_startup_eof_recovery_is_bounded_and_does_not_retry_host_failures(launch
     monkeypatch.setattr(worker, "_request", failed)
     with pytest.raises(client.HostError, match="engine refused startup"):
         worker.ensure_started()
+
+
+@pytest.mark.parametrize("listener", ["closed", "expired"])
+def test_admission_connect_timeout_rechecks_the_record_like_a_refusal(launch, monkeypatch, listener):
+    # A retiring host can pass start_host's probe and close its listener before
+    # the client connects. POSIX refuses that connect at once; Windows retries
+    # the SYN for about two seconds, so the control budget expires first. Both
+    # must re-run start_host within the original budget, not fail the caller.
+    from dataclasses import replace
+
+    key, directory, children = launch
+    record = spawn.start_host(key, directory)
+    if listener == "closed":
+        # A real closed loopback port: Windows times out, POSIX refuses.
+        endpoint = ipc.Endpoint("tcp")
+        endpoint.listen().close()
+        records = [replace(record, endpoint=endpoint), record]
+    else:
+        # The Windows outcome on every platform: the connect budget expires.
+        records = [record, record]
+        connect = ipc.Endpoint.connect
+        expired = []
+
+        def expiring(self, timeout):
+            if not expired:
+                expired.append(timeout)
+                raise TimeoutError("timed out")
+            return connect(self, timeout)
+
+        monkeypatch.setattr(ipc.Endpoint, "connect", expiring)
+    returned = []
+
+    def start_host(*args, **kwargs):
+        returned.append(records[len(returned)])
+        return returned[-1]
+
+    monkeypatch.setattr(client, "start_host", start_host)
+    worker = client.HostedWorker(key, directory=directory)
+    try:
+        worker.ensure_started()
+        assert returned == records
+        assert worker.host_pid == record.pid
+        assert len(children) == 1
+    finally:
+        worker.detach()
+
+
+def test_connect_client_reports_an_expired_connect_as_a_connection_error(launch, monkeypatch):
+    key, directory, _ = launch
+    record = spawn.start_host(key, directory)
+
+    def expiring(self, timeout):
+        raise TimeoutError("timed out")
+
+    # Scoped, so the fixture's teardown can still shut the host down.
+    with monkeypatch.context() as patched:
+        patched.setattr(ipc.Endpoint, "connect", expiring)
+        with pytest.raises(ConnectionError, match="Host endpoint unavailable: timed out") as error:
+            client.connect_client(record, directory)
+    assert not isinstance(error.value, TimeoutError)
+    assert error.value.errno == errno.ETIMEDOUT
 
 
 @pytest.mark.parametrize("transport", ["unix", "tcp"])

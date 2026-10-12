@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 import contextlib
 import copy
+import errno
 import hmac
 import json
 import math
@@ -53,7 +54,16 @@ def connect_client(record: r.HostRecord, directory: Path, *, timeout: float = CO
     """Prove both peers' identity within one control deadline."""
     r.validate_record(record, record.key, directory)
     deadline = time.monotonic() + timeout
-    connection = record.endpoint.connect(remaining_time(deadline))
+    budget = remaining_time(deadline)
+    try:
+        connection = record.endpoint.connect(budget)
+    except TimeoutError as exc:
+        # Windows reports a closed loopback port only after about two seconds
+        # of SYN retries, so a retiring host's closed listener expires this
+        # budget instead of refusing. Keep it the ConnectionError POSIX raises,
+        # so _connect rechecks the record under spawn exclusion rather than
+        # failing the caller (cleanup.connect_authenticated does the same).
+        raise ConnectionError(errno.ETIMEDOUT, f"Host endpoint unavailable: {exc}") from exc
     try:
         configure_stream_socket(connection, tcp=record.endpoint.kind == "tcp")
         hello = r.hello_message(record)
