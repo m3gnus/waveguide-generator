@@ -64,12 +64,37 @@ def tube_input_impedance(rho, c, area_m2, length_m, frequency_hz, load_pa_s_m3=N
     Lossless plane wave, exp(-i omega t), below the first transverse mode:
     Zin = Zc (ZL - i Zc tan(kL)) / (Zc - i ZL tan(kL)), Zc = rho c / S.
     The default load is matched (plane-wave termination), giving Zin = Zc
-    for every length/frequency. General finite ZL supports independent checks.
+    for every length/frequency. A rigid end is ZL -> infinity: dividing the
+    numerator and denominator by ZL gives +i Zc cot(kL). The opposite sign
+    belongs to exp(+i omega t), not the stored solver pressure convention.
     """
     zc = rho * c / area_m2
     zl = zc if load_pa_s_m3 is None else load_pa_s_m3
     tangent = math.tan(2 * math.pi * frequency_hz * length_m / c)
+    if np.isinf(zl):
+        return 1j * zc / tangent
     return zc * (zl - 1j * zc * tangent) / (zc - 1j * zl * tangent)
+
+
+def tube_pressure_ratio(c, length_m, frequency_hz):
+    """Matched p(outlet)/p(inlet) = exp(+i kL) for exp(-i omega t).
+
+    The transfer matrix implicit in tube_input_impedance is
+    p(0) = cos(kL) p(L) - i Zc sin(kL) Q(L). With p(L)=Zc Q(L),
+    p(0)=exp(-i kL) p(L), hence the positive spatial sign for forward flow.
+    """
+    return np.exp(1j * 2 * math.pi * frequency_hz * length_m / c)
+
+
+def surface_centroid(field, region_index, group_id):
+    """Area-weighted centroid [m] of the actual sidecar opening triangles."""
+    names = field[f"surface_names_{region_index}"].tolist()
+    index, = [i for i, name in enumerate(names) if f"|group={group_id}|" in name]
+    triangles = field[f"surface_triangles_{region_index}_{index}"]
+    vertices = field[f"points_mm_{region_index}"][triangles] * .001
+    areas = np.linalg.norm(np.cross(vertices[:, 1] - vertices[:, 0],
+                                    vertices[:, 2] - vertices[:, 0]), axis=1) / 2
+    return np.sum(vertices.mean(axis=1) * areas[:, None], axis=0) / areas.sum()
 
 
 def surface_average(field, region_index, group_id):
@@ -104,11 +129,41 @@ def resonance_from_compliance(frequencies_hz, pressure_per_acceleration):
     return float(1 / math.sqrt(x0 - y0 * (x1 - x0) / (y1 - y0)))
 
 
-def write_evidence(case, frequencies, computed, reference, tolerance, record, **details):
-    """Write errors before tolerance assertions, including failed qualification."""
-    destination = os.environ.get("WG2_FEM_VALIDATION_DIR")
-    if not destination:
-        return
+def stiffness_from_chamber_pressure(frequencies_hz, pressure_per_acceleration, piston_area_m2):
+    """Infer K [Pa/m³] independently of tuning from inverse compliance's intercept.
+
+    Positive drive acceleration is OUT of the air, so displaced volume INTO
+    the chamber is Sd/omega². For p = K Sd/omega² / (1 - fH²/f²),
+    Re(Sd/(omega² p)) = (1 - fH²/f²)/K. Its intercept at 1/f²=0 is 1/K.
+    A constant pressure/drive scaling error changes K even if tuning is right.
+    """
+    frequencies = np.asarray(frequencies_hz, dtype=float)
+    compliance = np.real(piston_area_m2 / (
+        (2 * math.pi * frequencies)**2 * np.asarray(pressure_per_acceleration)))
+    _, intercept = np.polyfit(1 / frequencies**2, compliance, 1)
+    return float(1 / intercept)
+
+
+def resonance_from_admittance(frequencies_hz, admittance):
+    """Interpolate Im(Q/p)=0 across a bracket of a closed-tube pressure pole.
+
+    For exp(-i omega t), Z=i Zc cot(kL), Y=-i tan(kL)/Zc. The first
+    nonzero pressure resonance is kL=pi (c/(2L)); kL=pi/2 is an impedance
+    zero and an admittance pole. Supply a local bracket of the former only.
+    """
+    frequencies = np.asarray(frequencies_hz, dtype=float)
+    reactive = np.imag(np.asarray(admittance))
+    crossings = np.flatnonzero(reactive[:-1] * reactive[1:] < 0)
+    if len(crossings) != 1:
+        raise ValueError(f"Expected one closed-tube admittance crossing, found {len(crossings)}")
+    i = crossings[0]
+    f0, f1 = frequencies[i:i + 2]
+    y0, y1 = reactive[i:i + 2]
+    return float(f0 - y0 * (f1 - f0) / (y1 - y0))
+
+
+def comparison_evidence(computed, reference, tolerance):
+    """JSON-safe complex values and relative errors for one qualification check."""
     computed, reference = np.asarray(computed), np.asarray(reference)
     errors = np.abs(computed - reference) / np.abs(reference)
 
@@ -117,14 +172,24 @@ def write_evidence(case, frequencies, computed, reference, tolerance, record, **
             return {"real": array.real.tolist(), "imag": array.imag.tolist()}
         return array.tolist()
 
+    return {"computed": values(computed), "reference": values(reference),
+               "relative_error": errors.tolist(), "tolerance": tolerance,
+               "passed": bool(np.all(np.isfinite(errors)) and np.all(errors <= tolerance))}
+
+
+def write_evidence(case, frequencies, computed, reference, tolerance, record, **details):
+    """Write errors before assertions; every additional check contributes to passed."""
+    destination = os.environ.get("WG2_FEM_VALIDATION_DIR")
+    if not destination:
+        return
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[2], text=True).strip()
     payload = {"case": case, "frequencies_hz": list(frequencies),
-               "computed": values(computed), "reference": values(reference),
-               "relative_error": errors.tolist(), "tolerance": tolerance,
-               "passed": bool(np.all(np.isfinite(errors)) and np.all(errors <= tolerance)),
+               **comparison_evidence(computed, reference, tolerance),
                "mesh_stats": {"regions": {r["region_id"]: r["stats"] for r in record["fem_regions"]},
                               "coupled_exterior": record.get("coupled_exterior", {}).get("stats")},
                "git_sha": sha, **details}
+    payload["passed"] = payload["passed"] and all(
+        check["passed"] for check in details.get("checks", {}).values())
     directory = Path(destination)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{case}.json").write_text(json.dumps(payload, indent=2, allow_nan=False) + "\n")
@@ -196,13 +261,14 @@ def validation_bundle(root, case):
         outlet_z = 40 + PORT_LENGTH_M * 1000 if ported else 100
         area = math.pi * 2**2 if ported else 100
         low, high = ((18, 18, outlet_z), (22, 22, outlet_z)) if ported else ((0, 0, 100), (10, 10, 100))
-        size = .75 if ported else 5.
+        size = .75 if ported else 2.5 if case == "closed-tube" else 5.
         region = _region(mesh_size_mm=10. if ported else size)
         region["surface_groups"] = [
             {"group_id": "cone", "name": "Diaphragm", "kind": "moving", "drive_channel_id": "drive-LF",
              "mesh_size_mm": 10. if ported else size,
              "faces": [_face(width**2, (width / 2, width / 2, 0), [0, 0, 1], (0, 0, 0), (width, width, 0))]},
-            {"group_id": "port", "name": "Outlet", "kind": "interface" if ported else "plane-wave-termination",
+            {"group_id": "port", "name": "Outlet", "kind": (
+                "interface" if ported else "rigid" if case == "closed-tube" else "plane-wave-termination"),
              "mesh_size_mm": size,
              "faces": [_face(area, (width / 2, width / 2, outlet_z), [0, 0, 1], low, high)]},
         ]
