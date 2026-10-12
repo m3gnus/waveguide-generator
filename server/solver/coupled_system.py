@@ -175,6 +175,8 @@ def _fem_driver_triangles(domain: FemRegionDomain) -> dict[tuple[int, int, int],
     facet's opposite tetrahedral vertex instead of imposing BEM skin rules.
     Reverse the air-domain outward winding for projected driver area only.
     """
+    from .component_symmetry import check_geometry
+
     tets = domain.tetrahedra
     faces = np.concatenate([tets[:, [1, 2, 3]], tets[:, [0, 2, 3]],
                             tets[:, [0, 1, 3]], tets[:, [0, 1, 2]]])
@@ -182,7 +184,9 @@ def _fem_driver_triangles(domain: FemRegionDomain) -> dict[tuple[int, int, int],
     keys, indices, counts = np.unique(np.sort(faces, axis=1), axis=0,
                                       return_index=True, return_counts=True)
     result = {}
-    for key, index in zip(keys[counts == 1], indices[counts == 1]):
+    for offset, (key, index) in enumerate(zip(keys[counts == 1], indices[counts == 1])):
+        if offset % 256 == 0:
+            check_geometry()
         face = faces[index].copy()
         corners = np.asarray(domain.points_mm[face], dtype=np.float64)
         normal = np.cross(corners[1] - corners[0], corners[2] - corners[0])

@@ -502,7 +502,7 @@ def test_near_field_monopole_velocity_error_below_one_percent(stored, frequency,
         r = np.linalg.norm(points.astype(np.float32).astype(float), axis=1)
         return np.exp(1j * k * r) / r
     result = evaluate_coupled_plane(replay, "field", request, evaluator=monopole)
-    if frequency * (radius - .01) * .05 * 2 * np.pi / 343 < .01:
+    if frequency * (radius - .01) * .05 * 2 * np.pi / 343 < .001:
         assert not decode(result, "valid_mask", "u1").any()
         assert (decode(result, "mask_reason", "u1") == 2).all()
         return
@@ -724,15 +724,102 @@ def test_best_first_distance_100k_sphere_256_plane_bounds_visited_pairs():
 
 
 
-def test_velocity_mask_uses_local_skin_element_size(stored):
+def test_velocity_clearance_is_independent_of_skin_tessellation(stored):
     store, _, _, _, arrays = stored
-    # Coarse skin: the pressure-noise step would be adequate at 1000 Hz,
-    # but a 0.1 m clearance is below one quarter of the local element size.
+    # A coarse planar skin does not impose an arbitrary element-size clearance.
     store.store_bem_trace_arrays('field', {**arrays, 'points_m': arrays['points_m'] * 100})
     request = plane_request('exterior', quantity='velocity_normal', frequency=1000.123456)
     request.plane.origin_m = (.1, .1, -.1)
     request.plane.width_m = request.plane.height_m = .001
     result = evaluate_coupled_plane(store, 'field', request,
-        evaluator=lambda *a, **k: pytest.fail('coarse-skin near-wall velocity evaluated'))
-    assert not decode(result, 'valid_mask', 'u1').any()
-    assert (decode(result, 'mask_reason', 'u1') == 2).all()
+        evaluator=lambda mesh, f, k, p, q, points, **kw: np.exp(1j * k * points[:, 2]))
+    assert decode(result, 'valid_mask', 'u1').all()
+    assert not decode(result, 'mask_reason', 'u1').any()
+
+
+@pytest.mark.parametrize('frequency', [10000., 16000.])
+@pytest.mark.parametrize('field', ['monopole', 'plane-wave'])
+def test_high_frequency_remote_velocity_is_valid_and_accurate(stored, frequency, field):
+    from types import SimpleNamespace
+    from server.solver.field_plane import field_plane_points
+    store = stored[0]
+    fem = store.load_fem_field('field', 100., 'fem')
+    traces = store.load_bem_traces('field', 100., 'fem')
+    replay = SimpleNamespace(load_fem_field=lambda *a: {**fem, 'frequency_hz': frequency},
+                             load_bem_traces=lambda *a: traces)
+    request = plane_request('exterior', quantity='velocity_normal', frequency=frequency)
+    request.plane.origin_m = (.004, .003, .5)
+    request.plane.width_m = request.plane.height_m = .001
+    k = 2 * np.pi * frequency / 343
+    def evaluate(mesh, f, k, p, q, points, **kw):
+        points = points.astype(np.float32).astype(float)
+        r = np.linalg.norm(points, axis=1)
+        return (np.exp(1j * k * r) / r if field == 'monopole'
+                else np.exp(1j * k * points[:, 2])).astype(np.complex64)
+    result = evaluate_coupled_plane(replay, 'field', request, evaluator=evaluate)
+    assert decode(result, 'valid_mask', 'u1').all()
+    assert not decode(result, 'mask_reason', 'u1').any()
+    points = field_plane_points(request.plane)
+    r = np.linalg.norm(points, axis=1)
+    gradient = (np.exp(1j * k * r) * (1j * k * r - 1) * points[:, 2] / r**3
+                if field == 'monopole' else 1j * k * np.exp(1j * k * points[:, 2]))
+    expected = gradient / (1j * 2 * np.pi * frequency * 1.21)
+    actual = decode(result, 'pressure_real') + 1j * decode(result, 'pressure_imag')
+    assert np.max(np.abs(actual / expected - 1)) < .01
+
+
+@pytest.mark.parametrize('frequency', [20., 20000.])
+@pytest.mark.parametrize('clearance_factor,shown', [(.005, False), (1.25, True)])
+def test_sweep_end_clearance_masks_wrong_noisy_surface_source_samples(stored, frequency, clearance_factor, shown):
+    from types import SimpleNamespace
+    from server.solver.field_plane import field_plane_points
+    store = stored[0]
+    fem = store.load_fem_field('field', 100., 'fem')
+    traces = store.load_bem_traces('field', 100., 'fem')
+    replay = SimpleNamespace(load_fem_field=lambda *a: {**fem, 'frequency_hz': frequency},
+                             load_bem_traces=lambda *a: traces)
+    request = plane_request('exterior', quantity='velocity_normal', frequency=frequency)
+    k = 2 * np.pi * frequency / 343
+    distance = clearance_factor * .001 / k / .05
+    request.plane.origin_m = (.001, .001, -distance)
+    request.plane.width_m = request.plane.height_m = .00001
+    # A monopole on the retained z=0 skin plus an outgoing plane wave. Probe
+    # away from the source pole, including the skin's singular evaluation band.
+    source = np.array([.008, .001, 0.])
+    def pressure(points):
+        r = np.linalg.norm(points - source, axis=1)
+        return np.exp(1j * k * points[:, 2]) + .0005 * np.exp(1j * k * r) / r
+    def derivative(points):
+        r = np.linalg.norm(points - source, axis=1)
+        return (1j * k * np.exp(1j * k * points[:, 2])
+                + .0005 * np.exp(1j * k * r) * (1j * k * r - 1) * points[:, 2] / r**3)
+    calls = []
+    def noisy(mesh, f, k, p, q, points, **kw):
+        calls.append(len(points))
+        n = len(points) // 2
+        exact = pressure(points.astype(np.float32).astype(float))
+        direction = derivative((points[:n] + points[n:]) / 2)
+        direction /= np.abs(direction)
+        # Opposing 1e-5 relative errors are a worst-case float32 potential
+        # noise realization, independent of point-coordinate rounding.
+        signs = np.concatenate([direction, -direction])
+        return (exact + 1e-5 * np.abs(exact) * signs).astype(np.complex64)
+    points = field_plane_points(request.plane)
+    h = min(343 / frequency / 50, .1, distance * .05)
+    probes = np.concatenate([points + [0, 0, h], points - [0, 0, h]])
+    raw = noisy(None, frequency, k, None, None, probes)
+    gradient = (raw[:len(points)] - raw[len(points):]) / (2 * h)
+    raw_error = np.max(np.abs(gradient / derivative(points) - 1))
+    calls.clear()
+    result = evaluate_coupled_plane(replay, 'field', request, evaluator=noisy)
+    valid = decode(result, 'valid_mask', 'u1')
+    assert valid.all() if shown else not valid.any()
+    if shown:
+        actual = decode(result, 'pressure_real') + 1j * decode(result, 'pressure_imag')
+        expected = derivative(points) / (1j * 2 * np.pi * frequency * 1.21)
+        assert np.max(np.abs(actual / expected - 1)) < .01
+        assert raw_error < .01
+    else:
+        assert raw_error > .01
+        assert not calls
+        assert (decode(result, 'mask_reason', 'u1') == 2).all()

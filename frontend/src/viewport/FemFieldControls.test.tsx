@@ -62,6 +62,8 @@ describe('coupled FEM controls', () => {
       act(() => checkbox.click()); expect(host.querySelector('[aria-label="FEM colour minimum"]')).toBeNull();
       select('FEM field quantity', 'velocity_normal'); expect(host.textContent).toContain('Velocity per unit acceleration ((m/s) per m/s²)');
       expect(host.textContent).not.toContain('Pressure per unit acceleration');
+      expect(host.textContent).toContain('kh ≥ 0.001');
+      expect(host.textContent).toContain('decreases as frequency rises');
       expect(host.querySelector<HTMLOptionElement>('[aria-label="FEM field display mode"] option[value="spl"]')!.disabled).toBe(true);
     } finally { cleanup(); }
   });

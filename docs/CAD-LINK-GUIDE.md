@@ -137,6 +137,14 @@ omits normalized acoustic impedance; see the driver Sd rules below.
 
 WG lists the prepared regions and shows retained interior pressure on a slice
 plane after solving; select a frequency and drive channel in the field controls.
+Exterior normal velocity uses a centred pressure difference with step h bounded
+by wavelength/50 and 5% of distance to the skin, to limit wave and near-source
+curvature error. Float32 pressure noise of about 1e-5 requires kh ≥ 1e-3
+(k = 2πf/c), giving roughly 1% precision and a minimum clearance of
+0.0032 wavelengths: about 55 mm at 20 Hz and 55 µm at 20 kHz for c = 343 m/s.
+The coordinate precision floor (32 float32 coordinate ULPs) may require more
+clearance. There is no fixed millimetre floor. Unreliable samples are masked
+with the legend reason “Too close to a surface for a reliable velocity”.
 
 FEM has been validated against closed-form references (sealed box, open box,
 ported box, plane-wave and closed tubes) on official BEAT CPU float64.

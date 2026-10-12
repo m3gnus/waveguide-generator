@@ -175,7 +175,7 @@ def driver_surface_problem(record: Mapping[str, Any], channels: Sequence[Any], *
     from server.mesh.fem_coupling import read_coupled_exterior
     from server.mesh.fem_regions import parse_physical_name, read_fem_region_domain
     from .beat_adapter.mesh import read_surface
-    from .component_symmetry import DriverSymmetryError, infer_component_symmetry
+    from .component_symmetry import DriverSymmetryError, infer_component_symmetry, check_geometry
     from .imported import imported_domain_planes
 
     drivers = {c.id: c.exterior_transducer for c in channels
@@ -185,17 +185,18 @@ def driver_surface_problem(record: Mapping[str, Any], channels: Sequence[Any], *
     meshes: dict[str, dict[str, list]] = {channel: {} for channel in drivers}
     geometry_points = []
 
-    def add(channel, mesh, points, faces):
+    def add(channel, mesh, points, faces, triangles=None):
         if channel in meshes and not len(faces):
             raise ValueError(f"group {mesh!r} has no faces in the prepared mesh")
         if channel in meshes and len(faces):
-            meshes[channel].setdefault(mesh, []).append((faces, points[faces]))
+            meshes[channel].setdefault(mesh, []).append((faces, points[faces] if triangles is None else triangles))
 
     try:
         if not exterior_only:
             for region in record.get("fem_regions", ()):
                 if not region.get("mesh_store_path"):
                     continue
+                check_geometry()
                 region_id = region["region_id"]
                 domain = read_fem_region_domain(read_verified_fem_region_mesh(record, region_id), region_id)
                 geometry_points.append(domain.points_mm * .001)
@@ -205,10 +206,16 @@ def driver_surface_problem(record: Mapping[str, Any], channels: Sequence[Any], *
                            if len(faces) and (fields := parse_physical_name(name))}
                 for group in sorted(set(assignments) - present):
                     raise ValueError(f"group {group!r} has no faces in the prepared mesh")
-                for name, faces in domain.surfaces.items():
+                from .coupled_system import _fem_driver_triangles
+
+                oriented = _fem_driver_triangles(domain) if assignments else {}
+                for name, faces in sorted(domain.surfaces.items()):
                     fields = parse_physical_name(name) or {}
-                    add(assignments.get(fields.get("group")), f"mesh:fem:{region_id}",
-                        domain.points_mm * .001, faces)
+                    channel = assignments.get(fields.get("group"))
+                    triangles = None
+                    if channel in meshes and len(faces):
+                        triangles = np.asarray([oriented[tuple(sorted(face))] for face in faces])
+                    add(channel, f"mesh:fem:{region_id}", domain.points_mm * .001, faces, triangles)
         # An undriven exterior still contributes to coupled snapping tolerance.
         exterior_record = record.get("coupled_exterior") or {}
         if not exterior_only and exterior_record.get("mesh_store_path"):
@@ -224,7 +231,10 @@ def driver_surface_problem(record: Mapping[str, Any], channels: Sequence[Any], *
                     geometry_points.append(points * .001)
                 else:
                     points, groups = exterior_points, exterior_groups
-                for name, faces in groups.items():
+                from .coupled_system import _oriented_exterior_surfaces
+
+                axes = tuple({"x0": 0, "y0": 1}[p] for p in imported_domain_planes(record))
+                for name, faces in _oriented_exterior_surfaces(points, groups, symmetry_plane_axes=axes):
                     source = next((part.split("=", 1)[1] for part in name.split("|")
                                    if part.startswith("source_id=")), None)
                     add(sources.get(source), "exterior", points * .001, faces)
@@ -244,6 +254,7 @@ def driver_surface_problem(record: Mapping[str, Any], channels: Sequence[Any], *
             if not exterior_only:
                 tolerance = min(1e-7, tolerance)
             for channel, selected in meshes.items():
+                check_geometry()
                 if not selected:
                     continue
                 # Match compilation's plane snapping before inspecting edges.

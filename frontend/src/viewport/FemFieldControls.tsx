@@ -41,7 +41,7 @@ export function FemFieldControls({ field, rendering, setRendering, sequential, c
       ? `RMS ${quantity === 'pressure' ? 'pressure' : 'velocity'} at ${field.field.payload.transducer_reference_voltage_v} V RMS (${quantity === 'pressure' ? 'Pa' : 'm/s'}). `
       : `${quantity === 'pressure' ? 'Pressure' : 'Velocity'} per unit acceleration (${quantity === 'pressure' ? 'Pa' : '(m/s)'} per m/s²). `}</p>
     {field.field?.payload.plane_unavailable_reason && <p role="note">{field.field.payload.plane_unavailable_reason}</p>}
-    {quantity === 'velocity_normal' && <p role="note">Signed particle velocity normal to the plane (m/s), constant within each P1 element. Exterior velocity uses a centred potential difference.</p>}
+    {quantity === 'velocity_normal' && <p role="note">Signed particle velocity normal to the plane (m/s), constant within each P1 element. Exterior velocity uses a centred potential difference. Clearance requires kh ≥ 0.001 with h ≤ 5% of surface distance (about 0.0032 wavelengths), plus coordinate precision; it decreases as frequency rises.</p>}
     {FEM_PLANE_MASK_REASONS.slice(1).map((reason, i) => {
       const count = planeResult.field?.maskReasons.filter((code) => code === i + 1).length ?? 0;
       return count > 0 && <p key={reason} role="note" title={reason}>{count} masked samples: {reason}.</p>;

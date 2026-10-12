@@ -747,7 +747,9 @@ def test_one_mm_thick_cone_with_both_faces_never_silently_uses_small_net(depth, 
     with warnings.catch_warnings(record=True) as emitted:
         warnings.simplefilter("always")
         assert parameters(driver(sd_m2=.03016), meshes, channel_id='cone')[1] == .03016
-    assert emitted == []
+    # Only Sd warnings matter here; unrelated ResourceWarnings from garbage
+    # collection of earlier tests' objects can land in the recorder.
+    assert [str(w.message) for w in emitted if issubclass(w.category, UserWarning)] == []
 
 
 @pytest.mark.parametrize('declared', [None, .0002])

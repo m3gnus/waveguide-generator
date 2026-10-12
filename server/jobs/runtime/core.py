@@ -1060,6 +1060,35 @@ async def resolve_submission(
     )
 
 
+async def _imported_request_refusal_async(request, record=None, msh_text=None):
+    """Inspect geometry before admission/solve permits, with cooperative stop."""
+    import threading
+    from server.solver.component_symmetry import (GeometryCheckCancelled,
+                                                 geometry_cancellation)
+
+    stopped = threading.Event()
+    def check():
+        if stopped.is_set():
+            raise GeometryCheckCancelled()
+    def inspect():
+        with geometry_cancellation(check):
+            check()
+            result = _imported_request_refusal(request, record, msh_text)
+            check()
+            return result
+    work = asyncio.create_task(asyncio.to_thread(inspect))
+    try:
+        return await asyncio.shield(work)
+    except asyncio.CancelledError:
+        stopped.set()
+        # Drain the worker so cancellation cannot leave geometry work running.
+        try:
+            await asyncio.shield(work)
+        except GeometryCheckCancelled:
+            pass
+        raise
+
+
 #: The geometry source an engine must declare to be offered imported geometry.
 async def resolve_imported_submission(
     request: SolveRequest,
@@ -1139,7 +1168,7 @@ async def resolve_imported_submission(
     requested = request.options.engine
     request_refusal = (
         _imported_backend_refusal(request, imported_record)
-        or _imported_request_refusal(request, imported_record, imported_msh_text)
+        or await _imported_request_refusal_async(request, imported_record, imported_msh_text)
     )
     if request_refusal is not None:
         raise ImportedSolveRefusal(*request_refusal)
@@ -1388,7 +1417,7 @@ async def plan_imported_submission(
     detected = await engine_registry.capabilities()
     resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
     needed_features = _imported_features_needed(request.geometry, imported_record)
-    request_refusal = _imported_request_refusal(request, imported_record, imported_msh_text)
+    request_refusal = await _imported_request_refusal_async(request, imported_record, imported_msh_text)
     verdicts: list[ImportedEngineVerdict] = []
     for name in full3d_engine_order():
         # Each engine's verdict answers "if this engine were picked", which is

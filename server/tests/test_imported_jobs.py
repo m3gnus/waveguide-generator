@@ -4981,3 +4981,65 @@ def test_f2_bound_cad_retry_carries_inputs_without_the_parents_lifecycle(tmp_pat
         finally:
             await runtime.shutdown()
     asyncio.run(flow())
+
+
+@pytest.mark.parametrize('entrypoint', ['plan_imported_submission', 'resolve_imported_submission', 'submit'])
+def test_imported_geometry_wait_is_off_loop_cancellable_and_holds_no_lane(monkeypatch, tmp_path, entrypoint):
+    import threading
+    import time
+    from server.jobs.runtime import core
+    from server.solver.component_symmetry import check_geometry, GeometryCheckCancelled
+    from server.solver.metal_permit import MetalPermit
+
+    started, ended = threading.Event(), threading.Event()
+    thread_ids = []
+    def inspect(*args):
+        thread_ids.append(threading.get_ident())
+        started.set()
+        try:
+            deadline = time.monotonic() + .5
+            while True:
+                check_geometry()
+                if time.monotonic() >= deadline:
+                    raise AssertionError('geometry work did not receive a cancellation token')
+                time.sleep(.001)
+        except GeometryCheckCancelled:
+            ended.set()
+            raise
+    monkeypatch.setattr(core, '_imported_request_refusal', inspect)
+    async def exercise():
+        permit = MetalPermit()
+        request = _request('wgi_' + '0' * 26)
+        request.options.engine = 'auto'
+        registry = _DeclaredRegistry(_metal(), _bempp())
+        monkeypatch.setattr(core, 'process_metal_permit', lambda: permit)
+        if entrypoint == 'submit':
+            store = JobStore(tmp_path / 'cancel.db')
+            store.initialize()
+            runtime = JobRuntime(store, engine_registry=registry, metal_permit=permit)
+            async def started_runtime():
+                pass
+            async def prepared(*args):
+                return SimpleNamespace(record={}, msh_text=None, symmetry_metadata={})
+            monkeypatch.setattr(runtime, 'start', started_runtime)
+            monkeypatch.setattr(runtime, '_prepare_imported_submission', prepared)
+            task = asyncio.create_task(runtime.submit(request))
+        else:
+            task = asyncio.create_task(getattr(core, entrypoint)(request, registry))
+        deadline = asyncio.get_running_loop().time() + 1
+        while not started.is_set():
+            assert asyncio.get_running_loop().time() < deadline
+            await asyncio.sleep(.001)
+        assert thread_ids[0] != threading.get_ident()
+        # The process solve permit remains available while admission inspects.
+        async with asyncio.timeout(.5):
+            async with permit.solve():
+                assert not ended.is_set()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 1)
+        assert ended.is_set()  # Cancellation has drained the checking worker.
+        if entrypoint == 'submit':
+            assert not runtime._queue
+            store.close()
+    asyncio.run(exercise())

@@ -680,11 +680,150 @@ def test_full_mirrored_drivers_refused_at_admission_and_compile(monkeypatch, sam
 
 
 def test_projected_footprint_union_counts_folds_once_and_skips_degenerate_faces():
-    from server.solver.component_symmetry import _footprint, _footprints_overlap
+    from server.solver.component_symmetry import _footprint, _footprints_overlap, _coverage
     square = np.array([[[0., 0.], [1., 0.], [1., 1.]], [[0., 0.], [1., 1.], [0., 1.]]])
     collapsed = np.array([[[0., 0.], [.5, .5], [1., 1.]]])
     for offset in (0., 1e6):
         folded = _footprint(np.concatenate([square, collapsed, square[:, ::-1]]) + offset)
         assert folded[1] == pytest.approx(1.)
+        assert len(folded[0]) == 4
+        assert _coverage(folded[0], np.array([offset, offset]), 1 / 256, (256, 256)).sum() / 256**2 == pytest.approx(1.)
         assert _footprints_overlap(folded, _footprint(square + [.5, 0] + offset))
         assert not _footprints_overlap(folded, _footprint(square + [.51, 0] + offset))
+
+
+def revolved_patch(radius, z=0., *, reverse=False, cone=False, rings=10, sectors=64):
+    """Connected disc/cone with no degenerate pole triangles."""
+    radii = np.linspace(0, radius, rings + 1)
+    theta = np.arange(sectors) * 2 * np.pi / sectors
+    points = np.zeros((1 + rings * sectors, 3))
+    points[1:, 0] = (radii[1:, None] * np.cos(theta)).ravel()
+    points[1:, 1] = (radii[1:, None] * np.sin(theta)).ravel()
+    points[:, 2] = z + (.3 * np.linalg.norm(points[:, :2], axis=1) if cone else 0)
+    j = np.arange(sectors)
+    faces = [np.column_stack([np.zeros(sectors, int), 1 + j, 1 + (j + 1) % sectors])]
+    for ring in range(1, rings):
+        a, b = 1 + (ring - 1) * sectors + j, 1 + (ring - 1) * sectors + (j + 1) % sectors
+        c, d = a + sectors, b + sectors
+        faces.extend([np.column_stack([a, b, d]), np.column_stack([a, d, c])])
+    faces = np.concatenate(faces)
+    if reverse:
+        faces = faces[:, ::-1]
+    return faces, points[faces]
+
+
+@pytest.mark.parametrize('two_meshes', [False, True])
+@pytest.mark.parametrize('case', ['coax', 'dome-over-cone', 'isobaric', 'opposed-isobaric', 'force-cancelling'])
+def test_overlapping_independent_drivers_are_refused(case, two_meshes):
+    front = revolved_patch(.1, cone=True)
+    axis = [0, 0, 1]
+    if case in ('coax', 'dome-over-cone'):
+        rear = revolved_patch(.015 if case == 'coax' else .03, .04, cone=case == 'dome-over-cone')
+    elif case in ('isobaric', 'opposed-isobaric'):
+        rear = revolved_patch(.1, -.08, cone=True, reverse=case == 'opposed-isobaric')
+    else:
+        front = revolved_patch(.1)
+        rear = revolved_patch(.1, reverse=True)
+        front = front[0], front[1][..., [2, 0, 1]] + [.2, 0, 0]
+        rear = rear[0], rear[1][..., [2, 0, 1]] - [.2, 0, 0]
+        axis = [1, 0, 0]
+    meshes = {'exterior': [front], 'fem:rear': [rear]} if two_meshes else {'mesh': [front, rear]}
+    with pytest.raises(DriverSymmetryError) as caught:
+        infer_component_symmetry(meshes, axis, channel_id=case)
+    assert caught.value.code == 'driver_disconnected_patches'
+
+
+@pytest.mark.parametrize('layout', ['two-chambers', 'fem-exterior', 'dipole-rigid-rim'])
+def test_close_opposed_diaphragm_faces_remain_one_driver(layout):
+    front = revolved_patch(.025, cone=layout == 'two-chambers')
+    rear = front[0][:, ::-1], front[1][:, ::-1] - [0, 0, .0005]
+    meshes = ({'front-chamber': [front], 'rear-chamber': [rear]} if layout == 'two-chambers'
+              else {'exterior': [front], 'fem:rear': [rear]} if layout == 'fem-exterior'
+              else {'exterior': [front, rear]})
+    assert infer_component_symmetry(meshes, [0, 0, 1])['physical_driver_orbit_count'] == 1
+
+
+def test_geometry_verdict_cache_uses_content_and_grouping_not_artifact_path(monkeypatch):
+    from server.solver import component_symmetry as module
+    patch = revolved_patch(.023456)
+    module._verdicts.clear()
+    infer_component_symmetry({'old-artifact.msh': [patch]}, [0, 0, 1], channel_id='cache-test')
+    original = module._infer_component_symmetry
+    calls = []
+    def inspect(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(module, '_infer_component_symmetry', inspect)
+    infer_component_symmetry({'new-artifact.msh': [(patch[0] + 10, patch[1].copy())]}, [0, 0, 1], channel_id='cache-test')
+    assert not calls
+    infer_component_symmetry({'new-artifact.msh': [(patch[0], patch[1] + [0, 0, .001])]}, [0, 0, 1], channel_id='cache-test')
+    assert len(calls) == 1
+    infer_component_symmetry({'new-artifact.msh': [patch]}, [0, 0, -1], channel_id='cache-test')
+    assert len(calls) == 2
+    infer_component_symmetry({'new-artifact.msh': [patch]}, [0, 0, 1], channel_id='another-channel')
+    assert len(calls) == 3
+    split = [(patch[0][:30], patch[1][:30]), (patch[0][30:], patch[1][30:])]
+    infer_component_symmetry({'new-artifact.msh': split}, [0, 0, 1], channel_id='cache-test')
+    assert len(calls) == 4
+
+
+def test_20k_triangle_faces_have_bounded_vectorised_overlap_work(monkeypatch):
+    import time
+    from server.solver import component_symmetry as module
+    front = revolved_patch(.1, cone=True, rings=40, sectors=256)
+    rear = front[0][:, ::-1], front[1][:, ::-1] - [0, 0, .003]
+    module._verdicts.clear()
+    checks = []
+    original = module.check_geometry
+    def check():
+        checks.append(True)
+        original()
+    monkeypatch.setattr(module, 'check_geometry', check)
+    start = time.perf_counter()
+    infer_component_symmetry({'exterior': [front], 'rear': [rear]}, [0, 0, 1])
+    elapsed = time.perf_counter() - start
+    assert len(front[0]) == 20224
+    assert len(checks) < 1000  # Bounded raster chunks, not triangle pairs.
+    assert elapsed < 2.0  # Generous CI bound; local target is below 0.2 s.
+
+
+def test_compile_reuses_admission_geometry_verdict(monkeypatch):
+    from server.solver import component_symmetry as module
+    from server.solver.coupled_admission import driver_surface_problem
+    item = region_input()
+    record = {'fem_regions': [dict(item.record, mesh_store_path='first.msh')]}
+    channel = DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=driver())
+    monkeypatch.setattr('server.mesh.artifact.read_verified_fem_region_mesh', lambda *a: 'verified')
+    monkeypatch.setattr('server.mesh.fem_regions.read_fem_region_domain', lambda *a: item.domain)
+    module._verdicts.clear()
+    assert driver_surface_problem(record, [channel]) is None
+    monkeypatch.setattr(module, '_infer_component_symmetry', lambda *a, **kw: pytest.fail('compile repeated geometry verdict'))
+    build_coupled_request(None, [item], layout=compiled().layout, frame=FRAME,
+                          frequencies_hz=[100.], transducers={'fem': driver()})
+
+
+def test_cancelled_raster_work_stops_before_completion_and_is_not_cached():
+    from server.solver import component_symmetry as module
+    front = revolved_patch(.1, cone=True, rings=40, sectors=256)
+    rear = front[0][:, ::-1], front[1][:, ::-1] - [0, 0, .003]
+    module._verdicts.clear()
+    checks = 0
+    def stop():
+        nonlocal checks
+        checks += 1
+        # Topology, then only the first few bounded raster chunks.
+        if checks == 12:
+            raise module.GeometryCheckCancelled()
+    with module.geometry_cancellation(stop), pytest.raises(module.GeometryCheckCancelled):
+        module.infer_component_symmetry({'exterior': [front], 'rear': [rear]}, [0, 0, 1])
+    assert checks == 12
+    assert not module._verdicts
+
+
+def test_fem_normal_preparation_observes_admission_cancel_token():
+    from server.solver.component_symmetry import geometry_cancellation, GeometryCheckCancelled
+    from server.solver.coupled_system import _fem_driver_triangles
+    def stop():
+        raise GeometryCheckCancelled()
+    with geometry_cancellation(stop), pytest.raises(GeometryCheckCancelled):
+        _fem_driver_triangles(region_input().domain)

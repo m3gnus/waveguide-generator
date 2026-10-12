@@ -113,15 +113,14 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
             step = np.full(len(selected), min(speed / frequency / 50, 0.1))
             evaluation_points = selected
             if request.quantity == "velocity_normal":
-                distance, element_size = SkinDistanceIndex(triangles, check).query(selected, check, return_sizes=True)
+                distance = SkinDistanceIndex(triangles, check).query(selected, check)
                 step = np.minimum(step, distance * 0.05)
                 rounding = np.max(np.abs(np.spacing(selected.astype(np.float32))), axis=1).astype(float)
                 # BEAT pressure evaluations are complex64 even for CPU solves.
-                # Relative pressure noise ~1e-5 needs k*h >= 1e-2 rad.
+                # Relative pressure noise ~1e-5 needs k*h >= 1e-3 rad (~1% velocity error).
                 k = 2 * np.pi * frequency / speed
-                minimum_step = max(.001, .01 / k)
-                safe = ((distance >= np.maximum(.002, .25 * element_size))
-                        & (step >= np.maximum(32 * rounding, minimum_step)))
+                minimum_step = .001 / k
+                safe = step >= np.maximum(32 * rounding, minimum_step)
                 mask_reason[np.flatnonzero(exterior)[~safe]] = 2
                 indices = np.flatnonzero(exterior)[safe]
                 exterior[:] = False
