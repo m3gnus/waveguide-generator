@@ -141,3 +141,18 @@ describe('cone excursion', () => {
     expect(excursionSeries({ frequencies: [100], metadata: {} } as ResultPayload)).toBeNull();
   });
 });
+
+it('uses recorded RMS input power and current for FEM channels, including zero and negative samples', () => {
+  const result = driven({ frequencies: [100, 200, 300], impedance: undefined }, {
+    driver: { input_power_w: {
+      frequencies: [100, 200, 300], units: 'W', amplitude_convention: 'rms',
+      values: [2.83, 0, -2.83], current_rms_a: [
+        { real: 1, imaginary: 2 }, { real: 0, imaginary: 0 }, { real: -1, imaginary: 0 },
+      ],
+    } },
+  });
+  const series = drivePowerSeries(result)!;
+  expect(series.watts).toEqual([2.83, 0, -2.83]);
+  expect(series.amps).toEqual([Math.sqrt(5), 0, 1]);
+  expect(series.voltAmps).toEqual([2.83 * Math.sqrt(5), 0, 2.83]);
+});

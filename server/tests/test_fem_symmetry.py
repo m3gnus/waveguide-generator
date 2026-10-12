@@ -332,7 +332,10 @@ def test_coupled_request_matches_exterior_image_options_and_observations(tmp_pat
     for key in ("symmetry", "phasor_convention", "precision", "bem_backend",
                 "regular_quadrature_mode", "quadrature_order", "singular_order"):
         assert coupled.wire["solver_options"][key] == ordinary.wire["solver_options"][key]
-    assert coupled.wire["outputs"][:-1] == ordinary.wire["outputs"][:len(coupled.wire["outputs"]) - 1]
+    exterior_outputs = [o for o in coupled.wire["outputs"] if o["quantity"] == "exterior_pressure"]
+    assert exterior_outputs == [o for o in ordinary.wire["outputs"] if o["quantity"] == "exterior_pressure"]
+    radiation_outputs = [o for o in coupled.wire["outputs"] if o["quantity"] == "interface_radiated_pressure"]
+    assert [o["options"] for o in radiation_outputs] == [o["options"] for o in exterior_outputs]
 
 
 @pytest.mark.parametrize("planes", [("x0",), ("x0", "y0")])

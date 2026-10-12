@@ -65,7 +65,9 @@ def test_coupled_wire_passes_pinned_engine_contract():
     validate_solve_request(request.wire)
     assert request.wire["compiled_system"]["contract_version"] == 2
     assert list(request.channel_ports) == ["exterior", "fem"]
-    assert [o["quantity"] for o in request.wire["outputs"]] == ["exterior_pressure"] * 3 + ["fem_nodal_pressure"]
+    assert [o["quantity"] for o in request.wire["outputs"]] == (
+        ["exterior_pressure"] * 3 + ["interface_radiated_pressure"] * 3
+        + ["interface_average_normal_velocity", "fem_nodal_pressure"])
     options = request.wire["solver_options"]
     assert options["precision"] == "float64"
     assert options["regular_quadrature_mode"] == "fixed"
@@ -189,7 +191,10 @@ def test_envelope_validates_and_contains_fem_only_drive():
     envelope = RESULT_ENVELOPE_ADAPTER.validate_python(enriched)
     assert envelope.result_contract_version == 2
     assert envelope.channels["fem"]["metadata"]["source_ids"] == []
-    assert enriched["metadata"]["fem"] == {"engine": "beat-cpu", "backend": "cpu", "precision": "float64"}
+    assert enriched["metadata"]["fem"]["engine"] == "beat-cpu"
+    assert enriched["metadata"]["fem"]["backend"] == "cpu"
+    assert enriched["metadata"]["fem"]["precision"] == "float64"
+    assert enriched["metadata"]["fem"]["interface_diagnostics"]["interfaces"][0]["flux_conservation_error"] == [2e-8, 2e-8]
     assert "impedance" not in envelope.channels["fem"]
 
 

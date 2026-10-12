@@ -140,6 +140,13 @@ def build_coupled_request(
                                   symmetry_plane_axes=axes)
     channels = {port["name"]: (port["id"],) for port in system["excitation_ports"]}
     outputs = transformed_layout.exterior_outputs() if exterior is not None else []
+    if system["interfaces"]:
+        # Empty targets select all interfaces. Radiation uses the same transformed
+        # observation points as total pressure, including the sampled sphere.
+        outputs.extend({**output, "id": output["id"].replace("pressure:", "interface:radiation:"),
+                        "quantity": "interface_radiated_pressure"} for output in list(outputs))
+        outputs.append({"id": "interface:velocity", "quantity": "interface_average_normal_velocity",
+                        "target_ids": [], "options": {}})
     outputs.append({"id": "fem:pressure", "quantity": "fem_nodal_pressure",
                     "target_ids": [], "options": {}})
     if transducers:

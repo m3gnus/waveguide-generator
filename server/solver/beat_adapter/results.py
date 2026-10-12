@@ -443,6 +443,9 @@ class CoupledSweep:
     velocity: np.ndarray | None = None  # frequency, basis, transducer; native RMS
     current: np.ndarray | None = None
     generalized_load: np.ndarray | None = None  # frequency, transducer, component
+    interface_velocity: np.ndarray | None = None  # frequency, basis, interface; solver convention
+    interface_radiation: dict[str, np.ndarray] = field(default_factory=dict)  # layout, frequency/basis/source/point
+    interface_areas_m2: list[float] = field(default_factory=list)
 
 
 def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_result=None,
@@ -458,6 +461,12 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                 "region_ids": [f"region:fem:{item.domain.region_id}" for item in domains],
                 "node_counts": counts, "node_offsets": np.cumsum([0, *counts[:-1]]).tolist()}
     system = request.wire["compiled_system"]
+    interface_ids = [i["id"] for i in system["interfaces"]]
+    exterior_ids = {r["id"] for r in system["regions"] if r["kind"] == "unbounded_air"}
+    radiation_ids = interface_ids + (["radiation:other-exterior"] if any(
+        b["kind"] == "moving" and b["region_id"] in exterior_ids for b in system["boundaries"])
+        else []) + ["radiation:total"]
+    interface_areas = []
     components = system["components"]
     drivers = [c for c in components if c["kind"] == "electrodynamic_transducer"]
     port_records = system["excitation_ports"]
@@ -502,12 +511,16 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                 for output, item in zip(outputs, quantities):
                     fem = output["quantity"] == "fem_nodal_pressure"
                     transducer = output["quantity"] in {"diaphragm_velocity", "voice_coil_current"}
-                    axis = "fem_node" if fem else "transducer" if transducer else "observation"
-                    count = sum(counts) if fem else len(drivers) if transducer else len(output["options"]["points_m"])
-                    unit = "m/s" if output["quantity"] == "diaphragm_velocity" else "A" if transducer else "Pa"
+                    interface = output["quantity"] == "interface_average_normal_velocity"
+                    radiation = output["quantity"] == "interface_radiated_pressure"
+                    axis = "fem_node" if fem else "transducer" if transducer else "interface" if interface else "observation"
+                    count = sum(counts) if fem else len(drivers) if transducer else len(interface_ids) if interface else len(output["options"]["points_m"])
+                    shape = (len(ports), len(radiation_ids), count) if radiation else (len(ports), count)
+                    axes = ["excitation", "radiation_source", "observation"] if radiation else ["excitation", axis]
+                    unit = "m/s" if interface or output["quantity"] == "diaphragm_velocity" else "A" if transducer else "Pa"
                     if (item.get("quantity") != output["quantity"] or item.get("unit") != unit
                             or item.get("target_id") is not None
-                            or item.get("axes") != ["excitation", axis]
+                            or item.get("axes") != axes
                             or not isinstance(item.get("values"), dict)
                             or item["values"].get("dtype") != (
                                 "complex64" if expected["precision"] == "float32" else "complex128")):
@@ -521,7 +534,24 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                                                  physical_driver_orbit_counts=[1] * len(drivers))
                         if item.get("metadata") != expected_meta:
                             raise ResultContractError("Coupled transducer identity or physical-copy accounting changed")
-                    decoded[output["id"]] = decode_complex_values(item["values"], (len(ports), count))
+                    if interface or radiation:
+                        meta = item.get("metadata", {})
+                        if not isinstance(meta, dict) or meta.get("interface_ids") != interface_ids or meta.get("amplitude_convention") != "rms":
+                            raise ResultContractError("Interface identity or amplitude convention changed")
+                        if interface:
+                            areas = meta.get("represented_area_m2")
+                            if (not isinstance(areas, list) or len(areas) != len(interface_ids)
+                                    or any(type(a) not in {int, float} or not math.isfinite(a) or a <= 0 for a in areas)
+                                    or meta.get("normal_orientation") != "bounded_region_outward"
+                                    or meta.get("spatial_average") != "area_weighted_complex_normal_velocity"
+                                    or interface_areas and areas != interface_areas):
+                                raise ResultContractError("Interface averaging or represented area changed")
+                            interface_areas = areas
+                        elif (meta.get("radiation_source_ids") != radiation_ids
+                              or meta.get("points_m") != output["options"]["points_m"]
+                              or meta.get("decomposition") != "fixed_operating_flux_full_exterior_replay"):
+                            raise ResultContractError("Interface radiation decomposition changed")
+                    decoded[output["id"]] = decode_complex_values(item["values"], shape)
                 if drivers:
                     from .coupled_transducers import recover_load
 
@@ -537,7 +567,8 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                                              sound_speed=medium["sound_speed_m_per_s"]))
                 scale = np.where(scales, 1, acceleration_scale(frequencies[index]))[:, None]
                 fields.append(decoded.pop("fem:pressure") * scale)
-                rows.append({key: value * scale for key, value in decoded.items()})
+                rows.append({key: value * (scale[:, :, None] if value.ndim == 3 else scale)
+                             for key, value in decoded.items()})
                 logs.append({"frequency_hz": frequencies[index], "converged": True,
                              "native_diagnostics": diagnostics, "timings": diagnostics.get("timings", {})})
                 if progress_callback:
@@ -571,7 +602,13 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
         return CoupledSweep(channels, nodal, terminal == "cancelled",
                             np.asarray(velocities).reshape(len(rows), len(ports), len(drivers)) if drivers else None,
                             np.asarray(currents).reshape(len(rows), len(ports), len(drivers)) if drivers else None,
-                            np.asarray(loads).reshape(len(rows), len(drivers), len(components)) if drivers else None)
+                            np.asarray(loads).reshape(len(rows), len(drivers), len(components)) if drivers else None,
+                            (np.stack([row["interface:velocity"] for row in rows]) if rows else
+                             np.empty((0, len(ports), len(interface_ids)), complex)) if interface_ids else None,
+                            {name: np.stack([row[f"interface:radiation:{name}"] for row in rows]) if rows else
+                             np.empty((0, len(ports), len(radiation_ids), len(points)), complex)
+                             for name, points in request.layout.points_m.items()} if interface_ids else {},
+                            interface_areas)
     finally:
         close = getattr(events, "close", None) or getattr(stream, "close", None)
         if close:
@@ -580,7 +617,7 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
 
 def coupled_envelope(sweep, request, *, context, geometry, record, config, started):
     """Map ideal and voltage drives, including FEM-only drives, to the channel envelope."""
-    from server.solver.result_mapping import build_solver_response
+    from server.solver.result_mapping import build_solver_response, map_coupled_port_response, coupled_interface_diagnostics
     from server.solver.imported_channels import channel_source_identity
     from server.solver.combine import combine_drive_channels
     from server.solver.coupled_system import solve_kind
@@ -601,6 +638,8 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
     reroute = request.wire["compiled_system"].get("metadata", {}).get("fem_execution_reroute")
     if reroute:
         fem_metadata["execution_reroute"] = reroute
+    if request.wire["compiled_system"]["interfaces"]:
+        fem_metadata["interface_diagnostics"] = coupled_interface_diagnostics(sweep, request)
     has_voltage = "voltage_rms" in request.drive_normalization.values()
 
     channel_warnings = request.wire["compiled_system"]["metadata"].get("channel_warnings", {})
@@ -620,6 +659,7 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
                       else "unit_acceleration_m_per_s2"},
             sound_speed_m_per_s=speed)
         response.pop("impedance", None)
+        map_coupled_port_response(response, sweep, request, name)
         if request.drive_normalization[name] == "voltage_rms":
             from server.solver.result_mapping import map_coupled_transducer_response
 

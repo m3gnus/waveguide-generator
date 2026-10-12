@@ -92,6 +92,20 @@ export function drivePowerSeries(result: ResultPayload): DrivePowerSeries | null
   if (!hasElectricalImpedance(result)) return null;
   const drive = electricalDrive(result);
   if (!drive) return null;
+  const native = record(record(result.metadata?.driver)?.input_power_w);
+  if (native?.units === 'W' && native.amplitude_convention === 'rms'
+      && Array.isArray(native.frequencies) && Array.isArray(native.values)
+      && Array.isArray(native.current_rms_a)) {
+    const frequencies = native.frequencies as number[];
+    const watts = frequencies.map((_, i) => finite((native.values as unknown[])[i])
+      ? (native.values as number[])[i] : null);
+    const amps = frequencies.map((_, i) => {
+      const current = record((native.current_rms_a as unknown[])[i]);
+      return finite(current?.real) && finite(current?.imaginary)
+        ? Math.hypot(current.real, current.imaginary) : null;
+    });
+    return { frequencies, watts, amps, voltAmps: amps.map((value) => value === null ? null : value * drive.voltageV) };
+  }
   const impedance = result.impedance;
   const frequencies = impedance?.frequencies?.length ? impedance.frequencies : result.frequencies;
   const real = impedance?.real ?? [];

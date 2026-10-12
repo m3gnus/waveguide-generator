@@ -1393,6 +1393,12 @@ def map_coupled_transducer_response(response, sweep, request, channel, spec):
                 "imaginary": [_finite(solver_to_engineering(z).imag) for z in values]}
 
     electrical = impedance(zin)
+    input_power = {"frequencies": frequencies, "units": "W",
+                   "values": json_safe_native_value(np.real(voltage * np.conj(current))),
+                   "current_rms_a": json_safe_native_value(solver_to_engineering(current)),
+                   "phase_convention": ENGINEERING_PHASE_CONVENTION,
+                   "definition": "Re(V_rms * conj(I_rms)) = Re(Zin) * abs(I_rms)^2",
+                   "amplitude_convention": "rms", "reference_voltage_rms_v": voltage}
     index = driver_indices[0]  # One mechanical coordinate per WG drive channel.
     velocity = sweep.velocity[:, basis_indices].sum(axis=1)
     excursion = np.sqrt(2) * 1000 * np.abs(velocity[:, index]) / (2 * np.pi * np.asarray(frequencies))
@@ -1411,6 +1417,7 @@ def map_coupled_transducer_response(response, sweep, request, channel, spec):
         drive={"voltage_v": voltage, "rg_ohm": 0.0},
         driver={"spec": driver_spec, "label": channel, "drive_voltage_v": voltage, "rg_ohm": 0.0,
                 "electrical_impedance_ohm": electrical,
+                "input_power_w": input_power,
                 "cone_excursion_mm": {"frequencies": frequencies, "values": excursion.tolist(),
                                       "peak_mm": float(np.max(excursion, initial=0)),
                                       "quantity": "one_way_peak_displacement"}},
@@ -1429,3 +1436,64 @@ def map_coupled_transducer_response(response, sweep, request, channel, spec):
                                               "component_ids": [c["id"] for c in system["components"]],
                                               "values": json_safe_native_value(sweep.generalized_load[:, index]),
                                               "unavailable_frequency_indices": np.flatnonzero(~np.isfinite(load)).tolist()}})
+
+
+def coupled_interface_diagnostics(sweep, request):
+    """Retain BEAT's per-interface maxima over excitation bases, without gating."""
+    native = next(iter(sweep.channels.values()))
+    ids = [item["id"] for item in request.wire["compiled_system"]["interfaces"]]
+    logs = [row["native_diagnostics"] for row in native.solver_log]
+
+    def errors(key, interface_id):
+        values = []
+        for row in logs:
+            row_ids = row.get("interface_ids", [])
+            samples = row.get(key, [])
+            index = row_ids.index(interface_id) if interface_id in row_ids else -1
+            values.append(_finite(samples[index]) if 0 <= index < len(samples) else None)
+        return values
+
+    return {"frequencies": native.frequencies_hz.tolist(), "source": "beat_engine",
+            "aggregation": "maximum_over_excitation_bases", "units": "relative_error",
+            "interfaces": [{"id": identity,
+                            "pressure_continuity_error": errors("interface_pressure_continuity_errors", identity),
+                            "flux_conservation_error": errors("interface_flux_conservation_errors", identity)}
+                           for identity in ids]}
+
+
+def map_coupled_port_response(response, sweep, request, channel):
+    """Expose port phasors in engineering convention on the channel drive basis."""
+    from server.contracts.conventions import ENGINEERING_PHASE_CONVENTION, solver_to_engineering
+
+    interfaces = request.wire["compiled_system"]["interfaces"]
+    if not interfaces:
+        return
+    indices = [request.wire["excitation_port_ids"].index(p) for p in request.channel_ports[channel]]
+    velocity = solver_to_engineering(sweep.interface_velocity[:, indices].sum(axis=1))
+    radiation = {name: solver_to_engineering(values[:, indices].sum(axis=1))
+                 for name, values in sweep.interface_radiation.items()}
+
+    def pressure(source_index):
+        return {name: json_safe_native_value(values[:, source_index]) for name, values in radiation.items()}
+
+    response["metadata"]["fem_ports"] = {
+        "frequencies": response["frequencies"], "drive_normalization": request.drive_normalization[channel],
+        "reference_voltage_rms_v": request.wire["solver_options"].get("transducer_reference_voltage_v")
+        if request.drive_normalization[channel] == "voltage_rms" else None,
+        "phase_convention": ENGINEERING_PHASE_CONVENTION,
+        "normal_orientation": "bounded_region_outward", "velocity_units": "m/s", "pressure_units": "Pa",
+        "observation_angles_deg": request.layout.angles_deg.tolist(),
+        "observation_points_m": {output["id"].removeprefix("interface:radiation:"): output["options"]["points_m"]
+                                 for output in request.wire["outputs"]
+                                 if output["quantity"] == "interface_radiated_pressure"},
+        "sphere_theta_deg": json_safe_native_value(request.layout.sphere_theta_deg),
+        "sphere_phi_deg": json_safe_native_value(request.layout.sphere_phi_deg),
+        "interfaces": [{"id": item["id"], "label": item["id"].removeprefix("interface:"),
+                        "represented_area_m2": sweep.interface_areas_m2[i] if sweep.interface_areas_m2 else None,
+                        "average_normal_velocity": json_safe_native_value(velocity[:, i]),
+                        "radiated_pressure": pressure(i)} for i, item in enumerate(interfaces)],
+        "diaphragm_radiated_pressure": {
+            name: json_safe_native_value(values[:, -1] - values[:, :len(interfaces)].sum(axis=1))
+            for name, values in radiation.items()},
+        "total_radiated_pressure": pressure(-1),
+        "decomposition": "fixed_operating_flux_full_exterior_replay"}

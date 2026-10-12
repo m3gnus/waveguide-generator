@@ -77,6 +77,7 @@ class EngineWorker:
                 self._info.update(contracts={"system_request": [1], "compiled_system": [2], "system_result": [2],
                                             "field_array": [1], "mesh_data": [1]},
                                   precisions=["float32", "float64"], solve_kinds=["coupled_fem_bem_lem", "interior_fem"],
+                                  optional_output_quantities=["interface_average_normal_velocity", "interface_radiated_pressure"],
                                   phasor_conventions=[SOLVER_TIME_CONVENTION], cancellation="marker_file")
             self.log("started")
 
@@ -177,12 +178,32 @@ def coupled_result(request, frequency):
                                if r["kind"] == "bounded_air"],
                 "node_counts": counts, "node_offsets": np.cumsum([0, *counts[:-1]]).tolist()}
     ports = request["excitation_port_ids"]
+    system = request["compiled_system"]
+    interfaces = system["interfaces"]
+    interface_ids = [item["id"] for item in interfaces]
+    exterior_ids = {r["id"] for r in system["regions"] if r["kind"] == "unbounded_air"}
+    radiation_ids = interface_ids + (["radiation:other-exterior"] if any(
+        b["kind"] == "moving" and b["region_id"] in exterior_ids for b in system["boundaries"])
+        else []) + ["radiation:total"]
+    # Compute the represented area from each authoritative FEM boundary.
+    areas = []
+    for interface in interfaces:
+        boundary = next(b for b in system["boundaries"] if b["id"] == interface["bounded_boundary_id"])
+        mesh = next(m for m in meshes if m["id"] == boundary["group"]["mesh_id"])
+        points = np.frombuffer(base64.b64decode(mesh["mesh_data"]["points"]["data"]), dtype="<f8").reshape(-1, 3)
+        cell = next(c for c in mesh["mesh_data"]["cells"] if c["type"] == "triangle")
+        triangles = np.frombuffer(base64.b64decode(cell["connectivity"]["data"]), dtype="<i8").reshape(-1, 3)
+        tags = np.frombuffer(base64.b64decode(cell["physical_tags"]["data"]), dtype="<i8")
+        faces = points[triangles[tags == boundary["group"]["tag"]]]
+        areas.append(float(np.linalg.norm(np.cross(faces[:, 1] - faces[:, 0], faces[:, 2] - faces[:, 0]), axis=1).sum() / 2))
     quantities = []
     for output in request["outputs"]:
         fem = output["quantity"] == "fem_nodal_pressure"
         transducer = output["quantity"] in {"diaphragm_velocity", "voice_coil_current"}
+        interface = output["quantity"] == "interface_average_normal_velocity"
+        radiation = output["quantity"] == "interface_radiated_pressure"
         drivers = [c for c in request["compiled_system"]["components"] if c["kind"] == "electrodynamic_transducer"]
-        count = sum(counts) if fem else len(drivers) if transducer else len(output["options"]["points_m"])
+        count = sum(counts) if fem else len(drivers) if transducer else len(interfaces) if interface else len(output["options"]["points_m"])
         values = np.asarray([np.full(count, (i + 1) * (2 + 3j)) for i in range(len(ports))], dtype="<c8" if request["solver_options"]["precision"] == "float32" else "<c16")
         extra = {"metadata": metadata} if fem else {}
         if transducer:
@@ -193,8 +214,25 @@ def coupled_result(request, frequency):
             extra = {"metadata": meta}
         else:
             unit = "Pa"
+        axes = ["excitation", "fem_node" if fem else "transducer" if transducer else "observation"]
+        if interface:
+            unit = "m/s"
+            axes = ["excitation", "interface"]
+            extra = {"metadata": {"interface_ids": interface_ids, "represented_area_m2": areas,
+                                  "normal_orientation": "bounded_region_outward",
+                                  "spatial_average": "area_weighted_complex_normal_velocity",
+                                  "amplitude_convention": "rms"}}
+        if radiation:
+            # Distinct contributions sum exactly to the ordinary fake total.
+            values = np.stack([values * ((i + 1) / sum(range(1, len(radiation_ids))))
+                               for i in range(len(radiation_ids) - 1)] + [values], axis=1)
+            axes = ["excitation", "radiation_source", "observation"]
+            extra = {"metadata": {"interface_ids": interface_ids, "radiation_source_ids": radiation_ids,
+                                  "radiation_source_names": radiation_ids, "points_m": output["options"]["points_m"],
+                                  "decomposition": "fixed_operating_flux_full_exterior_replay",
+                                  "amplitude_convention": "rms"}}
         quantities.append({"id": output["id"], "quantity": output["quantity"], "unit": unit,
-                           "target_id": None, "axes": ["excitation", "fem_node" if fem else "transducer" if transducer else "observation"],
+                           "target_id": None, "axes": axes,
                            "values": {"encoding": "base64", "dtype": "complex64" if values.dtype.itemsize == 8 else "complex128", "shape": list(values.shape),
                                       "order": "C", "byte_order": "little",
                                       "content_base64": base64.b64encode(values.tobytes()).decode()}, **extra})
@@ -205,6 +243,10 @@ def coupled_result(request, frequency):
         return float(str(scalar(value)))
     if "transducer_reference_voltage_v" in diagnostics:
         diagnostics["transducer_reference_voltage_v"] = json_scalar(diagnostics["transducer_reference_voltage_v"])
+    if interfaces:
+        diagnostics.update(interface_ids=interface_ids,
+                           interface_pressure_continuity_errors=[1e-8 * (i + 1) for i in range(len(interfaces))],
+                           interface_flux_conservation_errors=[2e-8 * (i + 1) for i in range(len(interfaces))])
     if not any(r["kind"] == "unbounded_air" for r in request["compiled_system"]["regions"]):
         diagnostics["linear_backend"] = diagnostics.pop("bem_backend")
     return {"schema_version": 2, "freq_hz": json_scalar(frequency), "excitation_port_ids": ports,

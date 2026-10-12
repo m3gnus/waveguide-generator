@@ -26,6 +26,7 @@ import { combinedChannelId, combineMetadataOf, type ResultPayload } from '../res
 import { resolveNormalizationAngle, withNormalizationAngle } from '../results/normalization';
 import { MAX_MEASUREMENT_ANGLES, measurementAnchorRefusal, measurementAngleLabel, measurementAngles, measurementPlanes, nearestMeasurementAngle, onAxisAngle, withMeasurementAngle, type MeasurementPlane } from '../results/measurementAngle';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
+import { FemPortsPanel } from '../results/FemPortsPanel';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
@@ -2691,7 +2692,7 @@ export function ResultsPanel() {
   // is rebuilt and no canvas is touched until the tab is in front again, and
   // then exactly once from the newest snapshot.
   const charts = useVisibleRedraw(shown && cadResultMatchesViewport
-    ? <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifactView} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/>
+    ? <><FemPortsPanel result={shown}/><ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifactView} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/></>
     : null);
   /** Every file is attempted; the ones that fail are named rather than
    * cancelling the ones that parsed. */
