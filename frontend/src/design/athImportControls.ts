@@ -13,7 +13,18 @@ export function athControlError(path: string | undefined, value: number): string
   return undefined;
 }
 
+/**
+ * The server refuses a lip or Opus rear whenever the design carries an
+ * enclosure block, even at depth 0, so the UI tests presence, not depth.
+ */
+function enclosurePresent(design: DesignDocument): boolean {
+  return !design._absent?.includes('enclosure');
+}
+
+const ENCLOSURE_PRESENT = 'This design carries a Mesh.Enclosure block, and ATH builds no mouth lip or Opus rear with one. Re-import the file without Mesh.Enclosure to use them.';
+
 export function opusMountingReason(design: DesignDocument): string | undefined {
+  if (design.enclosure.depth <= 0 && enclosurePresent(design) && design.simulation.sim_type !== 'infinite-baffle' && design.mesh.wall_thickness > 0) return ENCLOSURE_PRESENT;
   if (design.simulation.sim_type === 'infinite-baffle' || design.enclosure.depth > 0 || design.mesh.wall_thickness <= 0) {
     return 'Mesh.RearShape = 3 requires a free-standing wall. Change Mounting to Thickened waveguide (freestanding).';
   }
@@ -31,10 +42,11 @@ export function opusClampNote(design: DesignDocument): string | undefined {
 
 /** Why the mouth lip cannot be switched on for this design (mesher and server refusals). */
 export function lipUnavailableReason(design: DesignDocument): string | undefined {
-  if (design.formula === 'R-OSSE') return 'Mesh.Roundover with R-OSSE is unsupported: ATH folds the lip back.';
+  if (design.formula !== 'OSSE') return `Mesh.Roundover with ${design.formula} is unsupported: ATH builds the lip on OSSE only.`;
   if (design.simulation.sim_type === 'infinite-baffle' || design.enclosure.depth > 0) {
     return 'Mesh.Roundover requires a free-standing or bare shell. Change Mounting to Thickened waveguide (freestanding) or Bare shell.';
   }
+  if (enclosurePresent(design)) return ENCLOSURE_PRESENT;
   if (design.mesh.length_segments < 3) return 'Mesh.Roundover requires Mesh.LengthSegments >= 3 for the mouth chord angle.';
   return undefined;
 }

@@ -6,7 +6,7 @@ import { athControlError, lipRadiusWallError, lipUnavailableReason } from './ath
 describe('ATH import wall default and controls', () => {
   it('keeps ATH\'s 5 mm wall for an unset wall through lip/rear edits without saving it', () => {
     resetDesignStore();
-    useDesignStore.getState().loadDesign(hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', mesh: { wall_thickness: null } }));
+    useDesignStore.getState().loadDesign(hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, mesh: { wall_thickness: null } }));
     const state = () => useDesignStore.getState();
     // ATH's parser defaults an omitted wall to 5 mm, which is also what WG sends the mesher.
     expect(state().design.mesh.wall_thickness).toBe(5);
@@ -34,7 +34,7 @@ describe('ATH import wall default and controls', () => {
 });
 
 describe('ATH lip availability and radius/wall rule', () => {
-  const load = (wire: Record<string, unknown>) => hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', ...wire });
+  const load = (wire: Record<string, unknown>) => hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, ...wire });
 
   it('reports the mesher refusals and nothing for a supported design', () => {
     expect(lipUnavailableReason(load({}))).toBeUndefined();

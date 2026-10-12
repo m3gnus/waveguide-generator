@@ -363,7 +363,7 @@ describe('ParamPanel inventory UX', () => {
 
   it('edits imported ATH lip and rear on Geometry while keeping NAC read-only', () => {
     act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
-      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', ath_nac_present: true, ath_nac: 10,
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, ath_nac_present: true, ath_nac: 10,
       mesh: { ath_roundover: { radius: 42, segments: 6 }, ath_rear_shape: 3,
         ath_rear_front_offset: 40, ath_rear_step: 50 },
     })));
@@ -408,7 +408,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('offers a first-time lip with the default radius and segments', () => {
-    act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'ath-2026-09a-v2' })));
+    act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null })));
     const select = host.querySelector<HTMLSelectElement>('[data-parameter-id="mesh.ath_roundover"] select')!;
     act(() => { select.value = '1'; select.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(useDesignStore.getState().design.mesh.ath_roundover).toEqual({ radius: 10, segments: 5 });
@@ -442,6 +442,52 @@ describe('ParamPanel inventory UX', () => {
     }
   });
 
+  it.each(['bare', 'enclosure'] as const)('writes an explicit 0 mm wall for %s on a default import with an unset wall', (mode) => {
+    // The default ATH import: infinite baffle, wall and enclosure unset. An unset
+    // wall is ATH's 5 mm once the baffle is gone, so these bodies need a written 0.
+    act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null,
+      simulation: { sim_type: 'infinite-baffle' }, mesh: { wall_thickness: null },
+    })));
+    const mounting = host.querySelector<HTMLSelectElement>('#outer-body-mode')!;
+    act(() => { mounting.value = mode; mounting.dispatchEvent(new Event('change', { bubbles: true })); });
+    const state = useDesignStore.getState().design;
+    expect(serializeDesign(state).mesh).toMatchObject({ wall_thickness: 0 });
+    expect(mounting.value).toBe(mode);
+    if (mode === 'bare') expect(serializeDesign(state).enclosure).toBeNull();
+    else expect(state.enclosure.depth).toBeGreaterThan(0);
+  });
+
+  it('refuses the lip and Opus while the design carries an enclosure block, even at depth 0', () => {
+    act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', mesh: { wall_thickness: 8 },
+    })));
+    const lip = host.querySelector<HTMLSelectElement>('[data-parameter-id="mesh.ath_roundover"] select')!;
+    const on = [...lip.options].find((option) => option.value === '1')!;
+    expect(on.disabled).toBe(true);
+    expect(host.textContent).toContain('Re-import the file without Mesh.Enclosure');
+  });
+
+  it('forgets the remembered lip when another design is loaded', () => {
+    const load = (radius: number) => act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null,
+      mesh: { wall_thickness: 5, ath_roundover: { radius, segments: 7 } },
+    })));
+    const lipSelect = () => host.querySelector<HTMLSelectElement>('[data-parameter-id="mesh.ath_roundover"] select')!;
+    const set = (value: string) => act(() => { const select = lipSelect(); select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    load(33);
+    set('0');
+    load(44);
+    set('0');
+    set('1');
+    expect(useDesignStore.getState().design.mesh.ath_roundover).toEqual({ radius: 44, segments: 7 });
+    act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, mesh: { wall_thickness: 5 },
+    })));
+    set('1');
+    expect(useDesignStore.getState().design.mesh.ath_roundover).toEqual({ radius: 10, segments: 5 });
+  });
+
   it('keeps the absent enclosure when the wall write is the only change', () => {
     act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
       formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, mesh: { wall_thickness: 8 },
@@ -460,7 +506,7 @@ describe('ParamPanel inventory UX', () => {
     ['an enclosure', { enclosure: { depth: 200 } }, 'Mesh.Roundover requires a free-standing or bare shell'],
     ['LengthSegments below 3', { mesh: { length_segments: 2 } }, 'Mesh.LengthSegments >= 3'],
   ])('disables the lip On choice for %s with the reason', (_name, extra, message) => {
-    act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', ...extra })));
+    act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, ...extra })));
     expect(host.querySelector<HTMLOptionElement>('[data-parameter-id="mesh.ath_roundover"] option[value="1"]')!.disabled).toBe(true);
     expect(host.textContent).toContain(message);
     const select = host.querySelector<HTMLSelectElement>('[data-parameter-id="mesh.ath_roundover"] select')!;
@@ -470,7 +516,7 @@ describe('ParamPanel inventory UX', () => {
 
   it('warns when a lip is already on where it is refused', () => {
     act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
-      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', simulation: { sim_type: 'infinite-baffle' },
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, simulation: { sim_type: 'infinite-baffle' },
       mesh: { ath_roundover: { radius: 20, segments: 5 } },
     })));
     expect(host.querySelector('.field-warning')?.textContent).toContain('Mesh.Roundover requires a free-standing or bare shell');
@@ -488,7 +534,7 @@ describe('ParamPanel inventory UX', () => {
       return input;
     };
     act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
-      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', mesh: { wall_thickness: 6, ath_roundover: { radius: 10, segments: 5 } },
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, mesh: { wall_thickness: 6, ath_roundover: { radius: 10, segments: 5 } },
     })));
     let input = type('mesh.ath_roundover.radius', '6');
     expect(host.textContent).toContain(message);
@@ -504,7 +550,7 @@ describe('ParamPanel inventory UX', () => {
 
   it('shows the Opus wall at its saved maximum of 1000 without lifting the bound', () => {
     act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
-      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', mesh: { ath_rear_shape: 3, wall_thickness: 1200 },
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, mesh: { ath_rear_shape: 3, wall_thickness: 1200 },
     })));
     const input = host.querySelector<HTMLInputElement>('[data-parameter-id="mesh.wall_thickness"] input')!;
     expect(input.getAttribute('aria-valuemax')).toBe('1000');
@@ -524,7 +570,7 @@ describe('ParamPanel inventory UX', () => {
     act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
       formula: 'OSSE', text_import_version: 'ath-2026-09a-v2',
       mesh: { wall_thickness: mode === 'bare' ? 0 : 6 },
-      enclosure: { depth: mode === 'enclosure' ? 200 : 0 },
+      enclosure: mode === 'enclosure' ? { depth: 200 } : null,
       simulation: { sim_type: mode === 'infinite-baffle' ? mode : 'freestanding' },
     })));
     expect(host.querySelector<HTMLOptionElement>('[data-parameter-id="mesh.ath_rear_shape"] option[value="3"]')!.disabled).toBe(true);
@@ -533,7 +579,7 @@ describe('ParamPanel inventory UX', () => {
 
   it.each([[.05, .1], [1200, 1000]])('shows Opus wall clamp for %s mm without altering the document', (wall, effective) => {
     act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
-      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', mesh: { ath_rear_shape: 3, wall_thickness: wall },
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, mesh: { ath_rear_shape: 3, wall_thickness: wall },
     })));
     expect(host.textContent).toContain(`Mesh.RearShape = 3 clamps Mesh.WallThickness to ${effective} mm`);
     expect(useDesignStore.getState().design.mesh.wall_thickness).toBe(wall);
@@ -549,7 +595,7 @@ describe('ParamPanel inventory UX', () => {
     ['mesh.ath_rear_step', '0', 'Mesh.RearShape.Step must be finite and > 0'],
   ])('validates %s input %s with the mesher diagnostic', (id, draft, message) => {
     act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
-      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', mesh: { ath_rear_shape: 3, ath_roundover: { radius: 10, segments: 5 } },
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, mesh: { ath_rear_shape: 3, ath_roundover: { radius: 10, segments: 5 } },
     })));
     const before = serializeDesign(useDesignStore.getState().design);
     const input = host.querySelector<HTMLInputElement>(`[data-parameter-id="${id}"] input`)!;

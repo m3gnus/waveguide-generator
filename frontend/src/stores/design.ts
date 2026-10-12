@@ -690,6 +690,8 @@ function announce(event: RevisionEvent): void {
 interface DesignStore {
   design: DesignDocument;
   designRevision: number;
+  /** Bumps when a design is loaded or replaced, never on an edit. */
+  loadGeneration: number;
   dragSnapshot: DesignDocument | null;
   updateField: (path: string, value: number) => void;
   updateValue: (path: string, value: DesignValue) => void;
@@ -812,6 +814,7 @@ export const useDesignStore = create<DesignStore>()(
     (set, get) => ({
       design: structuredClone(seedDesign),
       designRevision: 1,
+      loadGeneration: 0,
       dragSnapshot: null,
       updateField: (path, value) => get().updateValue(path, value),
       updateValue: (path, value) => {
@@ -871,13 +874,13 @@ export const useDesignStore = create<DesignStore>()(
       loadDesign: (design) => {
         cancelRevisionTimers();
         get().endDrag();
-        set((state) => ({ design: structuredClone(design), designRevision: state.designRevision + 1 }));
+        set((state) => ({ design: structuredClone(design), designRevision: state.designRevision + 1, loadGeneration: state.loadGeneration + 1 }));
         bump('load', true, 'ordinary');
       },
       replaceDesign: (design, options) => {
         cancelRevisionTimers();
         get().endDrag();
-        set((state) => ({ design: structuredClone(design), designRevision: state.designRevision + 1 }));
+        set((state) => ({ design: structuredClone(design), designRevision: state.designRevision + 1, loadGeneration: state.loadGeneration + 1 }));
         // Opening a file starts a new document, so its history starts empty.
         // Browsing to a previous run does not: that is a step inside the current
         // session, and undo has to be able to bring the working design back.

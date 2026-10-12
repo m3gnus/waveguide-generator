@@ -285,10 +285,16 @@ function WallEnclosureModeControl({ design, mounting = false, serverError }: { d
     // Write only what changes. An import without Mesh.Enclosure keeps `enclosure`
     // in _absent, and any write under it (even depth 0 over 0) would drop that
     // marker and send a full object, which the mesher refuses with a lip or Opus.
-    const current: Record<string, number> = { 'mesh.wall_thickness': design.mesh.wall_thickness, 'enclosure.depth': design.enclosure.depth };
+    // An unset wall is ATH's 5 mm (0 only while infinite baffle hides it), so a
+    // bare or enclosed body always needs an explicit 0, and a free-standing
+    // one keeps the unset wall. An unset enclosure stays unset at depth 0.
     const wallUnset = Boolean(design._absent?.includes('mesh.wall_thickness'));
-    const changed = Object.fromEntries(Object.entries(updates).filter(([path, next]) =>
-      current[path] !== next && !(mode === 'freestanding' && wallUnset && path === 'mesh.wall_thickness')));
+    const enclosureUnset = Boolean(design._absent?.includes('enclosure'));
+    const changed: Record<string, number> = {};
+    const wall = updates['mesh.wall_thickness'];
+    if (wallUnset ? wall === 0 : design.mesh.wall_thickness !== wall) changed['mesh.wall_thickness'] = wall;
+    const depth = updates['enclosure.depth'];
+    if (enclosureUnset ? depth !== 0 : design.enclosure.depth !== depth) changed['enclosure.depth'] = depth;
     updateValues({ ...changed, ...(mounting && design.simulation.sim_type === 'infinite-baffle' ? { 'simulation.sim_type': 'freestanding' } : {}) });
   };
 
@@ -460,6 +466,9 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
   // Session memory so Off then On, or Opus to 1 to Opus, restores what was set.
   const lastLip = useRef<{ radius: number; segments: number } | null>(null);
   const lastOpus = useRef<{ offset: number; step: number } | null>(null);
+  // Forget it when another design is loaded, so one import's lip never lands on the next.
+  const loadGeneration = useDesignStore((state) => state.loadGeneration);
+  useEffect(() => { lastLip.current = null; lastOpus.current = null; }, [loadGeneration]);
   const commit = (next: DesignValue) => {
     if (!field.path || disabled) return;
     if (field.id === 'mesh.ath_roundover') {
