@@ -57,8 +57,8 @@ function readDraft(): SourceAssemblyDocument {
 const visibility = { open: false, listeners: new Set<() => void>(), getSnapshot: () => visibility.open,
   subscribe: (listener: () => void) => { visibility.listeners.add(listener); return () => { visibility.listeners.delete(listener); }; },
   set(open: boolean) { visibility.open = open; visibility.listeners.forEach((listener) => listener()); } };
-export function SourceAssemblyLauncher() {
-  return <div className="source-editor-launch"><button type="button" aria-haspopup="dialog" onClick={() => visibility.set(true)}>Edit horn + woofer assembly…</button><ExperimentalBadge/><small>Shared enclosure, source contours and phase-plug passages.</small></div>;
+export function SourceAssemblyLauncher({ row = false }: { row?: boolean } = {}) {
+  return <div className="source-editor-launch" data-control-reveal-id="assembly-launch">{row && <span className="experimental-launch-label"><span>Horn + woofer assembly</span><ExperimentalBadge /></span>}<button type="button" aria-haspopup="dialog" onClick={() => visibility.set(true)}>Edit horn + woofer assembly…</button>{!row && <ExperimentalBadge/>}<small>Shared enclosure, source contours and phase-plug passages.</small></div>;
 }
 export function SourceAssemblyDialog() {
   const open = useSyncExternalStore(visibility.subscribe, visibility.getSnapshot, visibility.getSnapshot);

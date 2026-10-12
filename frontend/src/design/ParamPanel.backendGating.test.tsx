@@ -52,7 +52,7 @@ describe('solver-backend parameter gating', () => {
   const mount = async (payload: ReturnType<typeof capabilities>) => {
     queryClient.setQueryData(CAPABILITIES_QUERY_KEY, payload);
     await act(async () => {
-      root.render(<QueryClientProvider client={queryClient}><ParamPanel tab="simulation" /></QueryClientProvider>);
+      root.render(<QueryClientProvider client={queryClient}><ParamPanel tab="geometry" /></QueryClientProvider>);
       await Promise.resolve();
     });
   };
@@ -87,14 +87,14 @@ describe('solver-backend parameter gating', () => {
 
   it('offers infinite baffle where Metal is available', async () => {
     await mount(capabilities(true));
-    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
+    expect(optionsOf('simulation.sim_type')).toEqual(['Bare shell', 'Thickened waveguide (freestanding)', 'Waveguide in enclosure', 'Infinite baffle']);
     expect(host.querySelector('[data-parameter-id="simulation.solver_mode"]')).toBeNull();
     expect(host.querySelector('.field-warning')).toBeNull();
   });
 
   it('offers coupled infinite baffle on a host with BEMPP and no Metal', async () => {
     await mount(capabilities(false));
-    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
+    expect(optionsOf('simulation.sim_type')).toEqual(['Bare shell', 'Thickened waveguide (freestanding)', 'Waveguide in enclosure', 'Infinite baffle']);
     expect(host.querySelector('[data-parameter-id="simulation.solver_mode"]')).toBeNull();
     expect(host.querySelector('.field-warning')).toBeNull();
   });
@@ -102,7 +102,7 @@ describe('solver-backend parameter gating', () => {
   it('keeps an imported infinite-baffle design supported by BEMPP', async () => {
     useDesignStore.getState().updateValue('simulation.sim_type', 'infinite-baffle');
     await mount(capabilities(false));
-    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
+    expect(optionsOf('simulation.sim_type')).toEqual(['Bare shell', 'Thickened waveguide (freestanding)', 'Waveguide in enclosure', 'Infinite baffle']);
     expect(host.querySelector('[data-parameter-id="simulation.sim_type"] .field-warning')).toBeNull();
   });
 
@@ -115,6 +115,7 @@ describe('solver-backend parameter gating', () => {
       useDesignStore.getState().updateValue('simulation.sim_type', 'infinite-baffle');
       await Promise.resolve();
     });
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><ParamPanel tab="simulation" /></QueryClientProvider>));
     expect(host.querySelector('[data-parameter-id="mesh.aperture_resolution_scale"]')).not.toBeNull();
   });
 
@@ -133,14 +134,14 @@ describe('solver-backend parameter gating', () => {
     };
 
     await mount(payload);
-    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
+    expect(optionsOf('simulation.sim_type')).toEqual(['Bare shell', 'Thickened waveguide (freestanding)', 'Waveguide in enclosure', 'Infinite baffle']);
 
     await act(async () => {
       useSolveOptionsStore.setState({ engine: 'beat' });
       await Promise.resolve();
     });
     // Listed but disabled, naming the selection and the engines to switch to.
-    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
+    expect(optionsOf('simulation.sim_type')).toEqual(['Bare shell', 'Thickened waveguide (freestanding)', 'Waveguide in enclosure', 'Infinite baffle']);
     const option = [...host.querySelectorAll<HTMLOptionElement>('[data-parameter-id="simulation.sim_type"] option')]
       .find((item) => item.textContent === 'Infinite baffle');
     expect(option?.disabled).toBe(true);

@@ -511,6 +511,13 @@ describe('rendered document dimension transitions', () => {
     vi.spyOn(previewSocket, 'getSnapshot').mockImplementation(manager.getSnapshot);
     const host = document.createElement('div'); document.body.append(host);
     const root = createRoot(host);
+    const dimensions = () => host.querySelector('[data-testid="design-dimensions"]');
+    function expectState(state: string) {
+      expect(dimensions()?.getAttribute('title')).toContain(state);
+      expect(dimensions()?.getAttribute('aria-label')).toContain(state);
+      expect(dimensions()?.classList.contains('stale')).toBe(state !== 'Current preview');
+      expect(dimensions()?.textContent).not.toContain(state);
+    }
     const oldDocument = structuredClone(useDesignStore.getState().design); oldDocument.scale = 2;
     useDesignStore.getState().loadDesign(oldDocument);
     manager.start(); socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
@@ -518,42 +525,44 @@ describe('rendered document dimension transitions', () => {
     const firstRevision = useDesignStore.getState().designRevision;
     act(() => socket.message(fixtureWithHeader({ seq: 1, designRevision: firstRevision,
       previewMetadata: { dimensions_status: 'current', dimensions_mm: { mouth_opening: [400, 200], horn_overall: [410, 210, 200] } } })));
-    expect(host.textContent).toContain('400.0 × 200.0 mm');
+    expect(dimensions()?.textContent).toBe('Mouth 400.0 × 200.0 · Depth 200.0 · Overall 410.0 × 210.0 mm');
+    expectState('Current preview');
     const newDocument = structuredClone(oldDocument); newDocument.scale = 3;
     act(() => {
       if (action === 'New') resetDesignStore();
       else useDesignStore.getState().replaceDesign(newDocument);
     });
-    expect(host.querySelector('[aria-label="Design dimensions"]')).toBeNull();
+    expect(dimensions()).toBeNull();
     const revision = useDesignStore.getState().designRevision;
     act(() => socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 2,
       designRevision: revision, code: 'INVALID', message: 'New document failed' })));
-    expect(host.textContent).toContain('Dimensions unavailable');
+    expectState('Dimensions unavailable');
     expect(host.textContent).not.toContain('400.0');
     // Late previous-document frames cannot resurrect the hidden readouts.
     act(() => socket.message(fixtureWithHeader({ seq: 1, designRevision: firstRevision,
       previewMetadata: { dimensions_status: 'current', dimensions_mm: { mouth_opening: [400, 200] } } })));
-    expect(host.textContent).toContain('Dimensions unavailable');
+    expectState('Dimensions unavailable');
     act(() => socket.message(fixtureWithHeader({ seq: 3, designRevision: revision,
       previewMetadata: { dimensions_status: 'pending', dimensions_mm: null } })));
-    expect(host.textContent).toContain('Updating dimensions');
+    expectState('Updating dimensions');
     expect(host.textContent).not.toContain('400.0');
     const mouth: [number, number] = action === 'New' ? [300, 150] : [600, 300];
     act(() => socket.message(fixtureWithHeader({ seq: 4, designRevision: revision, lod: 'fine',
       previewMetadata: { dimensions_status: 'current', dimensions_mm: { mouth_opening: mouth, horn_overall: [610, 310, 300] } } })));
-    expect(host.textContent).toContain(mouth.map((value) => value.toFixed(1)).join(' × ') + ' mm');
-    expect(host.textContent).toContain('Current preview');
+    const expectedReadout = `Mouth ${mouth.map((value) => value.toFixed(1)).join(' × ')} · Depth 300.0 · Overall 610.0 × 310.0 mm`;
+    expect(dimensions()?.textContent).toBe(expectedReadout);
+    expectState('Current preview');
     expect(host.textContent).not.toContain('400.0');
     // A coarse frame after another edit retains only this document's values.
     act(() => useDesignStore.getState().updateField('a', 46));
     const editedRevision = useDesignStore.getState().designRevision;
     act(() => socket.message(fixtureWithHeader({ seq: 5, designRevision: editedRevision, lod: 'coarse',
       previewMetadata: { dimensions_status: 'pending', dimensions_mm: null } })));
-    expect(host.textContent).toContain('Updating dimensions');
-    expect(host.textContent).toContain(mouth.map((value) => value.toFixed(1)).join(' × ') + ' mm');
+    expectState('Updating dimensions');
+    expect(dimensions()?.textContent).toBe(expectedReadout);
     act(() => socket.message(fixtureWithHeader({ seq: 6, designRevision: editedRevision, lod: 'fine',
       previewMetadata: { dimensions_status: 'unavailable', dimensions_mm: null, dimensions_error: 'Cannot resolve' } })));
-    expect(host.textContent).toContain('unavailable');
+    expectState('Dimensions unavailable');
     expect(host.textContent).not.toContain(mouth[0].toFixed(1));
     act(() => root.unmount()); manager.stop(); host.remove();
   });

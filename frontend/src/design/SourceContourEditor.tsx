@@ -50,8 +50,8 @@ const visibility = {
   subscribe: (listener: () => void) => { visibility.listeners.add(listener); return () => { visibility.listeners.delete(listener); }; },
   set(open: boolean) { visibility.open = open; visibility.listeners.forEach((listener) => listener()); },
 };
-export function SourceContourEditor() {
-  return <div className="source-editor-launch"><button type="button" aria-haspopup="dialog" onClick={() => visibility.set(true)}>Edit source contour…</button><ExperimentalBadge/><small>Draw, edit points and arcs, or save a reusable source preset.</small></div>;
+export function SourceContourEditor({ row = false }: { row?: boolean } = {}) {
+  return <div className="source-editor-launch" data-control-reveal-id="source-contour-launch">{row && <span className="experimental-launch-label"><span>Source contour</span><ExperimentalBadge /></span>}<button type="button" aria-haspopup="dialog" onClick={() => visibility.set(true)}>Edit source contour…</button>{!row && <ExperimentalBadge/>}<small>Draw, edit points and arcs, or save a reusable source preset.</small></div>;
 }
 
 /** The App owns the modal, so responsive panel replacement cannot discard edits. */

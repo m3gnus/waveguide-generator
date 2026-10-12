@@ -1,3 +1,4 @@
+import { LiveDimensions } from '../design/LiveDimensions';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DecodedFrame } from '../api/frame';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
@@ -990,6 +991,7 @@ export function Viewport() {
         ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
         : workspaceMode === 'cad' ? (cadWorkspaceView.ingesting && cadBundleReadable ? `Preparing ${cadName}…` : cadWorkspaceView.ingestError && cadBundleReadable ? 'CAD preparation failed' : 'No ingested CAD viewport mesh') : viewportSubtitle(design, nativeOpening)}</span>
     </div>
+    {workspaceMode === 'parametric' && <LiveDimensions />}
     <div className="viewport-live">
       {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
       {workspaceMode === 'parametric' && behindDesign && !importedMesh && <button

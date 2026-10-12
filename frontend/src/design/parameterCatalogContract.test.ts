@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+import { PARAMETER_REGISTRY } from './parameterRegistry';
 import { buildParameterCatalog } from './parameterCatalogWire';
 
 describe('public parameter catalog', () => {
@@ -29,6 +30,23 @@ describe('public parameter catalog', () => {
     const bytes = readFileSync('../server/integration/parameter-catalog.v1.json');
     const committed = JSON.parse(new TextDecoder().decode(bytes));
     expect(buildParameterCatalog()).toEqual(committed);
+  });
+
+  it('keeps versioned catalog sections stable while the editor uses the new layout', () => {
+    const catalog = buildParameterCatalog();
+    for (const [id, oldSection, newSection] of [
+      ['source.shape', 'Source Definition', 'Throat'],
+      ['enclosure.front_resolution', 'Wall & Enclosure', 'Mesh'],
+      ['mesh.vertical_offset', 'Solve & export mesh', 'Export'],
+    ]) {
+      const wire = catalog.parameters.find((field) => field.id === id)!;
+      const editor = PARAMETER_REGISTRY.find((field) => field.id === id)!;
+      expect(wire.section).toBe(oldSection);
+      expect(editor.section).toBe(newSection);
+      expect(editor.path).toBe(wire.path);
+      expect(editor.kind).toBe(wire.kind);
+      expect(editor.families).toEqual(wire.families);
+    }
   });
 
   it('keeps v1 editor bounds non-null when a bounds object is present', () => {

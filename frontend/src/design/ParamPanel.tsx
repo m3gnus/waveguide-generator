@@ -2,7 +2,7 @@ import { nativeCadLimitation, nativeSymmetryLimitation } from './nativeFamilies'
 import { EnclosureResolutionField } from './EnclosureResolutionField';
 import { EXTERIOR_FIELDS } from '../stores/exteriorTransducer';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { convertDesignToFreeform } from '../api/designIo';
 import { previewSocket } from '../api/previewSocket';
@@ -32,17 +32,18 @@ import { NATIVE_FAMILIES, isNativeFamily, useDesignStore, type DesignDocument, t
 import { namespaceStorage } from '../stores/durableSettings';
 import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { DirectivityMapControls, SolveOptionsControls, ToggleRow } from './SolveOptionsSections';
+import { AdaptiveFrequencyControls, FrequencySweepControls, MeshValidationControl, DirectivityMapControls, SolveOptionsControls, ToggleRow } from './SolveOptionsSections';
 import { EditablePointTable, EditableStationTable } from './FreeformEditors';
 import { SourceContourEditor } from './SourceContourEditor';
 import { SourceAssemblyLauncher } from './SourceAssemblyEditor';
 import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
 import { SelectRow } from './SelectRow';
-import { LiveDimensions } from './LiveDimensions';
 import { HelpTipRow } from './HelpTip';
 import { Icon } from '../shell/icons';
 import {
+  LEGACY_PARAMETER_REGISTRY,
+  CAD_PARAMETER_SECTION_DEFINITIONS,
   PARAMETER_REGISTRY,
   PARAMETER_SECTION_DEFINITIONS,
   fieldAppliesToFamily,
@@ -139,7 +140,7 @@ migrateLegacySectionKeys();
 
 function storedSectionState(title: string): boolean {
   const stored = readSectionMap()[title];
-  return stored === undefined ? true : stored;
+  return stored === undefined ? !['Export', 'Experimental'].includes(title) : stored;
 }
 
 function writeSectionState(title: string, open: boolean): void {
@@ -246,11 +247,19 @@ const outerModeLabels: Record<OuterBodyMode, string> = {
   bare: 'Bare shell',
 };
 
-function WallEnclosureModeControl({ design }: { design: DesignDocument }) {
+function WallEnclosureModeControl({ design, mounting = false }: { design: DesignDocument; mounting?: boolean }) {
   const updateValues = useDesignStore((state) => state.updateValues);
   const [lastWallThickness, setLastWallThickness] = useState(() => design.mesh.wall_thickness > 0 ? design.mesh.wall_thickness : 5);
   const [lastEnclosureDepth, setLastEnclosureDepth] = useState(() => design.enclosure.depth > 0 ? design.enclosure.depth : 280);
-  const selectedMode = selectedOuterBodyMode(design);
+  const backend = useActiveBackendCapability();
+  const backendPlan = usePlannedBackendCapabilities();
+  const { engines, hostPlatform } = useCapabilities();
+  const simulationField = LEGACY_PARAMETER_REGISTRY.find((field) => field.id === 'simulation.sim_type')!;
+  const options = fieldOptionsForBackend(simulationField, design.simulation.sim_type, backend, backendPlan, engines);
+  const baffleOption = options.find((option) => option.value === 'infinite-baffle');
+  const unsupported = fieldUnsupportedFeature(simulationField, design.simulation.sim_type, backend, backendPlan);
+  const ibEngine = backendPlan.find((candidate) => candidate.mountings?.includes('infinite-baffle'));
+  const selectedMode = mounting ? resolveOuterBodyMode(design) : selectedOuterBodyMode(design);
   const resolvedMode = resolveOuterBodyMode(design);
 
   useEffect(() => {
@@ -260,28 +269,36 @@ function WallEnclosureModeControl({ design }: { design: DesignDocument }) {
     if (design.enclosure.depth > 0) setLastEnclosureDepth(design.enclosure.depth);
   }, [design.enclosure.depth]);
 
-  const chooseMode = (mode: SelectableOuterBodyMode) => {
+  const chooseMode = (mode: OuterBodyMode) => {
+    if (mounting && mode === 'infinite-baffle') {
+      updateValues({ 'simulation.sim_type': 'infinite-baffle' });
+      return;
+    }
     const updates = mode === 'bare'
       ? { 'mesh.wall_thickness': 0, 'enclosure.depth': 0 }
       : mode === 'freestanding'
         ? { 'mesh.wall_thickness': lastWallThickness, 'enclosure.depth': 0 }
         : { 'mesh.wall_thickness': 0, 'enclosure.depth': lastEnclosureDepth };
-    updateValues(updates);
+    updateValues({ ...updates, ...(mounting ? { 'simulation.sim_type': 'freestanding' } : {}) });
   };
 
-  return <div className="outer-body-mode">
-    <SelectRow>
-      <label htmlFor="outer-body-mode">Outer body</label>
-      <select id="outer-body-mode" value={selectedMode} onChange={(event) => chooseMode(event.target.value as SelectableOuterBodyMode)}>
+  return <div className="outer-body-mode" data-parameter-id={mounting ? 'simulation.sim_type' : undefined} data-control-reveal-id={mounting ? PARAMETRIC_CONTROLS.mounting.reveal.id : undefined}>
+    <SelectRow text={mounting ? simulationField.description : undefined}>
+      <label htmlFor="outer-body-mode">{mounting ? 'Mounting' : 'Outer body'}</label>
+      <select id="outer-body-mode" value={selectedMode} onChange={(event) => chooseMode(event.target.value as OuterBodyMode)}>
         <option value="bare">Bare shell</option>
         <option value="freestanding">Thickened waveguide (freestanding)</option>
         <option value="enclosure">Waveguide in enclosure</option>
+        {mounting && baffleOption && <option value="infinite-baffle" disabled={Boolean(baffleOption.unavailableReason)} title={baffleOption.unavailableReason}>Infinite baffle</option>}
       </select>
     </SelectRow>
-    <div className={`resolved-mode${resolvedMode === 'infinite-baffle' ? ' override' : ''}`}>
+    {!mounting && <div className={`resolved-mode${resolvedMode === 'infinite-baffle' ? ' override' : ''}`}>
       <span>Resolved mode</span><b>{outerModeLabels[resolvedMode]}</b>
       {resolvedMode === 'infinite-baffle' && <small>Infinite baffle simulation overrides the outer body.</small>}
-    </div>
+    </div>}
+    {mounting && baffleOption?.unavailableReason && <div className="field-warning" role="status">Infinite baffle: {baffleOption.unavailableReason}</div>}
+    {mounting && unsupported && <div className="field-warning" role="status">{backendLimitation(backend, unsupported, backendPlan)}</div>}
+    {mounting && ibEngine?.name === 'bempp' && ibEngine.assembly_backend === 'numba' && <OpenclUnavailableHook platform={hostPlatform} engine={ibEngine} notice="infinite_baffle_numba" />}
   </div>;
 }
 
@@ -1156,16 +1173,22 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const [converting, setConverting] = useState(false);
   const conversionGeneration = useRef(0);
   const searching = Boolean(query.trim());
-  const definitions = useMemo(() => PARAMETER_SECTION_DEFINITIONS
+  const definitions = useMemo(() => (workspaceMode === 'cad' ? CAD_PARAMETER_SECTION_DEFINITIONS : PARAMETER_SECTION_DEFINITIONS)
     .filter((definition) => definition.tab === tab)
     .filter((definition) => parameterSectionIsVisible(definition, { mode: workspaceMode, design, waveguideLinked })),
     [design, tab, waveguideLinked, workspaceMode]);
   const fieldsBySection = useMemo(() => new Map(definitions.map(({ title }) => {
-    const fields = PARAMETER_REGISTRY.filter((field) => field.section === title)
+    const fields = (workspaceMode === 'cad' ? LEGACY_PARAMETER_REGISTRY : PARAMETER_REGISTRY).filter((field) => field.section === title)
+      .filter((field) => field.section !== 'Imported ATH values' || fieldIsVisible(field, design))
       .filter((field) => query.trim() ? fieldAppliesToFamily(field, design.formula) : fieldIsVisible(field, design))
       .filter((field) => fieldMatchesQuery(field, query));
+    const order = title === 'Throat' ? ['common.s1', 'common.s2', 'common.throat_ext_angle', 'common.throat_ext_length', 'common.slot_length', 'common.length_mode', 'source.shape', 'source.radius', 'source.curvature']
+      : title === 'Mesh' ? ['mesh.angular_segments', 'mesh.length_segments', 'mesh.corner_segments', 'mesh.sampling_mode', 'mesh.z_map_points', 'mesh.throat_resolution', 'mesh.mouth_resolution', 'mesh.rear_resolution', 'enclosure.front_resolution', 'enclosure.back_resolution', 'mesh.aperture_resolution_scale', 'schema-gap.max_edge', 'mesh.max_triangles', 'freeform.inflectionPolicy']
+      : title === 'Export' ? ['mesh.vertical_offset', 'native.mesh.offset']
+      : title === 'Source excitation' ? ['source.velocity_convention', 'source.velocity'] : [];
+    if (order.length) fields.sort((a, b) => (order.indexOf(a.id) < 0 ? order.length : order.indexOf(a.id)) - (order.indexOf(b.id) < 0 ? order.length : order.indexOf(b.id)));
     return [title, fields] as const;
-  })), [definitions, design, query]);
+  })), [definitions, design, query, workspaceMode]);
   const matchingCadSections = useMemo(() => new Set(CAD_CONTROL_DESCRIPTORS
     .filter((descriptor) => workspaceMode === 'cad' && descriptor.tab === tab)
     .filter((descriptor) => cadControlIsAvailable(descriptor, Boolean(ingestRecord)))
@@ -1220,26 +1243,51 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     {field.kind !== 'number' && previewErrorForParameter(field, currentPreviewFields) && <div className="field-error" role="alert">{previewErrorForParameter(field, currentPreviewFields)}</div>}
   </div>;
 
+  const importedAthValues = design.text_import_version === 'ath-2026-09a-v2' ? <>
+        {design.mesh.ath_roundover && <div className="passthrough-row"><span>Mesh.Roundover</span><b>{design.mesh.ath_roundover.radius} mm · {design.mesh.ath_roundover.segments} segments</b></div>}
+        {design.mesh.ath_rear_shape != null && <div className="passthrough-row"><span>Mesh.RearShape</span><b>{design.mesh.ath_rear_shape === 3 ? '3 (Opus)' : '1 (full rear)'}</b></div>}
+        {design.mesh.ath_rear_shape === 3 && <>
+          <div className="passthrough-row"><span>Mesh.RearShape.FrontOffset</span><b>{design.mesh.ath_rear_front_offset ?? 40} mm</b></div>
+          <div className="passthrough-row"><span>Mesh.RearShape.Step</span><b>{design.mesh.ath_rear_step ?? 25} mm</b></div>
+        </>}
+        {design.ath_nac_present && <div className="passthrough-row"><span>NAC</span><b>{design.ath_nac ?? 'Present'} · preserves angular samples</b></div>}
+  </> : null;
+
   const renderRegistrySection = (definition: ParameterSectionDefinition) => {
     const fields = fieldsBySection.get(definition.title) ?? [];
     const showSolveDomain = definition.title === PARAMETRIC_CONTROLS.solveDomain.section
       && (!searching || matchingParametricSections.has(definition.title));
-    const showOuterBodyMode = definition.title === 'Wall & Enclosure' && !isNativeFamily(design.formula);
-    const hasCustomMode = (showOuterBodyMode && !searching) || showSolveDomain;
-    if (fields.length === 0 && !hasCustomMode) return null;
+    const showOuterBodyMode = ['Wall & Enclosure', 'Mounting'].includes(definition.title) && !isNativeFamily(design.formula)
+      && (workspaceMode === 'cad' || !searching || matchingParametricSections.has('Mounting') || fields.some((field) => field.id === 'simulation.sim_type'));
+    const hasCustomMode = (showOuterBodyMode && (workspaceMode !== 'cad' || !searching)) || showSolveDomain;
+    const showCustom = workspaceMode === 'parametric' && (!searching || matchingParametricSections.has(definition.title));
+    const custom = showCustom ? definition.title === 'Experimental' ? <><SourceContourEditor row /><SourceAssemblyLauncher row /></>
+      : definition.title === 'Directivity map' ? <DirectivityMapControls />
+      : definition.title === 'Solver' ? <SolveOptionsControls includeSampling={false} showOpenclGuidance={!ibNumbaNotice} />
+      : definition.title === 'Frequency sweep' ? <><FrequencySweepControls idPrefix="design-solve" context="design" /><AdaptiveFrequencyControls /></>
+      : null : null;
+    const meshPolicyBefore = definition.title === 'Mesh' ? fields.find((field) => field.id === 'freeform.inflectionPolicy' || field.id.startsWith('native.'))?.id : undefined;
+    if (fields.length === 0 && !hasCustomMode && !custom && !(definition.title === 'Imported ATH values' && design.text_import_version === 'ath-2026-09a-v2')) return null;
     return <Section
       key={definition.title}
       title={definition.title}
       description={definition.description}
-      forceOpen={searching}
+      forceOpen={searching || (definition.title === 'Imported ATH values' && design.text_import_version === 'ath-2026-09a-v2')}
+      revealId={workspaceMode === 'parametric' ? `parametric.section.${definition.title}` : undefined}
     >
-      {showOuterBodyMode && <WallEnclosureModeControl design={design} />}
+      {showOuterBodyMode && <WallEnclosureModeControl design={design} mounting={workspaceMode === 'parametric'} />}
       {/* Domain is an execution option, not a saved design parameter. Keeping
           it independent of mesh.quadrants prevents the round-trip-only ATH
           field from masquerading as a second solve/export control, while its
           section remains hidden wholesale in CAD mode. */}
       {showSolveDomain && <SolveDomainControl design={design} />}
-      {fields.map(renderField)}
+      {fields.filter((field) => workspaceMode === 'cad' || field.id !== 'simulation.sim_type').map((field) => <Fragment key={field.id}>
+        {showCustom && field.id === meshPolicyBefore && <MeshValidationControl />}
+        {renderField(field)}
+      </Fragment>)}
+      {definition.title === 'Mesh' && showCustom && !meshPolicyBefore && <MeshValidationControl />}
+      {custom}
+      {definition.title === 'Imported ATH values' && importedAthValues}
       {searching && fields.some((field) => !fieldIsVisible(field, design)) && <p className="filter-note">Some matches are normally hidden by the active mode; they are shown here for discoverability.</p>}
     </Section>;
   };
@@ -1318,23 +1366,9 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       </div>
       {workspaceMode === 'cad' && tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.linkedDesign.section) && <LinkedDesignCard forceOpen={searching}/>}
       {workspaceMode === 'parametric' && !searching && tab === 'geometry' && modelTypeSection}
-      {workspaceMode === 'parametric' && tab === 'geometry' && <LiveDimensions />}
-      {workspaceMode === 'parametric' && tab === 'geometry' && design.text_import_version === 'ath-2026-09a-v2' && <Section title="Imported ATH values" description="Geometry controls retained from the imported configuration." forceOpen>
-        {design.mesh.ath_roundover && <div className="passthrough-row"><span>Mesh.Roundover</span><b>{design.mesh.ath_roundover.radius} mm · {design.mesh.ath_roundover.segments} segments</b></div>}
-        {design.mesh.ath_rear_shape != null && <div className="passthrough-row"><span>Mesh.RearShape</span><b>{design.mesh.ath_rear_shape === 3 ? '3 (Opus)' : '1 (full rear)'}</b></div>}
-        {design.mesh.ath_rear_shape === 3 && <>
-          <div className="passthrough-row"><span>Mesh.RearShape.FrontOffset</span><b>{design.mesh.ath_rear_front_offset ?? 40} mm</b></div>
-          <div className="passthrough-row"><span>Mesh.RearShape.Step</span><b>{design.mesh.ath_rear_step ?? 25} mm</b></div>
-        </>}
-        {design.ath_nac_present && <div className="passthrough-row"><span>NAC</span><b>{design.ath_nac ?? 'Present'} · preserves angular samples</b></div>}
-      </Section>}
-      {!searching && tab === 'geometry' && <SourceContourEditor />}
-      {!searching && tab === 'geometry' && <SourceAssemblyLauncher />}
-      {workspaceMode === 'parametric' ? definitions.map((definition) => <div key={definition.title}>
-          {renderRegistrySection(definition)}
-          {!searching && definition.title === 'Frequency Sweep' && <Section title="Directivity Map" description="Polar planes and angular sampling used for directivity exports and plots." forceOpen={false}><DirectivityMapControls /></Section>}
-          {!searching && definition.title === 'Source Definition' && <Section title="Solve options" description="Backend engine, validation, which frequencies get solved, and diagnostic output controls." forceOpen={false}><SolveOptionsControls showOpenclGuidance={!ibNumbaNotice} /></Section>}
-        </div>)
+      {workspaceMode === 'cad' && !searching && tab === 'geometry' && <SourceContourEditor />}
+      {workspaceMode === 'cad' && !searching && tab === 'geometry' && <SourceAssemblyLauncher />}
+      {workspaceMode === 'parametric' ? definitions.map(renderRegistrySection)
         : <>
           {definitions.map(renderRegistrySection)}
           {tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.realizedDimensions.section) && <RealizedDimensionsCard forceOpen={searching}/>}

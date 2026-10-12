@@ -4,7 +4,7 @@ import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { CAD_CONTROL_DESCRIPTORS, cadControlIsAvailable, cadControlMatchesQuery } from '../design/cadControlRegistry';
 import { DesignFileMenu } from '../design/DesignFileMenu';
-import { PARAMETER_REGISTRY, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily, fieldMatchesQuery, parameterSectionIsVisible, type ParameterTab } from '../design/parameterRegistry';
+import { CAD_PARAMETER_SECTION_DEFINITIONS, LEGACY_PARAMETER_REGISTRY, PARAMETER_REGISTRY, fieldIsVisible, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily, fieldMatchesQuery, parameterSectionIsVisible, type ParameterTab } from '../design/parameterRegistry';
 import { PARAMETRIC_CONTROL_DESCRIPTORS, parametricControlMatchesQuery } from '../design/parametricControlRegistry';
 import { restoreParametricWorkingDesign } from '../jobs/showJobModel';
 import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
@@ -15,7 +15,7 @@ import { useCadRecoveryNotices } from '../stores/cadRecoveryNotices';
 import type { FusionCadStatus } from '../api/cadlink';
 import { operationNeedsUser, solveAttention, useReadyRun } from './solveAttention';
 import { noteExplicitNavigation } from './workspaceNavigation';
-import { useDesignStore, type DesignDocument, type DesignFamily } from '../stores/design';
+import { isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 import { requestParameterReveal } from '../design/ParamPanel';
@@ -40,9 +40,6 @@ function initialTheme(): Theme {
   return saved === 'light' ? 'light' : 'dark';
 }
 
-const parameterTabBySection = new Map(PARAMETER_SECTION_DEFINITIONS.map((section) => [section.title, section.tab]));
-const parameterSectionByTitle = new Map(PARAMETER_SECTION_DEFINITIONS.map((section) => [section.title, section]));
-
 export function revealParameterFromPalette(
   id: string,
   tab: ParameterTab,
@@ -66,10 +63,10 @@ export function revealCadControlFromPalette(id: string, tab: ParameterTab, query
   requestParameterReveal({ id, tab, query, target: 'control', fallbackId });
 }
 
-export function revealParametricControlFromPalette(id: string, tab: ParameterTab, query: string): void {
+export function revealParametricControlFromPalette(id: string, tab: ParameterTab, query: string, fallbackId?: string): void {
   workspaceModeStore.setMode('parametric');
   workspaceNavigation.navigate(tab);
-  requestParameterReveal({ id, tab, query, target: 'control' });
+  requestParameterReveal({ id, tab, query, target: 'control', fallbackId });
 }
 
 export interface ParameterPaletteContext {
@@ -99,16 +96,21 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
   const design = context.design ?? useDesignStore.getState().design;
   const cadReturnReady = context.cadReturnReady ?? Boolean(useCadReturnStore.getState().ingestRecord);
   const waveguideLinked = context.waveguideLinked ?? waveguideDefinitionAppliesNow();
-  const parameterEntries: PaletteEntry[] = PARAMETER_REGISTRY
+  const sectionDefinitions = mode === 'cad' ? CAD_PARAMETER_SECTION_DEFINITIONS : PARAMETER_SECTION_DEFINITIONS;
+  const sectionByTitle = new Map(sectionDefinitions.map((section) => [section.title, section]));
+  const tabBySection = new Map(sectionDefinitions.map((section) => [section.title, section.tab]));
+  const parameterEntries: PaletteEntry[] = (mode === 'cad' ? LEGACY_PARAMETER_REGISTRY : PARAMETER_REGISTRY)
+    .filter((field) => mode === 'cad' || field.id !== 'simulation.sim_type')
+    .filter((field) => field.section !== 'Imported ATH values' || fieldIsVisible(field, design))
     .filter((field) => !family || fieldAppliesToFamily(field, family))
     // Section policy already decides what the rail can render. Reusing it here
     // prevents palette and rail from growing subtly different CAD mode rules.
     .filter((field) => {
-      const section = parameterSectionByTitle.get(field.section);
+      const section = sectionByTitle.get(field.section);
       return !section || parameterSectionIsVisible(section, { mode, design, waveguideLinked });
     })
     .map((field) => {
-      const tab = parameterTabBySection.get(field.section) ?? 'geometry';
+      const tab = tabBySection.get(field.section) ?? 'geometry';
       return {
         id: `parameter-${field.id}`,
         kind: 'Parameters',
@@ -125,14 +127,14 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
       };
     });
   if (mode !== 'cad') {
-    const parametricControls: PaletteEntry[] = PARAMETRIC_CONTROL_DESCRIPTORS.map((descriptor) => ({
+    const parametricControls: PaletteEntry[] = PARAMETRIC_CONTROL_DESCRIPTORS.filter((descriptor) => descriptor.id !== 'mounting' || !isNativeFamily(family ?? design.formula)).map((descriptor) => ({
       id: `parametric-control-${descriptor.id}`,
       kind: 'Parameters',
       label: descriptor.label,
       detail: descriptor.section,
       keywords: [descriptor.id, descriptor.section, ...descriptor.keywords].join(' '),
       matches: (query) => parametricControlMatchesQuery(descriptor, query),
-      run: () => revealParametricControlFromPalette(descriptor.reveal.id, descriptor.tab, descriptor.label),
+      run: () => revealParametricControlFromPalette(descriptor.reveal.id, descriptor.tab, descriptor.label, `parametric.section.${descriptor.section}`),
     }));
     return [...parameterEntries, ...parametricControls];
   }

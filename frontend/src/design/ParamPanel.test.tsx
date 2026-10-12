@@ -171,7 +171,7 @@ describe('ParamPanel inventory UX', () => {
   it('hides inactive morph edits and preserves the existing search reveal behavior', () => {
     act(() => useDesignStore.getState().updateValue('morph.target_width', 600));
     expect(host.querySelector('[data-parameter-id="morph.target_width"]')).toBeNull();
-    expect(host.querySelector('[data-section="Morph Target"] .modified')).toBeNull();
+    expect(host.querySelector('[data-section="Mouth"] .modified')).toBeNull();
     const search = host.querySelector<HTMLInputElement>('.parameter-search input')!;
     const searchFor = (value: string) => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(search, value);
@@ -256,7 +256,10 @@ describe('ParamPanel inventory UX', () => {
     const resolution = () => host.querySelector('[data-parameter-id="enclosure.front_resolution"]');
     expect(resolution()).toBeNull();
     act(() => useDesignStore.getState().updateValue('enclosure.depth', 90));
-    expect(resolution()).not.toBeNull();
+    expect(resolution()).toBeNull();
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    expect(resolution()?.closest('[data-section]')?.getAttribute('data-section')).toBe('Mesh');
+    act(() => root.render(withQueryClient(<ParamPanel tab="geometry" />)));
     const input = host.querySelector<HTMLInputElement>('[data-parameter-id="enclosure.depth_margin_mm"] input')!;
     expect(Number(input.value)).toBe(1);
     act(() => input.focus());
@@ -377,7 +380,7 @@ describe('ParamPanel inventory UX', () => {
         expect(host.querySelector('[data-parameter-id^="morph."]')).toBeNull();
         expect(host.querySelector('[data-parameter-id^="enclosure."]')).toBeNull();
         expect(host.querySelector('[data-parameter-id="simulation.sim_type"]')).toBeNull();
-        expect(host.querySelector('[data-section="Morph Target"]')).toBeNull();
+        expect(host.querySelector('[data-section="Mouth"]')).toBeNull();
       }
     }
   });
@@ -491,7 +494,8 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('filters across labels and ATH/v1 keys, including a mode-hidden field', () => {
-    const input = host.querySelector<HTMLInputElement>('#parameter-filter-geometry')!;
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    const input = host.querySelector<HTMLInputElement>('#parameter-filter-simulation')!;
     const setInputValue = (value: string) => Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
     act(() => {
       setInputValue('zMapPoints');
@@ -509,8 +513,11 @@ describe('ParamPanel inventory UX', () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'mesh');
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    expect(host.querySelector('[data-parameter-id="mesh.angular_segments"]')).not.toBeNull();
+    expect(host.querySelector('[data-parameter-id="mesh.angular_segments"]')).toBeNull();
     expect(host.querySelector('[data-parameter-id="mesh.throat_resolution"]')).toBeNull();
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    expect(host.querySelector('[data-parameter-id="mesh.angular_segments"]')).not.toBeNull();
+    expect(host.querySelector('[data-parameter-id="mesh.throat_resolution"]')).not.toBeNull();
   });
 
   it('uses the dock tab as its only category switcher', () => {
@@ -523,10 +530,10 @@ describe('ParamPanel inventory UX', () => {
   it('preserves the complete parametric section set', () => {
     act(() => useDesignStore.getState().setFamily('OSSE'));
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
-    expect(titles()).toEqual(['Model Type', 'Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve', 'Surface sampling']);
+    expect(titles()).toEqual(['Model Type', 'Profile', 'Throat', 'Mouth', 'Cross-section', 'Mounting', 'Experimental']);
     expect(host.querySelector('[data-section="Realized dimensions"]')).toBeNull();
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Source Definition', 'Solve options', 'Solve & export mesh', 'Output & Passthrough']);
+    expect(titles()).toEqual(['Frequency sweep', 'Directivity map', 'Source excitation', 'Solver', 'Mesh', 'Export']);
     expect(host.querySelector('#solve-engine')).not.toBeNull();
     expect(host.querySelector('#solve-symmetry')).not.toBeNull();
   });
@@ -540,6 +547,7 @@ describe('ParamPanel inventory UX', () => {
     expect(curl.textContent).toContain('Rollback curl angle');
 
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    act(() => host.querySelector<HTMLButtonElement>('[data-section="Export"] .section-head')!.click());
     const throat = host.querySelector<HTMLElement>('[data-parameter-id="mesh.throat_segments"]')!;
     expect(throat.querySelector<HTMLInputElement>('input')!.disabled).toBe(true);
     expect(throat.textContent).toContain('Mesh.ThroatSegments has no effect on the mesh');
@@ -549,14 +557,35 @@ describe('ParamPanel inventory UX', () => {
     expect((exported.mesh as Record<string, unknown>).throat_segments).toBe(8);
   });
 
+  it('keeps imported legacy text editable and serialised in the original document paths', () => {
+    const imported = designForFamily('ICW');
+    imported.text_import_version = 'ath-2026-09a-v2';
+    act(() => useDesignStore.getState().loadDesign(imported));
+    expect([...host.querySelectorAll('[data-section]')].at(-1)?.getAttribute('data-section')).toBe('Imported ATH values');
+    for (const [id, value] of [['common.coverage_mode', 'legacy coverage'], ['source.contours', 'legacy contours']]) {
+      const entry = host.querySelector(`[data-parameter-id="${id}"]`)!;
+      expect(entry.closest('[data-section]')?.getAttribute('data-section')).toBe('Imported ATH values');
+      const input = entry.querySelector<HTMLInputElement>('input')!;
+      expect(input.disabled).toBe(false);
+      act(() => input.focus());
+      act(() => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); });
+      act(() => input.blur());
+    }
+    const document = serializeDesign(useDesignStore.getState().design);
+    expect(document.coverage_mode).toBe('legacy coverage');
+    expect((document.source as Record<string, unknown>).contours).toBe('legacy contours');
+  });
+
   it('keeps Solve domain authoritative and demotes stored ATH quadrants to a read-only passthrough', () => {
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     const sections = [...host.querySelectorAll<HTMLElement>('[data-section]')];
-    const solveMesh = sections.find((section) => section.dataset.section === 'Solve & export mesh')!;
-    const passthrough = sections.find((section) => section.dataset.section === 'Output & Passthrough')!;
+    const solveMesh = sections.find((section) => section.dataset.section === 'Mesh')!;
+    const passthrough = sections.find((section) => section.dataset.section === 'Export')!;
     expect(sections.map((section) => section.dataset.section)).toEqual([
-      'Frequency Sweep', 'Directivity Map', 'Source Definition', 'Solve options', 'Solve & export mesh', 'Output & Passthrough',
+      'Frequency sweep', 'Directivity map', 'Source excitation', 'Solver', 'Mesh', 'Export',
     ]);
+    expect(passthrough.classList.contains('closed')).toBe(true);
+    act(() => passthrough.querySelector<HTMLButtonElement>('.section-head')!.click());
     const stored = passthrough.querySelector<HTMLElement>('[data-parameter-id="mesh.quadrants"]')!;
 
     expect(solveMesh.querySelector('#solve-symmetry')).not.toBeNull();
@@ -609,7 +638,7 @@ describe('ParamPanel inventory UX', () => {
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
     expect(titles()).toEqual(['Linked design', 'Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve', 'Realized dimensions']);
     expect(host.querySelector('[data-section="Model Type"]')).toBeNull();
-    expect(host.textContent).not.toContain('Surface sampling');
+    expect(host.textContent).not.toContain('Mesh');
 
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Drivers', 'Crossover', 'Passive cardioid', 'Solve options', 'Mesh detail']);
@@ -638,7 +667,7 @@ describe('ParamPanel inventory UX', () => {
     });
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
     expect(titles()).toEqual(['Linked design', 'Realized dimensions']);
-    for (const gone of ['Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve']) {
+    for (const gone of ['Profile', 'Throat', 'Mouth', 'Mounting', 'Cross-section']) {
       expect(host.querySelector(`[data-section="${gone}"]`)).toBeNull();
     }
   });
@@ -1287,7 +1316,7 @@ describe('ParamPanel inventory UX', () => {
 
     expect(activate).toHaveBeenCalledWith('simulation');
     const target = host.querySelector<HTMLElement>('[data-parameter-id="mesh.quadrants"]')!;
-    expect(target.closest('[data-section]')?.getAttribute('data-section')).toBe('Output & Passthrough');
+    expect(target.closest('[data-section]')?.getAttribute('data-section')).toBe('Export');
     expect(document.activeElement).toBe(target);
     expect(host.querySelector<HTMLInputElement>('#parameter-filter-simulation')?.value).toBe('Stored ATH Mesh.Quadrants');
   });
@@ -1318,12 +1347,12 @@ describe('ParamPanel inventory UX', () => {
 
   it('persists section collapse state', () => {
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    const source = host.querySelector<HTMLElement>('[data-section="Source Definition"]')!;
+    const source = host.querySelector<HTMLElement>('[data-section="Source excitation"]')!;
     act(() => source.querySelector<HTMLButtonElement>('.section-head')!.click());
     // One map rather than a key per section, so this travels with every other
     // durable setting instead of living only in this browser.
     expect(JSON.parse(localStorage.getItem('wg-param-sections')!)).toMatchObject({
-      'Source Definition': false,
+      'Source excitation': false,
     });
     expect(source.classList.contains('closed')).toBe(true);
   });
@@ -1349,10 +1378,103 @@ describe('ParamPanel inventory UX', () => {
     expect(useDesignStore.getState().design.enclosure.depth).toBe(0);
   });
 
+  it('uses Mounting for all four choices, preserves the body under infinite baffle and restores it', () => {
+    const choose = (value: string) => act(() => {
+      const select = host.querySelector<HTMLSelectElement>('#outer-body-mode')!;
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const design = () => useDesignStore.getState().design;
+    act(() => useDesignStore.getState().updateValues({ 'enclosure.depth': 145, 'mesh.wall_thickness': 8, 'enclosure.edge_radius': 12 }));
+    const body = structuredClone(design());
+    const revision = useDesignStore.getState().designRevision;
+    choose('infinite-baffle');
+    expect(design()).toEqual({ ...body, simulation: { ...body.simulation, sim_type: 'infinite-baffle' } });
+    expect(useDesignStore.getState().designRevision).toBe(revision + 1);
+    expect(host.querySelector<HTMLSelectElement>('#outer-body-mode')!.value).toBe('infinite-baffle');
+    choose('enclosure');
+    expect(design()).toEqual({ ...body, mesh: { ...body.mesh, wall_thickness: 0 } });
+    choose('infinite-baffle'); choose('freestanding');
+    expect(design().simulation.sim_type).toBe('freestanding');
+    expect(design().mesh.wall_thickness).toBe(8);
+    expect(design().enclosure.depth).toBe(0);
+    choose('infinite-baffle'); choose('bare');
+    expect(design().simulation.sim_type).toBe('freestanding');
+    expect(design().mesh.wall_thickness).toBe(0);
+    expect(design().enclosure.depth).toBe(0);
+    choose('enclosure');
+    expect(design().enclosure.depth).toBe(145);
+    expect(design().enclosure.edge_radius).toBe(12);
+  });
+
+  it('displays Infinite baffle for a loaded design that also has an enclosure', () => {
+    const loaded = designForFamily('OSSE');
+    loaded.simulation.sim_type = 'infinite-baffle'; loaded.enclosure.depth = 210;
+    act(() => useDesignStore.getState().loadDesign(loaded));
+    expect(host.querySelector<HTMLSelectElement>('#outer-body-mode')!.value).toBe('infinite-baffle');
+    expect(host.querySelectorAll('[data-parameter-id="simulation.sim_type"] select')).toHaveLength(1);
+    expect(host.textContent).not.toContain('Resolved mode');
+    expect(useDesignStore.getState().design.enclosure.depth).toBe(210);
+  });
+
+  it('keeps Experimental and Export collapsed by default, with normal labelled launcher rows', () => {
+    const section = host.querySelector('[data-section="Experimental"]')!;
+    expect(section.classList.contains('closed')).toBe(true);
+    act(() => section.querySelector<HTMLButtonElement>('.section-head')!.click());
+    const rows = section.querySelectorAll('.source-editor-launch');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].querySelector('.experimental-launch-label > span:first-child')?.textContent).toBe('Source contour');
+    expect(rows[1].querySelector('.experimental-launch-label > span:first-child')?.textContent).toBe('Horn + woofer assembly');
+    for (const row of rows) {
+      expect(row.querySelector('button')?.getAttribute('aria-haspopup')).toBe('dialog');
+      expect(row.textContent).toContain('Experimental');
+    }
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    expect(host.querySelector('[data-section="Export"]')?.classList.contains('closed')).toBe(true);
+  });
+
+  it('places frequency, excitation, solver and mesh controls in their new sections', () => {
+    act(() => useDesignStore.getState().updateValues({ 'enclosure.depth': 90, 'source.velocity_convention': 'legacy' }));
+    expect(host.querySelector('[data-parameter-id="source.shape"]')?.closest('[data-section]')?.getAttribute('data-section')).toBe('Throat');
+    expect(host.querySelector('[data-parameter-id="common.s1"]')?.closest('[data-section]')?.getAttribute('data-section')).toBe('Throat');
+    expect(host.querySelector('[data-parameter-id="cross_section.exponent"]')?.closest('[data-section]')?.getAttribute('data-section')).toBe('Cross-section');
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    for (const [id, section] of [
+      ['design-solve-frequency-mode', 'Frequency sweep'], ['design-solve-frequency-spacing', 'Frequency sweep'],
+      ['adaptive-frequency-sampling', 'Frequency sweep'], ['solve-accuracy', 'Solver'], ['solve-engine', 'Solver'],
+      ['solve-ground-plane', 'Solver'], ['solve-verbose', 'Solver'], ['mesh-validation-mode', 'Mesh'],
+    ]) expect(host.querySelector(`#${id}`)?.closest('[data-section]')?.getAttribute('data-section'), id).toBe(section);
+    for (const id of ['source.velocity_convention', 'source.velocity'])
+      expect(host.querySelector(`[data-parameter-id="${id}"]`)?.closest('[data-section]')?.getAttribute('data-section')).toBe('Source excitation');
+    expect(host.querySelector('label[for="polar-angle-start"]')?.textContent).toBe('Start angle');
+    expect(host.querySelector('label[for="polar-angle-end"]')?.textContent).toBe('End angle');
+    const mesh = host.querySelector('[data-section="Mesh"]')!;
+    expect([...mesh.querySelectorAll('[data-parameter-id]')].map((entry) => entry.getAttribute('data-parameter-id'))).toEqual([
+      'mesh.angular_segments', 'mesh.length_segments', 'mesh.corner_segments', 'mesh.sampling_mode',
+      'mesh.throat_resolution', 'mesh.mouth_resolution', 'mesh.rear_resolution',
+      'enclosure.front_resolution', 'enclosure.back_resolution', 'schema-gap.max_edge', 'mesh.max_triangles',
+    ]);
+    act(() => useDesignStore.getState().setFamily('FREEFORM'));
+    expect(host.querySelector('[data-parameter-id="freeform.inflectionPolicy"]')?.closest('[data-section]')?.getAttribute('data-section')).toBe('Mesh');
+  });
+
+  it('searches and reveals moved source cap fields and sweep controls under their new sections', async () => {
+    requestParameterReveal({ id: 'source.shape', tab: 'geometry', query: 'Source surface' });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    const target = host.querySelector('[data-parameter-id="source.shape"]')!;
+    expect(target.closest('[data-section]')?.getAttribute('data-section')).toBe('Throat');
+    expect(document.activeElement).toBe(target.querySelector('select'));
+    const sweep = buildParameterPaletteEntries('R-OSSE').find((entry) => entry.id === 'parametric-control-frequency-points')!;
+    expect(sweep.detail).toBe('Frequency sweep');
+    act(() => { sweep.run(); root.render(withQueryClient(<ParamPanel tab="simulation" />)); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(document.activeElement).toBe(host.querySelector('#design-solve-frequency-mode'));
+  });
+
   it('plainly reports the infinite-baffle override', () => {
     act(() => useDesignStore.getState().updateValue('simulation.sim_type', 'infinite-baffle'));
-    expect(host.textContent).toContain('Infinite baffle simulation overrides the outer body.');
-    expect(host.textContent).toContain('Resolved mode');
+    expect(host.querySelector<HTMLSelectElement>('#outer-body-mode')?.value).toBe('infinite-baffle');
+    expect(host.textContent).not.toContain('Resolved mode');
   });
 
   it('rejects prospective inverted frequency bounds before committing', () => {
@@ -1412,8 +1534,8 @@ describe('ParamPanel inventory UX', () => {
 
   it('renders the solve/directivity contracts and editable FREEFORM tables', () => {
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(host.querySelector('[data-section="Solve options"]')).not.toBeNull();
-    expect(host.querySelector('[data-section="Directivity Map"]')).not.toBeNull();
+    expect(host.querySelector('[data-section="Solver"]')).not.toBeNull();
+    expect(host.querySelector('[data-section="Directivity map"]')).not.toBeNull();
     for (const id of ['solve-engine', 'mesh-validation-mode', 'design-solve-frequency-spacing', 'solve-verbose', 'polar-angle-start', 'polar-angle-end', 'polar-angle-step', 'polar-distance', 'polar-norm-angle', 'polar-diagonal-angle', 'polar-observation-origin', 'polar-spherical-sampling', 'polar-field-plane']) {
       expect(host.querySelector(`#${id}`), id).not.toBeNull();
     }

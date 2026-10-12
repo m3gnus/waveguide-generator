@@ -1,5 +1,5 @@
 import {
-  PARAMETER_REGISTRY,
+  LEGACY_PARAMETER_REGISTRY,
   fieldAcceptsExpression,
   type ParameterDefinition,
 } from './parameterRegistry';
@@ -156,6 +156,6 @@ export function buildParameterCatalog() {
       validate_cli: 'wg validate --request REQUEST.json',
       note: 'editor_bounds describe the WG editor, not hard solver validity or recommended search ranges',
     },
-    parameters: PARAMETER_REGISTRY.map(serializeField),
+    parameters: LEGACY_PARAMETER_REGISTRY.map(serializeField),
   };
 }

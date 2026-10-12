@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NATIVE_FAMILIES, designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import {
+  LEGACY_PARAMETER_REGISTRY,
   PARAMETER_REGISTRY,
   PARAMETER_SECTION_DEFINITIONS,
   TRACEABILITY_PARAMETER_INVENTORY,
@@ -78,26 +79,54 @@ describe('complete parameter registry', () => {
     // The segment counts size the exported and solved mesh; the viewport
     // overrides them with its own adaptive sampling, so they must not sit in a
     // section that promises live preview control.
-    expect(sectionFor('mesh.angular_segments')).toBe('Surface sampling');
-    expect(sectionFor('mesh.length_segments')).toBe('Surface sampling');
-    expect(sectionFor('mesh.corner_segments')).toBe('Surface sampling');
+    expect(sectionFor('mesh.angular_segments')).toBe('Mesh');
+    expect(sectionFor('mesh.length_segments')).toBe('Mesh');
+    expect(sectionFor('mesh.corner_segments')).toBe('Mesh');
     // Inert ATH keys: the mesher rejects Mesh.ThroatSegments and never reads a
     // slice density, so they belong with the other round-trip-only values.
-    expect(sectionFor('mesh.throat_segments')).toBe('Output & Passthrough');
-    expect(sectionFor('mesh.throat_slice_density')).toBe('Output & Passthrough');
-    expect(sectionFor('mesh.throat_resolution')).toBe('Solve & export mesh');
+    expect(sectionFor('mesh.throat_segments')).toBe('Export');
+    expect(sectionFor('mesh.throat_slice_density')).toBe('Export');
+    expect(sectionFor('mesh.throat_resolution')).toBe('Mesh');
     const triangleWarning = PARAMETER_REGISTRY.find((field) => field.id === 'mesh.max_triangles')!;
     expect(triangleWarning.label).toBe('Triangle warning threshold');
     const legacyApproval = PARAMETER_REGISTRY.find((field) => field.id === 'mesh.allow_large_mesh')!;
     expect(fieldIsVisible(legacyApproval, designForFamily('OSSE'))).toBe(false);
-    expect(sectionFor('mesh.wall_thickness')).toBe('Wall & Enclosure');
+    expect(sectionFor('mesh.wall_thickness')).toBe('Mounting');
     const storedQuadrants = PARAMETER_REGISTRY.find((field) => field.id === 'mesh.quadrants')!;
-    expect(storedQuadrants.section).toBe('Output & Passthrough');
+    expect(storedQuadrants.section).toBe('Export');
     expect(storedQuadrants.kind).toBe('indicator');
     expect(storedQuadrants.label).toBe('Stored ATH Mesh.Quadrants');
     expect(storedQuadrants.description).toContain('overwrites this stored value from Solve domain');
     expect(storedQuadrants.description).toContain('ignores it for geometry export');
-    expect(sectionFor('source.shape')).toBe('Source Definition');
+    expect(sectionFor('source.shape')).toBe('Throat');
+  });
+
+  it('preserves all document fields, paths, bounds, defaults and family gates across the presentation moves', () => {
+    expect(PARAMETER_REGISTRY.map((field) => field.id)).toEqual(LEGACY_PARAMETER_REGISTRY.map((field) => field.id));
+    for (const original of LEGACY_PARAMETER_REGISTRY) {
+      const moved = PARAMETER_REGISTRY.find((field) => field.id === original.id)!;
+      const { section: _oldSection, label: _oldLabel, visibleWhen: oldVisibility, ...oldSemantics } = original;
+      const { section: _section, label: _label, visibleWhen: visibility, ...semantics } = moved;
+      expect(semantics, original.id).toEqual(oldSemantics);
+      if (moved.section !== 'Imported ATH values') expect(visibility, original.id).toBe(oldVisibility);
+    }
+  });
+
+  it('shows legacy round-trip fields only for imports or non-default values without changing their paths', () => {
+    for (const id of ['icw.a', 'icw.k', 'icw.q', 'icw.curl', 'common.coverage_mode', 'source.contours']) {
+      const field = PARAMETER_REGISTRY.find((item) => item.id === id)!;
+      const design = designForFamily(id === 'source.contours' ? 'OSSE' : 'ICW');
+      expect(field.section, id).toBe('Imported ATH values');
+      expect(fieldIsVisible(field, design), id).toBe(false);
+      design.text_import_version = 'ath-2026-08c-v1';
+      expect(fieldIsVisible(field, design), id).toBe(true);
+      delete design.text_import_version;
+      const keys = field.path!.split('.');
+      const parent = keys.slice(0, -1).reduce<Record<string, unknown>>((value, key) => value[key] as Record<string, unknown>, design as unknown as Record<string, unknown>);
+      parent[keys.at(-1)!] = field.kind === 'text' ? 'imported legacy text' : 12.5;
+      expect(fieldIsVisible(field, design), id).toBe(true);
+      expect(field.disabledReason !== undefined, id).toBe(id === 'icw.curl');
+    }
   });
 
   it('uses a mode-and-design predicate for section visibility', () => {
@@ -107,10 +136,10 @@ describe('complete parameter registry', () => {
         PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === title)!,
         { mode, design, waveguideLinked },
       );
-    expect(visible('Profile Dimensions', 'cad')).toBe(true);
-    expect(visible('Surface sampling', 'parametric')).toBe(true);
-    expect(visible('Surface sampling', 'cad')).toBe(false);
-    expect(visible('Source Definition', 'cad')).toBe(false);
+    expect(visible('Profile', 'cad')).toBe(true);
+    expect(visible('Mesh', 'parametric')).toBe(true);
+    expect(visible('Mesh', 'cad')).toBe(false);
+    expect(visible('Source excitation', 'cad')).toBe(false);
   });
 
   it('hides the waveguide definition when no WG design stands behind the project', () => {
@@ -121,7 +150,7 @@ describe('complete parameter registry', () => {
         { mode, design, waveguideLinked },
       );
     const waveguideSections = [
-      'Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve',
+      'Profile', 'Throat', 'Mouth', 'Cross-section', 'Mounting',
     ];
     // Geometry authored in CAD has no horn of WG's, so every field in these
     // sections would be an input that cannot move the model.
@@ -231,7 +260,7 @@ describe('complete parameter registry', () => {
     expect(exponent).toMatchObject({
       legacyKey: 'morphExponent',
       path: 'morph.target_exponent',
-      section: 'Morph Target',
+      section: 'Mouth',
       kind: 'number',
       min: 2,
       max: 16,
@@ -264,7 +293,7 @@ describe('complete parameter registry', () => {
     // to carry the letter the formula uses -- which is exactly its legacy key.
     for (const family of ['R-OSSE', 'OSSE'] as const) {
       const scalars = PARAMETER_REGISTRY
-        .filter((item) => item.section === 'Profile Dimensions' && item.families?.includes(family) && item.id !== 'common.scale' && !item.id.startsWith('cross_section.'));
+        .filter((item) => (item.section === 'Profile' || ['common.s1', 'common.s2'].includes(item.id)) && item.families?.includes(family) && item.id !== 'common.scale' && !item.id.startsWith('cross_section.'));
       expect(scalars.map((item) => item.symbol)).toEqual(['s1', 's2', ...TRACEABILITY_KEYS[family].filter((key) => key !== 'scale')]);
       expect(scalars.every((item) => item.symbol === item.legacyKey), family).toBe(true);
     }

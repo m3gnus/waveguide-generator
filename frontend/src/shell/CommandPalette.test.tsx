@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parameterRevealRequest } from '../design/ParamPanel';
-import { PARAMETER_REGISTRY } from '../design/parameterRegistry';
+import { fieldIsVisible, PARAMETER_REGISTRY } from '../design/parameterRegistry';
 import { designForFamily } from '../stores/design';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
@@ -137,10 +137,12 @@ describe('CommandPalette', () => {
   it('adds the semantic Solve domain control to the registry-backed parametric palette', () => {
     const design = designForFamily('OSSE');
     const parametric = buildParameterPaletteEntries(undefined, { mode: 'parametric', design, cadReturnReady: true });
-    expect(parametric.slice(0, PARAMETER_REGISTRY.length).map((entry) => entry.id))
-      .toEqual(PARAMETER_REGISTRY.map((field) => `parameter-${field.id}`));
+    expect(parametric.filter((entry) => entry.id.startsWith('parameter-')).map((entry) => entry.id))
+      .toEqual(PARAMETER_REGISTRY.filter((field) => field.id !== 'simulation.sim_type')
+        .filter((field) => field.section !== 'Imported ATH values' || fieldIsVisible(field, design))
+        .map((field) => `parameter-${field.id}`));
     expect(parametric.find((entry) => entry.id === 'parametric-control-solve-domain')).toMatchObject({
-      label: 'Solve domain', detail: 'Solve & export mesh',
+      label: 'Solve domain', detail: 'Mesh',
     });
     expect(parametric.some((entry) => entry.id.startsWith('cad-control-'))).toBe(false);
   });

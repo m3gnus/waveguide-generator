@@ -13,7 +13,7 @@ import type { ImportedSolvePlan } from '../jobs/actions';
 import type { ImportedSolvePlanSnapshot } from '../jobs/useImportedSolvePlan';
 import { defaultPolarUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { useDesignStore } from '../stores/design';
-import { accuracyExplainer, DirectivityMapControls, effectiveGridView, FrequencySweepControls, runPolarFromJob, SolveOptionsControls } from './SolveOptionsSections';
+import { accuracyExplainer, AdaptiveFrequencyControls, MeshValidationControl, DirectivityMapControls, effectiveGridView, FrequencySweepControls, runPolarFromJob, SolveOptionsControls } from './SolveOptionsSections';
 
 const parametricPlan = vi.hoisted(() => ({
   current: { plan: null, error: null, isPending: false } as SolvePlanSnapshot,
@@ -321,6 +321,20 @@ describe('solve and directivity control help', () => {
     });
     render(<SolveOptionsControls />);
     expect(host.querySelector('.opencl-guidance')).toBeNull();
+  });
+
+  it('renders Solver without the moved sampling and validation controls, which retain their store writes independently', () => {
+    render(<SolveOptionsControls includeSampling={false} />);
+    for (const id of ['solve-accuracy', 'solve-engine', 'solve-ground-plane', 'solve-verbose']) expect(host.querySelector(`#${id}`), id).not.toBeNull();
+    for (const id of ['adaptive-frequency-sampling', 'mesh-validation-mode', 'design-solve-frequency-mode']) expect(host.querySelector(`#${id}`), id).toBeNull();
+    render(<><FrequencySweepControls idPrefix="design-solve" context="design" /><AdaptiveFrequencyControls /><MeshValidationControl /></>);
+    const validation = host.querySelector<HTMLSelectElement>('#mesh-validation-mode')!;
+    act(() => { validation.value = 'strict'; validation.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(useSolveOptionsStore.getState().meshValidationMode).toBe('strict');
+    const adaptive = host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!;
+    expect(adaptive.disabled).toBe(false);
+    act(() => adaptive.click());
+    expect(useSolveOptionsStore.getState().adaptiveFrequencySampling).toBe(true);
   });
 
   it('documents every solve option', () => {

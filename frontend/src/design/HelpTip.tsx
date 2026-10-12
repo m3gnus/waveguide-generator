@@ -136,13 +136,14 @@ export function useHelpTip(content?: HelpTipContent | string) {
 }
 
 /** Wrapper for rows that just need the whole row to be the hover target. */
-export function HelpTipRow({ text, className, children }: {
+export function HelpTipRow({ text, className, children, revealId }: {
   text?: string;
   className?: string;
+  revealId?: string;
   children: React.ReactNode;
 }) {
   const { triggerProps, tip } = useHelpTip(text);
-  return <div className={className} {...triggerProps}>{children}{tip}</div>;
+  return <div className={className} data-control-reveal-id={revealId} {...triggerProps}>{children}{tip}</div>;
 }
 
 /**

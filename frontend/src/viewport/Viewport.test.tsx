@@ -171,6 +171,23 @@ describe('Viewport preview errors', () => {
     expect(host.querySelector('[role="alert"]')).toBeNull();
   });
 
+  it('renders the design-size readout in the parametric viewport and removes it in CAD mode', () => {
+    const saved = { ...previewSnapshot };
+    try {
+      const revision = useDesignStore.getState().designRevision;
+      Object.assign(previewSnapshot, { frame: { ...frame, documentLoad: currentDocumentLoad(), header: { ...frame.header, designRevision: revision,
+        previewMetadata: { dimensions_mm: { mouth_opening: [411.7, 320], horn_overall: [411.7, 320, 176.5], enclosure_overall: [450, 360, 240] } } } },
+        dimensionsFrame: null, displayedRevision: revision, stale: false, error: null });
+      act(() => root.render(<Viewport />));
+      const readout = host.querySelector('[data-testid="design-dimensions"]')!;
+      expect(readout.closest('.wg2-viewport')).not.toBeNull();
+      expect(readout.textContent).toBe('Mouth 411.7 × 320.0 · Depth 176.5 · Enclosure 450.0 × 360.0 × 240.0 mm');
+      expect(readout.classList.contains('stale')).toBe(false);
+      act(() => workspaceModeStore.setMode('cad'));
+      expect(host.querySelector('[data-testid="design-dimensions"]')).toBeNull();
+    } finally { Object.assign(previewSnapshot, saved); }
+  });
+
   it('shows native opening dimensions only for the current document and revision', () => {
     const original = { ...previewSnapshot };
     try {

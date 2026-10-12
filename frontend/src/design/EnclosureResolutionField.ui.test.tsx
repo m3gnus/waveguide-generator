@@ -28,7 +28,7 @@ it('round-trips new controls and raw quadrant spellings through client hydration
 it('offers cross-section controls only for the supported formulas', () => {
   const sectionFields = PARAMETER_REGISTRY.filter(({ id }) => id.startsWith('cross_section.'));
   expect(sectionFields).toHaveLength(2);
-  expect(field.section).toBe('Wall & Enclosure');
+  expect(field.section).toBe('Mesh');
   for (const family of ['OSSE','R-OSSE','ICW','FREEFORM','SOURCE-DISK'] as const) {
     expect(sectionFields.every((entry) => fieldIsVisible(entry, designForFamily(family)))).toBe(['OSSE','R-OSSE','ICW'].includes(family));
   }

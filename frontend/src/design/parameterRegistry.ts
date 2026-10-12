@@ -1,10 +1,13 @@
-import type { DesignDocument, DesignFamily } from '../stores/design';
+import { designForFamily, type DesignDocument, type DesignFamily } from '../stores/design';
 import { NATIVE_FAMILIES, type NativeFamily } from './nativeFamilies';
 import type { WorkspaceMode } from '../stores/workspaceMode';
 import { backendSupports, hostLimitation, selectionLimitation, type BackendFeature, type BackendIdentity } from './backendSupport';
 import type { EngineCapability } from '../jobs/actions';
 
 export type ParameterSection =
+  | 'Profile' | 'Throat' | 'Mouth' | 'Cross-section' | 'Mounting'
+  | 'Frequency sweep' | 'Source excitation' | 'Mesh' | 'Export' | 'Imported ATH values'
+  | 'Directivity map' | 'Solver' | 'Experimental'
   | 'Profile Dimensions'
   | 'Throat Extension'
   | 'Morph Target'
@@ -155,7 +158,7 @@ const literalAdapters: DesignFamily[] = ['OSSE-ADAPTER-CONTROLS'];
 const nativeNumber = (id: string, path: string, label: string, options: Partial<ParameterDefinition>): ParameterDefinition =>
   number(`native.${id}`, path, path, profile, label, options);
 
-export const PARAMETER_REGISTRY: ParameterDefinition[] = [
+export const LEGACY_PARAMETER_REGISTRY: ParameterDefinition[] = [
   nativeNumber('L', 'L', 'Body length', { families: nativeHorns, unit: 'mm', min: .01, max: 10000, description: 'Intrinsic length of the original circular OSSE body before scale, adapter trimming or arc attachment. Axial, arc and roundover formulas require finished length 1–2000 mm; use axial_scale for Z on axial bodies and scale otherwise. Adapter-axial instead bounds total finished adapter plus retained-body depth to 1–2000 mm.' }),
   nativeNumber('r0', 'r0', 'Body throat radius', { families: nativeHorns, unit: 'mm', min: .01, max: 10000, description: 'Intrinsic radius of the original OSSE body. Axial, arc and roundover formulas require r0 × scale in 1–200 mm. Adapter-axial instead requires finished driver radius in 1–200 mm; driver diameter is controlled separately.' }),
   nativeNumber('a', 'a', 'Body coverage half-angle', { families: nativeHorns, unit: '°', min: 1, max: 79.999, description: 'Circular body flare angle. Must exceed the throat half-angle. Axial, arc and roundover formulas require 5 through 75 degrees.' }),
@@ -368,7 +371,7 @@ const commonTraceKeys = [
 /** Current family-qualified parameter inventory, with family duplicates qualified. */
 // Unqualified legacy controls apply to the original families. Native shapes
 // expose only their canonical controls and the shared execution settings.
-PARAMETER_REGISTRY.forEach((field) => {
+LEGACY_PARAMETER_REGISTRY.forEach((field) => {
   if (!field.families) field.families = [...allFamilies];
   if (field.id.startsWith('simulation.f') || field.id === 'simulation.num_frequencies'
     || field.section === 'Output & Passthrough' && field.kind === 'indicator') {
@@ -381,7 +384,7 @@ export const TRACEABILITY_PARAMETER_INVENTORY = [
   ...commonTraceKeys.map((key) => ({ key, family: undefined })),
 ];
 
-export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[] = [
+export const CAD_PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[] = [
   {
     title: 'Profile Dimensions',
     tab: 'geometry',
@@ -442,6 +445,52 @@ export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[
     description: 'Output flags, plus imported configuration content preserved verbatim for lossless export. Values here round-trip; they do not change the viewport, the solve, or the exported geometry.',
     visibleWhen: parametricWorkspaceOnly,
   },
+];
+
+/** Frozen presentation for CAD and the versioned public catalog. Document paths
+ * and wire metadata stay unchanged when the parametric editor is reorganised. */
+const sectionMoves: Partial<Record<ParameterSection, ParameterSection>> = {
+  'Profile Dimensions': 'Profile', 'Throat Extension': 'Throat',
+  'Morph Target': 'Mouth', 'Guiding Curve': 'Cross-section',
+  'Wall & Enclosure': 'Mounting', 'Surface sampling': 'Mesh',
+  'Frequency Sweep': 'Frequency sweep', 'Source Definition': 'Source excitation',
+  'Solve & export mesh': 'Mesh', 'Output & Passthrough': 'Export',
+};
+const importedOnlyIds = new Set(['icw.a', 'icw.k', 'icw.q', 'icw.curl', 'common.coverage_mode', 'source.contours']);
+function importedValueIsVisible(field: ParameterDefinition, design: DesignDocument): boolean {
+  if (design.text_import_version) return true;
+  const read = (document: DesignDocument) => field.path?.split('.').reduce<unknown>((value, key) =>
+    value && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined, document);
+  return read(design) !== read(designForFamily(design.formula));
+}
+export const PARAMETER_REGISTRY: ParameterDefinition[] = LEGACY_PARAMETER_REGISTRY.map((field) => {
+  let section = sectionMoves[field.section] ?? field.section;
+  if (['common.s1', 'common.s2', 'source.shape', 'source.radius', 'source.curvature'].includes(field.id)) section = 'Throat';
+  if (field.id.startsWith('cross_section.')) section = 'Cross-section';
+  if (field.id === 'freeform.inflectionPolicy' || ['enclosure.front_resolution', 'enclosure.back_resolution'].includes(field.id)) section = 'Mesh';
+  if (['mesh.vertical_offset', 'native.mesh.offset'].includes(field.id)) section = 'Export';
+  if (field.id === 'simulation.sim_type') section = 'Mounting';
+  if (importedOnlyIds.has(field.id)) section = 'Imported ATH values';
+  return { ...field, section,
+    ...(field.id === 'simulation.sim_type' ? { label: 'Mounting' } : {}),
+    ...(importedOnlyIds.has(field.id) ? { visibleWhen: (design: DesignDocument) => importedValueIsVisible(field, design) } : {}),
+  };
+});
+
+export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[] = [
+  { title: 'Profile', tab: 'geometry', description: 'Primary dimensions for the selected horn family. OSSE and R-OSSE labels carry their ATH formula symbol in parentheses.', visibleWhen: waveguideDefinitionOnly },
+  { title: 'Throat', tab: 'geometry', description: 'Throat stretch, extension, straight slot and source surface cap.', visibleWhen: waveguideDefinitionOnly },
+  { title: 'Mouth', tab: 'geometry', description: CAD_PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === 'Morph Target')!.description, visibleWhen: waveguideDefinitionOnly },
+  { title: 'Cross-section', tab: 'geometry', description: 'Base cross-section shape and OSSE guiding-curve controls.', visibleWhen: waveguideDefinitionOnly },
+  { title: 'Mounting', tab: 'geometry', description: 'Bare shell, thickened waveguide, enclosure or infinite baffle, with wall and enclosure dimensions.', visibleWhen: waveguideDefinitionOnly },
+  { title: 'Experimental', tab: 'geometry', description: 'Source contour and horn + woofer assembly editors.', visibleWhen: parametricWorkspaceOnly },
+  { title: 'Imported ATH values', tab: 'geometry', description: 'Imported geometry values and legacy fields preserved for file round-trip.', visibleWhen: parametricWorkspaceOnly },
+  { title: 'Frequency sweep', tab: 'simulation', description: 'Frequency range, output points, spacing and adaptive sampling.', visibleWhen: parametricWorkspaceOnly },
+  { title: 'Directivity map', tab: 'simulation', description: 'Polar planes and angular sampling used for directivity exports and plots.', visibleWhen: parametricWorkspaceOnly },
+  { title: 'Source excitation', tab: 'simulation', description: 'Source velocity convention and legacy amplitude.', visibleWhen: parametricWorkspaceOnly },
+  { title: 'Solver', tab: 'simulation', description: 'Solve accuracy, backend engine, ground plane and diagnostic logging.', visibleWhen: parametricWorkspaceOnly },
+  { title: 'Mesh', tab: 'simulation', description: CAD_PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === 'Surface sampling')!.description, visibleWhen: parametricWorkspaceOnly },
+  { title: 'Export', tab: 'simulation', description: 'Export placement and imported-file round-trip values; none change the preview or the solve.', visibleWhen: parametricWorkspaceOnly },
 ];
 
 export function parameterSectionIsVisible(

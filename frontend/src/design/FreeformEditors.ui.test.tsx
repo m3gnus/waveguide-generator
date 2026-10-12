@@ -6,12 +6,12 @@ import type { ParameterDefinition } from './parameterRegistry';
 import { EditablePointTable, EditableStationTable } from './FreeformEditors';
 
 const pointField: ParameterDefinition = {
-  id: 'freeform.pointsH', legacyKey: 'profile_h.points', section: 'Profile Dimensions',
+  id: 'freeform.pointsH', legacyKey: 'profile_h.points', section: 'Profile',
   label: 'Horizontal points', kind: 'table',
 };
 
 const stationField: ParameterDefinition = {
-  id: 'freeform.crossSections', legacyKey: 'cross_sections', section: 'Profile Dimensions',
+  id: 'freeform.crossSections', legacyKey: 'cross_sections', section: 'Profile',
   label: 'Cross sections', kind: 'table',
 };
 

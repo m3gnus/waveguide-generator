@@ -1,21 +1,12 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { Fragment, useEffect, useState, useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { currentDocumentLoad, useDesignStore } from '../stores/design';
-
-const hornReadouts = [
-  ['mouth_opening', 'Mouth opening', 2],
-  ['horn_overall', 'Horn overall', 3],
-  ['enclosure_overall', 'Enclosure overall', 3],
-] as const;
-const sourceReadouts = [
-  ['source_diameter', 'Source disk', 2],
-  ['body_overall', 'Body overall', 3],
-] as const;
 
 function formatted(value: unknown, count: number): string | null {
   if (!Array.isArray(value) || value.length !== count
       || !value.every((item) => typeof item === 'number' && Number.isFinite(item) && item > 0)) return null;
-  return `${value.map((item: number) => item.toFixed(1)).join(' × ')} mm`;
+  return value.map((item: number) => item.toFixed(1)).join(' × ');
 }
 
 function formattedTarget(value: unknown): string | null {
@@ -30,7 +21,7 @@ export function LiveDimensions() {
   const revision = useDesignStore((state) => state.designRevision);
   const formula = useDesignStore((state) => state.design.formula);
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
-  const host = useRef<HTMLElement>(null);
+  const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const [invalidDraft, setInvalidDraft] = useState(false);
   const frame = preview.dimensionsFrame ?? preview.frame;
   const metadata = frame?.header.previewMetadata;
@@ -43,40 +34,46 @@ export function LiveDimensions() {
   // public validity state so dimensions cannot look current beside an invalid
   // uncommitted input (including fields in the FREEFORM editors).
   useEffect(() => {
-    const panel = host.current?.closest('.param-panel');
-    if (!panel) return;
-    const update = () => setInvalidDraft(Boolean(panel.querySelector('[aria-invalid="true"]')));
+    const update = () => setInvalidDraft(Boolean(document.querySelector('.param-panel [aria-invalid="true"]')));
     const observer = new MutationObserver(update);
-    observer.observe(panel, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-invalid'] });
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-invalid'] });
     update();
     return () => observer.disconnect();
   }, [visible]);
 
   // After New/Open the retained frame is the previous document's: show nothing
   // until this document has a frame of its own.
-  if (!visible) return null;
+  if (!visible || mode !== 'parametric') return null;
   const pending = !preview.dimensionsUnavailable && metadata!.dimensions_status === 'pending';
   const dimensions = preview.dimensionsUnavailable || metadata!.dimensions_status === 'unavailable' ? null
     : pending ? preview.lastCanonicalDimensions : metadata!.dimensions_mm;
-  const current = preview.displayedRevision === revision
+  const current = Boolean(dimensions) && preview.displayedRevision === revision
     && frame?.header.designRevision === revision
     && !pending && !preview.stale && !preview.error && !invalidDraft;
-  const readouts = formula === 'SOURCE-DISK' ? sourceReadouts : hornReadouts;
-  return <section ref={host} className="live-dimensions" aria-label="Design dimensions">
-    <h3>Design size</h3>
-    <p>W × H × D · {pending ? 'Updating dimensions' : dimensions ? current ? 'Current preview' : 'Last valid preview' : 'Dimensions unavailable'}</p>
-    <dl className="realized-dimension-list">
-      {readouts.map(([key, label, count]) => {
-        if (key === 'enclosure_overall' && dimensions && !(key in dimensions)) return null;
-        const value = formatted(dimensions?.[key], count);
-        const requested = key === 'mouth_opening' ? formattedTarget(metadata!.dimensions_requested_mm?.mouth_opening) : null;
-        return <div className="realized-dimension-row" key={key}>
-          <dt><span>{label}</span></dt>
-          <dd>{value && requested && requested !== value
-            ? <>requested {requested}, effective {value}</>
-            : value ?? (pending ? 'updating' : 'unavailable')}{value && !current && <small>{pending ? 'updating' : 'last valid'}</small>}</dd>
-        </div>;
-      })}
-    </dl>
-  </section>;
+  const mouth = formatted(dimensions?.mouth_opening, 2);
+  const overall = formatted(dimensions?.horn_overall, 3);
+  const enclosure = formatted(dimensions?.enclosure_overall, 3);
+  const source = formatted(dimensions?.source_diameter, 2);
+  const body = formatted(dimensions?.body_overall, 3);
+  const mouthValues = dimensions?.mouth_opening;
+  const overallValues = dimensions?.horn_overall;
+  const wider = mouth && overall && mouthValues && overallValues
+    && overallValues.slice(0, 2).some((value, index) => Math.abs(value - mouthValues[index]) > .05 + 1e-9);
+  const parts = formula === 'SOURCE-DISK'
+    ? [source && `Source ${source}`, body && `Body ${body}`]
+    : [mouth && `Mouth ${mouth}`, overall && `Depth ${overallValues![2].toFixed(1)}`,
+      wider && `Overall ${overallValues!.slice(0, 2).map((value) => value.toFixed(1)).join(' × ')}`,
+      enclosure && `Enclosure ${enclosure}`];
+  const content = parts.filter(Boolean).join(' · ');
+  const state = pending ? 'Updating dimensions' : !content ? 'Dimensions unavailable'
+    : current ? 'Current preview' : 'Last valid preview';
+  const requested = formattedTarget(metadata!.dimensions_requested_mm?.mouth_opening);
+  const morphDetail = mouth && requested && requested !== `${mouth} mm`
+    ? `Mouth requested ${requested}, effective ${mouth} mm.` : '';
+  const title = [state, morphDetail].filter(Boolean).join('. ');
+  return <span className={`viewport-dimensions${!current || !content ? ' stale' : ''}`}
+    data-testid="design-dimensions" title={title} aria-live="polite"
+    aria-label={`Design dimensions. ${content ? `${content} mm. ` : ''}${title}`}>
+    {content && <>{parts.filter(Boolean).map((part, index) => <Fragment key={index}>{index > 0 && ' · '}<span>{part}</span></Fragment>)} mm</>}
+  </span>;
 }

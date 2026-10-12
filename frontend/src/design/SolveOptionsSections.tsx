@@ -37,7 +37,7 @@ import {
 } from '../stores/solveOptions';
 import { runDisplayName } from '../prefs/preferences';
 import { useDesignStore } from '../stores/design';
-import type { WorkspaceMode } from '../stores/workspaceMode';
+import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 
 const ACCURATE_HELP = 'Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions.';
 
@@ -194,10 +194,10 @@ export function FrequencySweepControls({ idPrefix, context }: { idPrefix: string
     ? 'These frequencies replace the range and count from the design, and sweep spacing no longer applies.'
     : 'These frequencies replace the imported solve range and count, and sweep spacing no longer applies.';
   return <>
-    <SelectRow text={modeHelp + samplingHelp}><label htmlFor={modeId}>Sweep points</label><select id={modeId} value={store.frequencyMode} onChange={(event) => store.setFrequencyMode(event.target.value as FrequencyMode)}><option value="range">Generated grid</option><option value="list">Explicit list</option></select></SelectRow>
+    <SelectRow revealId={modeId} text={modeHelp + samplingHelp}><label htmlFor={modeId}>Sweep points</label><select id={modeId} value={store.frequencyMode} onChange={(event) => store.setFrequencyMode(event.target.value as FrequencyMode)}><option value="range">Generated grid</option><option value="list">Explicit list</option></select></SelectRow>
     {store.frequencyMode === 'range'
-      ? <SelectRow text="How the generated frequencies are spread across the range. Logarithmic gives even spacing per octave, which matches how the response is read; Linear spends most of the points on the top octave."><label htmlFor={spacingId}>Sweep spacing</label><select id={spacingId} value={store.frequencySpacing} onChange={(event) => store.setFrequencySpacing(event.target.value as FrequencySpacing)}><option value="log">Logarithmic</option><option value="linear">Linear</option></select></SelectRow>
-      : <div className="point-paste">
+      ? <SelectRow revealId={spacingId} text="How the generated frequencies are spread across the range. Logarithmic gives even spacing per octave, which matches how the response is read; Linear spends most of the points on the top octave."><label htmlFor={spacingId}>Sweep spacing</label><select id={spacingId} value={store.frequencySpacing} onChange={(event) => store.setFrequencySpacing(event.target.value as FrequencySpacing)}><option value="log">Logarithmic</option><option value="linear">Linear</option></select></SelectRow>
+      : <div className="point-paste" data-control-reveal-id={listId}>
           <textarea id={listId} aria-label="Solver frequencies in Hz" rows={4} value={store.frequencyListText} onChange={(event) => store.setFrequencyListText(event.target.value)} placeholder={'500, 630, 800, 1000\n1250 1600 2000'} />
           <div className="paste-meta">{frequencies
             ? <>Output: <b>{frequencies.length}</b> points · <b>{frequencies[0]}</b> to <b>{frequencies[frequencies.length - 1]}</b> Hz</>
@@ -208,16 +208,8 @@ export function FrequencySweepControls({ idPrefix, context }: { idPrefix: string
   </>;
 }
 
-export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null, showOpenclGuidance = true }: {
-  mode?: WorkspaceMode;
-  ingestRecord?: CadReturnIngestRecord | null;
-  /** The parameter panel already shows this block beside its IB numba notice. */
-  showOpenclGuidance?: boolean;
-} = {}) {
+export function AdaptiveFrequencyControls({ mode = 'parametric' }: { mode?: WorkspaceMode } = {}) {
   const store = useSolveOptionsStore();
-  const { engines, engineSelection, hostPlatform, error, isLoading: capabilitiesLoading,
-    qualificationRefreshNeeded, refreshCapabilities } = useCapabilities();
-  const backendEngines = engines;
   const controlBackend = useSolveControlBackend(mode);
   const simulation = useDesignStore((state) => state.design.simulation);
   const importedCount = useCadReturnStore((state) => state.frequencyCount);
@@ -231,6 +223,31 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
     : count < 24 ? 'Adaptive sampling requires at least 24 frequencies.'
     : adaptiveEngine && !adaptiveEngine.startsWith('beat-') && adaptiveEngine !== 'beat'
       ? 'Adaptive sampling is BEAT only; choose a BEAT backend or Accurate.' : undefined;
+  return <>
+    <HelpTipRow revealId="adaptive-frequency-sampling" className="toggle-row" text="BEAT exterior sweeps with at least 24 frequencies. Fits unsolved points to a 0.1 dB equivalent disagreement target. Completed native acquisition has gaps no wider than 1/6 octave. Narrow resonances can be missed when narrower than the largest solved-frequency gap; this spacing bound does not guarantee interpolation accuracy."><label htmlFor="adaptive-frequency-sampling">Adaptive frequency sampling (experimental)</label><input id="adaptive-frequency-sampling" type="checkbox" checked={store.adaptiveFrequencySampling} disabled={Boolean(adaptiveReason) && !store.adaptiveFrequencySampling} aria-describedby={adaptiveReason ? 'adaptive-sampling-reason' : undefined} onChange={(event) => store.setAdaptiveFrequencySampling(event.target.checked)} /></HelpTipRow>
+    {adaptiveReason && <p id="adaptive-sampling-reason" className="section-note">{adaptiveReason}</p>}
+  </>;
+}
+
+export function MeshValidationControl() {
+  const store = useSolveOptionsStore();
+  return <>
+    <SelectRow revealId="mesh-validation-mode" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></SelectRow>
+  </>;
+}
+
+export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null, showOpenclGuidance = true, includeSampling = true }: {
+  includeSampling?: boolean;
+  mode?: WorkspaceMode;
+  ingestRecord?: CadReturnIngestRecord | null;
+  /** The parameter panel already shows this block beside its IB numba notice. */
+  showOpenclGuidance?: boolean;
+} = {}) {
+  const store = useSolveOptionsStore();
+  const { engines, engineSelection, hostPlatform, error, isLoading: capabilitiesLoading,
+    qualificationRefreshNeeded, refreshCapabilities } = useCapabilities();
+  const backendEngines = engines;
+  const controlBackend = useSolveControlBackend(mode);
   // For imported geometry the server says, per engine, whether it can take
   // this return, and where the user's choice resolves. Before a return is
   // prepared there is no record to ask about, and the list shows only what
@@ -266,17 +283,16 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   const beatGpu = engines.find((engine) => ['beat-metal', 'beat-cuda', 'beat-rocm'].includes(engine.name) && engine.available);
   const beatCpu = engines.find((engine) => engine.name === 'beat-cpu' && engine.available);
   return <>
-    <SelectRow text={accuracyHelp}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></SelectRow>
+    <SelectRow revealId="solve-accuracy" text={accuracyHelp}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></SelectRow>
     <AccuracyExplainer fastEngine={explainerFast} accurateEngine={explainerAccurate} />
     {store.engine === 'auto' && store.accuracy === 'fast' && explainerFast === 'bempp'
       && engines.some((engine) => engine.name.startsWith('beat-') && engine.runtime_state === 'preparing')
       && <p className="section-note" role="status">Solves use BEMPP until BEAT is ready.</p>}
-    <HelpTipRow className="toggle-row" text="BEAT exterior sweeps with at least 24 frequencies. Fits unsolved points to a 0.1 dB equivalent disagreement target. Completed native acquisition has gaps no wider than 1/6 octave. Narrow resonances can be missed when narrower than the largest solved-frequency gap; this spacing bound does not guarantee interpolation accuracy."><label htmlFor="adaptive-frequency-sampling">Adaptive frequency sampling (experimental)</label><input id="adaptive-frequency-sampling" type="checkbox" checked={store.adaptiveFrequencySampling} disabled={Boolean(adaptiveReason) && !store.adaptiveFrequencySampling} aria-describedby={adaptiveReason ? 'adaptive-sampling-reason' : undefined} onChange={(event) => store.setAdaptiveFrequencySampling(event.target.checked)} /></HelpTipRow>
-    {adaptiveReason && <p id="adaptive-sampling-reason" className="section-note">{adaptiveReason}</p>}
+    {includeSampling && <AdaptiveFrequencyControls mode={mode} />}
     {store.accuracy === 'accurate' && !beatGpu && beatCpu && <p className="section-note" role="status">No BEAT GPU backend is ready; Accurate will use BEAT CPU.</p>}
     {store.engine !== 'auto' && <p className="section-note">Advanced engine override: {store.engine}. This engine takes precedence. Selecting Fast or Accurate clears the override.</p>}
     {mode === 'parametric' ? <>
-      <SelectRow text="Advanced engine override. AUTO follows the Fast or Accurate choice. An explicit engine takes precedence."><label htmlFor="solve-engine">Advanced backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
+    <SelectRow revealId="solve-engine" text="Advanced engine override. AUTO follows the Fast or Accurate choice. An explicit engine takes precedence."><label htmlFor="solve-engine">Advanced backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">Automatic — follow accuracy</option>
         {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available && engine.qualification !== 'pending'}>{engine.label || engine.name}{engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${!engine.name.startsWith('beat-') && engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
       </select></SelectRow>
@@ -310,10 +326,10 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
       && <span className="section-note" role="status">BEMPP · checking OpenCL…</span>}
     {showOpenclGuidance && <OpenclUnavailableHook platform={hostPlatform}
       engine={engines.find((engine) => engine.name === 'bempp')} />}
-    <SelectRow text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></SelectRow>
+    {includeSampling && <MeshValidationControl />}
     {mode === 'parametric' && <GroundPlaneControls />}
-    <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />
-    <ToggleRow id="solve-verbose" label="Verbose backend logging" help="Records the backend's own per-frequency diagnostics in the job log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />
+    {includeSampling && <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />}
+    <ToggleRow revealId="solve-verbose" id="solve-verbose" label="Verbose backend logging" help="Records the backend's own per-frequency diagnostics in the job log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />
     {error && <div className="field-error" role="alert">Capabilities unavailable: {error}</div>}
   </>;
 }
@@ -360,6 +376,7 @@ export function GroundPlaneControls() {
     : [...new Set(plan.flatMap((item) => item.ground_plane_axes ?? []))];
   return <>
     <ToggleRow
+      revealId="solve-ground-plane"
       id="solve-ground-plane"
       label="Ground plane"
       help="Puts an infinite, perfectly rigid reflecting surface through the origin and stands the model above it, so the horn radiates into a half space. The whole body is reflected, cabinet edges included. This is NOT the infinite baffle: the baffle lets the mouth into an unbounded wall level with the mouth and removes every edge, which is a different boundary and a different answer. Off solves in free air."
@@ -368,6 +385,7 @@ export function GroundPlaneControls() {
     />
     {ground.enabled && <>
       <SelectRow
+        revealId="ground-plane-axis"
         text="Which surface reflects. WG's frame runs the waveguide axis along z with y vertical, so Floor is the ground under the horn, Side wall is a wall beside it, and Rear wall stands behind the throat. A rear wall is not the same as an infinite baffle: the baffle is at the mouth."
       >
         <label htmlFor="ground-plane-axis">Reflecting surface</label>
@@ -463,7 +481,7 @@ function PolarNumber({ id, label, help, value, unit, min, max, step = 1, disable
   const [draft, setDraft] = useState(String(value));
   useEffect(() => setDraft(String(value)), [value]);
   const draftInvalid = draft.trim() === '' || !Number.isFinite(Number(draft));
-  return <div className={`field-row polar-number${disabled ? ' field-disabled' : ''}`}><label className="field-label" htmlFor={id} {...tip.triggerProps}>{label}{tip.tip}</label><div className="number-control"><input
+  return <div data-control-reveal-id={id} className={`field-row polar-number${disabled ? ' field-disabled' : ''}`}><label className="field-label" htmlFor={id} {...tip.triggerProps}>{label}{tip.tip}</label><div className="number-control"><input
     id={id}
     type="number"
     value={draft}
@@ -607,6 +625,7 @@ export function SolvedWithReadout() {
 }
 
 export function DirectivityMapControls({ effectiveDerivation }: { effectiveDerivation?: Record<string, unknown> } = {}) {
+  const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const { capability } = useSolveControlBackend();
   const fieldReason = capability && capability.field_traces !== true
     ? `${capability.label || engineDisplayName(capability.name)} does not advertise field plane data.`
@@ -632,19 +651,19 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
     && Number.isFinite(polar.diagonalAngle)
     && Math.abs(polar.diagonalAngle % 90) < 1e-6;
   return <>
-    <PolarNumber id="polar-angle-start" label="Sweep start" help="First off-axis angle measured in each directivity plane. 0° is on-axis; negative angles cover the other side." value={polar.angleStart} unit="°" step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('angleStart')} />
-    <PolarNumber id="polar-angle-end" label="Sweep end" help="Last off-axis angle measured in each directivity plane. 90° reaches the baffle plane." value={polar.angleEnd} unit="°" step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('angleEnd')} />
+    <PolarNumber id="polar-angle-start" label={mode === 'cad' ? 'Sweep start' : 'Start angle'} help="First off-axis angle measured in each directivity plane. 0° is on-axis; negative angles cover the other side." value={polar.angleStart} unit="°" step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('angleStart')} />
+    <PolarNumber id="polar-angle-end" label={mode === 'cad' ? 'Sweep end' : 'End angle'} help="Last off-axis angle measured in each directivity plane. 90° reaches the baffle plane." value={polar.angleEnd} unit="°" step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('angleEnd')} />
     <PolarNumber id="polar-angle-step" label="Angular step" help="Spacing between measured angles. Finer steps give smoother directivity maps and cost almost nothing, because the field is evaluated after the solve rather than solved again." value={polar.angleStep} unit="°" min={1} step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('angleStep')} />
     <PolarNumber id="polar-distance" label="Measurement distance" help="How far from the horn the virtual microphone sits. Keep it well beyond the mouth so the result is a far-field pattern." value={polar.distance} unit="m" min={.1} step={.1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('distance')} />
     <PolarNumber id="polar-norm-angle" label="Normalization angle" help="The angle held at 0 dB in the directivity maps. Every polar curve is shifted so this angle reads flat. It is applied when the map is drawn, so it takes effect immediately and re-references runs already solved -- no re-solve, and the frequency response, phase and DI never move with it." value={polar.normAngle} unit="°" step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('normAngle')} />
     {infiniteBaffle && <p className="section-note" role="note">Infinite baffle observes the front half-space, 0–90°. A default 0–180° sweep is narrowed to that; set another end angle to keep it.</p>}
-    <div className="axis-toggles" role="group" aria-label="Directivity planes" {...axisHelp.triggerProps} aria-invalid={validationError ? true : undefined} aria-describedby={axisDescribedBy}>{(['horizontal', 'vertical', 'diagonal'] as PolarAxis[]).map((axis) => <label key={axis}><input type="checkbox" checked={polar.enabledAxes.includes(axis)} onChange={() => toggleAxis(axis)} /> {axis}</label>)}{axisHelp.tip}</div>
+    <div data-control-reveal-id="polar-planes" className="axis-toggles" role="group" aria-label="Directivity planes" {...axisHelp.triggerProps} aria-invalid={validationError ? true : undefined} aria-describedby={axisDescribedBy}>{(['horizontal', 'vertical', 'diagonal'] as PolarAxis[]).map((axis) => <label key={axis}><input type="checkbox" checked={polar.enabledAxes.includes(axis)} onChange={() => toggleAxis(axis)} /> {axis}</label>)}{axisHelp.tip}</div>
     <PolarNumber id="polar-diagonal-angle" label="Diagonal plane angle" help="Where the diagonal plane sits, measured from the horizontal. 45° is the corner of a square mouth. Only used when the diagonal plane is enabled." value={polar.diagonalAngle} unit="°" step={1} disabled={!polar.enabledAxes.includes('diagonal')} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('diagonalAngle')} />
     {validationError && <div id={validationErrorId} className="field-error polar-grid-error" role="alert">{validationError}</div>}
     {cardinalDiagonal && <p className="section-note" role="status">A diagonal at {Number(polar.diagonalAngle.toFixed(6))}° is the {Math.abs((polar.diagonalAngle % 180 + 180) % 180 - 90) < 1e-6 ? 'vertical' : 'horizontal'} plane, so it will be measured and plotted twice. Use an angle between the planes, such as 45°.</p>}
-    <SelectRow text="The point the measurement angles pivot around. Mouth rotates about the mouth centre, which is what a measured polar set matches; Throat pivots at the driver instead."><label htmlFor="polar-observation-origin">Measurement origin</label><select id="polar-observation-origin" value={polar.observationOrigin} onChange={(event) => update({ observationOrigin: event.target.value as ObservationOrigin })}><option value="mouth">Mouth</option><option value="throat">Throat</option></select></SelectRow>
-    <ToggleRow id="polar-spherical-sampling" label="Keep 3D balloon result" help="WG samples a spherical field for Directivity Index independently of the selected H/V/D display planes. Enable this to retain that grid for the 3D balloon and forward-beam views; availability depends on the backend." checked={polar.sphericalSampling} onChange={(sphericalSampling) => update({ sphericalSampling })} />
-    <ToggleRow disabled={Boolean(fieldReason)} reasonId={fieldReason ? 'field-plane-support-reason' : undefined} id="polar-field-plane" label="Keep field plane data" help="Retains the surface data needed for acoustic field planes. This adds ~0.1–1 MB per typical parametric job, with larger results for CAD-link imports." checked={polar.fieldPlane !== false} onChange={(fieldPlane) => update({ fieldPlane })} />
+    <SelectRow revealId="polar-observation-origin" text="The point the measurement angles pivot around. Mouth rotates about the mouth centre, which is what a measured polar set matches; Throat pivots at the driver instead."><label htmlFor="polar-observation-origin">Measurement origin</label><select id="polar-observation-origin" value={polar.observationOrigin} onChange={(event) => update({ observationOrigin: event.target.value as ObservationOrigin })}><option value="mouth">Mouth</option><option value="throat">Throat</option></select></SelectRow>
+    <ToggleRow revealId="polar-spherical-sampling" id="polar-spherical-sampling" label="Keep 3D balloon result" help="WG samples a spherical field for Directivity Index independently of the selected H/V/D display planes. Enable this to retain that grid for the 3D balloon and forward-beam views; availability depends on the backend." checked={polar.sphericalSampling} onChange={(sphericalSampling) => update({ sphericalSampling })} />
+    <ToggleRow revealId="polar-field-plane" disabled={Boolean(fieldReason)} reasonId={fieldReason ? 'field-plane-support-reason' : undefined} id="polar-field-plane" label="Keep field plane data" help="Retains the surface data needed for acoustic field planes. This adds ~0.1–1 MB per typical parametric job, with larger results for CAD-link imports." checked={polar.fieldPlane !== false} onChange={(fieldPlane) => update({ fieldPlane })} />
     {fieldReason && <p id="field-plane-support-reason" className="section-note">{fieldReason}</p>}
     <p className="section-note">Directivity Index always uses the complete spherical field. “Keep 3D balloon result” controls whether WG also stores that field for 3D views.</p>
     {effective && <div className={`effective-grid-readout${effective.widened ? ' widened' : ''}`} role="status"><b>{effective.summary}</b><span>{effective.detail}</span><small>Display planes and angle range only; Directivity Index always uses the complete spherical field.</small></div>}

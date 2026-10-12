@@ -27,7 +27,7 @@ for (const family of ['OSSE', 'R-OSSE'] as const) {
     it('publishes bounds and plain-number help beside profile parameters', () => {
       for (const key of ['s1', 's2']) {
         const field = PARAMETER_REGISTRY.find((p) => p.id === `common.${key}`)!;
-        expect(field.section).toBe('Profile Dimensions');
+        expect(field.section).toBe('Throat');
         expect(fieldIsVisible(field, designForFamily(family))).toBe(true);
         expect(fieldIsVisible(field, designForFamily('ICW'))).toBe(false);
         expect(fieldIsVisible(field, designForFamily('FREEFORM'))).toBe(false);

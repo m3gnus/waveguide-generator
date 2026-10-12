@@ -31,6 +31,13 @@ const PENDING={dimensions_mm:null,dimensions_status:'pending'};
 describe('document-scoped design size regressions',()=>{
   let host:HTMLDivElement,root:Root,sockets:Socket[];
   const manager=previewSocket;
+  const dimensions=()=>host.querySelector('[data-testid="design-dimensions"]');
+  function expectState(state:string){
+    expect(dimensions()?.getAttribute('title')).toContain(state);
+    expect(dimensions()?.getAttribute('aria-label')).toContain(state);
+    expect(dimensions()?.classList.contains('stale')).toBe(state!=='Current preview');
+    expect(dimensions()?.textContent).not.toContain(state);
+  }
   function render(){act(()=>root.render(createElement('div',{className:'param-panel'},createElement('input',{'aria-invalid':false}),createElement(LiveDimensions))))}
   function msg(data:unknown,index=sockets.length-1){act(()=>sockets[index].message(data))}
   function request(){return JSON.parse(sockets.at(-1)!.sent.at(-1)!)}
@@ -68,7 +75,7 @@ describe('document-scoped design size regressions',()=>{
       else {const design=structuredClone(useDesignStore.getState().design);design.scale=2;useDesignStore.getState().loadDesign(design)}
     });
     expect(host.textContent).not.toContain('111.0 × 222.0');
-    expect(host.querySelector('section')).toBeNull();
+    expect(dimensions()).toBeNull();
     expect(manager.getSnapshot().lastCanonicalDimensions).toBeUndefined();
     expect(manager.getSnapshot().dimensionsFrame?.header.previewMetadata?.dimensions_mm).toBeUndefined();
   });
@@ -78,11 +85,11 @@ describe('document-scoped design size regressions',()=>{
       if(action==='New')resetDesignStore();
       else {const design=structuredClone(useDesignStore.getState().design);design.scale=2;useDesignStore.getState().loadDesign(design)}
     });
-    expect(host.querySelector('section')).toBeNull();
+    expect(dimensions()).toBeNull();
     act(()=>manager.start());msg(JSON.stringify({v:1,kind:'hello',epoch:3,heartbeatSec:15}));
     answer(undefined);act(()=>vi.advanceTimersByTime(140));answer(undefined,{lod:'fine'});
     expect(manager.getSnapshot().awaitingDocumentFrame).toBe(false);
-    expect(host.querySelector('section')).toBeNull();
+    expect(dimensions()).toBeNull();
     expect(host.textContent).not.toContain('111.0');
   });
   it('repeated-epoch replacement owns the pending lane and cannot reuse cached numbers',()=>{
@@ -91,13 +98,13 @@ describe('document-scoped design size regressions',()=>{
     act(()=>manager.stop());act(()=>manager.start());msg(JSON.stringify({v:1,kind:'hello',epoch:3,heartbeatSec:15}));
     answer(PENDING);
     expect(manager.getSnapshot().dimensionsFrame).not.toBe(old);
-    expect(host.textContent).toContain('Updating dimensions');
+    expectState('Updating dimensions');
     expect(host.textContent).not.toContain('111.0');
     act(()=>vi.advanceTimersByTime(140));answer(NEW);
     expect(host.textContent).toContain('777.0 × 888.0');
-    expect(host.textContent).toContain('Current preview');
+    expectState('Current preview');
     msg(frame({epoch:3,seq:1,designRevision:1,lod:'coarse',previewMetadata:PENDING}));
-    expect(host.textContent).toContain('Current preview');
+    expectState('Current preview');
     expect(host.textContent).toContain('777.0 × 888.0');
     // A callback from the replaced socket is ignored even when its epoch matches.
     msg(frame({epoch:3,seq:99,designRevision:1,lod:'fine',previewMetadata:OLD}),0);
@@ -105,15 +112,15 @@ describe('document-scoped design size regressions',()=>{
   });
   it('late coarse cannot turn an already settled current readout back into pending',()=>{
     const coarse=request();act(()=>vi.advanceTimersByTime(140));answer(NEW);
-    expect(host.textContent).toContain('Current preview');
+    expectState('Current preview');
     msg(frame({epoch:3,seq:coarse.seq,designRevision:1,lod:'coarse',previewMetadata:PENDING}));
-    expect(host.textContent).toContain('Current preview');
+    expectState('Current preview');
   });
   it('new-document error-only outcome releases the awaiting flag',()=>{
     act(()=>resetDesignStore());const r=request();
     msg(JSON.stringify({v:1,kind:'error',epoch:3,seq:r.seq,designRevision:1,code:'INVALID',message:'new failed'}));
     expect(manager.getSnapshot().awaitingDocumentFrame).toBe(false);
-    expect(host.textContent).toContain('Dimensions unavailable');
+    expectState('Dimensions unavailable');
     expect(host.textContent).not.toContain('111.0');
   });
   it('rapid New-New drops the first New frame and a previous document error',()=>{
@@ -126,16 +133,16 @@ describe('document-scoped design size regressions',()=>{
   it('New then reconnect/epoch change accepts a new document frame without dimension keys',()=>{
     act(()=>resetDesignStore());msg(frame({epoch:2,seq:2,designRevision:1,previewMetadata:OLD}));expect(manager.getSnapshot().awaitingDocumentFrame).toBe(true);
     act(()=>sockets[0].close());act(()=>vi.advanceTimersByTime(250));msg(JSON.stringify({v:1,kind:'hello',epoch:4,heartbeatSec:15}));answer({warnings:[]});
-    expect(manager.getSnapshot().awaitingDocumentFrame).toBe(false);expect(host.textContent).not.toContain('111.0');expect(host.querySelector('section')).toBeNull();
+    expect(manager.getSnapshot().awaitingDocumentFrame).toBe(false);expect(host.textContent).not.toContain('111.0');expect(dimensions()).toBeNull();
   });
   it('New keeps exactly the previous viewport frame until the replacement arrives',()=>{
-    const old=manager.getSnapshot().frame;act(()=>resetDesignStore());expect(manager.getSnapshot().frame).toBe(old);expect(host.querySelector('section')).toBeNull();
-    answer(PENDING);expect(manager.getSnapshot().frame).not.toBe(old);expect(host.textContent).toContain('Updating dimensions');expect(host.textContent).not.toContain('111.0');
+    const old=manager.getSnapshot().frame;act(()=>resetDesignStore());expect(manager.getSnapshot().frame).toBe(old);expect(dimensions()).toBeNull();
+    answer(PENDING);expect(manager.getSnapshot().frame).not.toBe(old);expectState('Updating dimensions');expect(host.textContent).not.toContain('111.0');
   });
   it('mounting card during document replacement still observes invalid drafts',async()=>{
     act(()=>root.render(null));act(()=>resetDesignStore());render();answer(NEW);
     await act(async()=>host.querySelector('input')!.setAttribute('aria-invalid','true'));
-    expect(host.textContent).toContain('Last valid preview');
+    expectState('Last valid preview');
   });
   it('New after a high revision keeps card and actual preferred viewport frame on the same document',()=>{
     act(()=>useDesignStore.setState({designRevision:57}));answer(OLD,{designRevision:57,lod:'fine'});
@@ -150,17 +157,20 @@ describe('document-scoped design size regressions',()=>{
     expect(host.textContent).not.toContain('111.0');answer(NEW);expect(manager.getSnapshot().awaitingDocumentFrame).toBe(false);
   });
   it.each([
-    ['width-implicit', 'requested auto × 240.0 mm, effective 350.0 × 348.6 mm'],
-    ['height-implicit', 'requested 320.0 × auto mm, effective 348.6 × 350.0 mm'],
-    ['both-explicit', 'requested 320.0 × 240.0 mm, effective 348.6 × 348.6 mm'],
-    ['matching', '400.0 × 400.0 mm'],
-    ['inactive', '348.6 × 348.6 mm'],
-    ['both-implicit', '350.0 × 350.0 mm'],
-  ])('formats the real emitted %s morph target', (name, expected) => {
+    ['width-implicit', '350.0 × 348.6', 'Mouth requested auto × 240.0 mm, effective 350.0 × 348.6 mm.'],
+    ['height-implicit', '348.6 × 350.0', 'Mouth requested 320.0 × auto mm, effective 348.6 × 350.0 mm.'],
+    ['both-explicit', '348.6 × 348.6', 'Mouth requested 320.0 × 240.0 mm, effective 348.6 × 348.6 mm.'],
+    ['matching', '400.0 × 400.0', ''],
+    ['inactive', '348.6 × 348.6', ''],
+    ['both-implicit', '350.0 × 350.0', ''],
+  ])('formats the real emitted %s morph target', (name, mouth, morphDetail) => {
     const fixtures = JSON.parse(new TextDecoder().decode(readFileSync('../shared/preview-fixtures/c2-dimensions-morph-metadata.json')));
     answer(fixtures[name].metadata, { lod: 'fine' });
-    expect(host.querySelector('dd')?.textContent).toBe(expected);
-    expect(host.textContent).toContain('Current preview');
+    expect(dimensions()?.querySelector('span')?.textContent).toBe(`Mouth ${mouth}`);
+    expect(dimensions()?.textContent).toMatch(/ mm$/);
+    expect(dimensions()?.getAttribute('title')).toBe(morphDetail ? `Current preview. ${morphDetail}` : 'Current preview');
+    if(morphDetail)expect(dimensions()?.getAttribute('aria-label')).toContain(morphDetail);
+    expectState('Current preview');
   });
   it('absent dimension keys preserve existing same-revision error and badge behavior',()=>{
     answer(undefined);
@@ -180,6 +190,6 @@ describe('document-scoped design size regressions',()=>{
     expect(after.stale).toBe(false);
     expect(notifications).toBe(1);
     unsubscribe();
-    expect(host.querySelector('section')).toBeNull();
+    expect(dimensions()).toBeNull();
   });
 });

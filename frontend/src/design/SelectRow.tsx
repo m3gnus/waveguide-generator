@@ -23,9 +23,9 @@ function optionLabels(node: ReactNode): string[] {
 }
 
 /** Read the actual rendered option labels, including dynamic backend suffixes. */
-export function SelectRow({ text, className, children }: {
-  text?: string; className?: string; children: ReactNode;
+export function SelectRow({ text, className, children, revealId }: {
+  text?: string; className?: string; revealId?: string; children: ReactNode;
 }) {
   const stacked = selectRowLayout(optionLabels(children)) === 'stacked';
-  return <HelpTipRow text={text} className={`select-row${stacked ? ' stacked-select-row' : ''}${className ? ` ${className}` : ''}`}>{children}</HelpTipRow>;
+  return <HelpTipRow text={text} revealId={revealId} className={`select-row${stacked ? ' stacked-select-row' : ''}${className ? ` ${className}` : ''}`}>{children}</HelpTipRow>;
 }
