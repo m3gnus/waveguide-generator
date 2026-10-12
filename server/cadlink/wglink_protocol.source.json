@@ -1,6 +1,7 @@
 {
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "ad8b1b0513d47846373b60b12c22a078b7a7cfba",
+  "commit": "4f7fef9450f792c6677616ea857b0b041535d7ac",
   "path": "fusion-addins/WGLink/wglink_protocol.py",
-  "sha256": "afc94749b7efdea50a2b20cfbd14132951f282b86ad807b8ee77a71340572200"
+  "sha256": "a71af9289b5c85c7e69b9174e515ca02b7efec8ecb18cdb901ff944371ee18e7",
+  "note": "Provisional pin to feature/fem-regions-v1 (WGLink 0.2.1), including the W-P protocol additions; re-pin to the tagged release commit before landing."
 }

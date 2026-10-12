@@ -1203,6 +1203,27 @@ def _fem_keys(record: Mapping[str, Any], allowed: set[str], path: str) -> None:
         _fem_fail(path, "unknown member(s): " + ", ".join(extra))
 
 
+def validate_fem_group_options(group: Mapping[str, Any], path: str) -> None:
+    """Validate optional v1 boundary physics, also used for CAD attributes."""
+    if 'lining' in group:
+        lining_path = f'{path}.lining'
+        if group.get('kind') != 'rigid':
+            _fem_fail(lining_path, 'is accepted only on a rigid group')
+        lining = group['lining']
+        if not isinstance(lining, Mapping):
+            _fem_fail(lining_path, 'must be an object')
+        _fem_keys(lining, {'model', 'thickness_mm', 'flow_resistivity_pa_s_per_m2'}, lining_path)
+        if lining.get('model') != 'miki':
+            _fem_fail(f'{lining_path}.model', "must be 'miki'")
+        for key in ('thickness_mm', 'flow_resistivity_pa_s_per_m2'):
+            _fem_number(lining.get(key), f'{lining_path}.{key}', positive=True)
+    if 'relative_level_db' in group:
+        level_path = f'{path}.relative_level_db'
+        if group.get('kind') != 'moving':
+            _fem_fail(level_path, 'is accepted only on a moving group')
+        _fem_number(group['relative_level_db'], level_path, minimum=-120.0, maximum=0.0)
+
+
 def _fem_face(value: Any, path: str) -> None:
     if not isinstance(value, Mapping):
         _fem_fail(path, 'must be an object')
@@ -1292,7 +1313,8 @@ def validate_fem_regions(scope: Mapping[str, Any], files: Mapping[str, Any],
             if not isinstance(raw_group, Mapping):
                 _fem_fail(group_path, 'must be an object')
             group = raw_group
-            _fem_keys(group, {'group_id', 'name', 'kind', 'mesh_size_mm', 'faces', 'drive_channel_id'}, group_path)
+            _fem_keys(group, {'group_id', 'name', 'kind', 'mesh_size_mm', 'faces', 'drive_channel_id',
+                              'lining', 'relative_level_db'}, group_path)
             group_id = _fem_identifier(group, 'group_id', group_path)
             if group_id in group_ids:
                 _fem_fail(f'{group_path}.group_id', 'must be unique within its region')
@@ -1313,6 +1335,7 @@ def validate_fem_regions(scope: Mapping[str, Any], files: Mapping[str, Any],
                 drive_channels.append(channel)
             elif channel is not None:
                 _fem_fail(f'{group_path}.drive_channel_id', 'is accepted only on a moving group')
+            validate_fem_group_options(group, group_path)
             _fem_number(group.get('mesh_size_mm'), f'{group_path}.mesh_size_mm', positive=True)
             faces = group.get('faces')
             if not isinstance(faces, list) or not faces:

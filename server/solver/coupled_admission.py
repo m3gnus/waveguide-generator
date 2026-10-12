@@ -5,6 +5,26 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
+def fem_group_options_problem(regions: Sequence[Mapping[str, Any]]) -> tuple[str, str] | None:
+    """Refuse protocol options this build cannot yet apply."""
+    for region in regions:
+        for group in region.get("surface_groups", ()):
+            if "lining" not in group and group.get("relative_level_db", 0) == 0:
+                continue
+            label = (
+                f"FEM region {region.get('name') or region['region_id']!r} "
+                f"({region['region_id']!r}), group {group.get('name') or group['group_id']!r} "
+                f"({group['group_id']!r})"
+            )
+            if "lining" in group:
+                return "fem_lining_unsupported", (
+                    f"{label}: lining is not supported yet in this WG build")
+            if group.get("relative_level_db", 0) != 0:
+                return "fem_motion_weight_unsupported", (
+                    f"{label}: relative_level_db is not supported yet in this WG build")
+    return None
+
+
 def fem_termination_problem(regions: Sequence[Mapping[str, Any]], *,
                             has_exterior: bool = False) -> tuple[str, str] | None:
     """Refuse interior-only terminations when any region or source needs BEM."""
@@ -31,6 +51,9 @@ def fem_drive_problem(regions: Sequence[Mapping[str, Any]],
                       channels: Mapping[str, Sequence[str]], *,
                       painted_sources: set[str],
                       combine_id: str | None = None) -> tuple[str, str] | None:
+    problem = fem_group_options_problem(regions)
+    if problem:
+        return problem
     moving: dict[str, list[str]] = {}
     for region in regions:
         for group in region.get("surface_groups", ()):

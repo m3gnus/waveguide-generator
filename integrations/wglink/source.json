@@ -1,7 +1,8 @@
 {
   "schema": 1,
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "ad8b1b0513d47846373b60b12c22a078b7a7cfba",
+  "commit": "4f7fef9450f792c6677616ea857b0b041535d7ac",
   "license": "AGPL-3.0-or-later",
-  "addinVersion": "0.2.1"
+  "addinVersion": "0.2.1",
+  "note": "Provisional pin to feature/fem-regions-v1 (WGLink 0.2.1), including the W-P protocol additions; re-pin to the tagged release commit before landing."
 }

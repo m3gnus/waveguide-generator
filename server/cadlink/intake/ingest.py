@@ -163,12 +163,14 @@ class IngestRefusal(ValueError):
         stage: str,
         message: str,
         *,
+        reason_code: str | None = None,
         corruption: bool = False,
         symmetry_plane: str | None = None,
         area_drift_sources: list[str] | tuple[str, ...] = (),
     ) -> None:
         self.symmetry_plane = symmetry_plane
         self.stage = stage
+        self.reason_code = reason_code
         self.corruption = corruption
         self.area_drift_sources = tuple(area_drift_sources)
         super().__init__(f"{stage}: {message}")
@@ -2140,6 +2142,12 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
             "stage 7 meshing",
             "This return declares FEM regions; this Waveguide Generator has FEM regions turned off.",
         )
+    from server.solver.coupled_admission import fem_group_options_problem
+
+    problem = fem_group_options_problem(regions)
+    if problem:
+        code, message = problem
+        raise IngestRefusal("stage 7 meshing", f"{code}: {message}", reason_code=code)
     labels = "; ".join(
         f"FEM region {region['name']!r}" + "".join(
             f", group {group['name']!r}" for group in region["surface_groups"]
