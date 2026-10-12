@@ -79,7 +79,7 @@ def test_coupled_route_documentation_describes_supported_drives_and_outputs():
     from pathlib import Path
 
     text = (Path(__file__).parents[2] / "docs/plans/CADLINK-FEM-REGIONS.md").read_text()
-    assert "supports electrodynamic drivers on full models" in text
+    assert "Electrodynamic voltage drives are supported on full models" in text
     assert "RMS input power and current" in text
     assert "Interface outputs include area-weighted complex normal velocity" in text
     assert "drives only. Any `exterior_transducer`" not in text

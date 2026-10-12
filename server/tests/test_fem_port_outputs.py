@@ -27,7 +27,7 @@ def multi_port(*, precision="float64", layout=None, frequencies=(100., 200.), tr
     exterior = ExteriorSurface(np.concatenate([r.domain.points_mm for r in regions]), groups,
                                {n: {'kind': 'interface' if 'kind=interface' in n else 'rigid'} for n in groups})
     return build_coupled_request(exterior, regions, layout=layout or compiled().layout, frame=FRAME,
-                                 frequencies_hz=frequencies, precision=precision, transducers=transducers)
+                                 frequencies_hz=frequencies, precision=precision, backend="metal" if precision == "float32" else "cpu", transducers=transducers)
 
 
 def phasors(values):
@@ -39,7 +39,7 @@ def phasors(values):
 @pytest.mark.parametrize('precision', ['float32', 'float64'])
 @pytest.mark.parametrize('voltage', [False, True])
 def test_port_drive_basis_phase_and_linearity_at_every_observation(voltage, precision):
-    request = compiled(transducers={'fem': driver()} if voltage else None, precision=precision)
+    request = compiled(transducers={'fem': driver()} if voltage else None, precision=precision, backend="metal" if precision == "float32" else "cpu")
     sweep = map_coupled_sweep(events(request), request)
     response = {'frequencies': request.wire['frequencies_hz'], 'metadata': {}}
     map_coupled_port_response(response, sweep, request, 'fem')
@@ -82,7 +82,7 @@ def test_multiple_ports_and_no_other_exterior_source(precision):
 @pytest.mark.parametrize('precision', ['float32', 'float64'])
 @pytest.mark.parametrize('exterior_source', [False, True])
 def test_reconstruction_residual_is_never_a_radiation_source(precision, exterior_source):
-    request = compiled(precision=precision) if exterior_source else multi_port(precision=precision)
+    request = compiled(precision=precision, backend="metal" if precision == "float32" else "cpu") if exterior_source else multi_port(precision=precision)
     sweep = map_coupled_sweep(events(request), request)
     for values in sweep.interface_radiation.values():
         values[:, :, -1] += .001 + .002j
@@ -112,7 +112,7 @@ def test_reconstruction_residual_is_never_a_radiation_source(precision, exterior
 ])
 @pytest.mark.parametrize('precision', ['float32', 'float64'])
 def test_port_contract_mismatch_is_refused(mutation, message, precision):
-    request = compiled(precision=precision)
+    request = compiled(precision=precision, backend="metal" if precision == "float32" else "cpu")
     raw = coupled_result(request.wire, request.wire['frequencies_hz'][0])
     terminal = {'type': 'cancelled', 'solved_count': 1}
     assert map_coupled_sweep([{'type': 'result', 'result': raw}, terminal], request).cancelled
@@ -159,7 +159,7 @@ def test_diagnostics_are_named_ungated_and_align_to_cancelled_prefix(reconstruct
 @pytest.mark.parametrize('precision', ['float32', 'float64'])
 @pytest.mark.parametrize('current', [.1 + .2j, .3 - .4j, 0j])
 def test_rms_input_power_matches_impedance_identity(current, precision):
-    request = compiled(transducers={'fem': driver()}, reference_voltage_rms_v=5.66, precision=precision)
+    request = compiled(transducers={'fem': driver()}, reference_voltage_rms_v=5.66, precision=precision, backend="metal" if precision == "float32" else "cpu")
     sweep = map_coupled_sweep(events(request), request)
     sweep.current[:, 1, 0] = current
     response = {'frequencies': request.wire['frequencies_hz'], 'metadata': {}}
