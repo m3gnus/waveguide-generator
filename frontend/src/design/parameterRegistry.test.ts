@@ -134,7 +134,13 @@ describe('complete parameter registry', () => {
       const { section: _oldSection, label: _oldLabel, description: oldDescription, visibleWhen: oldVisibility, ...oldSemantics } = original;
       const { section: _section, label: _label, description, visibleWhen: visibility, ...semantics } = moved;
       expect(semantics, original.id).toEqual(oldSemantics);
-      expect(description, original.id).toBe(original.section === 'Frequency Sweep' ? oldDescription?.replaceAll('Solve options', 'Frequency sweep') : oldDescription);
+      if (original.id === 'simulation.sim_type') {
+        // The Mounting select names its own choices instead of the old Free-standing option.
+        expect(description).toContain('Infinite baffle');
+        expect(description).not.toContain('Free-standing');
+      } else {
+        expect(description, original.id).toBe(original.section === 'Frequency Sweep' ? oldDescription?.replaceAll('Solve options', 'Frequency sweep') : oldDescription);
+      }
       if (moved.section !== 'Imported ATH values') expect(visibility, original.id).toBe(oldVisibility);
     }
   });
