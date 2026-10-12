@@ -897,6 +897,9 @@ def test_legal_payload_becomes_long_backup_path_and_recovers(native: Path, tmp_p
     previous = base / relative
     previous.parent.mkdir()
     previous.write_bytes(b"deep previous payload")
+    # The only fixture file not yet through the sharing gate: a scanner still holding
+    # it makes prepare's rename of the whole runtime directory fail (exit 3).
+    _wait_for_fixture_files([previous])
     assert len(str(previous)) < 260 and len(str(root / ".wg-install-old/runtime" / relative)) > 260
     owner = _prepare(native, root, record, dead_owner=True)
     _kill_owner(owner)
