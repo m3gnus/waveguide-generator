@@ -321,7 +321,12 @@ def _imported_backend_refusal(
     if (not coupled_regions and any(c.exterior_transducer is not None for c in request.geometry.drive_channels)
             and request.options.engine not in {"beat-cpu", "beat-metal"}):
         return "exterior_transducer_engine_unsupported", "exterior transducer jobs require an explicit beat-cpu or beat-metal engine"
+    from server.cadlink.build_flags import fem_regions_enabled
+
+    # With FEM regions switched off the FEM engine rule does not apply; the
+    # kill-switch refusal names the real reason.
     if (record and record.get("fem_regions") and not request.geometry.exterior_only
+            and fem_regions_enabled()
             and request.options.engine not in {"auto", "beat", "beat-cpu", "beat-metal", "beat-cuda", "beat-rocm"}):
         return "fem_backend_unsupported", (
             "FEM regions require official BEAT; choose BEAT CPU, Metal, CUDA or ROCm, or choose exterior-only")
