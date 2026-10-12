@@ -68,7 +68,8 @@ Two existing tools set the shape of the work:
    ideal channel are refused in 0.3.6 because positive FEM load weights would
    make both chambers breathe rather than move as a piston. An electrodynamic
    channel uses the rigid translation axis and may own moving faces in two
-   separate meshes; their absolute net projections are averaged for Sd.
+   separate meshes; same-sign net projections sum as one side and opposite
+   sides are averaged for Sd.
 6. **The display slices exactly.** Boundary Lab samples a grid and locates
    points in tetrahedra. WG cuts each crossed tetrahedron and interpolates
    along its edges, which is exact for P1 elements and leaves no gaps. Smooth
@@ -473,32 +474,39 @@ real terminal power to be calculated. Ratings stay in result metadata and do
 not enter the engine's driver parameters; absent options retain v1 bytes.
 
 Driver options expose **Sd** in cm² and store it as `sd_m2` in SI m². The
-selected library driver's `Sd_cm2` prefills the field; users may edit it. A
+selected library driver's `Sd_cm2` replaces the field; users may edit it.
+Explicit picks replace all mapped T/S fields and clear unavailable values. A
 spec declaring Sd requires v2; absent options preserve v1 serialization.
 Declared Sd alone controls sealed-chamber stiffness Kbox = ρc²Sd²/V and
 acoustic impedance normalization Z/(ρcSd). Results record `sd_m2`,
 `sd_source` (`declared` or `geometry`), `geometric_sd_m2` and
 `geometry_ambiguous` per channel. An undetermined Sd has null value/source.
 
-Geometry is a prefill/fallback and cross-check, never a front/rear classifier.
-All the channel's moving faces in each mesh contribute their signed net
-projection; Sd is its absolute value. Separate FEM regions, or FEM plus
-exterior, retain separate meshes and use the mean of their absolute nets,
-with a per-channel warning above 10% difference. Connected surround folds
-subtract without being reclassified as another side. Declared Sd remains in
-use even for ambiguous geometry; a geometric difference above 10% of the
-declared value produces a per-channel result warning.
+Geometry supplies acoustic-impedance normalization when Sd is undeclared and
+unambiguous, and a cross-check when Sd is declared. Calculations use float64
+source coordinates before any backend rotation or float32 packing. Admission
+and compilation orient coupled exterior shells with the same helper; raw OCC
+face winding is not used for projection. Connected surround folds subtract
+from each mesh's signed net. Mesh nets with the same sign sum as one side;
+opposite-sign side totals are averaged, with a warning above 10% disagreement.
+Declared Sd remains in use for ambiguous geometry. Only unambiguous geometry
+produces a declared-vs-geometric cross-check warning, above 25% of declared Sd.
+Geometry includes everything that moves, such as the surround roll, so a value
+10–20% above datasheet Sd is normal.
 
-Without declared Sd, geometry is ambiguous if any mesh's absolute net is
-less than 20% of its sum of absolute face projections, or a minority
-opposite-sign connected patch has at least 5% of the majority patch's
-absolute net. Numerically neutral rim faces do not join independent skins.
-This catches thick cones, shelled domes, closed moving skins and partly
-tagged rear faces. An enabled lumped chamber refuses at admission and
-compilation with `driver_sd_required` and asks for Sd for the named channel.
-With no chamber the solve continues, omits acoustic impedance and records
-“Sd not determined; enter Sd to get acoustic impedance”.
+Geometry is ambiguous if any mesh's absolute net is less than 20% of its sum
+of absolute face projections, or a minority opposite-sign connected patch
+has at least 5% of the majority patch's absolute net. Numerically neutral rim
+faces do not join independent skins. This heuristic is used only for acoustic
+impedance; connected non-neutral rims can hide partly tagged rear faces.
+Every enabled lumped chamber therefore requires declared Sd at admission and
+compilation with `driver_sd_required`, regardless of geometry or solve route.
+With no chamber and ambiguous geometry, the solve continues, omits acoustic
+impedance and records “Sd not determined; enter Sd to get acoustic impedance”.
+Admission does not read FEM tetrahedral meshes for Sd when no chamber is enabled.
 
-F10a must refuse an enabled lumped rear chamber when a FEM rear region is
-attached to the same diaphragm. The FEM rear load and the lumped stiffness
-must never be applied together.
+F10a refuses `lumped_chamber_double_rear_load` at admission and compilation
+when an enabled lumped rear chamber shares a channel with moving faces in
+multiple meshes (two FEM regions, or FEM plus exterior), even with declared Sd.
+The rear already radiates; its FEM load and lumped stiffness must never be
+applied together.

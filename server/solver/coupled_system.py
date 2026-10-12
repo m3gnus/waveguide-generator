@@ -100,6 +100,20 @@ def _ordered(groups: Mapping[str, np.ndarray]) -> list[tuple[str, np.ndarray]]:
     return sorted(groups.items())
 
 
+def _oriented_exterior_surfaces(points_mm, groups, *, symmetry_plane_axes=()):
+    """Use the same closed-shell winding for admission Sd and compilation."""
+    surfaces = _ordered(groups)
+    triangles = orient_closed_surface(
+        np.asarray(points_mm, dtype=np.float64),
+        np.concatenate([block for _name, block in surfaces]),
+        into_body=EXTERIOR_NORMALS_INTO_BODY, symmetry_plane_axes=symmetry_plane_axes)
+    result, offset = [], 0
+    for name, block in surfaces:
+        result.append((name, triangles[offset:offset + len(block)]))
+        offset += len(block)
+    return result
+
+
 def _mesh_data(
     points_mm: np.ndarray,
     surfaces: list[tuple[str, np.ndarray]],
@@ -170,12 +184,12 @@ def _fem_driver_triangles(domain: FemRegionDomain) -> dict[tuple[int, int, int],
     result = {}
     for key, index in zip(keys[counts == 1], indices[counts == 1]):
         face = faces[index].copy()
-        corners = domain.points_mm[face]
+        corners = np.asarray(domain.points_mm[face], dtype=np.float64)
         normal = np.cross(corners[1] - corners[0], corners[2] - corners[0])
         # Driver normal points into the adjacent air tetrahedron.
         if np.dot(normal, domain.points_mm[opposite[index]] - corners[0]) < 0:
             face[[1, 2]] = face[[2, 1]]
-        result[tuple(int(v) for v in key)] = domain.points_mm[face] * MM_TO_M
+        result[tuple(int(v) for v in key)] = np.asarray(domain.points_mm[face], dtype=np.float64) * MM_TO_M
     return result
 
 
@@ -318,22 +332,12 @@ def build_coupled_system(
         # Every exterior vertex is a P1 unknown, so a point no triangle uses
         # would leave an empty row: keep only the referenced ones.
         exterior = compact_surface(exterior)
-        surfaces = _ordered(exterior.groups)
         try:
-            exterior_triangles = orient_closed_surface(
-                exterior.points_mm,
-                np.concatenate([block for _name, block in surfaces]),
-                into_body=EXTERIOR_NORMALS_INTO_BODY,
-                symmetry_plane_axes=symmetry_plane_axes,
-            )
+            surfaces = _oriented_exterior_surfaces(
+                exterior.points_mm, exterior.groups, symmetry_plane_axes=symmetry_plane_axes)
         except ValueError as exc:
             raise CoupledSystemError(str(exc)) from exc
-        rows_so_far = 0
-        oriented = []
-        for group_name, block in surfaces:
-            oriented.append((group_name, exterior_triangles[rows_so_far:rows_so_far + len(block)]))
-            rows_so_far += len(block)
-        surfaces = oriented
+        exterior_triangles = np.concatenate([block for _name, block in surfaces])
         edges = open_edges(exterior_triangles)
         if edges and not symmetry_plane_axes:
             raise CoupledSystemError(
@@ -371,7 +375,7 @@ def build_coupled_system(
                 moving_by_channel.setdefault(str(channel), []).append(boundary_id)
                 if channel in (transducers or {}):
                     moving_triangles.setdefault(str(channel), {}).setdefault(EXTERIOR_MESH_ID, []).append(
-                        (block, exterior.points_mm[block] * MM_TO_M))
+                        (block, np.asarray(exterior.points_mm[block], dtype=np.float64) * MM_TO_M))
 
     paired: set[str] = set()
     media = set()

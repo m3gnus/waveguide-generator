@@ -284,14 +284,14 @@ def test_absent_options_keep_original_request_bytes(built):
 
 def test_optional_models_match_engine_contract(mesh, layout, official_contract):
     compiled = t.build_transducer_request(
-        mesh, drivers=[driver(tags=(2,), semi_inductance=SEMI,
+        mesh, drivers=[driver(tags=(2,), sd_m2=.5, semi_inductance=SEMI,
                               lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))],
         layout=layout, frame=FRAME, frequencies_hz=[100])
     official_contract(compiled)
     params = compiled.wire["compiled_system"]["components"][0]["parameters"]
     assert params["semi_inductance"] == SEMI
     assert params["lumped_sealed_rear_chamber"] == dict(enabled=True, volume_m3=.01, projected_area_m2=.5)
-    assert compiled.warnings == ()
+    assert not any(compiled.channel_warnings.values())
 
 
 def test_disabled_models_match_engine_contract(mesh, layout, official_contract):
@@ -300,7 +300,7 @@ def test_disabled_models_match_engine_contract(mesh, layout, official_contract):
                               lumped_sealed_rear_chamber=dict(enabled=False))],
         layout=layout, frame=FRAME, frequencies_hz=[100])
     official_contract(compiled)
-    assert compiled.warnings == ()
+    assert not any(compiled.channel_warnings.values())
 
 
 @pytest.mark.parametrize("name,raw", [
@@ -320,45 +320,28 @@ def test_refuse_invalid_optional_engine_models(mesh, layout, name, raw):
                                    layout=layout, frame=FRAME, frequencies_hz=[100])
 
 
-def test_projected_area_uses_mean_and_warns_only_above_ten_percent():
-    front = np.array([[0, 0, 0], [2, 0, 0], [0, 1, 0]], dtype=float)  # 1 m²
-    rear = front[[0, 2, 1]].copy()
-    rear[:, 0] *= .8
-    area, warning = t.projected_driver_area(np.stack([front]), [0, 0, 10], rear_triangles_m=np.stack([rear]))
-    assert area == pytest.approx(.9)
-    assert "10%" in warning
-    area, warning = t.projected_driver_area(np.stack([front]), [0, 0, -1], rear_triangles_m=np.stack([front[[0, 2, 1]]]))
-    assert area == 1
-    assert warning is None
-    rear[:, 0] /= .8
-    rear[:, 0] *= .95
-    assert t.projected_driver_area(np.stack([front]), [0, 0, 1], rear_triangles_m=np.stack([rear]))[1] is None
-    with pytest.raises(UnsupportedPhysics, match="projected_area"):
-        t.projected_driver_area(np.stack([front]), [1, 0, 0])
-
-
 def test_m_roll_single_side_uses_net_projection(make_mesh, layout, official_contract):
     # A continuous folded strip: +1.01 m² forward, -.01 m² back-facing, Sd = 1 m².
     points = np.array([[0, 0, 0], [0, 1, 0], [1.01, 0, 0], [1.01, 1, 0],
                        [1, 0, 1], [1, 1, 1], [1.1, 0, -1], [1.1, 1, -1],
                        [0, 0, -1], [0, 1, -1]], dtype=float)
     faces = np.array([[0, 2, 3], [0, 3, 1], [2, 4, 5], [2, 5, 3]])
-    area, warning = t.projected_driver_area(points[faces], [0, 0, 1])
+    area, ambiguous, notes = t.geometric_driver_area({"exterior": [(faces, points[faces])]}, [0, 0, 1])
     assert area == pytest.approx(1.)
-    assert warning is None
+    assert not ambiguous and notes == []
     # Rigid sides and end caps close the body behind this single diaphragm.
     rigid = [[4, 6, 7], [4, 7, 5], [6, 8, 9], [6, 9, 7], [8, 0, 1], [8, 1, 9],
              [0, 8, 2], [2, 8, 6], [2, 6, 4], [1, 3, 9], [3, 7, 9], [3, 5, 7]]
     mesh = make_mesh(points.tolist(), faces.tolist() + rigid, [2, 2, 3, 3] + [4] * len(rigid))
     compiled = t.build_transducer_request(
-        mesh, drivers=[driver(axis=[0, 0, 1], lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))],
+        mesh, drivers=[driver(axis=[0, 0, 1], sd_m2=1., lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))],
         layout=layout, frame=FRAME, frequencies_hz=[100])
     chamber = compiled.wire["compiled_system"]["components"][0]["parameters"]["lumped_sealed_rear_chamber"]
     assert chamber["projected_area_m2"] == pytest.approx(1.)
     official_contract(compiled)
     # The old sign split gave .51² of this stiffness, approximately four times too low.
     assert 1.2041 * 343**2 * chamber["projected_area_m2"]**2 / chamber["volume_m3"] == pytest.approx(1.2041 * 343**2 / .01)
-    assert compiled.warnings == ()
+    assert not any(compiled.channel_warnings.values())
 
 
 @pytest.mark.parametrize("enabled", [True, False])
@@ -383,7 +366,39 @@ def test_area_warning_is_carried_once_without_python_warning(mesh, layout, monke
     with warnings.catch_warnings(record=True) as emitted:
         warnings.simplefilter("always")
         compiled = t.build_transducer_request(
-            mesh, drivers=[driver(tags=(2,), lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))],
+            mesh, drivers=[driver(tags=(2,), sd_m2=.5, lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))],
             layout=layout, frame=FRAME, frequencies_hz=[100])
-    assert compiled.warnings == ("Channel 'driver': area warning",)
+    assert compiled.channel_warnings == {"driver": ["Channel 'driver': area warning"]}
     assert emitted == []
+
+
+def test_exterior_sd_uses_unrotated_float64_source_on_every_backend(make_mesh, layout, monkeypatch):
+    # A rotated, translated closed puck would lose neutral projections when
+    # its coordinates were first packed in float32 for Metal.
+    rotation = np.array([[.8, 0., .6], [0., 1., 0.], [-.6, 0., .8]])
+    points = np.array([[0., 0., 0.], [.0123456789, 0., 0.], [0., .01, 0.], [0., 0., .002]])
+    points = points @ rotation.T + [10.123456789, .1, .2]
+    faces = np.array([[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]])
+    text = make_mesh(points.tolist(), faces.tolist(), [2, 3, 4, 5])
+    original = t.geometric_driver_area
+    seen = []
+    def inspect(meshes, axis):
+        triangles = meshes['exterior'][0][1]
+        seen.append(triangles.copy())
+        assert triangles.dtype == np.float64
+        return original(meshes, axis)
+    monkeypatch.setattr(t, 'geometric_driver_area', inspect)
+    results = [t.build_transducer_request(text, drivers=[driver(tags=(2,), axis=rotation @ [0., 0., -1.])],
+               layout=layout, frame=FRAME, frequencies_hz=[100.], backend=backend, precision=precision)
+               for backend, precision in [('cpu', 'float64'), ('metal', 'float32')]]
+    np.testing.assert_array_equal(seen[0], points[faces[:1]])
+    np.testing.assert_array_equal(seen[0], seen[1])
+    assert results[0].driver_sd == results[1].driver_sd
+
+
+@pytest.mark.parametrize('tags', [(2,), (2, 3, 4, 5)])
+def test_even_unambiguous_exterior_chamber_requires_declared_sd(mesh, layout, tags):
+    with pytest.raises(t.DriverSdRequired, match="a lumped rear chamber needs the driver's Sd"):
+        t.build_transducer_request(mesh, drivers=[driver(tags=tags,
+            lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .01})],
+            layout=layout, frame=FRAME, frequencies_hz=[100.])

@@ -62,6 +62,9 @@ export function exteriorTransducerError(form: ExteriorTransducerForm): string | 
       }
     }
   }
+  if (form.lumped_sealed_rear_chamber?.enabled && form.sd_m2 === undefined) {
+    return 'Enter Sd in the driver options; a lumped rear chamber needs the driver\'s Sd.';
+  }
   return null;
 }
 
@@ -94,8 +97,8 @@ export function parseExteriorTransducer(value: unknown): ExteriorTransducerForm 
       ? raw.motion_axis as [number, number, number] : [0, 0, 0] };
 }
 
-/** Library fields are in datasheet units; Mms must never stand in for bare Mmd. */
-export function prefillExteriorDriver(form: ExteriorTransducerForm, values: Record<string, number | undefined>): ExteriorTransducerForm {
+/** Library defaults fill gaps; explicit picks replace fields and clear unavailable values. Mms is never bare Mmd. */
+export function prefillExteriorDriver(form: ExteriorTransducerForm, values: Record<string, number | undefined>, options: { replace?: boolean } = {}): ExteriorTransducerForm {
   const conversions = [
     ['sd_m2', 'sd_cm2', 10000], ['re_ohm', 're_ohm', 1], ['le_h', 'le_mh', 1000],
     ['bl_n_per_a', 'bl_t_m', 1], ['mmd_kg', 'mmd_g', 1000],
@@ -104,9 +107,11 @@ export function prefillExteriorDriver(form: ExteriorTransducerForm, values: Reco
   ] as const;
   const filled = { ...form };
   for (const [key, libraryKey, divisor] of conversions) {
+    if (!options.replace && filled[key] !== undefined) continue;
     const value = values[libraryKey];
-    if (filled[key] === undefined && value !== undefined && Number.isFinite(value)
+    if (value !== undefined && Number.isFinite(value)
       && (key === 'le_h' ? value >= 0 : value > 0)) filled[key] = value / divisor;
+    else if (options.replace) delete filled[key];
   }
   return normalizeExteriorOptions(filled);
 }

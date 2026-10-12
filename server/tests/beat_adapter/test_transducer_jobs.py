@@ -286,7 +286,7 @@ def test_job_persistence_and_retry_use_the_explicit_new_contract(tmp_path, solid
 
     parameters = dict(PARAMETERS)
     if version == 2:
-        parameters.update(version=2, motion_axis=[1., 1., 1.], semi_inductance=SEMI,
+        parameters.update(version=2, sd_m2=.5 / np.sqrt(3), motion_axis=[1., 1., 1.], semi_inductance=SEMI,
                           lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))
 
     def native(compiled, **kwargs):
@@ -441,7 +441,7 @@ def test_v2_route_packages_piston_area_and_driver_limits(piston_cube, record, mo
     channel["source_ids"] = ["a"]
     payload["geometry"]["mesh"]["source_size_mm"] = {"a": 3.}
     channel["exterior_transducer"].update(
-        version=2, motion_axis=[0., 0., 1.], semi_inductance={**SEMI, "enabled": semi_enabled},
+        version=2, sd_m2=1., motion_axis=[0., 0., 1.], semi_inductance={**SEMI, "enabled": semi_enabled},
         lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01), power_w=100., xmax_mm=2.)
     captured = []
 
@@ -458,7 +458,7 @@ def test_v2_route_packages_piston_area_and_driver_limits(piston_cube, record, mo
     assert params["lumped_sealed_rear_chamber"]["projected_area_m2"] == pytest.approx(1.)
     assert "power_w" not in params and "xmax_mm" not in params
     packaged = result["channels"]["driver"]
-    assert captured[0].warnings == ()
+    assert not any(captured[0].channel_warnings.values())
     assert not any("moving-face projected" in warning for warning in packaged["metadata"].get("warnings", []))
     spec = packaged["metadata"]["driver"]["spec"]
     assert spec["power_w"] == 100. and spec["xmax_mm"] == 2.
@@ -541,21 +541,23 @@ def test_declared_exterior_sd_controls_normalization_and_chamber(piston_cube, re
     assert response['metadata']['sd_source'] == ('declared' if declared is not None else 'geometry')
     assert response['acoustic_impedance']['real'][0] == pytest.approx(7 / (1.2041 * 343 * sd))
     assert response['acoustic_impedance']['imaginary'][0] == pytest.approx(8 / (1.2041 * 343 * sd))
-    assert any('Declared Sd differs' in w for w in response['metadata']['warnings']) == (declared is not None)
+    assert any('Sd cross-check' in w for w in response['metadata']['warnings']) == (declared is not None)
     if chamber:
         parameters = captured[0].wire['compiled_system']['components'][0]['parameters']
         assert parameters['lumped_sealed_rear_chamber']['projected_area_m2'] == declared
 
 
 @pytest.mark.parametrize('exterior_only', [False, True])
-def test_exterior_ambiguous_sd_admission_and_compile_match(solid, record, exterior_only):
+@pytest.mark.parametrize('source_ids', [['a'], list('abcd')])
+def test_exterior_chamber_sd_admission_and_compile_match(solid, record, exterior_only, source_ids):
     from server.jobs.runtime.imported_refusals import _imported_request_refusal
     from server.solver.beat_adapter.observations import build_observations
     from server.solver.beat_adapter.transducers import build_transducer_request, DriverSdRequired
     from server.tests.beat_adapter.test_transducers import FRAME
     payload = request().model_dump(mode='json')
     channel = payload['geometry']['drive_channels'][0]
-    channel['source_ids'] = list('abcd')  # A whole closed moving skin has zero net area.
+    channel['source_ids'] = source_ids  # Test both one side and a whole closed moving skin.
+    payload['geometry']['mesh']['source_size_mm'] = {source: 3. for source in source_ids}
     payload['geometry']['drive_channels'] = [channel]
     channel['exterior_transducer'].update(version=2, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .01})
     job = SolveRequest.model_validate(payload)

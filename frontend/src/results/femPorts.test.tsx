@@ -145,7 +145,7 @@ it.each([
     const host = document.createElement('div');
     const root = createRoot(host);
     act(() => root.render(<FemPortsPanel result={invalid}/>));
-    expect(host.textContent).toBe('Ports could not be displayed: invalid pressure data.');
+    expect(host.textContent).toBe('Port data is invalid.');
     expect(host.querySelector('details')).toBeNull();
     act(() => root.unmount());
   }

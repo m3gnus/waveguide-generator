@@ -16,7 +16,7 @@ from urllib.parse import quote
 import numpy as np
 
 from server.contracts.conventions import SOLVER_TIME_CONVENTION
-from .mesh import SurfaceMesh
+from .mesh import SurfaceMesh, read_surface
 from .observations import ObservationLayout
 from .preflight import UnsupportedPhysics, validate_exterior_physics
 from .request import SourceBasis, build_request
@@ -87,55 +87,48 @@ def _projected_face_areas(triangles_m: np.ndarray, axis: Sequence[float]) -> np.
     return np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]) @ direction / 2
 
 
-def _signed_projected_area(triangles_m: np.ndarray, axis: Sequence[float]) -> float:
-    return float(_projected_face_areas(triangles_m, axis).sum())
-
-
-def projected_driver_area(
-    triangles_m: np.ndarray, axis: Sequence[float], *, rear_triangles_m: np.ndarray | None = None,
-) -> tuple[float, str | None]:
-    """Net projected Sd per declared side, reusable for FEM/BEM diaphragms.
-
-    Back-facing folds on one diaphragm side subtract from its projection. Only
-    an explicitly supplied second side is averaged with the first side.
-    """
-    front = abs(_signed_projected_area(triangles_m, axis))
-    _positive(front, "moving faces projected_area_m2")
-    if rear_triangles_m is None:
-        return front, None
-    rear = abs(_signed_projected_area(rear_triangles_m, axis))
-    _positive(rear, "rear moving faces projected_area_m2")
-    area = (front + rear) / 2
-    warning = None
-    if abs(front - rear) / area > 0.1:
-        warning = "Front and rear moving-face projected areas differ by more than 10%; sealed rear chamber uses their mean."
-    return area, warning
-
-
 class DriverSdRequired(UnsupportedPhysics):
     reason_code = "driver_sd_required"
 
     def __init__(self, channel_id: str):
-        self.message = (f"Enter Sd in the driver options for channel '{channel_id}' "
-                        "(the moving faces do not give an unambiguous projected area)")
+        self.message = (f"Enter Sd in the driver options for channel '{channel_id}'; "
+                        "a lumped rear chamber needs the driver's Sd")
         super().__init__(f"{self.reason_code}: {self.message}")
+
+
+class LumpedChamberDoubleRearLoad(UnsupportedPhysics):
+    reason_code = "lumped_chamber_double_rear_load"
+
+    def __init__(self, channel_id: str):
+        self.message = (f"Channel '{channel_id}': a lumped rear chamber replaces rear radiation; "
+                        "the moving faces lie in multiple meshes and the rear already radiates")
+        super().__init__(f"{self.reason_code}: {self.message}")
+
+
+def chamber_sd_problem(raw: Mapping[str, Any], channel_id: str, *, mesh_count: int = 1) -> None:
+    """Declaration-only chamber checks, shared by admission and compilation."""
+    if (raw.get("lumped_sealed_rear_chamber") or {}).get("enabled", False):
+        if raw.get("sd_m2") is None:
+            raise DriverSdRequired(channel_id)
+        if mesh_count > 1:
+            raise LumpedChamberDoubleRearLoad(channel_id)
 
 
 def geometric_driver_area(meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.ndarray]]],
                           axis: Sequence[float]) -> tuple[float, bool, list[str]]:
-    """Net projection per mesh; neutral rims do not join independent skins.
+    """Sum same-sign mesh nets; average opposite sides. Neutral rims do not join skins.
 
     Connected folds keep their signed subtraction. Only edge connectivity is
     used: there is no normal-angle separator or inferred front/rear classifier.
     """
-    areas, ambiguous = [], False
+    nets_by_mesh, ambiguous = [], False
     for boundaries in meshes_m.values():
         faces = np.concatenate([faces for faces, _ in boundaries])
         triangles = np.concatenate([triangles for _, triangles in boundaries])
         projections = _projected_face_areas(triangles, axis)
         total = float(np.abs(projections).sum())
         net = float(projections.sum())
-        areas.append(abs(net))
+        nets_by_mesh.append(net)
         ambiguous |= total <= 0 or abs(net) < .2 * total
         # Numerically neutral faces carry no projected area and cannot hide an
         # independently tagged rear patch behind a connecting cylindrical rim.
@@ -162,26 +155,29 @@ def geometric_driver_area(meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.n
         majority = max(nets, key=abs, default=0.)
         ambiguous |= any(value * majority < 0 and abs(value) >= .05 * abs(majority)
                          for value in nets)
-    if not areas:
+    if not nets_by_mesh:
         return 0., True, []
-    area = float(np.mean(areas))
+    # A side can span several meshes: sum equal-sign projections first.
+    sides = [sum(net for net in nets_by_mesh if net > 0),
+             -sum(net for net in nets_by_mesh if net < 0)]
+    sides = [area for area in sides if area > 0]
+    area = float(np.mean(sides)) if sides else 0.
     notes = []
-    if len(areas) > 1 and area > 0 and (max(areas) - min(areas)) / area > .1:
+    if len(sides) > 1 and (max(sides) - min(sides)) / area > .1:
         notes.append("Moving-face projected areas in separate meshes differ by more than 10 %; Sd uses their mean.")
     return area, bool(ambiguous), notes
 
 
 def resolve_driver_sd(raw: Mapping[str, Any], meshes_m, axis, channel_id: str
                       ) -> tuple[float | None, dict[str, Any], list[str]]:
+    chamber_sd_problem(raw, channel_id, mesh_count=len(meshes_m))
     geometric, ambiguous, notes = geometric_driver_area(meshes_m, axis)
     declared = raw.get("sd_m2")
     area = _positive(declared, "sd_m2") if declared is not None else (None if ambiguous else geometric)
     source = "declared" if declared is not None else ("geometry" if area is not None else None)
-    if declared is not None and abs(geometric - area) / area > .1:
-        notes.append("Declared Sd differs from the moving-face geometric projection by more than 10 %; declared Sd is used.")
+    if declared is not None and not ambiguous and abs(geometric - area) / area > .25:
+        notes.append("Sd cross-check: geometry differs from declared Sd by more than 25 %; geometry includes everything that moves, including the surround roll, so 10–20 % above datasheet Sd is normal. Declared Sd is used.")
     if area is None:
-        if (raw.get("lumped_sealed_rear_chamber") or {}).get("enabled", False):
-            raise DriverSdRequired(channel_id)
         notes.append("Sd not determined; enter Sd to get acoustic impedance")
     metadata = {"sd_m2": area, "sd_source": source, "geometric_sd_m2": geometric,
                 "geometry_ambiguous": ambiguous}
@@ -216,7 +212,6 @@ class TransducerRequest:
     wire: dict[str, Any]
     layout: ObservationLayout
     mesh: SurfaceMesh
-    warnings: tuple[str, ...] = ()
     driver_sd: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     channel_warnings: Mapping[str, list[str]] = field(default_factory=dict)
 
@@ -276,17 +271,16 @@ def build_transducer_request(
     components = system["components"][:len(ideal_sources)]
     ports = system["excitation_ports"][:len(ideal_sources)]
     offset = len(ideal_sources)
-    area_warnings = []
+    source_mesh = read_surface(msh_text, scale_to_m=mesh_scale_to_m)
     sd_metadata = {}
     channel_warnings = {}
     for driver in drivers:
         axis = system["components"][offset]["parameters"]["motion_axis"]
         offset += len(driver.tags)
-        selected = prepared.mesh.faces[np.isin(prepared.mesh.tags, driver.tags)]
+        selected = source_mesh.faces[np.isin(source_mesh.tags, driver.tags)]
         area, sd_metadata[driver.id], notes = resolve_driver_sd(
             {"sd_m2": driver.sd_m2, "lumped_sealed_rear_chamber": driver.lumped_sealed_rear_chamber},
-            {"exterior": [(selected, prepared.mesh.points_m[selected])]}, axis, driver.id)
-        area_warnings.extend(notes)
+            {"exterior": [(selected, source_mesh.points_m[selected])]}, driver.axis, driver.id)
         channel_warnings[driver.id] = notes
         components.append({"id": driver.component_id, "name": driver.id,
                            "kind": "electrodynamic_transducer",
@@ -303,8 +297,7 @@ def build_transducer_request(
                             "undriven_transducer_termination": "shorted"})
     wire.update(excitation_port_ids=requested, outputs=outputs(prepared.layout))
     wire["solver_options"]["transducer_reference_voltage_v"] = voltage
-    request = TransducerRequest(wire, prepared.layout, prepared.mesh, tuple(area_warnings),
-                                sd_metadata, channel_warnings)
+    request = TransducerRequest(wire, prepared.layout, prepared.mesh, sd_metadata, channel_warnings)
     validate_transducer_request(request)
     return request
 

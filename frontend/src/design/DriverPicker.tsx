@@ -922,15 +922,23 @@ export function ChannelDriverPicker({ channel, form, roleHint }: {
   </div>;
 }
 
-/** Use the existing library search to prefill the explicit BEAT driver options. */
+/** Use an explicit library pick to replace BEAT driver fields; unavailable fields are cleared. */
 export function ExteriorDriverLibraryPicker({ channel, roleHint }: { channel: CadDriveChannel; roleHint?: string }) {
   const info = useDriverLibraryStore((store) => store.info);
   const load = useDriverLibraryStore((store) => store.load);
   const counts = useMemo(() => driverKindCounts(info), [info]);
   useEffect(() => { void load(); }, [load]);
-  return <DriverSearch channel={channel} roleHint={roleHint} counts={counts} onPick={picked => {
-    const state = useCadReturnStore.getState();
-    const form = state.driveChannels.find(c => c.id === channel.id)?.exterior_transducer;
-    if (form) state.setExteriorTransducer(channel.id, prefillExteriorDriver(form, picked.base));
-  }}/>;
+  const [pickedWithoutSd, setPickedWithoutSd] = useState(false);
+  return <>
+    <DriverSearch channel={channel} roleHint={roleHint} counts={counts} onPick={picked => {
+      const state = useCadReturnStore.getState();
+      const form = state.driveChannels.find(c => c.id === channel.id)?.exterior_transducer;
+      if (form) state.setExteriorTransducer(channel.id, prefillExteriorDriver(form, picked.base, { replace: true }));
+      const sd = picked.base.sd_cm2;
+      setPickedWithoutSd(!(sd !== undefined && Number.isFinite(sd) && sd > 0));
+    }}/>
+    {pickedWithoutSd && <p className="section-note" role="status">
+      This library driver lists no Sd. Enter Sd in the driver options to use a lumped rear chamber.
+    </p>}
+  </>;
 }

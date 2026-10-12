@@ -1,8 +1,10 @@
 """F10a contract, mixed-basis mapping and load recovery without native solves."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 import time
+import warnings
 
 import numpy as np
 import pytest
@@ -37,7 +39,7 @@ def test_voltage_request_passes_engine_contract_and_owns_all_boundaries(coupled)
             name: {'kind': 'interface' if 'interface' in name else 'moving' if 'moving' in name else 'rigid',
                    'drive_channel_id': 'fem'} for name in region.domain.surfaces})
     # The exterior skin is the diaphragm's second side; a lumped chamber would load the rear twice.
-    spec = driver(semi_inductance={'enabled': True, 're_prime_ohm': 3., 'leb_h': .001,
+    spec = driver(sd_m2=.00005, semi_inductance={'enabled': True, 're_prime_ohm': 3., 'leb_h': .001,
                                   'le_h': .002, 'ke_semi_h': .003, 'rss_ohm': 4.},
                   lumped_sealed_rear_chamber={'enabled': not coupled, 'volume_m3': .002})
     request = build_coupled_request(exterior, [region], layout=compiled().layout, frame=FRAME,
@@ -66,8 +68,8 @@ def test_two_sided_diaphragm_refuses_lumped_rear_chamber():
     exterior = ExteriorSurface(region.domain.points_mm, region.domain.surfaces, {
         name: {'kind': 'interface' if 'interface' in name else 'moving' if 'moving' in name else 'rigid',
                'drive_channel_id': 'fem'} for name in region.domain.surfaces})
-    spec = driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
-    with pytest.raises(UnsupportedPhysics, match="both sides"):
+    spec = driver(sd_m2=.00005, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+    with pytest.raises(UnsupportedPhysics, match="lumped_chamber_double_rear_load.*rear already radiates"):
         build_coupled_request(exterior, [region], layout=compiled().layout, frame=FRAME,
                               frequencies_hz=[100.], transducers={'fem': spec})
 
@@ -287,7 +289,7 @@ def test_connected_fold_keeps_sd_and_accepts_lumped_chamber_across_tags(split_ta
         name: {'kind': 'rigid' if name == 'walls' else 'moving', 'drive_channel_id': 'front'}
         for name in groups})
     request = build_coupled_request(exterior, [region_input()], layout=compiled().layout, frame=FRAME,
-        frequencies_hz=[100.], transducers={'front': driver(
+        frequencies_hz=[100.], transducers={'front': driver(sd_m2=7.5e-5,
             lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})})
     system = request.wire['compiled_system']
     assert system['metadata']['projected_areas_m2']['front'] == pytest.approx(7.5e-5)
@@ -301,7 +303,7 @@ def test_numerically_neutral_disconnected_rim_joins_populated_side():
     # A separate rim group with opposing projections and a tiny negative net.
     rim = np.array([[[1., 0., 0.], [1.02, 0., 0.], [1., .01, .01]],
                     [[1.02, 0., 0.], [1., 0., 0.], [1., .01 + 1e-16, -.01]]])
-    spec = driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+    spec = driver(sd_m2=1e-4, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
     params, area = parameters(spec, {'exterior': [(np.array([[0, 1, 2]]), front),
                                                 (np.array([[3, 4, 5], [4, 3, 6]]), rim)]})
     assert area == pytest.approx(1e-4)
@@ -316,8 +318,8 @@ def test_coincident_faces_in_distinct_meshes_are_two_sides_and_average():
               'fem': [(np.array([[0, 2, 1]]), rear)]}
     _, area = parameters(driver(), meshes)
     assert area == pytest.approx(1e-4)
-    with pytest.raises(ValueError, match='both sides'):
-        parameters(driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}), meshes)
+    with pytest.raises(ValueError, match='lumped_chamber_double_rear_load.*rear already radiates'):
+        parameters(driver(sd_m2=.0002, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}), meshes)
 
 
 def test_projected_area_mismatch_reaches_compiled_and_result_warnings():
@@ -406,10 +408,12 @@ def test_connected_front_rim_rear_skin_requires_declared_sd(dome, rear_fraction)
         parameters(driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}),
                    meshes, channel_id='skin')
     metadata = {}
-    with pytest.warns(UserWarning, match='Declared Sd differs'):
+    with warnings.catch_warnings(record=True) as emitted:
+        warnings.simplefilter("always")
         params, sd = parameters(driver(sd_m2=.0004,
             lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}),
             meshes, channel_id='skin', sd_metadata=metadata)
+    assert emitted == []
     assert sd == .0004
     assert params['lumped_sealed_rear_chamber']['projected_area_m2'] == sd
     assert metadata['sd_source'] == 'declared'
@@ -425,7 +429,7 @@ def test_separately_tagged_cone_surround_roll_and_cap_keep_fold_subtraction():
     roll = np.array([[[.1, 0., 0.], [0., 0., 0.], [0., .01, .02]]])
     meshes = {'fem': [(np.array([[0, 1, 2]]), cone),
                       (np.array([[3, 4, 5]]), cap), (np.array([[1, 0, 6]]), roll)]}
-    _, area = parameters(driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}), meshes)
+    _, area = parameters(driver(), meshes)
     assert area == pytest.approx(.005 + .0008 - .0005)
 
 
@@ -436,8 +440,8 @@ def test_two_sides_keep_separate_mesh_connectivity(mesh_names):
     faces = np.array([[0, 1, 2]])
     meshes = {mesh_names[0]: [(faces, triangles)], mesh_names[1]: [(faces, triangles[:, [0, 2, 1]])]}
     assert parameters(driver(), meshes)[1] == pytest.approx(.0002)
-    with pytest.raises(ValueError, match='already radiates on both sides'):
-        parameters(driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}), meshes)
+    with pytest.raises(ValueError, match='lumped_chamber_double_rear_load.*rear already radiates'):
+        parameters(driver(sd_m2=.0002, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}), meshes)
 
 
 def test_cancelling_skin_without_separable_sides_names_channel():
@@ -583,8 +587,9 @@ def test_cone_half_roll_270_roll_and_deep_cap_have_exact_net_sd(depth, roll_end)
     # Projected polygon area at the outer endpoint, including signed folds.
     radius = roll[-1][0]
     expected = 48 / 2 * np.sin(2 * np.pi / 48) * radius**2
-    params, sd = parameters(driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}),
+    params, sd = parameters(driver(sd_m2=expected, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}),
                             {'fem': boundaries})
+    assert parameters(driver(), {'fem': boundaries})[1] == pytest.approx(expected, rel=1e-12)
     assert sd == pytest.approx(expected, rel=1e-12)
     assert params['lumped_sealed_rear_chamber']['projected_area_m2'] == sd
 
@@ -609,8 +614,10 @@ def test_one_mm_thick_cone_with_both_faces_never_silently_uses_small_net(depth, 
     with pytest.raises(ValueError, match="driver_sd_required: Enter Sd.*channel 'cone'"):
         parameters(driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}),
                    meshes, channel_id='cone')
-    with pytest.warns(UserWarning, match='Declared Sd differs'):
+    with warnings.catch_warnings(record=True) as emitted:
+        warnings.simplefilter("always")
         assert parameters(driver(sd_m2=.03016), meshes, channel_id='cone')[1] == .03016
+    assert emitted == []
 
 
 @pytest.mark.parametrize('declared', [None, .0002])
@@ -622,7 +629,7 @@ def test_ambiguous_channel_omits_acoustic_impedance_or_uses_declared_sd(declared
     system = request.wire['compiled_system']
     metadata = {}
     notes = []
-    with pytest.warns(UserWarning):
+    with (pytest.warns(UserWarning) if declared is None else nullcontext()):
         _, area = parameters(spec, _closed_moving_skin(), channel_id='fem',
                              sd_metadata=metadata, collected_warnings=notes)
     system['metadata']['projected_areas_m2']['fem'] = area
@@ -645,8 +652,10 @@ def test_ambiguous_channel_omits_acoustic_impedance_or_uses_declared_sd(declared
 def test_declared_sd_controls_kbox_exactly_and_requires_v2():
     from server.solver.beat_adapter.coupled_transducers import parameters
     spec = driver(sd_m2=.0004, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
-    with pytest.warns(UserWarning, match='Declared Sd differs'):
+    with warnings.catch_warnings(record=True) as emitted:
+        warnings.simplefilter("always")
         params, area = parameters(spec, _closed_moving_skin())
+    assert emitted == []
     dry = driver().model_dump()
     difference = mechanical_impedance(params, 100., density=1.21, sound_speed=343.) - mechanical_impedance(
         dry, 100., density=1.21, sound_speed=343.)
@@ -681,7 +690,7 @@ def test_shared_sd_admission_and_compile_return_identical_channel_refusal(monkey
     meshes = _closed_moving_skin(rear_fraction=.2)
     problem = fem_request_problem({'fem_regions': [region]}, [channel], enabled=True,
                                   moving_meshes={'skin': meshes})
-    assert problem == ('driver_sd_required', "Enter Sd in the driver options for channel 'skin' (the moving faces do not give an unambiguous projected area)")
+    assert problem == ('driver_sd_required', "Enter Sd in the driver options for channel 'skin'; a lumped rear chamber needs the driver's Sd")
     with pytest.raises(DriverSdRequired) as raised:
         parameters(spec, meshes, channel_id='skin')
     assert str(raised.value) == f'{problem[0]}: {problem[1]}'
@@ -714,7 +723,7 @@ def test_two_fem_regions_share_one_voltage_coordinate_and_mean_sd(monkeypatch):
 
 
 
-def test_fem_sd_admission_reads_verified_geometry_and_uses_tetrahedral_normals(monkeypatch):
+def test_fem_sd_admission_refuses_before_geometry_and_matches_compile(monkeypatch):
     from server.jobs.runtime.imported_refusals import _imported_request_refusal
     from server.tests.test_imported_jobs import _request
     region = region_input(channel='skin')
@@ -730,8 +739,158 @@ def test_fem_sd_admission_reads_verified_geometry_and_uses_tetrahedral_normals(m
     job.geometry.drive_channels = [DriveChannel(id='skin', source_ids=[], motion='axial', exterior_transducer=spec)]
     problem = _imported_request_refusal(job, {'fem_regions': [region.record]})
     assert problem[0] == 'driver_sd_required'
-    assert calls == ['air']
+    assert calls == []
     with pytest.raises(ValueError) as raised:
         build_coupled_request(None, [region], layout=compiled().layout, frame=FRAME,
                               frequencies_hz=[100.], transducers={'skin': spec})
     assert str(raised.value) == f'{problem[0]}: {problem[1]}'
+
+
+@pytest.mark.parametrize('rear_fraction', [.2, .6])
+@pytest.mark.parametrize('kind', ['twisted-puck', 'slanted-cone'])
+def test_non_neutral_rear_connection_always_requires_chamber_sd(rear_fraction, kind):
+    # Regression geometries from the review probes: a zigzag rim or an outer
+    # slanted end face connects a partly tagged rear to the moving front.
+    from server.solver.beat_adapter.coupled_transducers import parameters
+    from server.solver.coupled_admission import fem_request_problem
+    if kind == 'twisted-puck':
+        meshes = _closed_moving_skin(rear_fraction=rear_fraction)
+        boundaries = meshes['fem']
+        # Twist the rear-ring coordinates, preserving shared node identities.
+        for faces, corners in boundaries:
+            angle = np.where(corners[:, :, 2] == 0, np.pi / 48, 0.)
+            x, y = corners[:, :, 0].copy(), corners[:, :, 1].copy()
+            corners[:, :, 0] = x * np.cos(angle) - y * np.sin(angle)
+            corners[:, :, 1] = x * np.sin(angle) + y * np.cos(angle)
+    else:
+        a, b = np.array([.02, 0.]), np.array([.1, .06])
+        c, d = a - [-.0006, .0008], b - [-.0006, .0008]
+        meshes = {'fem': _revolved_moving([
+            ([tuple(a + (b - a) * x) for x in np.linspace(0, 1, 12)], False),
+            ([tuple(b), tuple(d)], False),
+            ([tuple(c + (d - c) * x) for x in np.linspace(1 - rear_fraction, 1, 6)], True)])}
+    spec = driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+    channel = DriveChannel(id='probe', source_ids=[], motion='axial', exterior_transducer=spec)
+    problem = fem_request_problem({'fem_regions': [region_input(channel='probe').record]},
+                                  [channel], enabled=True, moving_meshes={'probe': meshes})
+    assert problem[0] == 'driver_sd_required'
+    with pytest.raises(ValueError) as raised:
+        parameters(spec, meshes, channel_id='probe')
+    assert str(raised.value) == f'{problem[0]}: {problem[1]}'
+
+
+@pytest.mark.parametrize('second', ['fem-rear', 'exterior'])
+def test_declared_chamber_double_load_refused_at_admission_and_compile(second):
+    from server.solver.beat_adapter.coupled_transducers import parameters
+    from server.solver.coupled_admission import fem_request_problem
+    faces = np.array([[0, 1, 2]])
+    front = np.array([[[0., 0., 0.], [.02, 0., 0.], [0., .01, 0.]]])
+    meshes = {'fem-front': [(faces, front)], second: [(faces, front[:, [0, 2, 1]])]}
+    spec = driver(sd_m2=.0001, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+    channel = DriveChannel(id='speaker', source_ids=[], motion='axial', exterior_transducer=spec)
+    problem = fem_request_problem({'fem_regions': [region_input(channel='speaker').record]},
+                                  [channel], enabled=True, moving_meshes={'speaker': meshes})
+    assert problem[0] == 'lumped_chamber_double_rear_load'
+    assert 'rear already radiates' in problem[1]
+    with pytest.raises(ValueError) as raised:
+        parameters(spec, meshes, channel_id='speaker')
+    assert str(raised.value) == f'{problem[0]}: {problem[1]}'
+
+
+def test_same_side_split_meshes_sum_and_opposite_sides_average():
+    from server.solver.beat_adapter.transducers import geometric_driver_area
+    faces = np.array([[0, 1, 2]])
+    triangle = np.array([[[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]])
+    meshes = {'inner': [(faces, triangle)], 'outer': [(faces, triangle)]}
+    assert geometric_driver_area(meshes, [0, 0, 1]) == (1., False, [])
+    meshes['rear'] = [(faces, triangle[:, [0, 2, 1]] * np.sqrt(2))]
+    area, ambiguous, notes = geometric_driver_area(meshes, [0, 0, 1])
+    assert area == pytest.approx(1.)
+    assert not ambiguous and notes == []
+    meshes['rear'] = [(faces, triangle[:, [0, 2, 1]])]
+    assert 'more than 10 %' in geometric_driver_area(meshes, [0, 0, 1])[2][0]
+
+
+@pytest.mark.parametrize('ratio,ambiguous,warning', [(1.2, False, False), (1.25, False, False),
+                                                   (1.3, False, True), (2., True, False)])
+def test_declared_sd_cross_check_requires_unambiguous_geometry(monkeypatch, ratio, ambiguous, warning):
+    from server.solver.beat_adapter import transducers as t
+    monkeypatch.setattr(t, 'geometric_driver_area', lambda *args: (ratio, ambiguous, []))
+    _, _, notes = t.resolve_driver_sd({'sd_m2': 1.}, {}, [0, 0, 1], 'speaker')
+    assert bool(notes) == warning
+    if warning:
+        assert 'cross-check' in notes[0] and '25 %' in notes[0]
+        assert 'surround roll' in notes[0] and '10–20 %' in notes[0]
+
+
+def test_coupled_axis_is_normalized_again_before_engine_use():
+    from server.solver.beat_adapter.coupled_transducers import parameters
+    raw = driver().model_dump()
+    raw['motion_axis'] = [0., 0., 30.]
+    faces = np.array([[0, 1, 2]])
+    triangle = np.array([[[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]])
+    params, area = parameters(raw, {'fem': [(faces, triangle)]})
+    assert params['motion_axis'] == [0., 0., 1.]
+    assert area == .5
+
+
+def test_admission_without_chamber_never_reads_fem_sd_geometry(monkeypatch):
+    from server.solver.coupled_admission import fem_request_problem
+    def unexpected(*args, **kwargs):
+        pytest.fail('admission read a tetrahedral mesh for Sd without a chamber')
+    monkeypatch.setattr('server.mesh.artifact.read_verified_fem_region_mesh', unexpected)
+    channel = DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=driver())
+    assert fem_request_problem({'fem_regions': [region_input().record]}, [channel], enabled=True) is None
+
+
+def test_coupled_exterior_admission_and_compile_share_oriented_projection(monkeypatch):
+    from server.solver.coupled_admission import _channel_moving_meshes, driver_sd_problem
+    from server.solver.beat_adapter.transducers import geometric_driver_area
+    points = np.array([[0., 0., 0.], [20., 0., 0.], [0., 10., 0.], [0., 2.5, 5.]])
+    groups = {'source_id=front': np.array([[0, 1, 2]]),
+              'source_id=fold': np.array([[0, 1, 3]]),  # OCC face wound backwards
+              'walls': np.array([[0, 2, 3], [1, 3, 2]])}
+    record = {'coupled_exterior': {'physical_names': list(groups)}}
+    monkeypatch.setattr('server.mesh.artifact.read_verified_coupled_exterior_mesh', lambda *args: 'verified')
+    monkeypatch.setattr('server.mesh.fem_coupling.read_coupled_exterior', lambda *args: (points, groups))
+    spec = driver(sd_m2=7.5e-5, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+    channel = DriveChannel(id='front', source_ids=['front', 'fold'], motion='axial', exterior_transducer=spec)
+    meshes = _channel_moving_meshes(record, channel)
+    area, ambiguous, _ = geometric_driver_area(meshes, spec.motion_axis)
+    assert area == pytest.approx(7.5e-5) and not ambiguous
+    assert driver_sd_problem(record, [channel]) is None
+    exterior = ExteriorSurface(points, groups, {
+        name: {'kind': 'rigid' if name == 'walls' else 'moving', 'drive_channel_id': 'front'} for name in groups})
+    request = build_coupled_request(exterior, [region_input()], layout=compiled().layout, frame=FRAME,
+                                   frequencies_hz=[100.], transducers={'front': spec})
+    metadata = request.wire['compiled_system']['metadata']['driver_sd']['front']
+    assert metadata['geometric_sd_m2'] == pytest.approx(area)
+    assert metadata['geometry_ambiguous'] == ambiguous
+
+
+@pytest.mark.parametrize('exterior_side', [False, True])
+def test_declared_chamber_admission_checks_verified_multi_mesh_return(monkeypatch, exterior_side):
+    from server.solver.coupled_admission import driver_sd_problem
+    regions = [region_input('front', 'speaker'), region_input('rear', 'speaker')]
+    domains = {r.record['region_id']: r.domain for r in regions}
+    calls = []
+    monkeypatch.setattr('server.mesh.artifact.read_verified_fem_region_mesh',
+                        lambda record, identity: calls.append(identity) or identity)
+    monkeypatch.setattr('server.mesh.fem_regions.read_fem_region_domain',
+                        lambda text, identity: domains[identity])
+    record = {'fem_regions': [r.record for r in regions]}
+    if exterior_side:
+        record['fem_regions'] = [regions[0].record]
+        record['coupled_exterior'] = {'physical_names': ['source_id=front']}
+        domain = regions[0].domain
+        groups = {('source_id=front' if 'moving' in name else name): faces
+                  for name, faces in domain.surfaces.items()}
+        monkeypatch.setattr('server.mesh.artifact.read_verified_coupled_exterior_mesh', lambda *args: 'verified')
+        monkeypatch.setattr('server.mesh.fem_coupling.read_coupled_exterior',
+                            lambda *args: (domain.points_mm, groups))
+    spec = driver(sd_m2=.00005, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+    channel = DriveChannel(id='speaker', source_ids=['front'] if exterior_side else [],
+                           motion='axial', exterior_transducer=spec)
+    problem = driver_sd_problem(record, [channel])
+    assert problem[0] == 'lumped_chamber_double_rear_load'
+    assert calls == (['front'] if exterior_side else ['front', 'rear'])

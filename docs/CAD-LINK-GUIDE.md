@@ -235,20 +235,25 @@ This is useful for studying response and directivity, but it does not provide
 the driver's voltage sensitivity, electrical impedance, power or excursion.
 
 When **Solve driver in BEAT** is enabled, driver options include **Sd (cm²)**.
-Choosing a library driver prefills its Sd and available bare-driver parameters;
-check the datasheet and enter missing values, especially bare Mmd (Mms includes
-air load and is not substituted). Sd is stored in m² in a v2 transducer spec.
-The declared value controls sealed rear chamber stiffness ρc²Sd²/V and
-acoustic impedance Z/(ρcSd), on both exterior-only and coupled FEM routes.
+Choosing a library driver replaces its Sd and available bare-driver parameters;
+fields missing from the new library entry are cleared. Check the datasheet and
+enter missing values, especially bare Mmd (Mms includes air load and is not
+substituted). Sd is stored in m² in a v2 transducer spec. Every enabled lumped
+sealed rear chamber requires an entered Sd, at admission and compilation,
+on both exterior-only and coupled FEM routes. The declared value controls
+chamber stiffness ρc²Sd²/V and acoustic impedance Z/(ρcSd).
 
-Moving-face geometry supplies a fallback and cross-check: use the absolute
-net projection per mesh, averaging separate regions/sides and warning when
-they differ by more than 10%. Results warn when declared Sd differs from the
-geometry by more than 10%, and record the value and its source per channel.
-Ambiguous geometry requires an entered Sd when a lumped chamber is enabled.
-Without a chamber the solve can proceed; acoustic impedance is omitted with
-“Sd not determined; enter Sd to get acoustic impedance”. A meshed rear region
-cannot also have a lumped rear chamber on the same diaphragm.
+Moving-face geometry supplies acoustic-impedance normalization when Sd is
+undeclared and geometry is unambiguous. Same-sign mesh net projections are
+summed as one side; opposite sides are averaged, with a warning above 10%
+disagreement. Geometry is also a cross-check when unambiguous: it includes
+everything that moves, including the surround roll, so 10–20% above datasheet
+Sd is normal. Results warn above 25% difference from declared Sd and record
+the value and its source per channel. Ambiguous geometry without Sd omits
+acoustic impedance with “Sd not determined; enter Sd to get acoustic impedance”.
+A channel whose moving faces lie in multiple meshes cannot also use a lumped
+rear chamber: admission refuses `lumped_chamber_double_rear_load` because the
+rear already radiates.
 
 ## 6. Ports and rear chambers
 

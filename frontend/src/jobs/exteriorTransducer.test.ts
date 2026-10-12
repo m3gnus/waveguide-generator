@@ -70,9 +70,9 @@ it('requires clearing the mechanical coordinate before source reassignment', () 
 
 const semi = { enabled: true, re_prime_ohm: 5.5, leb_h: .0001, le_h: .002, ke_semi_h: .03, rss_ohm: 20 };
 
-it('passes and persists v2 physical models without a user-supplied Sd', () => {
+it('passes and persists v2 physical models with a declared Sd', () => {
   enable();
-  const extended = { ...form, version: 2, power_w: 100, xmax_mm: 2, semi_inductance: semi,
+  const extended = { ...form, version: 2, power_w: 100, xmax_mm: 2, sd_m2: .0132, semi_inductance: semi,
     lumped_sealed_rear_chamber: { enabled: true, volume_m3: .01 } };
   useCadReturnStore.getState().setExteriorTransducer('d', extended);
   expect(parseExteriorTransducer(JSON.parse(JSON.stringify(extended)))).toEqual(extended);
@@ -123,7 +123,7 @@ it('restores v2 driver options through the persisted CAD profile parser', () => 
     documentName: 'Driver', requestId: null, sourceCount: 1, instanceCount: 1,
     sources: [{ id: 's', role: 'LF', required: true, suggestedResolutionMm: 3, defaultDriveChannelId: 'd' }] };
   useCadReturnStore.getState().selectBundle(bundle, 'driver-project');
-  const extended = { ...form, version: 2, power_w: 100, xmax_mm: 2, semi_inductance: semi,
+  const extended = { ...form, version: 2, power_w: 100, xmax_mm: 2, sd_m2: .0132, semi_inductance: semi,
     lumped_sealed_rear_chamber: { enabled: true, volume_m3: .01 } };
   useCadReturnStore.getState().setExteriorTransducer('d', extended);
   resetCadReturnStore();
@@ -176,4 +176,27 @@ it('round-trips v2 Sd without altering v1 readers or allowing invalid Sd', async
   expect(prefillExteriorDriver({ version: 1, motion_axis: [0, 0, 1] }, { sd_cm2: 55, re_ohm: 6,
     mmd_g: 20, mms_g: 99, rms_kg_per_s: 1.5, le_mh: .5 })).toMatchObject({
     sd_m2: .0055, version: 2, re_ohm: 6, mmd_kg: .02, rms_n_s_per_m: 1.5, le_h: .0005 });
+});
+
+it('replaces driver A with driver B values and clears fields absent from B', async () => {
+  const { prefillExteriorDriver } = await import('../stores/exteriorTransducer');
+  const a = prefillExteriorDriver(form, { sd_cm2: 220, re_ohm: 6, le_mh: .5, bl_t_m: 7,
+    mmd_g: 20, cms_m_per_n: .001, rms_kg_per_s: 1.5, power_w: 100, xmax_mm: 2 }, { replace: true });
+  const b = prefillExteriorDriver(a, { sd_cm2: 55, re_ohm: 4, le_mh: 0, bl_t_m: 8,
+    mmd_g: 12, cms_m_per_n: .002, rms_kg_per_s: 2 }, { replace: true });
+  expect(b).toEqual({ version: 2, motion_axis: form.motion_axis, sd_m2: .0055,
+    re_ohm: 4, le_h: 0, bl_n_per_a: 8, mmd_kg: .012, cms_m_per_n: .002, rms_n_s_per_m: 2 });
+  expect(b).not.toHaveProperty('power_w');
+  expect(b).not.toHaveProperty('xmax_mm');
+});
+
+it('blocks a lumped rear chamber without a declared Sd', () => {
+  const base = {
+    version: 2, motion_axis: [0, 0, 1] as [number, number, number], re_ohm: 3.3, le_h: 0.00029, bl_n_per_a: 7.9,
+    mmd_kg: 0.0397, cms_m_per_n: 0.00086, rms_n_s_per_m: 1.25,
+    lumped_sealed_rear_chamber: { enabled: true, volume_m3: 0.002 },
+  };
+  expect(exteriorTransducerError(base)).toContain('Enter Sd in the driver options');
+  expect(exteriorTransducerError({ ...base, sd_m2: 0.0132 })).toBeNull();
+  expect(exteriorTransducerError({ ...base, lumped_sealed_rear_chamber: { enabled: false } })).toBeNull();
 });

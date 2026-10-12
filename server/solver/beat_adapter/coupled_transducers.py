@@ -6,7 +6,7 @@ import warnings
 
 import numpy as np
 
-from .preflight import UnsupportedPhysics
+from .request import _axis
 from .transducers import DRIVER_SCALARS, ExteriorDriver, driver_parameters, resolve_driver_sd
 
 
@@ -15,11 +15,8 @@ def parameters(spec: Any, meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.n
                sd_metadata: dict[str, Any] | None = None) -> tuple[dict[str, Any], float | None]:
     """Use declared Sd, with per-mesh geometry as a fallback and cross-check."""
     raw = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
-    axis = np.asarray(raw["motion_axis"], dtype=float)
+    axis = _axis(raw["motion_axis"])
     area, metadata, notes = resolve_driver_sd(raw, meshes_m, axis, channel_id)
-    if len(meshes_m) > 1 and (raw.get("lumped_sealed_rear_chamber") or {}).get("enabled", False):
-        raise UnsupportedPhysics(f"Channel {channel_id!r}: a lumped rear chamber replaces the rear radiation; "
-                                 "this diaphragm already radiates on both sides")
     if sd_metadata is not None:
         sd_metadata.update(metadata)
     for note in notes:

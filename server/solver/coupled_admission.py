@@ -168,20 +168,22 @@ def fem_request_problem(record: Mapping[str, Any], channels: Sequence[Any] | Non
 def driver_sd_problem(record: Mapping[str, Any], channels: Sequence[Any], *,
                       moving_meshes: Mapping[str, Any] | None = None,
                       exterior_msh_text: str | None = None) -> tuple[str, str] | None:
-    """Check verified moving geometry only for chambers lacking a declared Sd."""
-    from server.solver.beat_adapter.transducers import DriverSdRequired, resolve_driver_sd
+    """Require declared chamber Sd; inspect geometry only for enabled chambers."""
+    from server.solver.beat_adapter.transducers import (
+        DriverSdRequired, LumpedChamberDoubleRearLoad, chamber_sd_problem)
 
     for channel in channels:
         spec = getattr(channel, "exterior_transducer", None)
         chamber = getattr(spec, "lumped_sealed_rear_chamber", None)
-        if spec is None or getattr(spec, "sd_m2", None) is not None or not getattr(chamber, "enabled", False):
+        if spec is None or not getattr(chamber, "enabled", False):
             continue
         raw = spec.model_dump(mode="json")
-        meshes = (moving_meshes[channel.id] if moving_meshes is not None
-                  else _channel_moving_meshes(record, channel, exterior_msh_text=exterior_msh_text))
         try:
-            resolve_driver_sd(raw, meshes, spec.motion_axis, channel.id)
-        except DriverSdRequired as exc:
+            chamber_sd_problem(raw, channel.id)
+            meshes = (moving_meshes[channel.id] if moving_meshes is not None
+                      else _channel_moving_meshes(record, channel, exterior_msh_text=exterior_msh_text))
+            chamber_sd_problem(raw, channel.id, mesh_count=len(meshes))
+        except (DriverSdRequired, LumpedChamberDoubleRearLoad) as exc:
             return exc.reason_code, exc.message
     return None
 
@@ -193,7 +195,7 @@ def _channel_moving_meshes(record, channel, *, exterior_msh_text=None):
                                       read_verified_coupled_exterior_mesh, read_verified_import_mesh)
     from server.mesh.fem_regions import read_fem_region_domain, parse_physical_name
     from server.mesh.fem_coupling import read_coupled_exterior
-    from server.solver.coupled_system import _fem_driver_triangles
+    from server.solver.coupled_system import _fem_driver_triangles, _oriented_exterior_surfaces
     from server.solver.beat_adapter.mesh import read_surface
 
     meshes = {}
@@ -215,7 +217,7 @@ def _channel_moving_meshes(record, channel, *, exterior_msh_text=None):
     if channel.source_ids:
         if record.get("coupled_exterior"):
             points, groups = read_coupled_exterior(read_verified_coupled_exterior_mesh(record))
-            boundaries = [(faces, points[faces] * .001) for name, faces in groups.items()
+            boundaries = [(faces, points[faces] * .001) for name, faces in _oriented_exterior_surfaces(points, groups)
                           if any(f"source_id={source}" in name.split("|") for source in channel.source_ids)]
         else:
             mesh = read_surface(exterior_msh_text if exterior_msh_text is not None else read_verified_import_mesh(record))

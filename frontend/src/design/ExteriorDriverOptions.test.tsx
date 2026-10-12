@@ -63,7 +63,8 @@ it('edits and validates the sealed volume and explains mesh-derived area', () =>
   enter('Rear chamber volume', '10');
   expect(form.lumped_sealed_rear_chamber).toEqual({ enabled: true, volume_m3: .01 });
   expect(host.textContent).toContain('0.01 m³');
-  expect(exteriorTransducerError(form)).toBeNull();
+  // A lumped chamber needs the driver's declared Sd.
+  expect(exteriorTransducerError(form)).toContain('Enter Sd in the driver options');
   enter('Rear chamber volume', '');
   expect(exteriorTransducerError(form)).not.toBeNull();
   act(() => input('Lumped sealed rear chamber').click());
