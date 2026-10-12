@@ -131,11 +131,28 @@ def test_closing_live_host_refusal_retries_within_start_deadline(launch, monkeyp
 
     monkeypatch.setattr(spawn, 'connect_authenticated', connecting)
     monkeypatch.setattr(spawn, 'cleanup_host', cleaning)
+    launches = []
+    popen = spawn.subprocess.Popen  # The launch fixture's recording wrapper.
+
+    def timed(*args, **kwargs):
+        # Count only launches that started. Where the caller's job forbids
+        # breakaway (hosted CI), the "granted" attempt is refused before the
+        # "refused" one starts the same host.
+        child = popen(*args, **kwargs)
+        if spawn.HOST_MODULE in args[0]:
+            launches.append(time.monotonic())
+        return child
+
+    monkeypatch.setattr(spawn.subprocess, 'Popen', timed)
     started = time.monotonic()
-    replacement = spawn.start_host(key, directory, timeout=2)
+    # start_host's default 10 s budget. The replacement interpreter's start-up
+    # is the runner's speed: a hosted Windows runner has spent a 2 s budget on it.
+    replacement = spawn.start_host(key, directory)
     assert replacement.pid != old.pid
     assert cleanups and all(record == old for record in cleanups)
-    assert time.monotonic() - started < 2
+    # The bound under test: refusals from the closing host are retried, and the
+    # replacement launches promptly once that host exits.
+    assert len(launches) == 1 and launches[0] - started < 2
     assert children[0].returncode is not None
     assert len(children) == 2
 
