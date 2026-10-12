@@ -231,6 +231,14 @@ def test_native_uses_real_solver_mesh_pipeline(formula: str, tmp_path: Path) -> 
     assert {name: value.tolist() for name, value in mesh.field_data.items()} == {
         "SD1G0": [1, 2], "SD1D1001": [2, 2],
     }
+    if formula == "OSSE-ADAPTER-CONTROLS":
+        controls = result["metadata"]["controlsAdapter"]["controls"]
+        assert controls["mode"] == "controls"
+        assert controls["control_points_mm"] == RECIPES[formula]["throat_adapter"]["control_points_mm"]
+    if formula == "OSSE-ARC":
+        assert result["metadata"]["terminatingArc"]["arc"]["endTangentDeg"] == 100
+        mouth_rim = mesh.points[np.hypot(mesh.points[:, 0], mesh.points[:, 1]).argmax()]
+        assert mesh.points[:, 2].max() > mouth_rim[2]
 
 
 @pytest.mark.parametrize("formula", FAMILIES)
@@ -251,7 +259,7 @@ def test_native_fixture_fits_a_7_gib_runner_dense_solver_ceiling(formula: str, t
     metal_detail = f" ({metal_dofs:,} Metal DOFs)" if metal_dofs != dofs else ""
     est = requirements["estimated_bytes"]
     assert est <= limit.bytes, (
-        f"{formula}: {dofs:,} P1 DOFs{metal_detail} estimate {est/1024**3:.2f} GiB of dense-solver memory, "
+        f"{formula}: {dofs:,} P1 DOFs{metal_detail}, an estimated {est/1024**3:.2f} GiB of dense-solver memory, "
         f"above the {limit.bytes/1024**3:.2f} GiB ceiling of a 7 GiB hosted runner; make this fixture more compact"
     )
     _enforce_dense_solver_memory_ceiling(triangles, quadrants, mode=mode, tags=tags, limit=limit)
