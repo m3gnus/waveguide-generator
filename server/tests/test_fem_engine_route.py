@@ -74,8 +74,9 @@ def test_coupled_wire_passes_pinned_engine_contract():
 
 
 @pytest.mark.parametrize("options,message", [
-    ({"backend": "metal"}, "CPU"), ({"backend": "cuda"}, "CPU"),
-    ({"precision": "float32"}, "float64"), ({"symmetry": "xy"}, "Unsupported BEAT symmetry"),
+    ({"backend": "unknown"}, "Unsupported FEM"),
+    ({"backend": "metal", "precision": "float64"}, "GPU float32"),
+    ({"precision": "complex64"}, "Unsupported FEM"), ({"symmetry": "xy"}, "Unsupported BEAT symmetry"),
     ({"ground": object()}, "ground plane"),
 ])
 def test_request_refusals(options, message):
@@ -187,7 +188,7 @@ def test_envelope_validates_and_contains_fem_only_drive():
     envelope = RESULT_ENVELOPE_ADAPTER.validate_python(enriched)
     assert envelope.result_contract_version == 2
     assert envelope.channels["fem"]["metadata"]["source_ids"] == []
-    assert enriched["metadata"]["fem"] == {"engine": "beat-cpu", "precision": "float64"}
+    assert enriched["metadata"]["fem"] == {"engine": "beat-cpu", "backend": "cpu", "precision": "float64"}
     assert "impedance" not in envelope.channels["fem"]
 
 
@@ -225,14 +226,10 @@ def test_fusion_defaults_accept_fem_only_design():
                       artifact_sha256="sha256:" + "0" * 64, acknowledged_findings=[])
 
 
-@pytest.mark.parametrize("backend,provider,flag,expected", [
-    ("cpu", "official", None, True), ("cpu", "official", "1", True), ("cpu", "hbb", "1", True),
-    ("cpu", "official", "0", False), ("metal", "official", "1", False),
-    ("cuda", "official", "1", False), ("rocm", "official", "1", False),
-])
-def test_registry_only_offers_cpu_fem(monkeypatch, backend, provider, flag, expected):
+@pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm"])
+@pytest.mark.parametrize("flag,expected", [(None, True), ("1", True), ("0", False)])
+def test_registry_offers_fem_on_all_official_backends(monkeypatch, backend, flag, expected):
     from server.engines.registry import _beat_engine_info
-    monkeypatch.setenv("WG2_BEAT_PROVIDER", provider)
     if flag is None:
         monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
     else:
@@ -283,7 +280,7 @@ def test_auto_dispatch_skips_gpu_for_fem(monkeypatch, tmp_path, accuracy):
     record["symmetry"] = {"applied": {"cut_planes": [], "quadrants": 1234}}
     infos = [EngineInfo(name=name, version=None, available=True, reason="fixture", geometry_sources=("imported",),
                        imported_features=features, symmetry_domains=("full",))
-             for name, features in (("beat-metal", ()), ("beat-cpu", ("fem-regions",)))]
+             for name, features in (("beat-metal", ("fem-regions",)), ("beat-cpu", ("fem-regions",)))]
     class Registry:
         async def capabilities(self):
             return infos
@@ -297,7 +294,7 @@ def test_auto_dispatch_skips_gpu_for_fem(monkeypatch, tmp_path, accuracy):
     assert resolution.request.options.engine == "beat-cpu"
 
 
-@pytest.mark.parametrize("engine", ["bempp", "beat-metal"])
+@pytest.mark.parametrize("engine", ["bempp"])
 @pytest.mark.parametrize("accuracy", ["fast", "accurate"])
 def test_fem_plan_offers_cpu_despite_incompatible_selected_backend(monkeypatch, tmp_path, engine, accuracy):
     import asyncio
@@ -336,11 +333,11 @@ def test_fem_plan_offers_cpu_despite_incompatible_selected_backend(monkeypatch, 
     for name in ("bempp", "beat-metal"):
         assert verdicts[name]["solves"] is False
         assert verdicts[name]["code"] == "imported_feature_unsupported_by_engine"
-        assert "coupled FEM regions (official CPU float64)" in verdicts[name]["reason"]
+        assert "coupled FEM regions (official BEAT)" in verdicts[name]["reason"]
     assert plan["engine"] is None
     assert plan["code"] == "fem_backend_unsupported"
-    assert "choose BEAT CPU, or choose exterior-only" in plan["reason"]
-    with pytest.raises(ImportedSolveRefusal, match="choose BEAT CPU, or choose exterior-only") as caught:
+    assert "choose BEAT CPU, Metal, CUDA or ROCm, or choose exterior-only" in plan["reason"]
+    with pytest.raises(ImportedSolveRefusal, match="choose BEAT CPU, Metal, CUDA or ROCm, or choose exterior-only") as caught:
         asyncio.run(resolve_imported_submission(request, Registry(), **kwargs))
     assert caught.value.reason_code == "fem_backend_unsupported"
     assert request.options.engine == engine
@@ -394,8 +391,9 @@ def test_sidecar_cleanup_and_rated_retention(tmp_path, operation):
     assert store._fem_field_path("one").exists() is (operation == "rated")
 
 
+@pytest.mark.parametrize("engine_choice", ["auto", "beat-cpu", "beat-metal", "beat-cuda", "beat-rocm"])
 @pytest.mark.parametrize("voltage", [False, True])
-def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runtime, monkeypatch, tmp_path, voltage):
+def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runtime, monkeypatch, tmp_path, voltage, engine_choice):
     import asyncio
     from dataclasses import replace
     from server.engines.registry import EngineInfo
@@ -409,12 +407,17 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
     from server.tests.test_fem_electrodynamic import driver
 
-    built = compiled(fem_channel="exterior", **({"transducers": {"exterior": driver()}} if voltage else {}))
+    backend = "cpu" if engine_choice == "auto" else engine_choice.removeprefix("beat-")
+    precision = "float64" if engine_choice == "auto" or backend == "cpu" and voltage else "float32"
+    built = compiled(fem_channel="exterior", backend=backend, precision=precision,
+                     **({"transducers": {"exterior": driver()}} if voltage else {}))
     built = replace(built, wire={**built.wire, "frequencies_hz": [100., 500., 1000.]})
-    def compile_request(*args, **kwargs):
+    def build(*args, **kwargs):
         assert kwargs["resolved_quadrants"] == 1234
+        assert kwargs["backend"] == backend
+        assert kwargs["precision"] == ("float64" if engine_choice == "auto" else None)
         return built
-    monkeypatch.setattr(coupled_request, "build_imported_coupled_request", compile_request)
+    monkeypatch.setattr(coupled_request, "build_imported_coupled_request", build)
     def mutate(raw):
         wire = runtime.requests[-1]
         index = runtime.result_count % 3
@@ -438,14 +441,15 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
     monkeypatch.setattr(combine, "serialize_channel_bases", serialize)
     exterior_runs = []
     class Engine:
-        name = "beat-cpu"
+        name = f"beat-{backend}"
         async def run(self, request, **kwargs):
             exterior_runs.append(request.geometry.exterior_only)
             return EngineRunResult(_result_envelope("multi_channel"))
     class Registry:
         async def capabilities(self):
-            return (EngineInfo("beat-cpu", True, "fixture", "test", geometry_sources=("imported",),
-                               imported_features=("fem-regions", "exterior-transducers"), symmetry_domains=("full",)),)
+            return tuple(EngineInfo(name, True, "fixture", "test", geometry_sources=("imported",),
+                                   imported_features=("fem-regions", "exterior-transducers"), symmetry_domains=("full",))
+                         for name in {"beat-cpu", f"beat-{backend}"})
         async def get_engine(self, name):
             return Engine()
     async def scenario():
@@ -461,13 +465,19 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
         if voltage:
             request.geometry.drive_channels[0].exterior_transducer = driver()
             request.geometry.drive_channels[0].motion = "axial"
-        request.options.engine = "auto"
+        request.options.engine = engine_choice
         try:
             first = await job_runtime.submit(request)
             await job_runtime.wait_idle()
             row = job_runtime.store.get_job_row(first)
             assert row["status"] == "complete", row["error_message"]
             assert row["task_metadata"]["has_fem_field_artifact"]
+            assert row["task_metadata"]["fem_execution"] == {
+                "engine": f"beat-{backend}", "backend": backend, "precision": precision}
+            assert runtime.requests[0]["solver_options"]["bem_backend"] == backend
+            assert runtime.requests[0]["solver_options"]["precision"] == precision
+            if engine_choice == "auto":
+                assert row["task_metadata"]["fem_execution_reroute"]["requested_engine"] == "auto"
             envelope = RESULT_ENVELOPE_ADAPTER.validate_python(job_runtime.store.get_results(first))
             assert envelope.channel_order == ["exterior"]
             with np.load(BytesIO(job_runtime.store.get_fem_field(first)), allow_pickle=False) as field:
@@ -475,7 +485,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
                 assert field["schema"].item() == "wg-fem-field-store-v2"
                 assert field["drive_normalization"].tolist() == ["voltage_rms" if voltage else "unit_acceleration"]
                 if voltage:
-                    assert field["transducer_reference_voltage_v"].item() == 2.83
+                    assert field["transducer_reference_voltage_v"].item() == float(np.asarray(2.83, dtype=precision))
                 else:
                     assert "transducer_reference_voltage_v" not in field.files
                 assert field["pressure"].shape == (3, 1, 4)
@@ -483,6 +493,13 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
             assert not exterior_runs
             override = request.model_copy(deep=True)
             override.geometry.exterior_only = True
+            if voltage and backend in {"cuda", "rocm"}:
+                from server.jobs.models import SolveRequest
+                with pytest.raises(ValueError, match="exterior transducer jobs require an explicit"):
+                    SolveRequest.model_validate(override.model_dump())
+                assert len(runtime.requests) == 1
+                assert worker_operations == ["field-npz"]
+                return
             second = await job_runtime.submit(override)
             await job_runtime.wait_idle()
             assert job_runtime.store.get_job_row(second)["status"] == "complete"
@@ -589,13 +606,14 @@ def test_combined_exterior_channels_keep_the_existing_filtered_sum():
     assert response["metadata"]["solver_engine"]["formulation"] == "interior_fem"
 
 
+@pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm"])
 @pytest.mark.parametrize("coupled,cancel", [(True, False), (True, True), (False, False)])
-def test_fake_host_worker_contract_negotiation_without_sockets(tmp_path, monkeypatch, coupled, cancel):
+def test_fake_host_worker_contract_negotiation_without_sockets(tmp_path, monkeypatch, coupled, cancel, backend):
     from server.solver.beat_runtime import manager, readiness, registry
     from server.tests.beat_runtime.fake_host_worker import EngineWorker, events as recorded_events
     monkeypatch.setenv("WG2_FEM_REGIONS", "1")
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
-    key = registry.host_key({"backend": "cpu", "julia_executable": str(tmp_path / "julia"),
+    key = registry.host_key({"backend": backend if coupled else "cpu", "julia_executable": str(tmp_path / "julia"),
         "julia_identity": "fixture", "solver_script": str(tmp_path / "solver.jl"),
         "julia_project": str(tmp_path / "project"), "julia_sysimage": None, "julia_threads": 2,
         "engine_fingerprint": "fixture", "runtime_fingerprint": "fixture",
@@ -608,7 +626,8 @@ def test_fake_host_worker_contract_negotiation_without_sockets(tmp_path, monkeyp
     isolated_manager = SimpleNamespace(get_worker=lambda *a, **k: owned.get_worker(
         *a, **k, environment=dict(key["environment"])))
     try:
-        result = bridge.solve_coupled_compiled(compiled(coupled=coupled), worker_manager=isolated_manager,
+        request = compiled(coupled=coupled, backend=backend, precision="float32")
+        result = bridge.solve_coupled_compiled(request, worker_manager=isolated_manager,
                      on_frequency_result=(lambda *a: False) if cancel else None)
         assert result.cancelled is cancel
         assert result.nodal_pressure.shape[0] == (1 if cancel else 2)
@@ -847,7 +866,7 @@ def test_default_fem_admission_refuses_without_a_capable_engine(
     record = _record(path)
     record["fem_regions"] = [region_input(channel="left").record]
     record["symmetry"] = {"applied": {"cut_planes": [], "quadrants": 1234}}
-    with pytest.raises(EngineUnavailableError, match="available official BEAT CPU engine"):
+    with pytest.raises(EngineUnavailableError, match="available official BEAT engine"):
         asyncio.run(resolve_imported_submission(request, Registry(), imported_record=record,
                                                 imported_msh_text=MESH))
 
@@ -876,3 +895,191 @@ def test_fem_unavailable_remedy_tracks_cpu_preparation(monkeypatch, state, remed
                   for plane in ("x0", "y0", "z0")}}}}
     with pytest.raises(EngineUnavailableError, match=remedy):
         asyncio.run(resolve_imported_submission(request, Registry(), imported_record=record))
+
+
+@pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm"])
+@pytest.mark.parametrize("accuracy", ["fast", "accurate"])
+@pytest.mark.parametrize("voltage", [False, True])
+@pytest.mark.parametrize("interior", [False, True])
+def test_imported_precision_matches_exterior_and_interior_reroutes(monkeypatch, backend, accuracy, voltage, interior):
+    from server.solver.beat_adapter import coupled_request
+    from server.tests.test_fem_electrodynamic import driver
+    from server.tests.test_imported_jobs import _request
+    from beat_engine.beat_contract import validate_solve_request
+
+    region = region_input(channel="left", interface=not interior)
+    record = {"fem_regions": [region.record], "normalisation": {"assembly_frame_is_solver_frame": True},
+              "coupled_exterior": {"physical_names": {
+                  name: {"kind": "interface" if "interface" in name else "rigid"}
+                  for name in region.domain.surfaces}}}
+    monkeypatch.setattr(coupled_request, "read_verified_fem_region_mesh", lambda *a: "verified")
+    monkeypatch.setattr(coupled_request, "read_fem_region_domain", lambda *a: region.domain)
+    monkeypatch.setattr(coupled_request, "read_verified_coupled_exterior_mesh", lambda *a: "verified")
+    monkeypatch.setattr(coupled_request, "read_coupled_exterior", lambda *a: (region.domain.points_mm, region.domain.surfaces))
+    job = _request("wgi_" + "0" * 26)
+    job.geometry.drive_channels = []
+    job.options.engine, job.options.accuracy = f"beat-{backend}", accuracy
+    if voltage:
+        from server.jobs.models import DriveChannel
+        job.geometry.drive_channels = [DriveChannel(id="left", source_ids=[],
+                                                   exterior_transducer=driver(), motion="axial")]
+    context = SolverContext.from_imported_request(job, quadrants=1234, source_motion="normal")
+    request = coupled_request.build_imported_coupled_request(
+        record, job.geometry, context, frequencies_hz=[1000.123456], backend=backend)
+    validate_solve_request(request.wire)
+    options = request.wire["solver_options"]
+    expected_precision = "float64" if interior or backend == "cpu" and voltage else "float32"
+    assert options["bem_backend"] == ("cpu" if interior else backend)
+    assert options["precision"] == expected_precision
+    sweep = map_coupled_sweep(events(request), request)
+    assert sweep.nodal_pressure.shape == (1, 1, 4)
+    assert sweep.channels["left"].frequencies_hz.tolist() == [1000.123456]
+    response = coupled_envelope(sweep, request, context=context, geometry=job.geometry, record=record,
+                                config=bridge.response_config(request, context), started=time.time())
+    assert response["metadata"]["fem"]["backend"] == options["bem_backend"]
+    assert response["metadata"]["fem"]["precision"] == expected_precision
+    assert response["metadata"]["solver_engine"]["engine"] == f"beat-{options['bem_backend']}"
+    if interior and backend != "cpu":
+        assert response["metadata"]["fem"]["execution_reroute"]["requested_backend"] == backend
+
+
+@pytest.mark.parametrize("backend", ["metal", "cuda", "rocm"])
+@pytest.mark.parametrize("accuracy", ["fast", "accurate"])
+@pytest.mark.parametrize("interior", [False, True])
+def test_fem_explicit_gpu_submission_and_planner(monkeypatch, tmp_path, backend, accuracy, interior):
+    import asyncio
+    from server.engines.registry import _beat_engine_info
+    from server.jobs.runtime import plan_imported_submission, resolve_imported_submission
+    from server.tests.test_imported_jobs import _request, _record
+    from server.tests.test_imported_beat import MESH
+
+    monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
+    path = tmp_path / "exterior.msh"
+    path.write_text(MESH)
+    record = _record(path)
+    record["fem_regions"] = [region_input(channel="left", interface=not interior).record]
+    record["symmetry"] = {"applied": {"cut_planes": [], "quadrants": 1234}}
+    job = _request("wgi_" + "0" * 26)
+    from server.jobs.models import DriveChannel
+    from server.tests.test_fem_electrodynamic import driver
+    job.geometry.drive_channels = [DriveChannel(id="left", source_ids=[],
+                                               exterior_transducer=driver(), motion="axial")]
+    record["sources"] = []
+    record["source_tags"] = {}
+    job.options.engine, job.options.accuracy = f"beat-{backend}", accuracy
+    infos = [_beat_engine_info(b, {"available": True, "state": "ready"}) for b in ("cpu", backend)]
+    class Registry:
+        async def capabilities(self):
+            return infos
+        async def get_engine(self, name):
+            return SimpleNamespace(name=name)
+    kwargs = dict(imported_record=record, imported_msh_text=MESH,
+                  symmetry_metadata={"resolved_quadrants": 1234})
+    resolution = asyncio.run(resolve_imported_submission(job, Registry(), **kwargs))
+    expected_engine = "beat-cpu" if interior else f"beat-{backend}"
+    assert resolution.engine_name == expected_engine
+    plan = resolution.symmetry_metadata["solver_plan"]
+    assert plan["requested"] == f"beat-{backend}"
+    if interior:
+        assert plan["fallback_reason"] == "Interior-only FEM uses CPU float64"
+    assert job.options.engine == f"beat-{backend}"
+    planned = asyncio.run(plan_imported_submission(job, Registry(), **kwargs))
+    assert planned["engine"] == expected_engine
+    assert next(v for v in planned["engines"] if v["name"] == f"beat-{backend}")["solves"]
+
+
+@pytest.mark.parametrize("backend", ["metal", "cuda", "rocm"])
+def test_gpu_voltage_path_uses_selected_worker(runtime, monkeypatch, backend):
+    from server.tests.test_fem_electrodynamic import driver
+    monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
+    request = compiled(backend=backend, precision="float32", transducers={"fem": driver()})
+    acquired = []
+    original = runtime.manager.get_worker
+    def get_worker(selected, **kwargs):
+        acquired.append(selected)
+        return original(selected, **kwargs)
+    monkeypatch.setattr(runtime.manager, "get_worker", get_worker)
+    runtime.mutate = lambda raw: (raw.clear(), raw.update(coupled_result(
+        runtime.requests[-1], runtime.requests[-1]["frequencies_hz"][runtime.result_count % 2])))
+    result = bridge.solve_coupled_compiled(request)
+    assert acquired == [backend]
+    assert np.isfinite(result.velocity).all()
+    assert np.isfinite(result.current).all()
+
+
+def test_bridge_rejects_tampered_interior_options_before_worker(runtime, monkeypatch):
+    monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
+    request = compiled(coupled=False)
+    request.wire["solver_options"].update(bem_backend="cuda", precision="float32")
+    with pytest.raises(ValueError, match="Interior-only FEM requires CPU float64"):
+        bridge.solve_coupled_compiled(request)
+    assert runtime.requests == []
+
+
+def test_coupled_float32_result_rejects_backend_dtype_and_frequency_changes():
+    request = compiled(backend="cuda", precision="float32")
+    for change in ("backend", "dtype", "frequency"):
+        raw = coupled_result(request.wire, request.wire["frequencies_hz"][0])
+        if change == "backend":
+            raw["diagnostics"]["bem_backend"] = "cpu"
+        elif change == "dtype":
+            raw["quantities"][-1]["values"]["dtype"] = "complex128"
+        else:
+            raw["freq_hz"] = request.wire["frequencies_hz"][0]
+        with pytest.raises(ResultContractError):
+            map_coupled_sweep(iter([{"type": "result", "result": raw}]), request)
+
+
+@pytest.mark.parametrize("backend", ["metal", "cuda", "rocm"])
+def test_interior_execution_records_reroute_and_uses_cpu_worker(runtime, monkeypatch, tmp_path, backend):
+    import asyncio
+    from server.jobs.models import DriveChannel
+    from server.jobs.runtime import JobRuntime
+    from server.jobs.store import JobStore
+    from server.solver.beat_adapter import coupled_request
+    from server.tests.test_fem_electrodynamic import driver
+    from server.tests.test_fem_termination import _closed_domain
+    from server.tests.test_imported_jobs import _request
+    from server.tests.test_jobs_store import _job
+
+    monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
+    built = compiled(coupled=False, backend=backend, precision="float32", transducers={"fem": driver()})
+    record = {"fem_regions": [built.regions[0].record], "domain_interpretation": _closed_domain()}
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = f"beat-{backend}"
+    request.geometry.drive_channels = [DriveChannel(id="fem", source_ids=[], exterior_transducer=driver(), motion="axial")]
+    monkeypatch.setattr(coupled_request, "build_imported_coupled_request", lambda *a, **k: built)
+    runtime.mutate = lambda raw: (raw.clear(), raw.update(coupled_result(
+        runtime.requests[-1], runtime.requests[-1]["frequencies_hz"][runtime.result_count % 2])))
+    acquired = []
+    original = runtime.manager.get_worker
+    def get_worker(selected, **kwargs):
+        acquired.append(selected)
+        return original(selected, **kwargs)
+    monkeypatch.setattr(runtime.manager, "get_worker", get_worker)
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("interior"))
+    self = SimpleNamespace(store=store, _check_cancelled=lambda *a: None)
+    stages = []
+    outcome = asyncio.run(JobRuntime._run_coupled_regions(
+        self, "interior", request, record, lambda *args: stages.append(args)))
+    assert acquired == ["cpu"]
+    assert store.get_job_row("interior")["task_metadata"]["fem_execution"] == {
+        "engine": "beat-cpu", "backend": "cpu", "precision": "float64"}
+    assert store.get_job_row("interior")["task_metadata"]["fem_execution_reroute"]["requested_backend"] == backend
+    assert any("Interior-only FEM uses CPU float64" in message for _, _, message in stages)
+    assert outcome.results["metadata"]["fem"]["execution_reroute"]["requested_backend"] == backend
+    assert store.get_fem_field("interior") is not None
+
+
+@pytest.mark.parametrize("frequencies", [[1e40], [1e-50], [1000., 1000.000001], 100.])
+def test_coupled_frequencies_must_be_representable_and_distinct_at_selected_precision(frequencies):
+    request = compiled()
+    region = request.regions[0]
+    exterior = ExteriorSurface(region.domain.points_mm, region.domain.surfaces, {
+        name: {"kind": "interface" if "interface" in name else "rigid"}
+        for name in region.domain.surfaces})
+    with pytest.raises(ValueError, match="Frequencies must be positive, finite and distinct"):
+        build_coupled_request(exterior, [region], layout=request.layout, frame=FRAME,
+                              frequencies_hz=frequencies, backend="cuda", precision="float32")

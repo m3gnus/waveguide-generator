@@ -392,9 +392,8 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
         # No ground plane: the BEAT adapter does not translate one yet.
         mountings=("free-standing",),
         geometry_sources=beat_geometry_sources(backend),
-        imported_features=(("exterior-transducers", "fem-regions") if backend == "cpu" and fem_regions_enabled()
-                           else ("exterior-transducers",))
-        if backend in {"cpu", "metal"} else (),
+        imported_features=(("exterior-transducers",) if backend in {"cpu", "metal"} else ())
+        + (("fem-regions",) if fem_regions_enabled() else ()),
         symmetry_domains=_symmetry_domains(name),
         field_traces=bool(status.get("surface_traces")),
         di_sphere=True,

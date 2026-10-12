@@ -185,7 +185,7 @@ def test_exterior_only_choice_excludes_declared_termination():
 
 @pytest.mark.parametrize("override,engine,code", [
     ({"WG2_FEM_REGIONS": "0"}, "beat-cpu", "fem_required"),
-    ({}, "beat-metal", "fem_backend_unsupported"),
+    ({}, "bempp", "fem_backend_unsupported"),
 ])
 def test_operator_and_backend_refusals_precede_termination(monkeypatch, override, engine, code):
     monkeypatch.setenv("WG2_FEM_REGIONS", "1")
@@ -235,7 +235,7 @@ def test_recovered_declared_fem_refuses_before_unavailable_engine(tmp_path, monk
         })
         await runtime.shutdown()
         request = _request(ingest_id)
-        request.options.engine = "beat-metal" if reason == "backend" else "beat-cpu"
+        request.options.engine = "bempp" if reason == "backend" else "beat-cpu"
         recovered = JobRuntime(JobStore(tmp_path / "jobs.db"), engine_registry=UnavailableRegistry(),
                                cadlink_store=CadLinkStore(tmp_path / "cadlink.db"))
         recovered.store.initialize()

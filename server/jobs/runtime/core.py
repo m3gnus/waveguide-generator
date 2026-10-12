@@ -116,6 +116,7 @@ from .imported_refusals import (
     _imported_capabilities,
     _imported_capable_if_picked,
     _imported_accuracy,
+    _fem_interior_only,
 )
 from .cad_lane import (
     _ImportedSubmission,
@@ -1113,7 +1114,17 @@ async def resolve_imported_submission(
     _refuse_removed_solver(request)
     original_requested = request.options.engine
     if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
-        cpu_fallback = None  # Capability selection must skip accelerators even in Accurate.
+        cpu_fallback = None
+        # AUTO keeps the CPU f64 FEM reference policy. Explicit coupled GPU
+        # choices keep their backend; interior sparse solves always use CPU f64.
+        if request.options.engine in {"auto", "beat"} or (
+                request.options.engine in {"beat-cpu", "beat-metal", "beat-cuda", "beat-rocm"}
+                and _fem_interior_only(request, imported_record)):
+            request = request.model_copy(deep=True)
+            request.options.engine = "beat-cpu"
+            if original_requested != "beat-cpu":
+                cpu_fallback = ("Interior-only FEM uses CPU float64" if _fem_interior_only(request, imported_record)
+                                else "AUTO FEM uses the CPU float64 reference")
     else:
         request, cpu_fallback = await _accuracy_engine(request, engine_registry)
     requested = request.options.engine
@@ -1135,13 +1146,15 @@ async def resolve_imported_submission(
             info.name == "beat-cpu" and info.runtime_state == "preparing" for info in detected
         ) else "Prepare BEAT CPU")
         raise EngineUnavailableError(
-            "FEM regions require an available official BEAT CPU engine. "
+            "FEM regions require an available official BEAT engine. "
             f"{remedy}, or choose exterior-only (leave FEM regions out)."
         )
     if requested == "bempp" and any(info.name == "bempp" and info.qualification == "pending"
                                     for info in detected):
         detected = await engine_registry.wait_for_bempp()
-    declared = _imported_capabilities(detected, _imported_accuracy(request), request.options.engine)
+    needed_features = _imported_features_needed(request.geometry, imported_record)
+    declared = _imported_capabilities(detected, _imported_accuracy(request), request.options.engine,
+                                      fem_regions="fem-regions" in needed_features)
     order = full3d_engine_order()
     capable = [
         name
@@ -1162,7 +1175,7 @@ async def resolve_imported_submission(
         )
     else:
         candidates = (requested,)
-        reason = f"explicit engine={requested!r} declares imported geometry"
+        reason = cpu_fallback or f"explicit engine={requested!r} declares imported geometry"
     if requested != "auto" and not any(name in capable for name in candidates):
         if requested not in declared and requested in _BEAT_FAST_IMPORTED_EXPLICIT:
             # Not detected on this host at all: say so, not that the engine
@@ -1177,7 +1190,8 @@ async def resolve_imported_submission(
             name
             for name in order
             if name != requested
-            and _imported_capable_if_picked(detected, request.options.accuracy, name)
+            and _imported_capable_if_picked(detected, request.options.accuracy, name,
+                                           fem_regions="fem-regions" in needed_features)
             and next(item for item in detected if item.name == name).available
         ]
         if (
@@ -1209,7 +1223,6 @@ async def resolve_imported_submission(
 
     explicit = requested not in {"auto", "beat"}
     resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
-    needed_features = _imported_features_needed(request.geometry, imported_record)
     selected: str | None = None
     passed_over: list[str] = []
     refused: list[str] = []
@@ -1220,7 +1233,8 @@ async def resolve_imported_submission(
             # preflight can choose it immediately, but pending BEMPP cannot be
             # passed over just because OpenCL has not returned yet.
             detected = await engine_registry.wait_for_bempp()
-            declared = _imported_capabilities(detected, _imported_accuracy(request), request.options.engine)
+            declared = _imported_capabilities(detected, _imported_accuracy(request), request.options.engine,
+                                              fem_regions="fem-regions" in needed_features)
             capable = [candidate for candidate in order if candidate in declared
                        and _IMPORTED_GEOMETRY in declared[candidate].geometry_sources]
             info = declared.get(name)
@@ -1359,7 +1373,8 @@ async def plan_imported_submission(
         # Each engine's verdict answers "if this engine were picked", which is
         # what the selector offers; the resolution below stays keyed on the
         # request, so AUTO is unchanged.
-        info = _imported_capabilities(detected, request.options.accuracy, name).get(name)
+        info = _imported_capabilities(detected, request.options.accuracy, name,
+                                      fem_regions="fem-regions" in needed_features).get(name)
         if info is None:
             continue
         if request_refusal is not None:
@@ -3574,6 +3589,14 @@ class JobRuntime:
                 )
                 if refusal:
                     raise ImportedSolveRefusal(*refusal)
+            if _fem_interior_only(request, imported_record) and request.options.engine != "beat-cpu":
+                requested_engine = request.options.engine
+                request = request.model_copy(deep=True)
+                request.options.engine = "beat-cpu"
+                self.store.mutate_job_metadata(job_id, {"fem_execution_reroute": {
+                    "requested_engine": requested_engine, "engine": "beat-cpu",
+                    "backend": "cpu", "precision": "float64",
+                    "reason": "Interior-only FEM uses CPU float64"}})
             try:
                 engine = await self.engine_registry.get_engine(request.options.engine)
             except Exception:
@@ -3828,8 +3851,13 @@ class JobRuntime:
         refusal = _imported_request_refusal(request, record)
         if refusal:
             raise ImportedSolveRefusal(*refusal)
-        if request.options.engine != "beat-cpu":
-            raise ImportedSolveRefusal("fem_backend_unsupported", "FEM regions require official BEAT CPU")
+        from server.solver.beat import beat_engine_backend
+
+        backend = beat_engine_backend(request.options.engine)
+        if backend is None:
+            raise ImportedSolveRefusal("fem_backend_unsupported", "FEM regions require official BEAT")
+        plan = self.store.get_job_row(job_id)["task_metadata"].get("solver_plan", {})
+        precision = "float64" if plan.get("requested") in {"auto", "beat"} else None
         from server.solver.imported import imported_symmetry_from_cut_planes, imported_domain_planes
 
         symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
@@ -3838,7 +3866,23 @@ class JobRuntime:
         compiled = await asyncio.to_thread(
             build_imported_coupled_request, record, request.geometry, context,
             frequencies_hz=canonical_frequencies(context),
-            resolved_quadrants=(symmetry_metadata or {}).get("resolved_quadrants"))
+            resolved_quadrants=(symmetry_metadata or {}).get("resolved_quadrants"),
+            backend=backend, precision=precision)
+        options = compiled.wire["solver_options"]
+        execution = {"engine": f"beat-{options['bem_backend']}",
+                     "backend": options["bem_backend"], "precision": options["precision"]}
+        reroute = (compiled.wire["compiled_system"].get("metadata", {}).get("fem_execution_reroute")
+                   or self.store.get_job_row(job_id)["task_metadata"].get("fem_execution_reroute"))
+        if plan.get("fallback_reason"):
+            reroute = {"requested_engine": plan["requested"], **execution,
+                       "reason": plan["fallback_reason"]}
+        metadata = {"fem_execution": execution}
+        if reroute:
+            compiled.wire["compiled_system"].setdefault("metadata", {})["fem_execution_reroute"] = reroute
+            metadata["fem_execution_reroute"] = reroute
+        self.store.mutate_job_metadata(job_id, metadata)
+        stage_cb("setup", .4, f"Configuring FEM ({execution['backend']}, {execution['precision']})"
+                 + (f"; {reroute['reason']}" if reroute else ""))
         sweep = await asyncio.to_thread(
             solve_coupled_compiled, compiled,
             cancellation_callback=lambda: self._check_cancelled(job_id),

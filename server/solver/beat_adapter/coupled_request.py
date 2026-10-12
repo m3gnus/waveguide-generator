@@ -36,6 +36,15 @@ class CoupledRequest:
                 for channel, ports in self.channel_ports.items()}
 
 
+def validate_coupled_execution(backend: str, precision: str, *, interior: bool) -> None:
+    if backend not in {"cpu", "metal", "cuda", "rocm"}:
+        raise ValueError("FEM regions require official BEAT CPU, Metal, CUDA or ROCm")
+    if precision not in {"float32", "float64"} or (backend != "cpu" and precision != "float32"):
+        raise ValueError("Coupled FEM requires CPU float32/float64 or GPU float32")
+    if interior and (backend, precision) != ("cpu", "float64"):
+        raise ValueError("Interior-only FEM requires CPU float64")
+
+
 def build_coupled_request(
     exterior: ExteriorSurface | None, regions: Sequence[FemRegionInput], *,
     layout: ObservationLayout, frequencies_hz: Sequence[float], frame: Mapping[str, Any],
@@ -43,18 +52,26 @@ def build_coupled_request(
     ground: Any = None, transducers: Mapping[str, Any] | None = None,
     reference_voltage_rms_v: float = 2.83,
 ) -> CoupledRequest:
-    if backend != "cpu":
-        raise ValueError("FEM regions require the official BEAT CPU backend")
-    if precision != "float64":
-        raise ValueError("FEM regions require float64 precision")
+    requested_backend, requested_precision = backend, precision
+    if backend not in {"cpu", "metal", "cuda", "rocm"} or precision not in {"float32", "float64"}:
+        raise ValueError("Unsupported FEM backend or precision")
+    if exterior is None:
+        backend, precision = "cpu", "float64"
+    validate_coupled_execution(backend, precision, interior=exterior is None)
     mode, rotation, translation = _image_frame(symmetry, None)
     axes = (0,) if mode == "x" else (0, 1) if mode == "xy" else ()
     if not regions:
         raise ValueError("A coupled request requires declared FEM regions")
+    frequencies = np.asarray(frequencies_hz, dtype=float)
+    if frequencies.ndim != 1:
+        raise ValueError("Frequencies must be positive, finite and distinct")
     if any(isinstance(f, (bool, np.bool_)) for f in frequencies_hz):
         raise ValueError("Frequencies must be real numbers")
-    frequencies = np.asarray(frequencies_hz, dtype=float)
+    with np.errstate(over="ignore", under="ignore"):
+        wire_frequencies = frequencies.astype(precision)
     if (frequencies.ndim != 1 or not frequencies.size or not np.isfinite(frequencies).all()
+            or not np.isfinite(wire_frequencies).all() or np.any(wire_frequencies <= 0)
+            or len(np.unique(wire_frequencies)) != len(wire_frequencies)
             or np.any(frequencies <= 0) or len(np.unique(frequencies)) != len(frequencies)):
         raise ValueError("Frequencies must be positive, finite and distinct")
     from server.solver.coupled_admission import fem_request_problem
@@ -142,13 +159,20 @@ def build_coupled_request(
     if transducers:
         from .transducers import _positive
 
-        wire["solver_options"]["transducer_reference_voltage_v"] = _positive(reference_voltage_rms_v, "transducer_reference_voltage_v")
+        wire["solver_options"]["transducer_reference_voltage_v"] = float(np.asarray(
+            _positive(reference_voltage_rms_v, "transducer_reference_voltage_v"), dtype=precision))
+    if (backend, precision) != (requested_backend, requested_precision):
+        system["metadata"]["fem_execution_reroute"] = {
+            "requested_backend": requested_backend, "requested_precision": requested_precision,
+            "backend": backend, "precision": precision,
+            "reason": "Interior-only FEM uses CPU float64"}
     return CoupledRequest(wire, layout, frame, tuple(regions), channels)
 
 
 def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any, *,
                                    frequencies_hz: Sequence[float],
-                                   resolved_quadrants: int | None = None) -> CoupledRequest:
+                                   resolved_quadrants: int | None = None, backend: str = "cpu",
+                                   precision: str | None = None) -> CoupledRequest:
     from server.solver.coupled_admission import fem_request_problem
 
     problem = fem_request_problem(
@@ -197,7 +221,12 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
                            if int(tag) in by_tag else {"kind": "rigid"})
         exterior = ExteriorSurface(mesh.points_m * 1000, groups, kinds)
     frame = imported_anchor_frame(record)
-    request = build_coupled_request(exterior, regions, layout=_layout(context, frame, "float64"),
+    # Match the exterior routes: ideal bases use f32 for either accuracy;
+    # voltage bases use CPU f64 and GPU f32. AUTO supplies its f64 reference override.
+    precision = precision or ("float64" if backend == "cpu" and any(
+        getattr(c, "exterior_transducer", None) is not None for c in geometry.drive_channels) else "float32")
+    request = build_coupled_request(exterior, regions, layout=_layout(context, frame, precision),
+                                    backend=backend, precision=precision,
                                     frame=frame, frequencies_hz=frequencies_hz,
                                     symmetry=symmetry.native_plane or "full", ground=context.ground_plane,
                                     transducers={c.id: c.exterior_transducer for c in geometry.drive_channels

@@ -304,17 +304,18 @@ def solve_transducer_compiled(
 
 
 def solve_coupled_compiled(request, **callbacks):
-    """CPU float64 FEM route using the production session, progress and cancel marker."""
+    """FEM route using the selected production worker, progress and cancel marker."""
     from server.platform.feature_flags import fem_regions_enabled
-    from .beat_adapter.coupled_request import CoupledRequest
+    from .beat_adapter.coupled_request import CoupledRequest, validate_coupled_execution
 
     if not isinstance(request, CoupledRequest):
         raise TypeError("Expected a CoupledRequest")
     if not fem_regions_enabled():
         raise ValueError("FEM regions are disabled by WG2_FEM_REGIONS; remove the override to enable them")
     options = request.wire["solver_options"]
-    if options.get("bem_backend") != "cpu" or options.get("precision") != "float64":
-        raise ValueError("FEM regions require CPU float64")
+    interior = not any(r["kind"] == "unbounded_air"
+                       for r in request.wire["compiled_system"]["regions"])
+    validate_coupled_execution(options.get("bem_backend"), options.get("precision"), interior=interior)
     if options.get("symmetry") not in {"off", "x", "xy"}:
         raise ValueError("FEM regions support off, x and xy symmetry without a ground plane")
     return solve_compiled(request, _coupled=True, **callbacks)

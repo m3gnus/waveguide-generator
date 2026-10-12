@@ -76,7 +76,7 @@ class EngineWorker:
                 self._info = copy.deepcopy(WORKER_INFO)
                 self._info.update(contracts={"system_request": [1], "compiled_system": [2], "system_result": [2],
                                             "field_array": [1], "mesh_data": [1]},
-                                  precisions=["float64"], solve_kinds=["coupled_fem_bem_lem", "interior_fem"],
+                                  precisions=["float32", "float64"], solve_kinds=["coupled_fem_bem_lem", "interior_fem"],
                                   phasor_conventions=[SOLVER_TIME_CONVENTION], cancellation="marker_file")
             self.log("started")
 
@@ -183,7 +183,7 @@ def coupled_result(request, frequency):
         transducer = output["quantity"] in {"diaphragm_velocity", "voice_coil_current"}
         drivers = [c for c in request["compiled_system"]["components"] if c["kind"] == "electrodynamic_transducer"]
         count = sum(counts) if fem else len(drivers) if transducer else len(output["options"]["points_m"])
-        values = np.asarray([np.full(count, (i + 1) * (2 + 3j)) for i in range(len(ports))], dtype="<c16")
+        values = np.asarray([np.full(count, (i + 1) * (2 + 3j)) for i in range(len(ports))], dtype="<c8" if request["solver_options"]["precision"] == "float32" else "<c16")
         extra = {"metadata": metadata} if fem else {}
         if transducer:
             unit = "m/s" if output["quantity"] == "diaphragm_velocity" else "A"
@@ -195,11 +195,11 @@ def coupled_result(request, frequency):
             unit = "Pa"
         quantities.append({"id": output["id"], "quantity": output["quantity"], "unit": unit,
                            "target_id": None, "axes": ["excitation", "fem_node" if fem else "transducer" if transducer else "observation"],
-                           "values": {"encoding": "base64", "dtype": "complex128", "shape": list(values.shape),
+                           "values": {"encoding": "base64", "dtype": "complex64" if values.dtype.itemsize == 8 else "complex128", "shape": list(values.shape),
                                       "order": "C", "byte_order": "little",
                                       "content_base64": base64.b64encode(values.tobytes()).decode()}, **extra})
     diagnostics = dict(request["solver_options"])
     if not any(r["kind"] == "unbounded_air" for r in request["compiled_system"]["regions"]):
         diagnostics["linear_backend"] = diagnostics.pop("bem_backend")
-    return {"schema_version": 2, "freq_hz": frequency, "excitation_port_ids": ports,
+    return {"schema_version": 2, "freq_hz": float(np.asarray(frequency, dtype=request["solver_options"]["precision"])), "excitation_port_ids": ports,
             "quantities": quantities, "diagnostics": diagnostics}

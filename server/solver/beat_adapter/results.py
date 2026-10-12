@@ -481,14 +481,15 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                 if (index >= len(frequencies) or not isinstance(raw, dict)
                         or type(raw.get("schema_version")) is not int or raw["schema_version"] != 2
                         or type(raw.get("freq_hz")) not in {int, float}
-                        or raw.get("freq_hz") != frequencies[index]
+                        or raw.get("freq_hz") != float(np.asarray(
+                            frequencies[index], dtype=request.wire["solver_options"]["precision"]))
                         or raw.get("excitation_port_ids") != ports):
                     raise ResultContractError("Coupled result frequency, version or excitation identity changed")
                 diagnostics = raw.get("diagnostics")
                 expected = request.wire["solver_options"]
                 backend_key = ("bem_backend" if any(r["kind"] == "unbounded_air"
                                for r in request.wire["compiled_system"]["regions"]) else "linear_backend")
-                if (not isinstance(diagnostics, dict) or diagnostics.get(backend_key) != "cpu"
+                if (not isinstance(diagnostics, dict) or diagnostics.get(backend_key) != expected["bem_backend"]
                         or any(diagnostics.get(k) != expected[k]
                                for k in ("phasor_convention", "precision", "symmetry"))):
                     raise ResultContractError("Coupled result physics changed")
@@ -507,7 +508,8 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                             or item.get("target_id") is not None
                             or item.get("axes") != ["excitation", axis]
                             or not isinstance(item.get("values"), dict)
-                            or item["values"].get("dtype") != "complex128"):
+                            or item["values"].get("dtype") != (
+                                "complex64" if expected["precision"] == "float32" else "complex128")):
                         raise ResultContractError("Coupled quantity identity, unit or precision changed")
                     if fem and item.get("metadata") != metadata:
                         raise ResultContractError("FEM result node layout differs from retained domains")
@@ -585,10 +587,17 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
         raise ValueError(f"Combine id {geometry.combine.id!r} collides with a compiled drive channel id")
     channels = {}
     formulation = solve_kind(request.wire["compiled_system"])
-    solver_engine = {"provider": "official", "engine": "beat-cpu", "package": "beat-engine",
-                     "package_version": engine_version(), "device": "cpu", "precision": "double",
+    options = request.wire["solver_options"]
+    backend, precision = options["bem_backend"], options["precision"]
+    engine = f"beat-{backend}"
+    solver_engine = {"provider": "official", "engine": engine, "package": "beat-engine",
+                     "package_version": engine_version(), "device": backend,
+                     "precision": "double" if precision == "float64" else "single",
                      "formulation": formulation}
-    fem_metadata = {"engine": "beat-cpu", "precision": "float64"}
+    fem_metadata = {"engine": engine, "backend": backend, "precision": precision}
+    reroute = request.wire["compiled_system"].get("metadata", {}).get("fem_execution_reroute")
+    if reroute:
+        fem_metadata["execution_reroute"] = reroute
     has_voltage = "voltage_rms" in request.drive_normalization.values()
 
     channel_warnings = request.wire["compiled_system"]["metadata"].get("channel_warnings", {})
@@ -600,7 +609,7 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
         response = build_solver_response(
             result=native, config=config, context=context, start_time=started,
             metadata={"drive_channel_id": name, "source_ids": list(spec.source_ids) if spec else [],
-                      **identity.get(name, {"role": None}), "solver_backend": "beat-cpu",
+                      **identity.get(name, {"role": None}), "solver_backend": engine,
                       "solver_engine": solver_engine, "fem": fem_metadata,
                       "warnings": list(channel_warnings.get(name, ())),
                       "phase_time_convention": PHASE_TIME_CONVENTION,

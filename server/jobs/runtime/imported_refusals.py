@@ -177,12 +177,13 @@ _IMPORTED_DOMAIN_LABELS = {
 #: Imported features a request can use, as a refusal names them.
 _IMPORTED_FEATURE_LABELS = {"passive-cardioid": "the passive-cardioid radiation campaign",
                             "exterior-transducers": "coupled exterior transducers",
-                            "fem-regions": "coupled FEM regions (official CPU float64)"}
+                            "fem-regions": "coupled FEM regions (official BEAT)"}
 
 
 def _imported_features_needed(geometry: ImportedGeometrySource, record=None) -> set[str]:
     features = {"passive-cardioid"} if geometry.passive_cardioid_enabled else set()
-    if any(channel.exterior_transducer is not None for channel in geometry.drive_channels):
+    if (any(channel.exterior_transducer is not None for channel in geometry.drive_channels)
+            and not (record and record.get("fem_regions") and not geometry.exterior_only)):
         features.add("exterior-transducers")
     if record and record.get("fem_regions") and not geometry.exterior_only:
         features.add("fem-regions")
@@ -305,14 +306,21 @@ def _imported_axial_refusal(
     return None
 
 
+def _fem_interior_only(request: SolveRequest, record: Mapping[str, Any] | None) -> bool:
+    return bool(record and record.get("fem_regions") and not request.geometry.exterior_only
+                and not any(c.source_ids for c in request.geometry.drive_channels)
+                and not any(g.get("kind") == "interface" for r in record["fem_regions"]
+                            for g in r.get("surface_groups", ())))
+
+
 def _imported_backend_refusal(
     request: SolveRequest, record: Mapping[str, Any] | None = None,
 ) -> tuple[str, str] | None:
     """Refuse the selected backend at submit/run, without restricting other picks."""
     if (record and record.get("fem_regions") and not request.geometry.exterior_only
-            and request.options.engine not in {"auto", "beat", "beat-cpu"}):
+            and request.options.engine not in {"auto", "beat", "beat-cpu", "beat-metal", "beat-cuda", "beat-rocm"}):
         return "fem_backend_unsupported", (
-            "FEM regions require official BEAT CPU; choose BEAT CPU, or choose exterior-only")
+            "FEM regions require official BEAT; choose BEAT CPU, Metal, CUDA or ROCm, or choose exterior-only")
     return None
 
 
@@ -472,9 +480,11 @@ def _imported_capabilities(
     capabilities: tuple[EngineInfo, ...] | list[EngineInfo],
     accuracy: str,
     engine: str = "auto",
+    *, fem_regions: bool = False,
 ) -> dict[str, EngineInfo]:
     """Expose imported BEAT accelerators for the request that may use them.
 
+    FEM exposes every explicitly selected BEAT backend in either accuracy.
     Accurate exposes every accelerator. An explicitly named ``beat-metal`` is
     exposed in Fast too: Fast and Accurate run the identical BEAT computation.
     AUTO and the legacy ``beat`` family never gain a Fast accelerator, so their
@@ -484,7 +494,7 @@ def _imported_capabilities(
     def exposed(info: EngineInfo) -> bool:
         if info.name not in _BEAT_ACCELERATORS or "imported" in info.geometry_sources:
             return False
-        return accuracy == "accurate" or (
+        return (fem_regions and "fem-regions" in info.imported_features and info.name == engine) or accuracy == "accurate" or (
             info.name == engine and engine in _BEAT_FAST_IMPORTED_EXPLICIT
         )
 
@@ -496,11 +506,12 @@ def _imported_capabilities(
 
 
 def _imported_capable_if_picked(
-    capabilities: tuple[EngineInfo, ...] | list[EngineInfo], accuracy: str, name: str
+    capabilities: tuple[EngineInfo, ...] | list[EngineInfo], accuracy: str, name: str,
+    *, fem_regions: bool = False,
 ) -> bool:
     """Whether ``name`` would declare imported geometry if it were the pick."""
 
-    info = _imported_capabilities(capabilities, accuracy, name).get(name)
+    info = _imported_capabilities(capabilities, accuracy, name, fem_regions=fem_regions).get(name)
     return info is not None and _IMPORTED_GEOMETRY in info.geometry_sources
 
 

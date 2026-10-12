@@ -118,6 +118,7 @@ def test_refuse_invalid_si_model(field, value):
 )
 def test_refuse_unsupported_job_options(option, value):
     payload = request().model_dump(mode="json")
+    payload["geometry"]["exterior_only"] = True
     payload["options"][option] = value
     with pytest.raises(ValidationError, match="exterior transducer"):
         SolveRequest.model_validate(payload)
