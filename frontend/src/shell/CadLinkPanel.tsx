@@ -395,6 +395,7 @@ function FindingRows({ record }: { record: CadReturnIngestRecord }) {
 
 /** What a finding that blocks nothing tells the user, in words. */
 const NOTE_TITLE: Record<string, string> = {
+  fem_termination_with_exterior: 'FEM termination requires an interior-only solve',
   'stale-detection-unavailable': 'WG cannot tell whether this model is out of date',
   'declared-reduced-domain': 'Solved as the reduced model the CAD author declared',
   'interpreted-reduced-domain': 'Solved mirrored, as a model already cut in CAD (from recorded evidence)',

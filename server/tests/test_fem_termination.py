@@ -196,10 +196,15 @@ def test_operator_and_backend_refusals_precede_termination(monkeypatch, override
     request = _request("wgi_" + "0" * 26)
     request.options.engine = engine
     record = {"fem_regions": [_termination_input().record]}
-    refusal = _imported_request_refusal(request, record)
-    assert refusal[0] == code
+    class NoEngine:
+        async def capabilities(self):
+            pytest.fail("must refuse before engine selection")
+
+    with pytest.raises(ImportedSolveRefusal) as caught:
+        asyncio.run(resolve_imported_submission(request, NoEngine(), imported_record=record))
+    assert caught.value.reason_code == code
     if code == "fem_provider_unsupported":
-        assert "unset WG2_BEAT_PROVIDER, or choose exterior-only" in refusal[1]
+        assert "unset WG2_BEAT_PROVIDER, or choose exterior-only" in str(caught.value)
 
 
 def test_disabled_ingest_precedes_termination(monkeypatch):

@@ -298,6 +298,55 @@ def test_auto_dispatch_skips_gpu_for_fem(monkeypatch, tmp_path, accuracy):
     assert resolution.request.options.engine == "beat-cpu"
 
 
+@pytest.mark.parametrize("engine", ["bempp", "beat-metal"])
+@pytest.mark.parametrize("accuracy", ["fast", "accurate"])
+def test_fem_plan_offers_cpu_despite_incompatible_selected_backend(monkeypatch, tmp_path, engine, accuracy):
+    import asyncio
+    from server.jobs.runtime import ImportedSolveRefusal, plan_imported_submission, resolve_imported_submission
+    from server.engines.registry import EngineInfo
+    from server.tests.test_imported_jobs import _request, _record
+    from server.tests.test_imported_beat import MESH
+
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    path = tmp_path / "exterior.msh"
+    path.write_text(MESH)
+    record = _record(path)
+    record["fem_regions"] = [region_input(channel="left", interface=True).record]
+    record["symmetry"] = {"applied": {"cut_planes": [], "quadrants": 1234}}
+    infos = [EngineInfo(name=name, version=None, available=True, reason="fixture", geometry_sources=("imported",),
+                       imported_features=features, symmetry_domains=("full",))
+             for name, features in (("bempp", ()), ("beat-metal", ()), ("beat-cpu", ("fem-regions",)))]
+
+    class Registry:
+        async def capabilities(self):
+            return infos
+
+        async def get_engine(self, name):
+            assert name == "beat-cpu"
+            return SimpleNamespace(name=name)
+
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = engine
+    request.options.accuracy = accuracy
+    kwargs = {"imported_record": record, "imported_msh_text": MESH,
+              "symmetry_metadata": {"resolved_quadrants": 1234}}
+    plan = asyncio.run(plan_imported_submission(request, Registry(), **kwargs))
+    verdicts = {verdict["name"]: verdict for verdict in plan["engines"]}
+    assert verdicts["beat-cpu"]["solves"] is True
+    for name in ("bempp", "beat-metal"):
+        assert verdicts[name]["solves"] is False
+        assert verdicts[name]["code"] == "imported_feature_unsupported_by_engine"
+        assert "coupled FEM regions (official CPU float64)" in verdicts[name]["reason"]
+    assert plan["engine"] is None
+    assert plan["code"] == "fem_backend_unsupported"
+    assert "choose BEAT CPU, or choose exterior-only" in plan["reason"]
+    with pytest.raises(ImportedSolveRefusal, match="choose BEAT CPU, or choose exterior-only") as caught:
+        asyncio.run(resolve_imported_submission(request, Registry(), **kwargs))
+    assert caught.value.reason_code == "fem_backend_unsupported"
+    assert request.options.engine == engine
+
+
 def test_sidecar_is_lossless_and_follows_result_retention(tmp_path):
     from server.jobs.store import JobStore
     from server.tests.test_jobs_store import _job, _result_envelope

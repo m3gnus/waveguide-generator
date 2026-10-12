@@ -108,6 +108,7 @@ from .imported_refusals import (
     _imported_features_needed,
     _engines_able_to_take,
     _imported_request_refusal,
+    _imported_backend_refusal,
     ImportedEngineVerdict,
     imported_engine_verdict,
     _BEAT_ACCELERATORS,
@@ -1116,7 +1117,10 @@ async def resolve_imported_submission(
     else:
         request, cpu_fallback = await _accuracy_engine(request, engine_registry)
     requested = request.options.engine
-    request_refusal = _imported_request_refusal(request, imported_record, imported_msh_text)
+    request_refusal = (
+        _imported_backend_refusal(request, imported_record)
+        or _imported_request_refusal(request, imported_record, imported_msh_text)
+    )
     if request_refusal is not None:
         raise ImportedSolveRefusal(*request_refusal)
     if requested not in SELECTABLE_ENGINE_NAMES:
@@ -3564,7 +3568,10 @@ class JobRuntime:
                     ),
                 }
             if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
-                refusal = _imported_request_refusal(request, imported_record, job_msh_text)
+                refusal = (
+                    _imported_backend_refusal(request, imported_record)
+                    or _imported_request_refusal(request, imported_record, job_msh_text)
+                )
                 if refusal:
                     raise ImportedSolveRefusal(*refusal)
             try:

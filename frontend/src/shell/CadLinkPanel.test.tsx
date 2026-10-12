@@ -2682,6 +2682,29 @@ describe('CadLinkPanel', () => {
     expect(notes!.querySelectorAll('.cad-check')).toHaveLength(1);
   });
 
+  it('shows the FEM termination warning with a readable title and its remedy', async () => {
+    const reason = 'A plane-wave termination is supported only in an interior-only solve. Choose exterior-only.';
+    const reviewed = {
+      ...record,
+      findings: [{ id: 'fem-termination', kind: 'fem_termination_with_exterior', blocking: false, reason }],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
+      return json(reviewed);
+    }));
+    await renderAndSelect();
+    await clickIngest();
+
+    const notes = host.querySelector<HTMLElement>('.cad-check-notes')!;
+    expect(notes.querySelector('b')?.textContent).toBe('FEM termination requires an interior-only solve');
+    expect(notes.textContent).toContain(reason);
+    expect(notes.textContent).not.toContain('fem_termination_with_exterior');
+  });
+
   it('keeps a note that only records what was asked for one click away', async () => {
     // Positive control for the test above: a declared reduced model is not a
     // limit on confidence, so its note does not open the checks.

@@ -2376,7 +2376,11 @@ class JobStore:
         # the rename and the metadata update are serialised with deletion.
         path = self._fem_field_path(job_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd, name = tempfile.mkstemp(prefix=".fem-", dir=path.parent)
+        try:
+            fd, name = tempfile.mkstemp(prefix=".fem-", dir=path.parent)
+        except FileNotFoundError:
+            # Another publication for a deleted job removed the empty directory.
+            return False
         try:
             with os.fdopen(fd, "wb") as stream:
                 write(stream)

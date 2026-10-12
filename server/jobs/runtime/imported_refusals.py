@@ -305,6 +305,17 @@ def _imported_axial_refusal(
     return None
 
 
+def _imported_backend_refusal(
+    request: SolveRequest, record: Mapping[str, Any] | None = None,
+) -> tuple[str, str] | None:
+    """Refuse the selected backend at submit/run, without restricting other picks."""
+    if (record and record.get("fem_regions") and not request.geometry.exterior_only
+            and request.options.engine not in {"auto", "beat", "beat-cpu"}):
+        return "fem_backend_unsupported", (
+            "FEM regions require official BEAT CPU; choose BEAT CPU, or choose exterior-only")
+    return None
+
+
 def _imported_request_refusal(
     request: SolveRequest, record: Mapping[str, Any] | None = None,
     msh_text: str | None = None,
@@ -324,9 +335,6 @@ def _imported_request_refusal(
         if not official_selected():
             return "fem_provider_unsupported", ("FEM regions require the official BEAT provider; "
                                                 "unset WG2_BEAT_PROVIDER, or choose exterior-only")
-        if request.options.engine not in {"auto", "beat", "beat-cpu"}:
-            return "fem_backend_unsupported", (
-                "FEM regions require official BEAT CPU; choose BEAT CPU, or choose exterior-only")
         problem = fem_termination_problem(record["fem_regions"], has_exterior=bool(
             request.geometry.drive_channels or painted_source_ids(record)))
         if problem:

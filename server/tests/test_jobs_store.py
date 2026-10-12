@@ -1444,6 +1444,29 @@ def test_deleted_fem_publication_removes_only_empty_directory(tmp_path, delete_d
     assert store.get_job_row("gone") is None
 
 
+def test_second_deleted_fem_publication_loses_directory_before_staging(tmp_path, monkeypatch):
+    from server.jobs import store as stores
+
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    directory = store._fem_field_path("gone").parent
+    original_mkstemp = stores.tempfile.mkstemp
+
+    def competing_publication(*args, **kwargs):
+        # The second publisher has made the directory; the first completes
+        # its missing-job cleanup before the second opens its staging file.
+        with monkeypatch.context() as nested:
+            nested.setattr(stores.tempfile, "mkstemp", original_mkstemp)
+            assert store.store_fem_field("gone", b"first") is False
+        assert not directory.exists()
+        return original_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr(stores.tempfile, "mkstemp", competing_publication)
+    assert store.store_fem_field("gone", b"second") is False
+    assert not directory.exists()
+    assert store.get_job_row("gone") is None
+
+
 def test_startup_sweeps_stale_fem_staging_and_keeps_published_fields(tmp_path):
     store = JobStore(tmp_path / "jobs.db")
     store.initialize()
