@@ -31,7 +31,7 @@ ADVANCED = {
 
 def test_absent_advanced_icw_keeps_exact_existing_json_and_text() -> None:
     design = DesignConfig.model_validate({"formula": "ICW"})
-    before = (Path(__file__).parent / "data/icw-default.json").read_text().strip()
+    before = (Path(__file__).parent / "data/icw-default.json").read_text(encoding="utf-8").strip()
     assert design.model_dump_json() == before
     assert DesignConfig.model_validate_json(before).model_dump_json() == before
     assert not set(ICW_ADVANCED_KEYS).intersection(design_to_mesher_config(design)["profile"])
@@ -279,7 +279,7 @@ def test_coverage_is_sent_only_for_flat_baffle() -> None:
 def test_catalog_pin_option_values_are_valid_design_values() -> None:
     import json
 
-    catalog = json.loads((Path(__file__).parents[1] / "integration/parameter-catalog.v1.json").read_text())
+    catalog = json.loads((Path(__file__).parents[1] / "integration/parameter-catalog.v1.json").read_text(encoding="utf-8"))
     pin = next(item for item in catalog["parameters"] if item["id"] == "icw.pin_mouth_radius")
     assert [option["value"] for option in pin["options"]] == [None, False, True]
     for option in pin["options"]:
