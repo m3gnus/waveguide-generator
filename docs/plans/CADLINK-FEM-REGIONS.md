@@ -321,3 +321,23 @@ It requires a WG-provisioned CPU runtime and checks the F7 skin through managed
 session admission, contract-2 output mapping, polar pressure against the
 monopole within 5%, and duct-scale interior pressure. The broker owns native
 solver qualification.
+
+## F9 field-view request costs and follow-up
+
+The FEM frequency/channel selection waits for 250 ms of idle time before
+requesting a new field. The slider updates immediately; superseded timers and
+browser requests are cancelled, and obsolete responses cannot become the
+displayed selection. Browser cancellation cannot stop server decompression
+that has already started.
+
+Each request decompresses the selected pressure slice from the compressed NPZ
+sidecar. For C-order storage, skipping to a later slice still inflates all
+earlier bytes in that ZIP member; it saves memory, not decompression work.
+A 600 MB field can cost roughly 1–3 seconds of CPU per request, depending on
+the selected slice and compression. Every frequency/channel response also
+resends the full domain topology (coordinates, tetrahedra and surface
+triangles), although it is unchanged between selections.
+
+A follow-up should split topology from pressure so the frontend can retain
+the topology once per artifact, and use seekable per-slice pressure storage
+to read a selection without inflating earlier frequencies or channels.

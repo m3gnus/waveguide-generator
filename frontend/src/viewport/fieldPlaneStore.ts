@@ -841,7 +841,9 @@ export function createFieldPlaneStore(
         const current = get();
         if (displayMode === current.displayMode) return;
         set({ displayMode, animating: displayMode === 'instantaneous' ? current.animating : false });
-        preferenceStore.update({ fieldPlaneDisplayMode: displayMode });
+        if (current.source === 'exterior') {
+          preferenceStore.update({ fieldPlaneDisplayMode: displayMode });
+        }
       },
       setRangeLocked: (rangeLocked) => {
         const current = get();

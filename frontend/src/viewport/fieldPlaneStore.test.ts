@@ -67,6 +67,29 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 
 describe('field-plane state', () => {
   it.each(['disable', 'unavailable', 'exterior'] as const)(
+    'keeps FEM display selection local and restores the saved mode on %s', (exit) => {
+      const updatePreferences = vi.fn();
+      const store = createFieldPlaneStore({
+        fetchPlane: vi.fn(), fetchResults: async () => ({ frequencies: [800] }),
+        preferences: {
+          getSnapshot: () => ({ ...DEFAULT_VIEWER_PREFERENCES, fieldPlaneDisplayMode: 'phase' }),
+          update: updatePreferences,
+        },
+      });
+      store.getState().enableFem('fem', plane);
+      store.getState().setDisplayMode('normalized');
+      expect(store.getState().displayMode).toBe('normalized');
+      expect(updatePreferences).not.toHaveBeenCalled();
+      if (exit === 'disable') store.getState().disable();
+      else if (exit === 'unavailable') store.getState().reportUnavailable('no field');
+      else store.getState().enable('ordinary', plane);
+      expect(store.getState()).toMatchObject({ source: 'exterior', displayMode: 'phase' });
+      store.getState().setDisplayMode('spl');
+      expect(updatePreferences).toHaveBeenCalledExactlyOnceWith({ fieldPlaneDisplayMode: 'spl' });
+    },
+  );
+
+  it.each(['disable', 'unavailable', 'exterior'] as const)(
     'keeps FEM phase playback local and restores the saved mode on %s', (exit) => {
       const updatePreferences = vi.fn();
       const store = createFieldPlaneStore({

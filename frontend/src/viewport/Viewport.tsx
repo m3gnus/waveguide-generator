@@ -1151,7 +1151,7 @@ export function Viewport() {
     </div>}
 
     {femActive && <FemFieldControls field={femField} rendering={femRendering} setRendering={setFemRendering} sequential={fieldColormap}>
-      <div className="field-plane-presets" aria-label="FEM field plane presets">
+      <div className="field-plane-presets" role="group" aria-label="FEM field plane presets">
         <button type="button" onClick={() => applyFieldPlanePreset('h')}>H-plane</button>
         <button type="button" onClick={() => applyFieldPlanePreset('v')}>V-plane</button>
         <button type="button" onClick={() => applyFieldPlanePreset('mouth')}>Mouth</button>
@@ -1283,7 +1283,7 @@ export function Viewport() {
           <output>{fieldAnimationSpeed.toFixed(1)}×</output>
         </label>}
       </div>
-      <div className="field-plane-presets" aria-label="Field plane presets">
+      <div className="field-plane-presets" role="group" aria-label="Field plane presets">
         <button type="button" onClick={() => applyFieldPlanePreset('h')}>H-plane</button>
         <button type="button" onClick={() => applyFieldPlanePreset('v')}>V-plane</button>
         <button type="button" onClick={() => applyFieldPlanePreset('mouth')}>Mouth</button>
@@ -1372,7 +1372,7 @@ export function Viewport() {
           type="button"
           className={fieldEnabled ? 'on' : ''}
           title={!activeScene ? 'Field plane unavailable — waiting for viewport geometry' : availableFemJob ? 'Toggle FEM interior field' : 'Toggle acoustic field plane'}
-          aria-label="Acoustic field plane overlay"
+          aria-label={availableFemJob ? 'FEM interior field overlay' : 'Acoustic field plane overlay'}
           aria-pressed={fieldEnabled}
           disabled={!fieldEnabled && !activeScene}
           onClick={toggleFieldPlane}

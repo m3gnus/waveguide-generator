@@ -25,7 +25,12 @@ describe('experimental native assembly labels', () => {
   it('labels both launchers, and keeps their buttons enabled', async () => {
     await act(async () => root.render(<><SourceContourEditor/><SourceAssemblyLauncher/></>));
     expect(badges()).toHaveLength(2);
-    badges().forEach((badge) => { expect(badge.textContent).toBe('Experimental'); expect(badge.title).toBe(EXPERIMENTAL_NOTE); });
+    badges().forEach((badge) => {
+      expect(badge.textContent).toBe('Experimental');
+      expect(badge.title).toBe(EXPERIMENTAL_NOTE);
+      expect(badge.getAttribute('role')).toBe('note');
+      expect(badge.getAttribute('aria-label')).toBe(EXPERIMENTAL_NOTE);
+    });
     expect([...host.querySelectorAll('button')].every((b) => !b.disabled)).toBe(true);
   });
   it('labels the contour editor dialog', async () => {
