@@ -506,6 +506,15 @@ describe('result exporters', () => {
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/design/serialize', '/api/export/step', '/api/export/stl']);
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).not.toHaveProperty('identity');
   });
+  it('names the parameter config .mwg for LOOKUP, which the server refuses as .cfg', async () => {
+    const saveText = vi.fn();
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ text: 'mwg' }), { status: 200 }));
+    expect(await runExportFormat('mwg_config', {
+      jobStem: 'lk_1', preferences: preferencesStore.getSnapshot(), design: designForFamily('LOOKUP'), fetcher, saveText,
+    })).toEqual(['lk_1_config.mwg']);
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).filename).toBe('lk_1_config.mwg');
+    expect(saveText).toHaveBeenCalledWith('mwg', 'lk_1_config.mwg');
+  });
   it('stages both Fusion CSV responses before downloading either file', async () => {
     const saveBlob = vi.fn();
     const failedFetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {

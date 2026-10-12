@@ -259,14 +259,18 @@ public mesh-builder API.
 Analytic profile coefficients, guiding curves, nonzero throat extensions,
 slots and driver adapters are refused. Include extensions and adapters in the
 table itself. Optional `a0` controls the automatic source-cap angle, not the
-meridian. Scale, cross-section, morph, wall, enclosure and surface sampling
+meridian; it is always sent to the mesher, as 0 when absent, so the server, CLI
+and UI agree (the mesher's own default would be 15.5). Booleans and strings in
+the table, and ATH-only import fields, are refused. Scale, cross-section, morph, wall, enclosure and surface sampling
 controls retain their ordinary mesher behavior. Solve domains use the usual
 mesher symmetry checks; LOOKUP does not impose the native families' full-domain
 restriction.
 
 Native `.mwg` files store LOOKUP in the existing `WG.NativeDesign` JSON payload.
 The design serializer also exports a plain JSON copy when explicitly requested
-with a `.json` filename, and the open endpoint accepts that JSON. Existing
+with a `.json` filename, and the open endpoint, `wg solve` and `wg validate`
+accept that JSON as a design file. The UI exports the parameter config of a
+LOOKUP run as `.mwg`, never `.cfg`. Existing
 pristine native text and JSON are replayed byte-for-byte. ATH `.cfg` requests
 are refused because ATH has no LOOKUP profile; CAD Link transport, which writes
 `.cfg`, is refused with the same explanation. Geometry exports remain available.

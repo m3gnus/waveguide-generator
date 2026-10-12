@@ -607,7 +607,8 @@ export function mergeDesignForFamily(current: DesignDocument, family: DesignFami
   if (family === 'LOOKUP') {
     // LOOKUP starts from a conical whole meridian, not an analytic conversion.
     next.throat_ext_angle = 0; next.throat_ext_length = 0; next.slot_length = 0;
-    next.length_mode = null; next.coverage_mode = null;
+    // The hydrate defaults, so the payload does not depend on how the design was reached.
+    next.length_mode = 'profile'; next.coverage_mode = 'auto';
     delete next.text_import_version; delete next.ath_axial_sampling_rule;
     delete next.ath_nac_present; delete next.ath_nac;
     delete next.mesh.ath_roundover; delete next.mesh.ath_rear_shape;

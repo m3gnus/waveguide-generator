@@ -12,6 +12,7 @@ import { usePreferences, type Preferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
+import { designFileExtension } from '../stores/designName';
 import { parseFrequencyList, useSolveOptionsStore, type FrequencyMode } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { previewErrorMessage, previewMeshMetrics } from '../viewport/presentation';
@@ -81,8 +82,11 @@ export function engineStatusLabel(
   return isLoading ? `${effectiveEngine.toUpperCase()}…` : `${effectiveEngine.toUpperCase()} · OFFLINE`;
 }
 
-export function documentLabel(filename: string): string {
-  return filename.trim() || 'untitled design';
+export function documentLabel(filename: string, family?: string): string {
+  // The stored filename was derived when the name was set; the extension
+  // follows the family on screen now (LOOKUP saves as .mwg, never .cfg).
+  const named = family ? filename.replace(/\.(cfg|mwg)$/i, `.${designFileExtension(family)}`) : filename;
+  return named.trim() || 'untitled design';
 }
 
 export function StatusBar() {
@@ -115,7 +119,7 @@ export function StatusBar() {
     : solveSummary(design, { frequencyMode, frequencyListText, smoothing: preferences.smoothing });
   const document = mode === 'cad'
     ? cadReturn.selectedBundle?.documentName ?? cadReturn.selectedBundle?.name ?? 'no CAD return'
-    : documentLabel(filename);
+    : documentLabel(filename, design.formula);
   return <footer className="statusbar">
     <div className="status-item"><span className="engine-badge"><Icon name="chip"/>{engineLabel}</span></div>
     <div className="status-item status-drop-1">local engine · <b>{engines.filter((item) => item.available).length}</b> available</div>

@@ -1308,7 +1308,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         const family = event.target.value as DesignFamily;
         setConversionNotice(null);
         if (family === 'FREEFORM' && design.formula !== 'FREEFORM') setFreeformChoice(true);
-        else { setFreeformChoice(false); setFamily(family); setConversionNotice(family === 'LOOKUP' ? 'LOOKUP starts with a conical table defining the whole meridian. Edit or paste [z, r] samples in Profile. Analytic coefficients, throat extensions, slots, adapters and imported ATH geometry controls were removed.' : sectionResetNotice(family)); }
+        else { setFreeformChoice(false); setFamily(family); setConversionNotice(family === 'LOOKUP' ? 'LOOKUP starts with a conical table defining the whole meridian (12.7 mm throat to 140 mm mouth over 120 mm, scaled by the current Scale). Edit or paste [z, r] samples in Profile. Analytic coefficients, throat extensions, slots, adapters and imported ATH geometry controls were removed.' : sectionResetNotice(family)); }
       }}>
         <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option>FREEFORM</option><option value="LOOKUP">LOOKUP (EXPERIMENTAL)</option>
         {NATIVE_FAMILIES.map((family) => <option key={family}>{family}</option>)}

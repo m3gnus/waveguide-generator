@@ -62,35 +62,61 @@ export function parsePointPaste(text: string): ParsedPointPaste {
   };
 }
 
+const LOOKUP_ORDER_MESSAGE = 'lookupProfile z values must be strictly increasing';
+
+/** A pasted or tabled radius at or below zero: the mesher accepts it, the geometry is rarely meant. */
+export function lookupRadiusWarning(radii: readonly number[], lines?: readonly number[]): string | undefined {
+  const bad = radii.map((radius, index) => (radius <= 0 ? (lines?.[index] ?? index + 1) : 0)).filter(Boolean);
+  if (!bad.length) return undefined;
+  const where = lines ? 'line' : 'point';
+  return `${bad.length === 1 ? `Radius at ${where} ${bad[0]} is` : `Radii at ${where}s ${bad.join(', ')} are`} zero or negative; the mesher accepts it, but the horn will not be a physical surface.`;
+}
+
 /** LOOKUP preserves authored order and mm; it has no spline endpoints or angle column. */
 export function parseLookupPaste(text: string): [number, number][] {
-  const rows = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
-  if (/^z(?:_mm)?[\s,;]+r(?:_mm)?$/i.test(rows[0] ?? '')) rows.shift();
+  return parseLookupPasteRows(text).pairs.map(({ z, r }): [number, number] => [z, r]);
+}
+
+/** Parsed rows keep the line they came from, so a warning can name it. */
+export function parseLookupPasteRows(text: string): { pairs: { z: number; r: number; line: number }[] } {
+  const rows = text.split(/\r?\n/)
+    .map((raw, index) => ({ text: raw.trim(), line: index + 1 }))
+    .filter((row) => row.text && !row.text.startsWith('#'));
+  const delimiter = (line: string) => (line.includes(';') ? ';' : line.includes(',') ? ',' : /\s+/);
+  // A header is a first row with no numeric cell at all: "z,r", "z (mm), r (mm)".
+  if (rows.length && rows[0].text.split(delimiter(rows[0].text)).every((cell) => !Number.isFinite(Number(cell.trim())) || !cell.trim())) rows.shift();
   if (rows.length < 2) throw new Error('lookupProfile must be an array of at least two [z, r] pairs');
-  const pairs = rows.map((line, index): [number, number] => {
-    const values = numericCells(line, line.includes(';') ? ';' : line.includes(',') ? ',' : /\s+/, index, true);
-    if (values.length !== 2) throw new Error(`Line ${index + 1} must contain exactly z and r in mm.`);
-    return [values[0], values[1]];
+  const pairs = rows.map((row) => {
+    const values = numericCells(row.text, delimiter(row.text), row.line - 1, true);
+    if (values.length !== 2) throw new Error(`Line ${row.line} must contain exactly z and r in mm.`);
+    return { z: values[0], r: values[1], line: row.line };
   });
-  if (pairs.some(([z], index) => index > 0 && z <= pairs[index - 1][0])) throw new Error('lookupProfile z values must be strictly increasing');
-  return pairs;
+  const unordered = pairs.findIndex(({ z }, index) => index > 0 && z <= pairs[index - 1].z);
+  if (unordered > 0) throw new Error(`${LOOKUP_ORDER_MESSAGE} (line ${pairs[unordered].line})`);
+  return { pairs };
 }
 
 export function EditableLookupTable({ field, points }: { field: ParameterDefinition; points: [number, number][] }) {
   const updateValue = useDesignStore((state) => state.updateValue);
+  const beginDrag = useDesignStore((state) => state.beginDrag);
+  const endDrag = useDesignStore((state) => state.endDrag);
   const [text, setText] = useState('');
   const parsed = useMemo(() => {
-    try { return text.trim() ? parseLookupPaste(text) : null; }
+    try { return text.trim() ? parseLookupPasteRows(text).pairs : null; }
     catch (reason) { return reason instanceof Error ? reason : new Error(String(reason)); }
   }, [text]);
+  const positionError = (index: number, z: number) =>
+    (index > 0 && z <= points[index - 1][0]) || (index < points.length - 1 && z >= points[index + 1][0])
+      ? LOOKUP_ORDER_MESSAGE : undefined;
   const write = (index: number, axis: 0 | 1, value: number) => {
+    // A label scrub bypasses `validate`, so the order rule is enforced here too.
+    if (axis === 0 && positionError(index, value)) return;
     const next = structuredClone(points);
     next[index][axis] = value;
     updateValue('lookup_profile', next);
   };
-  const positionError = (index: number, z: number) =>
-    (index > 0 && z <= points[index - 1][0]) || (index < points.length - 1 && z >= points[index + 1][0])
-      ? 'lookupProfile z values must be strictly increasing' : undefined;
+  const tableWarning = lookupRadiusWarning(points.map(([, r]) => r));
+  const pasteWarning = parsed && !(parsed instanceof Error) ? lookupRadiusWarning(parsed.map(({ r }) => r), parsed.map(({ line }) => line)) : undefined;
   const add = () => {
     let gap = 0;
     for (let index = 1; index < points.length - 1; index += 1) {
@@ -103,18 +129,23 @@ export function EditableLookupTable({ field, points }: { field: ParameterDefinit
   return <div className="editable-parameter-table" aria-label={field.label}>
     <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{points.length} points</span></div>
     <table><thead><tr><th>z mm</th><th>r mm</th><th /></tr></thead><tbody>
-      {points.map(([z, r], index) => <tr key={`${index}-${z}`}>
-        <td><NumberField label={`Lookup point ${index + 1} z`} value={z} step={.1} precision={4} unit="mm" validate={(value) => positionError(index, value)} onCommit={(value) => write(index, 0, value)} /></td>
-        <td><NumberField label={`Lookup point ${index + 1} radius`} value={r} step={.1} precision={4} unit="mm" onCommit={(value) => write(index, 1, value)} /></td>
+      {points.map(([z, r], index) => <tr key={index}>
+        <td><NumberField label={`Lookup point ${index + 1} z`} value={z} step={.1} precision={4} unit="mm"
+          min={index > 0 ? points[index - 1][0] : -Infinity} max={index < points.length - 1 ? points[index + 1][0] : Infinity}
+          formatRangeError={() => LOOKUP_ORDER_MESSAGE}
+          validate={(value) => positionError(index, value)} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => write(index, 0, value)} /></td>
+        <td><NumberField label={`Lookup point ${index + 1} radius`} value={r} step={.1} precision={4} unit="mm" onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => write(index, 1, value)} /></td>
         <td><button type="button" aria-label={`Remove lookup point ${index + 1}`} disabled={points.length <= 2} onClick={() => updateValue('lookup_profile', points.filter((_point, item) => item !== index))}>−</button></td>
       </tr>)}
     </tbody></table>
+    {tableWarning && <div className="field-warning" role="status">{tableWarning}</div>}
     <button type="button" onClick={add} disabled={points.length < 2}>Add point</button>
     <div className="point-paste">
       <textarea aria-label="Paste lookup points" rows={4} value={text} onChange={(event) => setText(event.target.value)} placeholder={'z_mm,r_mm\n0,12.7\n120,140'} />
       {parsed instanceof Error && <div className="field-error" role="alert">{parsed.message}</div>}
+      {pasteWarning && <div className="field-warning" role="status">{pasteWarning}</div>}
       <button type="button" disabled={!parsed || parsed instanceof Error} onClick={() => {
-        if (parsed && !(parsed instanceof Error)) updateValue('lookup_profile', parsed);
+        if (parsed && !(parsed instanceof Error)) updateValue('lookup_profile', parsed.map(({ z, r }): [number, number] => [z, r]));
       }}>Import points</button>
     </div>
   </div>;

@@ -47,7 +47,7 @@ export function resolveChartTheme(chartTheme: string): string {
 }
 
 export const EXPORT_FORMATS = [
-  { id: 'mwg_config', label: 'Parameter Config (.cfg)' },
+  { id: 'mwg_config', label: 'Parameter Config (.cfg; .mwg for LOOKUP)' },
   { id: 'step', label: 'Waveguide STEP (solid)' },
   { id: 'png', label: 'Chart Images (PNG)' },
   { id: 'on_axis_frd', label: 'On-axis Response (FRD)' },

@@ -190,10 +190,10 @@ async def validate_path(
             payload["dialect"] = "solve-request-json"
             built = load_request_document(path, overlay=overlay, engine=engine)
         else:
-            if path.suffix.lower() not in {".mwg", ".cfg"}:
+            if path.suffix.lower() not in {".mwg", ".cfg", ".json"}:
                 _refuse(
                     payload,
-                    "design file must use the .mwg or .cfg extension",
+                    "design file must use the .mwg, .cfg or .json extension",
                     code="unsupported_input",
                     stage="input",
                 )

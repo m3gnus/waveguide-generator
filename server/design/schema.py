@@ -875,6 +875,11 @@ class LookupConfig(DesignCommon):
     @classmethod
     def _refuse_coefficients(cls, value: Any) -> Any:
         if isinstance(value, Mapping):
+            if value.get("guiding_curve") is not None or value.get("guidingCurve") is not None:
+                raise ValueError(
+                    "formula LOOKUP does not support guiding_curve: the lookupProfile defines "
+                    "the whole meridian; build the guiding shape into the lookupProfile instead"
+                )
             if any(value.get(key) is not None for key in (
                 "L", "L_mm", "R", "R_mm", "n", "s", "s1", "s2", "rotation", "rot",
                 "rot_deg", "tmax", "m", "r", "b",
@@ -891,6 +896,13 @@ class LookupConfig(DesignCommon):
     def _lookup_table(cls, value: Any) -> Any:
         from hornlab_mesher.profile_formulas import lookup_profile_array
 
+        # numpy would coerce True and "1" to numbers, so refuse them first.
+        if isinstance(value, (list, tuple)):
+            for row in value:
+                if isinstance(row, (list, tuple)) and any(
+                    isinstance(cell, bool) or not isinstance(cell, (int, float)) for cell in row
+                ):
+                    raise ValueError("lookupProfile cells must be numbers, not booleans or strings")
         # Use the pinned authority for its exact shape/finite/monotonic rules.
         try:
             return lookup_profile_array({"lookupProfile": value}).tolist()
@@ -906,7 +918,12 @@ class LookupConfig(DesignCommon):
                     f"formula LOOKUP does not support {field}: the lookupProfile defines "
                     "the whole meridian; build the extension or adapter into the lookupProfile instead"
                 )
-        if self.text_import_version is not None:
+        if (
+            self.text_import_version is not None
+            or self.ath_nac_present is not None
+            or self.ath_nac is not None
+            or self.ath_axial_sampling_rule is not None
+        ):
             raise ValueError("LOOKUP does not accept imported ATH geometry")
         return self
 

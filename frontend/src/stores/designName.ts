@@ -64,8 +64,13 @@ export function designNameSlug(name: unknown, fallback = UNTITLED_SLUG): string 
  * pasted, not a design called "horn.cfg".
  */
 export function designFilename(name: string, family?: string): string {
-  const stem = designNameSlug(name).replace(/\.(cfg|txt|mwg)$/i, '');
-  return `${stem || UNTITLED_SLUG}.${family === 'LOOKUP' ? 'mwg' : 'cfg'}`;
+  const stem = designNameSlug(name).replace(/\.(cfg|txt|mwg|json)$/i, '');
+  return `${stem || UNTITLED_SLUG}.${designFileExtension(family)}`;
+}
+
+/** LOOKUP has no ATH form, so its design files are native `.mwg`. */
+export function designFileExtension(family?: string): 'cfg' | 'mwg' {
+  return family === 'LOOKUP' ? 'mwg' : 'cfg';
 }
 
 /** The design name a picked file carries, in the file's own spelling. */

@@ -24,6 +24,7 @@ import { EMPTY_RUN_EXPORT_STATE, useRunExportStore, type RunExportOutcome } from
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { canLoadJobDesign, hydrateJobDesign, jobDesignAvailability, jobRerunState } from './jobDesign';
 import { exportStemForJob, exportSubdirectoryForJob } from './exportNaming';
+import { designFileExtension } from '../stores/designName';
 import './RunExportControl.css';
 
 export interface RunExportControlProps {
@@ -74,9 +75,14 @@ export function canExportRun(job: JobItem): boolean {
   return job.status === 'complete' && (job.has_results || canLoadJobDesign(job));
 }
 
-function formatLabel(format: ExportFormat): string {
+/** The parameter config is a native .mwg for LOOKUP, which has no ATH form. */
+function trailingFor(item: CatalogItem, family?: string): string {
+  return item.format === 'mwg_config' ? `.${designFileExtension(family)}` : item.trailing;
+}
+
+function formatLabel(format: ExportFormat, family?: string): string {
   const item = CATALOG_BY_FORMAT.get(format);
-  return item ? `${item.label} (${item.trailing})` : format;
+  return item ? `${item.label} (${trailingFor(item, family)})` : format;
 }
 
 function needsResults(formats: readonly ExportFormat[]): boolean {
@@ -141,7 +147,8 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const execute = useRunExportStore((state) => state.execute);
   const designState = jobRerunState(job);
   const designExportable = canLoadJobDesign(job);
-  const cadLimitation = nativeCadLimitation(hydrateJobDesign(job)?.formula ?? '');
+  const family = hydrateJobDesign(job)?.formula ?? '';
+  const cadLimitation = nativeCadLimitation(family);
   const designAvailability = jobDesignAvailability(job);
   const designUnavailableReason = designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.';
 
@@ -168,7 +175,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   // must produce the file again. See `ExistingFilePolicy`.
   const exportOne = (format: ExportFormat) => execute(job.id, [format], async (): Promise<RunExportOutcome> => {
     const destination = await askForExportDestination({
-      title: `Export ${formatLabel(format)}`,
+      title: `Export ${formatLabel(format, family)}`,
       detail: `From run ${jobName(job)}.`,
     });
     if (!destination) return { notice: EXPORT_CANCELLED_MESSAGE };
@@ -179,7 +186,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     }, [format], 'confirm'));
     if (!result) return { notice: EXPORT_CANCELLED_MESSAGE };
     await recordFiles(result.files);
-    const notice = workspaceNotice(formatLabel(format), result);
+    const notice = workspaceNotice(formatLabel(format, family), result);
     return result.failures.length ? {
       notice,
       error: `${notice} · ${result.failures.map(({ reason }) => reason).join('; ')}`,
@@ -204,7 +211,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
       await recordFiles(result.files);
       const fileText = workspaceNotice('Export', result);
       if (!result.failures.length) return { notice: fileText };
-      const failed = result.failures.map(({ format, reason }) => `${formatLabel(format)}: ${reason}`).join('; ');
+      const failed = result.failures.map(({ format, reason }) => `${formatLabel(format, family)}: ${reason}`).join('; ');
       return {
         notice: fileText,
         error: `${fileText} · Failed ${result.failures.length} format${result.failures.length === 1 ? '' : 's'}: ${failed}`,
@@ -249,7 +256,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
       return {
         id: item.id,
         label: item.label,
-        trailing: item.trailing,
+        trailing: trailingFor(item, family),
         group: item.group,
         disabled: operation.busy || Boolean(disabledReason),
         disabledReason,

@@ -284,9 +284,13 @@ export async function convertDesignToFreeform(
   }
 
   const fallback = preserveSharedForFreeform(designForFamily('FREEFORM'), design);
-  const length = design.L ?? design.depth ?? 120;
-  const mouth = design.R ?? 140;
-  const throat = design.r0 ?? 12.7;
+  // LOOKUP has no L, R or r0: the table's ends are the horn's ends.
+  const table = design.formula === 'LOOKUP' ? design.lookup_profile : undefined;
+  const first = table?.[0];
+  const last = table?.at(-1);
+  const length = first && last ? last[0] - first[0] : design.L ?? design.depth ?? 120;
+  const mouth = last ? last[1] : design.R ?? 140;
+  const throat = first ? first[1] : design.r0 ?? 12.7;
   fallback.length = length;
   fallback.profile_h!.points = [{ t: 0, r: throat }, { t: 1, r: mouth }];
   fallback.profile_v!.points = structuredClone(fallback.profile_h!.points);

@@ -13,6 +13,7 @@ import { archiveFolderForJob, exportStemForJob, exportSubdirectoryForJob } from 
 import { buildDesignRecord, buildRunRecord } from '../jobs/runArchive';
 import { resultExportSnapshot } from './exportContext';
 import { serializeDesign, type DesignDocument } from '../stores/design';
+import { designFileExtension } from '../stores/designName';
 import { designWireWithSolveSettings } from '../stores/designWire';
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import { resolveChartTheme, type ExportFormat, type Preferences } from '../prefs/preferences';
@@ -668,6 +669,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
   const now = context.now ?? new Date();
   if (format === 'mwg_config') {
     if (!context.design) throw new Error('This export requires a saved design snapshot.');
+    const configName = `${baseName}_config.${designFileExtension(context.design.formula)}`;
     const response = await (context.fetcher ?? fetch)('/api/design/serialize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -680,12 +682,12 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
           // whatever design happens to be on screen now.
           context.designName ?? context.jobStem,
         ),
-        filename: `${baseName}_config.cfg`,
+        filename: configName,
       }),
     });
     if (!response.ok) throw await responseError(response);
     const body = await response.json() as { text: string; suggestedFilename?: string };
-    const filename = body.suggestedFilename ?? `${baseName}_config.cfg`;
+    const filename = body.suggestedFilename ?? configName;
     saveText(body.text, filename);
     return [filename];
   }

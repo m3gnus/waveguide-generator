@@ -229,7 +229,9 @@ def _profile(
         return _clean({
             "formula": "LOOKUP",
             "lookupProfile": [[z * scale, r * scale] for z, r in design.lookup_profile],
-            "a0": _expr(design.a0),
+            # The UI and catalog default LOOKUP a0 to 0; the mesher's own default
+            # is 15.5, so always say it.
+            "a0": _expr(design.a0) if design.a0 is not None else 0,
         })
 
     if isinstance(design, FreeformConfig):

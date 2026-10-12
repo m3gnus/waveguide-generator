@@ -24,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
         "file",
         type=Path,
         nargs="?",
-        help="design .mwg or .cfg file",
+        help="design .mwg, .cfg or LOOKUP .json file",
     )
     validate_parser.add_argument(
         "--request",
@@ -70,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
         "design",
         type=Path,
         nargs="?",
-        help="design .mwg or .cfg file",
+        help="design .mwg, .cfg or LOOKUP .json file",
     )
     solve_parser.add_argument(
         "--request",

@@ -80,4 +80,5 @@ describe('the one design name', () => {
 it('names native LOOKUP copies and strips a JSON import extension', () => {
   expect(designFilename('lookup', 'LOOKUP')).toBe('lookup.mwg');
   expect(designNameFromFilename('lookup.json')).toBe('lookup');
+  expect(designFilename('lookup.json', 'LOOKUP')).toBe('lookup.mwg');
 });

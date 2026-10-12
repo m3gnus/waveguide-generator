@@ -63,9 +63,47 @@ def test_extensions_refused(key):
     assert design(**{key: 0})
 
 
-def test_guiding_curve_refused():
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+def test_guiding_curve_refused_with_a_lookup_message():
+    with pytest.raises(ValidationError, match="formula LOOKUP does not support guiding_curve"):
         design(guiding_curve={"curve_type": 1, "width": 100})
+
+
+@pytest.mark.parametrize("changes", [
+    {"ath_nac": 3}, {"ath_nac_present": False}, {"ath_axial_sampling_rule": "ath-v2025-06"},
+])
+def test_ath_only_fields_refused(changes):
+    with pytest.raises(ValidationError, match="LOOKUP does not accept imported ATH geometry"):
+        design(**changes)
+
+
+@pytest.mark.parametrize("table", [
+    [[True, 1], [2, 3]], [[0, 1], ["2", 3]], [[0, 1], [2, None]],
+])
+def test_non_number_cells_refused_before_numpy_coercion(table):
+    with pytest.raises(ValidationError, match="cells must be numbers"):
+        design(lookup_profile=table)
+
+
+def test_a0_is_always_emitted_so_server_cli_and_ui_agree():
+    assert design_to_mesher_config(design())["profile"]["a0"] == 0
+    assert design_to_mesher_config(design(a0=0))["profile"]["a0"] == 0
+    assert design_to_mesher_config(design(a0=12))["profile"]["a0"] == 12
+
+
+def test_cli_reads_a_lookup_json_design_and_refuses_other_extensions(tmp_path):
+    import argparse
+
+    from server.cli.solve import _read_request
+
+    original = design()
+    path = tmp_path / "lookup.json"
+    path.write_text(original.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    args = argparse.Namespace(request=None, design=path, overlay=None, engine=None)
+    assert _read_request(args).design.formula == "LOOKUP"
+    other = tmp_path / "lookup.txt"
+    other.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(ValueError, match=r"\.mwg, \.cfg or \.json"):
+        _read_request(argparse.Namespace(request=None, design=other, overlay=None, engine=None))
 
 
 def test_translation_scales_only_dimensions_and_keeps_source_angle():

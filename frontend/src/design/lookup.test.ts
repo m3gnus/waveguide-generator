@@ -4,7 +4,7 @@ import { designForFamily, mergeDesignForFamily, serializeDesign } from '../store
 import { restoreAutosave, writeAutosave } from '../stores/autosave';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { designFilename } from '../stores/designName';
-import { parseLookupPaste } from './FreeformEditors';
+import { lookupRadiusWarning, parseLookupPaste } from './FreeformEditors';
 import { PARAMETER_REGISTRY, fieldIsVisible, fieldMatchesQuery } from './parameterRegistry';
 import { buildParameterCatalog } from './parameterCatalogWire';
 
@@ -39,7 +39,29 @@ it('registers the table for profile search and publishes its catalog contract', 
   });
 });
 
+it('starts from the hydrate defaults, whichever way the design was reached', () => {
+  const switched = serializeDesign(mergeDesignForFamily(designForFamily('OSSE'), 'LOOKUP'));
+  const hydrated = serializeDesign(hydrateDesignDocument(serializeDesign(designForFamily('LOOKUP'))));
+  expect(switched.length_mode).toBe('profile');
+  expect(switched.coverage_mode).toBe('auto');
+  expect(switched).toEqual(hydrated);
+});
+
 describe('lookup CSV paste', () => {
+  it('accepts any all-text first row as a header', () => {
+    expect(parseLookupPaste('z (mm), r (mm)\n0,12.7\n120,140')).toEqual([[0, 12.7], [120, 140]]);
+    expect(parseLookupPaste('Axial;Radius\n0;12.7\n120;140')).toEqual([[0, 12.7], [120, 140]]);
+  });
+  it('reports the line numbers of the pasted text, not of the filtered rows', () => {
+    expect(() => parseLookupPaste('# note\n\nz,r\n0,12.7\n10,x\n120,140')).toThrow('Line 5 contains a non-numeric value.');
+    expect(() => parseLookupPaste('# note\n0,12.7\n\n5,1,2')).toThrow('Line 4 must contain exactly z and r in mm.');
+    expect(() => parseLookupPaste('0,1\n\n0,2')).toThrow('strictly increasing (line 3)');
+  });
+  it('warns, by original line, about radii at or below zero', () => {
+    expect(lookupRadiusWarning([12.7, 140])).toBeUndefined();
+    expect(lookupRadiusWarning([0, 5, -1])).toContain('points 1, 3 are zero or negative');
+    expect(lookupRadiusWarning([5, 0], [4, 7])).toContain('line 7 is zero or negative');
+  });
   it.each(['0,12.7\n120,140', 'z_mm,r_mm\n0,12.7\n120,140', '# mm\n0 12.7\n120 140', '0;12.7\n120;140'])('reads pairs in millimetres', (text) => {
     expect(parseLookupPaste(text)).toEqual([[0, 12.7], [120, 140]]);
   });

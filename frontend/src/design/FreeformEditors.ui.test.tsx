@@ -1,7 +1,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetDesignStore, useDesignStore, type CrossSectionStation, type FreeformPoint } from '../stores/design';
+import { designForFamily, resetDesignStore, useDesignStore, type CrossSectionStation, type FreeformPoint } from '../stores/design';
 import type { ParameterDefinition } from './parameterRegistry';
 import { EditableLookupTable, EditablePointTable, EditableStationTable } from './FreeformEditors';
 
@@ -87,6 +87,54 @@ describe('FREEFORM numeric tables', () => {
     expect(useDesignStore.getState().design.lookup_profile).toEqual([[0, 18], [40, 25], [100, 20]]);
     act(() => useDesignStore.getState().undo());
     expect(useDesignStore.getState().design.lookup_profile).toEqual([[0, 15], [120, 140]]);
+  });
+
+  it('keeps the z input mounted across its own commit and warns about non-positive radii', () => {
+    useDesignStore.getState().loadDesign({ ...designForFamily('LOOKUP'), lookup_profile: [[0, 12.7], [50, 20], [120, 140]] });
+    const field: ParameterDefinition = { id: 'lookup.profile', legacyKey: 'lookupProfile', section: 'Profile', label: 'Lookup profile points', kind: 'table' };
+    const render = () => act(() => root.render(<EditableLookupTable field={field} points={useDesignStore.getState().design.lookup_profile!}/>));
+    render();
+    const before = inputWithLabel(host, 'Lookup point 2 z');
+    act(() => before.focus());
+    act(() => enterDraft(before, '60'));
+    act(() => before.blur());
+    render();
+    expect(useDesignStore.getState().design.lookup_profile![1][0]).toBe(60);
+    expect(inputWithLabel(host, 'Lookup point 2 z')).toBe(before);
+    expect(host.querySelector('.field-warning')).toBeNull();
+    const radius = inputWithLabel(host, 'Lookup point 2 radius');
+    act(() => enterDraft(radius, '0'));
+    act(() => radius.blur());
+    render();
+    expect(host.querySelector('.field-warning')?.textContent).toContain('Radius at point 2 is zero or negative');
+  });
+
+  it('keeps a z scrub inside its neighbours and makes it one undo step', () => {
+    useDesignStore.getState().loadDesign({ ...designForFamily('LOOKUP'), lookup_profile: [[0, 12.7], [50, 20], [120, 140]] });
+    const field: ParameterDefinition = { id: 'lookup.profile', legacyKey: 'lookupProfile', section: 'Profile', label: 'Lookup profile points', kind: 'table' };
+    const render = () => act(() => root.render(<EditableLookupTable field={field} points={useDesignStore.getState().design.lookup_profile!}/>));
+    render();
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => { frames.push(callback); return frames.length; });
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
+    const label = [...host.querySelectorAll('label')].find((item) => item.textContent === 'Lookup point 2 z')!;
+    Object.defineProperty(label, 'setPointerCapture', { value: vi.fn() });
+    const move = (clientX: number) => {
+      act(() => label.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX })));
+      act(() => frames.splice(0).forEach((frame) => frame(0)));
+      render();
+    };
+    act(() => label.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientX: 0 })));
+    move(100);
+    expect(useDesignStore.getState().design.lookup_profile![1][0]).toBe(60);
+    // Far past the next row: clamped onto it, and a duplicate z is refused.
+    move(5000);
+    expect(useDesignStore.getState().design.lookup_profile![1][0]).toBe(60);
+    move(150);
+    expect(useDesignStore.getState().design.lookup_profile![1][0]).toBe(65);
+    act(() => label.dispatchEvent(new PointerEvent('lostpointercapture', { bubbles: true, pointerId: 1 })));
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design.lookup_profile).toEqual([[0, 12.7], [50, 20], [120, 140]]);
   });
 
   it('explains and reverts invalid or blank point values without updating the design', () => {

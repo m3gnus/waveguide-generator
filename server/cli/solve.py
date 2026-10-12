@@ -226,8 +226,8 @@ def _read_request(args: argparse.Namespace):
         ).request
     path = args.design
     assert path is not None
-    if path.suffix.lower() not in {".mwg", ".cfg"}:
-        raise ValueError("design file must use the .mwg or .cfg extension")
+    if path.suffix.lower() not in {".mwg", ".cfg", ".json"}:
+        raise ValueError("design file must use the .mwg, .cfg or .json extension")
     try:
         source = path.read_text(encoding="utf-8")
     except OSError as exc:

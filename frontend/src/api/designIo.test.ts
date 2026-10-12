@@ -244,6 +244,15 @@ describe('FREEFORM conversion of a rolled-back profile', () => {
   });
 });
 
+it('converts a LOOKUP design with the table ends when the profile export is unavailable', async () => {
+  const source = { ...designForFamily('LOOKUP'), lookup_profile: [[10, 8], [60, 30], [210, 95]] as [number, number][] };
+  const fetcher = async () => new Response('', { status: 500 });
+  const { design } = await convertDesignToFreeform(source, fetcher as unknown as typeof fetch);
+  expect(design.length).toBe(200);
+  expect(design.profile_h!.points[0].r).toBe(8);
+  expect(design.profile_h!.points.at(-1)!.r).toBe(95);
+});
+
 describe('geometry export requests', () => {
   /**
    * A `Response` whose `blob()` hands back *this environment's* `Blob`.
