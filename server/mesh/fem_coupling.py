@@ -646,7 +646,7 @@ def build_coupled_mesh(
             "regions": built_regions,
         }
     except FemRegionMeshError as exc:
-        raise FemRegionMeshError(f"{labels}: {exc}") from exc
+        raise FemRegionMeshError(f"{labels}: {exc}", symmetry_plane=exc.symmetry_plane) from exc
     except Exception as exc:
         raise FemRegionMeshError(f"{labels}: coupled meshing failed: {exc}") from exc
     finally:

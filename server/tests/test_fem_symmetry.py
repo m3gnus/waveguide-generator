@@ -582,3 +582,153 @@ def test_author_y_cut_with_auto_x_mirror_keeps_supported_quarter(tmp_path):
     record = _ingest(bundle, tmp_path)
     assert record["symmetry"]["domain_planes"] == ["x0", "y0"]
     assert record["domain_decision"]["solver_domain"]["planes"] == ["x0", "y0"]
+
+
+def test_union_snap_cap_preserves_genuine_small_vertex_in_metre_mesh():
+    from dataclasses import replace
+    from server.tests.test_fem_engine_route import region_input
+    item = region_input()
+    # Before the cap this union tolerance exceeds .0005 mm and flips the
+    # determinant from -0.03 to +0.02, although neither element collapses.
+    points = np.array([[.002, 10., 10.], [.002, 10., 20.], [.012, 20., 10.], [.0005, 8.2, 10.4]])
+    item = replace(item, domain=replace(item.domain, points_mm=points))
+    far = region_input('metre', 'far')
+    far = replace(far, domain=replace(far.domain, points_mm=far.domain.points_mm * 100.))
+    request = build_coupled_request(None, [item, far], layout=compiled().layout, frame=FRAME,
+                                    frequencies_hz=[100.], symmetry='yz')
+    packed = request.wire['compiled_system']['meshes'][0]['mesh_data']['points']
+    compiled_points = np.frombuffer(base64.b64decode(packed['data']), dtype=packed['dtype']).reshape(packed['shape']) * 1000
+    assert compiled_points[3, 0] == pytest.approx(.0005)
+    assert np.linalg.det(compiled_points[1:] - compiled_points[:1]) == pytest.approx(-.03)
+
+
+@pytest.mark.parametrize('element', ['triangle', 'tetrahedron'])
+def test_snap_refuses_orientation_flip_and_names_mesh_element(element):
+    from dataclasses import replace
+    from server.tests.test_fem_engine_route import region_input
+    item = region_input('flip')
+    points = np.array([[.0002, 1., 1.], [.0012, 2., 1.], [.0002, 1., 2.], [.00005, .83, 1.04]])
+    if element == 'triangle':
+        points[3, 2] = 1.
+    item = replace(item, domain=replace(item.domain, points_mm=points))
+    far = region_input('metre', 'far')
+    far = replace(far, domain=replace(far.domain, points_mm=far.domain.points_mm * 100.))
+    with pytest.raises(ValueError, match=f"Symmetry snapping flipped a {element}: mesh 'flip'.*element"):
+        build_coupled_request(None, [item, far], layout=compiled().layout, frame=FRAME,
+                              frequencies_hz=[100.], symmetry='yz')
+
+
+def test_auto_full_fallback_keeps_rotated_translated_standalone_chamber_frame(tmp_path):
+    from server.cadlink.intake import ingest
+    from server.cadlink.store import CadLinkStore
+    from server.tests.test_cadlink_wgreturn import _manifest
+    from server.solver.imported import imported_anchor_frame
+    bundle, manifest, region = symmetry_bundle(tmp_path / 'returns', sealed=True)
+    region['surface_groups'][0]['faces'] = [_face(
+        600, [20, 0, 10], [1, 0, 0], [20, -15, 0], [20, 15, 20])]
+    transform = np.array([[0., 0., 1., 100.], [0., 1., 0., 200.],
+                          [-1., 0., 0., 300.], [0., 0., 0., 1.]])
+    rotation, translation = transform[:3, :3], transform[:3, 3]
+
+    def place(path):
+        import gmsh
+        from server.mesh.imported import apply_rigid_normalisation
+        gmsh.model.add('placed-return')
+        roots = gmsh.model.occ.importShapes(str(path))
+        apply_rigid_normalisation(gmsh, roots, transform)
+        gmsh.write(str(path))
+        gmsh.model.remove()
+    for member in ('assembly.step', region['file']):
+        _run_in_gmsh_session(place, bundle / member)
+        data = (bundle / member).read_bytes()
+        manifest['files'][member].update(sha256='sha256:' + hashlib.sha256(data).hexdigest(),
+                                         size_bytes=len(data))
+    for group in region['surface_groups']:
+        for face in group['faces']:
+            face['centroid_mm'] = (rotation @ face['centroid_mm'] + translation).tolist()
+            face['normal'] = (rotation @ face['normal']).tolist()
+            corners = np.array([rotation @ [x, y, z] + translation
+                                for x in (face['bbox_mm'][0][0], face['bbox_mm'][1][0])
+                                for y in (face['bbox_mm'][0][1], face['bbox_mm'][1][1])
+                                for z in (face['bbox_mm'][0][2], face['bbox_mm'][1][2])])
+            face['bbox_mm'] = [corners.min(axis=0).tolist(), corners.max(axis=0).tolist()]
+    bounds = np.array([rotation @ [x, y, z] + translation
+                       for x in (-22, 22) for y in (-17, 17) for z in (-2, 20)])
+    manifest['assembly']['bbox_mm'] = [bounds.min(axis=0).tolist(), bounds.max(axis=0).tolist()]
+    instance = _manifest(b'')['instances'][0]
+    instance['assembly_from_link'] = transform.tolist()
+    manifest['instances'] = [instance]
+    manifest['coordinate_system']['solver_anchor_instance_id'] = instance['instance_id']
+    (bundle / 'wgreturn.json').write_text(json.dumps(manifest))
+    store = CadLinkStore(tmp_path / 'cadlink.db')
+    try:
+        record = ingest.ingest_bundle(bundle, SIZES, [], store, tmp_path / 'data',
+                                     expected_design_id=instance['design_id'], defer_viewport=True)
+    finally:
+        store.close()
+    assert record['symmetry']['domain_planes'] == []
+    assert len([f for f in record['findings'] if f['kind'] == 'fem-symmetry-fallback']) == 2
+    domain = read_fem_region_domain(read_verified_fem_region_mesh(record, region['region_id']), region['region_id'])
+    np.testing.assert_allclose(domain.points_mm.min(axis=0), [-20., -15., 0.], atol=1e-7)
+    np.testing.assert_allclose(domain.points_mm.max(axis=0), [20., 15., 20.], atol=1e-7)
+    np.testing.assert_allclose(record['fem_regions'][0]['normalisation_matrix'], record['normalisation']['matrix'])
+    frame = imported_anchor_frame(record)
+    np.testing.assert_allclose(frame['axis'], [0., 0., 1.], atol=1e-12)
+    np.testing.assert_allclose(frame['origin'], [0., 0., 0.], atol=1e-12)
+
+
+def test_auto_fallback_uses_typed_plane_and_resets_deadline(tmp_path, monkeypatch):
+    from server.cadlink.intake import ingest
+    bundle, _, _ = symmetry_bundle(tmp_path / 'returns', sealed=True)
+    original = ingest._mesh_coupled_regions
+    deadlines = []
+
+    def mesh(*args, **kwargs):
+        deadlines.append(kwargs['deadline'])
+        if len(deadlines) == 1:
+            # Neither an English mirror message nor the y0-only marker appears.
+            raise ingest.IngestRefusal('stage 7 meshing', 'Localized geometry verdict', symmetry_plane='x0')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ingest, '_mesh_coupled_regions', mesh)
+    record = _ingest(bundle, tmp_path)
+    assert record['symmetry']['domain_planes'] == []
+    assert len(deadlines) == 3
+    assert deadlines[0] < deadlines[1] < deadlines[2]
+    notes = [f for f in record['findings'] if f['kind'] == 'fem-symmetry-fallback']
+    assert notes[0]['plane'] == 'x0' and 'Localized geometry verdict' in notes[0]['reason']
+
+
+def test_null_symmetry_is_safe_during_fem_ingest(tmp_path, monkeypatch):
+    from server.cadlink.intake import ingest
+    from server.tests.test_fem_ingest import _bundle
+    original = ingest.build_imported_mesh_isolated
+
+    def mesh(*args, **kwargs):
+        result = original(*args, **kwargs)
+        result['symmetry'] = None
+        return result
+    monkeypatch.setattr(ingest, 'build_imported_mesh_isolated', mesh)
+    record = _ingest(_bundle(tmp_path / 'returns'), tmp_path)
+    assert record['fem_regions']
+
+
+def test_y_only_refusal_names_supported_export_remedy():
+    from server.cadlink.intake import ingest
+    from server.tests.test_fem_regions import _region
+    with pytest.raises(ingest.IngestRefusal) as raised:
+        ingest._refuse_fem_domain({'scope': {'fem_regions': [_region()]}}, {}, ['y0'])
+    message = str(raised.value)
+    assert 'Export without the y0 cut' in message and 'keep the x0 cut' in message
+    assert 'Force full domain' not in message
+    assert raised.value.symmetry_plane == 'y0'
+
+
+def test_auto_does_not_fallback_for_untyped_mirror_message(tmp_path, monkeypatch):
+    from server.cadlink.intake import ingest
+    bundle, _, _ = symmetry_bundle(tmp_path / 'returns', sealed=True)
+
+    def fail(*args, **kwargs):
+        raise ingest.IngestRefusal('stage 7 meshing', "FEM region 'rear-chamber' does not mirror on x0: parser failure")
+    monkeypatch.setattr(ingest, '_mesh_coupled_regions', fail)
+    with pytest.raises(ingest.IngestRefusal, match='parser failure'):
+        _ingest(bundle, tmp_path)

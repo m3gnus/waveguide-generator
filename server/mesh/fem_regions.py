@@ -50,7 +50,11 @@ AMBIGUITY_MARGIN = 2.0
 
 
 class FemRegionMeshError(ValueError):
-    """An actionable refusal that names the region or group it is about."""
+    """An actionable refusal, optionally identifying a rejected mirror plane."""
+
+    def __init__(self, message: str, *, symmetry_plane: str | None = None) -> None:
+        self.symmetry_plane = symmetry_plane
+        super().__init__(message)
 
 
 def physical_name(region_id: str, group_id: str | None = None, kind: str | None = None) -> str:
@@ -257,7 +261,8 @@ def verify_region_symmetry(gmsh: Any, region: Mapping[str, Any], boundary: Seque
             span_tolerance=AUTO_CUT_SPAN_REL * diagonal)
         if not verdict.accepted:
             raise FemRegionMeshError(
-                f"FEM region {region['region_id']!r} does not mirror on {plane}: {verdict.reason}")
+                f"FEM region {region['region_id']!r} does not mirror on {plane}: {verdict.reason}",
+                symmetry_plane=plane)
 
 
 def fragment_fundamental_domain(gmsh: Any, objects: list[tuple[int, int]],

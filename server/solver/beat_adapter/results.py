@@ -591,6 +591,7 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
     fem_metadata = {"engine": "beat-cpu", "precision": "float64"}
     has_voltage = "voltage_rms" in request.drive_normalization.values()
 
+    channel_warnings = request.wire["compiled_system"]["metadata"].get("channel_warnings", {})
     specs = {c.id: c for c in geometry.drive_channels}
     identity = channel_source_identity(geometry, record)
     speed = request.regions[0].record["medium"]["sound_speed_m_per_s"]
@@ -601,7 +602,7 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
             metadata={"drive_channel_id": name, "source_ids": list(spec.source_ids) if spec else [],
                       **identity.get(name, {"role": None}), "solver_backend": "beat-cpu",
                       "solver_engine": solver_engine, "fem": fem_metadata,
-                      "warnings": list(request.warnings),
+                      "warnings": list(channel_warnings.get(name, ())),
                       "phase_time_convention": PHASE_TIME_CONVENTION,
                       "pressure_normalization": "voltage_rms" if request.drive_normalization[name] == "voltage_rms"
                       else "unit_acceleration_m_per_s2"},
@@ -624,7 +625,7 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
             metadata={"drive_channel_id": spec.id, "derived_from_channels": list(spec.members),
                       "source_ids": [source for name in spec.members for source in specs[name].source_ids],
                       "combine": payload, "solver_engine": solver_engine, "fem": fem_metadata,
-                      "warnings": list(request.warnings),
+                      "warnings": list(channel_warnings.get(spec.id, ())),
                       "phase_time_convention": PHASE_TIME_CONVENTION}, sound_speed_m_per_s=speed)
         response.pop("impedance", None)
         channels[spec.id] = response

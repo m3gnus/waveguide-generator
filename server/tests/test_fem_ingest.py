@@ -84,6 +84,9 @@ def test_real_ingest_meshes_every_region_and_retains_verified_artifacts(tmp_path
         calls.append(region["region_id"])
         member = json.loads((bundle / "wgreturn.json").read_text())["files"][region["file"]]
         assert kwargs.pop("deadline") > ingest.time.monotonic()
+        assert kwargs.pop("domain_planes") == ()
+        assert kwargs.pop("cut_planes") == ()
+        assert len(kwargs.pop("normalisation_matrix")) == 4
         assert kwargs == {"expected_sha256": member["sha256"], "expected_size_bytes": member["size_bytes"]}
         return region_mesh(path, region, **kwargs)
 

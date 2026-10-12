@@ -47,8 +47,6 @@ def build_coupled_request(
         raise ValueError("FEM regions require the official BEAT CPU backend")
     if precision != "float64":
         raise ValueError("FEM regions require float64 precision")
-    if ground is not None:
-        raise ValueError("FEM regions require free space without a ground plane")
     mode, rotation, translation = _image_frame(symmetry, None)
     axes = (0,) if mode == "x" else (0, 1) if mode == "xy" else ()
     if not regions:
@@ -59,40 +57,65 @@ def build_coupled_request(
     if (frequencies.ndim != 1 or not frequencies.size or not np.isfinite(frequencies).all()
             or np.any(frequencies <= 0) or len(np.unique(frequencies)) != len(frequencies)):
         raise ValueError("Frequencies must be positive, finite and distinct")
-    if transducers and axes:
-        from .coupled_transducers import FEM_DRIVER_SYMMETRY_MESSAGE
+    from server.solver.coupled_admission import fem_request_problem
 
-        raise ValueError(FEM_DRIVER_SYMMETRY_MESSAGE)
+    problem = fem_request_problem(
+        {"fem_regions": [r.record for r in regions],
+         "symmetry": {"domain_planes": [{0: "x0", 1: "y0"}[axis] for axis in axes]}},
+        ground=ground is not None, has_exterior=exterior is not None,
+        has_transducers=bool(transducers))
+    if problem:
+        raise ValueError(problem[1])
 
     all_points = np.concatenate([item.domain.points_mm for item in regions]
                                 + ([exterior.points_mm] if exterior is not None else []))
     all_points = (all_points + translation * 1000) @ rotation.T
-    tolerance = max(1e-6, float(np.linalg.norm(np.ptp(all_points, axis=0))) * 1e-6)
+    # FEM OCC/gmsh builders declare no larger geometric tolerance. Keep
+    # one union tolerance for shared interfaces, capped at 1e-4 mm so a large
+    # remote mesh cannot move genuine vertices of a small region.
+    tolerance = min(1e-4, max(1e-6, float(np.linalg.norm(np.ptp(all_points, axis=0))) * 1e-6))
 
-    def image_points(points, surfaces, tetrahedra=None):
+    def image_points(points, surfaces, mesh_name, tetrahedra=None):
         points = (np.asarray(points, dtype=float) + translation * 1000) @ rotation.T
+        before = points.copy()
         for axis in axes:
             if np.min(points[:, axis]) < -tolerance:
-                raise ValueError("Mesh is outside the positive symmetry fundamental domain")
+                raise ValueError(f"Mesh {mesh_name!r} is outside the positive symmetry fundamental domain")
             points[np.abs(points[:, axis]) <= tolerance, axis] = 0.
         if axes:
-            for faces in surfaces.values():
-                corners = points[faces]
-                areas = np.linalg.norm(np.cross(corners[:, 1] - corners[:, 0],
-                                               corners[:, 2] - corners[:, 0]), axis=1)
-                if not np.all(areas > 0):
-                    raise ValueError("Symmetry snapping collapsed a triangle")
+            for group, faces in surfaces.items():
+                def normals(vertices):
+                    corners = vertices[faces]
+                    return np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
+                old, new = normals(before), normals(points)
+                sizes = np.linalg.norm(new, axis=1)
+                collapsed = np.flatnonzero(~np.isfinite(sizes) | (sizes <= np.linalg.norm(old, axis=1) * 1e-12))
+                if len(collapsed):
+                    raise ValueError(f"Symmetry snapping collapsed a triangle: mesh {mesh_name!r}, "
+                                     f"group {group!r}, element {collapsed[0]}")
+                flipped = np.flatnonzero(np.einsum("ij,ij->i", old, new) <= 0)
+                if len(flipped):
+                    raise ValueError(f"Symmetry snapping flipped a triangle: mesh {mesh_name!r}, "
+                                     f"group {group!r}, element {flipped[0]}")
             if tetrahedra is not None:
-                corners = points[tetrahedra]
-                volumes = np.abs(np.linalg.det(corners[:, 1:] - corners[:, :1]))
-                if not np.all(volumes > 0):
-                    raise ValueError("Symmetry snapping collapsed a tetrahedron")
+                def determinants(vertices):
+                    corners = vertices[tetrahedra]
+                    return np.linalg.det(corners[:, 1:] - corners[:, :1])
+                old, new = determinants(before), determinants(points)
+                collapsed = np.flatnonzero(~np.isfinite(new) | (np.abs(new) <= np.abs(old) * 1e-12))
+                if len(collapsed):
+                    raise ValueError(f"Symmetry snapping collapsed a tetrahedron: mesh {mesh_name!r}, "
+                                     f"element {collapsed[0]}")
+                flipped = np.flatnonzero(np.sign(old) != np.sign(new))
+                if len(flipped):
+                    raise ValueError(f"Symmetry snapping flipped a tetrahedron: mesh {mesh_name!r}, "
+                                     f"element {flipped[0]}")
         return points
 
     transformed_regions = [replace(item, domain=replace(
         item.domain, points_mm=image_points(item.domain.points_mm, item.domain.surfaces,
-                                           item.domain.tetrahedra))) for item in regions]
-    transformed_exterior = (replace(exterior, points_mm=image_points(exterior.points_mm, exterior.groups))
+                                           item.record["region_id"], item.domain.tetrahedra))) for item in regions]
+    transformed_exterior = (replace(exterior, points_mm=image_points(exterior.points_mm, exterior.groups, "exterior"))
                             if exterior is not None else None)
     transformed_layout = replace(layout, points_m={
         name: (points + translation) @ rotation.T for name, points in layout.points_m.items()})
@@ -126,26 +149,15 @@ def build_coupled_request(
 def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any, *,
                                    frequencies_hz: Sequence[float],
                                    resolved_quadrants: int | None = None) -> CoupledRequest:
-    from server.solver.coupled_admission import fem_drive_problem, fem_termination_problem, painted_source_ids
+    from server.solver.coupled_admission import fem_request_problem
 
-    from .coupled_transducers import channel_problem
-
-    problem = fem_termination_problem(record.get("fem_regions", ()), has_exterior=bool(
-        any(c.source_ids for c in geometry.drive_channels) or painted_source_ids(record)))
-    if problem:
-        raise ValueError(f"{problem[0]}: {problem[1]}")
-    for channel in geometry.drive_channels:
-        problem = channel_problem(channel)
-        if problem:
-            raise ValueError(f"{problem[0]}: {problem[1]}")
-    problem = fem_drive_problem(record.get("fem_regions", ()),
-        {c.id: c.source_ids for c in geometry.drive_channels},
-        painted_sources=painted_source_ids(record),
+    problem = fem_request_problem(
+        record, geometry.drive_channels,
+        ground=getattr(context, "ground_plane", None) is not None,
+        passive_cardioid=getattr(geometry, "passive_cardioid_enabled", False),
         combine_id=getattr(getattr(geometry, "combine", None), "id", None))
     if problem:
         raise ValueError(f"{problem[0]}: {problem[1]}")
-    if bool(record.get("infinite_baffle")):
-        raise ValueError("FEM regions require free space without an infinite baffle")
     symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
     if resolved_quadrants is not None and symmetry.quadrants != resolved_quadrants:
         raise ValueError("Stored job and ingestion record disagree on symmetry")

@@ -331,38 +331,12 @@ def _imported_request_refusal(
         if any(not c.source_ids for c in request.geometry.drive_channels):
             return "exterior_transducer_missing_source", "An exterior-only transducer needs painted source faces; a FEM-only driver requires FEM regions"
     if coupled_regions:
-        from server.solver.coupled_admission import fem_termination_problem, painted_source_ids
-        from server.cadlink.build_flags import fem_regions_enabled
+        from server.solver.coupled_admission import fem_request_problem
 
-        if not fem_regions_enabled():
-            return "fem_required", "FEM regions are disabled by WG2_FEM_REGIONS; remove the override to enable them"
-        problem = fem_termination_problem(record["fem_regions"], has_exterior=bool(
-            any(c.source_ids for c in request.geometry.drive_channels) or painted_source_ids(record)))
-        if problem:
-            return problem
-        planes = imported_domain_planes(record)
-        if any(p not in {"x0", "y0"} for p in planes):
-            return "fem_domain_unsupported", "FEM regions support only x0 and y0 symmetry planes"
-        if planes and any(c.exterior_transducer is not None for c in request.geometry.drive_channels):
-            from server.solver.beat_adapter.coupled_transducers import FEM_DRIVER_SYMMETRY_MESSAGE
-
-            return "fem_domain_unsupported", FEM_DRIVER_SYMMETRY_MESSAGE
-        if request.options.ground_plane.enabled or record.get("infinite_baffle"):
-            return "fem_domain_unsupported", "FEM regions require free space without a ground plane"
-        ideal_message = "FEM solves support ideal normal-velocity and electrodynamic voltage drives"
-        from server.solver.beat_adapter.coupled_transducers import channel_problem
-
-        for channel in request.geometry.drive_channels:
-            problem = channel_problem(channel)
-            if problem:
-                return problem
-        if request.geometry.passive_cardioid_enabled:
-            return "fem_drive_unsupported", f"{ideal_message}; passive-cardioid synthesis is unsupported"
-        from server.solver.coupled_admission import fem_drive_problem
-
-        problem = fem_drive_problem(record["fem_regions"],
-            {c.id: c.source_ids for c in request.geometry.drive_channels},
-            painted_sources=painted_source_ids(record),
+        problem = fem_request_problem(
+            record, request.geometry.drive_channels,
+            ground=request.options.ground_plane.enabled,
+            passive_cardioid=request.geometry.passive_cardioid_enabled,
             combine_id=request.geometry.combine.id if request.geometry.combine else None)
         if problem:
             return problem

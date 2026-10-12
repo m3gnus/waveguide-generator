@@ -9,7 +9,6 @@ from importlib.metadata import PackageNotFoundError, version
 import json
 import logging
 import os
-import re
 from pathlib import Path
 import secrets
 import shutil
@@ -165,8 +164,10 @@ class IngestRefusal(ValueError):
         message: str,
         *,
         corruption: bool = False,
+        symmetry_plane: str | None = None,
         area_drift_sources: list[str] | tuple[str, ...] = (),
     ) -> None:
+        self.symmetry_plane = symmetry_plane
         self.stage = stage
         self.corruption = corruption
         self.area_drift_sources = tuple(area_drift_sources)
@@ -1663,11 +1664,11 @@ def ingest_bundle(
     # plane. Rebuild the exterior with rejected planes excluded so its artifact,
     # replay recipe, polar grid and all FEM meshes retain one domain decision.
     fem_symmetry_notes = []
-    fem_deadline = time.monotonic() + FEM_REGIONS_WALL_TIME_S
     while True:
+        fem_deadline = time.monotonic() + FEM_REGIONS_WALL_TIME_S
         reflected = (set(reflected_planes) | set(options.get("reflect_planes", ()))
                      | set((built.get("symmetry") or {}).get("reflected_planes", ())))
-        reflected.update(p for p, verdict in (built.get("symmetry", {}).get("planes") or {}).items()
+        reflected.update(p for p, verdict in ((built.get("symmetry") or {}).get("planes") or {}).items()
                          if verdict.get("reflected"))
         if manifest["scope"].get("fem_regions") and reflected:
             raise IngestRefusal("stage 6 symmetry", "The author-cut model keeps the negative side; "
@@ -1681,8 +1682,7 @@ def ingest_bundle(
         except IngestRefusal as exc:
             # Never turn parser/mesh failures or an author's declared cut into
             # a fallback. Only a failed FEM mirror on a WG candidate is optional.
-            match = re.search(r"FEM region .*?does not mirror on (x0|y0):", str(exc))
-            plane = match.group(1) if match else "y0" if "y0-only FEM" in str(exc) else None
+            plane = exc.symmetry_plane
             candidates = set((built.get("symmetry") or {}).get("cut_planes") or ())
             if (plane not in candidates or options.get("symmetry_mode", "auto") != "auto"
                     or plane in set(options["declared_cut_planes"]) | set(applied_planes)):
@@ -2150,8 +2150,8 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
         raise IngestRefusal("stage 7 meshing", f"{labels}: FEM symmetry supports only x0 and y0.")
     if final_domain and set(planes) == {"y0"}:
         raise IngestRefusal("stage 6 symmetry", f"{labels}: y0-only FEM returns cannot be solved "
-                            "by BEAT CPU. Prepare a full model with Force full domain enabled, "
-                            "or export a full model if the CAD author cut it.")
+                            "by BEAT CPU. Export without the y0 cut, or keep the x0 cut "
+                            "along with y0 when preparing the return.", symmetry_plane="y0")
     return labels
 
 
@@ -2214,7 +2214,8 @@ def _mesh_coupled_regions(
             deadline=deadline,
         )
     except Exception as exc:
-        raise IngestRefusal("stage 7 meshing", f"{labels}: {exc}") from exc
+        raise IngestRefusal("stage 7 meshing", f"{labels}: {exc}",
+                            symmetry_plane=getattr(exc, "symmetry_plane", None)) from exc
     check_deadline()
     built = coupled["exterior"]
     digest = mesh_text_sha256(built["msh_text"])
@@ -2279,13 +2280,14 @@ def _mesh_fem_regions(
                     **({"normalisation_matrix": exterior["normalisation"]["matrix"],
                         "domain_planes": imported_domain_planes({"symmetry": exterior.get("symmetry")}),
                         "cut_planes": tuple((exterior.get("symmetry") or {}).get("cut_planes") or ())}
-                       if exterior and imported_domain_planes({"symmetry": exterior.get("symmetry")}) else {}),
+                       if exterior and (exterior.get("normalisation") or {}).get("matrix") is not None else {}),
                 )
         except Exception as exc:
             # Typed face-matching errors already name the group. Child crashes
             # and timeouts also block ingestion, with the region added here.
             raise IngestRefusal(
                 "stage 7 meshing", f"FEM region {region['name']!r}: {exc}",
+                symmetry_plane=getattr(exc, "symmetry_plane", None),
             ) from exc
         check_deadline(region)
         digest = mesh_text_sha256(built["msh_text"])
@@ -2293,6 +2295,7 @@ def _mesh_fem_regions(
             "pipeline_contract": "wg-import-fem-v1",
             "region": region, "member": member, "mesher": mesher_identity(),
             "symmetry": (exterior or {}).get("symmetry"),
+            "normalisation_matrix": ((exterior or {}).get("normalisation") or {}).get("matrix"),
             **({"coupled_sha256": digest} if region["region_id"] in (coupled or {}) else {}),
         })).hexdigest()
         # Bind the path to output bytes as well as inputs: a later meshing run

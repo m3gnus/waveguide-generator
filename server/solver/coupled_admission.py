@@ -74,3 +74,51 @@ def painted_source_ids(record: Mapping[str, Any]) -> set[str]:
         sources.update(part.split("=", 1)[1] for part in name.split("|")
                        if part.startswith("source_id="))
     return sources
+
+
+def fem_request_problem(record: Mapping[str, Any], channels: Sequence[Any] | None = None, *,
+                        ground: bool = False, passive_cardioid: bool = False,
+                        combine_id: str | None = None, enabled: bool | None = None,
+                        has_exterior: bool | None = None,
+                        has_transducers: bool = False) -> tuple[str, str] | None:
+    """One ordered declaration refusal for admission and request compilation.
+
+    Feature availability, termination/exterior conflicts, domain restrictions,
+    channel physics, passive synthesis, then drive coverage/media. Callers with
+    already compiled boundaries can omit setup channels; their boundary-level
+    coverage is checked by the coupled system builder.
+    """
+    from server.solver.imported import imported_domain_planes
+    from server.solver.beat_adapter.coupled_transducers import FEM_DRIVER_SYMMETRY_MESSAGE, channel_problem
+
+    from server.platform.feature_flags import fem_regions_enabled
+
+    if enabled is None:
+        enabled = fem_regions_enabled()
+    if not enabled:
+        return "fem_required", "FEM regions are disabled by WG2_FEM_REGIONS; remove the override to enable them"
+    sources = painted_source_ids(record)
+    channels = tuple(channels) if channels is not None else None
+    if has_exterior is None:
+        has_exterior = bool(sources or any(c.source_ids for c in channels or ()))
+    problem = fem_termination_problem(record.get("fem_regions", ()), has_exterior=has_exterior)
+    if problem:
+        return problem
+    planes = imported_domain_planes(record)
+    if any(p not in {"x0", "y0"} for p in planes):
+        return "fem_domain_unsupported", "FEM regions support only x0 and y0 symmetry planes"
+    if planes and (has_transducers or any(getattr(c, "exterior_transducer", None) is not None for c in channels or ())):
+        return "fem_domain_unsupported", FEM_DRIVER_SYMMETRY_MESSAGE
+    if ground or record.get("infinite_baffle"):
+        return "fem_domain_unsupported", "FEM regions require free space without a ground plane"
+    for channel in channels or ():
+        problem = channel_problem(channel)
+        if problem:
+            return problem
+    if passive_cardioid:
+        return "fem_drive_unsupported", ("FEM solves support ideal normal-velocity and electrodynamic "
+                                         "voltage drives; passive-cardioid synthesis is unsupported")
+    if channels is not None:
+        return fem_drive_problem(record.get("fem_regions", ()), {c.id: c.source_ids for c in channels},
+                                 painted_sources=sources, combine_id=combine_id)
+    return None

@@ -11,10 +11,14 @@ from .transducers import (DRIVER_SCALARS, ExteriorDriver, _projected_face_areas,
                            projected_driver_area)
 
 
-def _moving_patches(mesh_boundaries: Sequence[tuple[np.ndarray, np.ndarray]]) -> list[np.ndarray]:
-    """Join moving faces across tags by shared vertex edges within one mesh."""
+def _moving_patches(mesh_boundaries: Sequence[tuple[np.ndarray, np.ndarray]], axis: np.ndarray
+                    ) -> tuple[np.ndarray, list[set[int]], list[list[int]]]:
+    """Split edge connectivity at faces nearly parallel to the motion axis."""
     faces = np.concatenate([faces for faces, _ in mesh_boundaries])
     triangles = np.concatenate([triangles for _, triangles in mesh_boundaries])
+    normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    sizes = np.linalg.norm(normals, axis=1)
+    separators = np.abs(normals @ axis) < .3 * sizes
     owners: dict[tuple[int, int], list[int]] = {}
     neighbours = [set() for _ in faces]
     for index, face in enumerate(faces):
@@ -24,27 +28,33 @@ def _moving_patches(mesh_boundaries: Sequence[tuple[np.ndarray, np.ndarray]]) ->
                 neighbours[index].add(owner)
                 neighbours[owner].add(index)
             owners[edge].append(index)
-    remaining = set(range(len(faces)))
+    remaining = set(np.flatnonzero(~separators))
     patches = []
     while remaining:
-        pending, patch = [remaining.pop()], []
+        pending, patch = [min(remaining)], []
+        remaining.remove(pending[0])
         while pending:
             index = pending.pop()
             patch.append(index)
             adjacent = neighbours[index] & remaining
             remaining.difference_update(adjacent)
-            pending.extend(adjacent)
-        patches.append(triangles[patch])
-    return patches
+            pending.extend(sorted(adjacent))
+        patches.append(patch)
+    return triangles, neighbours, patches
 
 
 def parameters(spec: Any, meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.ndarray]]], *,
-               collected_warnings: list[str] | None = None) -> tuple[dict[str, Any], float]:
-    """Derive Sd from connected moving patches, keeping source meshes separate.
+               collected_warnings: list[str] | None = None, channel_id: str = "unknown") -> tuple[dict[str, Any], float]:
+    """Derive Sd per radiating side, keeping source meshes separate.
 
-    Folds subtract within their patch regardless of tagging. Numerically neutral
-    patches join the populated side; only genuinely opposing patches form two
-    radiating sides and preclude a lumped rear chamber.
+    Faces with |normal_hat . axis| < 0.3 separate connected front/rear skins.
+    After removing those faces, patches with |net signed projection| at least
+    25% of the largest patch in the channel define sides by sign. Smaller
+    folds/lips and separator faces retain their signed projection and join the
+    nearest connected side (ties or disconnected patches use the dominant
+    side). Thus separately tagged folds subtract, neutral rims do not create a
+    side, and closed skins use the mean of two sides and forbid a lumped rear
+    chamber. A skin with no resolvable net side is refused by channel name.
     """
     raw = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
     axis = np.asarray(raw["motion_axis"], dtype=float)
@@ -52,25 +62,59 @@ def parameters(spec: Any, meshes_m: Mapping[str, Sequence[tuple[np.ndarray, np.n
         raise ValueError("Electrodynamic motion_axis must be finite and nonzero")
     axis /= np.max(np.abs(axis))
     axis /= np.linalg.norm(axis)
-    patches = [patch for boundaries in meshes_m.values() for patch in _moving_patches(boundaries)]
-    projections = [_projected_face_areas(patch, axis) for patch in patches]
-    tolerance = sum(float(np.abs(values).sum()) for values in projections) * 1e-12
+    meshes = [_moving_patches(boundaries, axis) for boundaries in meshes_m.values()]
+    nets = [float(_projected_face_areas(triangles[patch], axis).sum())
+            for triangles, _, patches in meshes for patch in patches]
+    largest = max(map(abs, nets), default=0.)
+    total = sum(float(np.abs(_projected_face_areas(triangles, axis)).sum())
+                for triangles, _, _ in meshes)
+    if largest <= total * 1e-12:
+        raise UnsupportedPhysics(f"Channel {channel_id!r}: moving skin has no resolvable "
+                                 "radiating side; check front/rear moving-face tags and motion axis")
+    dominant = max(nets, key=abs) > 0
     sides: dict[bool, list[np.ndarray]] = {True: [], False: []}
-    neutral = []
-    for patch, values in zip(patches, projections):
-        net = float(values.sum())
-        if abs(net) <= tolerance:
-            neutral.append(patch)
-        else:
-            sides[net > 0].append(patch)
-    sides[bool(sides[True]) or not sides[False]].extend(neutral)
+    for triangles, neighbours, patches in meshes:
+        labels: dict[int, bool] = {}
+        for patch in patches:
+            net = float(_projected_face_areas(triangles[patch], axis).sum())
+            if abs(net) >= .25 * largest:
+                labels.update({index: net > 0 for index in patch})
+        # Expand all seeded sides one edge at a time; ties use the dominant
+        # side. Each small fold stays together, even when it spans many faces.
+        small = [set(patch) for patch in patches if patch[0] not in labels]
+        small_faces = set().union(*small) if small else set()
+        while len(labels) < len(triangles):
+            updates = {}
+            remaining = set(range(len(triangles))) - labels.keys()
+            units = small + [{index} for index in remaining if index not in small_faces]
+            for unit in units:
+                linked = {labels[j] for i in unit for j in neighbours[i] if j in labels}
+                if linked:
+                    side = next(iter(linked)) if len(linked) == 1 else dominant
+                    updates.update({index: side for index in unit})
+            if not updates:
+                updates = dict.fromkeys(remaining, dominant)
+            labels.update(updates)
+            small = [patch for patch in small if not patch.intersection(updates)]
+        for side in sides:
+            selected = [index for index, label in labels.items() if label == side]
+            if selected:
+                sides[side].append(triangles[selected])
     front, rear = (np.concatenate(sides[key]) if sides[key] else None for key in (True, False))
+    for side in (front, rear):
+        if side is not None and abs(float(_projected_face_areas(side, axis).sum())) <= total * 1e-12:
+            raise UnsupportedPhysics(f"Channel {channel_id!r}: moving skin has no resolvable "
+                                     "radiating side; check front/rear moving-face tags and motion axis")
     if front is not None and rear is not None:
         chamber = raw.get("lumped_sealed_rear_chamber") or {}
         if chamber.get("enabled", False):
             raise UnsupportedPhysics(
-                "a lumped rear chamber replaces the rear radiation; this diaphragm already radiates on both sides")
+                f"Channel {channel_id!r}: a lumped rear chamber replaces the rear radiation; "
+                "this diaphragm already radiates on both sides")
         area, warning = projected_driver_area(front, axis, rear_triangles_m=rear)
+        if warning:
+            warning = (f"Channel {channel_id!r}: Front and rear moving-face projected areas differ "
+                       "by more than 10 %; Sd uses their mean.")
     else:
         area, warning = projected_driver_area(front if front is not None else rear, axis)
     if warning:

@@ -531,6 +531,9 @@ def main(argv: list[str] | None = None) -> int:
         drift = getattr(exc, "area_drift_sources", None)
         if isinstance(drift, (list, tuple)):
             error["area_drift_sources"] = [str(value) for value in drift]
+        plane = getattr(exc, "symmetry_plane", None)
+        if plane in {"x0", "y0"}:
+            error["symmetry_plane"] = plane
         _write_result(
             result_path,
             {

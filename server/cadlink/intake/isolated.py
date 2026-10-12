@@ -92,7 +92,7 @@ def _reraise_typed(exc: ChildRefusal) -> None:
     if exc.error_type == "FemRegionMeshError":
         from server.mesh.fem_regions import FemRegionMeshError
 
-        raise FemRegionMeshError(exc.detail) from exc
+        raise FemRegionMeshError(exc.detail, symmetry_plane=exc.details.get("symmetry_plane")) from exc
 
 
 def inspect_returned_step(

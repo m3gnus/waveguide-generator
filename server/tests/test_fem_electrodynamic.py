@@ -328,7 +328,7 @@ def test_projected_area_mismatch_reaches_compiled_and_result_warnings():
     exterior = ExteriorSurface(points, region.domain.surfaces, {
         name: {'kind': 'moving' if 'moving' in name else 'rigid', 'drive_channel_id': 'fem'}
         for name in region.domain.surfaces})
-    with pytest.warns(UserWarning, match='more than 10%'):
+    with pytest.warns(UserWarning, match='more than 10 %'):
         request = build_coupled_request(exterior, [region], layout=compiled().layout, frame=FRAME,
                                         frequencies_hz=[100.], transducers={'fem': driver()})
     assert request.wire['compiled_system']['metadata']['projected_areas_m2']['fem'] == pytest.approx(7.5e-5)
@@ -373,3 +373,169 @@ def test_driver_symmetry_refusal_names_actual_preparation_control(monkeypatch):
         build_coupled_request(None, [region_input()], layout=compiled().layout, frame=FRAME,
                              frequencies_hz=[100.], symmetry='yz', transducers={'fem': driver()})
     assert str(raised.value) == problem[1]
+
+
+def _closed_moving_skin(*, dome=False, rear_fraction=1.):
+    """Two 20 mm square sides, a connecting rim, and optional raised cap centres."""
+    points = np.array([[x, y, z] for z in (0., .002) for x, y in
+                       ((0., 0.), (.02, 0.), (.02, .02), (0., .02))])
+    if dome:
+        points = np.vstack([points, [.01, .01, -.004], [.01, .01, .006]])
+        front = np.array([[i, 8, (i + 1) % 4] for i in range(4)])
+        rear = np.array([[i + 4, (i + 1) % 4 + 4, 9] for i in range(4)])
+    else:
+        front = np.array([[0, 2, 1], [0, 3, 2]])
+        rear = np.array([[4, 5, 6], [4, 6, 7]])
+    if rear_fraction != 1.:
+        # Both tags touch the rim; only 60% of the rear is moving.
+        points = np.vstack([points, [.02 * rear_fraction, 0., .002],
+                            [.02 * rear_fraction, .02, .002]])
+        rear = np.array([[4, 8, 9], [4, 9, 7]])
+    rim = np.array([face for i in range(4) for face in
+                    ([i, (i + 1) % 4, (i + 1) % 4 + 4], [i, (i + 1) % 4 + 4, i + 4])])
+    return {'fem': [(front, points[front]), (rim, points[rim]), (rear, points[rear])]}
+
+
+@pytest.mark.parametrize('dome,rear_fraction,area', [(False, 1., .0004), (True, 1., .0004),
+                                                    (False, .6, .00032)])
+def test_connected_front_rim_rear_skin_is_two_sided(dome, rear_fraction, area):
+    from server.solver.beat_adapter.coupled_transducers import parameters
+    meshes = _closed_moving_skin(dome=dome, rear_fraction=rear_fraction)
+    if rear_fraction == 1.:
+        _, sd = parameters(driver(), meshes, channel_id='skin')
+    else:
+        with pytest.warns(UserWarning, match="Channel 'skin'.*Sd uses their mean"):
+            _, sd = parameters(driver(), meshes, channel_id='skin')
+    assert sd == pytest.approx(area)
+    with pytest.raises(ValueError, match="Channel 'skin'.*already radiates on both sides"):
+        parameters(driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}),
+                   meshes, channel_id='skin')
+
+
+def test_separately_tagged_cone_surround_roll_and_cap_keep_fold_subtraction():
+    from server.solver.beat_adapter.coupled_transducers import parameters
+    # Cone and cap project forward; a separately meshed surround roll is a
+    # small reversed fold, not a rear radiating side.
+    cone = np.array([[[0., 0., 0.], [.1, 0., 0.], [0., .1, .05]]])
+    cap = np.array([[[.03, .03, .06], [.07, .03, .06], [.03, .07, .06]]])
+    roll = np.array([[[.1, 0., 0.], [0., 0., 0.], [0., .01, .02]]])
+    meshes = {'fem': [(np.array([[0, 1, 2]]), cone),
+                      (np.array([[3, 4, 5]]), cap), (np.array([[1, 0, 6]]), roll)]}
+    _, area = parameters(driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}), meshes)
+    assert area == pytest.approx(.005 + .0008 - .0005)
+
+
+@pytest.mark.parametrize('mesh_names', [('fem-front', 'fem-rear'), ('fem-front', 'exterior')])
+def test_two_sides_keep_separate_mesh_connectivity(mesh_names):
+    from server.solver.beat_adapter.coupled_transducers import parameters
+    triangles = np.array([[[0., 0., 0.], [.02, 0., 0.], [0., .02, 0.]]])
+    faces = np.array([[0, 1, 2]])
+    meshes = {mesh_names[0]: [(faces, triangles)], mesh_names[1]: [(faces, triangles[:, [0, 2, 1]])]}
+    assert parameters(driver(), meshes)[1] == pytest.approx(.0002)
+    with pytest.raises(ValueError, match='already radiates on both sides'):
+        parameters(driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}), meshes)
+
+
+def test_cancelling_skin_without_separable_sides_names_channel():
+    from server.solver.beat_adapter.coupled_transducers import parameters
+    triangles = np.array([[[0., 0., 0.], [.02, 0., 0.], [0., .01, 0.]],
+                          [[.02, 0., 0.], [0., 0., 0.], [0., .01, .01]]])
+    with pytest.raises(ValueError, match="Channel 'cancel'.*no resolvable radiating side"):
+        parameters(driver(), {'fem': [(np.array([[0, 1, 2], [1, 0, 3]]), triangles)]}, channel_id='cancel')
+
+
+def test_area_warning_is_channel_specific_in_mixed_results():
+    from server.tests.test_imported_jobs import _request
+    region = region_input()
+    points = region.domain.points_mm.copy()
+    points[:, 0] *= 2
+    exterior = ExteriorSurface(points, region.domain.surfaces, {
+        name: {'kind': 'moving' if 'moving' in name else 'rigid', 'drive_channel_id': 'fem'}
+        for name in region.domain.surfaces})
+    with pytest.warns(UserWarning, match="Channel 'fem'.*more than 10 %; Sd uses their mean"):
+        request = build_coupled_request(exterior, [region, region_input('other', 'other')],
+            layout=compiled().layout, frame=FRAME, frequencies_hz=[100.], transducers={'fem': driver()})
+    geometry = _request('wgi_' + '0' * 26).geometry
+    geometry.drive_channels = [DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=driver()),
+                               DriveChannel(id='other', source_ids=['painted-other'])]
+    context = SolverContext(design=None, frequency_range=(100., 1000.), num_frequencies=2)
+    # A derived result must not inherit another channel's warning either.
+    from server.jobs.models import ChannelCombineSpec
+    geometry.combine = ChannelCombineSpec(id='combined', members=['fem', 'other'], crossovers_hz=[500.], level_match=False, align=False)
+    response = coupled_envelope(map_coupled_sweep(events(request), request), request, context=context,
+        geometry=geometry, record={}, config=official_beat.response_config(request, context), started=time.time())
+    assert response['channels']['fem']['metadata']['warnings'] == list(request.warnings)
+    assert response['channels']['other']['metadata']['warnings'] == []
+    assert response['channels']['combined']['metadata']['warnings'] == []
+    assert 'sealed rear chamber' not in request.warnings[0]
+
+
+@pytest.mark.parametrize('baffle,planes,transducer,weights,passive', [
+    (True, [], False, True, False),
+    (False, ['x0'], True, True, False),
+    (True, ['x0'], True, True, False),
+    (False, ['z0'], False, True, False),
+    (False, [], False, True, True),
+    (True, [], False, False, True),
+])
+def test_admission_and_compilation_share_first_refusal(monkeypatch, baffle, planes, transducer, weights, passive):
+    from server.jobs.runtime.imported_refusals import _imported_request_refusal
+    from server.tests.test_imported_jobs import _request
+    monkeypatch.setenv('WG2_FEM_REGIONS', '1')
+    request = _request('wgi_' + '0' * 26)
+    channel = request.geometry.drive_channels[0]
+    if transducer:
+        channel.exterior_transducer = driver()
+    if weights:
+        channel.patch_weights = {'patch': 1.}
+    request.geometry.passive_cardioid_rear_volume_l = 10. if passive else None
+    record = {'fem_regions': [region_input(channel=channel.id).record],
+              'infinite_baffle': baffle, 'symmetry': {'domain_planes': planes}}
+    problem = _imported_request_refusal(request, record)
+    assert problem is not None
+    with pytest.raises(ValueError) as raised:
+        build_imported_coupled_request(record, request.geometry, None, frequencies_hz=[100.])
+    assert str(raised.value) == f'{problem[0]}: {problem[1]}'
+
+
+def test_disabled_fem_has_same_first_refusal_in_admission_and_compilation(monkeypatch):
+    from server.jobs.runtime.imported_refusals import _imported_request_refusal
+    from server.tests.test_imported_jobs import _request
+    monkeypatch.setenv('WG2_FEM_REGIONS', '0')
+    request = _request('wgi_' + '0' * 26)
+    request.geometry.drive_channels[0].patch_weights = {'patch': 1.}
+    record = {'fem_regions': [region_input().record], 'infinite_baffle': True}
+    problem = _imported_request_refusal(request, record)
+    assert problem[0] == 'fem_required'
+    with pytest.raises(ValueError) as raised:
+        build_imported_coupled_request(record, request.geometry, None, frequencies_hz=[100.])
+    assert str(raised.value) == f'{problem[0]}: {problem[1]}'
+
+
+def test_thick_spherical_cap_skin_has_two_radiating_sides():
+    from server.solver.beat_adapter.coupled_transducers import parameters
+    sectors, rings = 16, 4
+    theta_max = 1.2
+    radius = np.sqrt(.0004 / (sectors / 2 * np.sin(2 * np.pi / sectors))) / np.sin(theta_max)
+    cap = [[0., 0., radius]]
+    for theta in np.linspace(theta_max / rings, theta_max, rings):
+        cap.extend([[radius * np.sin(theta) * np.cos(phi), radius * np.sin(theta) * np.sin(phi),
+                     radius * np.cos(theta)] for phi in np.arange(sectors) * 2 * np.pi / sectors])
+    cap = np.array(cap)
+    points = np.vstack([cap, cap + [0., 0., .002]])
+    front = [[0, 1 + i, 1 + (i + 1) % sectors] for i in range(sectors)]
+    for ring in range(rings - 1):
+        start = 1 + ring * sectors
+        front.extend([face for i in range(sectors) for face in
+                      ([start + i, start + sectors + i, start + sectors + (i + 1) % sectors],
+                       [start + i, start + sectors + (i + 1) % sectors, start + (i + 1) % sectors])])
+    front = np.array(front)
+    rear = front[:, [0, 2, 1]] + len(cap)
+    edge = np.arange(1 + (rings - 1) * sectors, len(cap))
+    rim = np.array([face for a, b in zip(edge, np.roll(edge, -1)) for face in
+                    ([a, b, b + len(cap)], [a, b + len(cap), a + len(cap)])])
+    meshes = {'fem': [(front, points[front]), (rear, points[rear]), (rim, points[rim])]}
+    assert parameters(driver(), meshes, channel_id='dome')[1] == pytest.approx(.0004)
+    with pytest.raises(ValueError, match="Channel 'dome'.*already radiates on both sides"):
+        parameters(driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002}),
+                   meshes, channel_id='dome')

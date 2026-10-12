@@ -468,6 +468,7 @@ def build_coupled_system(
     components, ports = [], []
     projected_areas = {}
     area_warnings: list[str] = []
+    channel_warnings: dict[str, list[str]] = {}
     for channel, boundary_ids in sorted(moving_by_channel.items()):
         component_id = f"component:{channel}"
         spec = (transducers or {}).get(channel)
@@ -475,8 +476,11 @@ def build_coupled_system(
         if spec is not None:
             from server.solver.beat_adapter.coupled_transducers import parameters
 
+            channel_warnings[channel] = []
             params, projected_areas[channel] = parameters(
-                spec, moving_triangles[channel], collected_warnings=area_warnings)
+                spec, moving_triangles[channel], collected_warnings=channel_warnings[channel],
+                channel_id=channel)
+            area_warnings.extend(channel_warnings[channel])
         components.append({
             "id": component_id, "name": channel,
             "kind": "electrodynamic_transducer" if spec is not None else "ideal_velocity_source",
@@ -497,7 +501,7 @@ def build_coupled_system(
         "assumptions": [],
         "metadata": {"producer": "waveguide-generator", "feature": "fem-regions-v1",
                      **({"projected_areas_m2": projected_areas} if projected_areas else {}),
-                     **({"warnings": area_warnings} if area_warnings else {})},
+                     **({"warnings": area_warnings, "channel_warnings": channel_warnings} if area_warnings else {})},
     }
 
 
