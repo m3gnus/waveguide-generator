@@ -3651,6 +3651,8 @@ export interface components {
                 number,
                 number
             ];
+            /** Power W */
+            power_w?: number | null;
             /** Re Ohm */
             re_ohm: number;
             /** Rms N S Per M */
@@ -3662,6 +3664,8 @@ export interface components {
              * @enum {integer}
              */
             version?: 1 | 2;
+            /** Xmax Mm */
+            xmax_mm?: number | null;
         };
         /** FemFieldPresentation */
         FemFieldPresentation: {

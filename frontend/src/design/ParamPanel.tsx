@@ -1,8 +1,7 @@
 import { registerParameterPanel } from './parameterPanelValidity';
 import { nativeCadLimitation, nativeSymmetryLimitation } from './nativeFamilies';
 import { EnclosureResolutionField } from './EnclosureResolutionField';
-import { ExteriorDriverOptions } from './ExteriorDriverOptions';
-import { EXTERIOR_FIELDS } from '../stores/exteriorTransducer';
+import { ExteriorDriverFields, ExteriorDriverOptions } from './ExteriorDriverOptions';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -1047,10 +1046,8 @@ function CadDriveChannels() {
             Solve driver in BEAT</label>
           {channel.exterior_transducer && <>
             <p className="cad-driver-hint">Complete outward solids only. Enter bare Mmd, excluding air load; datasheet Mms is not Mmd. Other drivers are shorted for each excitation.</p>
-            <div className="cad-driver-grid">{EXTERIOR_FIELDS.map(([key, label, unit]) => <label key={key} className="cad-driver-field">
-              <span>{label} ({unit}) *</span><input type="number" aria-label={`${label} for ${channel.id}`} value={channel.exterior_transducer?.[key] ?? ''}
-                onChange={event => state.setExteriorTransducer(channel.id, { ...channel.exterior_transducer!, [key]: event.target.value === '' ? undefined : Number(event.target.value) })}/>
-            </label>)}</div>
+            <ExteriorDriverFields channelId={channel.id} form={channel.exterior_transducer}
+              onChange={form => state.setExteriorTransducer(channel.id, form)}/>
             <ExteriorDriverOptions channelId={channel.id} form={channel.exterior_transducer}
               onChange={form => state.setExteriorTransducer(channel.id, form)}/>
             <p className="cad-driver-hint">Motion axis in the returned mesh frame:</p>

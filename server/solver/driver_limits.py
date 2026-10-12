@@ -209,8 +209,9 @@ def member_limits_from_channel(
     if metadata.get("beat_transducer") and rated_one is not None and drive_voltage is not None:
         rating_voltage = transducer_power_rating_voltage(spec, rated_one)
         if rating_voltage is not None:
-            # Feed the existing power ceiling the equivalent nominal rating
-            # fraction; real input power remains available from impedance.
+            # BEAT uses constant nominal V²/Re′ (or V²/Re for the simple
+            # model), not per-frequency real terminal power, for Pmax limits.
+            # Real terminal power remains available from the impedance plot.
             power = np.full(target.size, rated_one * count * (drive_voltage / rating_voltage) ** 2)
 
     limits = MemberLimits(

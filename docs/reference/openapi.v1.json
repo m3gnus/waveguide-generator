@@ -4066,6 +4066,18 @@
             "title": "Motion Axis",
             "type": "array"
           },
+          "power_w": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Power W"
+          },
           "re_ohm": {
             "exclusiveMinimum": 0.0,
             "title": "Re Ohm",
@@ -4094,6 +4106,18 @@
             ],
             "title": "Version",
             "type": "integer"
+          },
+          "xmax_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Xmax Mm"
           }
         },
         "required": [

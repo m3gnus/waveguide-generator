@@ -100,7 +100,7 @@ def drivers_for(record: Mapping, channels: Sequence) -> list[ExteriorDriver]:
                 channel.id,
                 tuple(tags[source] for source in channel.source_ids),
                 spec.motion_axis,
-                **spec.model_dump(exclude={"version", "motion_axis"}),
+                **spec.model_dump(exclude={"version", "motion_axis", "power_w", "xmax_mm"}),
             )
         )
     return drivers

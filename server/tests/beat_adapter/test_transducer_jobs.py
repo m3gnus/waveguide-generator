@@ -411,15 +411,32 @@ def test_v1_exact_serialization_and_v2_driver_mapping(record):
     assert mapped[0].lumped_sealed_rear_chamber == options["lumped_sealed_rear_chamber"]
 
 
-def test_v2_route_retains_engine_parameters_and_area_warning(solid, record, monkeypatch):
+@pytest.fixture
+def piston_cube(make_mesh):
+    # Closed 1 m cube; only the top face (tag 2) is a moving piston.
+    return make_mesh(
+        [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+         [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],
+        [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
+         [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5],
+         [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]],
+        [3, 3, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3])
+
+
+@pytest.mark.parametrize("semi_enabled,resistance", [(True, 5.5), (False, 6.)])
+def test_v2_route_packages_piston_area_and_driver_limits(piston_cube, record, monkeypatch, semi_enabled, resistance):
     from server.solver import official_beat
+    from server.solver.driver_limits import headroom, member_limits_from_channel
     from server.tests.beat_adapter.test_transducers import SEMI
 
     payload = request().model_dump(mode="json")
-    for channel in payload["geometry"]["drive_channels"]:
-        channel["exterior_transducer"].update(
-            version=2, motion_axis=[1., 1., 1.], semi_inductance=SEMI,
-            lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))
+    payload["geometry"]["drive_channels"] = payload["geometry"]["drive_channels"][:1]
+    channel = payload["geometry"]["drive_channels"][0]
+    channel["source_ids"] = ["a"]
+    payload["geometry"]["mesh"]["source_size_mm"] = {"a": 3.}
+    channel["exterior_transducer"].update(
+        version=2, motion_axis=[0., 0., 1.], semi_inductance={**SEMI, "enabled": semi_enabled},
+        lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01), power_w=100., xmax_mm=2.)
     captured = []
 
     def solve(compiled, **kwargs):
@@ -429,11 +446,61 @@ def test_v2_route_retains_engine_parameters_and_area_warning(solid, record, monk
 
     monkeypatch.setattr(official_beat, "solve_transducer_compiled", solve)
     monkeypatch.setattr(official_beat, "engine_version", lambda: "test")
-    with pytest.warns(UserWarning, match="shorted:.*10%"):
-        result = jobs.solve(solid, SolveRequest.model_validate(payload), record, backend="cpu")
-    params = captured[0].wire["compiled_system"]["components"][1]["parameters"]
-    assert params["semi_inductance"] == SEMI
-    assert params["lumped_sealed_rear_chamber"]["projected_area_m2"] == pytest.approx(1 / np.sqrt(3))
-    assert "10%" in result["channels"]["shorted"]["metadata"]["warnings"][0]
-    spec = result["channels"]["shorted"]["metadata"]["driver"]["spec"]
-    assert spec["semi_inductance"] == SEMI
+    result = jobs.solve(piston_cube, SolveRequest.model_validate(payload), record, backend="cpu")
+    params = captured[0].wire["compiled_system"]["components"][0]["parameters"]
+    assert params["semi_inductance"] == {**SEMI, "enabled": semi_enabled}
+    assert params["lumped_sealed_rear_chamber"]["projected_area_m2"] == pytest.approx(1.)
+    assert "power_w" not in params and "xmax_mm" not in params
+    packaged = result["channels"]["driver"]
+    assert captured[0].warnings == ()
+    assert not any("moving-face projected" in warning for warning in packaged["metadata"].get("warnings", []))
+    spec = packaged["metadata"]["driver"]["spec"]
+    assert spec["power_w"] == 100. and spec["xmax_mm"] == 2.
+    limits = member_limits_from_channel(packaged, frequencies_hz=np.array([100., 500.]))
+    assert limits.rated_power_w == 100.
+    assert limits.xmax_mm == 2.
+    assert limits.excursion_mm == pytest.approx(packaged["metadata"]["driver"]["cone_excursion_mm"]["values"])
+    assert limits.power_w == pytest.approx(np.full(2, 2.83**2 / resistance))
+    # Isolate Pmax from the independently preserved excursion limit.
+    from dataclasses import replace
+    power_limits = replace(limits, xmax_mm=None)
+    assert headroom(power_limits, np.ones(2)).scale == pytest.approx(np.full(2, np.sqrt(100. * resistance) / 2.83))
+
+
+@pytest.mark.parametrize("field,value", [("power_w", 0.), ("power_w", True), ("xmax_mm", -1.), ("xmax_mm", float("inf"))])
+def test_v2_refuses_invalid_ratings(field, value):
+    from server.jobs.models import ExteriorTransducerSpec
+
+    with pytest.raises(ValidationError):
+        ExteriorTransducerSpec(**{**PARAMETERS, "version": 2, field: value})
+
+
+@pytest.mark.parametrize("field", ["power_w", "xmax_mm"])
+def test_ratings_require_v2(field):
+    from server.jobs.models import ExteriorTransducerSpec
+
+    with pytest.raises(ValidationError, match="version 2"):
+        ExteriorTransducerSpec(**{**PARAMETERS, field: 1.})
+
+
+@pytest.mark.parametrize("connected", [False, True])
+def test_job_refuses_exterior_rear_load_before_engine(piston_cube, make_mesh, record, monkeypatch, connected):
+    from server.solver import official_beat
+    from server.solver.beat_adapter.mesh import read_surface
+
+    mesh = read_surface(piston_cube)
+    if not connected:
+        mesh.tags[:2] = 4  # Bottom rear face, separated from the top by rigid walls.
+        piston_cube = make_mesh(mesh.points_m.tolist(), mesh.faces.tolist(), mesh.tags.tolist())
+    sources = ["a", "b"] if connected else ["a", "c"]
+    payload = request().model_dump(mode="json")
+    channel = payload["geometry"]["drive_channels"][0]
+    payload["geometry"]["drive_channels"] = [channel]
+    channel["source_ids"] = sources
+    payload["geometry"]["mesh"]["source_size_mm"] = {source: 3. for source in sources}
+    channel["exterior_transducer"].update(
+        version=2, motion_axis=[0., 0., 1.],
+        lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))
+    monkeypatch.setattr(official_beat, "solve_transducer_compiled", lambda *a, **k: pytest.fail("rear load entered runtime"))
+    with pytest.raises(ValueError, match="a lumped rear chamber replaces the rear radiation; untag the rear faces or disable the chamber"):
+        jobs.solve(piston_cube, SolveRequest.model_validate(payload), record, backend="cpu")

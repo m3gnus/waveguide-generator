@@ -12,7 +12,6 @@ from dataclasses import dataclass
 import math
 from typing import Any
 from urllib.parse import quote
-import warnings
 
 import numpy as np
 
@@ -77,26 +76,71 @@ def validate_driver_option(raw: Any, name: str, scalars: Sequence[str]) -> None:
             _positive(raw.get(key), f"{name}.{key}")
 
 
-def projected_driver_area(triangles_m: np.ndarray, axis: Sequence[float]) -> tuple[float, str | None]:
-    """Sd from declared moving faces, reusable for FEM/BEM diaphragms.
-
-    Sum each side's projected areas; use their mean when both sides are
-    declared. A single exterior diaphragm uses its existing projected Sd.
-    """
+def _projected_face_areas(triangles_m: np.ndarray, axis: Sequence[float]) -> np.ndarray:
     direction = np.asarray(axis, dtype=float)
     if direction.shape != (3,) or not np.isfinite(direction).all() or not np.any(direction):
         raise UnsupportedPhysics("moving faces require a finite nonzero motion axis")
     direction = direction / np.max(np.abs(direction))
     direction = direction / np.linalg.norm(direction)
     triangles = np.asarray(triangles_m, dtype=float)
-    signed = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]) @ direction / 2
-    front, rear = float(signed[signed > 0].sum()), float(-signed[signed < 0].sum())
-    area = (front + rear) / 2 if front > 0 and rear > 0 else front + rear
-    _positive(area, "moving faces projected_area_m2")
+    return np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]) @ direction / 2
+
+
+def _signed_projected_area(triangles_m: np.ndarray, axis: Sequence[float]) -> float:
+    return float(_projected_face_areas(triangles_m, axis).sum())
+
+
+def projected_driver_area(
+    triangles_m: np.ndarray, axis: Sequence[float], *, rear_triangles_m: np.ndarray | None = None,
+) -> tuple[float, str | None]:
+    """Net projected Sd per declared side, reusable for FEM/BEM diaphragms.
+
+    Back-facing folds on one diaphragm side subtract from its projection. Only
+    an explicitly supplied second side is averaged with the first side.
+    """
+    front = abs(_signed_projected_area(triangles_m, axis))
+    _positive(front, "moving faces projected_area_m2")
+    if rear_triangles_m is None:
+        return front, None
+    rear = abs(_signed_projected_area(rear_triangles_m, axis))
+    _positive(rear, "rear moving faces projected_area_m2")
+    area = (front + rear) / 2
     warning = None
-    if front > 0 and rear > 0 and abs(front - rear) / area > 0.1:
+    if abs(front - rear) / area > 0.1:
         warning = "Front and rear moving-face projected areas differ by more than 10%; sealed rear chamber uses their mean."
     return area, warning
+
+
+def _moving_patches(mesh: SurfaceMesh, tags: Sequence[int]) -> list[np.ndarray]:
+    """Connected moving surfaces from the source tags (which have no side label).
+
+    Connectivity is by shared edges, across tag boundaries. Thus a surround,
+    lip or cap edge remains on its declared diaphragm patch despite a locally
+    reversed normal; disconnected front/rear patches retain separate net areas.
+    """
+    faces = mesh.faces[np.isin(mesh.tags, tags)]
+    edge_owners: dict[tuple[int, int], list[int]] = {}
+    neighbours = [set() for _ in faces]
+    for index, face in enumerate(faces):
+        for a, b in zip(face, np.roll(face, -1)):
+            edge = tuple(sorted((int(a), int(b))))
+            owners = edge_owners.setdefault(edge, [])
+            for owner in owners:
+                neighbours[index].add(owner)
+                neighbours[owner].add(index)
+            owners.append(index)
+    remaining = set(range(len(faces)))
+    patches = []
+    while remaining:
+        pending, patch = [remaining.pop()], []
+        while pending:
+            index = pending.pop()
+            patch.append(index)
+            adjacent = neighbours[index] & remaining
+            remaining.difference_update(adjacent)
+            pending.extend(adjacent)
+        patches.append(mesh.points_m[faces[patch]])
+    return patches
 
 
 def driver_parameters(driver: ExteriorDriver, axis: Sequence[float], *, projected_area_m2: float | None = None) -> dict[str, Any]:
@@ -191,11 +235,20 @@ def build_transducer_request(
         offset += len(driver.tags)
         area = None
         if driver.lumped_sealed_rear_chamber is not None and driver.lumped_sealed_rear_chamber.get("enabled", False):
-            selected = np.isin(prepared.mesh.tags, driver.tags)
-            area, warning = projected_driver_area(prepared.mesh.points_m[prepared.mesh.faces[selected]], axis)
+            patches = _moving_patches(prepared.mesh, driver.tags)
+            projections = [_signed_projected_area(patch, axis) for patch in patches]
+            triangles = np.concatenate(patches)
+            tolerance = float(np.abs(_projected_face_areas(triangles, axis)).sum()) * 1e-12
+            # A closed moving skin can connect both sides through a tagged rim.
+            # Its net projection cancels; it is not a front-only diaphragm.
+            if ((any(value > tolerance for value in projections) and any(value < -tolerance for value in projections))
+                    or abs(sum(projections)) <= tolerance):
+                raise UnsupportedPhysics(
+                    "a lumped rear chamber replaces the rear radiation; untag the rear faces or disable the chamber"
+                )
+            area, warning = projected_driver_area(triangles, axis)
             if warning:
                 area_warnings.append(f"{driver.id}: {warning}")
-                warnings.warn(area_warnings[-1], UserWarning, stacklevel=2)
         components.append({"id": driver.component_id, "name": driver.id,
                            "kind": "electrodynamic_transducer",
                            "boundary_ids": [f"boundary:tag:{tag}" for tag in driver.tags],

@@ -353,3 +353,26 @@ triangles), although it is unchanged between selections.
 A follow-up should split topology from pressure so the frontend can retain
 the topology once per artifact, and use seekable per-slice pressure storage
 to read a selection without inflating earlier frequencies or channels.
+
+## F-T exterior driver options and F10a rear loading
+
+Exterior transducer v2 accepts optional positive `power_w` and `xmax_mm`
+ratings for the existing power and excursion limits. BEAT Pmax channels use
+constant nominal V²/Re′ when semi-inductance is enabled (V²/Re otherwise),
+instead of per-frequency real terminal power. The impedance plot still allows
+real terminal power to be calculated. Ratings stay in result metadata and do
+not enter the engine's driver parameters; absent options retain v1 bytes.
+
+Source tags currently have no front/rear label. Connected moving patches
+are treated as diaphragm sides: local back-facing folds subtract from each
+patch's net signed projected area. Single-sided Sd is its absolute net
+projection. The shared area helper averages only explicitly supplied front
+and rear sides and warns when they differ by more than 10%. Exterior patches
+with opposing net projections radiate both sides and refuse an enabled lumped
+sealed rear chamber: a lumped rear chamber replaces the rear radiation;
+untag the rear faces or disable the chamber. A front-only diaphragm on a
+closed body may use this unmeshed rear load.
+
+F10a must refuse an enabled lumped rear chamber when a FEM rear region is
+attached to the same diaphragm. The FEM rear load and the lumped stiffness
+must never be applied together.

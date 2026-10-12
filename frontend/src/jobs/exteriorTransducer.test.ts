@@ -72,7 +72,7 @@ const semi = { enabled: true, re_prime_ohm: 5.5, leb_h: .0001, le_h: .002, ke_se
 
 it('passes and persists v2 physical models without a user-supplied Sd', () => {
   enable();
-  const extended = { ...form, version: 2, semi_inductance: semi,
+  const extended = { ...form, version: 2, power_w: 100, xmax_mm: 2, semi_inductance: semi,
     lumped_sealed_rear_chamber: { enabled: true, volume_m3: .01 } };
   useCadReturnStore.getState().setExteriorTransducer('d', extended);
   expect(parseExteriorTransducer(JSON.parse(JSON.stringify(extended)))).toEqual(extended);
@@ -94,6 +94,10 @@ it('passes and persists v2 physical models without a user-supplied Sd', () => {
 it('blocks malformed, incomplete and unsupported v2 options rather than dropping them', () => {
   enable();
   for (const options of [
+    { power_w: 0 },
+    { power_w: true },
+    { xmax_mm: -1 },
+    { xmax_mm: Infinity },
     { semi_inductance: { enabled: true } },
     { semi_inductance: { ...semi, enabled: 1 } },
     { semi_inductance: { ...semi, le_h: 0 } },
@@ -119,7 +123,7 @@ it('restores v2 driver options through the persisted CAD profile parser', () => 
     documentName: 'Driver', requestId: null, sourceCount: 1, instanceCount: 1,
     sources: [{ id: 's', role: 'LF', required: true, suggestedResolutionMm: 3, defaultDriveChannelId: 'd' }] };
   useCadReturnStore.getState().selectBundle(bundle, 'driver-project');
-  const extended = { ...form, version: 2, semi_inductance: semi,
+  const extended = { ...form, version: 2, power_w: 100, xmax_mm: 2, semi_inductance: semi,
     lumped_sealed_rear_chamber: { enabled: true, volume_m3: .01 } };
   useCadReturnStore.getState().setExteriorTransducer('d', extended);
   resetCadReturnStore();

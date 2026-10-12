@@ -324,24 +324,66 @@ def test_projected_area_uses_mean_and_warns_only_above_ten_percent():
     front = np.array([[0, 0, 0], [2, 0, 0], [0, 1, 0]], dtype=float)  # 1 m²
     rear = front[[0, 2, 1]].copy()
     rear[:, 0] *= .8
-    area, warning = t.projected_driver_area(np.stack([front, rear]), [0, 0, 10])
+    area, warning = t.projected_driver_area(np.stack([front]), [0, 0, 10], rear_triangles_m=np.stack([rear]))
     assert area == pytest.approx(.9)
     assert "10%" in warning
-    area, warning = t.projected_driver_area(np.stack([front, front[[0, 2, 1]]]), [0, 0, -1])
+    area, warning = t.projected_driver_area(np.stack([front]), [0, 0, -1], rear_triangles_m=np.stack([front[[0, 2, 1]]]))
     assert area == 1
     assert warning is None
     rear[:, 0] /= .8
     rear[:, 0] *= .95
-    assert t.projected_driver_area(np.stack([front, rear]), [0, 0, 1])[1] is None
+    assert t.projected_driver_area(np.stack([front]), [0, 0, 1], rear_triangles_m=np.stack([rear]))[1] is None
     with pytest.raises(UnsupportedPhysics, match="projected_area"):
         t.projected_driver_area(np.stack([front]), [1, 0, 0])
 
 
-def test_front_rear_area_warning_is_retained(mesh, layout):
-    with pytest.warns(UserWarning, match="10%"):
+def test_m_roll_single_side_uses_net_projection(make_mesh, layout, official_contract):
+    # A continuous folded strip: +1.01 m² forward, -.01 m² back-facing, Sd = 1 m².
+    points = np.array([[0, 0, 0], [0, 1, 0], [1.01, 0, 0], [1.01, 1, 0],
+                       [1, 0, 1], [1, 1, 1], [1.1, 0, -1], [1.1, 1, -1],
+                       [0, 0, -1], [0, 1, -1]], dtype=float)
+    faces = np.array([[0, 2, 3], [0, 3, 1], [2, 4, 5], [2, 5, 3]])
+    area, warning = t.projected_driver_area(points[faces], [0, 0, 1])
+    assert area == pytest.approx(1.)
+    assert warning is None
+    # Rigid sides and end caps close the body behind this single diaphragm.
+    rigid = [[4, 6, 7], [4, 7, 5], [6, 8, 9], [6, 9, 7], [8, 0, 1], [8, 1, 9],
+             [0, 8, 2], [2, 8, 6], [2, 6, 4], [1, 3, 9], [3, 7, 9], [3, 5, 7]]
+    mesh = make_mesh(points.tolist(), faces.tolist() + rigid, [2, 2, 3, 3] + [4] * len(rigid))
+    compiled = t.build_transducer_request(
+        mesh, drivers=[driver(axis=[0, 0, 1], lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))],
+        layout=layout, frame=FRAME, frequencies_hz=[100])
+    chamber = compiled.wire["compiled_system"]["components"][0]["parameters"]["lumped_sealed_rear_chamber"]
+    assert chamber["projected_area_m2"] == pytest.approx(1.)
+    official_contract(compiled)
+    # The old sign split gave .51² of this stiffness, approximately four times too low.
+    assert 1.2041 * 343**2 * chamber["projected_area_m2"]**2 / chamber["volume_m3"] == pytest.approx(1.2041 * 343**2 / .01)
+    assert compiled.warnings == ()
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_exterior_rear_radiation_refuses_lumped_chamber(make_mesh, layout, enabled):
+    mesh = make_mesh([[0, 0, 0], [1, 0, 0], [0, 1, 0],
+                      [0, 0, -1], [1, 0, -1], [0, 1, -1]],
+                     [[0, 1, 2], [3, 5, 4]], [2, 3])
+    options = dict(enabled=enabled, volume_m3=.01)
+    if enabled:
+        with pytest.raises(UnsupportedPhysics, match="a lumped rear chamber replaces the rear radiation; untag the rear faces or disable the chamber"):
+            t.build_transducer_request(mesh, drivers=[driver(lumped_sealed_rear_chamber=options)],
+                                       layout=layout, frame=FRAME, frequencies_hz=[100])
+    else:
+        t.build_transducer_request(mesh, drivers=[driver(lumped_sealed_rear_chamber=options)],
+                                   layout=layout, frame=FRAME, frequencies_hz=[100])
+
+
+def test_area_warning_is_carried_once_without_python_warning(mesh, layout, monkeypatch):
+    import warnings
+
+    monkeypatch.setattr(t, "projected_driver_area", lambda *args: (.5, "area warning"))
+    with warnings.catch_warnings(record=True) as emitted:
+        warnings.simplefilter("always")
         compiled = t.build_transducer_request(
-            mesh, drivers=[driver(tags=(2, 5), axis=[1, 1, 1],
-                                  lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))],
+            mesh, drivers=[driver(tags=(2,), lumped_sealed_rear_chamber=dict(enabled=True, volume_m3=.01))],
             layout=layout, frame=FRAME, frequencies_hz=[100])
-    assert len(compiled.warnings) == 1
-    assert "driver:" in compiled.warnings[0]
+    assert compiled.warnings == ("driver: area warning",)
+    assert emitted == []
