@@ -11,7 +11,6 @@ from server.mesh.fem_regions import read_fem_region_domain
 from server.solver.beat_adapter.coupled_request import build_coupled_request
 from server.solver.beat_adapter.coupled_transducers import mechanical_impedance
 from server.solver.beat_adapter.observations import build_observations
-from server.solver.beat_adapter.results import map_coupled_sweep
 from server.solver.coupled_system import ExteriorSurface, FemRegionInput
 from server.tests.test_fem_coupled_beat_live import worker as worker_fixture
 from server.tests.test_fem_electrodynamic import driver
@@ -43,7 +42,10 @@ def test_sealed_electrodynamic_box_impedance_peak_and_spl(worker, tmp_path):
                                     frequencies_hz=frequencies, frame=FRAME, transducers={'drive-lf': spec})
     from beat_engine.beat_contract import validate_solve_request
     validate_solve_request(request.wire)
-    sweep = map_coupled_sweep(worker.submit(request.wire), request)
+    # Through the managed bridge, as production runs it (the managed worker has no submit).
+    from types import SimpleNamespace
+    from server.solver.official_beat import solve_coupled_compiled
+    sweep = solve_coupled_compiled(request, worker_manager=SimpleNamespace(get_worker=lambda *a, **k: worker))
     current, velocity = sweep.current[:, 0, 0], sweep.velocity[:, 0, 0]
     zin = 2.83 / current
     params = request.wire['compiled_system']['components'][0]['parameters']
