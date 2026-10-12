@@ -254,9 +254,13 @@ def test_recovered_declared_fem_refuses_before_unavailable_engine(tmp_path, monk
             code = {"termination": CODE, "disabled": "fem_required",
                     "backend": "fem_backend_unsupported"}[reason]
             assert row["error_message"].startswith(code + ":")
+            if reason == "disabled":
+                assert "disabled by WG2_FEM_REGIONS" in row["error_message"]
+                assert "send again" not in row["error_message"]
             if reason == "termination":
                 assert row["error_message"] == f"{CODE}: {MESSAGE}"
             assert calls == []
         finally:
             await recovered.shutdown()
     asyncio.run(scenario())
+

@@ -692,13 +692,19 @@ def _refuse_imported_fem(
             and not geometry.exterior_only and fem_regions_enabled()):
         return evidence
     if (required_fem or regions) and not geometry.exterior_only:
+        exterior_only = "or choose exterior-only to solve without the FEM air."
+        if regions and not fem_regions_enabled():
+            remedy = "FEM regions are disabled by WG2_FEM_REGIONS; remove the override to enable them, "
+        elif regions and not record.get("fem_regions"):
+            # Declared, but ingested by a WG that did not mesh FEM regions.
+            remedy = "Send the return again so WG can prepare its FEM regions, "
+        else:
+            remedy = "Declare these volumes as FEM regions in WGLink and send again, "
         declared = "required FEM air volumes and FEM regions" if required_fem and regions else (
             "FEM regions" if regions else "required FEM air volumes"
         )
         raise ImportedSolveRefusal(
-            "fem_required",
-            f"The CAD return declares {declared}. Declare these volumes as FEM regions "
-            "in WGLink and send again, or choose exterior-only to solve without the FEM air.",
+            "fem_required", f"The CAD return declares {declared}. {remedy}{exterior_only}",
         )
     return evidence
 
