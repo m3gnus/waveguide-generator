@@ -51,8 +51,11 @@ class ManualWaitCap:
     first sight in this process, plus the wall-clock age it already had then.
     The store marks a row manual-waiting only when it creates it, so
     ``created_at`` is when it entered the wait; that offset also carries time
-    waited under an earlier backend. Every error makes a row look newer, never
-    older. Read and written only on the serving loop.
+    waited under an earlier backend. An unreadable or future ``created_at``
+    counts from first sight. A local clock moved forward (DST, a user's
+    change) can make a row look older and release it early; only the exit
+    timing moves, because the row is durable. Read and written only on the
+    serving loop.
     """
 
     def __init__(
@@ -147,15 +150,15 @@ class ActivityTracker:
                 return True
             if total:
                 # The idle exit and GUI-Quit release cap a manual wait's hold.
-                _rows, active = await asyncio.to_thread(
-                    runtime.store.list_jobs, statuses=("queued", "running"), limit=1
-                )
-                if active:
-                    return True
+                # Preparing first: a row only moves on to queued or running,
+                # so one leaving between the reads is still seen by the second.
                 rows, preparing = await asyncio.to_thread(
                     runtime.store.list_jobs, statuses=("preparing",), limit=MANUAL_WAIT_SCAN_LIMIT
                 )
-                if preparing > len(rows) or manual_wait.holds(rows):
+                _rows, active = await asyncio.to_thread(
+                    runtime.store.list_jobs, statuses=("queued", "running"), limit=1
+                )
+                if active or preparing > len(rows) or manual_wait.holds(rows):
                     return True
         return bool(self.http_requests)
 

@@ -1208,7 +1208,8 @@ clock includes suspend and grants 60 seconds of grace on resume. A fresh
 heartbeat restarts the idle count indefinitely. A CAD solve still waiting for
 its first Prepare press counts as a job for one hour from its creation, on that
 same clock (plus its age when this backend first saw it); after that it no
-longer blocks the idle exit or Quit's `release`. The row is durable, so the next
+longer blocks the idle exit or Quit's `release`, so an otherwise idle backend
+exits about 90 minutes after the solve arrived. The row is durable, so the next
 backend shows it again and a press resumes it. The installer event and the
 update `retire` request keep counting it.
 The GUI writes `<data>/locks/backend-retire.json`, matched to the backend pid
