@@ -20,6 +20,7 @@ def backend_argv(
     port: int | None,
     data_dir: Path | None = None,
     control_path: Path | None = None,
+    headless: bool = False,
 ) -> list[str]:
     """Build a supported start; data_dir is an explicit override, never discovery.
 
@@ -44,6 +45,8 @@ def backend_argv(
         command.extend(("--port", str(port)))
     if control_path is not None:
         command.extend(("--status-control", str(control_path), "--parent-pid", str(os.getpid())))
+    if headless:
+        command.append("--lifetime=headless")
     return command
 
 

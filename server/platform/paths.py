@@ -21,6 +21,20 @@ LEGACY_APP_DIRECTORY = "WaveguideGenerator2"
 log = logging.getLogger("wg.paths")
 
 
+def display_path(value: str) -> str:
+    """Use ordinary Windows path spelling in messages, preserving other inputs."""
+    if os.name == "nt":
+        if (value[:8].upper() == "\\\\?\\UNC\\"
+                and len(parts := value[8:].split("\\")) >= 2
+                and parts[0] and parts[1]):
+            return "\\\\" + value[8:]
+        if (value.startswith("\\\\?\\") and len(value) >= 7
+                and value[4] in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                and value[5:7] == ":\\"):
+            return value[4:]
+    return value
+
+
 def app_root(*, environ: Mapping[str, str] | None = None) -> Path:
     """Return the application source layer, whether bundled or checked out."""
 

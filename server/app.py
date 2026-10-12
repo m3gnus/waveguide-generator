@@ -851,6 +851,8 @@ def create_app(
         if request.method == "POST" and request.url.path in RESTART_GATED_POSTS:
             approval = getattr(application.state, "update_restart", None)
             refusal = approval.refusal() if approval is not None else None
+            if refusal is None:
+                refusal = application.state.retirement_hold.refusal()
             if refusal is not None:
                 return JSONResponse(
                     status_code=409,
@@ -874,6 +876,8 @@ def create_app(
             # Lets a client check that the port answers as the process that holds
             # the instance lock (server/platform/backend_owner.py).
             "pid": os.getpid(),
+            "lifetime": getattr(application.state, "lifetime", "standalone"),
+            "retiring": getattr(application.state, "retiring", False),
         }
         if os.environ.get("WG2_BACKEND_CONTAINED") == "1":
             payload["lifetime"] = "contained"
@@ -905,6 +909,7 @@ def create_app(
     # start installation-owned work refuse while it is set.
     restart_approval = RestartApproval()
     application.state.update_restart = restart_approval
+    application.state.retirement_hold = restart_approval.retirement_hold
     # Created here, served by ``mount_settings`` below (where its routes have
     # always been registered): the jobs runtime reads the automatic result
     # cleanup preference from this same instance, at startup and after jobs.

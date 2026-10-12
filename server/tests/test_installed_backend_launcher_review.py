@@ -48,7 +48,7 @@ def test_default_admission_migrates_before_lock_and_preserves_gui_arguments(tmp_
         assert (data / "old-settings").read_text() == "retained"
         assert "--data-dir" not in argv
         assert "WG2_DATA_DIR" not in env
-        assert argv == gui_args[:gui_args.index("--status-control")]
+        assert argv == gui_args[:gui_args.index("--status-control")] + ["--lifetime=headless"]
         return backend_owner.BackendHandle("http://127.0.0.1:3100", 123, 3100, data, "1", "abc")
 
     monkeypatch.setattr(backend_owner, "_discover", lambda *args: None)
@@ -58,7 +58,7 @@ def test_default_admission_migrates_before_lock_and_preserves_gui_arguments(tmp_
 
 
 @pytest.mark.parametrize("legacy_exports", [False, True])
-def test_default_admission_runs_supported_app_with_gui_workspace_defaults(tmp_path, monkeypatch, capsys, legacy_exports):
+def test_default_admission_runs_supported_app_with_gui_workspace_defaults(tmp_path, monkeypatch, capsys, legacy_exports, retire_event):
     """Exercise real serve/app routes with a socket-free Uvicorn driver."""
     from launch import serve
     from server import app as app_module
@@ -79,7 +79,7 @@ def test_default_admission_runs_supported_app_with_gui_workspace_defaults(tmp_pa
     observed = []
     class Driver:
         def __init__(self, config):
-            self.app = config.app
+            self.app = getattr(config.app, "app", config.app)
         def run(self, **kwargs):
             def route(path):
                 return next(item.endpoint for item in self.app.routes if item.path == path)
@@ -115,7 +115,7 @@ def test_default_admission_runs_supported_app_with_gui_workspace_defaults(tmp_pa
     assert len(capsys.readouterr().out.splitlines()) == 1
 
 
-def test_started_default_backend_health_workspace_and_migration_equal_gui(tmp_path, monkeypatch, capsys):
+def test_started_default_backend_health_workspace_and_migration_equal_gui(tmp_path, monkeypatch, capsys, retire_event):
     """Real supported serve.py through both starts, with only provisioning disabled."""
     require_backend_breakaway()
     isolate_home(tmp_path, monkeypatch)
@@ -125,7 +125,8 @@ def test_started_default_backend_health_workspace_and_migration_equal_gui(tmp_pa
     real_argv = backend_start.backend_argv
     # This test must never provision/download a solver. The supported launcher,
     # application, instance lock and HTTP routes still run unchanged.
-    boot = "from launch import serve; serve._start_beat_cpu_provisioning=lambda:None; raise SystemExit(serve.main())"
+    monkeypatch.setenv("WG2_TEST_RETIRE_EVENT", retire_event)
+    boot = "from launch import serve; serve._start_beat_cpu_provisioning=lambda:None; from server.tests.backend_lifetime_main import main; raise SystemExit(main())"
 
     def argv(**kwargs):
         result = real_argv(**kwargs)

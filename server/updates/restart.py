@@ -135,6 +135,7 @@ class RestartApproval:
         self._approval = 0
         self._listeners: list[ReleaseListener] = []
         self._observers: list[ReleaseObserver] = []
+        self.retirement_hold = RetirementHold(self)
 
     @property
     def pending(self) -> str | None:
@@ -155,6 +156,16 @@ class RestartApproval:
 
         with self._lock:
             self._observers.append(observer)
+
+    def notify_listeners(self, reason: str) -> None:
+        """Wake queues without changing an update approval or its bookkeeping."""
+        with self._lock:
+            listeners = list(self._listeners)
+        for listener in listeners:
+            try:
+                listener("", reason)
+            except Exception:  # noqa: BLE001 - other queues still need their wake
+                log.exception("A restart release listener failed")
 
     def approve(self, target: str) -> int:
         """Latch: ``target`` names what the restart installs, for the refusal message.
@@ -285,6 +296,39 @@ class RestartApproval:
         )
 
 
+class RetirementHold:
+    """Refuse route submissions while accepted work drains for retirement."""
+
+    def __init__(self, restart: RestartApproval) -> None:
+        self._restart = restart
+        self._lock = threading.Lock()
+        self._reason: str | None = None
+
+    def hold(self, reason: str) -> None:
+        with self._lock:
+            self._reason = reason
+
+    @property
+    def held(self) -> bool:
+        with self._lock:
+            return self._reason is not None
+
+    def refusal(self) -> str | None:
+        with self._lock:
+            reason = self._reason
+        if reason is None:
+            return None
+        return f"This backend is shutting down ({reason}); submit again and a new one will start."
+
+    def release(self) -> None:
+        with self._lock:
+            reason, self._reason = self._reason, None
+        if reason is None:
+            return
+        log.info("Backend retirement hold released (%s)", reason)
+        self._restart.notify_listeners(reason)
+
+
 __all__ = [
     "RESTART_APPROVAL_TTL",
     "REVOKED_SUFFIX",
@@ -293,5 +337,6 @@ __all__ = [
     "ReleaseObserver",
     "RestartApproval",
     "RestartRelease",
+    "RetirementHold",
     "revoke_request",
 ]

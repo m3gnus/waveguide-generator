@@ -80,6 +80,7 @@ def test_entry_finds_or_starts_same_owner(tmp_path, monkeypatch, capsys, running
         assert root == data.resolve()
         assert "--data-dir" not in argv  # The inherited env remains the explicit override.
         assert "--parent-pid" not in argv and "--status-control" not in argv
+        assert "--lifetime=headless" in argv
         assert env["WG2_DATA_DIR"] == str(root)
         assert env["WG2_NO_BROWSER"] == env["PYTHONUNBUFFERED"] == "1"
 

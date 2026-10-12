@@ -1822,6 +1822,9 @@ async def _create_manual_solve_operation(
 
     restart = getattr(state, "update_restart", None)
     refusal = restart.refusal() if restart is not None else None
+    hold = getattr(state, "retirement_hold", None)
+    if refusal is None and hold is not None:
+        refusal = hold.refusal()
     if restart_response is not None:
         refused = restart_response()
         if refused is not None:

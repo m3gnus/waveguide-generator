@@ -52,7 +52,7 @@ PROGRAM_NAME = "waveguide-generator"
 def add_server_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     """Add every argument ``launch.serve`` accepts, and return the parser.
 
-    The two suppressed options are the launcher-to-server private channel:
+    The suppressed options are the launcher-to-server private channel:
     they are real and must keep parsing, but they are not something a user is
     ever meant to type, so they stay out of ``--help``.
     """
@@ -64,4 +64,5 @@ def add_server_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     )
     parser.add_argument("--status-control", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--parent-pid", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--lifetime", choices=("headless",), default=None, help=argparse.SUPPRESS)
     return parser

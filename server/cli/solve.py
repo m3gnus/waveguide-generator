@@ -519,7 +519,7 @@ async def solve_path(
             if handle is None:
                 override = args.data_dir.resolve() if args.data_dir is not None else None
                 handle = await asyncio.to_thread(
-                    ensure_backend, data_dir, backend_argv(port=None, data_dir=override),
+                    ensure_backend, data_dir, backend_argv(port=None, data_dir=override, headless=True),
                     start_env=backend_environment(os.environ, data_dir=override),
                     allow_contained=True,
                 )

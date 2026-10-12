@@ -109,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
                 data_dir,
                 backend_argv(
                     repo_root=root,
+                    headless=True,
                     data_dir=options.data_dir,
                     port=requested_port(None, environ=environment),
                 ),

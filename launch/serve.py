@@ -775,6 +775,7 @@ def main(argv: list[str] | None = None) -> int:
     stop_reason = "the --no-gui server stopped before it confirmed a healthy start"
     # What ``main`` returns, for an exit that has to end the process itself.
     exit_status = 1
+    retire_thread = None
     try:
         backstop.activate()
         app = create_app(
@@ -794,6 +795,15 @@ def main(argv: list[str] | None = None) -> int:
             # Retain the launcher port argument for compatibility.
             advertised_port=port,
         )
+        state = getattr(app, "state", None)
+        if state is not None:
+            state.lifetime = args.lifetime or ("attached" if args.status_control is not None else "standalone")
+            state.retiring = False
+        tracker = None
+        if args.lifetime == "headless":
+            from launch.backend_lifetime import ActivityTracker
+
+            tracker = ActivityTracker(app)
         # ``getattr`` twice: an embedder's or a test's stand-in app need not
         # carry Starlette's ``state`` at all.
         jobs_runtime = getattr(getattr(app, "state", None), "jobs_runtime", None)
@@ -803,7 +813,7 @@ def main(argv: list[str] | None = None) -> int:
             # running jobs as interrupted by Quit, not as a crash.
             backstop.on_begin(jobs_runtime.mark_running_interrupted_by_quit)
         config = uvicorn.Config(
-            app,
+            tracker if tracker is not None else app,
             host=HOST,
             port=port,
             log_config=None,
@@ -843,6 +853,12 @@ def main(argv: list[str] | None = None) -> int:
         def request_stop(reason: str) -> None:
             server.should_exit = True
             backstop.begin(reason)
+
+        if tracker is not None:
+            from launch.backend_lifetime import InstallerRetireThread
+
+            retire_thread = InstallerRetireThread(tracker, request_stop)
+            retire_thread.start()
 
         # Windows-only, and a no-op anywhere else or without a console.
         harden_console(
@@ -900,6 +916,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             stop_browser.set()
             stop_status_watch.set()
+            if retire_thread is not None:
+                retire_thread.close()
             _not_confirmed(no_gui_start, stop_reason)
             if listener is not None:
                 listener.close()

@@ -726,3 +726,132 @@ def test_lock_loser_waits_to_deadline_and_reports_conflict(
         assert fake.processes[-1].wait(timeout=2) == 2
     finally:
         lock.release()
+
+
+def test_validate_does_not_adopt_a_retiring_backend(data_dir):
+    from types import SimpleNamespace
+
+    info = SimpleNamespace(pid=123, port=3100)
+    health = {"pid": 123, "data_dir": str(data_dir), "retiring": True}
+    assert backend_owner._validate(data_dir, info, health) is None
+
+
+def test_exit_2_respawns_after_a_retiring_owner_disappears(data_dir, monkeypatch):
+    from types import SimpleNamespace
+
+    clock = [0.0]
+    calls = []
+    closed = []
+    waited = []
+    owner = SimpleNamespace(pid=123, port=3100)
+    replacement = SimpleNamespace(pid=456, port=3101)
+    observations = iter([
+        (owner, {"pid": 123, "data_dir": str(data_dir), "retiring": True}),
+        (None, None),
+        (replacement, {"pid": 456, "data_dir": str(data_dir)}),
+    ])
+
+    def process(pid, code):
+        return SimpleNamespace(
+            pid=pid, poll=lambda: code, wait=lambda: waited.append(pid),
+            _wg_start_job=SimpleNamespace(close=lambda: closed.append(pid)),
+        )
+
+    children = iter([process(321, 2), process(654, 2), process(456, None)])
+
+    def spawn(argv, root, env):
+        calls.append((argv, root, env, clock[0]))
+        return next(children), data_dir / "start.log"
+
+    monkeypatch.setattr(backend_owner, "_spawn", spawn)
+    monkeypatch.setattr(backend_owner, "_observe", lambda _: next(observations))
+    monkeypatch.setattr(backend_owner, "pid_is_running", lambda _: True)
+    monkeypatch.setattr(backend_owner.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(backend_owner.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    handle = backend_owner._start_and_wait(data_dir, ["backend"], 5.0, {"KEEP": "yes"})
+    assert handle.pid == 456
+    assert [call[3] for call in calls] == [0.0, 0.5, 1.0]
+    assert waited == [321, 654] and closed == [321, 654, 456]
+    assert all(call[2] == {"KEEP": "yes"} for call in calls)
+
+
+@pytest.mark.parametrize("metadata", [False, True])
+def test_exit_2_retries_when_owner_metadata_is_missing_or_dead(data_dir, monkeypatch, metadata):
+    from types import SimpleNamespace
+
+    clock = [0.0]
+    calls = []
+    info = SimpleNamespace(pid=123, port=3100)
+    observations = iter([(info if metadata else None, None), (info, {"pid": 123, "data_dir": str(data_dir)})])
+
+    def spawn(*args):
+        calls.append(args)
+        return SimpleNamespace(pid=321, poll=lambda: 2, wait=lambda: None), data_dir / "start.log"
+
+    monkeypatch.setattr(backend_owner, "_spawn", spawn)
+    monkeypatch.setattr(backend_owner, "_observe", lambda _: next(observations))
+    monkeypatch.setattr(backend_owner, "pid_is_running", lambda _: False)
+    monkeypatch.setattr(backend_owner.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(backend_owner.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    assert backend_owner._start_and_wait(data_dir, ["backend"], 5.0).pid == 123
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("executable, displayed", [
+    (r"\\?\C:\Program Files\WG\python.exe", r"C:\Program Files\WG\python.exe"),
+    (r"\\?\UNC\server\share\python.exe", r"\\server\share\python.exe"),
+])
+@pytest.mark.parametrize("punctuation", ["", ".", ".."])
+def test_spawn_refusal_uses_display_path_and_one_period(data_dir, monkeypatch, executable, displayed, punctuation):
+    from types import SimpleNamespace
+    from server.platform import paths, process_tree
+
+    def refused():
+        raise OSError("Breakaway refused" + punctuation)
+
+    monkeypatch.setattr(backend_owner.sys, "platform", "win32")
+    monkeypatch.setattr(paths, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", refused)
+    with pytest.raises(BackendSpawnError) as error:
+        backend_owner._spawn([executable], data_dir)
+    assert str(error.value) == (
+        f'Could not start the backend ("{displayed}"): Breakaway refused. '
+        "Check the installation, or start Waveguide Generator manually."
+    )
+    assert ".." not in str(error.value) and "\\\\?\\" not in str(error.value)
+
+
+@pytest.mark.parametrize("failure", ["timeout", "cancel"])
+def test_respawn_cleanup_targets_only_the_current_child(data_dir, monkeypatch, failure):
+    from types import SimpleNamespace
+
+    clock = [0.0]
+    closed, reaped, terminated = [], [], []
+
+    def child(pid, code):
+        return SimpleNamespace(
+            pid=pid, poll=lambda: code, wait=lambda: reaped.append(pid),
+            _wg_start_job=SimpleNamespace(close=lambda: closed.append(pid)),
+        )
+
+    children = iter([child(100, 2), child(200, None)])
+    monkeypatch.setattr(backend_owner, "_spawn", lambda *args: (next(children), data_dir / "start.log"))
+    monkeypatch.setattr(backend_owner, "_discover", lambda _: None)
+    observations = [0]
+
+    def observe(_root):
+        observations[0] += 1
+        if observations[0] > 1:
+            if failure == "cancel":
+                raise KeyboardInterrupt()
+            clock[0] = 5.0
+        return None, None
+
+    monkeypatch.setattr(backend_owner, "_observe", observe)
+    monkeypatch.setattr(backend_owner, "_terminate_child", lambda process: (terminated.append(process.pid), "")[1])
+    monkeypatch.setattr(backend_owner.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(backend_owner.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    with pytest.raises(KeyboardInterrupt if failure == "cancel" else BackendStartTimeout):
+        backend_owner._start_and_wait(data_dir, ["backend"], 5.0)
+    assert reaped == [100] and closed == [100, 200]
+    assert terminated and set(terminated) == {200}

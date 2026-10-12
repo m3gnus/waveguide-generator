@@ -8,9 +8,10 @@ it reads metadata, then confirms that ``GET /health`` reports the same folder
 confirmed owner yet; the preferred metadata port may change during startup.
 
 Starting is serialised on ``<data>/locks/backend-start.lock``. Exit 2 means
-another starter owns InstanceLock: wait for it until the overall deadline without
-respawning. A matching-pid backend reporting a different folder is a typed
-refusal only at the deadline. Never work around conflicts with a private folder.
+another starter owns InstanceLock: wait for it until the overall deadline,
+respawning (0.5 s apart) only when that owner is retiring or gone. A
+matching-pid backend reporting a different folder is a typed refusal only at
+the deadline. Never work around conflicts with a private folder.
 A timeout terminates and reaps our unconfirmed child; success retains the owner.
 Windows CLI clients can opt into a contained lifetime after breakaway refusal.
 
@@ -37,9 +38,12 @@ from .instance import (
     LOCK_OPEN_FLAGS,
     InstanceInfo,
     lock_exclusive,
+    pid_is_running,
     read_lock_info,
     unlock,
 )
+
+from .paths import display_path
 
 START_LOCK_FILENAME = "backend-start.lock"
 LOG_FILENAME = "backend-start.log"
@@ -125,7 +129,7 @@ def _observe(data_dir: Path) -> tuple[InstanceInfo | None, dict[str, object] | N
 def _validate(
     data_dir: Path, info: InstanceInfo | None, health: dict[str, object] | None
 ) -> BackendHandle | None:
-    if info is None or health is None:
+    if info is None or health is None or health.get("retiring") is True:
         return None
     if health.get("pid") != info.pid or not _same_path(health.get("data_dir"), data_dir):
         return None
@@ -308,14 +312,15 @@ def _spawn_attempt(
         from server.platform.job_start import ContainedStartError
         if not isinstance(exc, (OSError, ContainedStartError)):
             raise
+        detail = str(exc).rstrip().rstrip(".") + "."
         if _breakaway_refusal(exc) is not None:
             raise BackendSpawnError(
-                f"Could not start the backend ({argv[0]!r}): {exc}. "
+                f'Could not start the backend ("{display_path(argv[0])}"): {detail} '
                 "Open Waveguide Generator from the Start menu and try again, "
                 "or run outside the CI/IDE job that forbids breakaway."
             ) from exc
         raise BackendSpawnError(
-            f"Could not start the backend ({argv[0]!r}): {exc}. Check the installation, "
+            f'Could not start the backend ("{display_path(argv[0])}"): {detail} Check the installation, '
             "or start Waveguide Generator manually."
         ) from exc
     return process, log_path
@@ -360,7 +365,7 @@ def ensure_backend(
 ) -> BackendHandle:
     """Find or start the owner; start_argv must use this folder and --no-browser.
 
-    Exit 2 waits until the overall deadline without respawning. Discovery
+    Exit 2 waits for a live owner, retrying when it is retiring or gone. Discovery
     mismatches are transient; a matching-pid folder mismatch refuses at deadline.
     ``start_env`` is the launcher's prepared child environment. An interrupted
     wait terminates/reaps only our unconfirmed spawned child, then releases the
@@ -428,6 +433,20 @@ def _start_and_wait(
                     "The backend did not become ready within the timeout. "
                     f"{_owner_description(root)} See {log_path}.{cleanup}"
                 )
+            if code == EXIT_ALREADY_RUNNING and (
+                info is None or not pid_is_running(info.pid)
+                or (health is not None and health.get("pid") == info.pid
+                    and health.get("retiring") is True)
+            ):
+                process.wait()
+                job = getattr(process, "_wg_start_job", None)
+                if job is not None:
+                    job.close()
+                    process._wg_start_job = None
+                time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
+                if time.monotonic() < deadline:
+                    process, log_path = _spawn(argv, root) if env is None else _spawn(argv, root, env)
+                continue
             time.sleep(POLL_INTERVAL)
     except BaseException:
         # Signals use this same cleanup as timeout. Confirm once more in case

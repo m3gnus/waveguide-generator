@@ -5,6 +5,7 @@ import sys
 import pytest
 
 from server.platform import process_tree
+from server.platform.paths import display_path
 
 
 WINDOWS_BREAKAWAY_REFUSAL = (
@@ -36,7 +37,7 @@ def require_backend_breakaway() -> None:
 
 def backend_spawn_refusal_message(executable: str) -> str:
     return (
-        f"Could not start the backend ({executable!r}): {WINDOWS_BREAKAWAY_REFUSAL}. "
+        f'Could not start the backend ("{display_path(executable)}"): {WINDOWS_BREAKAWAY_REFUSAL} '
         "Open Waveguide Generator from the Start menu and try again, "
         "or run outside the CI/IDE job that forbids breakaway."
     )

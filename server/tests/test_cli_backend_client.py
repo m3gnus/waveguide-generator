@@ -369,9 +369,9 @@ def test_typed_startup_errors_do_not_change_folder(tmp_path, monkeypatch, error,
     assert messages[-1]["error"]["code"] == name
     assert "Check the backend installation" in stderr
     assert len(calls) == 1 and calls[0][0] == data_dir
-    assert calls[0][1] == backend_argv(port=None, data_dir=data_dir.resolve())
+    assert calls[0][1] == backend_argv(port=None, data_dir=data_dir.resolve(), headless=True)
     assert calls[0][2] == backend_environment(os.environ, data_dir=data_dir.resolve())
-    assert calls[0][1][-1] == "--no-browser"
+    assert calls[0][1][-2:] == ["--no-browser", "--lifetime=headless"]
     assert str(data_dir.resolve()) in calls[0][1]
 
 
@@ -441,7 +441,7 @@ def test_sigint_stops_only_the_submitted_job_and_keeps_owner_alive(tmp_path):
 
 
 @pytest.mark.parametrize("selection", ["default", "environment", "explicit", "legacy"])
-def test_real_headless_argv_preserves_gui_workspace_defaults(tmp_path, monkeypatch, selection):
+def test_real_headless_argv_preserves_gui_workspace_defaults(tmp_path, monkeypatch, selection, retire_event):
     """Execute the supported launcher, including its isolation/adoption decision."""
     import time
     import urllib.request
@@ -482,27 +482,38 @@ def test_real_headless_argv_preserves_gui_workspace_defaults(tmp_path, monkeypat
         repo_root=app_root, python_executable=sys.executable,
         server_args=("--data-dir", str(override)) if override is not None else (),
     )
-    commands = [backend_argv(port=None, data_dir=override), controller._command(port, tmp_path / "stop")]
+    commands = [backend_argv(port=None, data_dir=override, headless=True), controller._command(port, tmp_path / "stop")]
+    assert "--lifetime=headless" in commands[0]
+    assert "--lifetime=headless" not in commands[1]
     environments = [backend_environment(os.environ, data_dir=override), controller._server_environment()]
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     observations = []
     for index, (command, environment) in enumerate(zip(commands, environments)):
+        if index == 0:
+            # The tests-only entry refuses unsafe event names before starting serve.
+            environment["WG2_TEST_RETIRE_EVENT"] = retire_event
+            command = [command[0], str(ROOT / "server" / "tests" / "backend_lifetime_main.py"), *command[2:]]
         log_path = tmp_path / f"start-{index}.log"
         with log_path.open("wb") as log:
             process = subprocess.Popen(command, cwd=tmp_path, env=environment, stdout=log, stderr=log)
             try:
-                deadline = time.monotonic() + 90  # a real server's lifespan start-up is slow on hosted macOS
+                # A real server's lifespan start-up is slow on hosted macOS.
+                startup_deadline = time.monotonic() + 90
                 handle = None
-                while time.monotonic() < deadline:
+                while time.monotonic() < startup_deadline:
                     assert process.poll() is None, log_path.read_text()
                     handle = discover_backend(data_dir)
                     if handle is not None:
-                        break
+                        with opener.open(handle.base_url + "/health", timeout=2) as response:
+                            health = json.load(response)
+                        if health.get("pid") == handle.pid:
+                            break
                     time.sleep(0.05)
                 assert handle is not None, log_path.read_text()
                 assert handle.pid == process.pid
                 with opener.open(handle.base_url + "/health", timeout=2) as response:
                     health = json.load(response)
+                assert health["lifetime"] == ("headless" if index == 0 else "attached")
                 with opener.open(handle.base_url + "/api/workspace/path", timeout=2) as response:
                     workspace = json.load(response)
                 observations.append((Path(health["data_dir"]).resolve(), Path(workspace["path"]).resolve(), workspace["selected"]))
@@ -565,8 +576,8 @@ def test_cli_start_matches_shared_argv_and_environment(tmp_path, monkeypatch, se
         expected = [str(python), str(app_root() / "launch" / "serve.py")]
         if override is not None:
             expected.extend(("--data-dir", str(override)))
-        expected.append("--no-browser")
-        assert command == expected == backend_argv(port=None, data_dir=override)
+        expected.extend(("--no-browser", "--lifetime=headless"))
+        assert command == expected == backend_argv(port=None, data_dir=override, headless=True)
         assert start_env == backend_environment(inherited, data_dir=override)
         assert start_env.get("WG2_DATA_DIR") == (
             str(override) if override is not None else inherited.get("WG2_DATA_DIR")
@@ -580,4 +591,4 @@ def test_cli_start_matches_shared_argv_and_environment(tmp_path, monkeypatch, se
     monkeypatch.setattr(cli, "backend_argv", argv)
     monkeypatch.setattr(cli, "ensure_backend", refuse)
     assert asyncio.run(_solve(args))[0] == 5
-    assert forwarded == [{"port": None, "data_dir": override}]
+    assert forwarded == [{"port": None, "data_dir": override, "headless": True}]

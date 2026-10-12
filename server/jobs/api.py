@@ -361,9 +361,12 @@ def create_jobs_router(
     """
 
     router = APIRouter(route_class=_JobsContractRoute)
+    retirement_hold = getattr(restart_approval, "retirement_hold", None)
 
     def restart_refusal(client_request_id: str | None = None) -> JSONResponse | None:
         message = restart_approval.refusal() if restart_approval is not None else None
+        if message is None and retirement_hold is not None:
+            message = retirement_hold.refusal()
         if message is None:
             return None
         return _error_response(
