@@ -361,3 +361,34 @@ export function decodeFemFieldPayload(payload: FemFieldPayload): { domain: FemFi
   });
   return { domain: { regionId: payload.region_id, points, tetrahedra, surfaces }, values, frequencyHz: payload.frequency_hz };
 }
+
+/** Exact P1 velocity, projected onto the plane normal in exp(-i omega t). */
+export function femNormalVelocitySlice(domain: FemFieldDomain, values: ComplexNodal,
+  plane: SlicePlane, frequencyHz: number, density = 1.21): FemSlice {
+  if (!(frequencyHz > 0) || !(density > 0)) throw new Error('Velocity needs a positive frequency and density');
+  const cut = sliceFemField(domain, values, plane);
+  const norm = Math.hypot(...plane.normal);
+  const normal = plane.normal.map((v) => v / norm);
+  const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const dot = (a: number[], b: number[]) => a.reduce((s, v, i) => s + v * b[i], 0);
+  const perTet = new Map<number, [number, number]>();
+  for (let triangle = 0; triangle < cut.tetrahedron.length; triangle++) {
+    const tet = cut.tetrahedron[triangle];
+    let velocity = perTet.get(tet);
+    if (!velocity) {
+      const indices = Array.from(domain.tetrahedra.subarray(tet * 4, tet * 4 + 4));
+      const xyz = indices.map((i) => Array.from(domain.points.subarray(i * 3, i * 3 + 3)).map((v) => v / 1000));
+      const edges = xyz.slice(1).map((p) => p.map((v, i) => v - xyz[0][i]));
+      const cofactors = [cross(edges[1], edges[2]), cross(edges[2], edges[0]), cross(edges[0], edges[1])];
+      const det = dot(edges[0], cofactors[0]);
+      if (!Number.isFinite(det) || det === 0) throw new Error('Degenerate velocity tetrahedron');
+      const gradient = (field: Float32Array) => cofactors.reduce((sum, c, i) => sum + dot(c, normal) * (field[indices[i + 1]] - field[indices[0]]) / det, 0);
+      const factor = 2 * Math.PI * frequencyHz * density;
+      velocity = [gradient(values.imag) / factor, -gradient(values.real) / factor];
+      perTet.set(tet, velocity);
+    }
+    cut.real.fill(velocity[0], triangle * 3, triangle * 3 + 3);
+    cut.imag.fill(velocity[1], triangle * 3, triangle * 3 + 3);
+  }
+  return cut;
+}

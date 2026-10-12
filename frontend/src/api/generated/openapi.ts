@@ -1727,6 +1727,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/results/{job_id}/fem-field/plane": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fem Field Plane
+         * @description Raw channel plane; masked samples are zero with valid_mask=0.
+         *
+         *     P1 interior normal velocity is exact per tetrahedron. Exterior normal
+         *     velocity uses centred differences of the official BEAT potential.
+         */
+        post: operations["fem_field_plane_api_results__job_id__fem_field_plane_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/results/{job_id}/field-plane": {
         parameters: {
             query?: never;
@@ -3675,6 +3698,8 @@ export interface components {
             channel_id: string;
             /** Channel Ids */
             channel_ids: string[];
+            /** Density Kg Per M3 */
+            density_kg_per_m3?: number | null;
             /**
              * Drive Normalization
              * @enum {string}
@@ -3689,6 +3714,8 @@ export interface components {
              * @constant
              */
             phasor_convention: "exp(-i omega t)";
+            /** Plane Scopes */
+            plane_scopes?: ("interior" | "exterior" | "combined")[];
             /** Points Mm */
             points_mm: string;
             /** Pressure Imag */
@@ -3715,6 +3742,65 @@ export interface components {
             name: string;
             /** Triangles */
             triangles: string;
+        };
+        /** FemPlanePresentation */
+        FemPlanePresentation: {
+            /** Channel Id */
+            channel_id: string;
+            /** Frequency Hz */
+            frequency_hz: number;
+            /** Nx */
+            nx: number;
+            /** Ny */
+            ny: number;
+            /**
+             * Phasor Convention
+             * @constant
+             */
+            phasor_convention: "exp(-i omega t)";
+            /** Points Mm */
+            points_mm: string;
+            /** Pressure Imag */
+            pressure_imag: string;
+            /** Pressure Real */
+            pressure_real: string;
+            /**
+             * Quantity
+             * @enum {string}
+             */
+            quantity: "pressure" | "velocity_normal";
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "interior" | "exterior" | "combined";
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "Pa" | "m/s";
+            /** Valid Mask */
+            valid_mask: string;
+        };
+        /** FemPlaneRequest */
+        FemPlaneRequest: {
+            /** Channel */
+            channel?: string | null;
+            /** Frequency */
+            frequency?: number | null;
+            plane: components["schemas"]["FieldPlaneSpec"];
+            /**
+             * Quantity
+             * @default pressure
+             * @enum {string}
+             */
+            quantity?: "pressure" | "velocity_normal";
+            /**
+             * Scope
+             * @default combined
+             * @enum {string}
+             */
+            scope?: "interior" | "exterior" | "combined";
         };
         /** FieldPlaneRequest */
         FieldPlaneRequest: {
@@ -8962,6 +9048,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FemFieldPresentation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fem_field_plane_api_results__job_id__fem_field_plane_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FemPlaneRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FemPlanePresentation"];
                 };
             };
             /** @description Validation Error */

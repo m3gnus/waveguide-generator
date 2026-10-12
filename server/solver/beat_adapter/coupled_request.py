@@ -24,6 +24,7 @@ class CoupledRequest:
     frame: Mapping[str, Any]
     regions: tuple[FemRegionInput, ...]
     channel_ports: Mapping[str, tuple[str, ...]]
+    image_rotation: np.ndarray | None = None
 
     @property
     def warnings(self) -> tuple[str, ...]:
@@ -148,6 +149,14 @@ def build_coupled_request(
                        if output["id"].removeprefix("pressure:") in layout.planes)
         outputs.append({"id": "interface:velocity", "quantity": "interface_average_normal_velocity",
                         "target_ids": [], "options": {}})
+    if exterior is not None:
+        from server.jobs.bem_traces import check_trace_size
+
+        mesh = next(m["mesh_data"] for m in system["meshes"] if m["purpose"] == "bem_surface")
+        check_trace_size(len(frequencies), len(channels), mesh["points"]["shape"][0],
+                         mesh["cells"][0]["connectivity"]["shape"][0], precision)
+        outputs.extend({"id": q, "quantity": q, "target_ids": [], "options": {}}
+                       for q in ("bem_boundary_pressure", "bem_boundary_neumann"))
     outputs.append({"id": "fem:pressure", "quantity": "fem_nodal_pressure",
                     "target_ids": [], "options": {}})
     if transducers:
@@ -174,7 +183,7 @@ def build_coupled_request(
             "requested_backend": requested_backend, "requested_precision": requested_precision,
             "backend": backend, "precision": precision,
             "reason": "Interior-only FEM uses CPU float64"}
-    return CoupledRequest(wire, layout, frame, tuple(regions), channels)
+    return CoupledRequest(wire, layout, frame, tuple(regions), channels, rotation)
 
 
 def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any, *,

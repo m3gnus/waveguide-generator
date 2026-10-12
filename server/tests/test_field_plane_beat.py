@@ -78,7 +78,7 @@ def runtime(monkeypatch, tmp_path):
                 if state.failed:
                     yield dict(type="failed", error="field kernel failed")
                     return
-                values = np.full(len(arrays["points_m"]), arrays["boundary_pressure"][0], dtype="<c8")
+                values = np.asarray(state.field_function(arrays, wire), dtype="<c8") if hasattr(state, "field_function") else np.full(len(arrays["points_m"]), arrays["boundary_pressure"][0], dtype="<c8")
                 (path.parent / "field.bin").write_bytes(values.tobytes())
                 descriptor = dict(file="field.bin", offset=0, nbytes=values.nbytes,
                                   dtype="complex64", shape=[len(values)], order="C", byte_order="little")

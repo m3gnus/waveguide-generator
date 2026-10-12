@@ -24,10 +24,10 @@ def _encode(array: np.ndarray, dtype: str) -> str:
 
 
 def _pressure_slice(archive: zipfile.ZipFile, frequency: int, channel: int,
-                    shape: tuple[int, int, int]) -> np.ndarray:
+                    shape: tuple[int, int, int], *, member: str = "pressure") -> np.ndarray:
     # NPZ members are compressed NPY streams. Skipping discards preceding bytes in
     # bounded blocks; it never allocates the whole frequency/channel tensor.
-    with archive.open("pressure.npy") as stream:
+    with archive.open(f"{member}.npy") as stream:
         version = np.lib.format.read_magic(stream)
         if version == (1, 0):
             stored_shape, fortran, dtype = np.lib.format.read_array_header_1_0(stream)
@@ -35,8 +35,8 @@ def _pressure_slice(archive: zipfile.ZipFile, frequency: int, channel: int,
             stored_shape, fortran, dtype = np.lib.format.read_array_header_2_0(stream)
         else:
             raise FemFieldCorrupt("Unsupported FEM pressure array version")
-        if stored_shape != shape or dtype != np.dtype("complex128"):
-            raise FemFieldCorrupt("FEM pressure must be a complex128 frequency/channel/node array")
+        if stored_shape != shape or dtype not in {np.dtype("complex128"), np.dtype("complex64")}:
+            raise FemFieldCorrupt("FEM pressure must be a complex frequency/channel/node array")
         count = shape[2]
         if fortran:
             # Fortran NPY members interleave frequencies/channels per node.
@@ -165,7 +165,12 @@ def load_fem_field_payload(path: Path, frequency: float | None,
             surfaces = [{**surface, "triangles": _encode(block, "<u4")}
                         for surface, block in zip(surfaces, triangles)
                         if not planes or "group=_symmetry|" not in surface["name"]]
+            density = float(arrays["density_kg_per_m3"].item()) if "density_kg_per_m3" in arrays else None
+            if density is not None and (not np.isfinite(density) or density <= 0):
+                raise FemFieldCorrupt("Invalid FEM field density")
             return {
+                **({"density_kg_per_m3": density}
+                   if "density_kg_per_m3" in arrays else {}),
                 "schema": "wg-fem-field-v1",
                 "region_id": regions[0] if len(regions) == 1 else "all",
                 "frequency_hz": float(frequencies[frequency_index]),

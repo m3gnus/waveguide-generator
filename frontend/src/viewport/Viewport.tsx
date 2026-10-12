@@ -49,8 +49,8 @@ import { defaultFieldPlane, nearestFieldPlaneFrequencyIndex, useFieldPlaneStore 
 import { useObservationStore } from './observationStore';
 import { FemFieldControls } from './FemFieldControls';
 import { FemFieldScene } from './FemFieldScene';
-import type { FemFieldRendering } from './FemFieldView';
-import { useFemField } from './useFemField';
+import type { FemFieldRendering, FemDisplayMode } from './FemFieldView';
+import { useFemField, useFemPlane } from './useFemField';
 import type { FieldPlaneResponseId } from '../api/fieldPlane';
 import type { ImportedMeshScene } from './importedMesh';
 import { importedMeshStore, type ImportedMeshShowing } from './importedMeshStore';
@@ -428,6 +428,10 @@ export function Viewport() {
   const fieldEnabled = useFieldPlaneStore((state) => state.enabled);
   const fieldSource = useFieldPlaneStore((state) => state.source);
   const [femRendering, setFemRendering] = useState<FemFieldRendering>('smooth');
+  const [femScope, setFemScope] = useState<import('../api/femField').FemPlaneScope>('interior');
+  const [femQuantity, setFemQuantity] = useState<import('../api/femField').FemPlaneQuantity>('pressure');
+  const [femDisplayMode, setFemDisplayMode] = useState<FemDisplayMode | null>(null);
+  const [femManualWindow, setFemManualWindow] = useState<FieldPlaneValueWindow | null>(null);
   const fieldJobId = useFieldPlaneStore((state) => state.jobId);
   const fieldStatus = useFieldPlaneStore((state) => state.status);
   const fieldError = useFieldPlaneStore((state) => state.error);
@@ -449,6 +453,9 @@ export function Viewport() {
   const storedFieldWindow = useFieldPlaneStore((state) => state.windows[state.displayMode]);
   const femActive = fieldEnabled && fieldSource === 'fem' && fieldJobId === availableFemJob?.id;
   const femField = useFemField(femActive ? fieldJobId : null);
+  const effectiveFemScope = !femField.field || femField.field.payload.plane_scopes?.includes(femScope) ? femScope : 'interior';
+  const femPlane = useFemPlane(femActive ? fieldJobId : null, femField.field, fieldPlane, effectiveFemScope, femQuantity);
+  const needsFemPlane = effectiveFemScope !== 'interior';
   const selectedRef = useRef<DecodedFrame | null>(null);
   const solveWasRunningOrQueued = useRef(solveRunningOrQueued);
   const latencyClock = useRef(new ClientLatencyClock());
@@ -1022,7 +1029,7 @@ export function Viewport() {
       onRenderFailure={setRenderFailure}
       onCameraDirection={setCameraDirection}
     >
-      {femActive && femField.field && <FemFieldScene field={femField.field} rendering={femRendering}
+      {femActive && femField.field && (!needsFemPlane || femPlane.field) && <FemFieldScene field={femField.field} planeField={femPlane.field} quantity={femQuantity} scope={effectiveFemScope} displayMode={femDisplayMode ?? fieldDisplayMode} manualWindow={femManualWindow} rendering={femRendering}
         sequential={fieldColormap} unitsPerMetre={activeScene.unitsPerMetre}/>}
     </ViewportCanvas>}
 
@@ -1150,7 +1157,14 @@ export function Viewport() {
       </li>)}</ul>
     </div>}
 
-    {femActive && <FemFieldControls field={femField} rendering={femRendering} setRendering={setFemRendering} sequential={fieldColormap}>
+    {femActive && <FemFieldControls field={femField} planeResult={femPlane} scope={effectiveFemScope} setScope={setFemScope}
+      quantity={femQuantity} setQuantity={(q) => { setFemQuantity(q); setFemDisplayMode(q === 'pressure' ? null : 'real'); setFemManualWindow(null); }}
+      displayMode={femDisplayMode ?? fieldDisplayMode} setDisplayMode={(m) => {
+        if (m === 'real' || m === 'imaginary') setFemDisplayMode(m);
+        else { setFemDisplayMode(null); useFieldPlaneStore.getState().setDisplayMode(m); }
+        setFemManualWindow(null);
+      }}
+      manualWindow={femManualWindow} setManualWindow={setFemManualWindow} rendering={femRendering} setRendering={setFemRendering} sequential={fieldColormap}>
       <div className="field-plane-presets" role="group" aria-label="FEM field plane presets">
         <button type="button" onClick={() => applyFieldPlanePreset('h')}>H-plane</button>
         <button type="button" onClick={() => applyFieldPlanePreset('v')}>V-plane</button>

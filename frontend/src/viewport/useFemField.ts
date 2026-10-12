@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchFemField, type DecodedFemField } from '../api/femField';
+import { fetchFemPlane, fetchFemField, type DecodedFemField } from '../api/femField';
 
 const SELECTION_IDLE_MS = 250;
 
@@ -65,4 +65,31 @@ export function useFemField(jobId: string | null) {
     setChannel: (next: string) => { if (jobId) setSelection({ jobId, frequency, channel: next }); },
     retry: () => setRetry((value) => value + 1),
   };
+}
+
+/** Clear obsolete planes immediately, and debounce post-solve evaluations. */
+export function useFemPlane(jobId: string | null, field: DecodedFemField | null,
+  plane: import('../api/fieldPlane').FieldPlaneSpec | null,
+  scope: import('../api/femField').FemPlaneScope, quantity: import('../api/femField').FemPlaneQuantity) {
+  const key = jobId && field && plane && scope !== 'interior'
+    ? JSON.stringify([jobId, field.frequencyHz, field.payload.channel_id, plane, scope, quantity]) : null;
+  const [loaded, setLoaded] = useState<{ key: string; value: import('../api/femField').FemPlaneField } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    setError(null); setLoaded(null); setLoading(!!key);
+    if (!key || !jobId || !field || !plane) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void fetchFemPlane(jobId, plane, field.frequencyHz, field.payload.channel_id, scope === 'combined' ? 'exterior' : scope, quantity, controller.signal)
+        .then((value) => { if (!controller.signal.aborted) { setLoaded({ key, value }); setLoading(false); } })
+        .catch((reason: unknown) => { if (!controller.signal.aborted) {
+          setError(reason instanceof Error ? reason.message : 'Coupled plane could not be loaded'); setLoading(false);
+        } });
+    }, SELECTION_IDLE_MS);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [key, retry]);
+  return { field: loaded?.key === key ? loaded?.value : null, error, loading,
+    retry: () => setRetry((v) => v + 1) };
 }

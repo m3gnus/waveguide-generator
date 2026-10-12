@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { buildFemFieldGeometries } from './FemFieldView';
 import {
   clippedGhostEdges,
   decodeFemFieldPayload,
   elementMeanSlice,
   femFieldColors,
+  femNormalVelocitySlice,
   femSurfaceKind,
   FEM_ROLE_COLORS,
   sliceFemField,
@@ -218,4 +220,47 @@ describe('buildFemFieldGeometries', () => {
     expect(colors[0]).toBe(colors[3]);
     expect(colors[0]).toBe(colors[6]);
   });
+});
+
+it('particle velocity is constant on P1 cuts and reverses under reflection', () => {
+  const domain: FemFieldDomain = { regionId: 'air', surfaces: [],
+    points: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]), tetrahedra: new Uint32Array([0, 1, 2, 3]) };
+  const f = 100, rho = 1.21, c = 343, k = 2 * Math.PI * f / c;
+  const values = { real: new Float32Array([1, Math.cos(k * .001), 1, 1]),
+    imag: new Float32Array([0, Math.sin(k * .001), 0, 0]) };
+  const plane = { origin: [.2, 0, 0] as [number, number, number], normal: [1, 0, 0] as [number, number, number] };
+  const cut = femNormalVelocitySlice(domain, values, plane, f, rho);
+  expect(cut.real.length).toBeGreaterThan(0);
+  for (const v of cut.real) expect(v).toBeCloseTo(1 / (rho * c), 6);
+  const mirrored = { ...domain, points: Float32Array.from(domain.points, (v, i) => i % 3 === 0 ? -v : v) };
+  const mirrorCut = femNormalVelocitySlice(mirrored, values, { ...plane, origin: [-.2, 0, 0] }, f, rho);
+  expect(mirrorCut.real[0]).toBeCloseTo(-cut.real[0], 7);
+});
+
+it('real, imaginary and manual colour limits apply to retained plane geometry', () => {
+  const domain: FemFieldDomain = { regionId: 'air', surfaces: [], points: new Float32Array(0), tetrahedra: new Uint32Array(0) };
+  const values = { real: new Float32Array(0), imag: new Float32Array(0) };
+  const planeField = { positions: new Float32Array(9), real: new Float32Array([1, 1, 1]), imag: new Float32Array([-1, -1, -1]), unit: 'Pa' as const };
+  const options = { plane: { origin: [0, 0, 0] as [number, number, number], normal: [0, 0, 1] as [number, number, number] },
+    rendering: 'smooth' as const, sequential: ['#000000', '#ffffff'], planeField,
+    manualWindow: { minimum: -2, maximum: 2, unit: 'Pa' as const } };
+  const real = buildFemFieldGeometries(domain, values, { ...options, mode: 'real' });
+  const imag = buildFemFieldGeometries(domain, values, { ...options, mode: 'imaginary' });
+  expect(real.window).toEqual(options.manualWindow);
+  expect(Array.from(real.slice!.getAttribute('color').array)).not.toEqual(Array.from(imag.slice!.getAttribute('color').array));
+});
+
+it('combined rendering joins the exact tetrahedron cut to the exterior plane', () => {
+  const domain = cube(), values = linear(domain);
+  const options = { plane: { origin: [0, 0, 5] as [number, number, number], normal: [0, 0, 1] as [number, number, number] },
+    mode: 'normalized' as const, rendering: 'smooth' as const, sequential: ['#000000', '#ffffff'] };
+  const interior = buildFemFieldGeometries(domain, values, options);
+  const exterior = { positions: new Float32Array([20, 0, 5, 20, 10, 5, 30, 0, 5]),
+    real: new Float32Array([1, 2, 3]), imag: new Float32Array(3), unit: 'Pa' as const };
+  const combined = buildFemFieldGeometries(domain, values, { ...options, planeField: exterior, includeInterior: true });
+  const count = interior.slice!.getAttribute('position').count;
+  expect(combined.slice!.getAttribute('position').count).toBe(count + 3);
+  expect(Array.from(combined.slice!.getAttribute('position').array).slice(0, count * 3))
+    .toEqual(Array.from(interior.slice!.getAttribute('position').array));
+  expect(combined.fieldMaxSplDb).toBe(interior.fieldMaxSplDb);
 });

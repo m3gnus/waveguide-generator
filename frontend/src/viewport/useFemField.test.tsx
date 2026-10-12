@@ -1,8 +1,9 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { decodeFemFieldPayload } from './femField';
 import { femFieldFixture } from './test-fixtures/femField';
-import { useFemField } from './useFemField';
+import { useFemField, useFemPlane } from './useFemField';
 
 let current: ReturnType<typeof useFemField>;
 function Reader({ jobId, onRender }: { jobId: string | null; onRender?: () => void }) {
@@ -109,4 +110,45 @@ describe('FEM result selection fencing', () => {
     expect(current.field).toBeNull();
     expect(current.channels).toEqual([]);
   });
+});
+
+let currentPlane: ReturnType<typeof useFemPlane>;
+function PlaneReader({ jobId, scope, quantity, x = 0 }: { jobId: string | null;
+  scope: 'interior' | 'exterior' | 'combined'; quantity: 'pressure' | 'velocity_normal'; x?: number }) {
+  const payload = femFieldFixture();
+  const field = { ...decodeFemFieldPayload(payload), payload };
+  currentPlane = useFemPlane(jobId, field, { origin_m: [x, 0, 0], axis_u: [1, 0, 0], axis_v: [0, 1, 0],
+    width_m: 1, height_m: 1, nx: 2, ny: 2 }, scope, quantity);
+  return null;
+}
+
+it('coupled plane requests debounce, abort and discard obsolete results', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  vi.useFakeTimers();
+  const host = document.createElement('div'), root = createRoot(host);
+  const pending: Array<{ resolve: (r: Response) => void; signal: AbortSignal }> = [];
+  const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, options) => new Promise((resolve) => {
+    pending.push({ resolve, signal: options!.signal as AbortSignal });
+  }));
+  const reply = () => new Response(JSON.stringify({ nx: 2, ny: 2,
+    points_mm: btoa(String.fromCharCode(...new Uint8Array(new Float32Array(12).buffer))),
+    pressure_real: btoa(String.fromCharCode(...new Uint8Array(new Float32Array([1, 1, 1, 1]).buffer))),
+    pressure_imag: btoa(String.fromCharCode(...new Uint8Array(new Float32Array(4).buffer))),
+    valid_mask: btoa(String.fromCharCode(1, 1, 1, 1)), frequency_hz: 100, channel_id: 'front',
+    scope: 'exterior', quantity: 'pressure', phasor_convention: 'exp(-i omega t)', unit: 'Pa' }));
+  try {
+    act(() => root.render(<PlaneReader jobId="one" scope="combined" quantity="pressure"/>));
+    await act(async () => vi.advanceTimersByTimeAsync(250));
+    expect(JSON.parse(fetchSpy.mock.calls[0][1]!.body as string).scope).toBe('exterior');
+    act(() => root.render(<PlaneReader jobId="one" scope="combined" quantity="pressure" x={1}/>));
+    expect(pending[0].signal.aborted).toBe(true); expect(currentPlane.field).toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(250));
+    await act(async () => pending[1].resolve(reply()));
+    expect(currentPlane.field?.real.length).toBe(6);
+    await act(async () => pending[0].resolve(reply()));
+    expect(currentPlane.field?.real.length).toBe(6);
+    act(() => root.render(<PlaneReader jobId="one" scope="interior" quantity="velocity_normal"/>));
+    await act(async () => vi.advanceTimersByTimeAsync(250));
+    expect(fetchSpy).toHaveBeenCalledTimes(2); expect(currentPlane.field).toBeNull();
+  } finally { act(() => root.unmount()); vi.useRealTimers(); vi.restoreAllMocks(); }
 });

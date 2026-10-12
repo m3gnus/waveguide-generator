@@ -14,6 +14,7 @@ import {
   FEM_GHOST_STYLE,
   FEM_ROLE_COLORS,
   femFieldColors,
+  femNormalVelocitySlice,
   sliceFemField,
   type ComplexNodal,
   type FemFieldDomain,
@@ -21,6 +22,7 @@ import {
   type SlicePlane,
 } from './femField';
 
+export type FemDisplayMode = FieldPlaneDisplayMode | 'real' | 'imaginary';
 export type FemFieldRendering = 'smooth' | 'element';
 
 export interface FemFieldGeometries {
@@ -29,6 +31,7 @@ export interface FemFieldGeometries {
   slice: BufferGeometry | null;
   ghost: BufferGeometry | null;
   window: FieldPlaneValueWindow | null;
+  fieldMaxSplDb: number;
 }
 
 /** Build every three.js geometry the FEM view draws, in millimetres. */
@@ -37,7 +40,11 @@ export function buildFemFieldGeometries(
   values: ComplexNodal,
   options: {
     plane: SlicePlane | null;
-    mode: FieldPlaneDisplayMode;
+    mode: FemDisplayMode;
+    includeInterior?: boolean;
+    planeField?: import('../api/femField').FemPlaneField | null;
+    manualWindow?: FieldPlaneValueWindow | null;
+    velocity?: { frequencyHz: number; density: number };
     rendering: FemFieldRendering;
     sequential: readonly string[];
     phaseRadians?: number;
@@ -58,18 +65,40 @@ export function buildFemFieldGeometries(
       geometry.computeVertexNormals();
       surfaces.push({ kind, geometry });
     }
-    return { surfaces, slice: null, ghost: null, window: null };
+    return { surfaces, slice: null, ghost: null, window: null, fieldMaxSplDb: 0 };
   }
-  const cut = sliceFemField(domain, values, options.plane);
-  const shown = options.rendering === 'element' ? elementMeanSlice(domain, values, cut) : cut;
-  // The window comes from the nodal field, not the slice, so moving the plane
-  // does not rescale the colours under the user.
-  const window = fieldPlaneWindowForMode(options.mode, values.real, values.imag);
-  const { colors } = femFieldColors(shown, options.mode, {
+  const mode = options.mode === 'real' || options.mode === 'imaginary' ? 'instantaneous' : options.mode;
+  const phaseRadians = options.mode === 'real' ? 0 : options.mode === 'imaginary' ? Math.PI / 2 : options.phaseRadians;
+  const empty = { positions: new Float32Array(0), real: new Float32Array(0),
+    imag: new Float32Array(0), tetrahedron: new Uint32Array(0) };
+  const interior = options.planeField && !options.includeInterior ? empty : options.velocity
+    ? femNormalVelocitySlice(domain, values, options.plane, options.velocity.frequencyHz, options.velocity.density)
+    : sliceFemField(domain, values, options.plane);
+  const interiorShown = !options.velocity && options.rendering === 'element'
+    ? elementMeanSlice(domain, values, interior) : interior;
+  const join = (a: Float32Array, b: Float32Array) => {
+    const joined = new Float32Array(a.length + b.length); joined.set(a); joined.set(b, a.length); return joined;
+  };
+  const exterior = options.planeField;
+  const cut = exterior ? {
+    positions: options.includeInterior ? join(interior.positions, exterior.positions) : exterior.positions,
+    real: options.includeInterior ? join(interiorShown.real, exterior.real) : exterior.real,
+    imag: options.includeInterior ? join(interiorShown.imag, exterior.imag) : exterior.imag,
+    tetrahedron: new Uint32Array(0),
+  } : interior;
+  const shown = exterior ? cut : interiorShown;
+  // Pressure uses all retained interior nodes, keeping the colour range
+  // stable as the cut moves. Velocity uses the exact element values on the cut.
+  const reference = options.velocity ? shown : exterior
+    ? options.includeInterior ? { real: join(values.real, exterior.real), imag: join(values.imag, exterior.imag) } : exterior
+    : values;
+  const window = options.manualWindow ?? fieldPlaneWindowForMode(mode, reference.real, reference.imag);
+  const fieldMaxSplDb = maxFieldSplDb(reference.real, reference.imag);
+  const { colors } = femFieldColors(shown, mode, {
     sequential: options.sequential,
-    phaseRadians: options.phaseRadians,
+    phaseRadians,
     window,
-    fieldMaxSplDb: maxFieldSplDb(values.real, values.imag),
+    fieldMaxSplDb,
   });
   const slice = new BufferGeometry();
   slice.setAttribute('position', new BufferAttribute(cut.positions, 3));
@@ -78,14 +107,18 @@ export function buildFemFieldGeometries(
   slice.setAttribute('pressureImag', new BufferAttribute(shown.imag, 1));
   const ghost = new BufferGeometry();
   ghost.setAttribute('position', new BufferAttribute(clippedGhostEdges(domain, options.plane), 3));
-  return { surfaces, slice, ghost, window };
+  return { surfaces, slice, ghost, window, fieldMaxSplDb };
 }
 
 interface FemFieldViewProps {
   domain: FemFieldDomain;
   values: ComplexNodal;
   plane: SlicePlane | null;
-  mode: FieldPlaneDisplayMode;
+  mode: FemDisplayMode;
+  includeInterior?: boolean;
+  planeField?: import('../api/femField').FemPlaneField | null;
+  manualWindow?: FieldPlaneValueWindow | null;
+  velocity?: { frequencyHz: number; density: number };
   rendering: FemFieldRendering;
   sequential: readonly string[];
   /** Scene units per metre; the FEM domain is in millimetres. */
@@ -102,15 +135,15 @@ interface FemFieldViewProps {
  * the kept half-volume with the walls hidden.
  */
 export function FemFieldView({
-  domain, values, plane, mode, rendering, sequential, unitsPerMetre, phaseRadians, animating = false, animationSpeed = 1,
+  domain, values, plane, mode, planeField, includeInterior, manualWindow, velocity, rendering, sequential, unitsPerMetre, phaseRadians, animating = false, animationSpeed = 1,
 }: FemFieldViewProps) {
   const built = useMemo(
-    () => buildFemFieldGeometries(domain, values, { plane, mode, rendering, sequential, phaseRadians }),
-    [domain, values, plane, mode, rendering, sequential, phaseRadians],
+    () => buildFemFieldGeometries(domain, values, { plane, mode, planeField, includeInterior, manualWindow, velocity, rendering, sequential, phaseRadians }),
+    [domain, values, plane, mode, planeField, includeInterior, manualWindow, velocity, rendering, sequential, phaseRadians],
   );
   const invalidate = useThree((state) => state.invalidate);
   const phase = useRef(0);
-  const fieldMaxSplDb = useMemo(() => maxFieldSplDb(values.real, values.imag), [values]);
+  const fieldMaxSplDb = built.fieldMaxSplDb;
   // Animation recolours the existing cut; it never recuts tetrahedra or
   // rebuilds ghost geometry on every frame.
   const recolor = (phaseRadians: number) => {
@@ -119,8 +152,8 @@ export function FemFieldView({
       real: built.slice.getAttribute('pressureReal').array as Float32Array,
       imag: built.slice.getAttribute('pressureImag').array as Float32Array,
     };
-    const { colors } = femFieldColors(shown, mode, {
-      sequential, phaseRadians, window: built.window,
+    const { colors } = femFieldColors(shown, mode === 'real' || mode === 'imaginary' ? 'instantaneous' : mode, {
+      sequential, phaseRadians: mode === 'real' ? 0 : mode === 'imaginary' ? Math.PI / 2 : phaseRadians, window: built.window,
       fieldMaxSplDb,
     });
     const attribute = built.slice.getAttribute('color');
@@ -128,7 +161,7 @@ export function FemFieldView({
     attribute.needsUpdate = true;
   };
   useFrame((_state, delta) => {
-    if (!animating) return;
+    if (!animating || mode === 'real' || mode === 'imaginary') return;
     phase.current = advanceFieldPlanePhase(phase.current, delta, animationSpeed);
     recolor(phase.current);
     invalidate();

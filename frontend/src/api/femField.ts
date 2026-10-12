@@ -8,6 +8,8 @@ export interface FemFieldResponse extends FemFieldPayload {
   phasor_convention: 'exp(-i omega t)';
   drive_normalization: 'unit_acceleration_m_per_s2' | 'unit_acceleration' | 'voltage_rms';
   transducer_reference_voltage_v?: number | null;
+  density_kg_per_m3?: number | null;
+  plane_scopes?: FemPlaneScope[];
 }
 
 export async function fetchFemField(jobId: string, frequency?: number, channel?: string, signal?: AbortSignal) {
@@ -24,6 +26,7 @@ export async function fetchFemField(jobId: string, frequency?: number, channel?:
     || payload.channel_ids.some((id) => typeof id !== 'string' || !id)
     || !payload.frequencies_hz.includes(payload.frequency_hz)
     || !payload.channel_ids.includes(payload.channel_id)
+    || (payload.density_kg_per_m3 != null && (!Number.isFinite(payload.density_kg_per_m3) || payload.density_kg_per_m3 <= 0))
     || payload.phasor_convention !== 'exp(-i omega t)'
     || !['unit_acceleration_m_per_s2', 'unit_acceleration', 'voltage_rms'].includes(payload.drive_normalization)
     || (payload.drive_normalization === 'voltage_rms'
@@ -32,3 +35,53 @@ export async function fetchFemField(jobId: string, frequency?: number, channel?:
 }
 
 export type DecodedFemField = Awaited<ReturnType<typeof fetchFemField>>;
+
+export type FemPlaneScope = 'interior' | 'exterior' | 'combined';
+export type FemPlaneQuantity = 'pressure' | 'velocity_normal';
+export interface FemPlaneField {
+  positions: Float32Array;
+  real: Float32Array;
+  imag: Float32Array;
+  unit: 'Pa' | 'm/s';
+}
+
+/** Convert a masked grid to triangles; never bridge a solid or invalid sample. */
+export function decodeFemPlane(payload: {
+  nx: number; ny: number; points_mm: string; pressure_real: string; pressure_imag: string;
+  valid_mask: string; unit: 'Pa' | 'm/s';
+}): FemPlaneField {
+  const bytes = (value: string) => Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
+  const floats = (value: string) => {
+    const raw = bytes(value); const view = new DataView(raw.buffer);
+    if (raw.length % 4) throw new Error('Invalid coupled plane array');
+    return Float32Array.from({ length: raw.length / 4 }, (_, i) => view.getFloat32(i * 4, true));
+  };
+  const points = floats(payload.points_mm), real = floats(payload.pressure_real), imag = floats(payload.pressure_imag);
+  const valid = bytes(payload.valid_mask), count = payload.nx * payload.ny;
+  if (!Number.isSafeInteger(payload.nx) || !Number.isSafeInteger(payload.ny) || payload.nx < 2 || payload.ny < 2
+    || payload.nx > 256 || payload.ny > 256 || points.length !== count * 3 || real.length !== count
+    || imag.length !== count || valid.length !== count || valid.some((v) => v > 1)
+    || points.some((v) => !Number.isFinite(v)) || real.some((v) => !Number.isFinite(v)) || imag.some((v) => !Number.isFinite(v)))
+    throw new Error('Invalid coupled plane grid');
+  const indices: number[] = [];
+  for (let j = 0; j < payload.ny - 1; j++) for (let i = 0; i < payload.nx - 1; i++) {
+    const a = j * payload.nx + i, b = a + 1, c = a + payload.nx, d = c + 1;
+    for (const triangle of [[a, b, d], [a, d, c]]) if (triangle.every((v) => valid[v])) indices.push(...triangle);
+  }
+  return { positions: Float32Array.from(indices.flatMap((i) => [points[i * 3], points[i * 3 + 1], points[i * 3 + 2]])),
+    real: Float32Array.from(indices.map((i) => real[i])), imag: Float32Array.from(indices.map((i) => imag[i])), unit: payload.unit };
+}
+
+export async function fetchFemPlane(jobId: string, plane: import('./fieldPlane').FieldPlaneSpec,
+  frequency: number, channel: string, scope: FemPlaneScope, quantity: FemPlaneQuantity, signal: AbortSignal) {
+  const response = await fetch(`/api/results/${encodeURIComponent(jobId)}/fem-field/plane`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+    body: JSON.stringify({ plane, frequency, channel, scope, quantity }),
+  });
+  if (!response.ok) throw new Error(`Coupled field plane request failed (${response.status}).`);
+  const payload = await response.json();
+  if (payload.frequency_hz !== frequency || payload.channel_id !== channel || payload.scope !== scope
+    || payload.quantity !== quantity || payload.phasor_convention !== 'exp(-i omega t)'
+    || payload.unit !== (quantity === 'pressure' ? 'Pa' : 'm/s')) throw new Error('Invalid coupled plane metadata');
+  return decodeFemPlane(payload);
+}

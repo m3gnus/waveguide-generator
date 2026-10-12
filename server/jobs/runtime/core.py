@@ -3938,7 +3938,14 @@ class JobRuntime:
                 for j, name in enumerate(names):
                     arrays[f"surface_triangles_{index}_{j}"] = region.domain.surfaces[name]
             self._check_cancelled(job_id)
+            arrays["density_kg_per_m3"] = np.asarray(compiled.regions[0].record["medium"]["density_kg_per_m3"])
             self.store.store_fem_field_arrays(job_id, arrays)
+            from server.jobs.bem_traces import trace_arrays
+
+            traces = trace_arrays(compiled, sweep)
+            if traces is not None:
+                self._check_cancelled(job_id)
+                self.store.store_bem_trace_arrays(job_id, traces)
             return (None if "voltage_rms" in compiled.drive_normalization.values()
                     else serialize_channel_bases(sweep.channels))
 

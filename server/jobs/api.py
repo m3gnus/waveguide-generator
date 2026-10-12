@@ -30,6 +30,7 @@ from server.jobs.models import (
     ClearFailedResponse,
     DeleteResponse,
     FieldPlaneRequest,
+    FieldPlaneSpec,
     JobListResponse,
     JobMetadataPatch,
     JobStatusResponse,
@@ -170,6 +171,31 @@ class FemFieldPresentation(BaseModel):
     phasor_convention: Literal["exp(-i omega t)"]
     drive_normalization: Literal["unit_acceleration_m_per_s2", "unit_acceleration", "voltage_rms"]
     transducer_reference_voltage_v: float | None = None
+    density_kg_per_m3: float | None = None
+    plane_scopes: list[Literal["interior", "exterior", "combined"]] = Field(default_factory=lambda: ["interior"])
+
+
+class FemPlaneRequest(BaseModel):
+    plane: FieldPlaneSpec
+    frequency: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    channel: str | None = Field(default=None, min_length=1)
+    scope: Literal["interior", "exterior", "combined"] = "combined"
+    quantity: Literal["pressure", "velocity_normal"] = "pressure"
+
+
+class FemPlanePresentation(BaseModel):
+    frequency_hz: float
+    channel_id: str
+    scope: Literal["interior", "exterior", "combined"]
+    quantity: Literal["pressure", "velocity_normal"]
+    unit: Literal["Pa", "m/s"]
+    phasor_convention: Literal["exp(-i omega t)"]
+    nx: int
+    ny: int
+    points_mm: str
+    pressure_real: str
+    pressure_imag: str
+    valid_mask: str
 
 
 class EngineSubstitution(BaseModel):
@@ -993,6 +1019,37 @@ def create_jobs_router(
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         except FemFieldInvalidSelection as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if payload is None:
+            raise HTTPException(status_code=404, detail="No retained FEM field for this job")
+        return StreamingResponse(_json_chunks(payload), media_type="application/json",
+                                 headers={"Cache-Control": "no-store"})
+
+    @router.post("/api/results/{job_id}/fem-field/plane", response_model=FemPlanePresentation)
+    async def fem_field_plane(job_id: str, selection: FemPlaneRequest) -> Response:
+        """Raw channel plane; masked samples are zero with valid_mask=0.
+
+        P1 interior normal velocity is exact per tetrahedron. Exterior normal
+        velocity uses centred differences of the official BEAT potential.
+        """
+        from server.jobs.coupled_field import evaluate_coupled_plane_async
+
+        if not fem_regions_enabled():
+            raise HTTPException(status_code=404, detail="FEM fields are turned off")
+        row = await asyncio.to_thread(runtime.store.get_job_row, job_id)
+        if row is None or row["status"] != "complete":
+            raise HTTPException(status_code=404, detail="No completed FEM field for this job")
+        try:
+            payload = await evaluate_coupled_plane_async(runtime.store, job_id, selection, runtime.field_plane_service)
+        except (FieldEvaluationBusy, FieldEvaluationSuperseded) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except FemFieldInvalidSelection as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except FieldPlaneUnsupported as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except FieldPlaneTimedOut as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except (FemFieldCorrupt, FieldPlaneEvaluationFailed) as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         if payload is None:
             raise HTTPException(status_code=404, detail="No retained FEM field for this job")
         return StreamingResponse(_json_chunks(payload), media_type="application/json",

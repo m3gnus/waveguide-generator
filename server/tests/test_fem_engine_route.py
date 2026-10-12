@@ -67,7 +67,7 @@ def test_coupled_wire_passes_pinned_engine_contract():
     assert list(request.channel_ports) == ["exterior", "fem"]
     assert [o["quantity"] for o in request.wire["outputs"]] == (
         ["exterior_pressure"] * 3 + ["interface_radiated_pressure"] * 2
-        + ["interface_average_normal_velocity", "fem_nodal_pressure"])
+        + ["interface_average_normal_velocity", "bem_boundary_pressure", "bem_boundary_neumann", "fem_nodal_pressure"])
     options = request.wire["solver_options"]
     assert options["precision"] == "float64"
     assert options["regular_quadrature_mode"] == "fixed"
@@ -514,7 +514,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
                 with pytest.raises(ValueError, match="exterior transducer jobs require an explicit"):
                     SolveRequest.model_validate(override.model_dump())
                 assert len(runtime.requests) == 1
-                assert worker_operations == ["field-npz"]
+                assert worker_operations == ["field-npz", "field-npz"]
                 return
             second = await job_runtime.submit(override)
             await job_runtime.wait_idle()
@@ -522,7 +522,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
             assert job_runtime.store.get_fem_field(second) is None
             assert exterior_runs == [True]
             assert len(runtime.requests) == 1
-            assert worker_operations == (["field-npz"] if voltage else ["field-npz", "basis", "basis-npz"])
+            assert worker_operations == (["field-npz", "field-npz"] if voltage else ["field-npz", "field-npz", "basis", "basis-npz"])
         finally:
             await job_runtime.shutdown()
     asyncio.run(scenario())

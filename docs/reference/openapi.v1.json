@@ -4156,6 +4156,17 @@
             "title": "Channel Ids",
             "type": "array"
           },
+          "density_kg_per_m3": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Density Kg Per M3"
+          },
           "drive_normalization": {
             "enum": [
               "unit_acceleration_m_per_s2",
@@ -4180,6 +4191,18 @@
             "const": "exp(-i omega t)",
             "title": "Phasor Convention",
             "type": "string"
+          },
+          "plane_scopes": {
+            "items": {
+              "enum": [
+                "interior",
+                "exterior",
+                "combined"
+              ],
+              "type": "string"
+            },
+            "title": "Plane Scopes",
+            "type": "array"
           },
           "points_mm": {
             "title": "Points Mm",
@@ -4259,6 +4282,143 @@
           "triangles"
         ],
         "title": "FemFieldSurface",
+        "type": "object"
+      },
+      "FemPlanePresentation": {
+        "properties": {
+          "channel_id": {
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "frequency_hz": {
+            "title": "Frequency Hz",
+            "type": "number"
+          },
+          "nx": {
+            "title": "Nx",
+            "type": "integer"
+          },
+          "ny": {
+            "title": "Ny",
+            "type": "integer"
+          },
+          "phasor_convention": {
+            "const": "exp(-i omega t)",
+            "title": "Phasor Convention",
+            "type": "string"
+          },
+          "points_mm": {
+            "title": "Points Mm",
+            "type": "string"
+          },
+          "pressure_imag": {
+            "title": "Pressure Imag",
+            "type": "string"
+          },
+          "pressure_real": {
+            "title": "Pressure Real",
+            "type": "string"
+          },
+          "quantity": {
+            "enum": [
+              "pressure",
+              "velocity_normal"
+            ],
+            "title": "Quantity",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "interior",
+              "exterior",
+              "combined"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "unit": {
+            "enum": [
+              "Pa",
+              "m/s"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "valid_mask": {
+            "title": "Valid Mask",
+            "type": "string"
+          }
+        },
+        "required": [
+          "frequency_hz",
+          "channel_id",
+          "scope",
+          "quantity",
+          "unit",
+          "phasor_convention",
+          "nx",
+          "ny",
+          "points_mm",
+          "pressure_real",
+          "pressure_imag",
+          "valid_mask"
+        ],
+        "title": "FemPlanePresentation",
+        "type": "object"
+      },
+      "FemPlaneRequest": {
+        "properties": {
+          "channel": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "frequency": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequency"
+          },
+          "plane": {
+            "$ref": "#/components/schemas/FieldPlaneSpec"
+          },
+          "quantity": {
+            "default": "pressure",
+            "enum": [
+              "pressure",
+              "velocity_normal"
+            ],
+            "title": "Quantity",
+            "type": "string"
+          },
+          "scope": {
+            "default": "combined",
+            "enum": [
+              "interior",
+              "exterior",
+              "combined"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plane"
+        ],
+        "title": "FemPlaneRequest",
         "type": "object"
       },
       "FieldPlaneRequest": {
@@ -15822,6 +15982,56 @@
           }
         },
         "summary": "Fem Field"
+      }
+    },
+    "/api/results/{job_id}/fem-field/plane": {
+      "post": {
+        "description": "Raw channel plane; masked samples are zero with valid_mask=0.\n\nP1 interior normal velocity is exact per tetrahedron. Exterior normal\nvelocity uses centred differences of the official BEAT potential.",
+        "operationId": "fem_field_plane_api_results__job_id__fem_field_plane_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FemPlaneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FemPlanePresentation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fem Field Plane"
       }
     },
     "/api/results/{job_id}/field-plane": {

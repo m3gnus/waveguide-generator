@@ -203,7 +203,13 @@ def coupled_result(request, frequency):
         interface = output["quantity"] == "interface_average_normal_velocity"
         radiation = output["quantity"] == "interface_radiated_pressure"
         drivers = [c for c in request["compiled_system"]["components"] if c["kind"] == "electrodynamic_transducer"]
-        count = sum(counts) if fem else len(drivers) if transducer else len(interfaces) if interface else len(output["options"]["points_m"])
+        bem_pressure = output["quantity"] == "bem_boundary_pressure"
+        bem_neumann = output["quantity"] == "bem_boundary_neumann"
+        bem = bem_pressure or bem_neumann
+        bem_mesh = next((m for m in system["meshes"] if m["purpose"] == "bem_surface"), None)
+        bem_count = (bem_mesh["mesh_data"]["points"]["shape"][0] if bem_pressure else
+                     bem_mesh["mesh_data"]["cells"][0]["connectivity"]["shape"][0]) if bem else 0
+        count = bem_count if bem else sum(counts) if fem else len(drivers) if transducer else len(interfaces) if interface else len(output["options"]["points_m"])
         values = np.asarray([np.full(count, (i + 1) * (2 + 3j)) for i in range(len(ports))], dtype="<c8" if request["solver_options"]["precision"] == "float32" else "<c16")
         extra = {"metadata": metadata} if fem else {}
         if transducer:
@@ -215,6 +221,12 @@ def coupled_result(request, frequency):
         else:
             unit = "Pa"
         axes = ["excitation", "fem_node" if fem else "transducer" if transducer else "observation"]
+        if bem:
+            unit = "Pa" if bem_pressure else "Pa/m"
+            axes = ["excitation", "bem_node" if bem_pressure else "bem_face"]
+            prefix = "vertex" if bem_pressure else "face"
+            extra = {"metadata": {"mesh_ids": [bem_mesh["id"]], f"{prefix}_offsets": [0],
+                                  f"{prefix}_counts": [bem_count]}}
         if interface:
             unit = "m/s"
             axes = ["excitation", "interface"]

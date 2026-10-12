@@ -2360,6 +2360,30 @@ class JobStore:
     def _fem_field_path(self, job_id: str) -> Path:
         return field_trace_artifact_dir(job_id, artifact_root=self.field_traces_dir) / "fem-field.npz"
 
+    def _bem_traces_path(self, job_id: str) -> Path:
+        return self._fem_field_path(job_id).with_name("bem-traces.npz")
+
+    def store_bem_trace_arrays(self, job_id: str, arrays: Mapping[str, Any]) -> bool:
+        import numpy as np
+        from server.jobs.bem_traces import MAX_BEM_TRACE_BYTES
+
+        if sum(np.asarray(a).nbytes for a in arrays.values()) > MAX_BEM_TRACE_BYTES:
+            raise ValueError("Coupled BEM trace sidecar exceeds 256 MiB")
+        return self._publish_fem_field(job_id, lambda stream: np.savez_compressed(stream, **arrays), bem=True)
+
+    def load_bem_traces(self, job_id: str, frequency: float, channel: str):
+        from server.jobs.bem_traces import load_bem_traces
+
+        with self._lock:
+            row = self.get_job_row(job_id)
+            if row is None or not row["task_metadata"].get("has_bem_traces_artifact"):
+                return None
+            path = self._bem_traces_path(job_id)
+        try:
+            return load_bem_traces(path, frequency, channel)
+        except FileNotFoundError:
+            return None
+
     def store_fem_field(self, job_id: str, payload: bytes) -> bool:
         """Publish a lossless file sidecar; advertise it in existing task metadata."""
         return self._publish_fem_field(job_id, lambda stream: stream.write(payload))
@@ -2370,11 +2394,13 @@ class JobStore:
 
         return self._publish_fem_field(job_id, lambda stream: np.savez_compressed(stream, **arrays))
 
-    def _publish_fem_field(self, job_id: str, write) -> bool:
+    def _publish_fem_field(self, job_id: str, write, *, bem: bool = False) -> bool:
         # Writing and compressing can take seconds for a large field, so it
         # happens in staging without the store lock; only the existence check,
         # the rename and the metadata update are serialised with deletion.
-        path = self._fem_field_path(job_id)
+        path = self._bem_traces_path(job_id) if bem else self._fem_field_path(job_id)
+        marker = "has_bem_traces_artifact" if bem else "has_fem_field_artifact"
+        bytes_key = "bem_traces_artifact_bytes" if bem else "fem_field_artifact_bytes"
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
             fd, name = tempfile.mkstemp(prefix=".fem-", dir=path.parent)
@@ -2400,8 +2426,8 @@ class JobStore:
                     conn.execute(
                         """UPDATE simulation_jobs SET task_metadata_json = json_set(
                            COALESCE(task_metadata_json, '{}'),
-                           '$.has_fem_field_artifact', json('true'), '$.fem_field_artifact_bytes', ?),
-                           updated_at = ? WHERE id = ?""", (size_bytes, _now_iso(), job_id))
+                           ?, json('true'), ?, ?),
+                           updated_at = ? WHERE id = ?""", (f'$.{marker}', f'$.{bytes_key}', size_bytes, _now_iso(), job_id))
                 except BaseException:
                     path.unlink(missing_ok=True)
                     raise
@@ -2430,7 +2456,10 @@ class JobStore:
                 return None
             path = self._fem_field_path(job_id)
         try:
-            return load_fem_field_payload(path, frequency, channel)
+            payload = load_fem_field_payload(path, frequency, channel)
+            if row["task_metadata"].get("has_bem_traces_artifact") and self._bem_traces_path(job_id).is_file():
+                payload["plane_scopes"] = ["interior", "exterior", "combined"]
+            return payload
         except FileNotFoundError:
             return None
 
@@ -2441,9 +2470,14 @@ class JobStore:
             conn.execute(
                 """UPDATE simulation_jobs SET task_metadata_json = json_set(
                    COALESCE(task_metadata_json, '{}'),
-                   '$.has_fem_field_artifact', json('false'), '$.fem_field_artifact_bytes', json('null')),
+                   '$.has_fem_field_artifact', json('false'), '$.fem_field_artifact_bytes', json('null'),
+                       '$.has_bem_traces_artifact', json('false'), '$.bem_traces_artifact_bytes', json('null')),
                    updated_at = ? WHERE id = ?""", (_now_iso(), job_id))
             _unlink_or_log(path)
+            _unlink_or_log(self._bem_traces_path(job_id))
+            conn.execute("""UPDATE simulation_jobs SET task_metadata_json = json_remove(
+                task_metadata_json, '$.has_bem_traces_artifact', '$.bem_traces_artifact_bytes')
+                WHERE id = ?""", (job_id,))
         return existed
 
     def store_radiation_impedance(self, job_id: str, matrix_npz: bytes) -> None:
@@ -2859,6 +2893,8 @@ class JobStore:
                     f"""UPDATE simulation_jobs
                         SET task_metadata_json = json_set(
                               COALESCE(task_metadata_json, '{{}}'),
+                              '$.has_bem_traces_artifact', json('false'),
+                              '$.bem_traces_artifact_bytes', json('null'),
                               '$.has_fem_field_artifact', json('false'),
                               '$.fem_field_artifact_bytes', json('null'),
                               '$.has_pressure_basis_artifact', json('false'),
@@ -2965,6 +3001,7 @@ class JobStore:
             )
         for job_id in running_ids:
             _unlink_or_log(self._fem_field_path(job_id))
+            _unlink_or_log(self._bem_traces_path(job_id))
         # Staging files have no metadata and cannot survive a process restart.
         for directory in self.field_traces_dir.iterdir() if self.field_traces_dir.exists() else ():
             if not directory.is_dir() or directory.is_symlink():
@@ -3175,7 +3212,8 @@ class JobStore:
                 conn.execute(
                     """UPDATE simulation_jobs SET task_metadata_json = json_set(
                        COALESCE(task_metadata_json, '{}'),
-                       '$.has_fem_field_artifact', json('false'), '$.fem_field_artifact_bytes', json('null'))
+                       '$.has_fem_field_artifact', json('false'), '$.fem_field_artifact_bytes', json('null'),
+                       '$.has_bem_traces_artifact', json('false'), '$.bem_traces_artifact_bytes', json('null'))
                        WHERE id = ?""", (job_id,))
             trace_rows = conn.execute(
                 """SELECT simulation_field_traces.job_id,
@@ -3354,6 +3392,7 @@ class JobStore:
             )
         for job_id in fem_ids:
             _unlink_or_log(self._fem_field_path(job_id))
+            _unlink_or_log(self._bem_traces_path(job_id))
         if deleted_results != len(removed_ids):  # pragma: no cover - SQLite rowcount invariant
             logger.warning(
                 "Retention selected %d result ids but SQLite reported %d deletions",

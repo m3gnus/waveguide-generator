@@ -447,6 +447,8 @@ class CoupledSweep:
     interface_radiation: dict[str, np.ndarray] = field(default_factory=dict)  # layout, frequency/basis/source/point
     interface_areas_m2: list[float] = field(default_factory=list)
     interface_radiation_source_ids: list[str] = field(default_factory=list)
+    bem_pressure: np.ndarray | None = None  # frequency, channel, BEM node
+    bem_neumann: np.ndarray | None = None  # frequency, channel, BEM face
 
 
 def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_result=None,
@@ -462,6 +464,7 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                 "region_ids": [f"region:fem:{item.domain.region_id}" for item in domains],
                 "node_counts": counts, "node_offsets": np.cumsum([0, *counts[:-1]]).tolist()}
     system = request.wire["compiled_system"]
+    bem_mesh = next((m for m in system["meshes"] if m["purpose"] == "bem_surface"), None)
     interface_ids = [i["id"] for i in system["interfaces"]]
     exterior_ids = {r["id"] for r in system["regions"] if r["kind"] == "unbounded_air"}
     radiation_ids = interface_ids + (["radiation:other-exterior"] if any(
@@ -514,11 +517,16 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                     transducer = output["quantity"] in {"diaphragm_velocity", "voice_coil_current"}
                     interface = output["quantity"] == "interface_average_normal_velocity"
                     radiation = output["quantity"] == "interface_radiated_pressure"
-                    axis = "fem_node" if fem else "transducer" if transducer else "interface" if interface else "observation"
-                    count = sum(counts) if fem else len(drivers) if transducer else len(interface_ids) if interface else len(output["options"]["points_m"])
+                    bem_pressure = output["quantity"] == "bem_boundary_pressure"
+                    bem_neumann = output["quantity"] == "bem_boundary_neumann"
+                    bem = bem_pressure or bem_neumann
+                    bem_count = (bem_mesh["mesh_data"]["points"]["shape"][0] if bem_pressure else
+                                 bem_mesh["mesh_data"]["cells"][0]["connectivity"]["shape"][0]) if bem else 0
+                    axis = "bem_node" if bem_pressure else "bem_face" if bem_neumann else "fem_node" if fem else "transducer" if transducer else "interface" if interface else "observation"
+                    count = bem_count if bem else sum(counts) if fem else len(drivers) if transducer else len(interface_ids) if interface else len(output["options"]["points_m"])
                     shape = (len(ports), len(radiation_ids), count) if radiation else (len(ports), count)
                     axes = ["excitation", "radiation_source", "observation"] if radiation else ["excitation", axis]
-                    unit = "m/s" if interface or output["quantity"] == "diaphragm_velocity" else "A" if transducer else "Pa"
+                    unit = "Pa/m" if bem_neumann else "m/s" if interface or output["quantity"] == "diaphragm_velocity" else "A" if transducer else "Pa"
                     if (item.get("quantity") != output["quantity"] or item.get("unit") != unit
                             or item.get("target_id") is not None
                             or item.get("axes") != axes
@@ -526,6 +534,11 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                             or item["values"].get("dtype") != (
                                 "complex64" if expected["precision"] == "float32" else "complex128")):
                         raise ResultContractError("Coupled quantity identity, unit or precision changed")
+                    if bem:
+                        prefix = "vertex" if bem_pressure else "face"
+                        if item.get("metadata") != {"mesh_ids": [bem_mesh["id"]],
+                                f"{prefix}_offsets": [0], f"{prefix}_counts": [bem_count]}:
+                            raise ResultContractError("BEM result layout differs from retained boundary mesh")
                     if fem and item.get("metadata") != metadata:
                         raise ResultContractError("FEM result node layout differs from retained domains")
                     if transducer:
@@ -568,8 +581,13 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                                              sound_speed=medium["sound_speed_m_per_s"]))
                 scale = np.where(scales, 1, acceleration_scale(frequencies[index]))[:, None]
                 fields.append(decoded.pop("fem:pressure") * scale)
-                rows.append({key: value * (scale[:, :, None] if value.ndim == 3 else scale)
-                             for key, value in decoded.items()})
+                scaled = {}
+                for key, value in decoded.items():
+                    result = value * (scale[:, :, None] if value.ndim == 3 else scale)
+                    if key in {"bem_boundary_pressure", "bem_boundary_neumann"}:
+                        result = result.astype(np.complex64 if expected["precision"] == "float32" else np.complex128)
+                    scaled[key] = result
+                rows.append(scaled)
                 logs.append({"frequency_hz": frequencies[index], "converged": True,
                              "native_diagnostics": diagnostics, "timings": diagnostics.get("timings", {})})
                 if progress_callback:
@@ -610,7 +628,9 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                              np.empty((0, len(ports), len(radiation_ids), len(points)), complex)
                              for name, points in request.layout.points_m.items()
                              if any(o["id"] == f"interface:radiation:{name}" for o in outputs)} if interface_ids else {},
-                            interface_areas, radiation_ids if interface_ids else [])
+                            interface_areas, radiation_ids if interface_ids else [],
+                            np.stack([row["bem_boundary_pressure"] for row in rows]) if rows and exterior_ids else None,
+                            np.stack([row["bem_boundary_neumann"] for row in rows]) if rows and exterior_ids else None)
     finally:
         close = getattr(events, "close", None) or getattr(stream, "close", None)
         if close:

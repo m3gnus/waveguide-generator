@@ -523,8 +523,8 @@ opposite-sign side totals are averaged only for the acoustic-impedance fallback,
 which is ambiguous above 10% disagreement.
 Declared Sd remains in use for ambiguous geometry. Only unambiguous geometry
 produces a declared-vs-geometric cross-check warning.
-Geometry includes everything that moves, such as the surround roll, so a value
-10–20% above datasheet Sd is normal.
+Geometry includes everything that moves, such as the surround roll; the
+cross-check warns outside 0.8–1.6 times the declared Sd.
 
 Geometry is ambiguous if any mesh's absolute net is less than 20% of its sum
 of absolute face projections, or a minority opposite-sign connected patch
@@ -545,3 +545,51 @@ to one side without a double load. Admission counts meshes from declarations
 and inspects verified moving geometry when a chamber is enabled. The rear
 already radiates; its FEM load and lumped stiffness must never be applied
 together.
+
+### Coupled observation planes
+
+Coupled solves also request `bem_boundary_pressure` (excitation × BEM node,
+Pa) and `bem_boundary_neumann` (excitation × BEM face, Pa/m). The mapper
+checks the pinned contract's node/face offsets and counts, then applies the
+same per-channel drive scale as FEM pressure. The compressed `bem-traces.npz`
+sidecar stores frequency × channel × node/face arrays, the exact compiled
+boundary mesh ordering, shared medium, image rotation and symmetry mode.
+Float32 traces remain complex64; reference traces remain complex128.
+
+Retention is limited to 256 MiB of uncompressed arrays per job, including
+boundary coordinates and connectivity. Before solving, admission reserves
+64 KiB for axes and metadata and checks
+`frequency_count * channel_count * (node_count + face_count) * complex_itemsize`
+plus mesh storage. An oversized request asks for a smaller mesh or sweep.
+Compression and fsync run outside the store lock; atomic publication and small
+metadata updates share the existing FEM sidecar pattern. There is no database
+schema change. Both sidecars follow FEM failure, cancellation, startup recovery,
+job deletion and result-retention cleanup.
+
+`POST /api/results/{job_id}/fem-field/plane` accepts the existing orthonormal
+plane specification, frequency/channel selectors, `interior`, `exterior` or
+`combined` scope, and `pressure` or `velocity_normal`. It returns float32
+base64 coordinates and complex components plus a byte validity mask. Masked
+samples are zero; they must never become displayed field triangles. Plane grids
+retain the existing maximum of 256 × 256 samples. The route shares the existing
+field permit, solve priority and worker-drain lifecycle, with a maximum 90 second
+evaluation deadline.
+
+FEM tetrahedra take priority in combined samples. The completed BEM skin masks
+remaining points inside bodies and on boundary faces. Symmetry images preserve
+scalar pressure and reflect vector components through geometry, including the
+image rotation needed for a Y-only half model. The exterior potential is
+computed by WG's official BEAT `bem_field` operation without another solve.
+In `exp(-i omega t)`, velocity is `grad(p)/(i omega rho)`. Interior gradients
+are exact and constant per P1 tetrahedron; exterior normal velocity uses a
+centred difference of the same potential with a step no larger than 0.1 mm or
+0.0001 wavelength. Exterior velocity samples whose difference stencil crosses
+a body or bounded region are masked.
+
+The viewport offers pressure SPL, normalized level, phase, real, imaginary,
+instantaneous animation and manual colour limits. Normal particle velocity
+uses m/s and disables pressure SPL. Interior cuts retain exact tetrahedron
+polygons; combined views join those polygons to the masked exterior grid.
+Triangles touching masked grid samples are omitted, leaving a grid-scale gap
+at body boundaries. Older FEM sidecars retain the interior view and disable
+exterior/combined choices until a new solve retains BEM traces.
