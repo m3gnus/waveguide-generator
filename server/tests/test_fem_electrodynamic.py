@@ -36,9 +36,10 @@ def test_voltage_request_passes_engine_contract_and_owns_all_boundaries(coupled)
         exterior = ExteriorSurface(region.domain.points_mm, region.domain.surfaces, {
             name: {'kind': 'interface' if 'interface' in name else 'moving' if 'moving' in name else 'rigid',
                    'drive_channel_id': 'fem'} for name in region.domain.surfaces})
+    # The exterior skin is the diaphragm's second side; a lumped chamber would load the rear twice.
     spec = driver(semi_inductance={'enabled': True, 're_prime_ohm': 3., 'leb_h': .001,
                                   'le_h': .002, 'ke_semi_h': .003, 'rss_ohm': 4.},
-                  lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+                  lumped_sealed_rear_chamber={'enabled': not coupled, 'volume_m3': .002})
     request = build_coupled_request(exterior, [region], layout=compiled().layout, frame=FRAME,
                                     frequencies_hz=[100.], transducers={'fem': spec})
     validate_solve_request(request.wire)
@@ -48,13 +49,27 @@ def test_voltage_request_passes_engine_contract_and_owns_all_boundaries(coupled)
     params = component['parameters']
     assert params['motion_profile'] == 'rigid_translation'
     assert params['semi_inductance'] == spec.semi_inductance.model_dump()
-    assert params['lumped_sealed_rear_chamber']['projected_area_m2'] == pytest.approx(0.00005)
+    assert request.wire['compiled_system']['metadata']['projected_areas_m2']['fem'] == pytest.approx(0.00005)
+    if not coupled:
+        assert params['lumped_sealed_rear_chamber']['projected_area_m2'] == pytest.approx(0.00005)
     assert request.wire['solver_options']['transducer_reference_voltage_v'] == 2.83
     assert request.wire['compiled_system']['excitation_ports'][0]['kind'] == 'voltage'
     assert request.drive_normalization == {'fem': 'voltage_rms'}
     sweep = map_coupled_sweep(events(request), request)
     np.testing.assert_allclose(sweep.nodal_pressure[0, 0], 2 + 3j)
     assert np.isfinite(sweep.generalized_load).all()
+
+
+def test_two_sided_diaphragm_refuses_lumped_rear_chamber():
+    from server.solver.beat_adapter.preflight import UnsupportedPhysics
+    region = region_input(interface=True)
+    exterior = ExteriorSurface(region.domain.points_mm, region.domain.surfaces, {
+        name: {'kind': 'interface' if 'interface' in name else 'moving' if 'moving' in name else 'rigid',
+               'drive_channel_id': 'fem'} for name in region.domain.surfaces})
+    spec = driver(lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+    with pytest.raises(UnsupportedPhysics, match="both sides"):
+        build_coupled_request(exterior, [region], layout=compiled().layout, frame=FRAME,
+                              frequencies_hz=[100.], transducers={'fem': spec})
 
 
 def test_mixed_bases_scale_fields_and_pressure_independently():

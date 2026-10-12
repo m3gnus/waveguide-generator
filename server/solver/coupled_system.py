@@ -473,7 +473,7 @@ def build_coupled_system(
         if spec is not None:
             from server.solver.beat_adapter.coupled_transducers import parameters
 
-            params, projected_areas[channel] = parameters(spec, np.concatenate(moving_triangles[channel]))
+            params, projected_areas[channel] = parameters(spec, moving_triangles[channel])
         components.append({
             "id": component_id, "name": channel,
             "kind": "electrodynamic_transducer" if spec is not None else "ideal_velocity_source",

@@ -6,18 +6,37 @@ import warnings
 
 import numpy as np
 
-from .transducers import DRIVER_SCALARS, ExteriorDriver, driver_parameters, projected_driver_area
+from .preflight import UnsupportedPhysics
+from .transducers import (DRIVER_SCALARS, ExteriorDriver, _signed_projected_area, driver_parameters,
+                           projected_driver_area)
 
 
-def parameters(spec: Any, triangles_m: np.ndarray) -> tuple[dict[str, Any], float]:
-    """Map the WG driver exactly, deriving Sd from all declared moving faces."""
+def parameters(spec: Any, boundaries_m: Sequence[np.ndarray]) -> tuple[dict[str, Any], float]:
+    """Map the WG driver exactly, deriving Sd from the declared moving boundaries.
+
+    Each boundary keeps its own net projection, so folds on one side still
+    subtract. Boundaries facing along the axis form one side and those facing
+    against it the other; with both sides present Sd is their mean, and a
+    lumped rear chamber would load the rear twice.
+    """
     raw = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
     axis = np.asarray(raw["motion_axis"], dtype=float)
     if axis.shape != (3,) or not np.isfinite(axis).all() or not np.any(axis):
         raise ValueError("Electrodynamic motion_axis must be finite and nonzero")
     axis /= np.max(np.abs(axis))
     axis /= np.linalg.norm(axis)
-    area, warning = projected_driver_area(triangles_m, axis)
+    sides: dict[bool, list[np.ndarray]] = {True: [], False: []}
+    for triangles in boundaries_m:
+        sides[_signed_projected_area(triangles, axis) >= 0].append(np.asarray(triangles, dtype=float))
+    front, rear = (np.concatenate(sides[key]) if sides[key] else None for key in (True, False))
+    if front is not None and rear is not None:
+        chamber = raw.get("lumped_sealed_rear_chamber") or {}
+        if chamber.get("enabled", False):
+            raise UnsupportedPhysics(
+                "a lumped rear chamber replaces the rear radiation; this diaphragm already radiates on both sides")
+        area, warning = projected_driver_area(front, axis, rear_triangles_m=rear)
+    else:
+        area, warning = projected_driver_area(front if front is not None else rear, axis)
     if warning:
         warnings.warn(warning, UserWarning, stacklevel=2)
     driver = ExteriorDriver("", (), axis, **{key: raw[key] for key in DRIVER_SCALARS},
