@@ -12,6 +12,7 @@ import pytest
 
 from server.jobs.api import FemFieldPresentation, create_jobs_router
 from server.jobs.fem_field import _pressure_slice
+from server.jobs.models import JobItem, JobStatusResponse
 from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
 from server.tests.test_jobs_api import _request_with_headers
@@ -123,8 +124,66 @@ def test_flag_off_hides_route_and_job_marker(field_app, monkeypatch):
     assert JobRuntime._serialize_job(store.get_job_row("field"))["has_fem_field_artifact"] is True
     monkeypatch.setenv("WG2_FEM_REGIONS", "0")
     assert _get(app)[0] == 404
-    assert JobRuntime._serialize_job(store.get_job_row("field"))["has_fem_field_artifact"] is False
+    assert "has_fem_field_artifact" not in JobRuntime._serialize_job(store.get_job_row("field"))
     assert store.get_fem_field("field") is not None
+
+
+@pytest.mark.parametrize("model", [JobItem, JobStatusResponse])
+@pytest.mark.parametrize("marker", [None, False, True])
+def test_job_model_only_serializes_true_fem_marker(field_app, model, marker):
+    _, store = field_app
+    item = JobRuntime._serialize_job(
+        store.get_job_row("ordinary"), detailed=model is JobStatusResponse)
+    if marker is not None:
+        item["has_fem_field_artifact"] = marker
+    response = model.model_validate(item)
+    for payload in (response.model_dump(), response.model_dump(mode="json"),
+                    json.loads(response.model_dump_json())):
+        if marker is True:
+            assert payload["has_fem_field_artifact"] is True
+        else:
+            assert "has_fem_field_artifact" not in payload
+        # Omitting this marker must not change other false or null fields.
+        assert payload["has_results"] is False
+        assert payload["label"] is None
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_rest_and_websocket_snapshot_only_advertise_retained_fem_fields(
+    field_app, field_arrays, monkeypatch, enabled,
+):
+    _, store = field_app
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1" if enabled else "0")
+    runtime = JobRuntime(store)
+    app = FastAPI()
+    app.include_router(create_jobs_router(runtime))
+
+    async def responses():
+        try:
+            await runtime.start()
+            store.store_fem_field_arrays("field", field_arrays)
+            status, raw, _ = await _request_with_headers(app, "GET", "/api/jobs")
+            assert status == 200
+            items = json.loads(raw)["items"]
+            for job_id in ("field", "ordinary", "running"):
+                status, raw, _ = await _request_with_headers(app, "GET", f"/api/status/{job_id}")
+                assert status == 200
+                items.append(json.loads(raw))
+            items.extend(runtime.snapshot()["jobs"])
+            return items
+        finally:
+            await runtime.shutdown()
+
+    for item in asyncio.run(responses()):
+        if enabled and item["id"] == "field":
+            assert item["has_fem_field_artifact"] is True
+        else:
+            assert "has_fem_field_artifact" not in item
+
+    for name in ("JobItem", "JobStatusResponse"):
+        schema = app.openapi()["components"]["schemas"][name]
+        assert schema["properties"]["has_fem_field_artifact"]["type"] == "boolean"
+        assert "has_fem_field_artifact" not in schema["required"]
 
 
 @pytest.mark.parametrize("key,value", [("schema", np.array("other")),

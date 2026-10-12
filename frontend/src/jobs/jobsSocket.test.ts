@@ -38,6 +38,20 @@ describe('jobs websocket state machine', () => {
   beforeEach(() => { vi.useFakeTimers(); compareSelection.clear(); provisionalResults.clear(); });
   afterEach(() => { provisionalResults.clear(); vi.useRealTimers(); });
 
+  it('accepts legacy snapshots without advertising a FEM field', () => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1,
+      jobs: [job({ status: 'complete' })] });
+    const legacy = manager.getSnapshot().jobs[0];
+    expect(legacy.id).toBe('job-1');
+    expect(legacy.has_fem_field_artifact).toBeUndefined();
+    expect(Boolean(legacy.has_fem_field_artifact)).toBe(false);
+    manager.stop();
+  });
+
   it('accepts FEM artifact availability and removes it on a retention metadata event', () => {
     const socket = new MockSocket();
     const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');

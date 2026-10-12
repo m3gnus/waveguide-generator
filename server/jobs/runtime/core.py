@@ -4908,7 +4908,11 @@ class JobRuntime:
             "radiation_impedance_artifact_bytes": metadata.get(
                 "radiation_impedance_artifact_bytes"
             ),
-            "has_fem_field_artifact": bool(metadata.get("has_fem_field_artifact")) and fem_regions_enabled(),
+            **(
+                {"has_fem_field_artifact": True}
+                if metadata.get("has_fem_field_artifact") and fem_regions_enabled()
+                else {}
+            ),
             "field_plane_available": bool(metadata.get("field_plane_available")),
             "field_trace_bytes": metadata.get("field_trace_bytes"),
             "unavailable_reason": field_unavailable_reason,
