@@ -255,6 +255,35 @@ describe('NumberField', () => {
     expect(host.querySelector('input')?.getAttribute('role')).toBe('spinbutton');
   });
 
+  it('keeps an IME composition in its input and switches only when it ends', () => {
+    const commit = vi.fn();
+    act(() => root.render(<NumberField label="Radius" value={4} allowExpression onCommit={commit} />));
+    const input = host.querySelector('input')!;
+    act(() => input.focus());
+    act(() => input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })));
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '4*p');
+      input.setSelectionRange(3, 3);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // Mid-composition the element must not be replaced, or the composition is lost.
+    expect(host.querySelector('textarea')).toBeNull();
+    expect(host.querySelector('input')).toBe(input);
+    // Enter and Escape confirm or cancel the IME candidate, not the field.
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    act(() => input.dispatchEvent(enter));
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe('4*p');
+    act(() => input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '4*p' })));
+    const textarea = host.querySelector('textarea')!;
+    expect(textarea).not.toBeNull();
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.value).toBe('4*p');
+    expect(textarea.selectionStart).toBe(3);
+    expect(commit).not.toHaveBeenCalled();
+  });
+
   it('commits with Enter and cancels with Escape in the formula editor', () => {
     const commitExpression = vi.fn();
     const render = () => root.render(<NumberField label="Radius" value={4} expression={{ raw: '4*p', value: 4 }} allowExpression onCommit={vi.fn()} onCommitExpression={commitExpression} />);

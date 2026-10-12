@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ChangeEvent, type KeyboardEvent, type PointerEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ChangeEvent, type CompositionEvent, type KeyboardEvent, type PointerEvent } from 'react';
 import type { ExprNumber } from '../stores/design';
 import { useHelpTip } from './HelpTip';
 
@@ -69,6 +69,7 @@ export function NumberField({
   const [editing, setEditing] = useState(false);
   const [expandedDraft, setExpandedDraft] = useState(false);
   const editor = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+  const composingRef = useRef(false);
   const pendingSelection = useRef<{ start: number; end: number; direction: 'forward' | 'backward' | 'none' } | null>(null);
   const [dragDelta, setDragDelta] = useState<number | null>(null);
   const drag = useRef<{ x: number; value: number } | null>(null);
@@ -92,7 +93,9 @@ export function NumberField({
   const holdsExpression = Boolean(rawExpression) && !Number.isFinite(Number(rawExpression));
   const showEvaluatedExpression = holdsExpression && expression?.value != null;
   const isExpression = allowExpression && draft.trim() !== '' && !Number.isFinite(parsed);
-  const formulaLayout = holdsExpression || isExpression || (editing && expandedDraft);
+  // While editing, the switch is driven by expandFor() so it can wait for an IME
+  // composition to end; otherwise a non-numeric draft is a formula.
+  const formulaLayout = holdsExpression || (editing ? expandedDraft : isExpression);
   const empty = draft.trim() === '';
   const outOfRange = !empty && !isExpression && Number.isFinite(parsed) && (parsed < min || parsed > max);
   /**
@@ -148,7 +151,6 @@ export function NumberField({
   const changeDraft = (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const element = event.currentTarget;
     const next = element.value.replace(/[\r\n]/g, '');
-    const becomesExpression = allowExpression && next.trim() !== '' && !Number.isFinite(Number(next));
     const start = element.selectionStart ?? next.length;
     const end = element.selectionEnd ?? start;
     const selection = {
@@ -160,13 +162,32 @@ export function NumberField({
       element.value = next;
       element.setSelectionRange(selection.start, selection.end, selection.direction);
     }
+    // An IME composition lives in this element; swapping it for the textarea
+    // mid-composition would drop the text being composed. Expand on
+    // compositionend instead.
+    const composing = composingRef.current || (event.nativeEvent as InputEvent).isComposing === true;
+    if (!composing) expandFor(next, selection);
+    setDraft(next);
+  };
+
+  const expandFor = (next: string, selection: { start: number; end: number; direction: 'forward' | 'backward' | 'none' }) => {
+    const becomesExpression = allowExpression && next.trim() !== '' && !Number.isFinite(Number(next));
     if (!formulaLayout && becomesExpression) pendingSelection.current = selection;
     if (becomesExpression) setExpandedDraft(true);
-    setDraft(next);
+  };
+
+  const onCompositionStart = () => { composingRef.current = true; };
+  const onCompositionEnd = (event: CompositionEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    composingRef.current = false;
+    const element = event.currentTarget;
+    const next = element.value.replace(/[\r\n]/g, '');
+    const start = element.selectionStart ?? next.length;
+    expandFor(next, { start, end: element.selectionEnd ?? start, direction: element.selectionDirection ?? 'none' });
   };
 
   const commit = () => {
     setEditing(false);
+    composingRef.current = false;
     setExpandedDraft(false);
     if (cancelBlur.current) {
       cancelBlur.current = false;
@@ -215,6 +236,9 @@ export function NumberField({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    // Enter and Escape confirm or cancel an IME candidate while composing; they
+    // must not commit or revert the field.
+    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === 'Enter') {
       event.preventDefault();
       event.currentTarget.blur();
@@ -341,6 +365,8 @@ export function NumberField({
           onFocus={() => setEditing(true)}
           onBlur={commit}
           onKeyDown={onKeyDown}
+          onCompositionStart={onCompositionStart}
+          onCompositionEnd={onCompositionEnd}
         />
         {unit && !formulaLayout && <span className="unit">{unit}</span>}
       </div>

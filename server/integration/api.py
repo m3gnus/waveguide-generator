@@ -49,6 +49,8 @@ class CatalogOption(_DiscoveryModel):
     requires_feature: str | None
     degraded_without: str | None
     degraded_label: str | None
+    # Kept only so an imported value displays and round-trips; not offered for a fresh choice.
+    current_only: bool = False
 
 
 class ParameterDescriptor(_DiscoveryModel):

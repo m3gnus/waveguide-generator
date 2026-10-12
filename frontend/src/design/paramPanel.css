@@ -35,8 +35,8 @@
 .field-row.expression-row .expr-value { grid-column: 3; justify-self: end; white-space: nowrap; }
 .field-row.expression-row .number-control { grid-column: 1 / -1; width: 100%; height: auto; min-height: var(--field-h); padding: 4px 6px; }
 .field-row.expression-row .number-control textarea { box-sizing: border-box; display: block; width: 100%; min-width: 0; min-height: 1lh; padding: 0; border: 0; background: transparent; color: var(--fg); text-align: left; font: var(--text-base)/1.4 var(--mono); resize: none; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
-.number-control.editing textarea { color: var(--acc); }
-.number-control.invalid textarea { color: var(--red); }
+.field-row.expression-row .number-control.editing textarea { color: var(--acc); }
+.field-row.expression-row .number-control.invalid textarea { color: var(--red); }
 .readonly-parameter-table { margin: 4px 0 8px; overflow: hidden; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
 .readonly-table-head { display: flex; justify-content: space-between; padding: 4px 6px; border-bottom: 1px solid var(--hair-soft); color: var(--fg2); font-size: var(--text-micro); }
 .readonly-table-head b { color: var(--fg1); font-weight: 560; }

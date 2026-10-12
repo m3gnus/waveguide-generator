@@ -1013,14 +1013,16 @@
           "label": "No",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 1,
           "label": "Yes",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "Allows native exports to exceed the user triangle budget. Source-body hard allocation limits and solve safety ceilings still apply."
@@ -1938,14 +1940,16 @@
           "label": "Flat baffle",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": "rollback",
           "label": "Rollback",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "How the mouth ends. Flat baffle meets the baffle tangentially at 90° with continuous curvature; Rollback carries the lip past 90° so it curls back on itself."
@@ -2437,14 +2441,16 @@
           "label": "Warn on S-curves",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": "reject",
           "label": "Enforce one-way",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "An S-curve is a stretch where the wall's outward angle falls back by more than a degree before opening again. Warn records it and builds anyway; Enforce one-way rejects the profile instead."
@@ -2565,14 +2571,16 @@
           "label": "Profile length",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": "total",
           "label": "Total length",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "What Horn length measures. Profile length leaves all of it for the flare, so the slot makes the part longer; Total length subtracts the slot from it instead, shortening the flare. The throat extension is added on top either way. R-OSSE derives its own length and ignores this."
@@ -2634,28 +2642,32 @@
           "label": "None",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 1,
           "label": "Rectangle",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 2,
           "label": "Circle",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 3,
           "label": "Superellipse",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "Outline the mouth is blended toward as it approaches the baffle. None keeps the outline the profile formula produces. A Circle takes half the larger target extent as its radius, so on an anisotropic mouth it expands the smaller axis and cannot preserve both mouth endpoints. Only Superellipse is shape-only; exponent 2 gives an ellipse."
@@ -2916,14 +2928,16 @@
           "label": "No",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 1,
           "label": "Yes",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "Whether the target may be smaller than the mouth the formula produced. No raises the target width and height to at least the mouth bounds, so a smaller target is enlarged rather than honoured.",
@@ -2960,14 +2974,16 @@
           "label": "OS-SE",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 3,
           "label": "Circular arc",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "Which curve carries the wall from throat to mouth: the OS-SE formula above, or a plain circular arc driven by the two arc controls at the bottom of this section. The arc ignores a0, k, s, n and q; Shape factor h and Profile rotation still apply."
@@ -3026,21 +3042,24 @@
           "label": "Explicit coverage",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 1,
           "label": "Superellipse",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 2,
           "label": "Superformula",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "Where the mouth coverage angle comes from. Explicit uses the angle you typed; the other two solve, per azimuth, the coverage angle that puts the OS-SE radius on the guide shape at the guide distance, overriding that field. The solved angle is clamped to 0.5°–89°."
@@ -3538,14 +3557,16 @@
           "label": "Spherical cap",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 2,
           "label": "Flat disc",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "Shape of the driving surface placed at the throat. A spherical cap approximates a dome radiating into the horn; a flat disc models a flat piston."
@@ -3616,21 +3637,24 @@
           "label": "Auto",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 1,
           "label": "Convex",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": -1,
           "label": "Concave",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "Which way a spherical-cap source bulges, seen from the horn. Auto picks the usual direction for the chosen surface."
@@ -3706,21 +3730,24 @@
           "label": "Normal velocity",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": "axial",
           "label": "Axial rigid-piston velocity",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": "legacy",
           "label": "Legacy config value",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": true
         }
       ],
       "description": "Which way the source surface moves. Normal drives every point along its own surface normal; Axial drives it as a rigid piston along the horn axis. Legacy takes the same choice from the numeric code in Source amplitude instead."
@@ -3992,14 +4019,16 @@
           "label": "Rounded",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 2,
           "label": "Chamfered",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "Whether the front edges are cut as a circular roundover or a flat bevel. Both use Edge radius for their size.",
@@ -4363,21 +4392,24 @@
           "label": "Uniform",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": "ath-default-zmap",
           "label": "ATH default Z-map",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": "zmap",
           "label": "Custom Z-map points",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "How axial stations are spread along the profile. OSSE and R-OSSE take all three modes; FREEFORM takes Uniform or a custom map only, and ICW is always uniform in arc length and rejects a custom map. A custom map reaches the viewport as well as the export."
@@ -4648,14 +4680,16 @@
           "label": "Ignored",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 1,
           "label": "Ignored",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "Compatibility-only imported value; it does not change solve limits.",
@@ -4918,14 +4952,16 @@
           "label": "Free-standing",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": "infinite-baffle",
           "label": "Infinite baffle",
           "requires_feature": "infinite-baffle",
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "What the horn radiates into. Free-standing solves the whole body in open air, with the enclosure or wall shell you configured. Infinite baffle mounts the mouth flush in an unbounded rigid wall, ignoring both of those and removing all cabinet-edge diffraction; availability follows the solver capabilities reported by this host."
@@ -5073,14 +5109,16 @@
           "label": "No",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 1,
           "label": "Yes",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "ATH's own Output.STL flag, kept so an imported file round-trips unchanged. It does not drive this app's exports — use the export menu for that."
@@ -5118,14 +5156,16 @@
           "label": "No",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         },
         {
           "value": 1,
           "label": "Yes",
           "requires_feature": null,
           "degraded_without": null,
-          "degraded_label": null
+          "degraded_label": null,
+          "current_only": false
         }
       ],
       "description": "ATH's own Output.MSH flag, kept so an imported file round-trips unchanged. It does not drive this app's exports — use the export menu for that."

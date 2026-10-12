@@ -138,6 +138,7 @@ function serializeField(field: ParameterDefinition) {
       requires_feature: option.requiresFeature ?? null,
       degraded_without: option.degradedWithout ?? null,
       degraded_label: option.degradedLabel ?? null,
+      current_only: option.currentOnly ?? false,
     })),
     description: field.description ?? '',
     ...conditions,

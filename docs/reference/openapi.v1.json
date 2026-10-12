@@ -1532,6 +1532,11 @@
       "CatalogOption": {
         "additionalProperties": false,
         "properties": {
+          "current_only": {
+            "default": false,
+            "title": "Current Only",
+            "type": "boolean"
+          },
           "degraded_label": {
             "anyOf": [
               {

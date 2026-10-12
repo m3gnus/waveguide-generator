@@ -2759,6 +2759,11 @@ export interface components {
         };
         /** CatalogOption */
         CatalogOption: {
+            /**
+             * Current Only
+             * @default false
+             */
+            current_only?: boolean;
             /** Degraded Label */
             degraded_label: string | null;
             /** Degraded Without */

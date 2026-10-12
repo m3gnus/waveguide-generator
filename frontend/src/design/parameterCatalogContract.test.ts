@@ -18,6 +18,13 @@ describe('public parameter catalog', () => {
     });
   });
 
+  it('publishes a held-only option as current_only so catalog consumers do not offer it fresh', () => {
+    const convention = buildParameterCatalog().parameters.find((field) => field.id === 'source.velocity_convention');
+    expect(convention?.options.map((option) => [option.value, option.current_only])).toEqual([
+      ['normal', false], ['axial', false], ['legacy', true],
+    ]);
+  });
+
   it('matches the committed server-owned integration artifact', () => {
     const bytes = readFileSync('../server/integration/parameter-catalog.v1.json');
     const committed = JSON.parse(new TextDecoder().decode(bytes));
