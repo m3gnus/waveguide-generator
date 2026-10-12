@@ -201,22 +201,3 @@ def test_default_metal_reproves_record_without_backend_evidence(metal_provisioni
     workers.clear()
     assert gpu.provision_gpu(**options)["status"] == "ready"
     assert len(workers) == 1 and len(calls) == 3
-
-
-@pytest.mark.parametrize("destination", ["project", "depot", "depot_symlink"])
-def test_metal_julia_write_destinations_refuse_hbb(metal_provisioning, tmp_path, monkeypatch, destination):
-    root, _, _, calls, workers, options, before = metal_provisioning
-    legacy = tmp_path / "hbb"
-    legacy.mkdir()
-    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(legacy))
-    options["environ"]["HORNLAB_BEAT_RUNTIME_DIR"] = str(legacy)
-    if destination == "project":
-        options["julia_project"] = legacy / "julia_metal"
-    elif destination == "depot":
-        options["environ"]["JULIA_DEPOT_PATH"] = str(legacy / "depot")
-    else:
-        (root / "depot").symlink_to(legacy, target_is_directory=True)
-    failed = gpu.provision_gpu(**options)
-    assert failed["status"] == "failed" and "overlaps" in failed["error"]
-    assert not workers and not calls and list(legacy.iterdir()) == []
-    assert (root / "state-cpu.json").read_bytes() == before

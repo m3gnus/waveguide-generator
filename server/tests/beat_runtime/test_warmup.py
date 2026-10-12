@@ -215,26 +215,3 @@ def test_tiny_probe_failure_before_iteration_explicitly_closes_events(runtime_fa
     with pytest.raises(RuntimeError, match="before iteration"):
         warmup.warm_up(mode="tiny")
     assert closed == [True]
-
-
-@pytest.mark.parametrize("selector,official", [("", True), (" official ", True), ("hbb", False), ("legacy", False), ("Official", True)])
-def test_shared_selector_lifecycle_and_readiness_decisions(runtime_factory, monkeypatch, tmp_path,
-                                                          selector, official):
-    monkeypatch.setenv("WG2_BEAT_PROVIDER", selector)
-    calls = []
-    monkeypatch.setattr(warmup, "warm_up", lambda **kwargs: calls.append("official-warmup"))
-    monkeypatch.setattr(manager, "_default_manager",
-                        SimpleNamespace(detach=lambda: calls.append("official-quit")))
-    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", SimpleNamespace(
-        warm_up=lambda **kwargs: calls.append("hbb-warmup"),
-        shutdown_workers=lambda: calls.append("hbb-quit")))
-    app_warmup._warm_beat("cpu")
-    asyncio.run(_beat_quit_hook(create_app(data_dir=tmp_path / "data"))())
-    prefix = "official" if official else "hbb"
-    assert calls == [f"{prefix}-warmup", f"{prefix}-quit"]
-    assert ("server.solver.beat_runtime.cli" in facade.provision_command()) == official
-    monkeypatch.setattr(facade, "_preparation_in_flight", False)
-    monkeypatch.setattr(facade, "_import", lambda name: None)
-    monkeypatch.setattr(readiness, "backend_readiness", lambda backend:
-                        readiness.BackendReadiness(True, "ready", "fixture proof"))
-    assert facade.cpu_runtime_readiness(None).ready == official

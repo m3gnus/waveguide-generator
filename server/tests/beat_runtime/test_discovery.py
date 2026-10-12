@@ -11,7 +11,6 @@ from server.solver.beat_runtime import discovery, paths, state
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv(paths.RUNTIME_DIR_ENV, str(tmp_path / "wg"))
-    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(tmp_path / "hbb"))
     monkeypatch.delenv(discovery.JULIA_ENV_VAR, raising=False)
     monkeypatch.setattr(discovery.shutil, "which", lambda *args, **kwargs: None)
 
@@ -82,30 +81,6 @@ def test_edited_recorded_binary_revokes_hint(tmp_path):
     assert discovery.discover_julia() is None
 
 
-@pytest.mark.parametrize("name", ["state-cpu.json", "state-metal.json", "state.json"])
-@pytest.mark.parametrize("status", ["ready", "failed", "in_progress"])
-def test_legacy_record_is_only_a_readonly_hint(tmp_path, name, status):
-    legacy = tmp_path / "hbb"
-    path = executable(legacy / "julia-1.12.6/bin/julia")
-    record = legacy / name
-    content = json.dumps({"status": status, "julia_executable": str(path), "backend": "cpu"})
-    record.write_text(content)
-    before = sorted(p.relative_to(legacy) for p in legacy.rglob("*"))
-    assert discovery.legacy_executable_hint(legacy) == str(path)
-    assert discovery.discover_julia() is None
-    assert not paths.runtime_dir().exists()
-    assert record.read_text() == content
-    assert sorted(p.relative_to(legacy) for p in legacy.rglob("*")) == before
-
-
-def test_legacy_missing_or_invalid_binary(tmp_path):
-    legacy = tmp_path / "hbb"
-    legacy.mkdir()
-    (legacy / "state-cpu.json").write_text('{"julia_executable":42}')
-    (legacy / "state.json").write_text(json.dumps({"status": "ready", "julia_executable": str(legacy / "removed")}))
-    assert discovery.legacy_executable_hint(legacy) is None
-
-
 def test_injected_environment_and_whitespace(tmp_path, monkeypatch):
     path = executable(tmp_path / "julia")
     env = {paths.RUNTIME_DIR_ENV: str(tmp_path / "other"), discovery.JULIA_ENV_VAR: f" {path} "}
@@ -130,19 +105,6 @@ def test_atomic_write_failure_preserves_old_record(tmp_path, monkeypatch):
     assert [p.name for p in root.iterdir()] == ["julia.json"]
 
 
-@pytest.mark.parametrize("alias", [False, True])
-def test_discovery_record_directory_hbb_isolation_before_mutation(tmp_path, monkeypatch, alias):
-    legacy = tmp_path / "hbb"
-    legacy.mkdir()
-    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(legacy))
-    root = tmp_path / "alias" if alias else legacy
-    if alias:
-        root.symlink_to(legacy, target_is_directory=True)
-    with pytest.raises(paths.RootConflict):
-        discovery.write_julia_record(root, tmp_path / "missing", origin="external", version=None)
-    assert list(legacy.iterdir()) == []
-
-
 def test_juliaup_launcher_path_is_preserved(tmp_path):
     actual = executable(tmp_path / "actual/bin/julia")
     launcher = tmp_path / "juliaup"
@@ -159,31 +121,6 @@ def test_one_off_explicit_record_does_not_outrank_path(tmp_path, monkeypatch):
     discovery.write_julia_record(paths.runtime_dir(), one_off, origin="external", version=None, selection="explicit")
     monkeypatch.setattr(discovery.shutil, "which", lambda *a, **k: str(default))
     assert discovery.discover_julia() == str(default)
-
-
-@pytest.mark.parametrize("source", ["explicit", "configured", "path", "record"])
-@pytest.mark.parametrize("alias", [False, True])
-def test_hbb_managed_executable_is_only_a_legacy_hint(tmp_path, monkeypatch, source, alias):
-    legacy = executable(tmp_path / "hbb/bin/julia")
-    candidate = tmp_path / "alias" if alias else legacy
-    if alias:
-        candidate.symlink_to(legacy)
-    kwargs = {}
-    if source in ("explicit", "configured"):
-        kwargs[source] = str(candidate)
-    elif source == "path":
-        monkeypatch.setattr(discovery.shutil, "which", lambda *a, **k: str(candidate))
-    else:
-        discovery.write_julia_record(paths.runtime_dir(), candidate, origin="external", version=None)
-    assert discovery.discover_julia(**kwargs) is None
-    assert legacy.read_bytes() == b"fake Julia"
-
-
-def test_recursive_legacy_json_returns_no_executable_hint(tmp_path):
-    legacy = tmp_path / "hbb"
-    legacy.mkdir()
-    (legacy / "state.json").write_text('[' * 1500 + '0' + ']' * 1500)
-    assert discovery.legacy_executable_hint(legacy) is None
 
 
 @pytest.mark.parametrize("selection", ["explicit", "configured"])

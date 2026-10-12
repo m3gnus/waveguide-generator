@@ -27,28 +27,12 @@ def official(monkeypatch, tmp_path):
         assert not thread.is_alive()
 
 
-def test_provider_defaults_to_official_with_explicit_rollback():
-    assert provider.official_selected({})
-    assert not provider.official_selected({provider.PROVIDER_ENV: "hbb"})
-    assert not provider.official_selected({provider.PROVIDER_ENV: "legacy"})
-    assert provider.official_selected({provider.PROVIDER_ENV: ""})
-    assert provider.official_selected({provider.PROVIDER_ENV: "official"})
-
-
 def test_official_presentation_does_not_load_hbb(official, monkeypatch):
-    monkeypatch.setattr(beat, "_load_api", lambda: pytest.fail("HBB readiness import"))
     monkeypatch.setattr(readiness, "backend_readiness", lambda backend, *args, **kwargs:
                         readiness.BackendReadiness(backend == "cpu", "ready", "compiled proof"))
     assert facade.cpu_runtime_readiness(None).ready
     assert _official_runtime_statuses()["cpu"]["available"]
     assert "server.solver.beat_runtime.cli" in facade.provision_command()
-
-
-def test_alternative_does_not_change_solve_api(official, monkeypatch):
-    sentinel = object()
-    monkeypatch.setattr(beat, "_beat", sentinel)
-    assert beat._load_api() is sentinel
-    assert beat._load_readiness_api() is sentinel
 
 
 @pytest.mark.parametrize("backend,system", [("metal", "Darwin"), ("cuda", "Windows"), ("rocm", "Linux")])
@@ -88,7 +72,6 @@ def test_background_stages_publish_progress_and_preserve_cpu(official, monkeypat
     monkeypatch.setattr(readiness, "backend_readiness", verdict)
     monkeypatch.setattr(readiness, "provision_cpu", cpu)
     monkeypatch.setattr(readiness, f"provision_{backend}", gpu)
-    monkeypatch.setattr(facade, "_import", lambda name: pytest.fail("HBB import"))
     listener = lambda: observed.append((facade.cpu_preparation_in_flight(), facade.cpu_provisioning_step(), facade.gpu_preparation_reason(backend)))
     facade.add_readiness_listener(listener)
     env = {provider.PROVIDER_ENV: "official", "WG2_BEAT_RUNTIME_DIR": str(tmp_path / "runtime")}
@@ -160,7 +143,6 @@ def test_skip_cpu_switch_skips_both_stages(official, monkeypatch):
 
 def test_invalidation_updates_live_registry_without_hbb(official, monkeypatch):
     usable = set()
-    monkeypatch.setattr(beat, "_load_api", lambda: None)
     monkeypatch.setattr(readiness, "backend_readiness", lambda backend, *args, **kwargs:
                         readiness.BackendReadiness(backend in usable, "ready" if backend in usable else "stale", f"{backend} proof"))
 

@@ -269,37 +269,6 @@ def test_record_json_recursion_refused_and_retained(tmp_path, record):
     assert path.read_text() == content
 
 
-@pytest.mark.parametrize("action", ["private_directory", "record_path", "spawn_lock_path", "launch_spec_path",
-                                     "log_path", "read_record", "write_record", "write_launch_spec",
-                                     "validate_record", "endpoint_for", "cleanup_host", "sweep_orphan_socket", "SpawnLock"])
-def test_explicit_directory_checked_root_rejects_hbb_before_mutation(tmp_path, record, monkeypatch, action):
-    from server.solver.beat_runtime import cleanup
-
-    legacy = tmp_path / "legacy-hbb"
-    monkeypatch.setenv("HORNLAB_BEAT_WORKER_DIR", str(legacy))
-    with pytest.raises(paths.RootConflict):
-        if action in {"private_directory"}:
-            getattr(r, action)(legacy)
-        elif action in {"record_path", "spawn_lock_path", "launch_spec_path", "log_path", "read_record"}:
-            getattr(r, action)(record.identifier, legacy)
-        elif action == "write_record":
-            r.write_record(record, legacy)
-        elif action == "write_launch_spec":
-            r.write_launch_spec(record.key, legacy)
-        elif action == "validate_record":
-            r.validate_record(record, record.key, legacy)
-        elif action == "endpoint_for":
-            ipc.endpoint_for(record.identifier, legacy)
-        elif action == "cleanup_host":
-            cleanup.cleanup_host(record, record.key, legacy)
-        elif action == "sweep_orphan_socket":
-            cleanup.sweep_orphan_socket(record.identifier, legacy)
-        else:
-            with r.SpawnLock(legacy / "test.lock"):
-                pytest.fail("Legacy lock acquired")
-    assert not legacy.exists()
-
-
 @pytest.mark.parametrize("state", ["Z", "Z+"])
 def test_posix_zombie_liveness_is_dead_without_pid_signal(monkeypatch, state):
     monkeypatch.setattr(r, "os", types.SimpleNamespace(**{**vars(os), "name": "posix"}))

@@ -107,7 +107,7 @@ def test_explicit_engine_overrides_accuracy_and_accurate_refuses_coupled_baffle(
 def test_cpu_refresh_preserves_terminal_event_during_an_inflight_probe(
     monkeypatch,
 ) -> None:
-    from server.solver import beat
+    from server.solver import beat, official_beat
 
     first_started = threading.Event()
     release_first = threading.Event()
@@ -122,8 +122,7 @@ def test_cpu_refresh_preserves_terminal_event_during_an_inflight_probe(
             assert release_first.wait(5.0)
         return next(answers)
 
-    monkeypatch.setattr(beat, "_load_api", lambda: object())
-    monkeypatch.setattr(beat, "_cpu_backend_status", cpu_status)
+    monkeypatch.setattr(registry, "_official_runtime_statuses", _runtime_rows(cpu_status))
     engine_registry = registry.EngineRegistry(
         detector=lambda: [_cpu_info(False, "starting")], cpu_refresh=True
     )
@@ -163,8 +162,7 @@ def test_finished_preparation_refreshes_the_gpu_rows_too(monkeypatch) -> None:
 
     stale = "No Julia executable was found."
     in_flight = {"value": True}
-    monkeypatch.setattr(beat, "_load_api", lambda: object())
-    monkeypatch.setattr(beat, "_cpu_backend_status", lambda _package: (True, "cpu ready"))
+    monkeypatch.setattr(registry, "_official_runtime_statuses", _runtime_rows(lambda _package: (True, "cpu ready")))
     monkeypatch.setattr(
         beat_cpu_runtime, "cpu_preparation_in_flight", lambda: in_flight["value"]
     )
@@ -173,10 +171,13 @@ def test_finished_preparation_refreshes_the_gpu_rows_too(monkeypatch) -> None:
         beat_cpu_runtime, "gpu_preparation_reason",
         lambda backend: "preparing metal" if backend == "metal" else None,
     )
-    monkeypatch.setattr(beat, "reprobe_package_backend_statuses", lambda: {
-        "metal": {"available": True, "reason": "metal ready"},
-        "cuda": {"available": False, "reason": "No NVIDIA GPU was detected."},
-    })
+    def statuses():
+        return {
+            "cpu": {"available": True, "reason": "cpu ready", "state": "ready"},
+            "metal": {"available": not in_flight["value"], "reason": "preparing metal" if in_flight["value"] else "metal ready", "state": "preparing" if in_flight["value"] else "ready"},
+            "cuda": {"available": False, "reason": "No NVIDIA GPU was detected.", "state": "no-device"},
+        }
+    monkeypatch.setattr(registry, "_official_runtime_statuses", statuses)
     engine_registry = registry.EngineRegistry(
         detector=lambda names=None: [
             _cpu_info(False, "starting"),
@@ -201,7 +202,7 @@ def test_finished_preparation_refreshes_the_gpu_rows_too(monkeypatch) -> None:
         engine_registry._cpu_readiness_changed()
         during = await rows()
         assert during["beat-metal"].reason == "preparing metal"
-        assert during["beat-cuda"].reason == stale
+        assert during["beat-cuda"].reason == "No NVIDIA GPU was detected."
 
         in_flight["value"] = False
         engine_registry._cpu_readiness_changed()
@@ -223,109 +224,12 @@ def test_finished_preparation_refreshes_the_gpu_rows_too(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("reprobe", [None, {"metal": {"available": False, "reason": "Runtime still unavailable"}}])
-@pytest.mark.parametrize("failed", [False, True])
-def test_hbb_gpu_refresh_ends_cached_preparing_when_probe_is_unavailable(monkeypatch, reprobe, failed):
-    from server.solver import beat, beat_cpu_runtime
-
-    monkeypatch.setattr(beat, "_load_api", lambda: object())
-    monkeypatch.setattr(beat, "_cpu_backend_status", lambda package: (True, "CPU ready"))
-    monkeypatch.setattr(beat, "_package_retains_surface_traces", lambda package: False)
-    monkeypatch.setattr(beat, "reprobe_package_backend_statuses", lambda: reprobe)
-    monkeypatch.setattr(beat_cpu_runtime, "runtimes_prepared_this_process", lambda: True)
-    monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: False)
-    monkeypatch.setattr(beat_cpu_runtime, "_preparation_in_flight", False)
-    monkeypatch.setattr(beat_cpu_runtime, "_preparation_errors", {"metal": "Download failed"} if failed else {})
-    monkeypatch.setattr(beat_cpu_runtime, "_import", lambda name: SimpleNamespace(read_backend_states=lambda: {}))
-    monkeypatch.setattr(beat_cpu_runtime, "preparation_enabled", lambda backend: True)
-    engine_registry = registry.EngineRegistry(detector=lambda: [
-        registry.EngineInfo("beat-metal", False, "Preparing Metal", "1", runtime_state="preparing"),
-    ], cpu_refresh=True)
-
-    async def scenario():
-        try:
-            await engine_registry.capabilities()
-            engine_registry._cpu_readiness_changed()
-            await asyncio.sleep(0)
-            assert engine_registry._refresh_task is not None
-            await engine_registry._refresh_task
-            row = (await engine_registry.capabilities())[0]
-            assert not row.available
-            assert row.runtime_state == ("failed" if failed else "unprepared")
-            assert row.runtime_preparable
-            assert "Preparing Metal" not in row.reason
-            if failed:
-                assert "Download failed" in row.reason
-        finally:
-            await engine_registry.shutdown_prewarm()
-
-    asyncio.run(scenario())
-
-
-def test_a_reprobe_waits_for_a_running_probe_and_discards_its_answer(monkeypatch) -> None:
-    """A probe begun before provisioning finished must not answer after it."""
-
-    from server.solver import beat
-
-    answers = iter([
-        {"metal": {"available": False, "reason": "stale"}},
-        {"metal": {"available": True, "reason": "fresh"}},
-    ])
-    first_running = threading.Event()
-    release_first = threading.Event()
-
-    def probe():
-        answer = next(answers)
-        if answer["metal"]["reason"] == "stale":
-            first_running.set()
-            assert release_first.wait(5.0)
-        return answer
-
-    monkeypatch.setattr(beat, "_probe_package_backend_statuses", probe)
-    beat.beat_backend_statuses.cache_clear()
-    stale = threading.Thread(target=beat._package_backend_statuses)
-    stale.start()
-    assert first_running.wait(5.0)
-    result: list[object] = []
-    reprobe = threading.Thread(
-        target=lambda: result.append(beat.reprobe_package_backend_statuses())
-    )
-    reprobe.start()
-    release_first.set()
-    stale.join(5.0)
-    reprobe.join(5.0)
-
-    assert result == [{"metal": {"available": True, "reason": "fresh"}}]
-    beat.beat_backend_statuses.cache_clear()
-
-
-def test_a_launch_that_prepared_nothing_does_not_reprobe_gpu_rows(monkeypatch) -> None:
-    """Each GPU re-probe is a Julia startup; pay it only when something changed."""
-
-    from server.solver import beat, beat_cpu_runtime
-
-    monkeypatch.setattr(beat, "_load_api", lambda: object())
-    monkeypatch.setattr(beat, "_cpu_backend_status", lambda _package: (True, "cpu ready"))
-    monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: False)
-    monkeypatch.setattr(beat_cpu_runtime, "runtimes_prepared_this_process", lambda: False)
-    monkeypatch.setattr(
-        beat, "reprobe_package_backend_statuses", lambda: pytest.fail("must not re-probe")
-    )
-
-    updates = registry._beat_row_updates(object(), beat._cpu_backend_status)
-
-    assert updates == {"beat-cpu": (True, "cpu ready")}
-
-
 def test_cpu_refresh_retains_an_event_before_initial_cache_population(
     monkeypatch,
 ) -> None:
-    from server.solver import beat
+    from server.solver import beat, official_beat
 
-    monkeypatch.setattr(beat, "_load_api", lambda: object())
-    monkeypatch.setattr(
-        beat, "_cpu_backend_status", lambda _package: (True, "ready")
-    )
+    monkeypatch.setattr(registry, "_official_runtime_statuses", _runtime_rows(lambda _package: (True, "ready")))
     engine_registry = registry.EngineRegistry(
         detector=lambda: [_cpu_info(False, "starting")], cpu_refresh=True
     )
@@ -352,8 +256,7 @@ def test_custom_detector_is_not_overridden_by_runtime_refresh(monkeypatch) -> No
         calls += 1
         return True, "runtime ready"
 
-    monkeypatch.setattr(beat, "_load_api", lambda: object())
-    monkeypatch.setattr(beat, "_cpu_backend_status", cpu_status)
+    monkeypatch.setattr(registry, "_official_runtime_statuses", _runtime_rows(cpu_status))
     engine_registry = registry.EngineRegistry(
         detector=lambda: [_cpu_info(False, "disabled by embedding application")]
     )
@@ -374,7 +277,7 @@ def test_custom_detector_is_not_overridden_by_runtime_refresh(monkeypatch) -> No
 def test_missing_package_consumes_refresh_and_a_later_event_retries(
     monkeypatch,
 ) -> None:
-    from server.solver import beat
+    from server.solver import beat, official_beat
 
     package = None
     calls = 0
@@ -384,11 +287,12 @@ def test_missing_package_consumes_refresh_and_a_later_event_retries(
 
     def cpu_status(_package):
         nonlocal calls
+        if package is None:
+            return False, "package missing"
         calls += 1
         return True, "ready"
 
-    monkeypatch.setattr(beat, "_load_api", load_api)
-    monkeypatch.setattr(beat, "_cpu_backend_status", cpu_status)
+    monkeypatch.setattr(registry, "_official_runtime_statuses", _runtime_rows(cpu_status))
     engine_registry = registry.EngineRegistry(
         detector=lambda: [_cpu_info(False, "package missing")], cpu_refresh=True
     )
@@ -420,7 +324,7 @@ def test_missing_package_consumes_refresh_and_a_later_event_retries(
 
 
 def test_failed_refresh_is_consumed_without_a_busy_retry(monkeypatch) -> None:
-    from server.solver import beat
+    from server.solver import beat, official_beat
 
     calls = 0
 
@@ -429,8 +333,7 @@ def test_failed_refresh_is_consumed_without_a_busy_retry(monkeypatch) -> None:
         calls += 1
         raise RuntimeError("state file unreadable")
 
-    monkeypatch.setattr(beat, "_load_api", lambda: object())
-    monkeypatch.setattr(beat, "_cpu_backend_status", cpu_status)
+    monkeypatch.setattr(registry, "_official_runtime_statuses", _runtime_rows(cpu_status))
     engine_registry = registry.EngineRegistry(
         detector=lambda: [_cpu_info(False, "last known answer")], cpu_refresh=True
     )
@@ -463,8 +366,7 @@ def test_shutdown_unregisters_listener_and_cancels_refresh(monkeypatch) -> None:
         assert release_status.wait(5.0)
         return True, "late answer"
 
-    monkeypatch.setattr(beat, "_load_api", lambda: object())
-    monkeypatch.setattr(beat, "_cpu_backend_status", cpu_status)
+    monkeypatch.setattr(registry, "_official_runtime_statuses", _runtime_rows(cpu_status))
     engine_registry = registry.EngineRegistry(
         detector=lambda: [_cpu_info(False, "disabled")], cpu_refresh=True
     )
@@ -518,7 +420,7 @@ def _stub_beat_backends(monkeypatch, **available: bool) -> None:
     answers outright.
     """
 
-    from server.solver import beat
+    from server.solver import beat, official_beat
 
     def statuses() -> dict[str, dict[str, object]]:
         return {
@@ -532,7 +434,7 @@ def _stub_beat_backends(monkeypatch, **available: bool) -> None:
             for backend in beat.BEAT_BACKENDS
         }
 
-    monkeypatch.setattr(beat, "beat_backend_statuses", statuses)
+    monkeypatch.setattr(official_beat, "production_statuses", statuses)
 
 
 def test_detection_uses_honest_probe_reasons_and_dryrun_gate(monkeypatch) -> None:
@@ -570,7 +472,7 @@ def test_every_beat_backend_is_selectable_and_ordered(monkeypatch) -> None:
     fifth backend lands.
     """
 
-    from server.solver import beat
+    from server.solver import beat, official_beat
 
     expected = {beat.beat_engine_name(backend) for backend in beat.BEAT_BACKENDS}
     assert expected <= set(registry.FULL3D_ENGINE_ORDER)
@@ -604,7 +506,7 @@ def test_beat_advertises_the_reduced_domains_and_di_sphere_it_really_has(
     "half" here would promise it.
     """
 
-    from server.solver import beat, bempp, metal
+    from server.solver import beat, bempp, metal, official_beat
 
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no helper", "version": None})
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "package absent", "version": None})
@@ -631,14 +533,14 @@ def test_beat_field_trace_capability_follows_the_installed_package(
     after a pin bump. The probe reports what the installed package can do.
     """
 
-    from server.solver import beat, bempp, metal
+    from server.solver import beat, bempp, metal, official_beat
 
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no helper", "version": None})
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "absent", "version": None})
     for supported in (False, True):
         monkeypatch.setattr(
-            beat,
-            "beat_backend_statuses",
+            official_beat,
+            "production_statuses",
             lambda supported=supported: {
                 backend: {
                     "available": backend == "cuda",
@@ -1890,7 +1792,6 @@ def test_official_unprovisioned_gpu_row_keeps_readable_reason(monkeypatch):
 def test_provision_command_names_the_backend(monkeypatch):
     from server.solver import beat_cpu_runtime
 
-    monkeypatch.setattr(beat_cpu_runtime, "official_selected", lambda: False)
     assert beat_cpu_runtime.provision_command().endswith("--backend cpu")
     assert beat_cpu_runtime.provision_command(backend="cuda").endswith("--backend cuda")
 
@@ -1958,14 +1859,6 @@ def test_explicit_official_refresh_waits_for_its_revision(monkeypatch):
     asyncio.run(scenario())
 
 
-@pytest.fixture(autouse=True)
-def _hbb_rollback_fakes():
-    """The package, probe and refresh fakes in this module exercise HBB rollback."""
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setenv("WG2_BEAT_PROVIDER", "hbb")
-        yield
-
-
 @pytest.mark.parametrize("system,machine,version,eligible", [
     ("Linux", "x86_64", "", False), ("Windows", "AMD64", "", False),
     ("Darwin", "x86_64", "14.0", False), ("Darwin", "arm64", "13.2", False),
@@ -1987,3 +1880,11 @@ def test_official_cpu_preparation_preserves_metal_hardware_reason(monkeypatch, s
     assert not statuses["metal"]["available"]
     assert statuses["metal"]["state"] == ("pending" if eligible else "no-device")
     assert statuses["metal"]["reason"] == ("BEAT metal readiness is pending CPU preparation." if eligible else facts["metal"]["reason"])
+
+
+def _runtime_rows(cpu_status):
+    def statuses():
+        available, reason = cpu_status(None)
+        return {"cpu": {"available": available, "reason": reason,
+                        "state": "ready" if available else "unprepared"}}
+    return statuses

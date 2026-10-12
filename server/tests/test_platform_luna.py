@@ -610,7 +610,7 @@ def test_windows_port_checks_require_exclusive_address_use(
     ]
 
 
-@pytest.mark.parametrize("provider", [None, "hbb"], ids=["official-default", "hbb-rollback"])
+@pytest.mark.parametrize("provider", [None, "hbb"], ids=["official-default", "retired-setting"])
 def test_capability_probe_runs_off_thread_and_is_cached(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str | None,
 ) -> None:
@@ -649,7 +649,7 @@ def test_capability_probe_runs_off_thread_and_is_cached(
             key: value for key, value in first.items() if key not in _host_scoped
         } == {
             # The fake catalog has no official runtime inventory.
-            **({"officialBeatRuntime": None} if provider is None else {}),
+            "officialBeatRuntime": None,
             "cpuPreparationInFlight": False,
             "opencl_qualification_max_seconds": 460.0,
             "engines": [

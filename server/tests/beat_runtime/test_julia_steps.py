@@ -132,32 +132,6 @@ def test_subprocess_resolves_all_relative_depots_against_launch_cwd(tmp_path):
     assert kwargs["env"]["JULIA_DEPOT_PATH"] == separator.join(str(tmp_path / entry) for entry in ("first", "second"))
 
 
-@pytest.mark.parametrize("destination", ["project", "depot", "later_depot", "depot_symlink"])
-def test_subprocess_destination_isolation_precedes_popen(tmp_path, monkeypatch, destination):
-    legacy = tmp_path / "hbb"
-    legacy.mkdir()
-    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(legacy))
-    project, depot = tmp_path / "project", tmp_path / "depot"
-    if destination == "project":
-        project = legacy / "project"
-    elif destination == "depot":
-        depot = legacy / "depot"
-    elif destination == "depot_symlink":
-        depot.symlink_to(legacy, target_is_directory=True)
-    effective = str(depot)
-    if destination == "later_depot":
-        effective += julia_steps.os.pathsep + str(legacy / "depot")
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("unsafe subprocess launched")
-
-    with pytest.raises(paths.RootConflict):
-        julia_steps.run_julia_step("fake", "code", project=project,
-                                  environment={"JULIA_DEPOT_PATH": effective},
-                                  label="setup", status_cb=lambda _: None, popen=forbidden)
-    assert list(legacy.iterdir()) == []
-
-
 def test_implicit_depot_list_entries_refused_before_subprocess(tmp_path):
     def forbidden(*args, **kwargs):
         raise AssertionError("implicit depot subprocess launched")

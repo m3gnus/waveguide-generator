@@ -8,35 +8,6 @@ import pytest
 from server.solver.beat_runtime import locks, provision, state
 
 
-@pytest.mark.parametrize("destination", ["depot", "inherited_first", "inherited_later", "project", "depot_symlink"])
-def test_julia_write_destinations_refuse_hbb_before_subprocess(cpu_provisioning, tmp_path, monkeypatch, destination):
-    root, _, _, calls, options = cpu_provisioning
-    legacy = tmp_path / "hbb"
-    legacy.mkdir()
-    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(legacy))
-    options["environ"]["HORNLAB_BEAT_RUNTIME_DIR"] = str(legacy)
-    if destination == "depot":
-        options["depot"] = legacy / "depot"
-    elif destination.startswith("inherited"):
-        entries = [str(legacy / "depot"), str(tmp_path / "safe-depot")]
-        if destination == "inherited_later":
-            entries.reverse()
-        options["environ"]["JULIA_DEPOT_PATH"] = os.pathsep.join(entries)
-    elif destination == "project":
-        options["julia_project"] = legacy / "julia_metal"
-    else:
-        root.mkdir(parents=True)
-        (root / "depot").symlink_to(legacy, target_is_directory=True)
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("installer reached an unsafe Julia destination")
-
-    options["ensure_julia"] = forbidden
-    failed = provision.provision_cpu(**options)
-    assert failed["status"] == "failed" and "overlaps" in failed["error"]
-    assert not calls and list(legacy.iterdir()) == []
-
-
 def test_default_wg_depot_passes_destination_checks(cpu_provisioning):
     root, _, _, calls, options = cpu_provisioning
     ready = provision.provision_cpu(**options)

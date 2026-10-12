@@ -97,7 +97,7 @@ class EngineInfo:
     #
     # A list rather than a boolean because the engines genuinely differ:
     # hornlab-bempp-bem mirrors across any one of the three coordinate planes,
-    # while hornlab-beat-bem's :ground transform is y = 0 only. A flat boolean
+    # while beat-engine's :ground transform is y = 0 only. A flat boolean
     # would make BEAT look capable of a side wall it cannot solve.
     ground_plane_axes: tuple[str, ...] = ()
     # Whether a ground plane may be combined with a reduced-domain mesh.
@@ -164,7 +164,7 @@ def _ground_plane_axes(name: str, status: Mapping[str, Any]) -> tuple[str, ...]:
     offered and then failing with a TypeError deep in the adapter.
 
     BEAT is absent, and the reason is worth stating precisely because it has
-    changed. hornlab-beat-bem CAN express a rigid half space now: at the pin
+    changed. beat-engine CAN express a rigid half space now: at the pin
     this application currently carries it exports ``GroundPlane``,
     ``SolveConfig.ground_plane``, ``reject_unsupported_ground_plane`` and
     ``GROUND_PLANE_AXES = ("y",)`` -- commented in its own source as the
@@ -339,14 +339,10 @@ def detect_engines(
         BEAT_BACKENDS, beat_backend_statuses, beat_engine_name,
     )
     try:
-        from server.solver.beat_runtime.provider import official_selected
 
-        if official_selected():
-            from server.solver.official_beat import production_statuses
+        from server.solver.official_beat import production_statuses
 
-            backend_statuses = production_statuses()
-        else:
-            backend_statuses = beat_backend_statuses()
+        backend_statuses = production_statuses()
     except Exception as exc:  # a broken optional stack is unavailable, not fatal
         backend_statuses = {
             backend: {
@@ -375,16 +371,10 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
 
     from server.solver.beat import BEAT_BACKEND_LABELS, beat_engine_name, beat_geometry_sources
 
-    from server.solver.beat_runtime.provider import official_selected
-
     from server.solver import beat_cpu_runtime
 
     name = beat_engine_name(backend)
     state = status.get("state")
-    if state is None and backend == "cpu" and not official_selected():
-        from server.solver.beat import _load_api
-
-        state = beat_cpu_runtime.cpu_runtime_readiness(_load_api()).state
     runtime_state = ("ready" if status.get("available") else
                      "preparing" if state in {"provisioning", "pending", "preparing"} else
                      "failed" if state == "failed" else
@@ -401,11 +391,6 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
     if preparable and not beat_cpu_runtime.preparation_enabled(backend):
         preparable = False
         reason = (reason or str(status.get("reason") or "")) + " Preparation is disabled by this installation's platform or provisioning settings."
-    if preparable and not official_selected():
-        provision = beat_cpu_runtime._import("hornlab_beat_bem.provision")
-        preparable = provision is not None and beat_cpu_runtime.records_state_per_backend(provision)
-        if not preparable:
-            reason = (reason or str(status.get("reason") or "")) + " Update Waveguide Generator before preparing runtimes with shared CPU/GPU records."
     return EngineInfo(
         name=name,
         label=BEAT_BACKEND_LABELS.get(backend, name),
@@ -417,7 +402,7 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
         # No ground plane: the BEAT adapter does not translate one yet.
         mountings=("free-standing",),
         geometry_sources=beat_geometry_sources(backend),
-        imported_features=("exterior-transducers",) if official_selected() and backend in {"cpu", "metal"} else (),
+        imported_features=("exterior-transducers",) if (backend in {"cpu", "metal"}) else (),
         symmetry_domains=_symmetry_domains(name),
         field_traces=bool(status.get("surface_traces")),
         di_sphere=True,
@@ -499,35 +484,10 @@ def _beat_row_updates(
     """
 
     from server.solver import beat, beat_cpu_runtime
-    from server.solver.beat_runtime.provider import official_selected
 
-    if official_selected():
-        return {f"beat-{backend}": (bool(status["available"]), str(status["reason"]))
-                for backend, status in _official_runtime_statuses().items()
-                if backend in {"cpu", "metal", "cuda", "rocm"}}
-
-    updates = {"beat-cpu": cpu_backend_status(package)}
-    if beat_cpu_runtime.cpu_preparation_in_flight():
-        for backend in beat_cpu_runtime.GPU_BACKENDS:
-            reason = beat_cpu_runtime.gpu_preparation_reason(backend)
-            if reason is not None:
-                updates[beat.beat_engine_name(backend)] = (False, reason)
-        return updates
-    if not beat_cpu_runtime.runtimes_prepared_this_process():
-        return updates
-    # The package's own per-backend verdicts, as ``beat_backend_statuses``
-    # uses them; ``None`` on an older pin, whose GPU rows keep their startup
-    # verdict as they always did.
-    statuses = beat.reprobe_package_backend_statuses() or {}
-    for backend in beat_cpu_runtime.GPU_BACKENDS:
-        status = statuses.get(backend)
-        if isinstance(status, Mapping):
-            updates[beat.beat_engine_name(backend)] = (
-                bool(status.get("available")),
-                str(status.get("reason")
-                    or f"the BEAT package returned no reason for the {backend} backend"),
-            )
-    return updates
+    return {f"beat-{backend}": (bool(status["available"]), str(status["reason"]))
+            for backend, status in _official_runtime_statuses().items()
+            if backend in {"cpu", "metal", "cuda", "rocm"}}
 
 
 def _failed_detection(
@@ -1009,10 +969,7 @@ class EngineRegistry:
     async def refresh_official_readiness(self) -> None:
         """Explicit UI refresh waits for a full proof instead of a warm verdict."""
         from server.solver.beat_runtime import readiness
-        from server.solver.beat_runtime.provider import official_selected
 
-        if not official_selected():
-            return
         await asyncio.to_thread(readiness.probe_cache_clear, notify=False)
         with self._refresh_state_lock:
             self._refresh_revision += 1
@@ -1092,9 +1049,8 @@ class EngineRegistry:
             self._opencl_revision = revision
 
     def _check_official_state(self) -> None:
-        from server.solver.beat_runtime.provider import official_selected
 
-        if not self._cpu_refresh_enabled or self._listener_removed or not official_selected():
+        if (not self._cpu_refresh_enabled) or (self._listener_removed):
             return
         from server.solver.beat_runtime import paths
 
@@ -1138,12 +1094,8 @@ class EngineRegistry:
     async def _refresh_cpu_backend(self) -> None:
         from server.solver import beat_cpu_runtime
         from server.solver.beat import (
-            _cpu_backend_status,
-            _load_api,
-            _package_retains_surface_traces,
             beat_engine_backend,
         )
-        from server.solver.beat_runtime.provider import official_selected
 
         while not self._listener_removed:
             with self._refresh_state_lock:
@@ -1152,41 +1104,26 @@ class EngineRegistry:
             if target_revision <= applied_revision:
                 return
             try:
-                selected = official_selected()
-                if selected:
-                    self.official_runtime_statuses = await asyncio.to_thread(_official_runtime_statuses)
-                package = None if selected else _load_api()
-                if selected or package is not None:
-                    updates = ({f"beat-{backend}": (bool(status["available"]), str(status["reason"]))
-                                for backend, status in self.official_runtime_statuses.items()
-                                if backend in {"cpu", "metal", "cuda", "rocm"}} if selected else
-                               await asyncio.to_thread(_beat_row_updates, package, _cpu_backend_status))
-                    async with self._lock:
-                        if self._cache is not None and not self._listener_removed:
-                            preparing = beat_cpu_runtime.cpu_preparation_in_flight()
-                            if not selected and not preparing:
-                                # A missing or unavailable reprobe must end the
-                                # cached progress row too, so Retry stays reachable.
-                                for item in self._cache:
-                                    if item.name in {"beat-metal", "beat-cuda", "beat-rocm"} and item.runtime_state == "preparing":
-                                        updates.setdefault(item.name, (False,
-                                            f"{item.label or item.name} runtime is not ready after preparation. Prepare the runtime again."))
-                            self._cache = tuple(
-                                _beat_engine_info(beat_engine_backend(item.name), {
-                                    "available": updates[item.name][0],
-                                    "reason": updates[item.name][1],
-                                    "version": self.official_runtime_statuses[beat_engine_backend(item.name)].get("version")
-                                    if selected else getattr(package, "__version__", item.version),
-                                    "surface_traces": True if selected else _package_retains_surface_traces(package),
-                                    "state": self.official_runtime_statuses[beat_engine_backend(item.name)].get("state") if selected else
-                                    None if item.name == "beat-cpu" else
-                                    "unprepared" if item.runtime_state == "preparing"
-                                    and not preparing else item.runtime_state,
-                                })
-                                if item.name in updates
-                                else item
-                                for item in self._cache
-                            )
+                self.official_runtime_statuses = await asyncio.to_thread(_official_runtime_statuses)
+                package = None
+                updates = ({f"beat-{backend}": (bool(status["available"]), str(status["reason"]))
+                            for backend, status in self.official_runtime_statuses.items()
+                            if backend in {"cpu", "metal", "cuda", "rocm"}})
+                async with self._lock:
+                    if self._cache is not None and not self._listener_removed:
+                        preparing = beat_cpu_runtime.cpu_preparation_in_flight()
+                        self._cache = tuple(
+                            _beat_engine_info(beat_engine_backend(item.name), {
+                                "available": updates[item.name][0],
+                                "reason": updates[item.name][1],
+                                "version": self.official_runtime_statuses[beat_engine_backend(item.name)].get("version"),
+                                "surface_traces": True,
+                                "state": self.official_runtime_statuses[beat_engine_backend(item.name)].get("state"),
+                            })
+                            if item.name in updates
+                            else item
+                            for item in self._cache
+                        )
             except Exception:  # noqa: BLE001 - refresh cannot break capabilities
                 log.warning("BEAT capability refresh failed", exc_info=True)
             with self._refresh_state_lock:

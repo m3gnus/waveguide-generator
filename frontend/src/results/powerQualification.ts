@@ -119,8 +119,8 @@ const ENGINE_PACKAGES: Record<string, string> = {
   metal: 'hornlab-metal-bem',
   circsym: 'hornlab-metal-bem',
   bempp: 'hornlab-bempp-bem',
-  beat: 'hornlab-beat-bem',
-  'beat-cpu': 'hornlab-beat-bem',
+  beat: 'beat-engine',
+  'beat-cpu': 'beat-engine',
 };
 const FORMULATION_BLOCKS = ['solver_engine', 'metal', 'axisym', 'bempp', 'beat'];
 

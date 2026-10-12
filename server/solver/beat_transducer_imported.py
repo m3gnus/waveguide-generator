@@ -26,7 +26,7 @@ from .beat_adapter.mesh import read_surface
 from .beat_adapter.request import _layout
 from .beat_adapter.results import SweepResult
 from .beat_adapter.transducers import ExteriorDriver, TransducerSweep, build_transducer_request
-from .beat_runtime.provider import official_selected
+
 from .context import SolverContext
 from .frequency_sweep import canonical_frequencies
 from .imported import imported_anchor_frame, imported_domain_planes
@@ -40,7 +40,7 @@ def enabled(channels: Sequence) -> bool:
 
 def preflight(record: Mapping, msh_text: str, channels: Sequence, *, backend: str) -> str | None:
     try:
-        if not official_selected() or backend not in {"cpu", "metal"}:
+        if (backend not in {"cpu", "metal"}):
             raise ValueError("Exterior transducers require the official BEAT CPU or Metal runtime")
         if imported_domain_planes(record):
             raise ValueError("Exterior transducers require complete solids without symmetry cuts")

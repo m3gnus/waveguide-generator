@@ -300,10 +300,6 @@ def test_beat_lifecycle_defaults_to_official_with_rollback(monkeypatch, tmp_path
     else:
         monkeypatch.setenv("WG2_BEAT_PROVIDER", provider)
     called = []
-    package = types.ModuleType("hornlab_beat_bem")
-    package.warm_up = lambda **kwargs: called.append(("hbb warm", kwargs))
-    package.shutdown_workers = lambda: called.append("hbb quit")
-    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
     monkeypatch.setattr(official_warmup, "warm_up", lambda **kwargs: called.append(("official warm", kwargs)))
     monkeypatch.setattr(manager, "get_manager", lambda: types.SimpleNamespace(detach=lambda: called.append("official quit")))
     warmup._warm_beat("metal")
@@ -322,14 +318,8 @@ def test_beat_lifecycle_defaults_to_official_with_rollback(monkeypatch, tmp_path
         assert application.state.beat_prewarm_task.cancelled()
 
     asyncio.run(quit_app())
-    if provider not in {"hbb", "legacy"}:
-        assert called == [("official warm", {"beat_backend": "metal", "mode": "tiny"}),
-                          "prewarm cancelled", "official quit"]
-    else:
-        from server.solver.beat_threads import beat_julia_threads
-        assert called == [("hbb warm", {"beat_backend": "metal", "mode": "tiny",
-                                     "julia_threads": beat_julia_threads("metal")}),
-                          "prewarm cancelled", "hbb quit"]
+    assert called == [("official warm", {"beat_backend": "metal", "mode": "tiny"}),
+                      "prewarm cancelled", "official quit"]
 
 
 def test_official_quit_bounds_a_stuck_detach(monkeypatch, tmp_path, caplog):
@@ -367,10 +357,10 @@ def test_quitting_stops_the_beat_worker_after_cancelling_prewarm(
 ) -> None:
     application = create_app(data_dir=tmp_path)
     called: list[str] = []
-    package = types.ModuleType("hornlab_beat_bem")
+    package = types.SimpleNamespace()
     package.detach_workers = lambda: called.append("detach")  # type: ignore[attr-defined]
     package.shutdown_workers = lambda: called.append("shutdown")  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
+    _mock_beat_runtime(monkeypatch, package)
 
     async def prewarm() -> None:
         try:
@@ -396,9 +386,9 @@ def test_quitting_stops_a_beat_package_without_detach_workers(
 
     application = create_app(data_dir=tmp_path)
     called: list[str] = []
-    package = types.ModuleType("hornlab_beat_bem")
+    package = types.SimpleNamespace()
     package.shutdown_workers = lambda: called.append("shutdown")  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
+    _mock_beat_runtime(monkeypatch, package)
 
     asyncio.run(_beat_quit_hook(application)())
 
@@ -412,9 +402,9 @@ def test_quitting_still_stops_workers_when_beat_prewarm_failed(
 ) -> None:
     application = create_app(data_dir=tmp_path)
     called: list[str] = []
-    package = types.ModuleType("hornlab_beat_bem")
+    package = types.SimpleNamespace()
     package.shutdown_workers = lambda: called.append("shutdown")  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
+    _mock_beat_runtime(monkeypatch, package)
 
     async def fail() -> None:
         raise RuntimeError("prewarm failed")
@@ -441,13 +431,13 @@ def test_quitting_logs_beat_shutdown_failure_and_continues(
     failure: Exception,
 ) -> None:
     application = create_app(data_dir=tmp_path)
-    package = types.ModuleType("hornlab_beat_bem")
+    package = types.SimpleNamespace()
 
     def fail() -> None:
         raise failure
 
     package.shutdown_workers = fail  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
+    _mock_beat_runtime(monkeypatch, package)
 
     asyncio.run(_beat_quit_hook(application)())
 
@@ -461,12 +451,12 @@ def test_quitting_logs_a_missing_beat_shutdown_api_and_continues(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     application = create_app(data_dir=tmp_path)
-    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", types.ModuleType("hornlab_beat_bem"))
+    _mock_beat_runtime(monkeypatch, types.SimpleNamespace())
 
     asyncio.run(_beat_quit_hook(application)())
 
     assert "BEAT worker shutdown failed; continuing exit" in caplog.text
-    assert "shutdown_workers" in caplog.text
+    assert "detach" in caplog.text
 
 
 def test_quitting_does_not_join_a_stuck_beat_shutdown_thread(
@@ -480,14 +470,14 @@ def test_quitting_does_not_join_a_stuck_beat_shutdown_thread(
     monkeypatch.setattr("server.app._BEAT_SHUTDOWN_TIMEOUT_SECONDS", 0.05)
     release = threading.Event()
     threads: list[threading.Thread] = []
-    package = types.ModuleType("hornlab_beat_bem")
+    package = types.SimpleNamespace()
 
     def block() -> None:
         threads.append(threading.current_thread())
         release.wait(5.0)
 
     package.shutdown_workers = block  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
+    _mock_beat_runtime(monkeypatch, package)
 
     started = time.monotonic()
     try:
@@ -527,6 +517,7 @@ def test_the_beat_worker_prewarm_only_warms_the_engine_auto_chose(
     assert solver_warmup.prewarm_beat_worker_for_engine(None) is False
     assert warmed == []
 
+    monkeypatch.setattr(solver_warmup, "_warmup_beat_status", lambda: {"available": True, "backend": "cpu"})
     assert solver_warmup.prewarm_beat_worker_for_engine("beat") is True
     assert warmed == ["beat"]
 
@@ -561,11 +552,11 @@ def test_the_beat_warmup_runs_a_solve_not_just_a_process_start(
     module = types.SimpleNamespace(
         warm_up=lambda **kwargs: calls.append(kwargs)
     )
-    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", module)
+    _mock_beat_runtime(monkeypatch, module)
 
     solver_warmup._warm_beat("cuda")
 
-    assert calls == [{"beat_backend": "cuda", "mode": "tiny", "julia_threads": "auto"}]
+    assert calls == [{"beat_backend": "cuda", "mode": "tiny"}]
 
 
 @pytest.mark.parametrize("backend", ["cuda", "rocm", "metal", "cpu"])
@@ -594,18 +585,18 @@ def test_the_beat_warmup_warms_the_backend_the_solve_will_use(
 
     calls: list[dict[str, object]] = []
     module = types.SimpleNamespace(warm_up=lambda **kwargs: calls.append(kwargs))
-    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", module)
+    _mock_beat_runtime(monkeypatch, module)
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
 
     engine = f"beat-{backend}"
     assert solver_warmup.prewarm_beat_worker_for_engine(engine) is True
 
-    from server.solver.beat_threads import beat_julia_threads
+    from server.solver.beat_runtime.threads import resolve_julia_threads
 
     # The thread count is part of the package's worker key: the solve asks
     # ``beat_julia_threads`` too, so both land on the same worker.
     assert calls == [
-        {"beat_backend": backend, "mode": "tiny", "julia_threads": beat_julia_threads(backend)}
+        {"beat_backend": backend, "mode": "tiny"}
     ]
     assert create_engine(engine).backend == backend
 
@@ -640,14 +631,14 @@ def test_the_beat_prewarm_still_answers_the_legacy_family_name(
 
     calls: list[dict[str, object]] = []
     module = types.SimpleNamespace(warm_up=lambda **kwargs: calls.append(kwargs))
-    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", module)
+    _mock_beat_runtime(monkeypatch, module)
     monkeypatch.setattr(
-        beat_adapter, "beat_status", lambda: {"available": True, "backend": "rocm"}
+        solver_warmup, "_warmup_beat_status", lambda: {"available": True, "backend": "rocm"}
     )
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
 
     assert solver_warmup.prewarm_beat_worker_for_engine("beat") is True
-    assert calls == [{"beat_backend": "rocm", "mode": "tiny", "julia_threads": "auto"}]
+    assert calls == [{"beat_backend": "rocm", "mode": "tiny"}]
 
 
 def test_an_unnamed_beat_backend_falls_back_to_the_one_every_host_has() -> None:
@@ -985,7 +976,7 @@ def test_solver_warmup_falls_back_to_bempp(
     calls: list[tuple[str, object]] = []
     status = {"available": True, "assembly_backend": "numba"}
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False})
-    monkeypatch.setattr(beat_adapter, "beat_status", lambda: {"available": False})
+    monkeypatch.setattr(warmup, "_warmup_beat_status", lambda: {"available": False})
     monkeypatch.setattr(warmup, "_beat_cpu_leads_bempp", lambda: False)
     monkeypatch.setattr(bempp, "bempp_status", lambda: status)
     monkeypatch.setattr(warmup, "_warm_metal", lambda: calls.append(("metal", None)))
@@ -1039,7 +1030,7 @@ def test_solver_warmup_skips_when_no_physical_engine_is_available(
 
     calls: list[str] = []
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no Metal"})
-    monkeypatch.setattr(beat_adapter, "beat_status", lambda: {"available": False, "reason": "no BEAT"})
+    monkeypatch.setattr(warmup, "_warmup_beat_status", lambda: {"available": False, "reason": "no BEAT"})
     monkeypatch.setattr(warmup, "_beat_cpu_leads_bempp", lambda: False)
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "no BEMPP"})
     monkeypatch.setattr(warmup, "_warm_metal", lambda: calls.append("metal"))
@@ -1751,7 +1742,7 @@ def test_the_beat_prewarm_records_every_outcome_in_the_log(
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     monkeypatch.setattr(
-        beat_adapter, "beat_status", lambda: {"available": True, "backend": "metal"}
+        solver_warmup, "_warmup_beat_status", lambda: {"available": True, "backend": "metal"}
     )
     monkeypatch.setattr(solver_warmup, "_warm_beat", lambda status: None)
 
@@ -1773,9 +1764,9 @@ def test_the_beat_prewarm_records_every_outcome_in_the_log(
     assert {record.levelno for record in caplog.records} == {logging.INFO}
 
 
-@pytest.fixture(autouse=True)
-def _hbb_rollback_fakes():
-    """Historic warm-up and shutdown fakes exercise HBB; selector tests override."""
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setenv("WG2_BEAT_PROVIDER", "hbb")
-        yield
+def _mock_beat_runtime(monkeypatch, recording):
+    from server.solver.beat_runtime import manager, warmup
+    if hasattr(recording, "warm_up"):
+        monkeypatch.setattr(warmup, "warm_up", recording.warm_up)
+    shutdown = getattr(recording, "shutdown_workers", None)
+    monkeypatch.setattr(manager, "get_manager", lambda: types.SimpleNamespace(detach=shutdown) if shutdown else types.SimpleNamespace())

@@ -46,7 +46,7 @@ def _resolve_key(backend: str, *, julia_executable: str | None = None,
     env["JULIA_NUM_THREADS"] = str(count)
     env["BLAB_BEAT_ENGINE_GPU_BACKEND"] = backend
     # The same destination checks provisioning uses: project and every depot
-    # entry, HBB refused, relative entries made absolute, empty entries refused.
+    # entry, relative entries made absolute, empty entries refused.
     project, env = julia_steps.julia_environment(
         engine.project if julia_project is None else julia_project, env)
     depots = env["JULIA_DEPOT_PATH"].split(os.pathsep)

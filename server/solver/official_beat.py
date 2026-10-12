@@ -151,7 +151,7 @@ def solve_compiled(
                            status_callback=status_callback)
             if profile is not None:
                 profile.mark("submitted")
-        except (discovery.JuliaDiscoveryError, assets.AssetsUnavailable, paths.RootConflict,
+        except (discovery.JuliaDiscoveryError, assets.AssetsUnavailable,
                 registry.RecordRefused) as exc:
             readiness.probe_cache_clear()
             raise OfficialBeatUnavailable(str(exc)) from exc
@@ -214,7 +214,7 @@ def solve_official_beat_from_msh_text(
 
     try:
         return solve_beat_from_msh_text(
-            msh_text, context, backend=backend, _official=True,
+            msh_text, context, backend=backend,
             _worker_manager=worker_manager, _julia_executable=julia_executable,
             _precision=precision, _mesh_scale_to_m=mesh_scale_to_m, **callbacks,
         )
@@ -264,7 +264,7 @@ def solve_transducer_compiled(
                 readiness.probe_cache_clear()
                 raise OfficialBeatUnavailable(str(exc)) from exc
             session.submit(client, wire, negotiate=negotiate, status_callback=status_callback)
-        except (discovery.JuliaDiscoveryError, assets.AssetsUnavailable, paths.RootConflict,
+        except (discovery.JuliaDiscoveryError, assets.AssetsUnavailable,
                 registry.RecordRefused, HostError, OSError) as exc:
             readiness.probe_cache_clear()
             raise OfficialBeatUnavailable(str(exc)) from exc

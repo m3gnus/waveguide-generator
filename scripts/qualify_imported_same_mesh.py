@@ -46,7 +46,7 @@ from server.mesh.imported import polar_grid_from_symmetry  # noqa: E402
 from server.solver.combine import deserialize_channel_bases  # noqa: E402
 from server.solver.imported import config_supports_source_axes, mesh_text_sha256  # noqa: E402
 
-#: The air every engine here solves in (hornlab-metal-bem and hornlab-beat-bem
+#: The air every engine here solves in (hornlab-metal-bem and beat-engine
 #: publish the same two constants).
 AIR_DENSITY = 1.2041
 SOUND_SPEED = 343.0
@@ -212,7 +212,7 @@ def rotation_matrix(axis: Sequence[float], degrees: float) -> np.ndarray:
 def pulsating_sphere(radius: float, frequency_hz: float, distance: float) -> complex:
     """Pressure per unit outward normal acceleration, e^{-iwt}, outgoing e^{+ikr}.
 
-    The form hornlab-beat-bem's conformance suite uses
+    The form beat-engine's conformance suite uses
     (``tests/conformance/analytic.py``): ``rho a^2 / r * e^{ik(r-a)} / (1 - ika)``.
     """
 
@@ -1146,7 +1146,7 @@ def environment_facts() -> dict[str, Any]:
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         facts["waveguide-generator"] = "unknown"
-    for dist in ("hornlab-metal-bem", "hornlab-beat-bem", "hornlab-bempp-bem"):
+    for dist in ("hornlab-metal-bem", "beat-engine", "hornlab-bempp-bem"):
         try:
             distribution = metadata.distribution(dist)
             direct = json.loads(distribution.read_text("direct_url.json") or "{}")

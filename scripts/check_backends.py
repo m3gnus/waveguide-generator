@@ -7,8 +7,7 @@ happily on a clean Windows box whose compiled extensions cannot load at all.
 Counting OpenCL devices was no better -- a device that initialises can still
 fail to compile the assembly kernel.
 
-BEAT probes follow the official default, or the one-release
-``WG2_BEAT_PROVIDER=hbb``/``legacy`` rollback.
+BEAT probes use the official engine route.
 
 So this asks v2's own capability probes, the ones the solve path consults, and
 prints the same three facts they carry: which backend was resolved, why, and the
@@ -109,14 +108,10 @@ def main() -> int:
     # One line per BEAT execution backend, the same four the app offers. A
     # single "BEAT" line here could only report whichever one the probe named,
     # which is exactly the question a person running this script is asking.
-    from server.solver.beat_runtime.provider import official_selected
 
-    if official_selected():
-        from server.solver.official_beat import production_statuses
+    from server.solver.official_beat import production_statuses
 
-        beat_statuses = production_statuses()
-    else:
-        beat_statuses = beat_backend_statuses()
+    beat_statuses = production_statuses()
     beat = False
     for backend in BEAT_BACKENDS:
         label = BEAT_BACKEND_LABELS.get(backend, f"BEAT ({backend})")

@@ -1,87 +1,4 @@
-"""Whether BEAT's CPU backend can really solve here, and getting it there.
-
-Two things live in this module, and they are one subject: what a *provisioned*
-BEAT CPU runtime is, and who provisions it.
-
-The default official provider delegates readiness and preparation to WG-owned
-``beat_runtime``: CPU is prepared first, then Metal on supported hardware.
-The HBB-specific records, probes and GPU rules described below apply only to
-the one-release ``WG2_BEAT_PROVIDER=hbb``/``legacy`` rollback.
-
-**Readiness.** The question the picker asks about ``beat-cpu`` used to be "is
-there a Julia executable, and is the bundled project on disk". Both can be true
-on a machine where the first solve then fails: the Julia project has a
-checked-in Manifest, but nothing has downloaded the packages that Manifest
-names, and an offline host discovers that inside the user's job rather than in
-a capability row. ``hornlab_beat_bem.provision`` answers the real question --
-its CPU path instantiates the project and then *solves a 1 kHz probe* through
-the precompiled engine bundle before it records ``ready`` -- so readiness here
-is that record, matched against the backend and the package content fingerprint
-it was recorded for. Not the install path: a second install of the same package,
-such as a source checkout's virtual environment beside the packaged
-application, is proved by the same record (see ``_proves_cpu_runtime``).
-Anything else is reported unavailable with a readable reason. The interface
-offers explicit preparation and retry through this same lifecycle.
-
-**Provisioning.** ``scripts/bootstrap.py`` covers the source install, where an
-installer run is the natural place to spend the download. The packaged
-application has no such step: it ships a prebuilt runtime layer with
-``hornlab-beat-bem`` already in it and never runs the bootstrap, so on a
-GPU-less Windows or Linux box nothing would ever fetch Julia and the CPU engine
-would stay permanently unavailable. ``start_cpu_provisioning`` is that missing
-step, and its constraints come from where it runs:
-
-* It never blocks startup. A daemon thread does the work -- including the GPU
-  hardware inventory that decides whether to do any of it, because that one
-  shells out to ``nvidia-smi`` -- and the server serves while it runs.
-* It never starts GPU work. ``provision_cpu`` instantiates the CPU project,
-  which depends on no accelerator package, so this cannot turn into the
-  multi-gigabyte CUDA/ROCm artifact pull that ``--if-gpu`` is gated on.
-* **It runs on every desktop platform this application supports, macOS
-  included.** It used to skip macOS, on the reasoning that AUTO prefers the
-  measured Metal path there so a CPU runtime would never be *selected*. That
-  answered the wrong question. ``BEAT · CPU`` is an engine a user picks by
-  name, and every supported computer has a CPU, so on a Mac it was a row that
-  could never light up -- offering, as its remedy, a shell command a packaged
-  application gives nobody a shell for. Preparing it is also cheapest there:
-  Apple Silicon has a Julia already, downloaded by the Metal hook, so what is
-  left is instantiating the CPU project and the 1 kHz probe.
-
-  Availability is not preference. ``registry.full3d_engine_order`` still leaves
-  macOS on the base order, so AUTO keeps choosing Metal first, then eligible BEAT engines and BEMPP;
-  this only decides whether the row can be chosen at all.
-* **It runs on a GPU host too, as long as the pinned package records readiness
-  per backend.** It used to stop as soon as ``nvidia-smi`` found a card, and
-  that made ``BEAT · CPU`` a row a user could select by name and never have:
-  permanently unavailable on every GPU machine, with a reason offering a
-  command that -- against a single-slot state record -- would have overwritten
-  the GPU runtime's own readiness. ``hornlab_beat_bem.provision`` now keeps one
-  record per backend, so both can be ready at once and the CPU runtime is
-  prepared *in addition to* the accelerator. Against an older pinned package
-  the old skip is kept, because there the two backends share one record and
-  preparing this one would cost the other; see ``_provision_worker``.
-* At launch it does not retry a failure. An explicit UI request can retry. A recorded failure for this same build is
-  reported, not re-run, so a metered or offline machine pays the attempt once
-  and reads why instead of re-downloading on every launch.
-* ``WG2_SKIP_BEAT_CPU_PROVISION=1`` switches it off entirely.
-
-**The GPU runtime, after the CPU one.** The packaged application never runs
-``scripts/bootstrap.py``, whose ``--if-gpu`` hook is the only other place a
-Metal, CUDA or ROCm runtime gets prepared. Without this step a fresh install, or
-any install whose pinned package moved to a new portable Julia, shows
-``BEAT · Metal`` (or CUDA/ROCm) unavailable for good, with a shell command as
-its remedy. So once the CPU stage is settled the same worker prepares the
-backend ``detect_gpu_backend`` names, through the package's own
-``provision_gpu``, under the same rules: per-backend records only, a recorded
-failure for this build is reported rather than retried, and
-``WG2_SKIP_GPU_PROVISION=1`` -- the switch ``scripts/bootstrap.py`` already
-honours -- leaves the GPU alone while still preparing the CPU.
-
-Readiness changes are published to ``EngineRegistry`` while the process is
-running. The interface polls only while this background preparation thread is
-alive, so a completed CPU runtime becomes selectable without restarting the
-application and a failed or skipped preparation stops polling.
-"""
+"""Readiness and background preparation for the official BEAT CPU/GPU runtimes."""
 
 from __future__ import annotations
 
@@ -96,8 +13,6 @@ import shlex
 import subprocess
 import threading
 from typing import Any, Mapping
-
-from .beat_runtime.provider import official_selected
 
 log = logging.getLogger("wg.solver.beat")
 
@@ -118,24 +33,6 @@ GPU_BACKENDS: tuple[str, ...] = ("cuda", "rocm", "metal")
 #: this application ships for. See the module docstring for why macOS is in the
 #: set even though AUTO never prefers a CPU solve there.
 PROVISION_SYSTEMS: frozenset[str] = frozenset({"Windows", "Linux", "Darwin"})
-
-#: The ``hornlab-beat-bem`` commit that introduced ``provision.provision_cpu``
-#: and its ``--backend cpu`` CLI. Named in the unavailable reason because the
-#: pin in ``server/requirements-pins.txt`` is older than this and is updated by
-#: the landing role, not here: until it moves, this path degrades to an honest
-#: "cannot prove it" rather than to a wrong "ready".
-REQUIRED_PACKAGE_COMMIT = "ac48d90"
-
-#: The attribute that tells us the pinned package records readiness per backend
-#: (``state-<backend>.json``) rather than in one slot. A capability, not a
-#: commit: this consumer cannot name a SHA that does not exist yet, and the
-#: attribute is the thing the behaviour actually depends on.
-#:
-#: With it, ``provision_cpu`` on a GPU host is additive and this module prepares
-#: the CPU runtime everywhere. Without it, provisioning the CPU would overwrite
-#: the record that says the accelerator is provisioned, so the GPU host is left
-#: alone and the CPU row says why.
-PER_BACKEND_STATE_ATTR = "read_backend_states"
 
 #: Thread name, so a stack dump from ``faulthandler`` names this work.
 PROVISION_THREAD_NAME = "wg2-beat-cpu-provision"
@@ -168,33 +65,22 @@ class CpuRuntimeReadiness:
     reason: str
 
 
-def _import(name: str) -> Any | None:
-    try:
-        return importlib.import_module(name)
-    except (ImportError, OSError):
-        return None
-
-
 def provision_command(*, production: bool = False, backend: str = "cpu") -> str:
     """The exact command that provisions a BEAT runtime (CPU by default) on this install.
 
     The interpreter is named rather than assumed: the packaged application's
     Python is not on PATH, so a bare ``python -m ...`` in a capability reason
     would send a user to whichever interpreter their shell finds, which is not
-    the one that has ``hornlab-beat-bem`` installed.
+    the one that has ``beat-engine`` installed.
     """
 
     executable = sys.executable or "python"
-    if official_selected() and not production:
-        from server.platform.paths import app_root
+    from server.platform.paths import app_root
 
-        code = (f"import sys, runpy; sys.path.insert(0, {str(app_root())!r}); "
-                "runpy.run_module('server.solver.beat_runtime.cli', run_name='__main__')")
-        command = [executable, "-c", code, "--backend", backend]
-        return subprocess.list2cmdline(command) if platform.system() == "Windows" else shlex.join(command)
-    if " " in executable:
-        executable = f'"{executable}"'
-    return f"{executable} -m hornlab_beat_bem.provision --backend {backend}"
+    code = (f"import sys, runpy; sys.path.insert(0, {str(app_root())!r}); "
+            "runpy.run_module('server.solver.beat_runtime.cli', run_name='__main__')")
+    command = [executable, "-c", code, "--backend", backend]
+    return subprocess.list2cmdline(command) if platform.system() == "Windows" else shlex.join(command)
 
 
 def cpu_provisioning_step() -> str | None:
@@ -270,10 +156,9 @@ def _record_step(step: str | None) -> None:
 
 
 def add_readiness_listener(listener: Any) -> None:
-    if official_selected():
-        from .beat_runtime import readiness
+    from .beat_runtime import readiness
 
-        readiness.add_readiness_listener(_official_readiness_changed)
+    readiness.add_readiness_listener(_official_readiness_changed)
     with _provision_lock:
         if listener not in _readiness_listeners:
             _readiness_listeners.append(listener)
@@ -284,15 +169,14 @@ def remove_readiness_listener(listener: Any) -> None:
         if listener in _readiness_listeners:
             _readiness_listeners.remove(listener)
         empty = not _readiness_listeners
-    if empty and official_selected():
+    if (empty):
         from .beat_runtime import readiness
 
         readiness.remove_readiness_listener(_official_readiness_changed)
 
 
 def _official_readiness_changed() -> None:
-    if official_selected():
-        _notify_readiness_listeners()
+    _notify_readiness_listeners()
 
 
 def _notify_readiness_listeners() -> None:
@@ -303,119 +187,6 @@ def _notify_readiness_listeners() -> None:
             listener()
         except Exception:  # noqa: BLE001
             log.debug("CPU readiness listener failed", exc_info=True)
-
-
-def _matches_cpu_request(
-    state: Mapping[str, Any], project: Path, fingerprint: str | None
-) -> bool:
-    """Whether a failed or interrupted record is *this* install's own attempt.
-
-    The same three fields ``provision._ready_for`` compares: backend, project
-    path and content fingerprint. It decides whose failure a row reports, and a
-    failure another install recorded is not one this install has seen, so the
-    path stays in it. A *ready* record is judged by content alone; see
-    ``_proves_cpu_runtime``.
-    """
-
-    if state.get("backend") != CPU_BACKEND:
-        return False
-    if state.get("project") != str(project):
-        return False
-    if fingerprint is not None and state.get("package_fingerprint") != fingerprint:
-        return False
-    return True
-
-
-def _proves_cpu_runtime(state: Mapping[str, Any], fingerprint: str) -> bool:
-    """Whether a record proves the CPU runtime for this package's content.
-
-    Wherever it was recorded. The record is one per user and per backend, and a
-    machine can hold more than one install of the same ``hornlab-beat-bem`` --
-    the packaged application and a source checkout's virtual environment, say
-    -- while only the install that provisioned wrote it. What its probe proved
-    is a property of the Julia it names, the depot that Julia instantiated
-    into, and the project content it loaded. A solve from another install runs
-    *its own* project on that same Julia and depot and reads nothing at the
-    recorded path, and the content fingerprint covers every ``Project.toml``,
-    ``Manifest.toml`` and Julia source that decides what gets loaded. So a
-    matching fingerprint proves this install as well.
-
-    Comparing the path too left the second install's row grey for good. A
-    source checkout run beside the installed application sets
-    ``WG2_SKIP_BEAT_CPU_PROVISION`` so it never provisions, and the command its
-    reason offered would have re-pointed the one record at itself, taking the
-    row away from the install that wrote it. ``provision._ready_for`` keeps the
-    path, which is right for its own question -- *should provisioning run
-    again* -- where a re-run costs one probe and no download.
-
-    The record does not name the depot. Neither did the path comparison: both
-    rely on the process not setting its own ``JULIA_DEPOT_PATH``, which neither
-    the application nor its launchers do.
-    """
-
-    return (
-        state.get("status") == "ready"
-        and state.get("backend") == CPU_BACKEND
-        and state.get("package_fingerprint") == fingerprint
-    )
-
-
-def records_state_per_backend(provision: Any) -> bool:
-    """Whether the installed package keeps one readiness record per backend.
-
-    The one fact that decides whether asking for the CPU runtime is additive or
-    a trade against a provisioned GPU one. See ``PER_BACKEND_STATE_ATTR``.
-    """
-
-    return hasattr(provision, PER_BACKEND_STATE_ATTR)
-
-
-def _read_cpu_state(provision: Any) -> Mapping[str, Any]:
-    """The CPU backend's own record, from whichever layout the pin has.
-
-    Asking for the backend by name is what stops another backend's record from
-    being read as an answer about this one. Against a single-slot package the
-    call has no such argument, and the field comparison in
-    ``_matches_cpu_request`` is what keeps that safe: a record describing CUDA
-    fails it, so the answer is "unprovisioned" rather than a claim about the
-    wrong backend.
-    """
-
-    if records_state_per_backend(provision):
-        return provision.read_state(backend=CPU_BACKEND) or {}
-    return provision.read_state() or {}
-
-
-def _provisioned_julia(provision: Any) -> str | None:
-    """The Julia the CPU record names, confirmed to still exist.
-
-    Narrowed to the CPU backend where the package can do that. Unnarrowed, the
-    answer is about any ready record -- which is the right answer for "is there
-    a Julia to run" and the wrong one for "is the CPU runtime provisioned", the
-    question this module asks.
-    """
-
-    if records_state_per_backend(provision):
-        return provision.provisioned_julia(backend=CPU_BACKEND)
-    return provision.provisioned_julia()
-
-
-def _cpu_project_and_fingerprint(runtime: Any) -> tuple[Path | None, str | None]:
-    """The bundled CPU project and its content fingerprint, best effort.
-
-    Both come from the optional package, so both are allowed to be missing: a
-    build that cannot say which project it would instantiate cannot be shown to
-    be ready either, and that is exactly what the callers do with ``None``.
-    """
-
-    try:
-        project = Path(runtime.default_project(CPU_BACKEND))
-    except Exception:  # noqa: BLE001 - an unlocatable project is not a crash
-        return None, None
-    try:
-        return project, str(runtime.package_fingerprint(project))
-    except Exception:  # noqa: BLE001 - an older signature is not a crash
-        return project, None
 
 
 def cpu_runtime_readiness(package: Any, *, production: bool = False) -> CpuRuntimeReadiness:
@@ -429,294 +200,15 @@ def cpu_runtime_readiness(package: Any, *, production: bool = False) -> CpuRunti
     package's own files, rather than a second Julia launch on every boot.
     """
 
-    if official_selected() and not production:
-        with _provision_lock:
-            preparing_cpu = _official_cpu_stage_pending
-        if preparing_cpu:
-            step = cpu_provisioning_step() or "starting"
-            return CpuRuntimeReadiness(False, "provisioning", f"WG is preparing the BEAT CPU runtime (step: {step}).")
-        from .beat_runtime.readiness import backend_readiness
-
-        verdict = backend_readiness(CPU_BACKEND)
-        return CpuRuntimeReadiness(verdict.ready, verdict.state, verdict.reason)
-
-    provision = _import("hornlab_beat_bem.provision")
-    runtime = _import("hornlab_beat_bem.runtime")
-    if provision is None or runtime is None:
-        return CpuRuntimeReadiness(
-            False,
-            "package-unusable",
-            "hornlab-beat-bem is installed but its provisioning module could not "
-            "be imported, so nothing here can say whether a BEAT CPU solve would run.",
-        )
-    if not hasattr(provision, "provision_cpu"):
-        return CpuRuntimeReadiness(
-            False,
-            "package-too-old",
-            "The installed hornlab-beat-bem cannot provision a BEAT CPU runtime: "
-            f"provision_cpu arrived in {REQUIRED_PACKAGE_COMMIT} and this build "
-            "predates it. A Julia executable and the bundled project on disk are "
-            "not evidence that a solve would run, so this backend stays "
-            "unavailable until the pinned package is updated. Every other BEAT "
-            "backend is unaffected.",
-        )
-
-    project, fingerprint = _cpu_project_and_fingerprint(runtime)
-    if project is None:
-        return CpuRuntimeReadiness(
-            False,
-            "no-project",
-            "The bundled BEAT CPU Julia project could not be located in the "
-            "installed hornlab-beat-bem.",
-        )
-    if not (project / "Project.toml").exists():
-        return CpuRuntimeReadiness(
-            False,
-            "no-project",
-            f"The bundled BEAT CPU Julia project is missing: {project}",
-        )
-    if fingerprint is None:
-        return CpuRuntimeReadiness(
-            False,
-            "fingerprint-unavailable",
-            "The BEAT CPU package identity could not be verified, so a recorded "
-            "provisioning result is not trusted. Prepare the runtime again.",
-        )
-
-    step = None if production and official_selected() else cpu_provisioning_step()
-    if step is not None:
-        return CpuRuntimeReadiness(
-            False,
-            "provisioning",
-            "Waveguide Generator is provisioning the BEAT CPU runtime now "
-            f"(step: {step}); it downloads a portable Julia and proves the "
-            "engine with a 1 kHz solve. It becomes selectable here when ready.",
-        )
-
-    state = _read_cpu_state(provision)
-    status = state.get("status")
-    if _proves_cpu_runtime(state, fingerprint):
-        julia = _provisioned_julia(provision)
-        recorded_project = state.get("project")
-        if julia is not None and recorded_project != str(project):
-            return CpuRuntimeReadiness(
-                True,
-                "ready",
-                "The BEAT CPU runtime is provisioned: an identical copy of this "
-                f"package (same content fingerprint) at {recorded_project} "
-                "instantiated its Julia project and proved it with a 1 kHz solve "
-                f"through the precompiled engine bundle ({julia}). This copy "
-                "shares that Julia and its packages; its first solve may compile "
-                "the engine bundle for this location once. No accelerator needed.",
-            )
-        if julia is not None:
-            return CpuRuntimeReadiness(
-                True,
-                "ready",
-                "The BEAT CPU runtime is provisioned: its Julia project was "
-                "instantiated and proved with a 1 kHz solve through the "
-                f"precompiled engine bundle ({julia}). No accelerator needed.",
-            )
-        return CpuRuntimeReadiness(
-            False,
-            "julia-gone",
-            "The BEAT CPU runtime was provisioned, but the Julia it recorded is "
-            "no longer on disk. Prepare the runtime again.",
-        )
-    if status == "failed" and _matches_cpu_request(state, project, fingerprint):
-        return CpuRuntimeReadiness(
-            False,
-            "failed",
-            "BEAT CPU runtime provisioning failed here: "
-            f"{state.get('error') or 'no reason was recorded'}. It is not "
-            "retried automatically. Use Retry to prepare it again.",
-        )
-    if status == "in_progress" and _matches_cpu_request(state, project, fingerprint):
-        return CpuRuntimeReadiness(
-            False,
-            "interrupted",
-            "An earlier BEAT CPU runtime provisioning did not finish (it stopped "
-            f"at step: {state.get('step', 'unknown')}). Prepare it again.",
-        )
-
-    if (
-        not records_state_per_backend(provision)
-        and state.get("backend") in {"metal", "cuda", "rocm"}
-    ):
-        return CpuRuntimeReadiness(
-            False,
-            "unprovisioned",
-            "The installed BEAT package shares one readiness record between CPU "
-            "and GPU runtimes. Update Waveguide Generator before preparing CPU "
-            "alongside the provisioned GPU: CPU preparation with this older "
-            "package can interrupt GPU availability.",
-        )
-
-    # Said wherever this module prints the provisioning command, because the
-    # question a user on a GPU box asks about it is "what does this cost me".
-    # On a package with per-backend records the answer is nothing: it is the
-    # single-slot layout that made running it look like trading the accelerator
-    # away, and where that layout is still what is pinned this clause is
-    # correctly absent.
-    additive = (
-        " Readiness is recorded per backend, so this does not disturb a "
-        "provisioned GPU runtime."
-        if records_state_per_backend(provision)
-        else ""
-    )
-    try:
-        julia = package.discover_julia()
-    except Exception as exc:  # noqa: BLE001 - a broken optional stack is unavailable
-        return CpuRuntimeReadiness(
-            False, "detection-failed", f"BEAT CPU detection failed: {exc}"
-        )
-    if julia is None:
-        return CpuRuntimeReadiness(
-            False,
-            "no-julia",
-            "No Julia executable was found and the BEAT CPU runtime has not been "
-            "provisioned here. Preparation downloads a "
-            "portable Julia, instantiates the CPU project, and proves it with a "
-            f"1 kHz solve.{additive}",
-        )
-    return CpuRuntimeReadiness(
-        False,
-        "unprovisioned",
-        f"Julia is present ({julia}) but the BEAT CPU runtime has not been "
-        "instantiated and probed here, and a Julia executable alone is not "
-        "evidence that a solve would run -- an uninstantiated or offline depot "
-        f"fails at the first solve instead. Prepare the runtime here.{additive}",
-    )
-
-
-def _provision_worker(*, backend: str | None = None) -> None:
-    """Decide on the hardware, then prepare the CPU and GPU runtimes in turn.
-
-    The hardware inventory is *here* rather than in the caller because
-    ``nvidia-smi`` is a subprocess the package is willing to wait 15 s for, and
-    the caller is a launcher that has a server to start. Which stages run was
-    decided by ``start_cpu_provisioning`` from the cheap records alone.
-    """
-
-    global _preparation_in_flight, _provision_step, _gpu_stage_backend, _gpu_stage_step
-    try:
-        provision = _import("hornlab_beat_bem.provision")
-        if provision is None:  # pragma: no cover - caller already imported it
-            return
-        with _provision_lock:
-            prepare_cpu, prepare_gpu = _prepare_cpu, _prepare_gpu
-        gpu = _gpu_backend_present(provision)
-        if backend in GPU_BACKENDS and gpu != backend:
-            _remember_preparation_failure(backend, f"No supported {backend} device was detected.")
-            return
-        if prepare_gpu:
-            if gpu is None:
-                log.info("BEAT GPU check: no supported GPU found; no GPU runtime prepared")
-            else:
-                log.info("BEAT GPU check: %s hardware found", gpu)
-        if prepare_cpu:
-            _prepare_cpu_runtime(provision, gpu, retry=backend is not None)
-        if prepare_gpu and gpu is not None:
-            _prepare_gpu_runtime(provision, gpu, retry=backend is not None)
-    finally:
-        with _provision_lock:
-            _provision_step = None
-            _gpu_stage_backend = None
-            _gpu_stage_step = None
-            _preparation_in_flight = False
-        _notify_readiness_listeners()
-
-
-def _prepare_cpu_runtime(provision: Any, gpu: str | None, *, retry: bool = False) -> None:
-    """Run ``provision_cpu``, unless that would cost a GPU runtime its record."""
-
-    if gpu is not None and not records_state_per_backend(provision):
-        # One record, one backend: provisioning this one would overwrite the
-        # record that says the accelerator is ready, and the next GPU hook
-        # would re-resolve multi-gigabyte artifacts to get back to where it
-        # already was. Leave it alone and let the CPU row say why.
-        log.info(
-            "BEAT %s hardware found and the pinned hornlab-beat-bem records "
-            "readiness in one slot; CPU preparation skipped so the %s "
-            "runtime keeps its record",
-            gpu,
-            gpu,
-        )
-        return
-    if gpu is not None:
-        # Additive, and cheap where it matters: the portable Julia this
-        # needs is the one the GPU runtime already downloaded, so what is
-        # left is instantiating the CPU project (no accelerator artifacts)
-        # and the 1 kHz probe solve.
-        log.info(
-            "BEAT %s hardware found; preparing the CPU runtime as well so "
-            "both backends are selectable",
-            gpu,
-        )
-    _mark_runtimes_prepared()
-    _record_step("starting")
-    try:
-        state = provision.provision_cpu(status_cb=_provision_status, **({"force": True} if retry else {}))
-    except Exception as exc:  # noqa: BLE001 - provisioning is never fatal here
-        # provision_cpu records and returns its own failures, so reaching
-        # this means something outside its contract broke. The final
-        # notification still lets the registry publish the terminal state.
-        _remember_preparation_failure(CPU_BACKEND, str(exc))
-        log.warning("BEAT CPU runtime provisioning could not run: %s", exc)
-        return
-    finally:
-        _record_step(None)
-    _remember_preparation_result(CPU_BACKEND, state)
-    status = str(state.get("status") or "unknown")
-    if status == "ready":
-        log.info("BEAT CPU runtime is ready")
-    else:
-        log.warning(
-            "BEAT CPU runtime provisioning finished as %s: %s",
-            status,
-            state.get("error") or "no reason was recorded",
-        )
-
-
-def _prepare_gpu_runtime(provision: Any, backend: str, *, retry: bool = False) -> None:
-    """Run ``provision_gpu`` for the detected backend, once per build."""
-
-    global _gpu_stage_backend, _gpu_stage_step
-    runtime = _import("hornlab_beat_bem.runtime")
-    if runtime is None or not retry and _gpu_runtime_settled(provision, runtime, backend):
-        return
-    _mark_runtimes_prepared()
     with _provision_lock:
-        _gpu_stage_backend = backend
-        _gpu_stage_step = "starting"
-    _notify_readiness_listeners()
-    log.info("Preparing the BEAT %s runtime in the background", backend)
+        preparing_cpu = _official_cpu_stage_pending
+    if preparing_cpu:
+        step = cpu_provisioning_step() or "starting"
+        return CpuRuntimeReadiness(False, "provisioning", f"WG is preparing the BEAT CPU runtime (step: {step}).")
+    from .beat_runtime.readiness import backend_readiness
 
-    def status(message: str) -> None:
-        global _gpu_stage_step
-        with _provision_lock:
-            _gpu_stage_step = message
-        if not official_selected():
-            _notify_readiness_listeners()
-        log.info("BEAT %s runtime provisioning: %s", backend, message)
-
-    try:
-        state = provision.provision_gpu(backend=backend, status_cb=status, **({"force": True} if retry else {}))
-    except Exception as exc:  # noqa: BLE001 - provisioning is never fatal here
-        _remember_preparation_failure(backend, str(exc))
-        log.warning("BEAT %s runtime provisioning could not run: %s", backend, exc)
-        return
-    _remember_preparation_result(backend, state)
-    result = str(state.get("status") or "unknown")
-    if result == "ready":
-        log.info("BEAT %s runtime is ready", backend)
-    else:
-        log.warning(
-            "BEAT %s runtime provisioning finished as %s: %s",
-            backend,
-            result,
-            state.get("error") or state.get("reason") or "no reason was recorded",
-        )
+    verdict = backend_readiness(CPU_BACKEND)
+    return CpuRuntimeReadiness(verdict.ready, verdict.state, verdict.reason)
 
 
 def _provision_status(message: str) -> None:
@@ -728,65 +220,9 @@ def _provision_status(message: str) -> None:
     """
 
     global _provision_step
-    if official_selected():
-        # Official provisioning: status lines only update the step text; the
-        # registry is notified on step transitions, not on every Julia line.
-        with _provision_lock:
-            _provision_step = message
-    else:
-        _record_step(message)
-        _notify_readiness_listeners()
+    with _provision_lock:
+        _provision_step = message
     log.info("BEAT CPU runtime provisioning: %s", message)
-
-
-def _gpu_runtime_settled(provision: Any, runtime: Any, backend: str) -> bool:
-    """Whether this build's ``backend`` runtime is ready, or already failed here.
-
-    A failure is reported, not repeated, exactly as for the CPU: a CUDA or ROCm
-    attempt downloads several GB, and an offline or full machine should pay
-    that once. A record from another package build does not count either way.
-    """
-
-    try:
-        if provision.backend_ready(backend):
-            return True
-        state = provision.read_state(backend=backend) or {}
-        if state.get("status") != "failed":
-            return False
-        project = runtime.default_project(backend)
-        return (
-            state.get("project") == str(project)
-            and state.get("package_fingerprint") == str(runtime.package_fingerprint(project))
-        )
-    except Exception:  # noqa: BLE001 - an unreadable record is "not settled"
-        return False
-
-
-def _gpu_preparation_wanted(provision: Any, env: Mapping[str, str]) -> bool:
-    """Whether the worker should run the GPU stage at all.
-
-    Which backend, and whether its runtime is already settled, is decided in
-    the worker: it needs the hardware inventory (``nvidia-smi`` is a
-    subprocess), and a record for some *other* GPU family -- a replaced card, a
-    second card -- says nothing about the one detected now. A GPU-less host
-    therefore starts a worker that finds no device and exits, one
-    ``shutil.which`` later, rather than paying anything at startup.
-    """
-
-    if str(env.get(SKIP_GPU_PROVISION_ENV_VAR, "")).strip() == "1":
-        log.info("BEAT GPU runtime provisioning disabled by %s=1", SKIP_GPU_PROVISION_ENV_VAR)
-        return False
-    if not hasattr(provision, "provision_gpu") or not records_state_per_backend(provision):
-        return False
-    return hasattr(provision, "backend_ready")
-
-
-def _gpu_backend_present(provision: Any) -> str | None:
-    try:
-        return provision.detect_gpu_backend()
-    except Exception as exc:  # noqa: BLE001 - an inventory failure is not a crash
-        log.info("BEAT GPU hardware inventory failed (%s); assuming none", exc)
-        return None
 
 
 def _start_official_provisioning(env: Mapping[str, str], *, backend: str | None = None) -> threading.Thread | None:
@@ -954,72 +390,21 @@ def start_runtime_preparation(backend: str) -> threading.Thread:
             raise RuntimePreparationConflict("A BEAT runtime preparation is already running.")
     if not preparation_enabled(backend):
         raise ValueError("BEAT preparation is disabled by this installation's platform or provisioning settings.")
-    if official_selected():
-        from .beat_runtime import hardware, locks, readiness
+    from .beat_runtime import hardware, locks, readiness
 
-        if locks.provisioning_active():
-            raise RuntimePreparationConflict("Another process is preparing a BEAT runtime.")
-        options = {} if backend == CPU_BACKEND else {
-            "hardware_facts": hardware.gpu_hardware(only=backend, probe_nvidia=False)[backend]}
-        verdict = readiness.backend_readiness(backend, **options)
-        if verdict.state == "provisioning":
-            raise RuntimePreparationConflict(verdict.reason)
-        if verdict.ready or verdict.state in {"no-device", "package-unusable", "unsupported", "identity-unavailable", "detection-failed"}:
-            raise ValueError(verdict.reason)
-        started = _start_official_provisioning(os.environ, backend=backend)
-        if started is None:
-            raise ValueError("The BEAT package cannot prepare this runtime.")
-        return started
-    package = _import("hornlab_beat_bem")
-    provision = _import("hornlab_beat_bem.provision")
-    if package is None or provision is None or not hasattr(provision, "provision_cpu"):
-        raise ValueError("The installed BEAT package cannot prepare runtimes. Update Waveguide Generator.")
-    if not records_state_per_backend(provision):
-        raise ValueError("Update Waveguide Generator before preparing runtimes with shared CPU/GPU records.")
-    if _hbb_preparation_active(provision):
+    if locks.provisioning_active():
         raise RuntimePreparationConflict("Another process is preparing a BEAT runtime.")
-    if backend != CPU_BACKEND and not _gpu_preparation_wanted(provision, os.environ):
-        raise ValueError("The installed BEAT package cannot prepare GPU runtimes.")
-    if backend in GPU_BACKENDS and provision.backend_ready(backend):
-        raise ValueError(f"The BEAT {backend} runtime is already ready.")
-    if backend == CPU_BACKEND:
-        verdict = cpu_runtime_readiness(package)
-        if verdict.state == "provisioning":
-            raise RuntimePreparationConflict(verdict.reason)
-        if verdict.ready or verdict.state in {"no-project", "package-unusable", "package-too-old"}:
-            raise ValueError(verdict.reason)
-    with _provision_lock:
-        if _provision_thread is not None and _provision_thread.is_alive():
-            raise RuntimePreparationConflict("A BEAT runtime preparation is already running.")
-        _begin_requested_preparation(backend)
-        _prepare_cpu, _prepare_gpu = backend == CPU_BACKEND, backend in GPU_BACKENDS
-        _preparation_in_flight = True
-        _provision_thread = threading.Thread(target=lambda: _provision_worker(backend=backend),
-                                             name=PROVISION_THREAD_NAME, daemon=True)
-        _provision_thread.start()
-        started = _provision_thread
-    _notify_readiness_listeners()
+    options = {} if backend == CPU_BACKEND else {
+        "hardware_facts": hardware.gpu_hardware(only=backend, probe_nvidia=False)[backend]}
+    verdict = readiness.backend_readiness(backend, **options)
+    if verdict.state == "provisioning":
+        raise RuntimePreparationConflict(verdict.reason)
+    if verdict.ready or verdict.state in {"no-device", "package-unusable", "unsupported", "identity-unavailable", "detection-failed"}:
+        raise ValueError(verdict.reason)
+    started = _start_official_provisioning(os.environ, backend=backend)
+    if started is None:
+        raise ValueError("The BEAT package cannot prepare this runtime.")
     return started
-
-
-def _hbb_preparation_active(provision: Any) -> bool:
-    """Read HBB's kernel lock without creating files or trusting holder records."""
-    from .beat_runtime import locks
-
-    if not hasattr(provision, "default_runtime_dir"):
-        return False
-    target = Path(provision.default_runtime_dir()).expanduser() / "provision.lock"
-    try:
-        descriptor = os.open(target, os.O_RDWR)
-    except FileNotFoundError:
-        return False
-    try:
-        if not locks._try_lock(descriptor):
-            return True
-        locks._unlock(descriptor)
-        return False
-    finally:
-        os.close(descriptor)
 
 
 def start_cpu_provisioning(
@@ -1048,72 +433,15 @@ def start_cpu_provisioning(
         )
         return None
 
-    if official_selected():
-        return _start_official_provisioning(env)
-
-    package = _import("hornlab_beat_bem")
-    provision = _import("hornlab_beat_bem.provision")
-    if package is None or provision is None:
-        log.info("BEAT is not installed here; no CPU runtime to provision")
-        return None
-    if not hasattr(provision, "provision_cpu"):
-        log.info(
-            "The installed hornlab-beat-bem predates CPU runtime provisioning "
-            "(needs %s); leaving the BEAT CPU engine unavailable",
-            REQUIRED_PACKAGE_COMMIT,
-        )
-        return None
-
-    readiness = cpu_runtime_readiness(package)
-    prepare_cpu = True
-    if readiness.ready:
-        log.debug("BEAT CPU runtime is already provisioned")
-        prepare_cpu = False
-    elif readiness.state in {"provisioning", "failed", "no-project", "package-unusable"}:
-        # A failure is reported, not repeated: re-downloading a portable Julia
-        # on every launch of a machine that is offline or out of disk is worse
-        # than one honest unavailable row offering an explicit Retry action.
-        log.info("Not provisioning the BEAT CPU runtime: %s", readiness.reason)
-        prepare_cpu = False
-    prepare_gpu = _gpu_preparation_wanted(provision, env)
-    if not prepare_cpu and not prepare_gpu:
-        return None
-
-    started: threading.Thread
-    with _provision_lock:
-        if _provision_thread is not None and _provision_thread.is_alive():
-            return _provision_thread
-        _requested_backend = None
-        _prepare_cpu, _prepare_gpu = prepare_cpu, prepare_gpu
-        _provision_step = None
-        _preparation_in_flight = True
-        _provision_thread = threading.Thread(
-            target=_provision_worker, name=PROVISION_THREAD_NAME, daemon=True
-        )
-        _provision_thread.start()
-        started = _provision_thread
-    # Listener notification takes the same lock to snapshot its callbacks.
-    # Publish START after releasing it, while the just-started thread is live.
-    _notify_readiness_listeners()
-    # No hardware has been looked at yet: the inventory runs on the worker
-    # thread, which logs what it found. Saying "detected GPU" here read as a
-    # finding on GPU-less machines.
-    log.info(
-        "Preparing BEAT runtimes in the background (CPU: %s, GPU check: %s)",
-        "yes" if prepare_cpu else "no",
-        "yes" if prepare_gpu else "no",
-    )
-    return started
+    return _start_official_provisioning(env)
 
 
 __all__ = [
     "CPU_BACKEND",
     "CpuRuntimeReadiness",
     "GPU_BACKENDS",
-    "PER_BACKEND_STATE_ATTR",
     "PROVISION_SYSTEMS",
     "PROVISION_THREAD_NAME",
-    "REQUIRED_PACKAGE_COMMIT",
     "SKIP_GPU_PROVISION_ENV_VAR",
     "SKIP_PROVISION_ENV_VAR",
     "cpu_provisioning_step",
@@ -1121,7 +449,6 @@ __all__ = [
     "cpu_runtime_readiness",
     "gpu_preparation_reason",
     "provision_command",
-    "records_state_per_backend",
     "runtimes_prepared_this_process",
     "start_cpu_provisioning",
     "start_runtime_preparation",

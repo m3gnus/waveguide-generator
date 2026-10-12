@@ -207,7 +207,7 @@ def test_old_imported_symmetry_record_and_unknown_source_refusal(imported, durab
         adapter.build_imported_request(msh, context, record, [DriveChannel(id="ch", source_ids=["lost"])])
 
 
-def test_adapter_builds_without_importing_optional_engine_or_hbb(build, monkeypatch):
+def test_adapter_builds_without_importing_optional_engine(build, monkeypatch):
     original = builtins.__import__
     def guarded(name, *args, **kwargs):
         if name.startswith(("beat_engine", "hornlab_beat_bem")):
@@ -307,7 +307,7 @@ def test_float32_frequency_aliases_map_every_row_by_requested_float64_order(buil
 
 
 @pytest.mark.parametrize("precision", ["float32", "float64"])
-def test_exact_float64_duplicate_requested_frequencies_match_hbb_refusal(build, precision):
+def test_exact_float64_duplicate_requested_frequencies_match_refusal(build, precision):
     with pytest.raises(ValueError, match="distinct in Float64"):
         build(frequencies_hz=[500., 500.], precision=precision)
 

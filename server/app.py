@@ -405,7 +405,7 @@ async def beat_worker_prewarm(
     The same shape as ``bempp_worker_prewarm``, and for the same reason: BEAT
     keeps its Julia worker alive between solves (in a persistent host that can
     outlive this process, or in a child process under
-    ``HORNLAB_BEAT_PERSISTENT_HOST=0``), so its startup, package loading,
+    child-worker mode), so its startup, package loading,
     engine compilation and GPU kernel compilation are paid once -- but until
     this hook existed nothing paid them, and a GPU host's first solve waited
     through all of it before its first frequency.
@@ -673,20 +673,14 @@ def create_app(
             )
         )
 
+    from .solver.beat_runtime.provider import warn_removed_provider
+
+    warn_removed_provider()
+
     async def shutdown_beat_worker() -> None:
         """Stop the prewarm and this server's BEAT workers on clean exit.
 
-        The HBB rollback (``WG2_BEAT_PROVIDER=hbb``/``legacy``) keeps its workers
-        in a module-level registry with no exit hook of its own, and the prewarm means one can be alive for a
-        session that never solved -- so this hook has to run either way.
-
-        ``shutdown_workers()`` stops the process-local worker registry,
-        including persistent hosts; detaching would leave Python and Julia
-        running until the host's idle timeout. Import and cleanup run on a
-        daemon thread: an executor thread would still be joined at Python
-        exit even if an async timeout had already expired.
-
-        The default official provider closes its process-default
+        The official provider closes its process-default
         manager for good: idle hosts detach, active sessions retire their
         engine, and child mode terminates. After idle or completed-warm-up Quit,
         hosts keep Julia warm for relaunch until DEFAULT_IDLE_TIMEOUT (1800 s).
@@ -720,18 +714,12 @@ def create_app(
 
         def stop_workers() -> None:
             try:
-                from .solver.beat_runtime.provider import official_provider_enabled
 
-                if official_provider_enabled():
-                    from .solver.beat_runtime.manager import get_manager
+                from .solver.beat_runtime.manager import get_manager
 
-                    # Final Quit closes admission for good. Ordinary session
-                    # cleanup and completed warm-up must never detach the manager.
-                    get_manager().detach()
-                else:
-                    from hornlab_beat_bem import shutdown_workers
-
-                    shutdown_workers()
+                # Final Quit closes admission for good. Ordinary session
+                # cleanup and completed warm-up must never detach the manager.
+                get_manager().detach()
             except Exception:
                 log.warning("BEAT worker shutdown failed; continuing exit", exc_info=True)
             finally:

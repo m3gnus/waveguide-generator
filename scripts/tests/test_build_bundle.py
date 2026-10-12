@@ -3544,11 +3544,10 @@ def test_every_verification_child_forces_private_data_and_addins(
         "APPDATA", "LOCALAPPDATA", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
         "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "XDG_DOCUMENTS_DIR",
         "PYTHONPYCACHEPREFIX", "NUMBA_CACHE_DIR",
-        "HORNLAB_BEAT_RUNTIME_DIR", "HORNLAB_BEAT_WORKER_DIR", "JULIA_DEPOT_PATH",
+        "JULIA_DEPOT_PATH",
     )
     removed_names = (
         "PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE",
-        "HORNLAB_BEAT_JULIA", "HORNLAB_BEAT_PROBE_ENGINE_DIR",
         "JULIA_PROJECT", "JULIA_LOAD_PATH",
     )
     for name in (*private_names, *removed_names):

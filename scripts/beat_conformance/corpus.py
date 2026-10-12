@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from server.jobs.models import SolveRequest
 
-from .json_io import write_json
+from .json_io import read_json, write_json
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -225,3 +225,12 @@ def save_frozen(frozen: FrozenCase, directory: Path) -> None:
     (directory / "surface.msh").write_bytes(frozen.mesh_bytes)
     write_json(directory / "frozen.json", {"case": frozen.case.name, "request": frozen.request,
         "record": frozen.record, "mesh_stats": frozen.mesh_stats, "mesh_sha256": frozen.sha256})
+
+
+def load_frozen(directory: Path, case: CorpusCase) -> FrozenCase:
+    values = read_json(directory / "frozen.json")
+    frozen = FrozenCase(case, values["request"], (directory / "surface.msh").read_bytes(),
+                        values["record"], values["mesh_stats"])
+    if values["case"] != case.name or frozen.sha256 != values["mesh_sha256"]:
+        raise ValueError("Coarse case or frozen mesh hash differs")
+    return frozen

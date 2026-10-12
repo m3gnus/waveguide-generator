@@ -1,4 +1,4 @@
-# HBB's independent integer-kernel control; no solver output can satisfy it.
+# Independent integer-kernel control; no solver output can satisfy it.
 using Metal
 Metal.functional() || error("Metal is not functional")
 function double!(output, input)

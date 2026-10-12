@@ -1,13 +1,30 @@
 """Resolve WG's worker thread budget once, before keying or starting a worker.
 
 AUTO uses macOS performance cores when available. Metal leaves a quarter of
-those cores for the server/window; see beat_threads.py for measurement history.
+those cores for the server/window; the same policy is used for probes and production.
 Pass the returned integer unchanged to probes, warm-up, keys and EngineWorker.
 """
 
 from __future__ import annotations
 
-from ..beat_threads import _performance_core_count
+from functools import lru_cache
+import os
+import platform
+import subprocess
+
+
+@lru_cache(maxsize=1)
+def _performance_core_count() -> int:
+    total = max(1, os.cpu_count() or 1)
+    if platform.system() != "Darwin":
+        return total
+    try:
+        result = subprocess.run(["/usr/sbin/sysctl", "-n", "hw.perflevel0.logicalcpu"],
+                                capture_output=True, text=True, timeout=5)
+        count = int(result.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return total
+    return min(count, total) if count >= 1 else total
 
 
 def resolve_julia_threads(

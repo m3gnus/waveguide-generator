@@ -120,9 +120,6 @@ __all__ = ["PROBE_TIMEOUT_SECONDS", "capabilities_or_none", "capabilities_payloa
 
 
 def _official_beat_runtime(engine_registry) -> dict:
-    """The official BEAT runtime's readiness (the default; empty under the HBB rollback)."""
-    from server.solver.beat_runtime.provider import official_selected
+    """The official BEAT runtime's readiness."""
 
-    if not official_selected():
-        return {}
     return {"officialBeatRuntime": getattr(engine_registry, "official_runtime_statuses", None)}

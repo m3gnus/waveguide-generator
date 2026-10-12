@@ -438,7 +438,6 @@ def assert_gate_allowlist(source: str) -> None:
     assert cleanup_index > max(i for i, t in enumerate(outside) if t.lower() == 'start-sandboxedsetup')
 
 
-
 def test_every_gate_setup_and_uninstall_is_sandboxed() -> None:
     assert_gate_allowlist((ROOT / 'installers/windows/gates.ps1').read_text())
 
@@ -480,20 +479,9 @@ def test_window_probe_and_inventory_reject_mutations(old: str, new: str) -> None
 ENTRYPOINTS = ('build_bundle.py', 'gates.ps1', 'qualify_installed_cpu.py', 'qualify_installed_quit.py')
 
 
-# rc-build runs qualify_installed_cpu.py six times: per OS the default-route CPU
-# gate (now official) and a one-release HBB rollback gate on the
-# same installed payload. The second run is the same entrypoint and argument
-# shape with WG2_BEAT_PROVIDER=hbb scoped to its step; slice 10 removes it.
-# The qualifier's isolated_environment sandboxes every launch exactly as on the default route.
-# rc-build also runs qualify_installed_quit.py nine times: per OS the default
-# (BEMPP) Quit gate and the reviewed --engine beat Quit gate on the same
-# installed payload, plus one HBB rollback BEAT Quit gate. That third run uses
-# WG2_BEAT_PROVIDER=hbb and separate work/output directories; it delegates to
-# the same reviewed qualifier and isolated_environment boundary.
-# The official run is the same entrypoint and argument shape
-# plus --engine beat and --official-runtime-work (the default CPU gate's official work
-# directory); the gate's own isolated environment sandboxes every launch.
-@pytest.mark.parametrize('workflow_name,counts', [('rc-build', (3, 1, 6, 9)), ('release', (3, 1, 0, 0))])
+# Each platform runs one official CPU gate and BEMPP/official BEAT Quit gates.
+# Every qualifier uses isolated_environment to sandbox the installed candidate.
+@pytest.mark.parametrize('workflow_name,counts', [('rc-build', (3, 1, 3, 6)), ('release', (3, 1, 0, 0))])
 def test_workflow_execution_inventory(workflow_name: str, counts: tuple[int, ...]) -> None:
     workflow = yaml.safe_load((ROOT / f'.github/workflows/{workflow_name}.yml').read_text())
     found = dict.fromkeys(ENTRYPOINTS, 0)
@@ -725,7 +713,6 @@ def test_python_app_launch_inventory() -> None:
                     if callee in ('subprocess.Popen', 'self.process_factory'):
                         assert any(k.arg in ('env', None) for k in node.keywords), 'missing child environment'
         assert launches == inventory, f'unreviewed Python launch in {path}: {launches}'
-
 
 
 def assert_closed_override(source: str) -> None:

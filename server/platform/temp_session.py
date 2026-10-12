@@ -20,7 +20,7 @@ the dead ones.
 
 Nothing global moves: ``tempfile.gettempdir()`` still answers the system
 directory. Libraries keep state there that must outlive this process --
-``hornlab_beat_bem`` the registry through which the next launch adopts the
+``server.solver.beat_runtime`` the registry through which the next launch adopts the
 persistent BEAT host, ``hornlab_mesher`` its publish lock -- and a swept
 registry would strand a live host.
 

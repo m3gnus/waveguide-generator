@@ -18,9 +18,9 @@ TEXT_SOURCE_SUFFIXES = {
 }
 
 
-def test_tracked_frontend_and_server_sources_contain_no_literal_nul_bytes() -> None:
+def test_frontend_and_server_sources_contain_no_literal_nul_bytes() -> None:
     tracked = subprocess.run(
-        ["git", "ls-files", "-z", "--", "frontend/src", "server"],
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "frontend/src", "server"],
         cwd=REPOSITORY_ROOT,
         check=True,
         capture_output=True,
@@ -34,7 +34,7 @@ def test_tracked_frontend_and_server_sources_contain_no_literal_nul_bytes() -> N
     offenders = [
         path.relative_to(REPOSITORY_ROOT).as_posix()
         for path in sources
-        if b"\0" in path.read_bytes()
+        if path.is_file() and b"\0" in path.read_bytes()
     ]
 
     assert offenders == [], f"literal NUL bytes found in source files: {offenders}"

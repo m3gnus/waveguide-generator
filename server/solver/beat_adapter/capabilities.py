@@ -16,7 +16,7 @@ from . import request
 from .observations import build_observations
 from .preflight import POLICY_VERSION, validate_exterior_physics
 
-# HBB conformance/warm-up tetrahedron; all four triangles are a normal source.
+# Conformance/warm-up tetrahedron; all four triangles are a normal source.
 PROBE_MESH = """$MeshFormat
 2.2 0 8
 $EndMeshFormat

@@ -16,7 +16,6 @@ from server.tests.beat_runtime.test_installer_extraction import archive, executa
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setenv(paths.RUNTIME_DIR_ENV, str(tmp_path / "wg"))
-    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(tmp_path / "hbb"))
     monkeypatch.delenv(discovery.JULIA_ENV_VAR, raising=False)
     monkeypatch.setattr(discovery.shutil, "which", lambda *a, **k: None)
 
@@ -24,32 +23,6 @@ def isolated(tmp_path, monkeypatch):
         raise AssertionError("real network forbidden")
 
     monkeypatch.setattr(installer.urllib.request, "urlopen", forbidden)
-
-
-@pytest.mark.parametrize("api", ["ensure", "extract", "download", "private_directory", "unpack"])
-@pytest.mark.parametrize("alias", [False, True])
-def test_installer_explicit_root_hbb_isolation_before_mutation(tmp_path, api, alias):
-    legacy = tmp_path / "hbb"
-    legacy.mkdir()
-    keep = legacy / "keep"
-    keep.write_bytes(b"HBB")
-    root = tmp_path / "alias" if alias else legacy
-    if alias:
-        root.symlink_to(legacy, target_is_directory=True)
-    spec = installer.julia_download("Linux", "x86_64")
-    source = archive(tmp_path)
-    with pytest.raises(paths.RootConflict):
-        if api == "ensure":
-            installer.ensure_julia(root)
-        elif api == "extract":
-            installer.extract_julia(source, root, spec)
-        elif api == "download":
-            installer.download_archive(spec, root / "archive")
-        elif api == "unpack":
-            installer._unpack(source, root)
-        else:
-            installer._private_directory(root)
-    assert list(legacy.iterdir()) == [keep] and keep.read_bytes() == b"HBB"
 
 
 def test_windows_max_path_default_twenty_character_username():
@@ -185,38 +158,6 @@ def test_archive_total_size_and_member_count_limits(tmp_path, monkeypatch, windo
     with pytest.raises(RuntimeError, match="extraction size/member limit"):
         installer.extract_julia(archive(tmp_path, windows=windows, members={"julia/bin/julia": b"Julia", "julia/lib/lib": b"lib"}), root, spec)
     assert not (root / "julia" / spec.directory).exists()
-
-
-@pytest.mark.parametrize("source", ["explicit", "configured", "path", "record"])
-def test_hbb_binary_selection_downloads_into_wg_ownership(tmp_path, monkeypatch, source):
-    legacy = executable(tmp_path / "hbb/bin/julia")
-    root = paths.runtime_dir()
-    downloaded = archive(tmp_path)
-    fake_download(monkeypatch, downloaded)
-    kwargs = {}
-    if source in ("explicit", "configured"):
-        kwargs[source] = str(legacy)
-    elif source == "record":
-        discovery.write_julia_record(root, legacy, origin="external", version=None)
-    else:
-        monkeypatch.setattr(discovery.shutil, "which", lambda *a, **k: str(legacy))
-    before = sorted(p.relative_to(legacy.parent.parent) for p in legacy.parent.parent.rglob("*"))
-    result = installer.ensure_julia(fetcher=lambda url, p: p.write_bytes(downloaded.read_bytes()), **kwargs)
-    assert Path(result).is_relative_to(root) and Path(result).read_bytes() == b"new Julia"
-    assert legacy.read_bytes() == b"old Julia"
-    assert sorted(p.relative_to(legacy.parent.parent) for p in legacy.parent.parent.rglob("*")) == before
-    assert discovery.read_julia_record()["origin"] == "managed"
-
-
-def test_stale_legacy_record_does_not_discard_valid_path_julia(tmp_path, monkeypatch):
-    external = executable(tmp_path / "external/bin/julia")
-    root = paths.runtime_dir()
-    root.mkdir(parents=True)
-    # Same path in an obsolete record must not poison a fresh PATH selection.
-    (root / "julia.json").write_text(json.dumps({"origin": "legacy", "julia_executable": str(external)}))
-    monkeypatch.setattr(discovery.shutil, "which", lambda *a, **k: str(external))
-    assert installer.ensure_julia() == str(external)
-    assert discovery.read_julia_record()["origin"] == "external"
 
 
 def test_one_off_explicit_installer_selection_does_not_outrank_later_path(tmp_path, monkeypatch):

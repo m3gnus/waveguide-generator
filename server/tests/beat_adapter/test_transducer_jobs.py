@@ -135,7 +135,6 @@ def test_hybrid_and_ceiling_refused():
 
 
 def test_geometry_preflight_is_opt_in_and_no_axis_guess(solid, record, monkeypatch):
-    monkeypatch.setattr(jobs, "official_selected", lambda: True)
     channels = request().geometry.drive_channels
     assert jobs.preflight(record, solid, channels, backend="cpu") is None
     assert jobs.preflight(
@@ -144,14 +143,11 @@ def test_geometry_preflight_is_opt_in_and_no_axis_guess(solid, record, monkeypat
     assert jobs.preflight(record, solid, channels, backend="cuda")
     inward = solid.replace("1 3 2", "1 2 3")
     assert jobs.preflight(record, inward, channels, backend="cpu")
-    monkeypatch.setattr(jobs, "official_selected", lambda: False)
-    assert jobs.preflight(record, solid, channels, backend="cpu")
 
 
 def test_job_route_keeps_rms_pressure_all_coupled_traces_and_matrix(solid, record, monkeypatch):
     from server.solver import official_beat
 
-    monkeypatch.setattr(jobs, "official_selected", lambda: True)
     monkeypatch.setattr(official_beat, "engine_version", lambda: "1.2.3")
     captured, partial = [], []
 
@@ -246,7 +242,7 @@ def test_capability_requires_official_provider(monkeypatch):
     monkeypatch.delenv("WG2_BEAT_PROVIDER")
     assert "exterior-transducers" in _beat_engine_info("cpu", {}).imported_features
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")
-    info = _beat_engine_info("cpu", {})
+    info = _beat_engine_info("cuda", {})
     assert (
         _imported_capability_blocker(info, 1234, needed)[0]
         == "imported_feature_unsupported_by_engine"
@@ -256,7 +252,6 @@ def test_capability_requires_official_provider(monkeypatch):
 def test_result_phase_and_cancelled_prefix(solid, record, monkeypatch):
     from server.solver import official_beat
 
-    monkeypatch.setattr(jobs, "official_selected", lambda: True)
 
     def solve(compiled, **kwargs):
         row = parse_transducer_frequency(raw(compiled, 100.0), compiled, 100.0)

@@ -226,7 +226,7 @@ def build_request(
                # 3-point rule from a mesh percentile, 3-4 dB wrong on graded meshes.
                "regular_quadrature_mode": "fixed",
                "quadrature_order": quadrature_order, "singular_order": singular_order}
-    if mode == "ground":  # HBB sent the clearance only with a ground plane
+    if mode == "ground":  # The adapter sends the clearance only with a ground plane
         options["ground_plane_min_clearance_m"] = ground_plane_min_clearance_m
     system = {"id": "system:waveguide-generator", "name": "WG exterior radiation",
               "contract_version": 2 if any(b.motion == "axial" for b in bases) else 1,
@@ -256,7 +256,7 @@ def build_parametric_request(
     msh_text: str, context: SolverContext, *, frequencies_hz: Sequence[float] | None = None,
     precision: str = "float32", mesh_scale_to_m: float = 1., **options: Any,
 ) -> CompiledRequest:
-    """Translate beat.py's context without constructing an HBB SolveConfig."""
+    """Translate beat.py's context as an official compiled request."""
     context.validate()
     if context.sim_type != 2:
         raise ValueError("Exterior adapter cannot represent a coupled infinite baffle")

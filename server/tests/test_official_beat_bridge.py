@@ -18,7 +18,6 @@ from server.solver.beat_runtime import manager, readiness, registry
 from server.solver.context import SolverContext
 from server.platform import temp_session
 from server.tests import test_imported_beat as cad
-from server.tests.beat_adapter.hbb_snapshot import assert_production_snapshot
 
 MESH = Path(__file__).resolve().parents[1] / "solver" / "warmup_mesh.msh"
 
@@ -175,8 +174,6 @@ def runtime(monkeypatch, tmp_path):
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(importlib, "import_module", fake_import)
-    monkeypatch.setattr(beat, "_load_api", lambda: pytest.fail("official path used HBB"))
-    monkeypatch.setattr(beat_imported, "_load_api", lambda: pytest.fail("official CAD path used HBB"))
     # Exercise host-mode admission/cache/session with an in-process fake transport.
     monkeypatch.setattr(manager, "HostedWorker", Worker)
     runtime = manager.WorkerManager(mode="host", directory=tmp_path / "workers")
@@ -226,7 +223,7 @@ def test_parametric_production(runtime, monkeypatch, backend, motion, adaptive):
 @pytest.mark.parametrize("available,selected", [(("cuda", "rocm", "metal", "cpu"), "cuda"),
                                                  (("rocm", "metal", "cpu"), "rocm"),
                                                  (("metal", "cpu"), "metal"), (("cpu",), "cpu")])
-def test_auto_production_uses_hbb_backend_order(runtime, monkeypatch, available, selected):
+def test_auto_production_uses_backend_order(runtime, monkeypatch, available, selected):
     monkeypatch.setattr(readiness, "backend_readiness", lambda backend, *a, **k:
                         readiness.BackendReadiness(backend in available, "ready", "mock proof"))
     response = beat.solve_beat_from_msh_text(MESH.read_text(), _context())
@@ -338,75 +335,6 @@ def test_stale_readiness_refuses_before_submission(runtime, monkeypatch):
     with pytest.raises(beat.BeatUnavailable, match="compiled proof is stale"):
         beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
     assert not runtime.requests
-
-
-@pytest.mark.parametrize("imported", [False, True])
-@pytest.mark.parametrize("adaptive", [False, True])
-@pytest.mark.parametrize("zip_creator_system", [0, 3])
-def test_selector_off_calls_hbb_and_never_imports_engine(monkeypatch, tmp_path, imported, adaptive,
-                                                       zip_creator_system):
-    import zipfile
-
-    original_zip_info = zipfile.ZipInfo.__init__
-
-    def zip_info(self, *args, **kwargs):
-        original_zip_info(self, *args, **kwargs)
-        self.create_system = zip_creator_system
-
-    monkeypatch.setattr(zipfile.ZipInfo, "__init__", zip_info)
-    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")
-    monkeypatch.setattr(beat.time, "time", lambda: 1700000000.)
-    monkeypatch.setattr(temp_session, "_active_root", str(tmp_path))
-    original = importlib.import_module
-    imports = []
-    def watched(name, *args, **kwargs):
-        imports.append(name)
-        if name.startswith("beat_engine"):
-            pytest.fail("default path imported official engine")
-        return original(name, *args, **kwargs)
-    monkeypatch.setattr(importlib, "import_module", watched)
-    package = cad._RecordingBeat()
-    statuses = {"cpu": dict(available=True, backend="cpu", surface_traces=False, reason="HBB")}
-    monkeypatch.setattr(beat, "_load_api", lambda: package)
-    monkeypatch.setattr(beat_imported, "_load_api", lambda: package)
-    monkeypatch.setattr(beat, "beat_backend_statuses", lambda: statuses)
-    monkeypatch.setattr(beat_imported, "beat_backend_statuses", lambda: statuses)
-    # Constants are part of the fake HBB package too.
-    def hbb_import(name, *args, **kwargs):
-        if name == "hornlab_beat_bem._constants":
-            imports.append(name)
-            return SimpleNamespace(SPEED_OF_SOUND=343.)
-        return watched(name, *args, **kwargs)
-    monkeypatch.setattr(importlib, "import_module", hbb_import)
-    request = cad._request()
-    request.options.adaptive_frequency_sampling = adaptive
-    if adaptive:
-        request.options.frequency_range = [100., 1000.]
-        request.options.frequencies_hz = None
-        request.options.num_frequencies = 24
-    result = (beat_imported.solve_imported_beat_from_msh_text(
-        cad.MESH, request, cad._record(), backend="cpu") if imported else
-        beat.solve_beat_from_msh_text(
-            MESH.read_text(), _context(adaptive_frequency_sampling=adaptive,
-                                      num_frequencies=24 if adaptive else 3), backend="cpu"))
-    assert package.solves
-    metadata = result["metadata"]
-    assert (metadata["solver_engine"]["package"] if imported else metadata["engine"]) == "hornlab-beat-bem"
-    assert metadata["solver_engine"]["provider"] == "hbb"
-    assert metadata["solver_engine"]["package_version"] is None
-    assert not any(name.startswith("beat_engine") for name in imports)
-    # Compare the pre-switch physics snapshot after checking the added provenance.
-    if imported:
-        metadata["solver_engine"].pop("provider")
-        for channel in result["channels"].values():
-            assert channel["metadata"]["solver_engine"]["provider"] == "hbb"
-            channel["metadata"].pop("solver_engine")
-    else:
-        metadata.pop("solver_engine")
-    expected = json.loads((Path(__file__).parent / "beat_adapter/fixtures/hbb_production.json").read_text())
-    key = ("imported" if imported else "parametric") + ("_adaptive" if adaptive else "")
-    assert_production_snapshot(result, expected[key], key, Path(__file__).parent / "beat_adapter/fixtures")
-
 
 
 @pytest.mark.parametrize("traces", [False, True])
@@ -798,8 +726,6 @@ def test_selected_registry_keeps_version_while_provisioning(runtime, monkeypatch
 
 @pytest.mark.parametrize("backend", ["cuda", "rocm"])
 def test_fork_cad_gpu_requires_accurate(runtime, monkeypatch, backend):
-    monkeypatch.setattr(beat, "_load_api", lambda: pytest.fail("fork CAD used HBB"))
-    monkeypatch.setattr(beat_imported, "_load_api", lambda: pytest.fail("fork CAD used HBB"))
     request = cad._request()
     request.options.accuracy = "fast"
     engine = beat.BeatEngine(backend)

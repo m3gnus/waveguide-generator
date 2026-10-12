@@ -39,15 +39,14 @@ def test_cold_start_phase_records_refused_breakaway(tmp_path, monkeypatch, capsy
                         lambda *args, **kwargs: pytest.fail("refused job entered cold-start harness"))
     assert gate.ensure_backend_cold_start_phase(
         tmp_path / "python", tmp_path / "app", tmp_path / "work", tmp_path / "output",
-        beat_provider="official",
+
     ) == NOT_EXERCISED
     assert capsys.readouterr().err.splitlines() == [NOT_EXERCISED["result"]]
 
 
 @pytest.mark.parametrize("platform,flags", [("win32", 0), ("win32", 0x01000000),
                                            ("linux", None), ("darwin", None)])
-@pytest.mark.parametrize("beat_provider", ["official", "hbb"])
-def test_cold_start_phase_runs_when_breakaway_permitted(tmp_path, monkeypatch, capsys, platform, flags, beat_provider):
+def test_cold_start_phase_runs_when_breakaway_permitted(tmp_path, monkeypatch, capsys, platform, flags):
     probes, calls = [], []
     def probe():
         assert platform == "win32", "non-Windows must not query Windows jobs"
@@ -62,8 +61,8 @@ def test_cold_start_phase_runs_when_breakaway_permitted(tmp_path, monkeypatch, c
     monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", probe)
     monkeypatch.setattr(gate, "check_ensure_backend_cold_start", cold_start)
     args = (tmp_path / "python", tmp_path / "app", tmp_path / "work", tmp_path / "output")
-    assert gate.ensure_backend_cold_start_phase(*args, beat_provider=beat_provider) == {"exercised": True, **result}
-    assert calls == [(args, {"beat_provider": beat_provider})]
+    assert gate.ensure_backend_cold_start_phase(*args, ) == {"exercised": True, **result}
+    assert calls == [(args, {})]
     assert probes == ([True] if platform == "win32" else [])
     assert capsys.readouterr().err == ""
 
@@ -109,15 +108,13 @@ def test_breakaway_refusal_matches_product_probe(monkeypatch):
 
 @pytest.mark.parametrize("via_main", [False, True])
 @pytest.mark.parametrize("permitted", [False, True])
-@pytest.mark.parametrize("beat_provider", ["official", "hbb"])
 def test_qualify_breakaway_decision_keeps_server_start_adoption_and_report(
-    tmp_path, monkeypatch, capsys, via_main, permitted, beat_provider,
+    tmp_path, monkeypatch, capsys, via_main, permitted,
 ):
     app, interpreter = tmp_path / "payload/app", tmp_path / "python"
     work, output = tmp_path / "work", tmp_path / "output"
-    environment = {"WG2_BEAT_PROVIDER": beat_provider, "WG2_BEAT_RUNTIME_DIR": "runtime",
-                   "WG2_BEAT_WORKER_DIR": "workers", "HORNLAB_BEAT_RUNTIME_DIR": "runtime",
-                   "HORNLAB_BEAT_WORKER_DIR": "workers", "JULIA_DEPOT_PATH": "julia",
+    environment = {"WG2_BEAT_RUNTIME_DIR": "runtime",
+                   "WG2_BEAT_WORKER_DIR": "workers", "JULIA_DEPOT_PATH": "julia",
                    "PYTHONPYCACHEPREFIX": "python-cache", "NUMBA_CACHE_DIR": "numba-cache"}
     starts, adoptions, cold_starts = [], [], []
     cold_result = {"argv": ["installed-launcher"], "survives_caller": True}
@@ -159,8 +156,7 @@ def test_qualify_breakaway_decision_keeps_server_start_adoption_and_report(
     monkeypatch.setattr(gate, "check_ensure_backend", adopt)
     monkeypatch.setattr(gate, "await_cpu_row", stop_after_adoption)
     monkeypatch.setattr(gate, "stop_our_workers", lambda *args: {"contained": True})
-    argv = ["--payload", str(app.parent), "--work", str(work), "--output", str(output),
-            "--beat-provider", beat_provider]
+    argv = ["--payload", str(app.parent), "--work", str(work), "--output", str(output)]
     if via_main:
         assert gate.main(argv) == 1
         report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
@@ -176,7 +172,7 @@ def test_qualify_breakaway_decision_keeps_server_start_adoption_and_report(
     assert adoptions == [((app, work / "data", environment, Server.base), {"cwd": output})]
     assert report["ensure_backend"] == {"same_owner": True}
     assert report["ensure_backend_cold_start"] == ({"exercised": True, **cold_result} if permitted else NOT_EXERCISED)
-    assert cold_starts == ([((interpreter, app, work, output), {"beat_provider": beat_provider})] if permitted else [])
+    assert cold_starts == ([((interpreter, app, work, output), {})] if permitted else [])
     lines = capsys.readouterr().err.splitlines()
     assert lines.count(NOT_EXERCISED["result"]) == (0 if permitted else 1)
 

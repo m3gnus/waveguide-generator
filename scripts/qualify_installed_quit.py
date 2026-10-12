@@ -34,9 +34,7 @@ reports the ``job_breakaway`` outcome the host recorded in its log: whether
 breakaway was allowed where the gate ran, not what a status-window Quit does
 (``docs/reference/SHUTDOWN-AND-RECOVERY.md``).
 
-``--beat-provider hbb`` (or ``WG2_BEAT_PROVIDER=hbb``/``legacy``) qualifies
-the one-release rollback: HBB hosts must stop on each Quit and restart fresh.
-Slice 10 removes this route. ``--engine`` still defaults to BEMPP.
+
 
 Everything runs in this gate's private tree: data, temporary directory, a
 sandboxed Fusion AddIns directory and every cache ``isolated_environment``
@@ -63,14 +61,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from qualify_installed_cpu import (  # noqa: E402 - a sibling script, not a package
     CAPABILITY_TIMEOUT_S,
     DESIGN,
-    _IDENTIFY_AND_STOP,
     QualificationError,
     await_cpu_row,
     http,
     isolated_environment,
     isolated_user_directories,
     resolve_payload,
-    provider,
     stop_our_workers,
     wait_for,
 )
@@ -127,9 +123,7 @@ from pathlib import Path
 sys.path.insert(0, os.environ["WG2_APP_ROOT"])
 from server.solver.beat_runtime import paths, registry
 from server.solver.beat_runtime.inspection import inspect_hosts
-from server.solver.beat_runtime.provider import official_selected
-if not official_selected():
-    raise RuntimeError("Quit host inspection requires the official provider")
+
 directory = Path(os.environ["WG2_BEAT_WORKER_DIR"]) / paths.PROVIDER_ID
 if paths.worker_dir().resolve() != directory.resolve():
     raise RuntimeError("Quit host registry escaped isolation")
@@ -150,9 +144,7 @@ def inspect_beat_hosts(
     interpreter: Path, app: Path, environment: dict[str, str],
 ) -> dict[str, Any]:
     """Authenticate only this gate's selected hosts; never start an engine."""
-    official = provider.official_selected(environment)
-    command = ([str(interpreter), "-c", _INSPECT_BEAT_HOSTS] if official else
-               [str(interpreter), "-c", _IDENTIFY_AND_STOP, environment["HORNLAB_BEAT_WORKER_DIR"], "inspect"])
+    command = ([str(interpreter), "-c", _INSPECT_BEAT_HOSTS])
     completed = subprocess.run(  # noqa: S603 - packaged interpreter, fixed program
         command,
         env=environment, cwd=str(app), capture_output=True, text=True,
@@ -195,7 +187,7 @@ def warm_beat_host(
     if len(answer["verified"]) != 1:
         raise QualificationError(f"BEAT prewarm never started exactly one host: {answer}")
     host = answer["verified"][0]
-    if type(host.get("host_pid")) is not int or (provider.official_selected(environment) and not host.get("worker_instance")):
+    if type(host.get("host_pid")) is not int or ((not host.get("worker_instance"))):
         raise QualificationError(f"BEAT host has no process/worker identity: {answer}")
     return answer
 
@@ -646,9 +638,8 @@ def run_gate(
         raise QualificationError(f"unknown Quit gate engine: {engine!r}")
     beat = engine == "beat"
     report["engine"] = engine
-    official = beat and provider.official_selected(environment)
     if beat:
-        report["provider"] = "official" if official else "hbb"
+        report["provider"] = "official"
     environment = dict(environment, **isolated_user_directories(work))
     grace = launcher_grace(app)
     report["launcher_grace_seconds"] = grace
@@ -673,9 +664,7 @@ def run_gate(
         # Qualify the release's default worker prewarm, without the diagnostic
         # in-process warmup or an inherited setting disabling worker prewarm.
         base_environment.pop("WG2_SOLVER_WARMUP", None)
-        if not official:
-            report["beat_host_policy"] = "stop HBB workers/hosts on Quit"
-        elif platform.system() != "Windows":
+        if platform.system() != "Windows":
             report["beat_host_policy"] = (
                 "detach completed-prewarm host/Julia for relaunch (1800 s idle timeout)"
             )
@@ -701,7 +690,7 @@ def run_gate(
             report["beat_host_before_quit"] = host = warm_beat_host(
                 first, interpreter, app, base_environment
             )
-            if official and platform.system() == "Windows":
+            if (platform.system() == "Windows"):
                 report["beat_host_policy"] = WINDOWS_BEAT_HOST_POLICY[
                     beat_job_breakaway(base_environment)
                 ]
@@ -749,7 +738,7 @@ def run_gate(
         elapsed = first.stop_and_time(grace)
         report["quit"] = {"seconds": round(elapsed, 2), "exit_code": first.process.returncode}
         report["children_seen_while_stopping"] = len(first.children)
-        if official:
+        if beat:
             report["beat_host_after_quit"] = require_detached_host(
                 interpreter, app, base_environment, host, beat_processes, launcher_pid
             )
@@ -783,16 +772,14 @@ def run_gate(
 
         if beat:
             restarted_host = warm_beat_host(second, interpreter, app, base_environment)
-            if not official:
-                beat_processes = stable_beat_tree(restarted_host["verified"][0]["host_pid"])
             second.children = descendants(second.pid)
-        if official:
+        if beat:
             report["beat_host_after_restart"] = require_detached_host(
                 interpreter, app, base_environment, host, beat_processes, launcher_pid
             )
 
         report["clean_stop_seconds"] = round(second.stop_and_time(grace), 2)
-        if official:
+        if beat:
             report["beat_host_after_clean_stop"] = require_detached_host(
                 interpreter, app, base_environment, host, beat_processes, launcher_pid
             )
@@ -802,12 +789,6 @@ def run_gate(
             stray = still_running(second.children - beat_processes)
             if stray:
                 raise QualificationError(f"child processes {sorted(stray)} outlived the second server")
-        if beat and not official:
-            deadline = time.monotonic() + CHILD_REAP_S
-            while still_running(second.children | beat_processes) and time.monotonic() < deadline:
-                time.sleep(0.1)
-            if still_running(second.children | beat_processes):
-                raise QualificationError("HBB rollback children outlived the second server")
         remaining = _temporary_leftovers(temporary)
         report["left_by_clean_stop"] = remaining
         own = f"wg2-run-{second.server_pid}-"
@@ -844,8 +825,7 @@ def run_gate(
                 report["beat_registry_after_cleanup"] = cleaned = inspect_beat_hosts(
                     interpreter, app, base_environment
                 )
-                # HBB launch .key.json inputs deliberately persist; inspection
-                # counts only host records, matching HBB find_live_hosts.
+                # Inspection counts authenticated host records, excluding key specs.
                 if cleaned["records"]:
                     raise QualificationError(f"BEAT cleanup left host registry records: {cleaned}")
                 deadline = time.monotonic() + CHILD_REAP_S
@@ -871,8 +851,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--payload-kind", default="unspecified", help="recorded in the report")
     parser.add_argument("--work", type=Path, required=True, help="private scratch directory")
     parser.add_argument("--output", type=Path, required=True, help="logs and the JSON report")
-    parser.add_argument("--beat-provider", choices=("official", "hbb", "legacy"),
-                        help="BEAT provider (default: official, or WG2_BEAT_PROVIDER; hbb/legacy is the rollback)")
     parser.add_argument("--engine", choices=("bempp", "beat"), default="bempp")
     parser.add_argument(
         "--official-runtime-work", type=Path,
@@ -903,12 +881,11 @@ def main(argv: list[str] | None = None) -> int:
                 if arguments.official_runtime_work is not None else None
             )
             environment = isolated_environment(
-                app, work, beat_provider=arguments.beat_provider, official_runtime_work=runtime_work
+                app, work, official_runtime_work=runtime_work
             )
-            if provider.official_selected(environment):
-                report["official_runtime_work"] = str(runtime_work or work)
+            report["official_runtime_work"] = str(runtime_work or work)
         else:
-            environment = isolated_environment(app, work, beat_provider=arguments.beat_provider)
+            environment = isolated_environment(app, work, )
         run_gate(app, interpreter, environment, work, output, report, engine=arguments.engine)
     except QualificationError as exc:
         failure = "\n".join([str(exc), *getattr(exc, "__notes__", [])])

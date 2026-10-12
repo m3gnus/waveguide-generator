@@ -99,8 +99,8 @@ _ENGINE_PACKAGES = {
     "metal": "hornlab-metal-bem",
     "circsym": "hornlab-metal-bem",
     "bempp": "hornlab-bempp-bem",
-    "beat": "hornlab-beat-bem",
-    "beat-cpu": "hornlab-beat-bem",
+    "beat": "beat-engine",
+    "beat-cpu": "beat-engine",
 }
 _FORMULATION_BLOCKS = ("solver_engine", "metal", "axisym", "bempp", "beat")
 

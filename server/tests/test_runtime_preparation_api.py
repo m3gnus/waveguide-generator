@@ -18,7 +18,6 @@ from server.solver.beat_runtime import hardware, readiness
 def preparation(monkeypatch):
     monkeypatch.delenv(runtime.SKIP_PROVISION_ENV_VAR, raising=False)
     monkeypatch.delenv(runtime.SKIP_GPU_PROVISION_ENV_VAR, raising=False)
-    monkeypatch.setattr(runtime, "official_selected", lambda: True)
     monkeypatch.setattr(runtime.platform, "system", lambda: "Linux")
     for name, value in (("_provision_thread", None), ("_provision_step", None),
                         ("_requested_backend", None), ("_preparation_errors", {}),
@@ -76,91 +75,6 @@ def preparation(monkeypatch):
 
 def rows(client):
     return {row["name"]: row for row in client.get("/api/capabilities").json()["engines"]}
-
-
-@pytest.fixture
-def hbb_preparation(preparation, monkeypatch, tmp_path):
-    client, release, entered, records, outcome, calls = preparation
-    monkeypatch.setattr(runtime, "official_selected", lambda: False)
-    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")
-
-    def provision_gpu(*, backend, status_cb, force=False):
-        calls.append((backend, {"force": force}))
-        status_cb("downloading")
-        entered.set()
-        assert release.wait(5), "Test did not release its preparation worker"
-        result = dict(outcome)
-        records[backend].update(available=result["status"] == "ready", state=result["status"],
-                                reason=result.get("error", "Runtime ready."))
-        return result
-
-    provision = SimpleNamespace(
-        provision_cpu=lambda **options: pytest.fail("GPU requests must not provision CPU"),
-        provision_gpu=provision_gpu, read_backend_states=lambda: records,
-        backend_ready=lambda backend: records[backend]["available"],
-        detect_gpu_backend=lambda: "metal", default_runtime_dir=lambda: tmp_path,
-    )
-    modules = {"hornlab_beat_bem": object(), "hornlab_beat_bem.provision": provision,
-               "hornlab_beat_bem.runtime": object()}
-    monkeypatch.setattr(runtime, "_import", modules.get)
-    return preparation
-
-
-def test_hbb_gpu_start_progress_conflict_and_ready(hbb_preparation):
-    client, release, entered, records, outcome, calls = hbb_preparation
-    assert client.post("/api/runtimes/beat/metal/prepare").status_code == 202
-    assert entered.wait(2)
-    row = rows(client)["beat-metal"]
-    assert row["runtime_state"] == "preparing" and "downloading" in row["reason"]
-    assert client.post("/api/runtimes/beat/metal/prepare").status_code == 409
-    release.set()
-    runtime._provision_thread.join(2)
-    assert rows(client)["beat-metal"]["runtime_state"] == "ready"
-    refused = client.post("/api/runtimes/beat/metal/prepare")
-    assert refused.status_code == 400 and "already ready" in refused.json()["detail"]
-    assert calls == [("metal", {"force": True})]
-
-
-@pytest.mark.parametrize("backend", runtime.GPU_BACKENDS)
-def test_hbb_ready_gpu_refused_without_provisioning(hbb_preparation, backend):
-    client, release, entered, records, outcome, calls = hbb_preparation
-    records[backend].update(available=True, state="ready")
-    assert client.post(f"/api/runtimes/beat/{backend}/prepare").status_code == 400
-    assert calls == [] and runtime._provision_thread is None
-
-
-def test_hbb_gpu_failure_surfaces_and_can_retry(hbb_preparation):
-    client, release, entered, records, outcome, calls = hbb_preparation
-    outcome.update(status="failed", error="Network unavailable")
-    release.set()
-    assert client.post("/api/runtimes/beat/metal/prepare").status_code == 202
-    runtime._provision_thread.join(2)
-    row = rows(client)["beat-metal"]
-    assert row["runtime_state"] == "failed" and row["runtime_preparable"]
-    assert "Network unavailable" in row["reason"]
-    outcome.update(status="ready")
-    assert client.post("/api/runtimes/beat/metal/prepare").status_code == 202
-    runtime._provision_thread.join(2)
-    assert rows(client)["beat-metal"]["available"]
-    assert calls == [("metal", {"force": True}), ("metal", {"force": True})]
-
-
-@pytest.mark.parametrize("backend", readiness.BACKENDS)
-def test_hbb_external_kernel_lock_refuses_preparation(hbb_preparation, tmp_path, backend):
-    from server.solver.beat_runtime import locks
-
-    client, release, entered, records, outcome, calls = hbb_preparation
-    # Use a real private advisory lock; no provisioning or subprocess runs.
-    with (tmp_path / "provision.lock").open("w+b") as holder:
-        holder.write(b"\0")
-        holder.flush()
-        assert locks._try_lock(holder.fileno())
-        try:
-            response = client.post(f"/api/runtimes/beat/{backend}/prepare")
-            assert response.status_code == 409 and "Another process" in response.json()["detail"]
-            assert calls == [] and runtime._provision_thread is None
-        finally:
-            locks._unlock(holder.fileno())
 
 
 @pytest.mark.parametrize("backend", readiness.BACKENDS)

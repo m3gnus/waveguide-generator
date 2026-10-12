@@ -68,7 +68,6 @@ def _no_real_solver_probes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_metal_module, "metal_status", lambda: dict(_STUB_STATUS))
 
 
-
 def _msh(vertices):
     nodes = "\n".join(
         f"{index + 1} {x!r} {y!r} {z!r}"
@@ -510,7 +509,7 @@ def test_an_engine_that_can_ground_is_accepted():
     assert resolution.engine_name == "bempp"
 
 
-@pytest.mark.parametrize("selected_provider", [None, "hbb"], ids=["official-default", "hbb-rollback"])
+@pytest.mark.parametrize("selected_provider", [None, "hbb"], ids=["official-default", "retired-setting"])
 def test_capability_tests_here_launch_no_solver_and_no_subprocess(
     monkeypatch: pytest.MonkeyPatch, selected_provider: str | None,
 ) -> None:
@@ -550,7 +549,7 @@ def test_capability_tests_here_launch_no_solver_and_no_subprocess(
 
     engines = {engine.name: engine for engine in detect_engines()}
 
-    assert probed == (["official"] if selected_provider is None else ["beat"]), (
+    assert probed == ["official"], (
         "detect_engines must have asked the selected provider's stubbed probe"
     )
     assert engines["bempp"].available is True
@@ -613,7 +612,6 @@ def test_a_baffle_and_a_ground_plane_are_refused_on_every_engine(engine):
 
     with pytest.raises(SymmetryValidationError, match="cannot be combined"):
         asyncio.run(resolve_submission(request, engine_registry))
-
 
 
 def test_imported_cad_geometry_refuses_a_ground_plane():

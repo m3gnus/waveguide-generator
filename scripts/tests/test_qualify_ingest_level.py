@@ -84,6 +84,7 @@ def _job_results(
     frequencies = list(FREQUENCIES)[:count]
     level, off_axis = (0.0, 0.0) if zero else (91.5, -6.0)
     payload = {
+        "metadata": {"engine": "beat-engine"},
         "frequencies": frequencies,
         "spl_on_axis": {
             "frequencies": frequencies,
@@ -101,7 +102,7 @@ def _job_results(
         "channels": {channel: payload},
         "channel_order": [channel],
         "frequencies": frequencies,
-        "metadata": {"geometry_type": "imported", "solver_engine": {"engine": reported}},
+        "metadata": {"geometry_type": "imported", "solver_engine": {"engine": reported, "package": "beat-engine"}},
     }
 
 

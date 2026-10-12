@@ -1,4 +1,4 @@
-"""HBB's polar cuts and theta-major sphere as official arbitrary points."""
+"""WG's polar cuts and theta-major sphere as official arbitrary points."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def build_observations(
 
     Resolve mouth/throat origins before calling, using WG's authoritative
     frame. Points and mesh must use the same frame; no engine-side translation
-    is needed. HBB's Float32 polar angles and selected geometry precision are
+    is needed. WG's Float32 polar angles and selected geometry precision are
     retained; sphere axes are rebuilt in Float64 for DI/balloon endpoints.
     """
     if precision not in {"float32", "float64"}:

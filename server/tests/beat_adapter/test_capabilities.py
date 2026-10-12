@@ -10,7 +10,7 @@ import pytest
 from server.solver.beat_adapter import capabilities
 
 
-def test_report_runs_without_engine_or_hbb_and_counts_one_unit(monkeypatch):
+def test_report_runs_without_engine_and_counts_one_unit(monkeypatch):
     original = builtins.__import__
 
     def guarded(name, *args, **kwargs):

@@ -445,7 +445,7 @@ def _probe_ground_plane_composition() -> bool:
     This is not cosmetic: hornlab-bempp-bem joins the symmetry spec and the
     ground plane into one reflection group, so a left-right-symmetric horn on a
     floor keeps its half mesh and pays four images on it. hornlab-metal-bem and
-    hornlab-beat-bem each carry a single image-transform set and cannot, so the
+    beat-engine each carry a single image-transform set and cannot, so the
     identical model there solves the full domain -- roughly four times the work.
 
     Measured on the pinned package rather than reasoned about: a reduced ``yz``

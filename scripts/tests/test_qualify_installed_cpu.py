@@ -38,7 +38,7 @@ from scripts import qualify_installed_cpu as gate
 
 
 PINS = {
-    "hornlab-beat-bem": "74da18cdbb12844729a154005a26110511864aa0",
+    "beat-engine": "74da18cdbb12844729a154005a26110511864aa0",
     "hornlab-bempp-bem": "57b1260777c09097c879a3fe7ecb377c32f322cb",
 }
 
@@ -59,13 +59,10 @@ def test_shared_selector_registry_probe_and_isolation(tmp_path, monkeypatch, pro
 
     monkeypatch.setattr(gate.subprocess, "run", run)
     gate.stop_our_workers(Path(sys.executable), environment, tmp_path)
-    official = provider not in {"hbb", "legacy"}
-    assert commands[0][2] == (gate._IDENTIFY_AND_STOP_OFFICIAL if official else gate._IDENTIFY_AND_STOP)
-    expected = "WG2_BEAT_WORKER_DIR" if official else "HORNLAB_BEAT_WORKER_DIR"
+    assert commands[0][2] == (gate._IDENTIFY_AND_STOP_OFFICIAL)
+    expected = "WG2_BEAT_WORKER_DIR"
     assert commands[0][3] == environment[expected]
-    if official:
-        assert Path(environment[expected]).is_relative_to(tmp_path / "work")
-        assert environment[expected] != environment["HORNLAB_BEAT_WORKER_DIR"]
+    assert Path(environment[expected]).is_relative_to(tmp_path / "work")
 
 
 def test_official_probe_runs_in_app_root_without_engine_or_registry(tmp_path):
@@ -224,7 +221,7 @@ def test_every_expected_pin_is_read_from_the_packaged_runtime(
         pytest.param({"commit": "0" * 40}, "expected", id="wrong-commit"),
         pytest.param({"error": "not installed: nope"}, "not installed", id="absent"),
         pytest.param(
-            {"commit": PINS["hornlab-beat-bem"], "editable": True},
+            {"commit": PINS["beat-engine"], "editable": True},
             "editable",
             id="editable",
         ),
@@ -235,10 +232,10 @@ def test_a_drifted_or_editable_module_fails_the_gate(
 ) -> None:
     """An editable install resolves to a working tree, which is not a payload."""
 
-    _pin_reader(monkeypatch, {"hornlab-beat-bem": answer})
+    _pin_reader(monkeypatch, {"beat-engine": answer})
 
     with pytest.raises(gate.QualificationError, match=message):
-        gate.check_pins(Path("python"), {"hornlab-beat-bem": PINS["hornlab-beat-bem"]}, {})
+        gate.check_pins(Path("python"), {"beat-engine": PINS["beat-engine"]}, {})
 
 
 def test_a_gate_with_no_expected_pins_refuses_to_run() -> None:
@@ -312,7 +309,7 @@ def test_a_solve_that_ran_on_another_backend_fails() -> None:
 
 
 def test_dependency_drift_reported_by_the_application_fails() -> None:
-    drifted = {"dependency_drift": ["hornlab-beat-bem"], "dependency_shas": dict(PINS)}
+    drifted = {"dependency_drift": ["beat-engine"], "dependency_shas": dict(PINS)}
     with pytest.raises(gate.QualificationError, match="dependency drift"):
         gate.check_solve(_result(provenance=drifted), PINS)
 
@@ -320,9 +317,9 @@ def test_dependency_drift_reported_by_the_application_fails() -> None:
 def test_a_solve_against_other_module_commits_fails() -> None:
     """The pins are verified where the solve saw them, not only where pip did."""
 
-    other = dict(PINS, **{"hornlab-beat-bem": "f" * 40})
+    other = dict(PINS, **{"beat-engine": "f" * 40})
     provenance = {"dependency_drift": [], "dependency_shas": other}
-    with pytest.raises(gate.QualificationError, match="other module commits"):
+    with pytest.raises(gate.QualificationError, match="pinned beat-engine revision|other module commits"):
         gate.check_solve(_result(provenance=provenance), PINS)
 
 
@@ -486,7 +483,7 @@ def test_the_gpu_claim_matches_what_the_host_could_support() -> None:
 def test_pins_are_supplied_as_name_equals_commit() -> None:
     assert gate.parse_pins(["a=1", "b=2"]) == {"a": "1", "b": "2"}
     with pytest.raises(SystemExit):
-        gate.parse_pins(["hornlab-beat-bem"])
+        gate.parse_pins(["beat-engine"])
     with pytest.raises(SystemExit):
         gate.parse_pins(["=abc"])
 
@@ -504,7 +501,7 @@ def test_a_failure_writes_a_report_and_exits_non_zero(tmp_path: Path) -> None:
             "--output",
             str(output),
             "--expected-pin",
-            "hornlab-beat-bem=deadbeef",
+            "beat-engine=deadbeef",
         ]
     )
 
@@ -534,7 +531,7 @@ def test_the_isolated_environment_leaves_the_users_directories_alone(tmp_path: P
     assert environment["WG2_BUNDLE"] == "1"
     assert environment["WG2_APP_ROOT"] == str(app)
     for name in ("PYTHONPYCACHEPREFIX", "NUMBA_CACHE_DIR", "MPLCONFIGDIR",
-                 "HORNLAB_BEAT_RUNTIME_DIR", "HORNLAB_BEAT_WORKER_DIR",
+                 "WG2_BEAT_RUNTIME_DIR", "WG2_BEAT_WORKER_DIR",
                  "WG2_FUSION_ADDINS_DIR"):
         assert environment[name].startswith(str(work)), name
     assert "PYTHONPATH" not in environment
@@ -542,7 +539,7 @@ def test_the_isolated_environment_leaves_the_users_directories_alone(tmp_path: P
     # and nothing else, so an invented one is ignored in silence: the workers
     # go to the user's default registry and the directory reported as isolated
     # is one nothing ever wrote to.
-    assert "HORNLAB_BEAT_WORKER_REGISTRY" not in environment
+    assert "WG2_BEAT_WORKER_DIR" in environment
     from server.platform.paths import documents_root
 
     for name in ("USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA"):
@@ -734,63 +731,11 @@ def test_every_platform_candidate_is_qualified_for_cpu(job: str) -> None:
 
     runs = [step for step in _steps(job) if "qualify_installed_cpu.py" in (step.get("run") or "")]
 
-    assert len(runs) == 2, f"{job} must qualify both default official and HBB rollback routes"
+    assert len(runs) == 1, f"{job} must qualify the official route"
     command = runs[0]["run"]
     assert "--pins-json pins.json" in command, job
     assert "--build-manifest" in command, job
     assert "--payload-kind" in command, job
-
-
-@pytest.mark.parametrize("job", PLATFORM_JOBS)
-def test_rollback_gate_reuses_the_candidate_and_preserves_its_own_evidence(job: str) -> None:
-    workflow = _workflow()
-    steps = _steps(job)
-    default_index = next(i for i, step in enumerate(steps)
-                         if step.get("name", "").startswith("Qualify BEAT CPU"))
-    rollback = steps[default_index + 1]
-    assert rollback["name"] == "Qualify the HBB rollback on the same candidate"
-    assert rollback["if"] == "${{ !cancelled() }}"
-    assert rollback["env"] == {"WG2_BEAT_PROVIDER": "hbb"}
-    assert "WG2_BEAT_PROVIDER" not in workflow.get("env", {})
-    assert "WG2_BEAT_PROVIDER" not in workflow["jobs"][job].get("env", {})
-    rollback_quit = next(step for step in steps if step.get("name", "").startswith(
-        "Qualify Quit with a live HBB rollback BEAT host"))
-    assert rollback_quit["env"] == {"WG2_BEAT_PROVIDER": "hbb"}
-    assert all("WG2_BEAT_PROVIDER" not in step.get("env", {})
-               and "WG2_BEAT_PROVIDER" not in step.get("run", "")
-               for step in steps if step is not rollback and step is not rollback_quit)
-    command = rollback["run"]
-    assert "WG2_CPU_GATE_ROOT" in command
-    for arg in ("--pins-json pins.json", "--build-manifest", "--imported-engine beat-cpu",
-                "--work", "hbb-work", "--output", "hbb-qualification"):
-        assert arg in command
-    payload, kind = {
-        "macos-bundle": ('$root/Waveguide Generator.app', 'dmg-ditto'),
-        "windows-bundle": ('Join-Path $root "app"', 'windows-installer'),
-        "linux-bundle": ('$root/prefix/waveguide-generator', 'linux-install-sh'),
-    }[job]
-    assert payload in command
-    assert f"--payload-kind {kind}" in command
-    assert ("--imported-engine-when-offered metal" in command) == (job == "macos-bundle")
-    for preparation in ("mktemp", "New-Item", "hdiutil ", "Start-Process", "install.sh"):
-        assert preparation not in command
-    assert not any(line.lstrip().startswith("ditto ") for line in command.splitlines())
-    if job == "windows-bundle":
-        assert rollback["shell"] == "pwsh"
-        assert command.index("$LASTEXITCODE") > command.index("qualify_installed_cpu.py")
-        assert 'throw "The HBB rollback qualification exited $LASTEXITCODE"' in command
-    else:
-        assert "set -euo pipefail" in command
-    logs = steps[default_index + 2]
-    assert logs["name"] == "Preserve the HBB rollback qualification logs"
-    assert logs["if"] == "always()"
-    default_logs = next(step for step in steps if step.get("name") == "Preserve the CPU qualification logs")
-    assert logs["run"] == default_logs["run"].replace(
-        '"qualification"', '"hbb-qualification"'
-    ).replace('$root/qualification', '$root/hbb-qualification').replace(
-        'No qualification output', 'No HBB rollback qualification output'
-    )
-    assert logs.get("shell") == default_logs.get("shell")
 
 
 @pytest.mark.parametrize("job", PLATFORM_JOBS)
@@ -940,15 +885,24 @@ def test_the_gate_changes_no_permission_and_no_trigger() -> None:
 # from the runners.
 
 _FAKE_INTERPRETER = '''#!{python}
-"""Answer the three things the qualifier asks a packaged interpreter to do."""
+"""Answer the qualifier with a simulated pinned engine and compiled proof."""
 import json
 import sys
+import os
+from pathlib import Path
 
 argv = sys.argv[1:]
 if argv and argv[0] == "-c":
     program = argv[1]
     if "importlib.metadata" in program:
-        print(json.dumps({{name: {{"commit": "{sha}"}} for name in argv[2:]}}))
+        pins = json.loads((Path(__file__).parent.parent.parent / "app/pins.json").read_text())["modules"]
+        print(json.dumps({{name: {{"commit": pins[name]["sha"]}} for name in argv[2:]}}))
+    elif "backend_readiness" in program:
+        root = Path(os.environ["WG2_BEAT_RUNTIME_DIR"]) / "wg-beat-engine"
+        print(json.dumps({{"ready": True, "runtime_dir": str(root), "probe_contract_expected": "fixture-compiled-proof",
+                           "record": {{"provider": "wg-beat-engine", "status": "ready", "backend": "cpu",
+                                       "probe_contract": "fixture-compiled-proof", "engine_fingerprint": "fixture-engine",
+                                       "runtime_fingerprint": "fixture-runtime", "julia_executable": str(root / "julia")}}}}))
     else:
         mode = "{cleanup}"
         if mode == "crash":
@@ -1108,6 +1062,7 @@ class StubApplication:
         if self.settings.get("imported_nan"):
             spl[0] = float("nan")
         channel = {
+            "metadata": {"engine": "beat-engine"},
             "frequencies": frequencies,
             "spl_on_axis": {"frequencies": frequencies, "spl": spl,
                             "phase_degrees": [0.0] * len(frequencies)},
@@ -1124,7 +1079,7 @@ class StubApplication:
             "channel_order": [channel_id],
             "frequencies": frequencies,
             "metadata": {"geometry_type": "imported", "ingest_id": job["ingest_id"],
-                         "solver_engine": {"engine": reported}},
+                         "solver_engine": {"engine": reported, "package": self.settings.get("imported_package", "beat-engine")}},
         }
         if self.settings.get("results_change_on_restart") and self.restarted:
             result["metadata"]["reopened"] = True
@@ -1361,12 +1316,13 @@ def _stub_payload(tmp_path: Path, **settings: object) -> Path:
         ),
         encoding="utf-8",
     )
+    (app / "pins.json").write_text(json.dumps({"modules": {name: {"sha": sha} for name, sha in PINS.items()}}))
     (app / "launch" / "serve.py").write_text(_STUB_SERVER, encoding="utf-8")
     interpreter = payload / "runtime" / "bin" / "python3.13"
     interpreter.write_text(
         _FAKE_INTERPRETER.format(
             python=sys.executable,
-            sha=PINS["hornlab-beat-bem"],
+            sha=PINS["beat-engine"],
             effective=str(settings.pop("effective_worker_dir", "")),
             cleanup=str(settings.pop("cleanup", "")),
         ),
@@ -1433,7 +1389,8 @@ def test_the_harness_starts_waits_solves_and_stops_against_a_stub(tmp_path: Path
             "--payload-kind", "stub",
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
             "--expected-version", "0.3.1",
             "--expected-tree-sha256", "b" * 64,
         ]
@@ -1490,7 +1447,8 @@ def test_an_application_that_does_not_offer_cpu_itself_fails_the_gate(
             "--payload-kind", "stub",
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
         ]
     )
 
@@ -1505,7 +1463,7 @@ def test_an_application_that_does_not_offer_cpu_itself_fails_the_gate(
     assert not (output / "cpu-provision-diagnosis.log").exists()
     assert not (output / "server-2.log").exists()
     # Everything established before the failure survived it.
-    assert report["pins"]["checked"] == ["hornlab-beat-bem"]
+    assert report["pins"]["checked"] == sorted(PINS)
     assert report["app_manifest"]["manifest"]["version"] == "0.3.1"
     assert report["cpu_preparation"]["settled"] == "not-preparing"
 
@@ -1530,7 +1488,8 @@ def test_the_diagnosis_flag_adds_evidence_and_still_fails(
             "--payload-kind", "stub",
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
             "--diagnose-preparation-failure",
         ]
     )
@@ -1562,7 +1521,8 @@ def test_a_stub_that_answers_with_rubbish_fails_the_gate(tmp_path: Path, _quick_
             "--payload-kind", "stub",
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
         ]
     )
 
@@ -1590,7 +1550,8 @@ def test_the_gate_starts_exactly_one_server(tmp_path: Path, _quick_timeouts: Non
             "--payload-kind", "stub",
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
         ]
     ) == 1
 
@@ -1605,7 +1566,7 @@ def test_a_registry_override_that_did_not_take_effect_signals_nothing(
 ) -> None:
     """The failure mode the wrong variable name produced, caught rather than hidden.
 
-    `worker_registry.py` reads `HORNLAB_BEAT_WORKER_DIR` and nothing else, so an
+    `worker_registry.py` reads `WG2_BEAT_WORKER_DIR` and nothing else, so an
     override under any other name is ignored in silence: the workers land in the
     user's own registry and the gate happily reports an isolated directory that
     nothing ever wrote to. Cleanup would then be reading -- and signalling --
@@ -1622,7 +1583,8 @@ def test_a_registry_override_that_did_not_take_effect_signals_nothing(
             "--payload-kind", "stub",
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
         ]
     )
 
@@ -1660,7 +1622,8 @@ def test_a_failure_still_cleans_up_and_keeps_what_it_had_established(
             "--payload-kind", "stub",
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
         ]
     ) == 1
 
@@ -1668,7 +1631,7 @@ def test_a_failure_still_cleans_up_and_keeps_what_it_had_established(
     assert report["qualified"] is False
     assert "non-finite" in report["error"]
     assert report["worker_cleanup"]["contained"] is True
-    assert report["pins"]["checked"] == ["hornlab-beat-bem"]
+    assert report["pins"]["checked"] == sorted(PINS)
     assert report["cpu_offered"]["available"] is True
     assert report["workspace"]["workspace_path"].startswith(str(tmp_path / "work"))
 
@@ -1688,7 +1651,8 @@ def test_the_workspace_is_moved_into_the_run_before_anything_solves(
             "--payload-kind", "stub",
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
         ]
     ) == 0
 
@@ -1714,7 +1678,7 @@ def test_workspace_selection_precedes_solving_on_every_platform(
     from server.platform.paths import default_runs_dir
 
     monkeypatch.setattr(gate.platform, "system", lambda: system)
-    monkeypatch.setattr(gate, "check_pins", lambda *_args: {"stubbed": True})
+    monkeypatch.setattr(gate, "check_pins", lambda *_args: {"found": {name: {"commit": sha} for name, sha in PINS.items()}})
     monkeypatch.setattr(gate, "stop_our_workers", lambda *_args: {"stubbed": True})
     requests = []
     original_post = StubApplication.post
@@ -1741,7 +1705,8 @@ def test_workspace_selection_precedes_solving_on_every_platform(
     assert gate.main([
         "--payload", str(payload), "--payload-kind", "stub",
         "--work", str(tmp_path / "work"), "--output", str(output),
-        "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+        "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
     ]) == 0
 
     report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
@@ -1789,7 +1754,8 @@ def test_a_solve_that_worked_does_not_excuse_a_cleanup_that_did_not(
             "--payload-kind", "stub",
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
         ]
     )
 
@@ -1827,7 +1793,8 @@ def test_an_unexpected_cleanup_exception_also_fails_the_run(
             "--payload-kind", "stub",
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
         ]
     )
 
@@ -1862,7 +1829,8 @@ def test_an_earlier_failure_is_not_replaced_by_the_cleanup_one(
             "--payload-kind", "stub",
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
         ]
     ) == 1
 
@@ -1876,7 +1844,7 @@ def test_an_earlier_failure_is_not_replaced_by_the_cleanup_one(
 def test_the_julia_depot_is_inside_the_run(tmp_path: Path) -> None:
     """The isolation claim has to include Julia, because nothing else sets it.
 
-    `HORNLAB_BEAT_RUNTIME_DIR` isolates the provisioning *record*. The pinned
+    `WG2_BEAT_RUNTIME_DIR` isolates the provisioning *record*. The pinned
     package launches Julia with `{**os.environ, ...}` and never sets
     `JULIA_DEPOT_PATH`, so without this the application's own preparation reads
     and writes the caller's `~/.julia` while the report calls every cache
@@ -2069,9 +2037,12 @@ def _imported_result(engine: str = "beat-cpu", **overrides: object) -> dict[str,
         "channel_order": ["drive-hf"],
         "frequencies": [500.0, 1000.0],
         "metadata": {"geometry_type": "imported", "ingest_id": "wgi_x",
-                     "solver_engine": {"engine": engine}},
+                     "solver_engine": {"engine": engine, "package": "beat-engine"}},
     }
     result.update(overrides)
+    for channel in result.get("channels", {}).values():
+        if isinstance(channel, dict):
+            channel.setdefault("metadata", {}).setdefault("engine", "beat-engine")
     return result
 
 
@@ -2207,7 +2178,8 @@ def _run_imported(
             "--payload-kind", "stub",
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
             *extra,
         ]
     )
@@ -2366,6 +2338,8 @@ def _in_process(monkeypatch: pytest.MonkeyPatch, _quick_timeouts: None) -> None:
     # Installed admission launches an OS entry; the subprocess harness above
     # covers it. These phase tests deliberately refuse every process launch.
     monkeypatch.setattr(gate, "check_ensure_backend", lambda *args, **kwargs: {"same_owner": True})
+    # Runtime inspection is covered by the subprocess stub and proof-validation tests.
+    monkeypatch.setattr(gate, "check_official_runtime", lambda interpreter, app, env, out, revision: {"stubbed": True, "beat_engine_revision": revision})
 
 
 def _imported_phase(
@@ -2452,7 +2426,7 @@ def test_the_written_report_keeps_what_the_imported_phase_established_before_it_
     stubbed so the whole entry point runs in this process.
     """
 
-    monkeypatch.setattr(gate, "check_pins", lambda *_args: {"stubbed": True})
+    monkeypatch.setattr(gate, "check_pins", lambda *_args: {"found": {name: {"commit": sha} for name, sha in PINS.items()}})
     monkeypatch.setattr(gate, "stop_our_workers", lambda *_args: {"stubbed": True})
 
     code, report = _run_imported(
@@ -2666,7 +2640,7 @@ def test_a_failure_naming_such_a_path_survives_a_legacy_console(
             "--payload", str(tmp_path / f"missing {omega}"),
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", "hornlab-beat-bem=deadbeef",
+            "--expected-pin", "beat-engine=deadbeef",
         ]
     )
     console.flush()
@@ -2957,7 +2931,8 @@ def test_a_slow_health_answer_inside_the_wait_budget_is_not_fatal(
             "--payload-kind", "stub",
             "--work", str(tmp_path / "work"),
             "--output", str(output),
-            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--pins-json", str(payload / "app/pins.json"),
+            "--expected-pin", f"beat-engine={PINS['beat-engine']}",
             "--expected-version", "0.3.1",
             "--expected-tree-sha256", "b" * 64,
         ]
@@ -3024,7 +2999,7 @@ def test_ib_installed_phase(
     elif damage == "drift":
         result["provenance"]["dependency_drift"] = ["hornlab-bempp-bem"]
     elif damage == "pins":
-        result["provenance"]["dependency_shas"]["hornlab-beat-bem"] = "0" * 40
+        result["provenance"]["dependency_shas"]["beat-engine"] = "0" * 40
     elif damage == "level":
         result["spl_on_axis"]["spl"][0] = -120.0
     elif damage == "rear":
@@ -3141,8 +3116,9 @@ def test_ib_opt_in_runs_on_the_cpu_server_and_keeps_its_report(
             str(tmp_path / "work"),
             "--output",
             str(output),
+            "--pins-json", str(payload / "app/pins.json"),
             "--expected-pin",
-            f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            f"beat-engine={PINS['beat-engine']}",
             "--ib-engine",
             "bempp",
             "--ib-expect-backend",
@@ -3158,8 +3134,8 @@ def test_ib_opt_in_runs_on_the_cpu_server_and_keeps_its_report(
     assert state["starts"] == 1
 
 
-@pytest.mark.parametrize("selector,official", [("", True), (" official ", True), ("hbb", False), ("legacy", False), ("Official", True)])
-def test_shared_selector_qualifier_report_paths(tmp_path, monkeypatch, selector, official):
+@pytest.mark.parametrize("selector", ["", " official ", "hbb", "legacy", "Official"])
+def test_shared_selector_qualifier_report_paths(tmp_path, monkeypatch, selector):
     monkeypatch.setenv("WG2_BEAT_PROVIDER", selector)
     monkeypatch.setattr(gate, "resolve_payload", lambda payload: (tmp_path, tmp_path, Path(sys.executable)))
     monkeypatch.setattr(gate, "pins_from_file", lambda path: {})
@@ -3175,7 +3151,7 @@ def test_shared_selector_qualifier_report_paths(tmp_path, monkeypatch, selector,
     with pytest.raises(gate.QualificationError, match="isolated report"):
         gate.qualify(args, report)
     environment = gate.isolated_environment(tmp_path, tmp_path / "work")
-    prefix = "WG2" if official else "HORNLAB"
+    prefix = "WG2"
     assert report["isolated"]["beat_runtime_dir"] == environment[f"{prefix}_BEAT_RUNTIME_DIR"]
     assert report["isolated"]["worker_registry"] == environment[f"{prefix}_BEAT_WORKER_DIR"]
 
@@ -3194,7 +3170,7 @@ def _official_result():
 def test_official_parametric_contract_refuses_fallback_and_unpinned_revisions(damage):
     result = _official_result()
     if damage == "hbb":
-        result["metadata"]["engine"] = "hornlab-beat-bem"
+        result["metadata"]["engine"] = "retired-engine"
     elif damage == "gpu":
         result["metadata"]["beat_backend"] = "metal"
     elif damage == "missing-revision":
@@ -3216,11 +3192,11 @@ def test_official_imported_contract_checks_package_and_each_channel(damage):
     result["metadata"]["solver_engine"]["package"] = "beat-engine"
     result["channels"]["drive-hf"]["metadata"] = {"engine": "beat-engine"}
     if damage == "hbb-package":
-        result["metadata"]["solver_engine"]["package"] = "hornlab-beat-bem"
+        result["metadata"]["solver_engine"]["package"] = "retired-engine"
     elif damage == "missing-package":
         result["metadata"]["solver_engine"].pop("package")
     elif damage == "hbb-channel":
-        result["channels"]["drive-hf"]["metadata"]["engine"] = "hornlab-beat-bem"
+        result["channels"]["drive-hf"]["metadata"]["engine"] = "retired-engine"
     elif damage == "missing-channel-engine":
         result["channels"]["drive-hf"].pop("metadata")
     if damage:
@@ -3240,7 +3216,7 @@ def test_official_runtime_inspection_records_only_matching_installed_proof(tmp_p
                          "probe_contract": "compiled-proof", "engine_fingerprint": "a" * 64,
                          "runtime_fingerprint": "b" * 64}}
     if damage == "hbb":
-        answer["record"]["provider"] = "hornlab-beat-bem"
+        answer["record"]["provider"] = "retired-engine"
     elif damage == "not-ready":
         answer["ready"] = False
     elif damage == "missing-proof":
@@ -3310,15 +3286,17 @@ def test_official_qualification_entrypoint_keeps_identity_and_rejects_hbb(tmp_pa
     payload = _payload(tmp_path)
     pins_file = tmp_path / "pins.json"
     pins_file.write_text(json.dumps({"modules": {"beat-engine": {"sha": OFFICIAL_REVISION}}}
-                                    if damage != "missing-pin" else {"modules": {"hornlab-beat-bem": {"sha": PINS["hornlab-beat-bem"]}}}))
+                                    if damage != "missing-pin" else {"modules": {"hornlab-bempp-bem": {"sha": PINS["hornlab-bempp-bem"]}}}))
     _pin_reader(monkeypatch, {"beat-engine": {"commit": "f" * 40 if damage == "wrong-installed-pin" else OFFICIAL_REVISION}})
-    result = _result() if damage == "hbb" else _official_result()
+    result = _official_result()
+    if damage == "hbb":
+        result["metadata"]["engine"] = "retired-engine"
 
     class Server:
         base = "stub"
         def __init__(self, interpreter, app, environment, *args):
             assert app == payload / "app"
-            assert environment["WG2_BEAT_PROVIDER"] == "official"
+            assert "WG2_BEAT_RUNTIME_DIR" in environment
         def __enter__(self):
             return self
         def __exit__(self, *args):
@@ -3333,6 +3311,8 @@ def test_official_qualification_entrypoint_keeps_identity_and_rejects_hbb(tmp_pa
 
     monkeypatch.setattr(gate, "Server", Server)
     monkeypatch.setattr(gate, "check_ensure_backend", lambda *args, **kwargs: {"same_owner": True})
+    # Runtime inspection is covered by the subprocess stub and proof-validation tests.
+    monkeypatch.setattr(gate, "check_official_runtime", lambda interpreter, app, env, out, revision: {"stubbed": True, "beat_engine_revision": revision})
     monkeypatch.setattr(gate, "await_cpu_row", lambda *args: {"settled": "available"})
     monkeypatch.setattr(gate, "workspace_isolation", lambda *args: {})
     inspected = []
@@ -3368,7 +3348,7 @@ def test_official_qualification_entrypoint_keeps_identity_and_rejects_hbb(tmp_pa
 
 
 def test_official_imported_phase_cannot_qualify_a_stub_on_hbb(tmp_path, _in_process):
-    payload = _stub_payload(tmp_path)
+    payload = _stub_payload(tmp_path, imported_package="retired-engine")
     output = tmp_path / "out"
     output.mkdir()
     section = {}
@@ -3383,44 +3363,23 @@ def test_official_imported_phase_cannot_qualify_a_stub_on_hbb(tmp_path, _in_proc
     assert section["engines"][0].get("decision") != "solved"
 
 
-@pytest.fixture(autouse=True)
-def _hbb_rollback_simulations(monkeypatch):
-    """Historic installed stubs report HBB; selector/official tests override it."""
-    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")
-
-
-@pytest.mark.parametrize("selector", [None, "official", "hbb", "legacy"])
-def test_provider_default_and_cli_override(tmp_path, monkeypatch, selector):
-    monkeypatch.delenv("WG2_BEAT_PROVIDER", raising=False)
-    argv = ["--payload", str(tmp_path), "--work", str(tmp_path / "work"),
-            "--output", str(tmp_path / "out")]
-    if selector is not None:
-        argv += ["--beat-provider", selector]
-    args = gate.build_parser().parse_args(argv)
-    environment = gate.isolated_environment(tmp_path, args.work, beat_provider=args.beat_provider)
-    assert gate.provider.official_selected(environment) == (selector in {None, "official"})
-    assert "WG2_BEAT_PROVIDER" not in os.environ
-
-
 @pytest.mark.parametrize("selector", [None, " OffICIAL ", " HBB ", " Legacy "])
 @pytest.mark.parametrize("override", [False, True])
 def test_preparation_diagnosis_follows_selected_provider(tmp_path, monkeypatch, selector, override):
     from server.solver.beat_runtime import paths
 
-    environment = {"HORNLAB_BEAT_RUNTIME_DIR": str(tmp_path / "hbb"),
-                   "WG2_BEAT_RUNTIME_DIR": str(tmp_path / "official")}
+    environment = {"WG2_BEAT_RUNTIME_DIR": str(tmp_path / "official")}
     if selector is not None:
         environment["WG2_BEAT_PROVIDER"] = selector
-    official = selector is None or selector.strip().casefold() == "official"
-    root = paths.runtime_dir(environ=environment) if official else Path(environment["HORNLAB_BEAT_RUNTIME_DIR"])
-    other = Path(environment["HORNLAB_BEAT_RUNTIME_DIR"]) if official else paths.runtime_dir(environ=environment)
+    root = paths.runtime_dir(environ=environment)
+    other = tmp_path / "foreign-runtime"
     root.mkdir(parents=True)
     other.mkdir(parents=True)
     julia = root / "julia" / "bin" / "julia"
     (root / "state-cpu.json").write_text(json.dumps({"status": "ready", "julia_executable": str(julia)}))
     (other / "state-cpu.json").write_text(json.dumps({"status": "failed", "julia_executable": "foreign"}))
-    selected_override = "WG2_BEAT_JULIA" if official else "HORNLAB_BEAT_JULIA"
-    other_override = "HORNLAB_BEAT_JULIA" if official else "WG2_BEAT_JULIA"
+    selected_override = "WG2_BEAT_JULIA"
+    other_override = "HORNLAB_BEAT_JULIA"
     environment[selected_override if override else other_override] = "explicit-julia"
     calls = []
     def run(command, **kwargs):
@@ -3430,7 +3389,7 @@ def test_preparation_diagnosis_follows_selected_provider(tmp_path, monkeypatch, 
     monkeypatch.setattr(gate.subprocess, "run", run)
     answer = gate.diagnose_preparation(Path("installed-python"), tmp_path, environment, tmp_path)
     assert calls == [["installed-python", "-m",
-                      "server.solver.beat_runtime.cli" if official else "hornlab_beat_bem.provision",
+                      "server.solver.beat_runtime.cli",
                       "--backend", "cpu"]]
     assert answer["command_exit_code"] == 7 and answer["status"] == "ready"
     assert answer["julia_executable"] == str(julia)

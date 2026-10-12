@@ -68,8 +68,7 @@ def recorded_julia(
         return None
     path = Path(record["executable"]).expanduser()
     try:
-        if (not paths.hbb_executable(path, environ=environ)
-                and executable_file(path) and record["identity"] == executable_identity(path)):
+        if (executable_file(path) and record["identity"] == executable_identity(path)):
             return str(path)
     except OSError:
         pass
@@ -88,7 +87,7 @@ def discover_julia(
             path = Path(candidate.strip()).expanduser().absolute()
             if not executable_file(path):
                 raise JuliaDiscoveryError(f"Invalid {source} Julia executable: {path}")
-            return None if paths.hbb_executable(path, environ=env) else str(path)
+            return str(path)
     directory = runtime_dir(environ=env) if root is None else root
     record = read_julia_record(directory)
     # Installer-only explicit choices remain one-off. Once provisioning has
@@ -105,16 +104,4 @@ def discover_julia(
     if recorded is not None:
         return recorded
     candidate = shutil.which("julia", path=env.get("PATH", os.defpath))
-    return candidate if candidate and not paths.hbb_executable(Path(candidate), environ=env) else None
-
-
-def legacy_executable_hint(legacy_root: Path) -> str | None:
-    """Read an opt-in HBB executable hint; legacy status is never WG readiness."""
-    for name in ("state-cpu.json", "state-metal.json", "state-cuda.json", "state-rocm.json", "state.json"):
-        record = _read_json(legacy_root / name)
-        candidate = record.get("julia_executable") if record else None
-        if isinstance(candidate, str) and candidate.strip():
-            path = Path(candidate).expanduser()
-            if executable_file(path):
-                return str(path)
-    return None
+    return candidate

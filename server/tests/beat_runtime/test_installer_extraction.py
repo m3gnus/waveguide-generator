@@ -17,7 +17,6 @@ from server.solver.beat_runtime import discovery, installer, paths
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv(paths.RUNTIME_DIR_ENV, str(tmp_path / "wg"))
-    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(tmp_path / "hbb"))
     monkeypatch.delenv(discovery.JULIA_ENV_VAR, raising=False)
     monkeypatch.setattr(discovery.shutil, "which", lambda *args, **kwargs: None)
     def forbidden(*args, **kwargs):
@@ -200,7 +199,7 @@ def test_external_and_legacy_trees_are_preserved_on_install(tmp_path, monkeypatc
     root = paths.runtime_dir()
     source = archive(tmp_path)
     fake_download(monkeypatch, source)
-    external = executable(tmp_path / "hbb/julia-1.12.6/bin/julia")
+    external = executable(tmp_path / "external/julia-1.12.6/bin/julia")
     if origin == "external":
         discovery.write_julia_record(root, external, origin=origin, version="1.12.6")
     else:
@@ -210,7 +209,8 @@ def test_external_and_legacy_trees_are_preserved_on_install(tmp_path, monkeypatc
         (root / "julia.json").write_text(json.dumps({
             "origin": "legacy", "julia_executable": str(external),
         }))
-    assert installer.ensure_julia(fetcher=lambda url, partial: partial.write_bytes(source.read_bytes())) != str(external)
+    selected = installer.ensure_julia(fetcher=lambda url, partial: partial.write_bytes(source.read_bytes()))
+    assert (selected == str(external)) is (origin == "external")
     assert external.read_bytes() == b"old Julia"
     assert list(external.parent.iterdir()) == [external]
 
@@ -311,15 +311,3 @@ def test_relative_selected_julia_record_is_absolute_and_keeps_launcher(tmp_path,
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
     assert discovery.recorded_julia(root) == str(launcher)
-
-
-@pytest.mark.parametrize("selection", ["explicit", "configured"])
-def test_ignored_hbb_selected_julia_reports_status(tmp_path, monkeypatch, selection):
-    source = archive(tmp_path)
-    fake_download(monkeypatch, source)
-    legacy = executable(tmp_path / "hbb/bin/julia")
-    lines = []
-    binary = installer.ensure_julia(**{selection: str(legacy)}, status_cb=lines.append,
-                                    fetcher=lambda url, partial: partial.write_bytes(source.read_bytes()))
-    assert binary != str(legacy) and legacy.read_bytes() == b"old Julia"
-    assert any(f"Ignoring {selection} Julia in an HBB root" in line for line in lines)

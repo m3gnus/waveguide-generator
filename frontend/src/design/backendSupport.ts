@@ -247,7 +247,6 @@ export function engineDisplayName(name: string): string {
     case 'metal': return 'Metal';
     case 'hornlab-bempp-bem':
     case 'bempp': return 'BEMPP';
-    case 'hornlab-beat-bem':
     case 'beat-engine':
     case 'beat': return 'BEAT';
     case 'beat-metal': return 'BEAT Metal';

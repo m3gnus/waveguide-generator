@@ -22,7 +22,7 @@ This is deliberate, and it is the whole reason this module exists.  The token
 
 * WG's own symmetry vocabulary: legacy bi-symmetry (``Mesh.Quadrants``),
   rejected by ``reject_unsupported_native_symmetry`` as unimplemented.
-* hornlab-beat-bem: mirrors across x *and* y -- two planes.
+* beat-engine: mirrors across x *and* y -- two planes.
 * hornlab-bempp-bem's ``SolveConfig.ground_plane``: the single z=0 plane -- the
   plane *spanned* by x and y.
 

@@ -49,15 +49,7 @@ def validate_native_backend(native: Any, backend: str, *, official: bool,
         execution = diagnostic.get("engine_provenance", {}).get("execution", {})
         if execution and execution.get("backend") != backend:
             raise ValueError("Native device backend differs from requested backend")
-        if not official and backend == "metal":
-            mode = diagnostic.get("regular_assembly_mode")
-            # Only device assembly counts: host-staged CPU assembly uploaded to the
-            # GPU and the metal_default placeholder are not Metal evidence, and
-            # HBB emits metal_pipeline=false on CPU too.
-            if not (isinstance(mode, str) and (mode == "metal_fused_burton_miller"
-                                                or mode.startswith("metal_native_"))):
-                raise ValueError("HBB Metal execution evidence is missing or indicates CPU fallback")
-        if official and backend == "metal":
+        if (backend == "metal"):
             device = execution.get("device", diagnostic.get("device"))
             if (not isinstance(device, str) or not device.strip()
                     or device.lower() in {"cpu", "host"} or execution.get("device_query_error")
@@ -72,7 +64,7 @@ def observed_settings(declared: dict, native: Any, *, official: bool,
     values["symmetry_native"] = native_symmetry
     evidence = {key: {"status": "declared", "value": value} for key, value in values.items()}
     rows = getattr(native, "solver_log", [])
-    validate_native_backend(native, declared["backend"], official=official)
+    validate_native_backend(native, declared["backend"], official=True)
     diagnostics = [row.get("native_diagnostics") or {} for row in rows]
     if len(rows) != len(native.frequencies_hz) or any(not d for d in diagnostics):
         raise ValueError("Agreement requires per-frequency native diagnostics")
@@ -97,29 +89,13 @@ def observed_settings(declared: dict, native: Any, *, official: bool,
             observe(name, value, "solver_log.native_diagnostics")
     for name in ("observation_angles_deg", "observation_planes"):
         value = getattr(native, name)
-        if official:
-            # The official adapter copies these from WG's request layout: the
-            # value takes part in the comparison but is a declared echo.
-            values[name] = value
-            evidence[name] = {"status": "declared", "value": value, "source": "WG request layout echo"}
-        else:
-            observe(name, value, f"native.{name}")
-    if official:
-        samples = [d.get("engine_provenance", {}).get("runtime", {}).get("julia_threads") for d in diagnostics]
-        if all(v is not None for v in samples):
-            if any(v != samples[0] for v in samples):
-                raise ValueError("Native threads change during the sweep")
-            observe("threads", samples[0], "engine_provenance.runtime.julia_threads")
-    mesh = getattr(native, "mesh_info", None)
-    if mesh is not None:
-        facts = asdict(mesh)
-        for name, field in (("mesh.node_count", "n_vertices"), ("mesh.triangle_count", "n_triangles"),
-                            ("mesh.tag_areas_m2", "physical_tag_areas_m2")):
-            if field in facts:
-                observe(name, facts[field], "HBB SolveResult.mesh_info")
-        # MeshInfo exposes counts/areas, not node/connectivity arrays. Hash only these facts.
-        evidence["hbb_mesh_info_sha256"] = {"status": "observed", "value": record_sha256(facts),
-                                            "source": "HBB parsed MeshInfo; not a connectivity hash"}
+        values[name] = value
+        evidence[name] = {"status": "declared", "value": value, "source": "WG request layout echo"}
+    samples = [d.get("engine_provenance", {}).get("runtime", {}).get("julia_threads") for d in diagnostics]
+    if all(v is not None for v in samples):
+        if any(v != samples[0] for v in samples):
+            raise ValueError("Native threads change during the sweep")
+        observe("threads", samples[0], "engine_provenance.runtime.julia_threads")
     points = getattr(native, "observation_points", None)
     if points is not None:
         for name, value in flatten({"observation_points": points}).items():

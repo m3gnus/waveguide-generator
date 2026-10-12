@@ -12,7 +12,6 @@ import pytest
 from server.engines.registry import EngineInfo, EngineRegistry, _official_runtime_statuses, detect_engines
 from server.solver import beat, beat_cpu_runtime as facade
 from server.solver.beat_runtime import cli, hardware, identity, locks, paths, provider, readiness, state
-from server.tests.test_beat_cpu_runtime import _install_stub_package, _ready_state
 from server.tests.beat_runtime import test_readiness
 
 _REAL_POPEN = subprocess.Popen
@@ -35,63 +34,8 @@ def selected(monkeypatch, tmp_path):
         assert not thread.is_alive()
 
 
-def test_rollback_import_isolation_in_fresh_interpreter(tmp_path):
-    env = dict(os.environ, WG2_BEAT_RUNTIME_DIR=str(tmp_path / "data"))
-    env[provider.PROVIDER_ENV] = "hbb"
-    code = """
-import sys
-from scripts import bootstrap
-from server.solver import beat_cpu_runtime, beat
-from server.engines.registry import EngineRegistry
-registry = EngineRegistry()
-beat.beat_status.cache_clear()
-beat_cpu_runtime.remove_readiness_listener(registry._cpu_listener)
-loaded = {name for name in sys.modules if name.startswith('server.solver.beat_runtime.')}
-assert loaded == {'server.solver.beat_runtime.provider'}, loaded
-"""
-    subprocess.run([sys.executable, "-c", code], env=env, check=True, timeout=20)
-    assert not (tmp_path / "data").exists()
-
-
-def test_rollback_official_notifications_cannot_reach_registry(monkeypatch):
-    monkeypatch.setenv(provider.PROVIDER_ENV, "hbb")
-    registry = EngineRegistry()
-    before = registry._refresh_revision
-    readiness.probe_cache_clear()
-    assert registry._refresh_revision == before
-    facade.remove_readiness_listener(registry._cpu_listener)
-
-
-@pytest.mark.parametrize("hbb_ready,official_ready", [(False, True), (True, False)])
-def test_production_registry_availability_follows_solve_adapter(selected, monkeypatch, tmp_path, hbb_ready, official_ready):
-    julia = tmp_path / "julia"
-    julia.write_text("fake executable")
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "Project.toml").write_text("fixture project")
-    package = _install_stub_package(monkeypatch, project=project, state=_ready_state(project, julia))
-    package.beat_backend_statuses = lambda: {name: {"available": False} for name in beat.BEAT_BACKENDS}
-    monkeypatch.setattr(beat, "_load_api", lambda: package if hbb_ready else None)
-    monkeypatch.setattr(readiness, "backend_readiness", lambda backend, *args, **kwargs:
-                        readiness.BackendReadiness(official_ready, "ready" if official_ready else "stale", "official proof"))
-
-    async def scenario():
-        registry = EngineRegistry(detector=lambda: detect_engines(names=("beat-cpu", "beat-metal")), cpu_refresh=True)
-        try:
-            entries = {entry.name: entry for entry in await registry.capabilities()}
-            await registry._refresh_cpu_backend()
-            assert entries["beat-cpu"].available == official_ready
-            assert entries["beat-metal"].available == official_ready
-            assert registry.official_runtime_statuses["cpu"]["available"] == official_ready
-        finally:
-            await registry.shutdown_prewarm()
-
-    asyncio.run(scenario())
-
-
 def test_stdout_burst_coalesces_notifications_and_readiness_computations(selected, monkeypatch):
     calls, notices = [], []
-    monkeypatch.setattr(beat, "_load_api", lambda: None)
     monkeypatch.setattr(readiness, "backend_readiness", lambda backend, *args, **kwargs:
                         calls.append(backend) or readiness.BackendReadiness(True, "ready", "proof"))
     listener = lambda: (notices.append(True), _official_runtime_statuses())
@@ -152,7 +96,6 @@ def test_cross_process_state_stamp_refreshes_live_registry(selected, monkeypatch
         return readiness.BackendReadiness(ready, "ready" if ready else "stale", "external record")
 
     monkeypatch.setattr(readiness, "backend_readiness", verdict)
-    monkeypatch.setattr(beat, "_load_api", lambda: None)
 
     async def settled(registry):
         # capabilities() schedules a background refresh when the state stamp
@@ -276,19 +219,3 @@ with provisioning_lock(root, backend='cpu'):
             raise
     assert not locks.provisioning_active(root)
     assert readiness.backend_readiness("cpu", root, **query).state == "interrupted"
-
-
-def test_selector_casefolds_values_warns_once_and_uses_process_environment(selected, monkeypatch, caplog):
-    provider._warned_values.clear()
-    for value in ("OFFICIAL", "Official", "invalid"):
-        assert provider.official_selected({provider.PROVIDER_ENV: value})
-        assert provider.official_selected({provider.PROVIDER_ENV: value})
-    assert len(caplog.records) == 1
-    assert "default official provider" in caplog.text
-    for value in ("hbb", "legacy"):
-        assert not provider.official_selected({provider.PROVIDER_ENV: value})
-    assert len(caplog.records) == 1
-    assert provider.official_selected({provider.PROVIDER_ENV: " official "})
-    monkeypatch.setattr(facade, "_start_official_provisioning", lambda env: "official")
-    # Launch options cannot silently select a different provider from status/listeners.
-    assert facade.start_cpu_provisioning(environ={provider.PROVIDER_ENV: "hbb"}, system="Linux") == "official"

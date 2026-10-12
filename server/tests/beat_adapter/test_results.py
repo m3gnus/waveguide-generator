@@ -1,4 +1,4 @@
-"""Phase, area/copy normalization, SPL and trace semantics against HBB."""
+"""Phase, area/copy normalization, SPL and trace semantics against reference."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from server.solver.beat_adapter.results import (
 from .conftest import EventStream, wire
 
 
-CONTROLS = json.loads((Path(__file__).parent / "fixtures/hbb_controls.json").read_text())
+CONTROLS = json.loads((Path(__file__).parent / "fixtures/exterior_controls.json").read_text())
 
 
 def parse(raw, layout, **kwargs):
@@ -27,7 +27,7 @@ def parse(raw, layout, **kwargs):
 
 
 @pytest.mark.parametrize("symmetry,copies", [("off", 1), ("x", 2), ("xy", 4), ("ground", 1)])
-def test_force_impedance_round_trip_and_symmetry_matches_hbb(layout, raw_result, symmetry, copies):
+def test_force_impedance_round_trip_and_symmetry_matches_reference(layout, raw_result, symmetry, copies):
     mean_pressure = 3.5 - 1.25j
     reduced_area = 0.004
     force = mean_pressure * reduced_area * copies
@@ -39,12 +39,12 @@ def test_force_impedance_round_trip_and_symmetry_matches_hbb(layout, raw_result,
     assert recovered_mean == pytest.approx(mean_pressure)
     assert recovered_mean * reduced_area * copies == pytest.approx(force)
     assert row.radiation_impedance == pytest.approx(force)
-    # Independently invert HBB's legacy display packing; official has neither
+    # Independently invert reference's legacy display packing; official has neither
     # the factor ten nor the negated/halved imaginary wire component.
     legacy_force = CONTROLS["impedance_force_factor"] * force
     pair = [legacy_force.real / 2, -legacy_force.imag / 2]
-    hbb_mean = (2 * pair[0] - 2j * pair[1]) / (CONTROLS["impedance_force_factor"] * reduced_area * copies)
-    assert row.impedance == pytest.approx(hbb_mean / (-1j * omega))
+    reference_mean = (2 * pair[0] - 2j * pair[1]) / (CONTROLS["impedance_force_factor"] * reduced_area * copies)
+    assert row.impedance == pytest.approx(reference_mean / (-1j * omega))
     rho_c = 1.2041 * 343
     assert np.conj(-1j * omega * row.impedance) / rho_c == pytest.approx(np.conj(mean_pressure) / rho_c)
 
@@ -82,7 +82,7 @@ def test_optional_sphere_and_surface_traces_remain_none(raw_result):
     assert row.surface_pressure_complex is None and row.surface_neumann_complex is None
 
 
-def test_absolute_spl_and_per_cut_directivity_match_hbb_with_null_reference(layout, raw_result, run_sweep):
+def test_absolute_spl_and_per_cut_directivity_match_reference_with_null_reference(layout, raw_result, run_sweep):
     arrays = [np.array([[0j, 1 + 0j, 0.5 + 0j], [1e-15 + 0j, 0j, 2 + 0j], [0j, 0j, 0j]]),
               np.array([[2 + 3j, 0.25 + 0j, 1 + 0j], [0.5 + 0j, 4 + 0j, 0j], [1 + 0j, 2 + 0j, 4 + 0j]])]
     events = []
@@ -149,9 +149,3 @@ def test_invalid_source_area_is_refused(area):
 def test_decoder_preserves_c_order_for_multiple_excitation_rows():
     values = np.array([[1 + 2j, 3 - 4j], [5 + 6j, 7 - 8j]])
     np.testing.assert_array_equal(decode_complex_values(wire(values), (2, 2)), values)
-
-
-def test_optional_hbb_private_impedance_factor_crosscheck():
-    sweep = pytest.importorskip("hornlab_beat_bem.sweep",
-                               reason="Optional HBB impedance cross-check needs hornlab_beat_bem")
-    assert sweep._BEAT_IMPEDANCE_FORCE_FACTOR == CONTROLS["impedance_force_factor"]

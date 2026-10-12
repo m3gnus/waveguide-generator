@@ -1,40 +1,12 @@
-"""Imported CAD geometry on hornlab-beat-bem.
+"""Imported CAD geometry through official BEAT compiled systems.
 
-Metal solves an ingestion record directly
-(``server/solver/metal.py``, ``solve_imported_metal_from_msh_text``). The BEAT
-package accepts less, and this module closes the gap in the adapter, without a
-package change:
-
-* **One velocity tag.** hornlab-beat-bem drives exactly one physical tag and
-  treats every other tag as rigid. Each drive channel is therefore solved on
-  its own, with its member source tags rewritten to the one driven tag and
-  every other tag to the rigid tag. Metal drives every member source of a
-  channel at unit weight too, so the merged tag is the same drive, and each
-  channel keeps its own complex basis for recombination.
-* **A +z frame.** BEAT measures its polar cuts in the mesh's own axes, around
-  the mesh origin; its only frame freedom is a translation. The mesh is rotated
-  rigidly so the record's anchor throat frame (u, v, axis) becomes
-  (+x, +y, +z). Polar cuts and the DI sphere are frame-relative and the surface
-  traces are per vertex, so every result maps back unchanged; the run records
-  the record's own frame, not BEAT's.
-* **Axial drive.** Each axial source moves along its own resolved axis
-  (``server.solver.imported.prepare_axial_drive``: the source's outward net
-  area vector, snapped to a solver-frame axis within half a degree). BEAT drives
-  ``n . z`` at unit real amplitude and nothing else, so it takes an axial
-  source only when that axis is exactly +z or -z of its frame; any other axis
-  is refused by name (:func:`beat_axial_signs`) and AUTO selection passes BEAT
-  over. +z sources are one group and -z sources another, and the channel is
-  the first minus the second, by linearity.
-* **Reduced domains.** BEAT mirrors across its own x = 0, or x = 0 and y = 0,
-  with the mesh on the positive side. An x0 half and an x0+y0 quarter execute
-  when the rotation leaves those planes, and that side, where they are. A
-  y-only half is not representable; submission refuses it by capability
-  (``EngineInfo.symmetry_domains``) and :func:`imported_beat_preflight` names
-  every other case this module cannot solve before a job exists.
-
-Formulation: BEAT solves Burton-Miller where Metal solves ``complex_k``. Small
-same-mesh differences near interior resonances come from that, not from the
-frame or the tag merge.
+The ingestion mesh and its observation frame are retained directly. Source
+bases and channel ports express normal/axial motion without rewriting tags or
+rotating the mesh. WG maps unit-acceleration pressure, historical pressure
+loading, adaptive sweeps and retained traces back to the result contract.
+Preflight refuses unsupported symmetry, rigid ground and passive cardioid
+campaigns before submission. Explicit exterior-transducer jobs use their own
+voltage-driven v3 contract.
 """
 
 from __future__ import annotations
@@ -63,12 +35,10 @@ from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.platform.temp_session import temporary_directory_root
 
 from .acoustics import solver_sound_speed_m_per_s
-from .beat_runtime.provider import solve_signature_scope
+from .beat_runtime.warm_cache import signature_scope as solve_signature_scope
 from .base import CancelCallback, ResultCallback, StageCallback
-from .beat_threads import beat_julia_threads
 from .beat import (
     BeatUnavailable,
-    _load_api,
     announce_beat_warmup_wait,
     beat_backend_statuses,
     beat_engine_name,
@@ -357,7 +327,7 @@ def beat_axial_signs(
 ) -> tuple[dict[int, float], dict[str, dict[str, Any]]]:
     """Each axial source tag's sign along BEAT's z, and the axial identity.
 
-    hornlab-beat-bem drives an axial source along global +z at unit real
+    beat-engine drives an axial source along global +z at unit real
     amplitude and nothing else, so it can take an axial source only when the
     source's resolved axis (:func:`server.solver.imported.prepare_axial_drive`,
     in solver coordinates, snapped) is exactly +-z of BEAT's frame. +z is
@@ -558,8 +528,7 @@ def _combined_channel_response(
     channel_identity: Mapping[str, Mapping[str, Any]],
     member_channels: Mapping[str, Any],
     frame_basis: Mapping[str, Any],
-    official: bool = False,
-) -> dict[str, Any]:
+    ) -> dict[str, Any]:
     """BEAT's counterpart of Metal's combined channel: the filtered sum."""
 
     spec = geometry.combine
@@ -614,12 +583,12 @@ def _combined_channel_response(
             "selected": beat_engine_name(backend),
             beat_engine_name(backend): dict(status),
         },
-        "engine": "beat-engine" if official else "hornlab-beat-bem",
+        "engine": "beat-engine",
         "phase_time_convention": PHASE_TIME_CONVENTION,
         "combine": combine_payload,
         "mesh_validation": {
             "mode": request.options.mesh_validation_mode,
-            "backend": "beat-engine" if official else "hornlab-beat-bem",
+            "backend": "beat-engine",
         },
         "performance": {"total_time_seconds": time.time() - started},
         "observation_frame_basis": dict(frame_basis),
@@ -639,7 +608,7 @@ def _combined_channel_response(
         context=context,
         start_time=started,
         metadata=metadata,
-        sound_speed_m_per_s=(343.0 if official else solver_sound_speed_m_per_s("hornlab_beat_bem")),
+        sound_speed_m_per_s=(343.0),
     )
     response.pop("impedance", None)
     response["metadata"]["impedance_omitted"] = (
@@ -659,9 +628,8 @@ def solve_imported_beat_from_msh_text(
     stage_callback: StageCallback | None = None,
     cancellation_callback: CancelCallback | None = None,
     result_callback: ResultCallback | None = None,
-    _official: bool | None = None, _worker_manager: Any = None,
+    _worker_manager: Any = None,
     _julia_executable: str | None = None, _precision: str = "float32",
-    _hbb_options: Mapping[str, Any] | None = None,
     _native_result_callback: Any = None,
 ) -> dict[str, Any]:
     """Solve every imported drive channel on BEAT, one merged-tag solve each.
@@ -675,25 +643,18 @@ def solve_imported_beat_from_msh_text(
     and expose unrounded native channel fields; ordinary callers are unchanged.
     """
 
-    from .beat_runtime.provider import official_selected
-
     from .beat_transducer_imported import enabled, solve
 
     if isinstance(request.geometry, ImportedGeometrySource) and enabled(request.geometry.drive_channels):
-        if _official is False:
-            raise BeatUnavailable("Exterior transducers require the official BEAT runtime")
         return solve(msh_text, request, record, backend=backend,
                      stage_callback=stage_callback, cancellation_callback=cancellation_callback,
                      result_callback=result_callback, worker_manager=_worker_manager,
                      julia_executable=_julia_executable)
-    official = official_selected() if _official is None else _official
     profile = None
-    if official:
-        from .beat_runtime.profile import start_profile
+    from .beat_runtime.profile import start_profile
 
-        profile = start_profile(logging.getLogger(__name__).info, "wg")
-    precision = ("double" if _precision == "float64" else "single") if official else (
-        (_hbb_options or {}).get("solve_precision", "single"))
+    profile = start_profile(logging.getLogger(__name__).info, "wg")
+    precision = "double" if _precision == "float64" else "single"
     geometry = request.geometry
     if not isinstance(geometry, ImportedGeometrySource):
         raise ValueError("imported BEAT solve requires imported geometry")
@@ -703,22 +664,15 @@ def solve_imported_beat_from_msh_text(
         )
     if geometry.passive_cardioid_enabled:
         raise BeatUnavailable(PASSIVE_CARDIOID_REFUSAL)
-    if official:
-        from .official_beat import (
-            batch_request, production_statuses, response_config, solve_compiled, sort_official_result,
-            common_artifact_results,
-        )
-        from .beat_adapter.request import build_imported_request
+    from .official_beat import (
+        batch_request, production_statuses, response_config, solve_compiled, sort_official_result,
+        common_artifact_results,
+    )
+    from .beat_adapter.request import build_imported_request
 
-        package = None
-        status = production_statuses(backend=backend).get(backend)
-        if profile is not None:
-            profile.mark("statuses done")
-    else:
-        package = _load_api()
-        if package is None:
-            raise BeatUnavailable("hornlab-beat-bem is not installed.")
-        status = beat_backend_statuses().get(backend)
+    status = production_statuses(backend=backend).get(backend)
+    if profile is not None:
+        profile.mark("statuses done")
     if status is None:
         raise BeatUnavailable(f"Unknown BEAT backend {backend!r}")
     if not status["available"]:
@@ -791,18 +745,6 @@ def solve_imported_beat_from_msh_text(
     )
     channel_identity = channel_source_identity(geometry, record, axial_identity)
     frame_basis = _frame_basis(frame)
-    if not official:
-        observation = observation_config(
-            context, package.ObservationConfig, BeatUnavailable, "hornlab-beat-bem"
-        )
-        beat_frame = package.ObservationFrame(
-            axis=np.asarray([0.0, 0.0, 1.0]),
-            origin=np.asarray(frame.origin, dtype=float),
-            u=np.asarray([1.0, 0.0, 0.0]),
-            v=np.asarray([0.0, 1.0, 0.0]),
-            mouth_center=np.asarray(frame.mouth_center, dtype=float),
-            source_center=np.asarray(frame.source_center, dtype=float),
-        )
     channel_groups = {
         channel.id: _drive_groups(channel_tags[channel.id], channel.motion, axial_signs)
         for channel in geometry.drive_channels
@@ -813,7 +755,7 @@ def solve_imported_beat_from_msh_text(
     acquisition_count = (
         len(native_acquisition_frequencies(context)) if adaptive else frequency_count
     )
-    total_work = max(1, acquisition_count * sum(1 if official else len(groups) for groups in channel_groups.values()))
+    total_work = max(1, acquisition_count * sum(1 for groups in channel_groups.values()))
 
     def stage_status(message: str) -> None:
         if stage_callback and message:
@@ -832,15 +774,14 @@ def solve_imported_beat_from_msh_text(
     live_channel_status: dict[str, list[str]] = {}
     # Adaptive channels retain independent refinement criteria and acquisition axes.
     # Fixed grids share the operator and independent excitation columns.
-    joint = official and not adaptive and channel_count > 1
+    joint = (not adaptive) and (channel_count > 1)
     joint_callbacks = {}
     joint_compiled = None
     for channel_index, channel in enumerate(geometry.drive_channels):
         channel_context = SolverContext.from_imported_request(
             request, quadrants=quadrants, source_motion=channel.motion
         )
-        groups = ([(1.0, channel_tags[channel.id])] if official
-                  else channel_groups[channel.id])
+        groups = ([(1.0, channel_tags[channel.id])])
         # A channel solved as two groups is streamed only while the last one
         # solves, each frame the signed sum of both groups at that frequency.
         earlier: dict[int, dict[str, Any]] = {}
@@ -868,8 +809,6 @@ def solve_imported_beat_from_msh_text(
                 completed = (work_done if adaptive else
                              (index * channel_count + _channel_index + 1 if joint
                               else _offset + index + 1))
-                if cancellation_callback and not official:
-                    cancellation_callback()
                 if stage_callback:
                     stage_callback(
                         "frequency_solve",
@@ -892,8 +831,6 @@ def solve_imported_beat_from_msh_text(
                 _context: SolverContext = channel_context,
                 _holder: dict[str, Any] = holder,
             ) -> bool:
-                if cancellation_callback and not official:
-                    cancellation_callback()
                 if result_callback is None:
                     return True
                 pressure = _sign * np.asarray(
@@ -927,7 +864,7 @@ def solve_imported_beat_from_msh_text(
                     config=_holder["config"],
                     context=_context,
                     backend="beat",
-                    sound_speed_m_per_s=(343.0 if official else solver_sound_speed_m_per_s("hornlab_beat_bem")),
+                    sound_speed_m_per_s=(343.0),
                 )
                 if len(_channel.source_ids) > 1:
                     channel_response.pop("impedance", None)
@@ -962,50 +899,21 @@ def solve_imported_beat_from_msh_text(
                 result_callback(revision, frame)
                 return True
 
-            if official:
-                try:
-                    compiled = joint_compiled or build_imported_request(
-                        msh_text, channel_context, record,
-                        geometry.drive_channels if joint else [channel], frequencies_hz=frequencies,
-                        engine_id=beat_engine_name(backend), backend=backend,
-                        surface_traces=retain_traces,
-                        precision=_precision,
-                    )
-                except ValueError as exc:
-                    raise BeatUnavailable(str(exc)) from exc
-                if profile is not None:
-                    profile.mark("request built")
-                if joint:
-                    joint_compiled = compiled
-                config = response_config(compiled, channel_context)
-            else:
-                try:
-                    config = package.SolveConfig(
-                        freq_min_hz=context.frequency_range[0],
-                        freq_max_hz=context.frequency_range[1],
-                        freq_count=context.num_frequencies,
-                        freq_spacing=context.frequency_spacing,
-                        velocity_sources={VELOCITY_TAG: 1.0},
-                        source_motion=channel.motion,
-                        observation=observation,
-                        frame_override=beat_frame,
-                        native_symmetry_plane=native_plane,
-                        mesh_scale=1.0,
-                        beat_backend=backend,
-                        # The CPU default of the pinned package ("wavelength") picks one 3-point rule from a
-                        # mesh percentile; on graded meshes that is 3-4 dB wrong at high frequency.
-                        # Fixed order 4 is what every accelerator already uses.
-                        **({"regular_quadrature_mode": "fixed", "julia_threads": beat_julia_threads(backend)}
-                           | dict(_hbb_options or {})),
-                        **({"surface_traces": True} if retain_traces else {}),
-                        progress_callback=progress,
-                        on_frequency_result=(
-                            on_frequency_result if result_callback is not None else None
-                        ),
-                    )
-                    package.reject_unsupported_native_symmetry(config)
-                except NotImplementedError as exc:
-                    raise BeatUnavailable(str(exc)) from exc
+            try:
+                compiled = joint_compiled or build_imported_request(
+                    msh_text, channel_context, record,
+                    geometry.drive_channels if joint else [channel], frequencies_hz=frequencies,
+                    engine_id=beat_engine_name(backend), backend=backend,
+                    surface_traces=retain_traces,
+                    precision=_precision,
+                )
+            except ValueError as exc:
+                raise BeatUnavailable(str(exc)) from exc
+            if profile is not None:
+                profile.mark("request built")
+            if joint:
+                joint_compiled = compiled
+            config = response_config(compiled, channel_context)
             holder["config"] = config
             if joint:
                 joint_callbacks[channel.id] = (progress, on_frequency_result if result_callback else None)
@@ -1014,20 +922,8 @@ def solve_imported_beat_from_msh_text(
 
             path: Path | None = None
             try:
-                if not official:
-                    with tempfile.NamedTemporaryFile(
-                        mode="w",
-                        suffix=".msh",
-                        delete=False,
-                        encoding="utf-8",
-                        dir=temporary_directory_root(),
-                    ) as handle:
-                        path = Path(handle.name)
-                        handle.write(mesh.text(group_tags))
                 try:
                     if adaptive:
-                        if not official:
-                            config.on_frequency_result = None
 
                         def publish(native):
                             if result_callback is None:
@@ -1041,7 +937,7 @@ def solve_imported_beat_from_msh_text(
                                     **channel_identity[channel.id],
                                     "observation_frame_basis": dict(frame_basis),
                                 },
-                                sound_speed_m_per_s=(343.0 if official else solver_sound_speed_m_per_s("hornlab_beat_bem")),
+                                sound_speed_m_per_s=(343.0),
                             )
                             if len(channel.source_ids) > 1:
                                 snapshot.pop("impedance", None)
@@ -1083,57 +979,20 @@ def solve_imported_beat_from_msh_text(
                             result_callback(next_revision[0], frame)
                             next_revision[0] += 1
 
-                        if official:
-                            def solve_batch(batch):
-                                return solve_compiled(
-                                    batch_request(compiled, batch), channel_id=channel.id,
-                                    worker_manager=_worker_manager, julia_executable=_julia_executable,
-                                    _profile=profile,
-                                    cancellation_callback=cancellation_callback,
-                                    progress_callback=progress, status_callback=stage_status,
-                                )
-                            result = solve_native_adaptively(
-                                context, solve_batch, distance_m=config.observation.distance_m,
-                                sound_speed=(343.0 if official else solver_sound_speed_m_per_s("hornlab_beat_bem")),
-                                publish=publish, cancel=cancellation_callback,
+                        def solve_batch(batch):
+                            return solve_compiled(
+                                batch_request(compiled, batch), channel_id=channel.id,
+                                worker_manager=_worker_manager, julia_executable=_julia_executable,
+                                _profile=profile,
+                                cancellation_callback=cancellation_callback,
+                                progress_callback=progress, status_callback=stage_status,
                             )
-                        else:
-                            with ExitStack() as cleanup:
-                                group_paths = [(groups[0][0], path)]
-                                for group_sign, tags in groups[1:]:
-                                    with tempfile.NamedTemporaryFile(
-                                        mode="w",
-                                        suffix=".msh",
-                                        delete=False,
-                                        encoding="utf-8",
-                                        dir=temporary_directory_root(),
-                                    ) as handle:
-                                        group_path = Path(handle.name)
-                                        cleanup.callback(group_path.unlink, missing_ok=True)
-                                        handle.write(mesh.text(tags))
-                                    group_paths.append((group_sign, group_path))
-
-                                def solve_batch(batch):
-                                    rows = []
-                                    for group_sign, group_path in group_paths:
-                                        if cancellation_callback:
-                                            cancellation_callback()
-                                        native = package.solve_frequencies(
-                                            str(group_path), batch, config, status_callback=stage_status
-                                        )
-                                        if not np.array_equal(native.frequencies_hz, batch):
-                                            raise ValueError(
-                                                "adaptive batch returned a different frequency grid"
-                                            )
-                                        rows.append((group_sign, native))
-                                    return _signed_sum(rows, adaptive=True)
-
-                                result = solve_native_adaptively(
-                                    context, solve_batch, distance_m=config.observation.distance_m,
-                                    sound_speed=(343.0 if official else solver_sound_speed_m_per_s("hornlab_beat_bem")),
-                                    publish=publish, cancel=cancellation_callback,
-                                )
-                    elif official:
+                        result = solve_native_adaptively(
+                            context, solve_batch, distance_m=config.observation.distance_m,
+                            sound_speed=(343.0),
+                            publish=publish, cancel=cancellation_callback,
+                        )
+                    else:
                         result = solve_compiled(
                             batch_request(compiled, frequencies), channel_id=channel.id,
                             worker_manager=_worker_manager, julia_executable=_julia_executable,
@@ -1141,10 +1000,6 @@ def solve_imported_beat_from_msh_text(
                             cancellation_callback=cancellation_callback, progress_callback=progress,
                             on_frequency_result=on_frequency_result if result_callback else None,
                             status_callback=stage_status,
-                        )
-                    else:
-                        result = package.solve_frequencies(
-                            str(path), frequencies, config, status_callback=stage_status
                         )
                 except NotImplementedError as exc:
                     raise BeatUnavailable(str(exc)) from exc
@@ -1154,10 +1009,7 @@ def solve_imported_beat_from_msh_text(
                         path.unlink(missing_ok=True)
                     except OSError as exc:
                         logger.warning("Could not remove temporary BEAT mesh %s: %s", path, exc)
-            if official:
-                sort_official_result(result)
-            else:
-                sort_native_result_frequencies(result)
+            sort_official_result(result)
             parts.append((1.0 if adaptive else sign, result))
             if not adaptive:
                 work_done += frequency_count
@@ -1165,7 +1017,7 @@ def solve_imported_beat_from_msh_text(
             continue
         sorted_results[channel.id] = _signed_sum(parts)
         configs[channel.id] = holder["config"]
-        if official and getattr(sorted_results[channel.id], "cancelled", False):
+        if (getattr(sorted_results[channel.id], "cancelled", False)):
             break
 
     if joint:
@@ -1178,7 +1030,7 @@ def solve_imported_beat_from_msh_text(
         for result in sorted_results.values():
             sort_official_result(result)
 
-    cancelled = official and any(getattr(r, "cancelled", False) for r in sorted_results.values())
+    cancelled = (any(getattr(r, "cancelled", False) for r in sorted_results.values()))
     if cancellation_callback:
         cancellation_callback()
     if stage_callback:
@@ -1229,18 +1081,18 @@ def solve_imported_beat_from_msh_text(
                 "selected": beat_engine_name(backend),
                 beat_engine_name(backend): status,
             },
-            "engine": "beat-engine" if official else "hornlab-beat-bem",
+            "engine": "beat-engine",
             "solver_engine": {
                 "engine": beat_engine_name(backend),
-                "provider": "official" if official else "hbb",
-                "package": "beat-engine" if official else "hornlab-beat-bem",
+                "provider": "official",
+                "package": "beat-engine",
                 "package_version": status.get("version"),
                 "device": backend,
             },
             "phase_time_convention": PHASE_TIME_CONVENTION,
             "mesh_validation": {
                 "mode": context.mesh_validation_mode,
-                "backend": "beat-engine" if official else "hornlab-beat-bem",
+                "backend": "beat-engine",
             },
             "performance": {
                 "total_time_seconds": time.time() - started,
@@ -1268,7 +1120,7 @@ def solve_imported_beat_from_msh_text(
             context=channel_context,
             start_time=started,
             metadata=channel_metadata,
-            sound_speed_m_per_s=(343.0 if official else solver_sound_speed_m_per_s("hornlab_beat_bem")),
+            sound_speed_m_per_s=(343.0),
         )
         if len(channel.source_ids) > 1:
             channel_response.pop("impedance", None)
@@ -1325,7 +1177,7 @@ def solve_imported_beat_from_msh_text(
             per_source_validity=per_source_validity,
             channel_identity=channel_identity,
             member_channels=channels,
-            frame_basis=frame_basis, official=official,
+            frame_basis=frame_basis,
         )
         channel_order.append(geometry.combine.id)
     fem_volumes = (
@@ -1341,8 +1193,8 @@ def solve_imported_beat_from_msh_text(
         "solve_path": "full-3d",
         "solver_engine": {
             "engine": beat_engine_name(backend),
-            "provider": "official" if official else "hbb",
-            "package": "beat-engine" if official else "hornlab-beat-bem",
+            "provider": "official",
+            "package": "beat-engine",
             "package_version": status.get("version"),
             "device": backend,
             "formulation": "burton_miller",
@@ -1362,7 +1214,7 @@ def solve_imported_beat_from_msh_text(
             "rotation_rows": [[float(value) for value in row] for row in frame.rotation],
             "origin_m": [float(value) for value in frame.origin],
             "note": (
-                "hornlab-beat-bem measures in its own +z frame; the mesh was "
+                "beat-engine measures in its own +z frame; the mesh was "
                 "rotated rigidly into it, and every result is frame-relative"
             ),
         },
@@ -1383,13 +1235,12 @@ def solve_imported_beat_from_msh_text(
             "cap_bytes": trace_cap_bytes,
         },
     }
-    if official:
-        metadata["cancelled"] = cancelled
-        metadata["beat_solver_frame"] = {
-            "rotation_rows": np.eye(3).tolist(),
-            "origin_m": [float(value) for value in frame.record_frame["origin"]],
-            "note": "Official BEAT uses the ingestion mesh and observation frame directly.",
-        }
+    metadata["cancelled"] = cancelled
+    metadata["beat_solver_frame"] = {
+        "rotation_rows": np.eye(3).tolist(),
+        "origin_m": [float(value) for value in frame.record_frame["origin"]],
+        "note": "Official BEAT uses the ingestion mesh and observation frame directly.",
+    }
     envelope: dict[str, Any] = {
         "result_kind": "multi_channel",
         "result_contract_version": 2,
@@ -1424,7 +1275,7 @@ def solve_imported_beat_from_msh_text(
             list(artifact_results.items()),
             first_config,
             backend=BEAT_FIELD_TRACE_BACKEND,
-            sound_speed_m_per_s=(343.0 if official else solver_sound_speed_m_per_s("hornlab_beat_bem")),
+            sound_speed_m_per_s=(343.0),
         )
         if retain_traces
         else None

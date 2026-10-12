@@ -9,7 +9,7 @@ import pytest
 
 from server import app as app_module
 from server.engines import registry as registry_module
-from server.solver import beat, bempp, bempp_opencl as probe, metal, warmup
+from server.solver import beat, bempp, bempp_opencl as probe, metal, warmup, official_beat
 from server.tests.test_app_batch_e import TestClient
 from server.tests.test_bempp_opencl import CPU
 
@@ -17,8 +17,6 @@ from server.tests.test_bempp_opencl import CPU
 @pytest.mark.parametrize('recovery', ['request', 'idle'])
 @pytest.mark.parametrize('code', ['inventory_timeout', 'probe_error'])
 def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path, recovery, code):
-    # Keep unrelated BEAT readiness on the HBB path that the fakes model.
-    monkeypatch.setenv('WG2_BEAT_PROVIDER', 'hbb')
     bempp.bempp_status.cache_clear()
     # This test keeps the real app's lifespan open long enough for the WGLink
     # startup pass to run. It must not touch the user's Fusion add-in, nor leave
@@ -67,8 +65,7 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
         'available': True, 'reason': 'Metal ready', 'version': 'test'})
     # The registry's live CPU refresh re-reads the real BEAT CPU verdict, which
     # depends on whether this host has a prepared runtime. Pin it with the rows.
-    monkeypatch.setattr(beat, '_cpu_backend_status', lambda _package: (True, 'BEAT detected'))
-    monkeypatch.setattr(beat, 'beat_backend_statuses', lambda: {
+    monkeypatch.setattr(official_beat, 'production_statuses', lambda: {
         backend: {'available': backend == 'cpu', 'reason': 'BEAT detected', 'version': 'test'}
         for backend in beat.BEAT_BACKENDS})
     # A zero injected HTTP wait exercises the timeout branch deterministically

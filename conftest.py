@@ -23,11 +23,8 @@ Runtime state: the same rule covers the BEAT and Julia runtime of the machine
 running the tests (native Metal and OpenCL discovery are not disabled: the
 variables below do not reach them, so a test that needs those marks itself
 ``real_runtime``). The ``_no_prepared_runtime`` fixture below points
-``HORNLAB_BEAT_RUNTIME_DIR`` (where ``state-<backend>.json`` lives),
-``HORNLAB_BEAT_JULIA``, ``HORNLAB_BEAT_WORKER_DIR``, the official provider's
-``WG2_BEAT_RUNTIME_DIR``, ``WG2_BEAT_JULIA``, ``WG2_BEAT_WORKER_DIR``,
-and ``JULIA_DEPOT_PATH`` at
-per-test empty locations and clears the force-CPU switch and the ROCm/HIP
+``WG2_BEAT_RUNTIME_DIR``, ``WG2_BEAT_JULIA``, ``WG2_BEAT_WORKER_DIR``
+and ``JULIA_DEPOT_PATH`` at per-test empty locations and clears the ROCm/HIP
 variables, so every ordinary test starts from "no prepared runtime" whether it
 runs on a Mac with a provisioned BEAT or on a bare hosted runner. A test that
 needs a runtime states one explicitly (a fake, or a state file it writes into
@@ -64,7 +61,7 @@ from server.platform.paths import DATA_DIR_ENV  # noqa: E402 - bound native pool
 # two apart.
 SANDBOX_DATA_DIR = Path(tempfile.mkdtemp(prefix="wg-test-data-"))
 os.environ[DATA_DIR_ENV] = str(SANDBOX_DATA_DIR)
-# Start collection on the product default; HBB tests select the rollback explicitly.
+# Start collection on the product default; obsolete provider settings are isolated by tests.
 os.environ.pop("WG2_BEAT_PROVIDER", None)
 # Server startup brings Fusion's WGLink up to this build and installs it where
 # it is missing (server/cadlink/fusion/addin_update.py). A test run must never touch
@@ -87,7 +84,6 @@ def pytest_configure(config: pytest.Config) -> None:
         raise pytest.UsageError("Use a bounded worker count: -n 0 through -n 6; never -n auto.")
     if workers and config.getoption("dist", default="no") != "loadgroup":
         raise pytest.UsageError("Parallel tests require --dist=loadgroup to honour serial groups.")
-
 
 
 @pytest.fixture()
@@ -262,22 +258,16 @@ def _no_test_touches_the_installed_addin(request: pytest.FixtureRequest) -> Iter
 
 #: Variables through which a BEAT/Julia/OpenCL runtime prepared on the host is
 #: found. Name -> value for the test (``{dir}`` is a per-test empty folder), or
-#: ``None`` to remove it. HORNLAB_BEAT_JULIA names a file that does not exist:
+#: ``None`` to remove it. WG2_BEAT_JULIA names a file that does not exist:
 #: the package treats a configured-but-missing path as "no Julia" and does not
 #: fall through to PATH or the provisioned runtime.
 _RUNTIME_ISOLATION: dict[str, str | None] = {
-    "HORNLAB_BEAT_RUNTIME_DIR": "{dir}/beat-runtime",
-    "HORNLAB_BEAT_JULIA": "{dir}/no-julia",
-    "HORNLAB_BEAT_WORKER_DIR": "{dir}/beat-workers",
-    "HORNLAB_BEAT_PERSISTENT_HOST": "0",
     "WG2_BEAT_RUNTIME_DIR": "{dir}/official-beat-runtime",
     "WG2_BEAT_JULIA": "{dir}/official-no-julia",
     "WG2_BEAT_WORKER_DIR": "{dir}/official-beat-workers",
     "JULIA_DEPOT_PATH": "{dir}/julia-depot",
     "JULIA_PROJECT": None,
     "JULIA_LOAD_PATH": None,
-    "HORNLAB_BEAT_FORCE_CPU": None,
-    "HORNLAB_BEAT_PROBE_ENGINE_DIR": None,
     "BLAB_ROCM_PATH": None,
     "ROCM_PATH": None,
     "HIP_PATH": None,
@@ -395,7 +385,7 @@ def _no_test_leaks_application_environment(
 
 @pytest.fixture(autouse=True)
 def _beat_provider_is_explicit() -> Iterator[None]:
-    """Start on the official product default; rollback tests select HBB explicitly."""
+    """Start on the official product default; provider warning tests set obsolete values explicitly."""
     with pytest.MonkeyPatch.context() as patcher:
         patcher.delenv("WG2_BEAT_PROVIDER", raising=False)
         yield

@@ -37,7 +37,7 @@ def output_directory(directory: Path, *, engine_source: Path | None = None) -> P
     """Refuse runtime, source-checkout and installed-distribution trees before writes."""
     directory = checked_root(directory).expanduser().resolve()
     roots = [engine_source] if engine_source else []
-    for module, distribution in (("hornlab_beat_bem", "hornlab-beat-bem"), ("beat_engine", "beat-engine")):
+    for module, distribution in (("beat_engine", "beat-engine"),):
         loaded = sys.modules.get(module)
         try:
             origin = getattr(loaded, "__file__", None) if loaded else getattr(find_spec(module), "origin", None)
@@ -50,7 +50,7 @@ def output_directory(directory: Path, *, engine_source: Path | None = None) -> P
     # Recognize source checkouts even when their packages are not imported/installed.
     for parent in (directory, *directory.parents):
         if any((parent / relative).is_file() for relative in (
-                "hornlab_beat_bem/__init__.py", "src/beat_engine/__init__.py")):
+                "src/beat_engine/__init__.py", "beat_engine/__init__.py")):
             roots.append(parent)
     for root in roots:
         root = Path(root).expanduser().resolve()
@@ -77,7 +77,7 @@ class FrozenExterior:
     backend: str = "cpu"
 
     def compiled(self) -> request.CompiledRequest:
-        """Freeze metre geometry and the HBB-representable observation frame."""
+        """Freeze metre geometry and the supported observation frame."""
         if type(self.threads) is not int or self.threads < 1:
             raise ValueError("Qualification requires an explicit positive thread count")
         if self.backend not in {"cpu", "metal"}:
@@ -86,9 +86,9 @@ class FrozenExterior:
             raise ValueError("Metal agreement requires float32 precision")
         validate_frequency_axis(self.frequencies_hz)
         if not self.angle_range[0] <= 0 <= self.angle_range[1] or self.sphere_grid is None:
-            raise ValueError("HBB comparison requires on-axis cuts and a complete sphere")
+            raise ValueError("Reference acquisition requires on-axis cuts and a complete sphere")
         if self.symmetry not in {"full", "yz", "yz+xz"}:
-            raise ValueError("HBB qualification supports full/yz/yz+xz symmetry only")
+            raise ValueError("Reference acquisition supports full/yz/yz+xz symmetry only")
         layout = build_observations(distance_m=self.distance_m, angle_range=self.angle_range,
                                     sphere_grid=self.sphere_grid, precision=self.precision)
         return request.build_request(
@@ -196,13 +196,13 @@ def metal_worker_environment(threads: int | str, *, assembly: str = "direct_syst
     if assembly != "direct_system":
         raise ValueError("Metal agreement requires direct_system assembly")
     count = resolve_julia_threads("metal", threads)
-    # HBB uses T BLAS threads; official direct assembly reserves one for T > 1.
+    # Direct assembly reserves one BLAS thread for T > 1.
     environment["OPENBLAS_NUM_THREADS"] = str(count + (count > 1))
     return environment
 
 
 def result_set(inputs: FrozenExterior, native: Any, *, revision: str,
-               recorder_record: dict | None = None, official: bool = False) -> ResultSet:
+               recorder_record: dict | None = None, official: bool = True) -> ResultSet:
     """Score the same full-sphere quadrature for DI and far-field power estimates."""
     compiled = inputs.compiled()
     if (native.cancelled or native.is_partial
@@ -227,73 +227,18 @@ def result_set(inputs: FrozenExterior, native: Any, *, revision: str,
     settings = inputs.settings()
     evidence = None
     if recorder_record is not None:
-        settings, evidence = observed_settings(settings, native, official=official,
+        settings, evidence = observed_settings(settings, native, official=True,
                                                native_symmetry=compiled.wire["solver_options"]["symmetry"])
     return ResultSet(inputs.mesh_bytes, np.asarray(native.frequencies_hz), np.asarray(native.pressure_complex),
                      np.asarray(native.impedance), di, power, settings, revision,
                      recorder_record, recorder_record["record_sha256"] if recorder_record else "", evidence)
 
 
-def hbb_runner(inputs: FrozenExterior, *, julia_executable: str,
-               expected_revision: str, directory: Path) -> ResultSet:
-    """Use HBB's public API in one-shot mode; never adopt or signal a registry PID."""
-    inputs.compiled()  # Refuse quantized frequencies before imports or launch.
-    directory = output_directory(directory)
-    import hornlab_beat_bem as hbb
-
-    distribution = metadata.distribution("hornlab-beat-bem")
-    direct = json.loads(distribution.read_text("direct_url.json") or "{}")
-    revision = direct.get("vcs_info", {}).get("commit_id", "")
-    if (not expected_revision or revision != expected_revision
-            or direct.get("dir_info", {}).get("editable", False)
-            or Path(hbb.__file__).resolve() != Path(distribution.locate_file("hornlab_beat_bem/__init__.py")).resolve()):
-        raise ValueError("HBB must be the non-editable current WG pin")
-    compiled = inputs.compiled()  # Validate before admitting any solve.
-    observation = hbb.ObservationConfig(
-        planes=list(compiled.layout.planes), distance_m=inputs.distance_m,
-        angle_min_deg=inputs.angle_range[0], angle_max_deg=inputs.angle_range[1],
-        angle_count=inputs.angle_range[2], sphere_grid=inputs.sphere_grid)
-    config = hbb.SolveConfig(
-        freq_min_hz=min(inputs.frequencies_hz), freq_max_hz=max(inputs.frequencies_hz),
-        freq_count=len(inputs.frequencies_hz), velocity_sources={inputs.source_tag: 1.},
-        observation=observation, native_symmetry_plane=None if inputs.symmetry == "full" else inputs.symmetry,
-        mesh_scale=1., air_density=inputs.density, sound_speed=inputs.sound_speed,
-        quadrature_order=inputs.quadrature_order, singular_order=inputs.singular_order,
-        regular_quadrature_mode="fixed",
-        solve_precision="double" if inputs.precision == "float64" else "single",
-        beat_backend=inputs.backend, julia_executable=julia_executable, julia_threads=inputs.threads,
-        persistent_worker=False)
-    directory.mkdir(parents=True, exist_ok=True)
-    record = {"evidence_mode": "real", "engine_distribution": "hornlab-beat-bem",
-              "engine_revision": revision, "revision_source": "installed_vcs_metadata_attested",
-              "engine_status": "failed", "requested_frequencies_hz": inputs.frequencies_hz,
-              "declared_settings": inputs.settings(), "real_solved_count": 0,
-              "case": {"backend": inputs.backend, "precision": inputs.precision},
-              "runtime": {"engine_revision": revision},
-              "mesh_sha256": hashlib.sha256(json.dumps(compiled.mesh.packed(), sort_keys=True).encode()).hexdigest(),
-              "count_source": "HBB public API-validated rows; not terminal events or WG-observed transport"}
-    try:
-        with tempfile.TemporaryDirectory(prefix="hbb-reference-", dir=directory) as temporary:
-            mesh_path = Path(temporary) / "surface.msh"
-            mesh_path.write_bytes(inputs.mesh_bytes)
-            native = hbb.solve_frequencies(mesh_path, inputs.frequencies_hz, config)
-        result_set(inputs, native, revision=revision)  # Validate decoded axes before recording success.
-        record.update(engine_status="passed", real_solved_count=len(native.frequencies_hz),
-                      solver_log=getattr(native, "solver_log", []),
-                      pressure_complex=native.pressure_complex, impedance=native.impedance,
-                      sphere_pressure_complex=native.sphere_pressure_complex)
-        record["result"] = {"solver_log": getattr(native, "solver_log", [])}
-        # Validate observed settings before declaring an engine-pass record.
-        _, record["setting_evidence"] = observed_settings(inputs.settings(), native, official=False,
-                                                          native_symmetry=compiled.wire["solver_options"]["symmetry"])
-        if getattr(native, "mesh_info", None) is not None:
-            record["hbb_mesh_info"] = asdict(native.mesh_info)
-        write_record(directory / "hbb-run.json", record)
-        result = result_set(inputs, native, revision=revision, recorder_record=record)
-        return result
-    except Exception as exc:
-        record["engine_status"] = "failed"
-        record["error"] = f"{type(exc).__name__}: {exc}"
-        raise
-    finally:
-        write_record(directory / "hbb-run.json", record)
+def metre_mesh(original: bytes, scale: float) -> bytes:
+    """Create one shared metre artifact, preserving row IDs, tags and winding."""
+    mesh = read_surface(original.decode(), scale_to_m=scale)
+    nodes = [f"{i} {x:.17e} {y:.17e} {z:.17e}" for i, (x, y, z) in zip(mesh.node_ids, mesh.points_m)]
+    faces = [f"{i} 2 2 {tag} {tag} " + " ".join(str(mesh.node_ids[n]) for n in face)
+             for i, tag, face in zip(mesh.element_ids, mesh.tags, mesh.faces)]
+    return ("\n".join(["$MeshFormat", "2.2 0 8", "$EndMeshFormat", "$Nodes", str(len(nodes)), *nodes,
+                        "$EndNodes", "$Elements", str(len(faces)), *faces, "$EndElements", ""])).encode()

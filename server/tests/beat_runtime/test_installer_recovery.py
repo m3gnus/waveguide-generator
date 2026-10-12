@@ -11,7 +11,6 @@ from server.tests.beat_runtime.test_installer_extraction import archive
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setenv(paths.RUNTIME_DIR_ENV, str(tmp_path / "wg"))
-    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(tmp_path / "hbb"))
     monkeypatch.delenv(discovery.JULIA_ENV_VAR, raising=False)
     monkeypatch.setattr(discovery.shutil, "which", lambda *a, **k: None)
 

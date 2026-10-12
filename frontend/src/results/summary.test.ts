@@ -33,38 +33,6 @@ function row(groups: SummaryGroup[], groupTitle: string, label: string) {
 }
 
 describe('simulation summary groups', () => {
-  it.each([
-    ['official', '1.2.3', 'Official BEAT · 1.2.3'],
-    ['hbb', '0.9.0', 'Legacy HBB · 0.9.0'],
-    ['official', undefined, 'Official BEAT'],
-  ])('shows the recorded %s provider beside the engine', (provider, version, display) => {
-    const result: ResultPayload = {
-      frequencies: [100],
-      metadata: { solver_backend: 'beat-cpu', solver_engine: { provider, package_version: version } },
-    };
-    const rows = summaryGroups({ result }).find(({ title }) => title === 'Solve')!.rows;
-    expect(rows.findIndex(({ label }) => label === 'BEAT provider')).toBe(
-      rows.findIndex(({ label }) => label === 'Engine') + 1,
-    );
-    expect(row(summaryGroups({ result }), 'Solve', 'BEAT provider')?.value).toBe(display);
-  });
-
-  it('reads provider provenance from the wrapper and prefers channel provenance', () => {
-    const wrapper: ResultPayload = {
-      frequencies: [100],
-      metadata: { solver_engine: { provider: 'hbb', package_version: '0.9.0' } },
-    };
-    const result: ResultPayload = { frequencies: [100] };
-    expect(row(summaryGroups({ result, wrapper }), 'Solve', 'BEAT provider')?.value).toBe('Legacy HBB · 0.9.0');
-    result.metadata = { solver_engine: { provider: 'official' } };
-    expect(row(summaryGroups({ result, wrapper }), 'Solve', 'BEAT provider')?.value).toBe('Official BEAT');
-  });
-
-  it('does not guess the provider for earlier runs', () => {
-    const result: ResultPayload = { frequencies: [100], metadata: { solver_backend: 'beat-cpu' } };
-    expect(row(summaryGroups({ result }), 'Solve', 'BEAT provider')).toBeUndefined();
-  });
-
   it('shows each axial source\'s resolved axis, snapped and raw, read-only', () => {
     const result = {
       frequencies: [1000],
@@ -556,7 +524,7 @@ describe('execution and storage provenance', () => {
   it('shows the executed backend, explicit request, fallback, precision and sampling outcome', () => {
     const result: ResultPayload = {
       frequencies: [100, 200, 400], frequency_status: ['solved', 'interpolated', 'solved'],
-      metadata: { engine: 'hornlab-beat-bem', beat: { precision: 'double' },
+      metadata: { engine: 'beat-engine', beat: { precision: 'double' },
         symmetry: { solver_plan: { engine: 'beat-cpu', reason: 'Available CPU backend', engine_substitution: { requested: 'beat-cuda', resolved: 'beat-cpu', reason: 'CUDA unavailable' } } },
         adaptive_sampling: { stop_reason: 'estimated_convergence', estimate_db: 0.08, native_solved_count: 7 },
       },

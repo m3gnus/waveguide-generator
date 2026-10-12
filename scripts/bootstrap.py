@@ -31,7 +31,6 @@ if str(_IMPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(_IMPORT_ROOT))
 
 from server.platform.paths import app_root  # noqa: E402
-from server.solver.beat_runtime.provider import official_selected  # noqa: E402
 
 
 REPO_ROOT = app_root()
@@ -55,7 +54,7 @@ REQUIREMENT_FILES = (
 REQUIRED_DISTRIBUTIONS = (
     "fastapi",
     "gmsh",
-    "hornlab-beat-bem",
+    "beat-engine",
     "hornlab-bempp-bem",
     "hornlab-metal-bem",
     "hornlab-plots",
@@ -68,12 +67,7 @@ REQUIRED_DISTRIBUTIONS = (
     "scipy",
     "uvicorn",
 )
-#: Where a BEAT CPU runtime is provisioned automatically, and the
-#: ``hornlab-beat-bem`` commit that can do it. Both are stated again in
-#: ``server/solver/beat_cpu_runtime.py``, which is what reports the engine as
-#: unavailable when this step did not run or could not.
 BEAT_CPU_PROVISION_SYSTEMS = ("Windows", "Linux")
-BEAT_CPU_PROVISION_COMMIT = "ac48d90"
 GIT_REQUIREMENT_RE = re.compile(
     r"^git\+[^@]+@(?P<sha>[0-9a-f]{40})#egg=(?P<name>[A-Za-z0-9_.-]+)$"
 )
@@ -636,32 +630,22 @@ def bootstrap(environment: Path, *, force: bool = False) -> None:
 def _provision_beat_runtime(python: Path) -> None:
     """Provision whichever BEAT runtime this host can actually use.
 
-    Official BEAT is the default; WG2_BEAT_PROVIDER=hbb/legacy uses the
-    one-release HBB rollback. The GPU step is hardware-gated and downloads
-    nothing without a matching supported device. The CPU step provisions on
-    Windows and Linux, independently of GPU readiness when the selected
-    provider records readiness per backend.
+    Official BEAT is the sole engine route. The GPU step downloads nothing
+    without a matching supported device. The CPU step provisions on Windows
+    and Linux, independently of GPU readiness.
     """
 
-    if official_selected():
-        if _run([str(python), "-c", "import beat_engine"], quiet=True).returncode != 0:
-            return
-        _provision_gpu_runtime(python)
-        _provision_beat_cpu_runtime(python)
-        return
-    if _run(
-        [str(python), "-c", "import hornlab_beat_bem.provision"], quiet=True
-    ).returncode != 0:
-        # The optional BEAT engine is not installed in this environment.
+    if _run([str(python), "-c", "import beat_engine"], quiet=True).returncode != 0:
         return
     _provision_gpu_runtime(python)
     _provision_beat_cpu_runtime(python)
+    return
 
 
 def _provision_gpu_runtime(python: Path) -> None:
     """Best-effort BEAT GPU runtime setup; a strict no-op without the hardware.
 
-    ``hornlab_beat_bem.provision --if-gpu`` checks the GPU inventory first and
+    ``server.solver.beat_runtime.cli --if-gpu`` checks the GPU inventory first and
     exits silently when there is none, so CPU-only machines never download the
     multi-GB CUDA or ROCm stack here. Failures (offline, low disk, old driver)
     are recorded by the provisioner and show up as the engine's capability
@@ -673,107 +657,27 @@ def _provision_gpu_runtime(python: Path) -> None:
         return
     # The provisioner announces its own download sizes once it decides to run;
     # without a supported GPU it exits silently, so CPU-only launches stay quiet.
-    module = "server.solver.beat_runtime.cli" if official_selected() else "hornlab_beat_bem.provision"
+    module = "server.solver.beat_runtime.cli"
     _run([str(python), "-m", module, "--if-gpu"])
 
 
-def _beat_provision_facts(python: Path) -> dict[str, object] | None:
-    """What the installed ``hornlab-beat-bem`` can do, and what this host has.
-
-    One subprocess for both questions, because both are answered by the
-    installed package rather than by this interpreter, which has no third-party
-    packages at all. ``None`` when the probe could not run or its answer could
-    not be read -- the caller treats that exactly like "cannot provision".
-    """
-
-    probe = (
-        "import json, hornlab_beat_bem.provision as p; "
-        "print(json.dumps({"
-        "'cpu': hasattr(p, 'provision_cpu'), "
-        "'gpu': p.detect_gpu_backend() if hasattr(p, 'detect_gpu_backend') else None, "
-        "'per_backend': hasattr(p, 'read_backend_states')"
-        "}))"
-    )
-    try:
-        completed = _capture([str(python), "-c", probe])
-    except OSError:
-        # An interpreter that cannot be executed at all is one more way of not
-        # being able to answer, and this function already answers None for
-        # every other one -- a non-zero exit, no output, unparseable output.
-        # Its caller prints "could not be asked what it supports" and carries
-        # on, so None keeps a broken venv from turning an install into a
-        # traceback. _warn_when_gui_unavailable runs the same stub through the
-        # same helper and has caught OSError since it was written; this call
-        # site simply never did, and provisioning happens outside the
-        # bootstrap lock, so the crash took the whole install down with it.
-        return None
-    if completed.returncode != 0:
-        return None
-    try:
-        facts = json.loads(completed.stdout.strip().splitlines()[-1])
-    except (IndexError, json.JSONDecodeError):
-        return None
-    return facts if isinstance(facts, dict) else None
-
-
 def _provision_beat_cpu_runtime(python: Path) -> None:
-    """Provision BEAT's CPU runtime on a Windows or Linux host.
+    """Prepare the WG-owned CPU runtime on Windows and Linux source installs.
 
-    ``--backend cpu`` is not gated on hardware -- nothing can infer that a
-    person wants it -- so the decision is made here: this is a Windows or Linux
-    install and the installed package can provision it independently of any
-    GPU runtime. Older packages with a single readiness record still skip CPU
-    preparation on GPU hosts to preserve accelerator readiness. It then downloads a portable Julia,
-    instantiates the CPU project (which pulls no accelerator artifacts) and
-    proves the result with a real 1 kHz solve, printing its own progress into
-    the installer transcript.
-
-    macOS is excluded deliberately: AUTO prefers Metal there on measured
-    evidence and Apple Silicon is already served by the GPU step above, so this
-    would spend a download on a backend that would not be selected.
-
-    An older pinned ``hornlab-beat-bem`` has no ``provision_cpu``. That is
-    reported in one line and skipped -- never guessed at, and never fatal.
-    WG2_SKIP_BEAT_CPU_PROVISION=1 opts out.
+    The CLI downloads Julia, instantiates the engine project and verifies a
+    compiled solve. GPU readiness remains independent. macOS source bootstrap
+    prepares the GPU; launcher/in-app preparation also offers CPU there.
+    WG2_SKIP_BEAT_CPU_PROVISION=1 opts out. Failure is reported without failing
+    installation, so the capability row can explain its unavailable runtime.
     """
 
     if os.environ.get("WG2_SKIP_BEAT_CPU_PROVISION", "").strip() == "1":
         return
     if platform.system() not in BEAT_CPU_PROVISION_SYSTEMS:
         return
-    if official_selected():
-        if _run([str(python), "-m", "server.solver.beat_runtime.cli", "--backend", "cpu"]).returncode != 0:
-            print("WARNING: the WG-owned BEAT CPU runtime could not be provisioned (see above).")
-        return
-    facts = _beat_provision_facts(python)
-    if facts is None:
-        print(
-            "Skipping BEAT CPU runtime setup: the installed hornlab-beat-bem "
-            "could not be asked what it supports."
-        )
-        return
-    if not facts.get("cpu"):
-        print(
-            "Skipping BEAT CPU runtime setup: the installed hornlab-beat-bem "
-            f"predates it (needs {BEAT_CPU_PROVISION_COMMIT}). BEAT's CPU engine "
-            "stays unavailable; every other engine is unaffected."
-        )
-        return
-    if facts.get("gpu") and not facts.get("per_backend"):
-        print(
-            "Skipping BEAT CPU runtime setup: this host provisions the "
-            f"{facts['gpu']} runtime instead."
-        )
-        return
-    print("Preparing the BEAT CPU runtime (portable Julia, then a 1 kHz solve check)...")
-    if _run([str(python), "-m", "hornlab_beat_bem.provision", "--backend", "cpu"]).returncode != 0:
-        # Recorded by the provisioner and reported as the engine's capability
-        # reason. Every other engine still solves, so this cannot fail a launch.
-        print(
-            "WARNING: the BEAT CPU runtime could not be provisioned (see above). "
-            "BEAT's CPU engine will report why it is unavailable; the rest of "
-            "Waveguide Generator is unaffected."
-        )
+    if _run([str(python), "-m", "server.solver.beat_runtime.cli", "--backend", "cpu"]).returncode != 0:
+        print("WARNING: the WG-owned BEAT CPU runtime could not be provisioned (see above).")
+    return
 
 
 def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:

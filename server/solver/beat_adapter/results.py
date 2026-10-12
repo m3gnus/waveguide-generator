@@ -43,7 +43,7 @@ def mean_pressure_from_force(
     """Convert unit-normal-velocity force using physical area times real copies.
 
     source_area_m2 is the meshed source area in the fundamental domain, after
-    scaling to metres. Official force has no HBB x10/[Re/2,-Im/2] display
+    scaling to metres. Official force has no legacy x10/[Re/2,-Im/2] display
     packing. This conversion is not valid for a generalized axial force.
     """
     if not math.isfinite(source_area_m2) or source_area_m2 <= 0:

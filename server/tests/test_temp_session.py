@@ -330,28 +330,6 @@ def test_activating_a_session_moves_only_wgs_own_temporary_directories(tmp_path:
     assert temporary_directory_root() is None
 
 
-def test_beats_worker_registry_stays_where_the_next_launch_looks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The persistent BEAT host is adopted through a registry under the system
-    temporary directory. A session must not move it: a swept registry strands
-    a live host and makes every launch pay a cold start.
-    """
-
-    registry = pytest.importorskip("hornlab_beat_bem.worker_registry")
-    monkeypatch.delenv("HORNLAB_BEAT_WORKER_DIR", raising=False)
-    before = Path(registry.worker_dir())
-    session = TemporarySession.create(tmp_path)
-    session.activate()
-    try:
-        during = Path(registry.worker_dir())
-    finally:
-        session.close(remove=True)
-
-    assert during == before
-    assert not during.is_relative_to(session.path)
-
-
 def test_official_registry_and_worker_roots_survive_session_sweep(tmp_path, monkeypatch):
     from server.solver.beat_runtime import paths, registry
     from server.solver.beat_runtime.ipc import Endpoint

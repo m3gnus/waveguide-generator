@@ -1,4 +1,4 @@
-"""HBB's absolute breathing-sphere control in negative-time phasors."""
+"""The absolute breathing-sphere control in negative-time phasors."""
 
 from __future__ import annotations
 

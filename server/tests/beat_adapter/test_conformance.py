@@ -123,7 +123,7 @@ def test_missing_runtime_or_engine_is_recorded_failure_never_skip(tmp_path, miss
 @pytest.mark.parametrize("field,value", [
     ("real_solves", False), ("real_solves", "false"), ("backend", "metal"), ("precision", "float64"),
     ("julia_executable", ""), ("julia_version", ""), ("engine_path", ""),
-    ("engine_revision", ""), ("engine_distribution", "hornlab-beat-bem"),
+    ("engine_revision", ""), ("engine_distribution", "other-engine"),
     ("device_class", "gpu"), ("device_name", "")])
 def test_each_required_runtime_assertion_bites(tmp_path, fake_solve, field, value):
     def wrong(request):

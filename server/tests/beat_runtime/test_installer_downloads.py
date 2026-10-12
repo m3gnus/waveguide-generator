@@ -13,7 +13,6 @@ from server.solver.beat_runtime import discovery, installer, paths
 def isolated(monkeypatch, tmp_path):
     (tmp_path / "downloads").mkdir()
     monkeypatch.setenv(paths.RUNTIME_DIR_ENV, str(tmp_path / "wg"))
-    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(tmp_path / "hbb"))
     monkeypatch.delenv(discovery.JULIA_ENV_VAR, raising=False)
     monkeypatch.setattr(discovery.shutil, "which", lambda *args, **kwargs: None)
     def forbidden(*args, **kwargs):

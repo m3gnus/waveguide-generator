@@ -16,15 +16,8 @@ it; everything else the server starts dies when the job closes.
   its suspend-aware idle expiry, authenticated cleanup, or the installer's
   retire request while it is idle. It never runs from the app layer, which an
   update must be able to move aside.
-* The legacy **HBB** host is started with
-  ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`` and no breakaway, so it stays
-  in the job and dies with it. Clean server exit stops it first through
-  ``shutdown_workers()``; the job is the backstop if that fails or the server
-  crashes.
-
-``docs/reference/SHUTDOWN-AND-RECOVERY.md`` states both. The Windows tests
-drive the real ``_windows_job_for``; the tripwires run everywhere, so a change
-to either side's flags fails here and the record gets revisited.
+The Windows tests drive the real `_windows_job_for`; portable checks cover the
+host flags and the documented lifecycle.
 """
 
 from __future__ import annotations
@@ -58,54 +51,6 @@ SELF_EXIT_SECONDS = 60.0
 
 _STILL_ACTIVE = 259
 _ROOT = Path(__file__).resolve().parents[2]
-
-
-def test_clean_server_exit_requests_shutdown_of_its_persistent_host(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Exercise the pinned package's real registry and shutdown dispatch."""
-
-    # This regression exercises HBB's pinned shutdown dispatch explicitly.
-    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")
-
-    from hornlab_beat_bem import worker
-    from hornlab_beat_bem.worker_client import HostedBeatWorker
-    from server.app import create_app
-
-    called: list[object] = []
-    host = HostedBeatWorker.__new__(HostedBeatWorker)
-    monkeypatch.setattr(host, "refuse_submissions", lambda: called.append("refuse"))
-    monkeypatch.setattr(
-        host, "_say_and_close",
-        lambda message, terminal: called.append((message, terminal)),
-    )
-    monkeypatch.setattr(host, "detach", lambda: called.append("detach"))
-    owned_workers = {"test-host": host}
-    monkeypatch.setattr(worker, "_WORKERS", owned_workers)
-    application = create_app(data_dir=tmp_path)
-    hook = next(
-        handler for handler in application.router.on_shutdown
-        if handler.__name__ == "shutdown_beat_worker"
-    )
-
-    asyncio.run(hook())
-
-    assert called == ["refuse", ({"op": "shutdown"}, "shutdown_ok")]
-    assert owned_workers == {}
-
-
-def test_the_pinned_beat_host_is_started_without_breaking_away_from_a_job() -> None:
-    """The HBB record below is only true while the package starts its host this way."""
-
-    worker_client = pytest.importorskip("hornlab_beat_bem.worker_client")
-    source = inspect.getsource(worker_client.HostedBeatWorker._launch)
-
-    assert "0x00000008 | 0x00000200" in source, (
-        "hornlab_beat_bem changed how it starts its persistent host on Windows; "
-        "re-record what a packaged Quit does to it"
-    )
-    assert "BREAKAWAY" not in source.upper()
-    assert "0x01000000" not in source
 
 
 def test_the_launcher_job_allows_explicit_breakaway_only() -> None:
@@ -193,86 +138,6 @@ host = subprocess.Popen(
 print(host.pid, flush=True)
 sys.stdin.read()
 """
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows job objects")
-def test_a_packaged_quit_on_windows_terminates_the_hbb_persistent_host() -> None:
-    from launchers.statusapp.controller import _windows_job_for
-
-    server = subprocess.Popen(
-        [sys.executable, "-c", _SERVER, str(BEAT_HOST_CREATION_FLAGS), str(SELF_EXIT_SECONDS)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    host_pid: int | None = None
-    job = None
-    try:
-        # The launcher assigns the job right after starting the server, before
-        # it can start anything; the stand-in waits for its stdin to be read,
-        # so assigning first reproduces that order.
-        job = _windows_job_for(server)  # type: ignore[arg-type]
-        assert job is not None, "the launcher's Job Object could not be created here"
-        assert server.stdin is not None and server.stdout is not None
-        server.stdin.write("")
-        host_pid = int(server.stdout.readline().strip())
-        assert _alive(host_pid)
-
-        # A Quit: the server exits on its own, then the launcher closes the job
-        # (``StatusController.stop`` does both, in that order).
-        server.stdin.close()
-        server.wait(timeout=30)
-        assert _alive(host_pid), "the host died with the server itself, before the job closed"
-        job.close()  # type: ignore[attr-defined]
-        job = None
-
-        assert _wait_dead(host_pid), (
-            "the HBB host survived the launcher's job close; the record in "
-            "docs/reference/SHUTDOWN-AND-RECOVERY.md is wrong"
-        )
-    finally:
-        if job is not None:
-            job.close()  # type: ignore[attr-defined]
-        if server.poll() is None:
-            server.kill()
-            server.wait(timeout=30)
-        if host_pid is not None and _alive(host_pid):
-            _terminate(host_pid)
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows job objects")
-def test_without_the_launchers_job_the_detached_host_survives() -> None:
-    """The control: the same host, with no launcher job closed, outlives its parent.
-
-    Without it a pass above could be the environment tearing trees down, not
-    the launcher's job. The stand-in stays in whatever job the test runs in --
-    a windows-latest runner's job refuses ``CREATE_BREAKAWAY_FROM_JOB`` with
-    ERROR_ACCESS_DENIED -- and that job stays open for the whole test, so the
-    only difference from the test above is the launcher's job and its close.
-    """
-
-    server = subprocess.Popen(
-        [sys.executable, "-c", _SERVER, str(BEAT_HOST_CREATION_FLAGS), str(SELF_EXIT_SECONDS)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    host_pid: int | None = None
-    try:
-        assert server.stdin is not None and server.stdout is not None
-        host_pid = int(server.stdout.readline().strip())
-        server.stdin.close()
-        server.wait(timeout=30)
-        time.sleep(1.0)
-        if not _alive(host_pid):
-            pytest.skip("this runner tears process trees down by itself; nothing to compare")
-        assert _alive(host_pid)
-    finally:
-        if server.poll() is None:
-            server.kill()
-            server.wait(timeout=30)
-        if host_pid is not None and _alive(host_pid):
-            _terminate(host_pid)
 
 
 # -- The official host -------------------------------------------------------

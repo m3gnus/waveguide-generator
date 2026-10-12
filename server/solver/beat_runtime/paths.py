@@ -1,4 +1,4 @@
-"""Provider-scoped roots, separate from HBB and swept solve sessions.
+"""Provider-scoped roots, separate from swept solve sessions.
 
 These accessors only select paths; future state/registry owners create private
 directories. WG overrides select bases, never the provider directory itself.
@@ -19,41 +19,6 @@ HOST_PROTOCOL = "wg-beat-host"
 HOST_PROTOCOL_VERSION = 2
 RUNTIME_DIR_ENV = "WG2_BEAT_RUNTIME_DIR"
 WORKER_DIR_ENV = "WG2_BEAT_WORKER_DIR"
-# HBB's root overrides. Without them HBB uses the defaults in _hbb_roots.
-HBB_ROOT_ENVS = ("HORNLAB_BEAT_RUNTIME_DIR", "HORNLAB_BEAT_WORKER_DIR")
-
-
-class RootConflict(ValueError):
-    """A WG root would share a directory tree with HBB's state or registry."""
-
-
-def _hbb_roots(
-    env: Mapping[str, str], system: str, home: Path, temp_dir: Path | None, uid: int | None
-) -> dict[str, Path]:
-    """HBB's effective runtime and worker roots (hornlab_beat_bem provision/worker_registry)."""
-    roots = {}
-    runtime = env.get(HBB_ROOT_ENVS[0], "").strip()
-    if runtime:
-        roots[HBB_ROOT_ENVS[0]] = Path(runtime)
-    elif system == "darwin":
-        roots["HBB runtime root"] = home / "Library" / "Application Support" / "hornlab-beat" / "runtime"
-    else:
-        roots["HBB runtime root"] = _data_base(system, env, home) / "hornlab-beat" / "runtime"
-    workers = env.get(HBB_ROOT_ENVS[1], "").strip()
-    if workers:
-        roots[HBB_ROOT_ENVS[1]] = Path(workers)
-    elif system == "win32":
-        roots["HBB worker root"] = _data_base(system, env, home) / "HornLab" / "BEAT" / "workers"
-    else:
-        xdg = env.get("XDG_RUNTIME_DIR", "").strip()
-        if xdg:
-            roots["HBB worker root"] = Path(xdg) / "hornlab-beat"
-        user_id = os.getuid() if uid is None else uid
-        tmp = temp_dir or Path(tempfile.gettempdir())
-        roots["HBB temporary worker root"] = tmp / f"hornlab-beat-{user_id}"
-    return roots
-
-
 def _isolated(
     root: Path,
     env: Mapping[str, str],
@@ -62,11 +27,6 @@ def _isolated(
     temp_dir: Path | None = None,
     uid: int | None = None,
 ) -> Path:
-    resolved = root.expanduser().resolve()
-    for name, legacy_root in _hbb_roots(env, system, home, temp_dir, uid).items():
-        legacy = legacy_root.expanduser().resolve()
-        if resolved == legacy or legacy in resolved.parents or resolved in legacy.parents:
-            raise RootConflict(f"{root} overlaps {name} ({legacy}); choose separate directories")
     return root
 
 
@@ -77,7 +37,7 @@ def checked_root(
     system: str | None = None,
     home: Path | None = None,
 ) -> Path:
-    """Refuse an explicit runtime/worker directory that overlaps HBB's roots.
+    """Normalize an explicit runtime/worker directory.
 
     Every writer that accepts a directory argument calls this before touching
     the filesystem; the defaults from runtime_dir()/worker_dir() already pass.
@@ -96,14 +56,6 @@ def is_link(path: Path) -> bool:
                     & stat.FILE_ATTRIBUTE_REPARSE_POINT)
     except (FileNotFoundError, NotADirectoryError):
         return False
-
-
-def hbb_executable(path: Path, *, environ: Mapping[str, str] | None = None) -> bool:
-    """Identify legacy-managed binaries, including aliases into HBB roots."""
-    env = os.environ if environ is None else environ
-    resolved = path.expanduser().resolve()
-    return any(resolved.is_relative_to(root.expanduser().resolve()) for root in
-               _hbb_roots(env, sys.platform, Path.home(), None, None).values())
 
 
 def _data_base(system: str, env: Mapping[str, str], home: Path) -> Path:

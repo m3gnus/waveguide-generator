@@ -254,10 +254,10 @@ describe('power qualification', () => {
   });
 });
 
-it.each([false, true])('requires the selected BEAT provider pin (imported=%s)', (imported) => {
-  for (const official of [false, true]) {
-    for (const availablePin of ['beat-engine', 'hornlab-beat-bem']) {
-      const pkg = official ? 'beat-engine' : 'hornlab-beat-bem';
+it.each([false, true])('requires the BEAT engine pin (imported=%s)', (imported) => {
+  {
+    for (const availablePin of ['beat-engine', 'hornlab-metal-bem']) {
+      const pkg = 'beat-engine';
       const payload = flat([.1]);
       payload.metadata!.engine = pkg;
       payload.metadata!.solver_backend = 'beat';

@@ -63,7 +63,7 @@ def test_queries_only_selected_rss():
 
 
 def test_sampler_keeps_transaction_selection_when_registry_changes(monkeypatch):
-    from scripts.beat_conformance import run_perf as perf
+    from scripts.beat_conformance import rss_sampler as perf
     from scripts.beat_conformance import mac_processes
     monkeypatch.setattr(perf.sys, 'platform', 'darwin')
     scans = []
@@ -89,7 +89,7 @@ def test_sampler_keeps_transaction_selection_when_registry_changes(monkeypatch):
 
 
 def test_sampler_does_not_fallback_after_native_read_error(monkeypatch):
-    from scripts.beat_conformance import run_perf as perf
+    from scripts.beat_conformance import rss_sampler as perf
     from scripts.beat_conformance import mac_processes
     monkeypatch.setattr(perf.sys, 'platform', 'darwin')
     class Native:
@@ -104,7 +104,7 @@ def test_sampler_does_not_fallback_after_native_read_error(monkeypatch):
 
 
 def test_sampler_keeps_new_descendant_reparented_during_first_transaction(monkeypatch):
-    from scripts.beat_conformance import run_perf as perf
+    from scripts.beat_conformance import rss_sampler as perf
     from scripts.beat_conformance import mac_processes
     monkeypatch.setattr(perf.sys, 'platform', 'darwin')
     before = {10: row(parent=1), 11: row(start=2, parent=10)}
@@ -120,7 +120,7 @@ def test_sampler_keeps_new_descendant_reparented_during_first_transaction(monkey
 
 
 def test_retry_does_not_adopt_reused_detached_descendant(monkeypatch):
-    from scripts.beat_conformance import run_perf as perf
+    from scripts.beat_conformance import rss_sampler as perf
     from scripts.beat_conformance import mac_processes
     monkeypatch.setattr(perf.sys, 'platform', 'darwin')
     before = {10: row(parent=1), 11: row(start=2, parent=10)}
@@ -135,7 +135,7 @@ def test_retry_does_not_adopt_reused_detached_descendant(monkeypatch):
 
 
 def test_retry_never_adopts_reused_registry_root(monkeypatch):
-    from scripts.beat_conformance import run_perf as perf
+    from scripts.beat_conformance import rss_sampler as perf
     from scripts.beat_conformance import mac_processes
     monkeypatch.setattr(perf.sys, 'platform', 'darwin')
     monkeypatch.setattr(perf, 'registry_pids', lambda _: {11})
@@ -156,7 +156,7 @@ def test_retry_never_adopts_reused_registry_root(monkeypatch):
 
 
 def test_retry_discovers_children_of_retained_detached_parent(monkeypatch):
-    from scripts.beat_conformance import run_perf as perf
+    from scripts.beat_conformance import rss_sampler as perf
     from scripts.beat_conformance import mac_processes
     monkeypatch.setattr(perf.sys, 'platform', 'darwin')
     before = {10: row(parent=1), 11: row(start=2, parent=10)}
@@ -175,7 +175,7 @@ def test_retry_discovers_children_of_retained_detached_parent(monkeypatch):
 
 
 def test_registry_pid_reused_within_read_stays_excluded_on_next_sample(monkeypatch):
-    from scripts.beat_conformance import run_perf as perf
+    from scripts.beat_conformance import rss_sampler as perf
     from scripts.beat_conformance import mac_processes
     monkeypatch.setattr(perf.sys, 'platform', 'darwin')
     monkeypatch.setattr(perf, 'registry_pids', lambda _: {11})

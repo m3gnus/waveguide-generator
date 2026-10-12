@@ -1,4 +1,4 @@
-"""Declared HBB conformance cases adapted to WG compiled requests."""
+"""Declared conformance cases adapted to WG compiled requests."""
 
 from __future__ import annotations
 

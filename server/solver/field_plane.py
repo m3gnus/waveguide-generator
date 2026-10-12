@@ -368,7 +368,7 @@ class FieldPlaneService:
         timed_out = threading.Event()
         deadline = time.monotonic() + self.timeout_seconds
         if traces[6] == BEAT_FIELD_TRACE_BACKEND:
-            # Imported here, not at module load: under the HBB rollback the
+            # Imported here, not at module load: when field replay is requested the
             # official runtime package must stay unloaded (import isolation).
             from .beat_runtime.session import SessionCancelled
             cancelled: type[BaseException] | tuple[()] = SessionCancelled

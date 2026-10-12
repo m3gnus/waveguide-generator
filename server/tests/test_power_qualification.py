@@ -732,11 +732,10 @@ def test_reopening_an_archived_record_reuses_its_read_time_flags(
 
 
 @pytest.mark.parametrize("imported", [False, True])
-@pytest.mark.parametrize("official", [False, True])
-@pytest.mark.parametrize("available_pin", ["beat-engine", "hornlab-beat-bem"])
-def test_beat_provenance_requires_its_own_provider_pin(imported, official, available_pin):
+@pytest.mark.parametrize("available_pin", ["beat-engine", "hornlab-metal-bem"])
+def test_beat_provenance_requires_its_engine_pin(imported, available_pin):
     payload = _channel([.1], formulation="burton_miller")
-    package = "beat-engine" if official else "hornlab-beat-bem"
+    package = "beat-engine"
     payload["metadata"].update(engine=package, solver_backend="beat")
     payload["metadata"].pop("metal")
     payload["metadata"]["beat"] = {"formulation": "burton_miller"}

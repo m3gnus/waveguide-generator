@@ -89,7 +89,7 @@ describe('operationStageWord', () => {
 
 describe('parseFrequencyProgress', () => {
   it('reads the printed number as the completed count -- every engine\'s callback fires after that frequency finishes', () => {
-    // hornlab_metal_bem/sweep.py, hornlab_beat_bem/sweep.py and
+    // hornlab_metal_bem/sweep.py, beat_engine/sweep.py and
     // hornlab_bempp_bem/sweep.py all invoke progress_callback(i, total, freq)
     // only after appending that frequency's result, and the WG adapters
     // (server/solver/metal.py, beat.py, bempp.py) print index+1 -- so

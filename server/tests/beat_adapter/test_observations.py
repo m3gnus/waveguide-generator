@@ -1,4 +1,4 @@
-"""Frozen donor coordinates and pure HBB frame/request helpers as controls."""
+"""Frozen donor coordinates and pure reference frame/request helpers as controls."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ import pytest
 
 from server.solver.beat_adapter.observations import build_observations
 
-CONTROLS = json.loads((Path(__file__).parent / "fixtures/hbb_controls.json").read_text())
-EXPECTED = json.loads((Path(__file__).parent / "fixtures/hbb_observations.json").read_text())
+CONTROLS = json.loads((Path(__file__).parent / "fixtures/exterior_controls.json").read_text())
+EXPECTED = json.loads((Path(__file__).parent / "fixtures/exterior_observations.json").read_text())
 
 
-def test_cuts_match_frozen_hbb_order_and_non_45_degree_diagonal():
+def test_cuts_match_frozen_reference_order_and_non_45_degree_diagonal():
     layout = build_observations(angle_range=(-90.0, 90.0, 5),
                                 planes=("diagonal", "vertical", "horizontal"),
                                 inclination_deg=30, sphere_grid=None, precision="float64")
@@ -56,7 +56,7 @@ def test_37x72_sphere_has_exact_axes_endpoints_and_theta_major_order(precision, 
                                np.broadcast_to(points[::72, 2, None], (37, 72)), atol=0, rtol=0)
 
 
-def test_frozen_frame_translation_control_without_hbb():
+def test_frozen_frame_translation_control_without_reference():
     control = CONTROLS["frame"]
     layout = build_observations(angle_range=(-90, 90, 5), planes=control["planes"],
                                 origin_m=control["origin_m"], inclination_deg=control["diagonal_inclination_deg"],
@@ -65,23 +65,6 @@ def test_frozen_frame_translation_control_without_hbb():
     for name in control["planes"]:
         np.testing.assert_allclose(layout.points_m[name] + control["translation_m"],
                                    EXPECTED["cuts_radius_2_inclination_30"][name], atol=5e-16, rtol=0)
-
-
-def test_optional_hbb_private_frame_controls_crosscheck(tmp_path):
-    hbb = pytest.importorskip("hornlab_beat_bem", reason="Optional HBB frame cross-check needs hornlab_beat_bem")
-    sweep = pytest.importorskip("hornlab_beat_bem.sweep")
-    control = CONTROLS["frame"]
-    frame = hbb.ObservationFrame(axis=np.array([0, 0, 1]), origin=np.array(control["origin_m"]),
-                                 u=np.array([1, 0, 0]), v=np.array([0, 1, 0]))
-    observation = hbb.ObservationConfig(planes=control["planes"], distance_m=2,
-                                       angle_min_deg=-90, angle_max_deg=90, angle_count=5,
-                                       inclination_deg=30, sphere_grid=(3, 4), origin="throat")
-    translation = sweep._validated_frame_translation(frame)
-    np.testing.assert_array_equal(translation, control["translation_m"])
-    payload = sweep._request_payload(tmp_path / "unused.msh", np.array([500.]),
-                                     hbb.SolveConfig(observation=observation, frame_override=frame), translation)
-    assert payload["config"]["step_size"] == control["step_size"]
-    assert payload["config"]["diagonal_inclination_deg"] == control["diagonal_inclination_deg"]
 
 
 def test_imported_global_frame_maps_all_cuts_and_sphere_together():
@@ -94,7 +77,7 @@ def test_imported_global_frame_maps_all_cuts_and_sphere_together():
         np.testing.assert_array_equal(mapped.points_m[name], local.points_m[name] @ rotation.T + origin)
 
 
-def test_polar_metadata_retains_hbb_float32_angle_rounding():
+def test_polar_metadata_retains_reference_float32_angle_rounding():
     layout = build_observations(angle_range=(-10, 10, 4), sphere_grid=None, precision="float64")
     np.testing.assert_array_equal(layout.angles_deg, np.linspace(-10, 10, 4).astype(np.float32).astype(float))
     assert len(build_observations(angle_range=(0, 0, 1)).angles_deg) == 1

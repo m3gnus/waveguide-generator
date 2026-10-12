@@ -158,7 +158,7 @@ def _pressure(result: object, options: dict) -> None:
 
 
 def compiled_probe(worker: ProbeWorker, *, directory: Path, backend: str = "cpu") -> ProbeResult:
-    """Prove matching negotiated results in caller-owned, HBB-isolated staging.
+    """Prove matching negotiated results in caller-owned, isolated staging.
 
     An injected fake can impersonate the engine. Readiness authenticity comes
     from the WG-owned worker launch, not from this probe's wire validation.

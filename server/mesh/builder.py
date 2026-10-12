@@ -529,7 +529,7 @@ def _dense_solver_memory_requirements(
     A BEMPP symmetry solve additionally operates on mirrored full geometry and
     keeps three reduced-row by full-trial arrays. BEAT's exterior CPU path is
     the fused Burton-Miller assembly: it allocates only the reduced N x N
-    complex64 system (hornlab-beat-bem ``docs/beat-engine-CPU.md``), with image
+    complex64 system, with image
     contributions folded into it, and the dense factorisation may hold one
     copy more. Taking the largest backend estimate prevents symmetry or
     aperture coupling from understating memory; the admission runs before an

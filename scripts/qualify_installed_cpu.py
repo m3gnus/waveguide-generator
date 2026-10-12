@@ -64,7 +64,6 @@ from urllib.request import Request, urlopen
 # Direct script invocation must find the WG-owned provider selector and job probe.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server.platform import process_tree  # noqa: E402
-from server.solver.beat_runtime import provider  # noqa: E402
 
 
 # Kept here because server.tests.backend_breakaway imports pytest, while this
@@ -107,7 +106,7 @@ IB_FREQUENCIES = [1000.0, 4000.0]
 #: reported.
 CPU_ENGINE = "beat-cpu"
 CPU_RESULT_CONTRACT = {
-    "engine": "hornlab-beat-bem",
+    "engine": "beat-engine",
     "solver_backend": "beat",
     "beat_backend": "cpu",
 }
@@ -183,98 +182,13 @@ FRESH_INSTALL_BLOCKING: dict[str, str | None] = {
 #: that: after a recorded host exits the operating system may reissue its pid,
 #: and an unrelated process would inherit a positive answer and then a signal.
 #: A record that will not authenticate is reported and left strictly alone.
-_IDENTIFY_AND_STOP = r"""
-import json, sys, time
-from pathlib import Path
-
-from hornlab_beat_bem import worker_registry as registry
-from hornlab_beat_bem.worker_client import find_live_hosts, receive_frame, send_frame
-
-directory, action = sys.argv[1], sys.argv[2]
-
-
-def identity(record):
-    try:
-        connection = record.endpoint.connect(timeout=5.0)
-    except (OSError, ValueError):
-        return None
-    try:
-        connection.settimeout(10.0)
-        send_frame(connection, {"op": "hello", "protocol": registry.PROTOCOL_VERSION,
-                                "key_id": record.identifier, "key": record.key,
-                                "token": record.token})
-        reply = receive_frame(connection)
-        if reply is None or str(reply.get("type", "")) != "hello_ok":
-            return None
-        engine = reply.get("engine_pid")
-        send_frame(connection, {"op": "ping"})
-        for _ in range(8):
-            event = receive_frame(connection)
-            if event is None:
-                return None
-            if str(event.get("type", "")) == "pong":
-                if event.get("host_pid") != record.pid:
-                    return None
-                return {"host_pid": record.pid,
-                        "engine_pid": engine if isinstance(engine, int) else -1}
-        return None
-    except Exception:
-        return None
-    finally:
-        try:
-            connection.close()
-        except OSError:
-            pass
-
-
-# The directory the package would use on its own. If the override did not take
-# effect this is the user's own registry, and nothing below may touch it.
-effective = str(registry.worker_dir())
-contained = Path(effective).resolve() == Path(directory).resolve()
-if not contained:
-    print(json.dumps({"verified": [], "refused": [], "effective_worker_dir": effective,
-                      "contained": False,
-                      "note": "refused to read or signal a registry outside the gate tree"}))
-    raise SystemExit(0)
-
-# HBB launch keys persist after shutdown and are not host records, exactly
-# as in find_live_hosts. Count records before inspection can prune them.
-records = [path.name for path in sorted(Path(directory).glob("*.json"))
-           if not path.name.endswith(".key.json")] if action == "inspect" else []
-verified, refused = [], []
-for host in find_live_hosts(directory):
-    found = identity(host)
-    if found is None:
-        if registry.pid_alive(host.pid):
-            refused.append({"pid": host.pid, "reason": "did not authenticate as itself"})
-        continue
-    verified.append(found)
-    if action == "stop":
-        registry.terminate_pid(host.pid)
-
-if action == "stop" and verified:
-    deadline = time.monotonic() + 30.0
-    while time.monotonic() < deadline:
-        if not any(registry.pid_alive(item["host_pid"]) for item in verified):
-            break
-        time.sleep(0.2)
-    verified = [dict(item, still_alive=registry.pid_alive(item["host_pid"]))
-                for item in verified]
-
-print(json.dumps({"verified": verified, "refused": refused,
-                  "effective_worker_dir": effective, "contained": True, "records": records}))
-"""
-
 _IDENTIFY_AND_STOP_OFFICIAL = r"""
 import json, os, sys
 from pathlib import Path
 sys.path.insert(0, os.environ["WG2_APP_ROOT"])
 from server.solver.beat_runtime import paths
 from server.solver.beat_runtime.inspection import inspect_hosts
-from server.solver.beat_runtime.provider import official_selected
 
-if not official_selected():
-    raise RuntimeError("Official BEAT inspection requires the official provider")
 directory = Path(sys.argv[1]) / paths.PROVIDER_ID
 print(json.dumps(inspect_hosts(directory, stop=sys.argv[2] == "stop")))
 """
@@ -286,10 +200,7 @@ import json, os, sys
 from pathlib import Path
 sys.path.insert(0, os.environ["WG2_APP_ROOT"])
 from server.solver.beat_runtime import paths, probe, readiness, state
-from server.solver.beat_runtime.provider import official_selected
 
-if not official_selected():
-    raise RuntimeError("Official runtime inspection requires the official provider")
 root = paths.runtime_dir()
 expected = Path(os.environ["WG2_BEAT_RUNTIME_DIR"]) / paths.PROVIDER_ID
 if root.resolve() != expected.resolve():
@@ -384,7 +295,7 @@ def isolated_user_directories(work: Path) -> dict[str, str]:
 
 
 def isolated_environment(
-    app: Path, work: Path, *, beat_provider: str | None = None,
+    app: Path, work: Path, *,
     official_runtime_work: Path | None = None,
 ) -> dict[str, str]:
     """The environment the packaged launchers build, pointed at this run's tree.
@@ -404,8 +315,7 @@ def isolated_environment(
     ``HOME`` do so elsewhere. Set these before startup: older payloads may
     create or repair ACLs on their Documents workspace despite ``--data-dir``.
 
-    A sibling gate can explicitly select ``beat_provider`` without changing
-    its caller's environment. ``official_runtime_work`` reuses the official
+    ``official_runtime_work`` reuses the official
     CPU gate's runtime and depot together (readiness keys both paths); its
     registry, user directories and other caches remain in the new work tree.
     """
@@ -421,8 +331,6 @@ def isolated_environment(
         directory.mkdir(parents=True, exist_ok=True)
 
     environment = os.environ.copy()
-    if beat_provider is not None:
-        environment["WG2_BEAT_PROVIDER"] = beat_provider
     for name in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "WG2_BEAT_JULIA"):
         environment.pop(name, None)
     environment.update(
@@ -432,35 +340,13 @@ def isolated_environment(
         PYTHONPYCACHEPREFIX=str(caches / "pycache"),
         NUMBA_CACHE_DIR=str(caches / "numba"),
         MPLCONFIGDIR=str(caches / "matplotlib"),
-        HORNLAB_BEAT_RUNTIME_DIR=str(work / "beat-runtime"),
-        # HORNLAB_BEAT_RUNTIME_DIR isolates the *provisioning record*, not
-        # Julia's own package store. The pinned package launches Julia with
-        # ``{**os.environ, ...}`` and never sets JULIA_DEPOT_PATH, so without
-        # this a run reads and writes the caller's ``~/.julia`` -- and a report
-        # claiming every cache was isolated would be wrong.
-        #
-        # It is also a stricter test than a user's machine gets, and that is
-        # worth naming rather than glossing: with an empty depot the
-        # application's own preparation has to fetch everything, so a pass here
-        # is closer to clean-machine evidence, and a run that reuses a populated
-        # ``~/.julia`` is not.
         JULIA_DEPOT_PATH=str(work / "julia-depot"),
-        # The name the pinned package actually reads is WORKER_DIR_ENV_VAR, and
-        # it is HORNLAB_BEAT_WORKER_DIR. An invented name is not an isolation
-        # failure that shows up as an error: the override is simply ignored, the
-        # workers land in the *user's* default registry, and the directory this
-        # gate then reports as isolated is one nothing ever wrote to. The
-        # containment check below exists because that failure is silent.
-        HORNLAB_BEAT_WORKER_DIR=str(work / "beat-registry"),
     )
     environment.update(isolated_user_directories(work))
-    if provider.official_selected(environment):
-        runtime_work = official_runtime_work or work
-        environment.update(WG2_BEAT_RUNTIME_DIR=str(runtime_work / "official-beat-runtime"),
-                           WG2_BEAT_WORKER_DIR=str(work / "official-beat-registry"))
-        environment["JULIA_DEPOT_PATH"] = str(runtime_work / "julia-depot")
-    elif official_runtime_work is not None:
-        raise QualificationError("official runtime reuse requires the official provider")
+    runtime_work = official_runtime_work or work
+    environment.update(WG2_BEAT_RUNTIME_DIR=str(runtime_work / "official-beat-runtime"),
+                       WG2_BEAT_WORKER_DIR=str(work / "official-beat-registry"))
+    environment["JULIA_DEPOT_PATH"] = str(runtime_work / "julia-depot")
     return environment
 
 
@@ -789,7 +675,7 @@ def backend_breakaway_permitted() -> bool:
 
 
 def ensure_backend_cold_start_phase(
-    interpreter: Path, app: Path, work: Path, output: Path, *, beat_provider: str | None = None,
+    interpreter: Path, app: Path, work: Path, output: Path,
 ) -> dict[str, Any]:
     """Exercise detached startup when allowed, otherwise record the GUI start."""
     if not backend_breakaway_permitted():
@@ -803,12 +689,11 @@ def ensure_backend_cold_start_phase(
             "refusal": WINDOWS_BREAKAWAY_REFUSAL,
         }
     return {"exercised": True, **check_ensure_backend_cold_start(
-        interpreter, app, work, output, beat_provider=beat_provider,
-    )}
+        interpreter, app, work, output, )}
 
 
 def check_ensure_backend_cold_start(
-    interpreter: Path, app: Path, work: Path, output: Path, *, beat_provider: str | None = None,
+    interpreter: Path, app: Path, work: Path, output: Path,
 ) -> dict[str, Any]:
     """A fresh default profile: installed admission, caller exit, then GUI argv.
 
@@ -819,7 +704,7 @@ def check_ensure_backend_cold_start(
     profile = work / "ensure-cold-start"
     if profile.exists():
         raise QualificationError("cold-start qualification requires a fresh ensure-cold-start folder")
-    environment = isolated_environment(app, profile, beat_provider=beat_provider)
+    environment = isolated_environment(app, profile, )
     environment.pop("WG2_DATA_DIR", None)
     environment["XDG_DATA_HOME"] = str(profile / "xdg-data")
     environment["WG2_PORT"] = str(free_port())
@@ -1187,16 +1072,10 @@ def diagnose_preparation(
     says nothing about a clean machine, so which happened is recorded.
     """
 
-    official = provider.official_selected(environment)
-    if official:
-        from server.solver.beat_runtime import paths
-        runtime_dir = str(paths.runtime_dir(environ=environment))
-        module = "server.solver.beat_runtime.cli"
-        julia_env = "WG2_BEAT_JULIA"
-    else:
-        runtime_dir = environment["HORNLAB_BEAT_RUNTIME_DIR"]
-        module = "hornlab_beat_bem.provision"
-        julia_env = "HORNLAB_BEAT_JULIA"
+    from server.solver.beat_runtime import paths
+    runtime_dir = str(paths.runtime_dir(environ=environment))
+    module = "server.solver.beat_runtime.cli"
+    julia_env = "WG2_BEAT_JULIA"
     completed = subprocess.run(  # noqa: S603 - packaged interpreter, documented module
         [str(interpreter), "-m", module, "--backend", "cpu"],
         cwd=str(app),
@@ -1412,19 +1291,19 @@ def check_axes(
 
 
 def check_solve(
-    result: dict[str, Any], expected_pins: dict[str, str], *, official: bool = False,
+    result: dict[str, Any], expected_pins: dict[str, str], *, official: bool = True,
 ) -> dict[str, Any]:
     """The solve reported the CPU backend, drifted from nothing, and has numbers."""
 
     metadata = result.get("metadata", {})
-    contract = dict(CPU_RESULT_CONTRACT, engine="beat-engine") if official else CPU_RESULT_CONTRACT
+    contract = dict(CPU_RESULT_CONTRACT, engine="beat-engine")
     actual = {key: metadata.get(key) for key in contract}
     if actual != contract:
         raise QualificationError(
             f"a {CPU_ENGINE!r} solve reported {actual!r}, expected {contract!r}"
         )
     reported_revision = (result.get("provenance", {}).get("dependency_shas") or {}).get("beat-engine")
-    if official and (not expected_pins.get("beat-engine")
+    if (not expected_pins.get("beat-engine")
                      or reported_revision != expected_pins["beat-engine"]):
         raise QualificationError("the official solve must report the pinned beat-engine revision")
     provenance = check_dependency_drift(result, expected_pins)
@@ -1604,13 +1483,12 @@ def stop_our_workers(
     qualification, keeping an earlier failure if there was one.
     """
 
-    official = provider.official_selected(environment)
-    worker_directory = environment["WG2_BEAT_WORKER_DIR" if official else "HORNLAB_BEAT_WORKER_DIR"]
+    worker_directory = environment["WG2_BEAT_WORKER_DIR"]
     completed = subprocess.run(  # noqa: S603 - packaged interpreter, fixed program
         [
             str(interpreter),
             "-c",
-            _IDENTIFY_AND_STOP_OFFICIAL if official else _IDENTIFY_AND_STOP,
+            _IDENTIFY_AND_STOP_OFFICIAL,
             worker_directory,
             "stop",
         ],
@@ -1648,7 +1526,7 @@ def stop_our_workers(
             f"{answer.get('effective_worker_dir')!r}, not "
             f"{worker_directory!r}. Nothing was signalled."
         )
-    if official and answer.get("refused"):
+    if (answer.get("refused")):
         raise QualificationError(f"official worker inspection refused records: {answer['refused']}")
     return answer
 
@@ -1817,7 +1695,7 @@ def check_imported_result(
     *,
     channels: list[str],
     frequencies: list[float],
-    official: bool = False,
+    official: bool = True,
 ) -> dict[str, Any]:
     """An imported solve ran on the engine asked for, answered what was asked, and has numbers.
 
@@ -1840,7 +1718,7 @@ def check_imported_result(
             f"an imported solve requested on {requested!r} reported "
             f"solver_engine.engine {engine!r}"
         )
-    if official and requested.startswith("beat-") and solver_engine.get("package") != "beat-engine":
+    if (requested.startswith("beat-")) and (solver_engine.get("package") != "beat-engine"):
         raise QualificationError("the imported official solve must report package 'beat-engine'")
     if metadata.get("geometry_type") != "imported":
         raise QualificationError(
@@ -1863,8 +1741,7 @@ def check_imported_result(
             raise QualificationError(
                 f"channel {channel!r} of the imported result on {requested!r} is not an object"
             )
-        if (official and requested.startswith("beat-")
-                and (payload.get("metadata") or {}).get("engine") != "beat-engine"):
+        if ((requested.startswith("beat-")) and ((payload.get("metadata") or {}).get("engine") != "beat-engine")):
             raise QualificationError(
                 f"imported official channel {channel!r} must report engine 'beat-engine'"
             )
@@ -2191,7 +2068,7 @@ def qualify_imported_return(
                 engine,
                 channels=[str(channel["id"]) for channel in geometry["drive_channels"]],
                 frequencies=list(IMPORTED_FREQUENCIES),
-                official=provider.official_selected(environment),
+                official=True,
             )
             entry.update(
                 decision="solved",
@@ -2297,14 +2174,13 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
     data_dir = work / "data"
-    environment = isolated_environment(app, work, beat_provider=arguments.beat_provider)
+    environment = isolated_environment(app, work, )
     expected_pins = pins_from_file(arguments.pins_json)
     pinned_beat_revision = expected_pins.get("beat-engine")
     expected_pins.update(arguments.expected_pin or {})
-    official = provider.official_selected(environment)
 
     report.update({
-        "provider": "official" if official else "hbb",
+        "provider": "official",
         "payload": str(resources),
         "payload_kind": arguments.payload_kind,
         "platform": {"system": platform.system(), "machine": platform.machine()},
@@ -2312,11 +2188,9 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
         "isolated": {
             "data_dir": str(data_dir),
             "beat_runtime_dir": environment[
-                "WG2_BEAT_RUNTIME_DIR" if provider.official_selected(environment)
-                else "HORNLAB_BEAT_RUNTIME_DIR"],
+                "WG2_BEAT_RUNTIME_DIR"],
             "worker_registry": environment[
-                "WG2_BEAT_WORKER_DIR" if provider.official_selected(environment)
-                else "HORNLAB_BEAT_WORKER_DIR"],
+                "WG2_BEAT_WORKER_DIR"],
             "julia_depot": environment["JULIA_DEPOT_PATH"],
             "python_cache": environment["PYTHONPYCACHEPREFIX"],
             "numba_cache": environment["NUMBA_CACHE_DIR"],
@@ -2335,7 +2209,7 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
         if value is not None:
             expected_identity[field] = value
     report["app_manifest"] = check_manifest(app, expected_identity)
-    if official and (not pinned_beat_revision or expected_pins.get("beat-engine") != pinned_beat_revision):
+    if (not pinned_beat_revision or expected_pins.get("beat-engine") != pinned_beat_revision):
         raise QualificationError("official qualification requires the beat-engine revision from --pins-json")
     report["pins"] = check_pins(interpreter, expected_pins, environment)
 
@@ -2348,8 +2222,7 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
     # knows where to look even if the very next call raises.
     arguments.cleanup = (interpreter, environment, output)
     report["ensure_backend_cold_start"] = ensure_backend_cold_start_phase(
-        interpreter, app, work, output, beat_provider=arguments.beat_provider,
-    )
+        interpreter, app, work, output, )
     control = work / "status" / "stop-1"
     # One server for the whole gate: the row the application published and the
     # solve that uses it are then the same process, so "offered" cannot describe
@@ -2385,15 +2258,14 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
             "after": "the application's own preparation",
             "settled": report["cpu_preparation"]["settled"],
         }
-        if official:
-            report["official_runtime"] = check_official_runtime(
-                interpreter, app, environment, output,
-                report["pins"]["found"]["beat-engine"]["commit"],
-            )
+        report["official_runtime"] = check_official_runtime(
+            interpreter, app, environment, output,
+            report["pins"]["found"]["beat-engine"]["commit"],
+        )
         report["workspace"] = workspace_isolation(server.base, work)
         result = server.completed(server.solve(SOLVE_FREQUENCIES, CPU_ENGINE))
         (output / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-        report["solve"] = check_solve(result, expected_pins, official=official)
+        report["solve"] = check_solve(result, expected_pins, official=True)
         report["gpu_independence"] = gpu_independence(capabilities, report["solve"])
         if arguments.ib_engine:
             section: dict[str, Any] = {}
@@ -2482,8 +2354,6 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="installed application root (holding app/ and runtime/), or a macOS .app",
     )
-    parser.add_argument("--beat-provider", choices=("official", "hbb", "legacy"),
-                        help="BEAT provider (default: official, or WG2_BEAT_PROVIDER; hbb/legacy is the one-release rollback)")
     parser.add_argument(
         "--payload-kind",
         default="unspecified",

@@ -92,8 +92,6 @@ def test_imported_beat_cpu_refresh_restores_the_complete_capability_row(
     monkeypatch: pytest.MonkeyPatch, preparing: bool, detection: str,
 ) -> None:
     """A ready CPU must accept CAD while the GPU probe is slow or has failed."""
-    # The readiness fakes below model the HBB rollback's live CPU refresh.
-    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")
 
     from server.diagnostics.capabilities import capabilities_payload
     from server.engines import registry
@@ -103,15 +101,14 @@ def test_imported_beat_cpu_refresh_restores_the_complete_capability_row(
     monkeypatch.setattr(registry, "CAPABILITIES_WAIT_SECONDS", 0.01)
     monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: preparing)
     monkeypatch.setattr(beat_cpu_runtime, "runtimes_prepared_this_process", lambda: False)
-    monkeypatch.setattr(beat, "_load_api", lambda: SimpleNamespace(
-        SolveConfig=lambda surface_traces=False: None,
-    ))
-    monkeypatch.setattr(beat, "_cpu_backend_status", lambda _package: (True, "CPU ready"))
-    monkeypatch.setattr(beat, "beat_backend_statuses", lambda: {
-        backend: {"available": backend == "cpu", "reason": "startup verdict",
-                  "version": "test", "surface_traces": True}
+    from server.solver import official_beat
+    statuses = {
+        backend: {"available": backend == "cpu", "reason": "CPU ready" if backend == "cpu" else "no device",
+                  "version": "test", "surface_traces": True, "state": "ready" if backend == "cpu" else "no-device"}
         for backend in beat.BEAT_BACKENDS
-    })
+    }
+    monkeypatch.setattr(official_beat, "production_statuses", lambda **kwargs: statuses)
+    monkeypatch.setattr(registry, "_official_runtime_statuses", lambda: statuses)
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ready"})
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "no OpenCL"})
     engine_registry = registry.EngineRegistry(factory=lambda name: SimpleNamespace(name=name))

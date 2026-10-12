@@ -64,8 +64,6 @@
     "server/tests/test_ground*.py",
     "scripts/tests/test_qualify_imported_same_mesh.py",
     "scripts/tests/test_qualify_ingest_level.py",
-    "server/tests/test_beat_cpu_availability.py",
-    "server/tests/test_beat_cpu_runtime.py",
     "server/tests/test_cad_solver_frame_real.py",
     "server/tests/test_cadlink_ingest.py",
     "server/tests/test_cli_solve.py",

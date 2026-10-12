@@ -207,8 +207,7 @@ def _warm_beat(backend: str) -> None:
 
     BEAT is the one engine whose cost was never being paid off the user's
     first solve, and the one where a warmup is cheapest to justify. Every BEAT
-    solve goes through the selected provider's Julia worker (official by
-    default; HBB with the explicit rollback), so startup is reused -- but nothing
+    solve goes through the official engine's Julia worker, so startup is reused -- but nothing
     was paying it until a user asked for a solve and then waited through Julia
     startup, package loading, engine compilation and accelerator kernel
     compilation before the first frequency began.
@@ -234,27 +233,11 @@ def _warm_beat(backend: str) -> None:
     name that was actually selected.
     """
 
-    from .beat_runtime.provider import official_provider_enabled
+    from .beat_runtime.warmup import warm_up
 
-    if official_provider_enabled():
-        from .beat_runtime.warmup import warm_up
-
-        with beat_warmup_recorded():
-            warm_up(beat_backend=backend, mode="tiny")
-        return
-
-    import hornlab_beat_bem
-
-    from .beat_threads import beat_julia_threads
-
-    # Recorded around the call, not inside the package: a solve that arrives
-    # now waits for the same worker, and ``beat_warmup_in_progress`` is what
-    # lets ``server/solver/beat.py`` say so instead of leaving the user on
-    # "Configuring BEAT Engine BEM solve" for the length of the compile.
     with beat_warmup_recorded():
-        hornlab_beat_bem.warm_up(
-            beat_backend=backend, mode="tiny", julia_threads=beat_julia_threads(backend)
-        )
+        warm_up(beat_backend=backend, mode="tiny")
+    return
 
 
 def warm_bempp_in_this_process(status: Mapping[str, object]) -> None:
@@ -309,11 +292,9 @@ def _warm_bempp(status: Mapping[str, object]) -> None:
 
 def _warmup_beat_status() -> dict[str, Any]:
     """Select from the same official readiness rows AUTO uses."""
-    from .beat_runtime.provider import official_selected
+
     from . import beat
 
-    if not official_selected():
-        return beat.beat_status()
     from .official_beat import production_statuses
 
     statuses = production_statuses()
@@ -342,14 +323,10 @@ def _beat_cpu_leads_bempp() -> bool:
     cpu_engine = beat_adapter.beat_engine_name(beat_adapter.BEAT_CPU_BACKEND)
     if order.index(cpu_engine) > order.index("bempp"):
         return False
-    from .beat_runtime.provider import official_selected
 
-    if official_selected():
-        from .official_beat import production_statuses
+    from .official_beat import production_statuses
 
-        statuses = production_statuses()
-    else:
-        statuses = beat_adapter.beat_backend_statuses()
+    statuses = production_statuses()
     return bool(statuses.get(beat_adapter.BEAT_CPU_BACKEND, {}).get("available"))
 
 
@@ -549,9 +526,8 @@ def prewarm_beat_worker_for_engine(engine: str | None) -> bool:
             # variant. Letting the package's own probe choose is what this hook
             # did for that name before the split, and it beats warming nothing.
             status = _warmup_beat_status()
-            from .beat_runtime.provider import official_selected
 
-            if official_selected() and not status.get("available"):
+            if (not status.get("available")):
                 log.info("BEAT worker prewarm skipped: %s", status.get("reason"))
                 return False
             backend = beat_adapter.resolve_beat_backend(status)

@@ -142,7 +142,7 @@ def _start_beat_cpu_provisioning() -> None:
 
     The source install provisions from ``scripts/bootstrap.py``, which the
     packaged application never runs: it ships a prebuilt runtime layer with
-    ``beat-engine`` already installed (or ``hornlab-beat-bem`` for rollback).
+    ``beat-engine`` already installed.
     Without this, nothing would fetch the Julia that backend needs and the engine would be permanently
     unavailable on exactly the machines it exists for.
 

@@ -13,8 +13,8 @@ from scripts import bootstrap
 @pytest.mark.parametrize("selector,module", [("official", "server.solver.beat_runtime.cli"),
                                             (" official ", "server.solver.beat_runtime.cli"),
                                             ("Official", "server.solver.beat_runtime.cli"),
-                                            ("hbb", "hornlab_beat_bem.provision"),
-                                            ("legacy", "hornlab_beat_bem.provision"),
+                                            ("hbb", "server.solver.beat_runtime.cli"),
+                                            ("legacy", "server.solver.beat_runtime.cli"),
                                             ("", "server.solver.beat_runtime.cli"),
                                             (None, "server.solver.beat_runtime.cli")])
 def test_shared_selector_bootstrap_commands(monkeypatch, selector, module):
@@ -27,9 +27,8 @@ def test_shared_selector_bootstrap_commands(monkeypatch, selector, module):
     monkeypatch.setattr(bootstrap.platform, "system", lambda: "Linux")
     calls = []
     monkeypatch.setattr(bootstrap, "_run", lambda command, **kwargs: calls.append(command) or SimpleNamespace(returncode=0))
-    monkeypatch.setattr(bootstrap, "_beat_provision_facts", lambda python: {"cpu": True, "gpu": "metal", "per_backend": True})
     bootstrap._provision_beat_runtime(Path("python"))
-    assert calls == [["python", "-c", "import beat_engine" if module == "server.solver.beat_runtime.cli" else "import hornlab_beat_bem.provision"],
+    assert calls == [["python", "-c", "import beat_engine"],
                      ["python", "-m", module, "--if-gpu"], ["python", "-m", module, "--backend", "cpu"]]
 
 

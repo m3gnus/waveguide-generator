@@ -1,16 +1,13 @@
-"""Native corpus evidence regression coverage; no engines are launched."""
-from __future__ import annotations
+"""Portable JSON serialization for official conformance artifacts."""
 
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath, PureWindowsPath
 import threading
 from typing import Any
-
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import numpy as np
 import pytest
 
-from scripts.beat_conformance import corpus, json_io, run_corpus as runner
-
+from scripts.beat_conformance import corpus, json_io
 
 @dataclass
 class CapturedConfig:
@@ -73,8 +70,8 @@ def assert_sample(decoded, expected):
 def test_corpus_json_dataclass_callbacks_and_numpy_roundtrip(tmp_path, dtype):
     expected = sample(dtype)
     path = tmp_path / "raw.json"
-    runner.write_json(path, expected)
-    assert_sample(runner.read_json(path), expected)
+    json_io.write_json(path, expected)
+    assert_sample(json_io.read_json(path), expected)
     assert "NaN" not in path.read_text() and "Infinity" not in path.read_text()
 
 
@@ -89,8 +86,8 @@ def test_corpus_json_dataclass_callbacks_and_numpy_roundtrip(tmp_path, dtype):
 ])
 def test_corpus_json_windows_paths_roundtrip_without_changing_identity(path, tmp_path):
     output = tmp_path / "paths.json"
-    runner.write_json(output, {"executable": path, "by_path": {path: "evidence"}})
-    decoded = runner.read_json(output)
+    json_io.write_json(output, {"executable": path, "by_path": {path: "evidence"}})
+    decoded = json_io.read_json(output)
     assert decoded["executable"] == path.as_posix()
     assert decoded["by_path"] == {path.as_posix(): "evidence"}
     assert PureWindowsPath(decoded["executable"]) == path
@@ -101,8 +98,8 @@ def test_corpus_json_windows_paths_roundtrip_without_changing_identity(path, tmp
 def test_corpus_json_path_conversion_preserves_posix_backslashes_and_strings(tmp_path):
     path = PurePosixPath(r"/external/literal\filename")
     value = {"path": path, "string": r"D:\runtime\julia.exe"}
-    runner.write_json(tmp_path / "paths.json", value)
-    assert runner.read_json(tmp_path / "paths.json") == {"path": path.as_posix(), "string": value["string"]}
+    json_io.write_json(tmp_path / "paths.json", value)
+    assert json_io.read_json(tmp_path / "paths.json") == {"path": path.as_posix(), "string": value["string"]}
 
 
 def test_corpus_json_normalized_path_key_collision_is_refused():
@@ -111,74 +108,19 @@ def test_corpus_json_normalized_path_key_collision_is_refused():
         json_io.dumps({path: 1, path.as_posix(): 2})
 
 
-@pytest.mark.parametrize("official", [False, True])
-@pytest.mark.parametrize("imported", [False, True])
-def test_corpus_engine_child_serializes_native_and_response(tmp_path, monkeypatch, official, imported):
-    case = corpus.CASES["imported-two-sources" if imported else "osse-quarter"]
-    record = {"sources": [{"id": "a"}, {"id": "b"}]} if imported else None
-    frozen = corpus.FrozenCase(case, case.request(record=record).model_dump(mode="json"),
-                              (corpus.ROOT / "server/solver/warmup_mesh.msh").read_bytes(), record, {})
-    corpus.save_frozen(frozen, tmp_path)
-    job, output = tmp_path / "job.json", tmp_path / ("official.json" if official else "hbb.json")
-    runner.write_json(job, {"case": case.name, "frequencies_hz": [500., 750., 1000.]})
-    expected = sample()
-    def route(text, request, *args, **kwargs):
-        assert kwargs["_official"] is official
-        channels = [c.id for c in request.geometry.drive_channels] if imported else ["source"]
-        for channel in channels:
-            kwargs["_native_result_callback"](channel, expected)
-        # Packaging is allowed to mutate a native result after the callback.
-        expected.pressure_complex[0, 0, 0] = 99j
-        return {"metadata": {"stats": sample(), "callback": Progress()}, "artifact": b"NPZ"}
-    production = runner.production_run
-    monkeypatch.setattr(runner, "production_run", lambda *a, **k: production(*a, **k, routes=(route, route)))
-    name = "beat-engine" if official else "hornlab-beat-bem"
-    identity = {"distributions": {name: {"revision": "a" * 40, "direct_url": {"vcs_info": {"commit_id": "a" * 40}}}}, "hbb_pin": "a" * 40, "wg_commit": {"returncode": 0, "stdout": "wg-test"},
-                "wg_worktree": {"returncode": 0, "stdout": ""}}
-    monkeypatch.setattr(runner, "capture_identity", lambda _: identity)
-    monkeypatch.setattr(runner.signal, "signal", lambda *args: None)
-    assert runner.engine_child(job, output, official=official, backend="cpu", precision="float64", julia="fake") == 0
-    result = runner.read_json(output)
-    assert "error" not in result and result["official"] is official
-    for values in result["native"].values():
-        assert_sample(values, sample())
-    assert_sample(result["response"]["metadata"]["stats"], sample())
-    assert result["response"]["metadata"]["__omitted_fields__"]["callback"] == json_io.CALLABLE_REASON
-    assert result["response"]["artifact"] == b"NPZ"
-
-
-def test_corpus_json_real_hbb_solve_result(tmp_path):
-    result_module = pytest.importorskip("hornlab_beat_bem.result")
-    from hornlab_beat_bem.config import SolveConfig
-    native = sample()
-    result = result_module.SolveResult(
-        frequencies_hz=native.frequencies_hz, pressure_complex=native.pressure_complex,
-        spl_db=np.zeros(native.pressure_complex.shape), impedance=np.array([1+2j, 2j, 3j]),
-        observation_angles_deg=np.array([0., 30.]), observation_planes=["horizontal"],
-        config=SolveConfig(progress_callback=Progress().progress, julia_executable="/external/julia"),
-        mesh_info=result_module.MeshInfo(np.int64(4), 4, {np.int64(2): np.float64(0.01)}),
-    )
-    path = tmp_path / "hbb.json"
-    runner.write_json(path, result)
-    decoded = runner.read_json(path)
-    assert decoded["config"]["__omitted_fields__"]["progress_callback"] == json_io.CALLABLE_REASON
-    assert decoded["mesh_info"]["physical_tag_areas_m2"] == {"2": 0.01}
-    assert decoded["pressure_complex"][0, 0, 0] == result.pressure_complex[0, 0, 0]
-
-
 @pytest.mark.parametrize("value", [object(), {lambda: None: 1}])
 def test_corpus_json_unknown_objects_fail_without_stringifying(tmp_path, value):
     path = tmp_path / "raw.json"
     with pytest.raises(TypeError, match=r"at \$.response"):
-        runner.write_json(path, {"response": value})
+        json_io.write_json(path, {"response": value})
     assert not path.exists()
 
 
 def test_corpus_json_sequence_callbacks_keep_positions_and_array_shape(tmp_path):
     path = tmp_path / "raw.json"
-    runner.write_json(path, {"log": [1, Progress(), 2], "matrix": np.array([[Progress(), 3]], dtype=object),
+    json_io.write_json(path, {"log": [1, Progress(), 2], "matrix": np.array([[Progress(), 3]], dtype=object),
                              "scalar": np.array(1+2j), "empty": np.empty((0, 2), dtype=np.complex64)})
-    decoded = runner.read_json(path)
+    decoded = json_io.read_json(path)
     assert decoded["log"] == [1, {"__unavailable__": json_io.CALLABLE_REASON}, 2]
     assert decoded["matrix"].shape == (1, 2)
     assert decoded["matrix"][0, 0] == {"__unavailable__": json_io.CALLABLE_REASON}
@@ -191,57 +133,11 @@ def test_corpus_frozen_record_and_stats_use_shared_serializer(tmp_path):
     frozen = corpus.FrozenCase(case, case.request().model_dump(mode="json"), b"mesh", None,
                               {"count": np.int64(4), "scale": np.float32(0.5), "result": sample()})
     corpus.save_frozen(frozen, tmp_path)
-    decoded = runner.read_json(tmp_path / "frozen.json")
+    decoded = json_io.read_json(tmp_path / "frozen.json")
     assert_sample(decoded["mesh_stats"]["result"], sample())
-    assert runner.load_frozen(tmp_path, case).sha256 == frozen.sha256
+    assert corpus.load_frozen(tmp_path, case).sha256 == frozen.sha256
 
 
-def test_corpus_preflight_refuses_before_meshing_or_child(tmp_path, monkeypatch):
-    from server.solver.beat_runtime import readiness
-    monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **k:
-                        readiness.BackendReadiness(False, "stale", "depot differs"))
-    monkeypatch.setattr(runner.subprocess, "Popen", lambda *a, **k: pytest.fail("child started"))
-    case = corpus.CASES["osse-quarter"]
-    monkeypatch.setattr(runner, "wg_identity", lambda: {})
-    with pytest.raises(ValueError, match="Official BEAT cpu readiness is stale.*No corpus solve started"):
-        runner.run_case(case, tmp_path / "run", backend="cpu", precision="float64", julia="fake", hbb_depot="/hbb/depot",
-                        freezer=lambda *a, **k: pytest.fail("meshing started"))
-    frozen = corpus.FrozenCase(case, {}, b"mesh", None, {})
-    with pytest.raises(ValueError, match="depot differs"):
-        runner.isolated_pair(frozen, (500.,), tmp_path / "coarse", backend="cpu", precision="float64", julia="fake", hbb_depot="/hbb/depot")
-    assert not (tmp_path / "coarse").exists()
-
-
-@pytest.mark.parametrize("official", [False, True])
-def test_corpus_child_records_serialization_failure(tmp_path, monkeypatch, official):
-    case = corpus.CASES["osse-quarter"]
-    frozen = corpus.FrozenCase(case, case.request().model_dump(mode="json"), b"mesh", None, {})
-    corpus.save_frozen(frozen, tmp_path)
-    job, output = tmp_path / "job.json", tmp_path / "error.json"
-    runner.write_json(job, {"case": case.name, "frequencies_hz": [500., 750., 1000.]})
-    name = "beat-engine" if official else "hornlab-beat-bem"
-    monkeypatch.setattr(runner, "capture_identity", lambda _: {
-        "distributions": {name: {"revision": "a" * 40, "direct_url": {"vcs_info": {"commit_id": "a" * 40}}}}, "hbb_pin": "a" * 40, "wg_commit": {"returncode": 0, "stdout": "wg-test"},
-                "wg_worktree": {"returncode": 0, "stdout": ""}})
-    monkeypatch.setattr(runner.signal, "signal", lambda *args: None)
-    monkeypatch.setattr(runner, "production_run", lambda *a, **k: {"response": {"opaque": object()}})
-    assert runner.engine_child(job, output, official=official, backend="cpu", precision="float64", julia="fake") == 1
-    error = runner.read_json(output)
-    assert "Unsupported evidence type object at $.response.opaque" in error["error"]
-    assert error["refusal"] is None
-
-
-def test_corpus_cli_verdict_uses_strict_serializer(monkeypatch, tmp_path, capsys):
-    import sys
-
-    verdict = {"passed": False, "native": sample()}
-    monkeypatch.setattr(runner, "run_case", lambda *a, **k: verdict)
-    monkeypatch.setattr(sys, "argv", ["run_corpus", "--case", "osse-quarter", "--julia", "fake",
-                                     "--output-dir", str(tmp_path), "--hbb-depot", "/hbb/depot"])
-    assert runner.main() == 1
-    import json
-    decoded = json.loads(capsys.readouterr().out, object_hook=json_io._decode)
-    assert_sample(decoded["native"], sample())
 
 
 def test_corpus_json_official_sweep_result(tmp_path):
@@ -258,8 +154,8 @@ def test_corpus_json_official_sweep_result(tmp_path):
         requested_frequency_count=np.int64(3), solver_log=native.solver_log,
     )
     path = tmp_path / "official.json"
-    runner.write_json(path, result)
-    decoded = runner.read_json(path)
+    json_io.write_json(path, result)
+    decoded = json_io.read_json(path)
     assert decoded["requested_frequency_count"] == 3 and decoded["cancelled"] is False
     assert decoded["solver_log"][0]["__omitted_fields__"]["hook"] == json_io.CALLABLE_REASON
     for field in ("pressure_complex", "sphere_pressure_complex", "surface_pressure_complex", "surface_neumann_complex"):
@@ -271,33 +167,16 @@ def test_corpus_json_official_sweep_result(tmp_path):
 @pytest.mark.parametrize("key", ["__array__", "__complex__", "__bytes__", "__float__", "__mapping__"])
 def test_corpus_json_reserved_mapping_keys_roundtrip_without_tag_collision(key, tmp_path):
     value = {key: "ordinary data", "nested": {key: ["ordinary", 3]}, "shape": [1], "data": [2]}
-    runner.write_json(tmp_path / "reserved.json", value)
-    assert runner.read_json(tmp_path / "reserved.json") == value
+    json_io.write_json(tmp_path / "reserved.json", value)
+    assert json_io.read_json(tmp_path / "reserved.json") == value
 
 
 def test_corpus_json_preserves_all_nonfinite_signs_in_scalars_arrays_and_complex(tmp_path):
     values = np.array([np.inf, -np.inf, np.nan])
     value = {"scalars": list(values), "array": values,
              "complex": complex(-np.inf, np.inf)}
-    runner.write_json(tmp_path / "nonfinite.json", value)
-    decoded = runner.read_json(tmp_path / "nonfinite.json")
+    json_io.write_json(tmp_path / "nonfinite.json", value)
+    decoded = json_io.read_json(tmp_path / "nonfinite.json")
     np.testing.assert_array_equal(decoded["scalars"], values)
     np.testing.assert_array_equal(decoded["array"], values)
     assert decoded["complex"].real == -np.inf and decoded["complex"].imag == np.inf
-
-
-@pytest.mark.parametrize("direct", [{"dir_info": {"editable": True}, "vcs_info": {"commit_id": "a" * 40}},
-                                   {"dir_info": {}}, {}])
-def test_corpus_official_child_refuses_unpinned_distribution_before_production(tmp_path, monkeypatch, direct):
-    case = corpus.CASES["osse-quarter"]
-    frozen = corpus.FrozenCase(case, case.request().model_dump(mode="json"), b"mesh", None, {})
-    corpus.save_frozen(frozen, tmp_path)
-    job, output = tmp_path / "job.json", tmp_path / "official.json"
-    runner.write_json(job, {"case": case.name, "frequencies_hz": [500., 750., 1000.]})
-    monkeypatch.setattr(runner, "capture_identity", lambda _: {
-        "wg_commit": {"returncode": 0, "stdout": "wg-test"}, "wg_worktree": {"returncode": 0, "stdout": ""},
-        "distributions": {"beat-engine": {"revision": "a" * 40, "direct_url": direct}}})
-    monkeypatch.setattr(runner.signal, "signal", lambda *args: None)
-    monkeypatch.setattr(runner, "production_run", lambda *a, **k: pytest.fail("production started"))
-    assert runner.engine_child(job, output, official=True, backend="cpu", precision="float32", julia="forbidden") == 1
-    assert "non-editable with an exact VCS commit" in runner.read_json(output)["error"]
