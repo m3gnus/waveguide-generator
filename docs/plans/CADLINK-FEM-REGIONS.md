@@ -617,3 +617,33 @@ distinct FEM and exterior functions; they do not establish physical continuity.
 Physical replay agreement is checked by the live V10 case: exterior plane versus
 retained polar points has relative error ≤1e-6. This case is outside the targeted
 fake-worker regression gate.
+
+### Driver connectivity and full-domain comparison
+
+A transducer channel must own one connected moving patch in each mesh. Shared
+edges join cone, cap and surround faces across group/tag boundaries. Disconnected
+patches in one FEM region or in the exterior refuse as
+`driver_disconnected_patches`; give each driver its own drive channel or connect
+the surfaces. A shared diaphragm spanning different FEM meshes, or a FEM rear
+and exterior front, remains allowed. In reduced models this rule applies to the
+representative: off-plane orbit images are separate physical drivers, each with
+its own Mmd/Re/Bl and parallel current contribution.
+
+For an orbit-two half-model comparison, prepare the complete model with **Force
+full domain**, assign the two mirrored drivers separate channels, and combine
+their voltage bases. Compare per-driver Zin and summed SPL; assigning both
+separate patches one full-model channel would describe one coil/mass and is
+refused. A perimeter edge on a symmetry plane is treated as a cut even if the
+edge merely touches the plane. The inferred fractional driver's motion axis
+must lie in that plane; otherwise prepare with **Force full domain**. That
+control requires complete geometry and cannot reconstruct a CAD-cut file.
+
+`driver.input_power_w.channel_current_rms_a` is the channel total, including
+parallel orbit copies, in the engineering phase convention.
+`beat_transducer.current_rms_a` retains one current per physical representative
+(without orbit multiplication) in the solver phase convention.
+
+Fake-worker comparisons validate mapping and copy accounting only. Gated live
+tests cover the central V7 driver, an orbit-two pair with separate full-model
+channels, a coupled exterior-side driver and the exterior-only transducer route.
+They require `WG2_RUN_LIVE=1`; live physics qualification remains a separate gate.

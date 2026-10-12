@@ -170,7 +170,7 @@ def test_rms_input_power_matches_impedance_identity(current, precision):
     assert power['values'] == pytest.approx([np.real(5.66 * np.conj(current))] * 2)
     assert power['reference_voltage_rms_v'] == pytest.approx(5.66)
     assert power['amplitude_convention'] == 'rms'
-    assert phasors(power['current_rms_a'])[0] == np.conj(current)
+    assert phasors(power['channel_current_rms_a'])[0] == np.conj(current)
     assert power['phase_convention'] == 'engineering_exp_plus_jwt'
     if current:
         assert power['values'][0] >= 0

@@ -10,7 +10,7 @@ import pytest
 from server.jobs.models import DriveChannel
 from server.solver.beat_adapter.coupled_request import build_coupled_request
 from server.solver.beat_adapter.results import map_coupled_sweep, ResultContractError
-from server.solver.component_symmetry import infer_component_symmetry
+from server.solver.component_symmetry import DriverSymmetryError, infer_component_symmetry
 from server.solver.coupled_system import ExteriorSurface
 from server.solver.result_mapping import map_coupled_transducer_response
 from server.tests.beat_runtime.fake_host_worker import coupled_result
@@ -61,24 +61,27 @@ def test_front_and_rear_meshes_do_not_cancel_cut_perimeters():
     assert params['surface_completion_factor'] == 4
 
 
-def test_disconnected_patches_with_different_cuts_are_refused_by_channel():
-    groups = [skin([[0, 0, 0], [.02, 0, 0], [0, .02, 0]], [[0, 1, 2]]),
+@pytest.mark.parametrize('axes', [(), (0,)])
+def test_disconnected_patches_in_one_mesh_are_refused_by_channel(axes):
+    groups = [skin([[.03, 0, 0], [.05, 0, 0], [.03, .02, 0]], [[0, 1, 2]]),
               skin([[.1, 0, 0], [.12, 0, 0], [.1, .02, 0]], [[0, 1, 2]])]
-    with pytest.raises(ValueError, match="Channel 'woofer'.*different symmetry cuts"):
-        infer_component_symmetry({'mesh': groups}, [0, 0, 1], (0,), channel_id='woofer')
+    with pytest.raises(DriverSymmetryError, match="Channel 'woofer': its moving faces form 2 separate surfaces in mesh") as caught:
+        infer_component_symmetry({'mesh': groups}, [0, 0, 1], axes, channel_id='woofer')
+    assert caught.value.code == 'driver_disconnected_patches'
+    assert 'give each driver its own drive channel (or connect the surfaces)' in str(caught.value)
 
 
 @pytest.mark.parametrize('axes,axis,plane', [((0,), [1, 0, 1], 'x0'), ((0, 1), [0, 1, 1], 'y0')])
 def test_axis_outside_cutting_plane_refused(axes, axis, plane):
     patch = skin([[0, 0, 0], [.02, 0, 0], [0, .02, 0]], [[0, 1, 2]])
-    with pytest.raises(ValueError, match=f"Channel 'woofer'.*motion_axis.*{plane}"):
+    with pytest.raises(DriverSymmetryError, match=f"Channel 'woofer'.*motion_axis.*{plane}.*Force full domain"):
         infer_component_symmetry({'mesh': [patch]}, axis, axes, channel_id='woofer')
 
 
 def test_compilation_refuses_axis_outside_cut_before_worker_acquisition(runtime):
     raw = driver().model_dump(mode='json')
     raw['motion_axis'] = [1., 0., 1.]
-    with pytest.raises(ValueError, match="Channel 'fem'.*cutting plane x0"):
+    with pytest.raises(DriverSymmetryError, match="Channel 'fem'.*cutting plane x0.*Force full domain"):
         build_coupled_request(None, [region_input()], layout=compiled().layout, frame=FRAME,
                               frequencies_hz=[100.], symmetry='yz', transducers={'fem': raw})
     assert runtime.calls == []
@@ -193,7 +196,8 @@ def mapped(request, sweep=None):
 
 
 @pytest.mark.parametrize('coupled', [False, True])
-def test_fake_worker_full_half_quarter_zin_excursion_and_acoustic_mapping(coupled):
+def test_fake_worker_full_half_quarter_response_accounting(coupled):
+    # Constant fake phasors verify mapping only, not acoustic or LEM parity.
     responses = [mapped(synthetic_request(mode, coupled=coupled)) for mode in ('full', 'yz', 'yz+xz')]
     full = responses[0]
     for reduced in responses[1:]:
@@ -205,16 +209,20 @@ def test_fake_worker_full_half_quarter_zin_excursion_and_acoustic_mapping(couple
 
 def test_off_plane_orbit_aggregates_current_and_power_without_scaling_excursion():
     # One complete half-domain driver represents two parallel physical drivers.
-    full = mapped(synthetic_request('full', coupled=False))
     request = synthetic_request('yz', coupled=False, offset=20.)
-    reduced = mapped(request)
-    meta = reduced['metadata']
+    sweep = map_coupled_sweep(events(request), request)
+    response = mapped(request, sweep)
+    meta = response['metadata']
+    current = sweep.current[0, 0, 0]
     assert meta['beat_transducer']['physical_driver_orbit_counts'] == [2]
-    assert reduced['impedance']['real'][0] == pytest.approx(full['impedance']['real'][0] / 2)
-    assert meta['driver']['input_power_w']['values'][0] == pytest.approx(
-        2 * full['metadata']['driver']['input_power_w']['values'][0])
-    assert meta['driver']['cone_excursion_mm'] == full['metadata']['driver']['cone_excursion_mm']
-    assert meta['beat_transducer']['current_rms_a'] == full['metadata']['beat_transducer']['current_rms_a']
+    assert response['impedance']['real'][0] == pytest.approx((2.83 / (2 * current)).real)
+    power = meta['driver']['input_power_w']
+    assert power['values'][0] == pytest.approx((2.83 * np.conj(2 * current)).real)
+    assert power['channel_current_rms_a'][0] == {'real': (2 * current).real, 'imaginary': -(2 * current).imag}
+    assert 'current_rms_a' not in power
+    assert meta['beat_transducer']['current_rms_a'][0][0] == {'real': current.real, 'imaginary': current.imag}
+    assert meta['driver']['cone_excursion_mm']['values'][0] == pytest.approx(
+        np.sqrt(2) * 1000 * abs(sweep.velocity[0, 0, 0]) / (2 * np.pi * 100))
 
 
 @pytest.mark.parametrize('key', ['surface_completion_factors', 'physical_driver_orbit_counts'])
@@ -238,15 +246,26 @@ def test_fem_moving_groups_share_a_driver_across_regions():
     assert fem_drive_problem([record, other], {}, painted_sources=set())[0] == 'fem_multiple_diaphragms_unsupported'
 
 
-def test_split_fem_groups_compile_as_union_and_replace_stale_symmetry():
+def test_adjacent_fem_groups_admit_and_compile_as_union_and_replace_stale_symmetry(monkeypatch):
     _, item = reflect_inputs(None, region_input(), 1)
     groups = dict(item.domain.surfaces)
     cone = next(name for name in groups if 'moving' in name)
     groups[cone], surround = groups[cone][:1], groups[cone][1:]
+    assert len(groups[cone]) == len(surround) == 1
+    assert len(set(groups[cone][0]) & set(surround[0])) == 2
     groups[cone.replace('group=cone', 'group=surround')] = surround
     record = deepcopy(item.record)
     record['surface_groups'].append({'group_id': 'surround', 'kind': 'moving', 'drive_channel_id': 'fem'})
     item = replace(item, record=record, domain=replace(item.domain, surfaces=groups))
+    from server.solver.coupled_admission import fem_drive_problem, fem_request_problem
+
+    assert fem_drive_problem([record], {}, painted_sources=set()) is None
+    monkeypatch.setattr('server.mesh.artifact.read_verified_fem_region_mesh', lambda *a: 'verified')
+    monkeypatch.setattr('server.mesh.fem_regions.read_fem_region_domain', lambda *a: item.domain)
+    retained = {'fem_regions': [dict(record, mesh_store_path='retained.msh')],
+                'symmetry': {'domain_planes': ['x0']}}
+    channel = DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=driver())
+    assert fem_request_problem(retained, [channel]) is None
     raw = driver().model_dump(mode='json')
     raw.update(symmetry_role='complete_representative', surface_completion_factor=1,
                physical_driver_orbit_count=4, fractional_symmetry_axes=['y'])
@@ -270,7 +289,7 @@ def test_coupled_axis_rotates_with_y_only_image_frame():
     assert raw['motion_axis'] == [1., 0., 1.]
 
 
-def test_managed_fake_worker_full_reduced_mapping_and_session_reuse(runtime):
+def test_managed_fake_worker_response_accounting_and_session_reuse(runtime):
     from server.solver.official_beat import solve_coupled_compiled
 
     def mutate(raw):
@@ -322,15 +341,262 @@ def test_live_v7_full_x_xy_driver_impedance_excursion_and_field_agree(tmp_path, 
     from server.solver.official_beat import solve_coupled_compiled
 
     manager = SimpleNamespace(get_worker=lambda *a, **k: worker)
-    results = [solve_coupled_compiled(request, worker_manager=manager) for request in v7_requests(tmp_path)]
-    for reduced in results[1:]:
+    requests = v7_requests(tmp_path)
+    results = [solve_coupled_compiled(request, worker_manager=manager) for request in requests]
+    impedances = [mapped_impedance(request, result, 'drive-lf') for request, result in zip(requests, results)]
+    for index, reduced in enumerate(results[1:], 1):
         assert np.all(np.abs(results[0].current) > 0)
         assert np.all(np.abs(results[0].velocity) > 0)
         np.testing.assert_allclose(reduced.current, results[0].current, rtol=1e-4, atol=0)
         np.testing.assert_allclose(reduced.velocity, results[0].velocity, rtol=1e-4, atol=0)
-        np.testing.assert_allclose(2.83 / reduced.current, 2.83 / results[0].current, rtol=1e-4, atol=0)
+        np.testing.assert_allclose(impedances[index], impedances[0], rtol=1e-4, atol=0)
         frequencies = np.array([100., 600.])[:, None, None]
         excursion = lambda result: np.sqrt(2) * 1000 * np.abs(result.velocity) / (2 * np.pi * frequencies)
         np.testing.assert_allclose(excursion(reduced), excursion(results[0]), rtol=1e-4, atol=0)
         np.testing.assert_allclose(reduced.channels['drive-lf'].pressure_complex,
                                    results[0].channels['drive-lf'].pressure_complex, rtol=1e-4, atol=0)
+
+
+
+def mapped_impedance(request, sweep, channel):
+    response = {'frequencies': request.wire['frequencies_hz'], 'metadata': {}}
+    map_coupled_transducer_response(response, sweep, request, channel,
+        DriveChannel(id=channel, source_ids=[], motion='axial', exterior_transducer=driver()))
+    z = response['impedance']
+    return np.asarray(z['real']) + 1j * np.asarray(z['imaginary'])
+
+
+@pytest.mark.parametrize('failure', ['axis', 'disconnected'])
+def test_admission_checks_retained_driver_geometry_before_engine_probe(monkeypatch, failure):
+    from server.jobs.runtime.imported_refusals import _imported_request_refusal
+    from server.tests.test_imported_jobs import _request
+
+    _, item = reflect_inputs(None, region_input(), 1)
+    raw = driver().model_dump(mode='json')
+    if failure == 'axis':
+        raw['motion_axis'] = [1., 0., 1.]
+        code = 'driver_symmetry_unsupported'
+        remedy = 'Force full domain'
+        planes = ['x0']
+    else:
+        item = replace(item, domain=replace(item.domain, points_mm=item.domain.points_mm + [20, 0, 0]))
+        _, item = reflect_inputs(None, item, 0)
+        code = 'driver_disconnected_patches'
+        remedy = 'give each driver its own drive channel'
+        planes = []
+    record = deepcopy(item.record)
+    record['mesh_store_path'] = 'retained.msh'
+    monkeypatch.setattr('server.mesh.artifact.read_verified_fem_region_mesh', lambda *a: 'verified')
+    monkeypatch.setattr('server.mesh.fem_regions.read_fem_region_domain', lambda *a: item.domain)
+    request = _request('wgi_' + '0' * 26)
+    request.options.engine = 'beat-cpu'
+    request.geometry.drive_channels = [DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=raw)]
+    refusal = _imported_request_refusal(request, {'fem_regions': [record], 'symmetry': {'domain_planes': planes}})
+    assert refusal[0] == code
+    assert remedy in refusal[1]
+    if failure == 'disconnected':
+        with pytest.raises(DriverSymmetryError, match=remedy):
+            build_coupled_request(None, [item], layout=compiled().layout, frame=FRAME,
+                                  frequencies_hz=[100.], transducers={'fem': driver()})
+
+
+@pytest.mark.parametrize('mode,planes', [('full', []), ('yz', ['x0'])])
+@pytest.mark.parametrize('declared,code', [(None, 'driver_sd_required'), (.0001, 'driver_disconnected_patches')])
+def test_chamber_sd_and_connectivity_refusals_match_admission_and_compile(monkeypatch, mode, planes, declared, code):
+    from server.solver.coupled_admission import fem_request_problem
+
+    _, item = reflect_inputs(None, region_input(), 1)
+    item = replace(item, domain=replace(item.domain, points_mm=item.domain.points_mm + [20, 0, 0]))
+    _, item = reflect_inputs(None, item, 0)
+    item = replace(item, domain=replace(item.domain, points_mm=item.domain.points_mm + [50, 0, 0]))
+    record = dict(item.record, mesh_store_path='retained.msh')
+    monkeypatch.setattr('server.mesh.artifact.read_verified_fem_region_mesh', lambda *a: 'verified')
+    monkeypatch.setattr('server.mesh.fem_regions.read_fem_region_domain', lambda *a: item.domain)
+    spec = driver(sd_m2=declared, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
+    channel = DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=spec)
+    assert fem_request_problem({'fem_regions': [record], 'symmetry': {'domain_planes': planes}},
+                               [channel], enabled=True)[0] == code
+    with pytest.raises(ValueError) as caught:
+        build_coupled_request(None, [item], layout=compiled().layout, frame=FRAME,
+                              frequencies_hz=[100.], symmetry=mode, transducers={'fem': spec})
+    assert getattr(caught.value, 'code', getattr(caught.value, 'reason_code', None)) == code
+
+
+def test_shared_driver_in_different_fem_meshes_is_allowed():
+    from server.solver.coupled_admission import fem_drive_problem
+
+    items = [region_input('front'), region_input('rear')]
+    assert fem_drive_problem([i.record for i in items], {}, painted_sources=set(),
+                             electrodynamic_channels={'fem'}) is None
+    request = build_coupled_request(None, items, layout=compiled().layout, frame=FRAME,
+                                    frequencies_hz=[100.], transducers={'fem': driver()})
+    assert len(request.wire['compiled_system']['components']) == 1
+
+
+def exterior_driven_inputs(root):
+    """V7 chamber coupled through its mouth, driven on the outer BEM bottom."""
+    from server.tests.test_fem_symmetry import mesh_pair, inputs
+
+    built, region = mesh_pair(root / 'quarter', ('x0', 'y0'))
+    exterior, item = inputs(built, region)
+    record = deepcopy(item.record)
+    for group in record['surface_groups']:
+        if group['kind'] == 'moving':
+            group['kind'] = 'rigid'
+            group.pop('drive_channel_id', None)
+    surfaces = {name.replace('kind=moving', 'kind=rigid'): faces
+                for name, faces in item.domain.surfaces.items()}
+    item = replace(item, record=record, domain=replace(item.domain, surfaces=surfaces))
+    groups, kinds, moving = {}, {}, []
+    bottom = exterior.points_mm[:, 2].min()
+    for name, faces in exterior.groups.items():
+        selected = np.all(np.isclose(exterior.points_mm[faces, 2], bottom, atol=1e-8), axis=1)
+        moving.extend(faces[selected])
+        if np.any(~selected):
+            groups[name] = faces[~selected]
+            kinds[name] = exterior.kinds[name]
+    assert moving
+    groups['exterior-driver'] = np.asarray(moving)
+    kinds['exterior-driver'] = {'kind': 'moving', 'drive_channel_id': 'drive-lf'}
+    quarter = replace(exterior, groups=groups, kinds=kinds), item
+    half = reflect_inputs(*quarter, 1)
+    full = reflect_inputs(*half, 0)
+    return full, half
+
+
+def exterior_driven_requests(root):
+    return [build_coupled_request(exterior, [item], layout=compiled().layout, frame=FRAME,
+        frequencies_hz=[100., 600.], symmetry=mode, transducers={'drive-lf': driver()})
+        for (exterior, item), mode in zip(exterior_driven_inputs(root), ('full', 'yz'))]
+
+
+def orbit_two_requests(root):
+    """One complete off-plane representative versus two independent full drivers."""
+    from server.tests.test_fem_symmetry import mesh_pair, inputs
+
+    built, region = mesh_pair(root / 'quarter', ('x0', 'y0'))
+    exterior, item = inputs(built, region)
+    exterior, item = reflect_inputs(*reflect_inputs(exterior, item, 1), 0)
+    shift = np.array([60., 0., 0.])
+    item = replace(item, domain=replace(item.domain, points_mm=item.domain.points_mm + shift))
+    exterior = replace(exterior, points_mm=exterior.points_mm + shift)
+    half = build_coupled_request(exterior, [item], layout=compiled().layout, frame=FRAME,
+        frequencies_hz=[100., 600.], symmetry='yz', transducers={'drive-lf': driver()})
+    exterior, item = reflect_inputs(exterior, item, 0)
+    record = deepcopy(item.record)
+    declarations = {g['group_id']: g for g in record['surface_groups']}
+    groups, new_groups = {}, []
+    for name, faces in item.domain.surfaces.items():
+        if 'kind=moving' not in name:
+            groups[name] = faces
+            continue
+        group_id = next(part.split('=', 1)[1] for part in name.split('|') if part.startswith('group='))
+        positive = item.domain.points_mm[faces, 0].mean(axis=1) > 0
+        for side, mask in (('right', positive), ('left', ~positive)):
+            groups[name.replace(f'group={group_id}', f'group={group_id}-{side}')] = faces[mask]
+            new_groups.append(dict(declarations[group_id], group_id=f'{group_id}-{side}', drive_channel_id=side))
+    record['surface_groups'] = [g for g in record['surface_groups'] if g['kind'] != 'moving'] + new_groups
+    item = replace(item, record=record, domain=replace(item.domain, surfaces=groups))
+    full = build_coupled_request(exterior, [item], layout=compiled().layout, frame=FRAME,
+        frequencies_hz=[100., 600.], transducers={'left': driver(), 'right': driver()})
+    return full, half
+
+
+@pytest.mark.parametrize('case', ['orbit-two', 'exterior-side'])
+def test_live_comparison_requests_validate_without_running_worker(tmp_path, case):
+    from beat_engine.beat_contract import validate_solve_request
+
+    requests = orbit_two_requests(tmp_path) if case == 'orbit-two' else exterior_driven_requests(tmp_path)
+    for request in requests:
+        validate_solve_request(request.wire)
+    counts = [c['parameters']['physical_driver_orbit_count']
+              for c in requests[1].wire['compiled_system']['components']]
+    assert counts == ([2] if case == 'orbit-two' else [1])
+    if case == 'orbit-two':
+        assert set(requests[0].channel_ports) == {'left', 'right'}
+    else:
+        system = requests[1].wire['compiled_system']
+        ids = set(system['components'][0]['boundary_ids'])
+        assert all(b['region_id'] == 'region:exterior-air' for b in system['boundaries'] if b['id'] in ids)
+
+
+@pytest.mark.live
+@pytest.mark.slow
+@pytest.mark.real_runtime
+@pytest.mark.skipif(os.environ.get('WG2_RUN_LIVE') != '1', reason='set WG2_RUN_LIVE=1')
+def test_live_orbit_two_per_driver_zin_and_summed_spl_agree(tmp_path, worker):
+    from server.solver.official_beat import solve_coupled_compiled
+
+    full_request, half_request = orbit_two_requests(tmp_path)
+    manager = SimpleNamespace(get_worker=lambda *a, **k: worker)
+    full = solve_coupled_compiled(full_request, worker_manager=manager)
+    half = solve_coupled_compiled(half_request, worker_manager=manager)
+    # Simultaneously drive both independent full-model voltage bases. Include
+    # induced currents from the other basis before mapping each driver's Zin.
+    combined = replace(full,
+        current=np.repeat(full.current.sum(axis=1, keepdims=True), full.current.shape[1], axis=1),
+        velocity=np.repeat(full.velocity.sum(axis=1, keepdims=True), full.velocity.shape[1], axis=1))
+    per_driver_half_zin = 2 * mapped_impedance(half_request, half, 'drive-lf')
+    for channel in ('left', 'right'):
+        np.testing.assert_allclose(mapped_impedance(full_request, combined, channel), per_driver_half_zin,
+                                   rtol=1e-4, atol=0)
+    pressure = sum(full.channels[c].pressure_complex for c in ('left', 'right'))
+    np.testing.assert_allclose(half.channels['drive-lf'].pressure_complex, pressure, rtol=1e-4, atol=0)
+    np.testing.assert_allclose(half.channels['drive-lf'].spl_db,
+        20 * np.log10(np.abs(pressure) / 20e-6), rtol=1e-4, atol=0)
+
+
+@pytest.mark.live
+@pytest.mark.slow
+@pytest.mark.real_runtime
+@pytest.mark.skipif(os.environ.get('WG2_RUN_LIVE') != '1', reason='set WG2_RUN_LIVE=1')
+def test_live_coupled_exterior_side_driver_full_half_zin_and_spl_agree(tmp_path, worker):
+    from server.solver.official_beat import solve_coupled_compiled
+
+    full_request, half_request = exterior_driven_requests(tmp_path)
+    manager = SimpleNamespace(get_worker=lambda *a, **k: worker)
+    full = solve_coupled_compiled(full_request, worker_manager=manager)
+    half = solve_coupled_compiled(half_request, worker_manager=manager)
+    np.testing.assert_allclose(mapped_impedance(half_request, half, 'drive-lf'),
+                               mapped_impedance(full_request, full, 'drive-lf'), rtol=1e-4, atol=0)
+    np.testing.assert_allclose(half.channels['drive-lf'].pressure_complex,
+                               full.channels['drive-lf'].pressure_complex, rtol=1e-4, atol=0)
+    np.testing.assert_allclose(half.channels['drive-lf'].spl_db, full.channels['drive-lf'].spl_db,
+                               rtol=1e-4, atol=0)
+
+
+
+@pytest.mark.parametrize('failure', ['empty', 'zero-axis', 'invalid-plane'])
+def test_inference_refusals_are_unsupported_physics(failure):
+    from server.solver.beat_adapter.preflight import UnsupportedPhysics
+
+    selected = {'mesh': [skin([[0, 0, 0], [.02, 0, 0], [0, .02, 0]], [[0, 1, 2]])]}
+    axis, planes = [0, 0, 1], ()
+    if failure == 'empty':
+        selected = {}
+    elif failure == 'zero-axis':
+        axis = [0, 0, 0]
+    else:
+        planes = (2,)
+    with pytest.raises(UnsupportedPhysics):
+        infer_component_symmetry(selected, axis, planes)
+
+
+def test_admission_plane_tolerance_uses_the_whole_mesh(monkeypatch):
+    from server.solver.coupled_admission import driver_surface_problem
+
+    item = region_input()
+    points = item.domain.points_mm.copy()
+    # Moving-edge vertices are close enough to snap using the full mesh extent,
+    # while the moving patch alone would yield a smaller tolerance.
+    points[[0, 2], 0] = 5e-5
+    points[3, 2] = 1000.
+    domain = replace(item.domain, points_mm=points)
+    monkeypatch.setattr('server.mesh.artifact.read_verified_fem_region_mesh', lambda *a: 'verified')
+    monkeypatch.setattr('server.mesh.fem_regions.read_fem_region_domain', lambda *a: domain)
+    record = {'fem_regions': [dict(item.record, mesh_store_path='retained.msh')],
+              'symmetry': {'domain_planes': ['x0']}}
+    channel = DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=driver().model_copy(update={'motion_axis': (1., 0., 1.)}))
+    problem = driver_surface_problem(record, [channel])
+    assert problem[0] == 'driver_symmetry_unsupported'
+    assert 'Force full domain' in problem[1]

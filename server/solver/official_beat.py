@@ -247,8 +247,10 @@ def solve_transducer_compiled(
 
     This uses the same worker admission, capability negotiation, cancellation
     and ownership as the production bridge. Existing job/provider routing keeps
-    its ideal-source path. CPU Float64 and Metal Float32 complete solids are
-    qualified; reduced solids and other backends need consumer qualification.
+    its ideal-source path. CPU Float64 and Metal Float32 support complete and
+    x/xy reduced solids with inferred driver completion and physical orbits.
+    Live physics comparisons are opt-in qualification tests; other backends
+    remain outside this consumer's supported scope.
     """
     from .beat_adapter.transducers import (
         TransducerRequest, map_transducer_sweep, validate_transducer_request,

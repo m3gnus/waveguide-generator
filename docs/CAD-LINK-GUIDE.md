@@ -362,6 +362,17 @@ other than model +Z are not supported for mirror recovery. Send the complete
 model instead. Full/half/quarter describe the acoustic domain, not how much of
 the model you happen to display in the viewport.
 
+Electrodynamic drivers support transverse half and quarter domains. Connected
+moving faces across cone/cap/surround groups form one driver; disconnected patches
+in one FEM region or exterior mesh need separate drive channels. Front and rear
+skins in different meshes may share a driver. An off-plane representative stands
+for separate mirrored drivers with parallel electrical currents. For a full-domain
+comparison, give each mirrored driver its own channel and combine the channels.
+
+A moving perimeter edge on a mirror plane is treated as a driver cut, including
+an edge that only touches the plane. The driver's motion axis must lie in each
+cutting plane. If it does not, prepare complete geometry with **Force full domain**.
+
 **[Screenshot placeholder: Solve card showing Radiates along, the domain line and Change, with a quarter-model preview.]**
 
 ## 8. Send, choose a solver, and solve

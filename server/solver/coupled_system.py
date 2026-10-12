@@ -515,10 +515,10 @@ def build_coupled_system(
         if spec is not None:
             from server.solver.beat_adapter.coupled_transducers import parameters
             from server.solver.component_symmetry import infer_component_symmetry
-            from server.solver.beat_adapter.transducers import chamber_sd_problem
+            from server.solver.coupled_admission import validate_driver_sd_geometry
 
             raw = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
-            chamber_sd_problem(raw, channel)
+            validate_driver_sd_geometry(raw, moving_triangles[channel], raw["motion_axis"], channel)
             symmetry = infer_component_symmetry(moving_triangles[channel], raw["motion_axis"],
                                                 symmetry_plane_axes, channel_id=channel)
             channel_warnings[channel] = []

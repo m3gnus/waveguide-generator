@@ -1396,7 +1396,7 @@ def map_coupled_transducer_response(response, sweep, request, channel, spec):
     electrical = impedance(zin)
     input_power = {"frequencies": frequencies, "units": "W",
                    "values": json_safe_native_value(np.real(voltage * np.conj(current))),
-                   "current_rms_a": json_safe_native_value(solver_to_engineering(current)),
+                   "channel_current_rms_a": json_safe_native_value(solver_to_engineering(current)),
                    "phase_convention": ENGINEERING_PHASE_CONVENTION,
                    "definition": "Re(V_rms * conj(I_rms)) = Re(Zin) * abs(I_rms)^2",
                    "amplitude_convention": "rms", "reference_voltage_rms_v": voltage}
@@ -1444,6 +1444,7 @@ def map_coupled_transducer_response(response, sweep, request, channel, spec):
                          "undriven_transducers": "shorted",
                          "surface_completion_factors": [c["parameters"].get("surface_completion_factor", 1) for c in drivers],
                          "physical_driver_orbit_counts": orbits.tolist(),
+                         "current_definition": "per physical driver; orbit images excluded",
                          "velocity_rms_m_per_s": json_safe_native_value(velocity),
                          "current_rms_a": json_safe_native_value(sweep.current[:, basis_indices].sum(axis=1)),
                          "excursion_peak_mm": (np.sqrt(2) * 1000 * np.abs(velocity)

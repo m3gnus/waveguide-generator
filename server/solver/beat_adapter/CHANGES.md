@@ -702,20 +702,24 @@ Notes kept open:
 
 `transducers.build_transducer_request` and
 `official_beat.solve_transducer_compiled` adopt the pinned engine's existing
-compiled v3 voltage ports. This Python adapter entry point supports CPU Float64,
-complete closed outward-wound solids, and symmetry off. It is explicitly called;
-stored jobs, default provider routing and the existing unit-acceleration results
-continue to use the v1/v2 ideal-source adapter. There is no engine or pin change.
-Reduced solids and other backends remain outside this consumer's qualified scope.
+compiled v3 voltage ports. This Python adapter entry point supports CPU Float64
+and Metal Float32, closed outward-wound solids and off/x/xy symmetry. Voltage
+transducer jobs call this consumer explicitly; ordinary ideal-source jobs and
+unit-acceleration results retain the v1/v2 adapter. There is no engine or pin change.
+Reduced solids infer surface completion and physical driver orbits from moving
+faces. Live full/reduced physics tests are opt-in; other backends remain outside
+this consumer's supported scope.
 
 Supply bare moving mass `mmd_kg` and the five other LEM scalars in SI units.
 Measured `Mms` is not accepted as an alias or inferred. One driver may own multiple
-disjoint moving tags with a common global rigid-translation axis. Outward mesh
+moving tags joined by shared edges with a common global rigid-translation axis.
+Disconnected patches in one mesh require separate drive channels. Outward mesh
 normals supply the signed front/rear projection; the adapter adds no rear sign,
 extra radiation mass, end correction or second electrical/mechanical solve.
 Open/two-sided diaphragms and compression-driver throats are refused by the
-engine's existing exterior topology checks. Optional engine chambers,
-semi-inductance and driver symmetry accounting await separate consumer adoption.
+engine's existing exterior topology checks. Optional engine chambers and
+semi-inductance use their explicit adapter parameters; driver symmetry accounting
+is validated against mesh inference.
 
 Each requested voltage port is an independent `reference_voltage_rms_v` basis
 (default 2.83 V); ideal ports remain independent 1 m/s RMS bases. Request order is

@@ -146,7 +146,7 @@ it('uses recorded RMS input power and current for FEM channels, including zero a
   const result = driven({ frequencies: [100, 200, 300], impedance: undefined }, {
     driver: { input_power_w: {
       frequencies: [100, 200, 300], units: 'W', amplitude_convention: 'rms',
-      reference_voltage_rms_v: 5.66, values: [2.83, 0, -2.83], current_rms_a: [
+      reference_voltage_rms_v: 5.66, values: [2.83, 0, -2.83], channel_current_rms_a: [
         { real: 1, imaginary: 2 }, { real: 0, imaginary: 0 }, { real: -1, imaginary: 0 },
       ],
     } },

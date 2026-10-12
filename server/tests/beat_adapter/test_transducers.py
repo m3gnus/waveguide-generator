@@ -348,14 +348,15 @@ def test_m_roll_single_side_uses_net_projection(make_mesh, layout, official_cont
 def test_exterior_rear_radiation_refuses_lumped_chamber(make_mesh, layout, enabled):
     mesh = make_mesh([[0, 0, 0], [1, 0, 0], [0, 1, 0],
                       [0, 0, -1], [1, 0, -1], [0, 1, -1]],
-                     [[0, 1, 2], [3, 5, 4]], [2, 3])
+                     [[0, 1, 2], [3, 5, 4], [0, 3, 4], [0, 4, 1],
+                      [1, 4, 5], [1, 5, 2], [2, 5, 3], [2, 3, 0]], [2, 3] + [4] * 6)
     options = dict(enabled=enabled, volume_m3=.01)
     if enabled:
         with pytest.raises(UnsupportedPhysics, match="driver_sd_required: Enter Sd"):
             t.build_transducer_request(mesh, drivers=[driver(lumped_sealed_rear_chamber=options)],
                                        layout=layout, frame=FRAME, frequencies_hz=[100])
     else:
-        t.build_transducer_request(mesh, drivers=[driver(lumped_sealed_rear_chamber=options)],
+        t.build_transducer_request(mesh, drivers=[driver(tags=(2, 3, 4), lumped_sealed_rear_chamber=options)],
                                    layout=layout, frame=FRAME, frequencies_hz=[100])
 
 

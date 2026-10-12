@@ -50,9 +50,19 @@ def preflight(record: Mapping, msh_text: str, channels: Sequence, *, backend: st
         if not channels or any(channel.exterior_transducer is None for channel in channels):
             raise ValueError("Every channel must carry an exterior transducer in this mode")
         mesh = read_surface(msh_text)
+        from server.solver.component_symmetry import infer_component_symmetry
+        from server.solver.coupled_admission import validate_driver_sd_geometry
+
+        axes = tuple({"x0": 0, "y0": 1}[p] for p in planes)
+        for driver in (() if planes else drivers_for(record, channels)):
+            faces = mesh.faces[np.isin(mesh.tags, driver.tags)]
+            validate_driver_sd_geometry(
+                {"sd_m2": driver.sd_m2, "lumped_sealed_rear_chamber": driver.lumped_sealed_rear_chamber},
+                {"exterior": [(faces, mesh.points_m[faces])]}, driver.axis, driver.id)
+            infer_component_symmetry({"exterior": [(faces, mesh.points_m[faces])]}, driver.axis,
+                                     axes, channel_id=driver.id)
         if planes:
             from server.mesh.surface_topology import orient_closed_surface
-            from server.solver.component_symmetry import infer_component_symmetry
 
             axes = tuple({"x0": 0, "y0": 1}[p] for p in planes)
             tolerance = max(1e-9, float(np.linalg.norm(np.ptp(mesh.points_m, axis=0))) * 1e-6)
@@ -68,6 +78,9 @@ def preflight(record: Mapping, msh_text: str, channels: Sequence, *, backend: st
             for driver in drivers_for(record, channels):
                 faces = mesh.faces[np.isin(mesh.tags, driver.tags)]
                 moving = {"exterior": [(faces, points[faces])]}
+                validate_driver_sd_geometry(
+                    {"sd_m2": driver.sd_m2, "lumped_sealed_rear_chamber": driver.lumped_sealed_rear_chamber},
+                    moving, driver.axis, driver.id)
                 inferred = infer_component_symmetry(moving, driver.axis, axes, channel_id=driver.id)
                 resolve_driver_sd({"sd_m2": driver.sd_m2,
                                    "lumped_sealed_rear_chamber": driver.lumped_sealed_rear_chamber},

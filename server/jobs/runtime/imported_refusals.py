@@ -369,6 +369,13 @@ def _imported_request_refusal(
         problem = driver_sd_problem(exterior_record, request.geometry.drive_channels, exterior_msh_text=msh_text)
         if problem:
             return problem
+    if not coupled_regions and record:
+        from server.solver.coupled_admission import driver_surface_problem
+
+        problem = driver_surface_problem(record, request.geometry.drive_channels,
+                                         exterior_only=True, msh_text=msh_text)
+        if problem:
+            return problem
     mismatch = _imported_decision_refusal(record)
     if mismatch is not None:
         return mismatch

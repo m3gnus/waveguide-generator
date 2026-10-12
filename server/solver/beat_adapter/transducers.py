@@ -28,13 +28,13 @@ MATRIX_DEFINITION = "force_per_unit_velocity; per-row physical-copy weighting in
 AREA_DEFINITION = "signed integral of motion factor over physical moving surfaces; real symmetry copies included; ground images excluded"
 EXTERIOR_AXIS_SYMMETRY_MESSAGE = (
     "Exterior BEAT transducers require motion_axis to lie in every active symmetry plane, "
-    "including complete mirrored drivers"
+    "including complete mirrored drivers; prepare with Force full domain"
 )
 
 
 @dataclass(frozen=True)
 class ExteriorDriver:
-    """One mechanical coordinate over disjoint tagged front/rear surfaces.
+    """One mechanical coordinate over connected tagged moving surfaces.
 
     The outward mesh normal determines the signed n·axis motion on each face.
     A rear surface needs no extra minus sign. Unrequested drivers are shorted.
@@ -337,17 +337,21 @@ def build_transducer_request(
     channel_warnings = {}
     mode, rotation, _ = _image_frame(symmetry, None)
     axes = (0,) if mode == "x" else (0, 1) if mode == "xy" else ()
+    from server.solver.coupled_admission import validate_driver_sd_geometry
+
     for driver in drivers:
         axis = (rotation @ _axis(driver.axis)).tolist()
         faces = prepared.mesh.faces[np.isin(prepared.mesh.tags, driver.tags)]
         moving = {"exterior": [(faces, prepared.mesh.points_m[faces])]}
+        selected = source_mesh.faces[np.isin(source_mesh.tags, driver.tags)]
+        raw = {"sd_m2": driver.sd_m2, "lumped_sealed_rear_chamber": driver.lumped_sealed_rear_chamber}
+        validate_driver_sd_geometry(raw, {"exterior": [(selected, source_mesh.points_m[selected])]},
+                                    driver.axis, driver.id)
         inferred = infer_component_symmetry(moving, axis, axes, channel_id=driver.id)
         if any(abs(axis[a]) > 1e-8 for a in axes):
             raise UnsupportedPhysics(f"Channel {driver.id!r}: {EXTERIOR_AXIS_SYMMETRY_MESSAGE}")
-        selected = source_mesh.faces[np.isin(source_mesh.tags, driver.tags)]
         area, sd_metadata[driver.id], notes = resolve_driver_sd(
-            {"sd_m2": driver.sd_m2, "lumped_sealed_rear_chamber": driver.lumped_sealed_rear_chamber},
-            {"exterior": [(selected, source_mesh.points_m[selected])]}, driver.axis, driver.id,
+            raw, {"exterior": [(selected, source_mesh.points_m[selected])]}, driver.axis, driver.id,
             surface_completion_factor=inferred["surface_completion_factor"])
         channel_warnings[driver.id] = notes
         components.append({"id": driver.component_id, "name": driver.id,

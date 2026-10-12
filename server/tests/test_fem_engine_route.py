@@ -80,6 +80,7 @@ def test_coupled_route_documentation_describes_supported_drives_and_outputs():
 
     text = (Path(__file__).parents[2] / "docs/plans/CADLINK-FEM-REGIONS.md").read_text()
     assert "Electrodynamic voltage drives support full, half and quarter models" in text
+    assert "Driver symmetry is pending" not in text
     assert "RMS input power and current" in text
     assert "Interface outputs include area-weighted complex normal velocity" in text
     assert "drives only. Any `exterior_transducer`" not in text
@@ -417,6 +418,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
     from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
     from server.tests.test_imported_jobs import _runtime_fixture, _request
     from server.tests.test_jobs_store import _result_envelope
+    from server.tests.test_imported_beat import MESH
     from server.solver.beat_adapter import coupled_request
 
     monkeypatch.setenv("WG2_FEM_REGIONS", "1")
@@ -475,7 +477,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
             "fem_regions": [region_input(channel="exterior").record],
             "evidence": {"fem_air_volumes": [], "fem_regions": [{"region_id": "air"}]},
             "symmetry": {"cut_planes": []},
-        })
+        }, mesh_text=MESH)
         job_runtime.engine_registry = Registry()
         request = _request(ingest_id, drive_channels=[{"id": "exterior", "source_ids": ["source-a", "source-b", "source-c"]}])
         if voltage:

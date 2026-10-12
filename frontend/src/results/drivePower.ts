@@ -91,14 +91,15 @@ export function electricalDrive(result: ResultPayload): ElectricalDrive | null {
 export function drivePowerSeries(result: ResultPayload): DrivePowerSeries | null {
   if (!hasElectricalImpedance(result)) return null;
   const native = record(record(result.metadata?.driver)?.input_power_w);
+  const channelCurrent = native?.channel_current_rms_a ?? native?.current_rms_a;
   if (native?.units === 'W' && native.amplitude_convention === 'rms'
       && Array.isArray(native.frequencies) && Array.isArray(native.values)
-      && Array.isArray(native.current_rms_a)) {
+      && Array.isArray(channelCurrent)) {
     const frequencies = native.frequencies as number[];
     const watts = frequencies.map((_, i) => finite((native.values as unknown[])[i])
       ? (native.values as number[])[i] : null);
     const amps = frequencies.map((_, i) => {
-      const current = record((native.current_rms_a as unknown[])[i]);
+      const current = record((channelCurrent as unknown[])[i]);
       return finite(current?.real) && finite(current?.imaginary)
         ? Math.hypot(current.real, current.imaginary) : null;
     });

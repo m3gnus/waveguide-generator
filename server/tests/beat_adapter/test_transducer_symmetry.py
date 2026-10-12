@@ -2,6 +2,7 @@
 from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
+import os
 
 import numpy as np
 import pytest
@@ -11,10 +12,14 @@ from server.solver import beat_transducer_imported as jobs
 from server.solver.beat_adapter import transducers as t
 from server.solver.beat_adapter.preflight import UnsupportedPhysics
 from server.solver.beat_adapter.results import ResultContractError
+from server.solver.component_symmetry import infer_component_symmetry
 from server.tests.beat_adapter.test_transducers import FRAME, driver, raw
+from server.tests.test_fem_coupled_beat_live import worker as worker_fixture
+
+worker = worker_fixture
 
 
-def octahedron(make_mesh, axes=(), offset=(0., 0., 0.)):
+def octahedron(make_mesh, axes=(), offset=(0., 0., 0.), *, scale=1.):
     points = np.array([[0, 0, 1], [0, 0, -1], [1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]], float)
     faces = np.array([[0, 2, 3], [0, 3, 4], [0, 4, 5], [0, 5, 2],
                       [1, 3, 2], [1, 4, 3], [1, 5, 4], [1, 2, 5]])
@@ -26,14 +31,21 @@ def octahedron(make_mesh, axes=(), offset=(0., 0., 0.)):
     used = np.unique(faces)
     remap = np.zeros(len(points), int)
     remap[used] = np.arange(len(used))
-    return make_mesh((points[used] + offset).tolist(), remap[faces].tolist(), tags[selected].tolist())
+    return make_mesh((points[used] * scale + offset).tolist(), remap[faces].tolist(), tags[selected].tolist())
 
 
 def symmetry_raw(request):
     result = raw(request, 100.)
-    params = request.wire['compiled_system']['components'][0]['parameters']
-    completion = params.get('surface_completion_factor', 1)
-    orbit = params.get('physical_driver_orbit_count', 1)
+    # Derive copy accounting from geometry, independently of component parameters.
+    system = request.wire['compiled_system']
+    component = system['components'][0]
+    tags = [b['group']['tag'] for b in system['boundaries'] if b['id'] in component['boundary_ids']]
+    faces = request.mesh.faces[np.isin(request.mesh.tags, tags)]
+    axes = {'off': (), 'x': (0,), 'xy': (0, 1)}[request.wire['solver_options']['symmetry']]
+    inferred = infer_component_symmetry({'exterior': [(faces, request.mesh.points_m[faces])]},
+                                       component['parameters']['motion_axis'], axes)
+    completion = inferred['surface_completion_factor']
+    orbit = inferred['physical_driver_orbit_count']
     for quantity in result['quantities']:
         if quantity['quantity'] in {'diaphragm_velocity', 'voice_coil_current', 'radiation_impedance_matrix'}:
             quantity['metadata'].update(surface_completion_factors=[completion], physical_driver_orbit_counts=[orbit])
@@ -43,7 +55,7 @@ def symmetry_raw(request):
 
 
 @pytest.mark.parametrize('axes,mode,completion', [((), 'full', 1), ((0,), 'yz', 2), ((0, 1), 'yz+xz', 4)])
-def test_exterior_central_driver_wire_preflight_and_mapping(make_mesh, layout, axes, mode, completion):
+def test_exterior_central_driver_wire_preflight_and_fake_phasor_accounting(make_mesh, layout, axes, mode, completion):
     from beat_engine.beat_contract import validate_solve_request
     mesh = octahedron(make_mesh, axes)
     spec = driver(tags=(2,), axis=[0, 0, 1], sd_m2=1.8, lumped_sealed_rear_chamber={'enabled': True, 'volume_m3': .002})
@@ -68,7 +80,7 @@ def test_exterior_central_driver_wire_preflight_and_mapping(make_mesh, layout, a
 
 
 @pytest.mark.parametrize('mode,orbit', [('yz', 2), ('yz+xz', 4)])
-def test_complete_driver_orbit_is_parallel_electrically(make_mesh, layout, mode, orbit):
+def test_fake_phasor_orbit_current_accounting(make_mesh, layout, mode, orbit):
     mesh = octahedron(make_mesh, offset=(3., 3., 0.))
     spec = driver(tags=(2,), axis=[0, 0, 1])
     request = t.build_transducer_request(mesh, drivers=[spec], layout=layout, frame=FRAME,
@@ -119,3 +131,60 @@ def test_exterior_preflight_refuses_open_edges_and_plane_caps(make_mesh):
     capped = make_mesh([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]],
                        [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]], [2, 3, 3, 3])
     assert 'without plane caps' in jobs.preflight(record, capped, [channel], backend='cpu')
+
+
+
+def test_fake_worker_derives_accounting_independently_of_declared_parameters(make_mesh, layout):
+    request = t.build_transducer_request(octahedron(make_mesh, (0,)),
+        drivers=[driver(tags=(2,), axis=[0, 0, 1])], layout=layout, frame=FRAME,
+        frequencies_hz=[100.], symmetry='yz')
+    request.wire['compiled_system']['components'][0]['parameters']['surface_completion_factor'] = 1
+    result = symmetry_raw(request)
+    assert result['quantities'][-1]['metadata']['surface_completion_factors'] == [2]
+    with pytest.raises(ResultContractError, match='physical-copy accounting'):
+        t.parse_transducer_frequency(result, request, 100.)
+
+
+@pytest.mark.parametrize('mode', ['full', 'yz'])
+def test_exterior_disconnected_moving_tags_refused_at_compile_and_admission(make_mesh, layout, mode):
+    # The octahedron's opposite equatorial triangles meet only at a vertex.
+    mesh = octahedron(make_mesh, offset=(3., 3., 0.))
+    from server.solver.beat_adapter.mesh import read_surface
+    parsed = read_surface(mesh)
+    tags = parsed.tags.copy()
+    tags[:] = 3
+    tags[[0, 2]] = 2
+    mesh = make_mesh(parsed.points_m.tolist(), parsed.faces.tolist(), tags.tolist())
+    with pytest.raises(UnsupportedPhysics, match='2 separate surfaces in exterior') as caught:
+        t.build_transducer_request(mesh, drivers=[driver(tags=(2,), axis=[0, 0, 1])],
+                                  layout=layout, frame=FRAME, frequencies_hz=[100.], symmetry=mode)
+    assert caught.value.code == 'driver_disconnected_patches'
+    params = ExteriorTransducerSpec(version=2, motion_axis=(0, 0, 1), re_ohm=6, le_h=.0005,
+                                    bl_n_per_a=7, mmd_kg=.02, cms_m_per_n=.001, rms_n_s_per_m=1.5)
+    channel = SimpleNamespace(id='driver', source_ids=['cone'], exterior_transducer=params)
+    record = {'source_tags': {'cone': 2}, 'symmetry': {'domain_planes': [] if mode == 'full' else ['x0']}}
+    from server.solver.coupled_admission import driver_surface_problem
+    assert driver_surface_problem(record, [channel], exterior_only=True, msh_text=mesh)[0] == 'driver_disconnected_patches'
+    assert '2 separate surfaces' in jobs.preflight(record, mesh, [channel], backend='cpu')
+
+
+@pytest.mark.live
+@pytest.mark.slow
+@pytest.mark.real_runtime
+@pytest.mark.skipif(os.environ.get('WG2_RUN_LIVE') != '1', reason='set WG2_RUN_LIVE=1')
+def test_live_exterior_only_full_half_zin_and_summed_spl_agree(make_mesh, layout, worker):
+    from server.solver.official_beat import solve_transducer_compiled
+
+    manager = SimpleNamespace(get_worker=lambda *a, **k: worker)
+    spec = driver(tags=(2,), axis=[0, 0, 1])
+    requests = [t.build_transducer_request(octahedron(make_mesh, axes, scale=.01), drivers=[spec],
+        layout=layout, frame=FRAME, frequencies_hz=[100., 600.], symmetry=mode)
+        for axes, mode in (((), 'full'), ((0,), 'yz'))]
+    full, half = [solve_transducer_compiled(r, worker_manager=manager) for r in requests]
+    for complete, reduced in zip(full.rows, half.rows):
+        np.testing.assert_allclose(reduced.input_impedance_ohm(spec.port_id),
+                                   complete.input_impedance_ohm(spec.port_id), rtol=1e-4, atol=0)
+        for plane, pressure in complete.pressure_rms_pa.items():
+            np.testing.assert_allclose(reduced.pressure_rms_pa[plane], pressure, rtol=1e-4, atol=0)
+            np.testing.assert_allclose(20 * np.log10(np.abs(reduced.pressure_rms_pa[plane]) / 20e-6),
+                                       20 * np.log10(np.abs(pressure) / 20e-6), rtol=1e-4, atol=0)
