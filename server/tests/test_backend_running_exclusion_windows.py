@@ -27,6 +27,7 @@ pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows installer runni
 ROOT = Path(__file__).resolve().parents[2]
 SYNCHRONIZE = 0x00100000
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+PROCESS_TERMINATE = 0x0001
 STILL_ACTIVE = 259
 ERROR_FILE_NOT_FOUND = 2
 
@@ -57,18 +58,10 @@ class _NativeProbes:
             function.argtypes = arguments
             function.restype = result
 
-    def alive(self, pid):
-        handle = self.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if not handle:
-            error = ctypes.get_last_error()
-            assert error == 87, f"OpenProcess({pid}) failed: Win32 error {error}"
-            return False  # ERROR_INVALID_PARAMETER: this PID has exited.
-        try:
-            code = wintypes.DWORD()
-            assert self.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-            return code.value == STILL_ACTIVE
-        finally:
-            self.kernel32.CloseHandle(handle)
+    def alive(self, handle):
+        code = wintypes.DWORD()
+        assert self.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        return code.value == STILL_ACTIVE
 
     def mutex(self, name):
         # Match the installer exactly. Never retain a probe handle between samples.
@@ -77,20 +70,6 @@ class _NativeProbes:
         if handle:
             assert self.kernel32.CloseHandle(handle)
         return bool(handle), error
-
-    def terminate(self, pid):
-        # Only a PID recorded by this fixture's harness is passed here.
-        if not self.alive(pid):
-            return
-        handle = self.kernel32.OpenProcess(0x0001 | SYNCHRONIZE, False, pid)
-        if not handle:
-            assert not self.alive(pid)
-            return
-        try:
-            self.kernel32.TerminateProcess(handle, 1)
-            assert self.kernel32.WaitForSingleObject(handle, 5000) == 0
-        finally:
-            self.kernel32.CloseHandle(handle)
 
 
 @pytest.fixture(params=["headless", "contained"])
@@ -132,7 +111,7 @@ def backend(request, tmp_path, retire_event):
         "WG2_NO_BROWSER": "1", "WG2_ENABLE_DRYRUN": "0",
     })
     process = watchdog = None
-    child_pid = None
+    child_handle = None
     expired = threading.Event()
     try:
         # Avoid the venv redirector's job; sitecustomize restores its packages.
@@ -153,7 +132,7 @@ def backend(request, tmp_path, retire_event):
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
         def healthy():
-            assert probes.alive(process.pid), log.read_text(encoding="utf-8", errors="replace")
+            assert probes.alive(process._handle), log.read_text(encoding="utf-8", errors="replace")
             try:
                 with opener.open(f"http://127.0.0.1:{port}/health", timeout=1) as response:
                     health = json.load(response)
@@ -164,28 +143,37 @@ def backend(request, tmp_path, retire_event):
         _until(healthy, 90, "backend never became healthy")
         _until(pid_file.is_file, 5, "backend did not publish its child PID")
         child_pid = int(pid_file.read_text(encoding="utf-8"))
-        assert probes.alive(child_pid), "mutex-holding child exited before retirement"
+        # The backend's multiprocessing Process still pins this PID here.
+        child_handle = probes.kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE,
+            False, child_pid,
+        )
+        assert child_handle, f"OpenProcess({child_pid}) failed: Win32 error {ctypes.get_last_error()}"
+        assert probes.alive(child_handle), "mutex-holding child exited before retirement"
         assert probes.mutex(name)[0], "backend and child did not hold the test mutex"
         yield SimpleNamespace(
-            process=process, child_pid=child_pid, probes=probes, name=name,
+            process=process, child_handle=child_handle, probes=probes, name=name,
             signal=lambda: probes.kernel32.SetEvent(control._handle), log=log,
         )
         assert not expired.is_set(), "backend test exceeded its hard overall timeout"
     finally:
-        if watchdog is not None:
-            watchdog.cancel()
-            watchdog.join(timeout=3)
-        if process is not None:
-            backend_owner._terminate_child(process)
-            job = getattr(process, "_wg_start_job", None)
-            if job is not None:
-                job.close()
-        # The job covers the child even if startup failed before PID publication.
-        if child_pid is None and pid_file.is_file():
-            child_pid = int(pid_file.read_text(encoding="utf-8"))
-        if child_pid is not None:
-            probes.terminate(child_pid)
-        control.close()
+        try:
+            if watchdog is not None:
+                watchdog.cancel()
+                watchdog.join(timeout=3)
+            if process is not None:
+                backend_owner._terminate_child(process)
+                job = getattr(process, "_wg_start_job", None)
+                if job is not None:
+                    job.close()
+            # Without a retained handle, the start job alone covers the child.
+            if child_handle and probes.alive(child_handle):
+                assert probes.kernel32.TerminateProcess(child_handle, 1)
+                assert probes.kernel32.WaitForSingleObject(child_handle, 5000) == 0
+        finally:
+            if child_handle:
+                assert probes.kernel32.CloseHandle(child_handle)
+            control.close()
 
 
 def test_backend_holds_running_until_interpreter_exit(backend):
@@ -195,11 +183,11 @@ def test_backend_holds_running_until_interpreter_exit(backend):
     samples = 0
     child_gone = False
     while time.monotonic() < deadline:
-        child_alive = probes.alive(backend.child_pid)
+        child_alive = probes.alive(backend.child_handle)
         # Probe before backend liveness: a process exiting between those calls
         # must not look like a live interpreter that released its mutex early.
         mutex_open = probes.mutex(backend.name)[0] if not child_alive else False
-        backend_alive = probes.alive(process.pid)
+        backend_alive = probes.alive(process._handle)
         if not child_alive:
             if not child_gone:
                 assert backend_alive, "child did not exit before the backend interpreter"

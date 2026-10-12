@@ -7,7 +7,7 @@ its children are gone. Only Windows ``wg-python.exe`` processes participate;
 failure to obtain a handle refuses to run. This deliberately does not look at
 the installer's admission mutex.
 
-A refusal raises :class:`RunningExclusionError`. The backend, mesher child and the
+A refusal raises :class:`RunningExclusionError`. The backend, the mesher child and the
 BEMPP worker then exit with code 1. A sweep pool worker is refused in its
 initializer instead: ``concurrent.futures`` logs that, lets the worker exit
 with code 0 and marks the pool broken, so the sweep fails with
