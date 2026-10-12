@@ -24,6 +24,22 @@ def _translate(payload: dict[str, object]) -> dict[str, object]:
     return design_to_mesher_config(DesignConfig.model_validate(payload))
 
 
+def test_native_json_legacy_circular_throat_arc_still_builds_identically() -> None:
+    design = DesignConfig.model_validate({
+        "formula": "OSSE", "L": 120, "r0": 12.7, "a": 45, "a0": 10,
+        "throat_profile": 3, "circ_arc_radius": 200, "circ_arc_term_angle": 35,
+        "mesh": {"angular_segments": 16, "length_segments": 8, "wall_thickness": 0},
+    })
+    reopened = DesignConfig.model_validate_json(design.model_dump_json())
+    config = design_to_mesher_config(reopened)
+    assert config["profile"]["throatProfile"] == 3
+    parameters, _, _ = build_geometry_params(config)
+    points = build_point_grid(parameters)["inner_points"]
+    original, _, _ = build_geometry_params(design_to_mesher_config(design))
+    np.testing.assert_array_equal(points, build_point_grid(original)["inner_points"])
+    assert np.isfinite(points).all()
+
+
 @pytest.mark.parametrize("morph_target", [0, 2], ids=["none", "circle"])
 def test_scalar_round_rosse_has_no_hidden_azimuth_morph(morph_target: int) -> None:
     """None and zero-sized Circle settings must keep every meridian identical."""

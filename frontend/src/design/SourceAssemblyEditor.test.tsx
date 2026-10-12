@@ -1,8 +1,9 @@
 import { act } from 'react';
+import { readFileSync } from 'node:fs';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sourceEditorApi, type SourceAssemblyDocument } from '../api/sourceEditor';
-import { namespaceStorage } from '../stores/durableSettings';
+import { durableSettings, namespaceStorage, SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { serializeDesign, useDesignStore } from '../stores/design';
 import { AssemblyEditor, INITIAL_ASSEMBLY, parseAssemblyDraft } from './SourceAssemblyEditor';
 
@@ -15,6 +16,7 @@ describe('shared source and passage authoring', () => {
     vi.useFakeTimers(); vi.clearAllMocks(); storage.removeItem('');
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT:boolean }).IS_REACT_ACT_ENVIRONMENT=true;
     vi.mocked(sourceEditorApi.validateAssembly).mockResolvedValue({ geometry_sha256:'geometry', passage_contract:null, horn_section_mm:{} });
+    vi.mocked(sourceEditorApi.hornProfile).mockRejectedValue(new Error('No resolved profile'));
     vi.mocked(sourceEditorApi.presets).mockResolvedValue([]);
     vi.mocked(sourceEditorApi.validate).mockImplementation(async (document) => ({ document, geometry_sha256:'g',excitation_sha256:'e',meridian:Object.fromEntries(document.contour.segments.map((s,i) => [s.id,document.contour.points.slice(i,i+2).map((p) => [p.r_mm,p.z_mm])])) }));
     host=document.createElement('div'); document.body.append(host); root=createRoot(host);
@@ -24,12 +26,132 @@ describe('shared source and passage authoring', () => {
   const mount = async () => { await act(async () => root.render(<AssemblyEditor onClose={() => {}}/>)); await settle(); };
   const button = (text:string) => [...host.querySelectorAll('button')].find((b) => b.textContent===text)!;
   const read = () => parseAssemblyDraft(storage.getItem('')!);
+  const field = (label:string) => {
+    const owner=[...host.querySelectorAll('label')].find((l) => l.querySelector('.field-name')?.textContent===label)!;
+    return document.getElementById(owner.htmlFor) as HTMLInputElement;
+  };
   async function enter(label:string, value:string) {
     const owner=[...host.querySelectorAll('label')].find((l) => l.querySelector('.field-name')?.textContent===label)!;
     const input=document.getElementById(owner.htmlFor) as HTMLInputElement;
     await act(async () => { input.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,value); input.dispatchEvent(new Event('input',{bubbles:true})); });
     await act(async () => input.blur()); await settle();
   }
+  const profile = { horn_config: { formula: 'OSSE', mode: 'bare', profile: { r0_mm: 7, L_mm: 130 } }, throat_radius_mm: 7, horn_length_mm: 130, mouth_radius_mm: 80 };
+  it('seeds a fresh assembly from the current design with source clearance and enclosure margins', async () => {
+    vi.mocked(sourceEditorApi.hornProfile).mockResolvedValue(profile);
+    const current = serializeDesign(useDesignStore.getState().design);
+    await mount();
+    expect(sourceEditorApi.hornProfile).toHaveBeenCalledExactlyOnceWith(current);
+    expect(field('Enclosure width').value).toBe('180.00');
+    expect(field('Enclosure height').value).toBe('216.00');
+    expect(field('Enclosure depth').value).toBe('140.00');
+    expect(host.textContent).toContain('Mouth radius: 80.00 mm');
+    expect(storage.getItem('')).toBeNull(); // Opening alone must not replace hydrated settings.
+    await enter('Front Z', '8');
+    expect(read()).toMatchObject({ horn_config: profile.horn_config, dimensions: {
+      horn_xy_mm: [0, 18], woofer_xy_mm: [0, -90], horn_length_mm: 130, mouth_radius_mm: 80,
+    } });
+    expect(read().horn.contour.points.at(-1)!.r_mm).toBe(7);
+    await act(async () => useDesignStore.getState().updateValue('L', 75)); await settle();
+    expect(sourceEditorApi.hornProfile).toHaveBeenCalledTimes(1);
+    expect(read().dimensions.horn_length_mm).toBe(130);
+  });
+  it('keeps the standalone defaults when the current horn cannot resolve', async () => {
+    await mount();
+    expect(field('Enclosure width').value).toBe('70.00');
+    expect(field('Horn mouth radius').value).toBe('10.00');
+    expect(sourceEditorApi.validateAssembly).toHaveBeenLastCalledWith(INITIAL_ASSEMBLY);
+  });
+  it('never seeds a saved assembly, including one without a saved horn profile', async () => {
+    const saved = structuredClone(INITIAL_ASSEMBLY); saved.dimensions.width_mm = 123.456789;
+    storage.setItem('', JSON.stringify(saved));
+    vi.mocked(sourceEditorApi.hornProfile).mockResolvedValue(profile);
+    await mount();
+    expect(sourceEditorApi.hornProfile).not.toHaveBeenCalled();
+    expect(read()).toEqual(saved);
+    expect(field('Enclosure width').value).toBe('123.46');
+    await act(async () => field('Enclosure width').focus());
+    await act(async () => field('Enclosure width').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    await enter('Front Z', '8');
+    expect(read().dimensions.width_mm).toBe(123.456789);
+  });
+  it.each(['edit', 'load'] as const)('does not replace a %s made while the initial horn resolves', async (action) => {
+    let resolve!: (value: typeof profile) => void;
+    vi.mocked(sourceEditorApi.hornProfile).mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+    await mount();
+    if (action === 'edit') await enter('Enclosure width', '99');
+    else {
+      const saved = structuredClone(INITIAL_ASSEMBLY); saved.dimensions.width_mm = 99;
+      const input = host.querySelector('[aria-label="Load assembly draft"]') as HTMLInputElement;
+      Object.defineProperty(input, 'files', { configurable: true, value: [{ size: 100, text: async () => JSON.stringify(saved) }] });
+      await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
+    }
+    await act(async () => resolve(profile)); await settle();
+    expect(read().dimensions.width_mm).toBe(99);
+    expect(read().horn_config).toBeUndefined();
+  });
+  it('lets a hydrated saved draft win over an in-flight initial profile request', async () => {
+    let resolve!: (value: typeof profile) => void;
+    let adopt!: (raw: string | null) => void;
+    vi.mocked(sourceEditorApi.hornProfile).mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+    vi.spyOn(durableSettings, 'subscribe').mockImplementation((namespace, listener) => {
+      expect(namespace).toBe('sourceAssemblyDraft'); adopt = listener; return () => {};
+    });
+    await mount();
+    const remote = structuredClone(INITIAL_ASSEMBLY); remote.dimensions.width_mm = 125;
+    await act(async () => { localStorage.setItem(SETTINGS_NAMESPACES.sourceAssemblyDraft, JSON.stringify(remote)); adopt(JSON.stringify(remote)); });
+    await act(async () => resolve(profile)); await settle();
+    expect(field('Enclosure width').value).toBe('125.00');
+    expect(read()).toEqual(remote);
+  });
+  it('does not change the assembly underneath an open nested contour editor', async () => {
+    let resolve!: (value: typeof profile) => void;
+    vi.mocked(sourceEditorApi.hornProfile).mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+    await mount();
+    await act(async () => button('Edit horn contour…').click()); await settle();
+    await act(async () => resolve(profile)); await settle();
+    await enter('Patch 1 weight', '.5');
+    await act(async () => button('Use contour in assembly').click()); await settle();
+    expect(read().horn_config).toBeUndefined();
+    expect(read().dimensions).toEqual(INITIAL_ASSEMBLY.dimensions);
+    expect(read().horn.drive.weights.piston).toBe(.5);
+    expect(document.activeElement).toBe(button('Close'));
+  });
+  it('places each toggle after its label on a shared row and still toggles by label', async () => {
+    await mount();
+    const style = document.createElement('style');
+    style.textContent = new TextDecoder().decode(readFileSync('src/design/sourceContourEditor.css'));
+    document.head.append(style);
+    const rows = [...host.querySelectorAll<HTMLLabelElement>('.source-toggle-row')];
+    expect(rows.map((row) => row.firstElementChild?.textContent)).toEqual(['Include woofer', 'Attach to a resolved horn profile']);
+    expect(rows.every((row) => row.lastElementChild?.matches('input[type="checkbox"]'))).toBe(true);
+    try {
+      for (const row of rows) {
+        expect(getComputedStyle(row).display).toBe('flex');
+        expect(getComputedStyle(row).justifyContent).toBe('space-between');
+        expect(getComputedStyle(row.querySelector('input')!).width).toBe('auto');
+        expect(getComputedStyle(row.querySelector('input')!).minWidth).toBe('0px');
+      }
+    } finally { style.remove(); }
+    await act(async () => rows[0].click()); await settle();
+    expect(read().woofer).toBeNull();
+    await act(async () => rows[1].click()); await settle();
+    expect(read().horn_config).toBeDefined();
+    await act(async () => rows[1].click()); await settle();
+    expect(read().horn_config).toBeUndefined();
+  });
+  it('keeps passive body identifiers editable in a collapsed disclosure and validates changes', async () => {
+    await mount(); await act(async () => button('Add central plug').click()); await settle();
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Passive body 1 ID"]')!;
+    const disclosure = input.closest('details')!;
+    expect(disclosure.open).toBe(false); expect(disclosure.querySelector('summary')?.textContent).toBe('Identifiers');
+    await act(async () => { disclosure.open = true; input.focus(); });
+    vi.mocked(sourceEditorApi.validateAssembly).mockRejectedValueOnce(new Error('Invalid body identifier'));
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, ''); input.dispatchEvent(new Event('input', { bubbles: true })); }); await settle();
+    expect(read().phase_plugs[0].id).toBe('');
+    expect(host.textContent).toContain('Invalid body identifier');
+    expect(button('Prepare assembly in WG').disabled).toBe(true);
+  });
   it('adds a central body and annular vane and edits independent radii with shared planes', async () => {
     await mount(); await act(async () => button('Add central plug').click()); await settle();
     await act(async () => button('Add annular vane').click()); await settle();
@@ -57,6 +179,7 @@ describe('shared source and passage authoring', () => {
   it('copies the current horn profile without rescaling the authored source or tracking later design edits', async () => {
     const profile = { horn_config: { formula: 'OSSE', mode: 'bare', profile: { r0_mm: 7, L_mm: 30 } }, throat_radius_mm: 7, horn_length_mm: 30, mouth_radius_mm: 16 };
     vi.mocked(sourceEditorApi.hornProfile).mockResolvedValue(profile);
+    storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY));
     const current = serializeDesign(useDesignStore.getState().design);
     await mount();
     await act(async () => button('Use current horn design').click()); await settle();

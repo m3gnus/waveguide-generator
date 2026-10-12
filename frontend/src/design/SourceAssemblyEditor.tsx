@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { sourceEditorApi, type AssemblyValidation, type SourceAssemblyDocument, type SourceDocument } from '../api/sourceEditor';
 import { durableSettings, namespaceStorage } from '../stores/durableSettings';
@@ -54,6 +54,19 @@ function readDraft(): SourceAssemblyDocument {
   try { const raw = storage.getItem(''); return raw ? parseAssemblyDraft(raw) : structuredClone(INITIAL_ASSEMBLY); }
   catch { return structuredClone(INITIAL_ASSEMBLY); }
 }
+function seedAssembly(profile: Awaited<ReturnType<typeof sourceEditorApi.hornProfile>>): SourceAssemblyDocument {
+  const draft = structuredClone(INITIAL_ASSEMBLY);
+  const margin = 10;
+  const mouth = profile.mouth_radius_mm;
+  const woofer = draft.dimensions.aperture_radius_mm;
+  return { ...draft, horn: flatSource('horn', profile.throat_radius_mm), horn_config: profile.horn_config,
+    dimensions: { ...draft.dimensions,
+      width_mm: Math.max(draft.dimensions.width_mm, 2 * (Math.max(mouth, woofer) + margin)),
+      height_mm: Math.max(draft.dimensions.height_mm, 2 * (mouth + woofer + 2 * margin)),
+      depth_mm: Math.max(draft.dimensions.depth_mm, profile.horn_length_mm + margin),
+      horn_xy_mm: [0, woofer + margin], woofer_xy_mm: [0, -mouth - margin],
+      horn_length_mm: profile.horn_length_mm, mouth_radius_mm: mouth } };
+}
 const visibility = { open: false, listeners: new Set<() => void>(), getSnapshot: () => visibility.open,
   subscribe: (listener: () => void) => { visibility.listeners.add(listener); return () => { visibility.listeners.delete(listener); }; },
   set(open: boolean) { visibility.open = open; visibility.listeners.forEach((listener) => listener()); } };
@@ -66,7 +79,9 @@ export function SourceAssemblyDialog() {
 }
 export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   const [draft, setDraft] = useState(readDraft);
-  const [hornText, setHornText] = useState(() => JSON.stringify(readDraft().horn_config ?? {}, null, 2));
+  const draftRef = useRef(draft);
+  const seedAllowed = useRef(true);
+  const [hornText, setHornText] = useState(() => JSON.stringify(draft.horn_config ?? {}, null, 2));
   const [editing, setEditing] = useState<'horn' | 'woofer' | null>(null);
   const [accepted, setAccepted] = useState<{ key: string; value: AssemblyValidation }>();
   const [error, setError] = useState(''); const [validationError, setValidationError] = useState('');
@@ -74,8 +89,21 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   const key = JSON.stringify(draft); const valid = accepted?.key === key;
   const close = useCallback(() => { if (!busy) onClose(); }, [busy, onClose]);
   const dialog = useModalDialogFocus<HTMLDivElement>({ open: !editing, onClose: close });
-  function change(next: SourceAssemblyDocument) { setDraft(next); storage.setItem('', JSON.stringify(next)); setError(''); setNotice(''); }
-  useEffect(() => durableSettings.subscribe('sourceAssemblyDraft', () => { const restored = readDraft(); setDraft(restored); setHornText(JSON.stringify(restored.horn_config ?? {}, null, 2)); setEditing(null); setNotice('Restored source assembly draft.'); }), []);
+  function change(next: SourceAssemblyDocument) { draftRef.current = next; setDraft(next); storage.setItem('', JSON.stringify(next)); setError(''); setNotice(''); }
+  useEffect(() => durableSettings.subscribe('sourceAssemblyDraft', () => { const restored = readDraft(); draftRef.current = restored; setDraft(restored); setHornText(JSON.stringify(restored.horn_config ?? {}, null, 2)); setEditing(null); setNotice('Restored source assembly draft.'); }), []);
+  useEffect(() => {
+    if (storage.getItem('') !== null) return;
+    const initial = draftRef.current;
+    let current = true;
+    void sourceEditorApi.hornProfile(serializeDesign(useDesignStore.getState().design)).then((profile) => {
+      // A local edit or hydrated saved draft takes precedence over this request.
+      if (!current || !seedAllowed.current || draftRef.current !== initial || storage.getItem('') !== null) return;
+      const seeded = seedAssembly(profile);
+      draftRef.current = seeded; setDraft(seeded);
+      setHornText(JSON.stringify(seeded.horn_config, null, 2));
+    }).catch(() => { /* Unresolvable designs retain the standalone defaults. */ });
+    return () => { current = false; };
+  }, []);
   useEffect(() => {
     let current = true; setValidationError('');
     const timer = setTimeout(() => { void sourceEditorApi.validateAssembly(draft).then((value) => {
@@ -83,7 +111,8 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
     }, (reason: unknown) => { if (current) setValidationError(reason instanceof Error ? reason.message : String(reason)); }); }, 180);
     return () => { current = false; clearTimeout(timer); };
   }, [draft, key]);
-  async function run(action: () => Promise<void>) { setBusy(true); setError(''); setNotice(''); try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(false); } }
+  async function run(action: () => Promise<void>) { seedAllowed.current = false; setBusy(true); setError(''); setNotice(''); try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(false); } }
+  function editSource(source: 'horn' | 'woofer') { seedAllowed.current = false; setEditing(source); }
   function download(blob: Blob, name: string) { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000); }
   // Publish nested edits to the assembly namespace immediately: the settings
   // owner protects genuine local changes from an in-flight hydration reply.
@@ -100,10 +129,10 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
     <header><div><h2>Horn + woofer assembly</h2><ExperimentalBadge/><p>{EXPERIMENTAL_NOTE}</p><p>Shared enclosure · dimensions in mm · parallel +Z axes</p></div><button type="button" disabled={busy} onClick={close}>Close</button></header>
     <fieldset disabled={busy}><div className="source-editor-columns"><div>
       <h3>Sources</h3><p>Each diaphragm keeps one physical identity and drive channel, including its patch weights.</p>
-      <div className="source-editor-toolbar"><button type="button" onClick={() => setEditing('horn')}>Edit horn contour…</button>{draft.woofer && <button type="button" onClick={() => setEditing('woofer')}>Edit woofer contour…</button>}</div>
+      <div className="source-editor-toolbar"><button type="button" onClick={() => editSource('horn')}>Edit horn contour…</button>{draft.woofer && <button type="button" onClick={() => editSource('woofer')}>Edit woofer contour…</button>}</div>
       <p>Horn: {draft.horn.contour.physical_source_id} · {draft.horn.drive.channel_id}. {draft.woofer ? <>Woofer: {draft.woofer.contour.physical_source_id} · {draft.woofer.drive.channel_id}.</> : "Horn only."}</p>
-      <label><input type="checkbox" checked={!!draft.woofer} onChange={(e) => change({ ...draft, woofer: e.target.checked ? flatSource('woofer', 8) : null,
-        dimensions: { ...draft.dimensions, woofer_xy_mm: e.target.checked ? [9, -15] : [0, 0], aperture_radius_mm: e.target.checked ? 8 : 0 } })}/> Include woofer</label>
+      <label className="source-toggle-row"><span>Include woofer</span><input type="checkbox" checked={!!draft.woofer} onChange={(e) => change({ ...draft, woofer: e.target.checked ? flatSource('woofer', 8) : null,
+        dimensions: { ...draft.dimensions, woofer_xy_mm: e.target.checked ? [9, -15] : [0, 0], aperture_radius_mm: e.target.checked ? 8 : 0 } })}/></label>
       <h3>Horn profile</h3>
       <button type="button" onClick={() => void run(async () => {
         const profile = await sourceEditorApi.hornProfile(serializeDesign(useDesignStore.getState().design));
@@ -113,11 +142,11 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
         setNotice(`Current horn profile attached. Its throat radius is ${profile.throat_radius_mm} mm; the horn contour rim must match.`);
       })}>Use current horn design</button>
       <p>Uses the full horn profile on this assembly enclosure. Match the horn contour rim to the throat and size the enclosure around its mouth.</p>
-      <label><input type="checkbox" checked={!!draft.horn_config} onChange={(e) => {
+      <label className="source-toggle-row"><span>Attach to a resolved horn profile</span><input type="checkbox" checked={!!draft.horn_config} onChange={(e) => {
         if (!e.target.checked) { const { horn_config: _config, ...plain } = draft; change(plain); }
         else { const example = { formula: 'OSSE', mode: 'bare', profile: { L_mm: 24, r0_mm: 4, a_deg: 32, a0_deg: 6 }, mesh: { angular_segments: 64, length_segments: 32, throat_res_mm: 2, mouth_res_mm: 3 } };
           setHornText(JSON.stringify(example, null, 2)); change({ ...draft, horn_config: example }); }
-      }}/> Attach to a resolved horn profile</label>
+      }}/></label>
       {draft.horn_config && <details><summary>Advanced horn configuration</summary><p>Paste a native bare horn configuration. Circular OSSE, R-OSSE, ICW and FREEFORM profiles retain their nonlinear wall. The source rim must match its throat. Length and mouth radius come from the profile.</p>
         <label>Horn configuration<textarea aria-label="Horn configuration" rows={8} value={hornText} onChange={(e) => setHornText(e.target.value)}/></label>
         <button type="button" onClick={() => { try { const config: unknown = JSON.parse(hornText); if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Horn configuration must be an object.'); change({ ...draft, horn_config: config as Record<string, unknown> }); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } }}>Apply horn configuration</button>
@@ -140,15 +169,18 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
         const last = draft.phase_plugs.at(-1); const inner0 = last ? last.outer0_mm + 1 : 2; const inner1 = last ? last.outer1_mm + 1 : 2.4;
         change({ ...draft, phase_plugs: [...draft.phase_plugs, { id: `vane-${crypto.randomUUID()}`, z0_mm: last?.z0_mm ?? 2, z1_mm: last?.z1_mm ?? 6, inner0_mm: inner0, outer0_mm: inner0 + .5, inner1_mm: inner1, outer1_mm: inner1 + .5 }] });
       }}>Add annular vane</button></div>
-      {!!draft.phase_plugs.length && <div className="source-fields">{(['z0_mm','z1_mm'] as const).map((field) => <NumberField key={field} label={field === 'z0_mm' ? 'Plug inlet Z' : 'Plug outlet Z'} value={draft.phase_plugs[0][field]} unit="mm" precision={6} step={.1} onCommit={(v) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p) => ({ ...p, [field]: v })) })}/>)}</div>}
-      {draft.phase_plugs.map((plug, i) => <section key={i}><label>Passive body ID<input aria-label={`Passive body ${i+1} ID`} value={plug.id} onChange={(e) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p,j) => j === i ? { ...p, id:e.target.value } : p) })}/></label>
-        <div className="source-fields">{(['inner0_mm','outer0_mm','inner1_mm','outer1_mm'] as const).map((field) => <NumberField key={field} label={`Body ${i+1} ${field.startsWith('inner') ? 'inner' : 'outer'} ${field.includes('0') ? 'inlet' : 'outlet'} radius`} value={plug[field]} unit="mm" precision={6} step={.1} onCommit={(v) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p,j) => j === i ? { ...p, [field]: v } : p) })}/>)}</div><button type="button" onClick={() => change({ ...draft, phase_plugs: draft.phase_plugs.filter((_,j) => j !== i) })}>Remove body {i+1}</button></section>)}
+      {!!draft.phase_plugs.length && <div className="source-fields">{(['z0_mm','z1_mm'] as const).map((field) => <NumberField key={field} label={field === 'z0_mm' ? 'Plug inlet Z' : 'Plug outlet Z'} value={draft.phase_plugs[0][field]} unit="mm" precision={2} step={.1} onCommit={(v) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p) => ({ ...p, [field]: v })) })}/>)}</div>}
+      {draft.phase_plugs.map((plug, i) => <section key={i}>
+        <div className="source-fields">{(['inner0_mm','outer0_mm','inner1_mm','outer1_mm'] as const).map((field) => <NumberField key={field} label={`Body ${i+1} ${field.startsWith('inner') ? 'inner' : 'outer'} ${field.includes('0') ? 'inlet' : 'outlet'} radius`} value={plug[field]} unit="mm" precision={2} step={.1} onCommit={(v) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p,j) => j === i ? { ...p, [field]: v } : p) })}/>)}</div><button type="button" onClick={() => change({ ...draft, phase_plugs: draft.phase_plugs.filter((_,j) => j !== i) })}>Remove body {i+1}</button></section>)}
+      {!!draft.phase_plugs.length && <details className="source-identifiers"><summary>Identifiers</summary>
+        {draft.phase_plugs.map((plug, i) => <label key={i}>Passive body {i+1} ID<input aria-label={`Passive body ${i+1} ID`} value={plug.id} onChange={(e) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p,j) => j === i ? { ...p, id:e.target.value } : p) })}/></label>)}
+      </details>}
     </div><aside><h3>Enclosure and placement</h3><div className="source-fields">
-      {Object.entries(scalarLabels).filter(([field]) => (!draft.horn_config || !['horn_length_mm', 'mouth_radius_mm'].includes(field)) && (draft.woofer || field !== 'aperture_radius_mm')).map(([field,label]) => <NumberField key={field} label={label} value={dimensions[field as keyof typeof scalarLabels]} unit="mm" precision={6} step={.1} onCommit={(v) => change({ ...draft, dimensions: { ...dimensions, [field]: v } })}/>)}
-      {(['horn_xy_mm','woofer_xy_mm'] as const).filter((field) => draft.woofer || field === 'horn_xy_mm').flatMap((field) => ([0,1] as const).map((axis) => <NumberField key={`${field}-${axis}`} label={`${field === 'horn_xy_mm' ? 'Horn' : 'Woofer'} ${axis ? 'Y' : 'X'}`} value={dimensions[field][axis]} unit="mm" precision={6} step={.1} onCommit={(v) => { const xy = [...dimensions[field]] as [number,number]; xy[axis] = v; change({ ...draft, dimensions: { ...dimensions, [field]: xy } }); }}/>))}
-      <NumberField label="Enclosure mesh size" value={draft.mesh_size_mm} unit="mm" min={.001} precision={6} step={.5} onCommit={(v) => change({ ...draft, mesh_size_mm: v })}/>
+      {Object.entries(scalarLabels).filter(([field]) => (!draft.horn_config || !['horn_length_mm', 'mouth_radius_mm'].includes(field)) && (draft.woofer || field !== 'aperture_radius_mm')).map(([field,label]) => <NumberField key={field} label={label} value={dimensions[field as keyof typeof scalarLabels]} unit="mm" precision={2} step={.1} onCommit={(v) => change({ ...draft, dimensions: { ...dimensions, [field]: v } })}/>)}
+      {(['horn_xy_mm','woofer_xy_mm'] as const).filter((field) => draft.woofer || field === 'horn_xy_mm').flatMap((field) => ([0,1] as const).map((axis) => <NumberField key={`${field}-${axis}`} label={`${field === 'horn_xy_mm' ? 'Horn' : 'Woofer'} ${axis ? 'Y' : 'X'}`} value={dimensions[field][axis]} unit="mm" precision={2} step={.1} onCommit={(v) => { const xy = [...dimensions[field]] as [number,number]; xy[axis] = v; change({ ...draft, dimensions: { ...dimensions, [field]: xy } }); }}/>))}
+      <NumberField label="Enclosure mesh size" value={draft.mesh_size_mm} unit="mm" min={.001} precision={3} step={.5} onCommit={(v) => change({ ...draft, mesh_size_mm: v })}/>
       <label>Passage refinement<select aria-label="Passage refinement" value={draft.passage_refinement} onChange={(e) => change({ ...draft, passage_refinement:Number(e.target.value) as 1|2|4 })}><option value="1">Standard</option><option value="2">2× finer</option><option value="4">4× finer</option></select></label>
-    </div>{draft.horn_config && <p>Resolved horn length: {dimensions.horn_length_mm.toFixed(3)} mm. Mouth radius: {dimensions.mouth_radius_mm.toFixed(3)} mm.</p>}
+    </div>{draft.horn_config && <p>Resolved horn length: {dimensions.horn_length_mm.toFixed(2)} mm. Mouth radius: {dimensions.mouth_radius_mm.toFixed(2)} mm.</p>}
     <p>Passages refine locally to preserve clearance. Smaller enclosure mesh sizes and finer passages use more triangles.</p>
       <button type="button" disabled={!valid} onClick={() => void run(async () => { const record = await prepareNativeAssembly(() => sourceEditorApi.ingestAssembly(draft)); setNotice(`Prepared ${record.mesh?.stats.triangle_count ?? ''} triangles. The imported workspace now uses this assembly and its physical source channels.`); })}>Prepare assembly in WG</button>
       <button type="button" disabled={!valid} onClick={() => void run(async () => { download(await sourceEditorApi.exportAssembly(draft), 'native-assembly.zip'); setNotice('Exported shared STEP shell, preview mesh and source recipe.'); })}>Export assembly STEP + mesh</button>

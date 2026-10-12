@@ -24,6 +24,10 @@ describe('public parameter catalog', () => {
     expect(convention?.options.map((option) => [option.value, option.current_only])).toEqual([
       ['normal', false], ['axial', false], ['legacy', true],
     ]);
+    const throat = buildParameterCatalog().parameters.find((field) => field.id === 'osse.throat_profile');
+    expect(throat?.options.map((option) => [option.value, option.label, option.current_only])).toEqual([
+      [1, 'OS-SE', false], [3, 'Circular arc (legacy)', true],
+    ]);
   });
 
   it('matches the committed server-owned integration artifact', () => {

@@ -13,6 +13,11 @@
 .source-editor button:disabled { opacity: .45; cursor: default; }
 .source-editor input { width: 100%; min-width: 75px; box-sizing: border-box; }
 .source-editor label { display: grid; gap: 4px; margin-bottom: 8px; }
+.source-editor .source-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.source-editor .source-toggle-row input { width: auto; min-width: 0; flex-shrink: 0; margin: 0; }
+.source-editor summary { cursor: pointer; }
+.source-identifiers { margin: 8px 0; }
+.source-identifiers[open] summary { margin-bottom: 8px; }
 .source-editor-columns { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(250px, 1fr); gap: 24px; }
 .source-editor aside { border-left: 1px solid var(--hair); padding-left: 20px; }
 .source-editor-toolbar, .source-preset { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }

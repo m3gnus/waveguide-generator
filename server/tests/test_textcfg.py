@@ -132,6 +132,44 @@ def test_new_design_does_not_serialize_machine_solver_path() -> None:
     assert "Symmetry = quarter" in text
 
 
+@pytest.mark.parametrize("profile", [None, 1])
+def test_osse_export_omits_inactive_circular_arc_keys_and_round_trips(profile) -> None:
+    payload = {"formula": "OSSE", "L": 120, "r0": 12.7, "a": 45}
+    if profile is not None:
+        payload["throat_profile"] = profile
+    baseline = serialize(DesignConfig.model_validate(payload))
+    design = DesignConfig.model_validate({**payload, "circ_arc_radius": 200, "circ_arc_term_angle": 35})
+    exported = serialize(design)
+    assert exported == baseline  # Every other byte stays in the same writer order.
+    assert "CircArc." not in exported
+    assert "Throat.Profile = 1\n" in exported
+    reopened = parse(exported).design
+    assert reopened.root.throat_profile.value == 1
+    assert reopened.root.circ_arc_radius is None
+    assert reopened.root.circ_arc_term_angle is None
+    assert reopened.root.L.value == design.root.L.value
+    assert serialize(parse(exported)) == exported
+    assert parse(serialize(reopened)).semantic_data() == parse(exported).semantic_data()
+
+
+@pytest.mark.parametrize("profile", [3, "3", {"value": 3, "raw": "3"}])
+def test_native_legacy_circular_arc_export_and_mesher_translation_are_preserved(profile) -> None:
+    design = DesignConfig.model_validate({
+        "formula": "OSSE", "L": 120, "r0": 12.7, "a": 45,
+        "throat_profile": profile, "circ_arc_radius": 200, "circ_arc_term_angle": 35,
+    })
+    reopened = DesignConfig.model_validate_json(design.model_dump_json())
+    assert reopened == design
+    text = serialize(reopened)
+    assert "Throat.Profile = 3\n" in text
+    assert "CircArc.Radius = 200\n" in text
+    assert "CircArc.TermAngle = 35\n" in text
+    mesher = design_to_mesher_config(reopened)["profile"]
+    assert mesher["throatProfile"] in (3, "3")
+    assert mesher["circArcRadius"] == 200
+    assert mesher["circArcTermAngle"] == 35
+
+
 def test_a_stated_solver_mode_is_reported_rather_than_accepted_and_ignored() -> None:
     """A machine-local setting a design states must not disappear in silence.
 

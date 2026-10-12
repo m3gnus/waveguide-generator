@@ -16,6 +16,7 @@ describe('experimental native assembly labels', () => {
     vi.mocked(sourceEditorApi.validateAssembly).mockReturnValue(new Promise(() => {}));
     vi.mocked(sourceEditorApi.validate).mockReturnValue(new Promise(() => {}));
     vi.mocked(sourceEditorApi.presets).mockResolvedValue([]);
+    vi.mocked(sourceEditorApi.hornProfile).mockRejectedValue(new Error('No resolved profile'));
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   });
   afterEach(() => { act(() => root.unmount()); host.remove(); vi.restoreAllMocks(); });

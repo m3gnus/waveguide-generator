@@ -27,6 +27,49 @@ describe('source editor interactions', () => {
   const input = (text: string) => { const direct = host.querySelector<HTMLInputElement>(`input[aria-label="${text}"]`); if (direct) return direct; const label = [...host.querySelectorAll('label')].find((l) => l.querySelector('.field-name')?.textContent === text)!; return document.getElementById(label.htmlFor) as HTMLInputElement; };
   async function enter(text: string, value: string) { await act(async () => { const field = input(text); field.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value); field.dispatchEvent(new Event('input', { bubbles: true })); }); await act(async () => input(text).blur()); }
 
+  it('shows concise coordinates, arc centers and weights without rounding untouched draft values', async () => {
+    const doc = structuredClone(INITIAL_SOURCE);
+    doc.contour.points[1].r_mm = 8.123456789;
+    doc.contour.segments[0] = { ...doc.contour.segments[0], kind: 'arc', center_mm: [4.0617283945, .000123456], direction: 'ccw' };
+    doc.drive.weights.piston = .123456789;
+    storage.setItem('', JSON.stringify(doc)); await mount();
+    for (const [label, displayed] of [['Point 2 radius', '8.12'], ['Arc center radius', '4.06'], ['Arc center z', '0.00'], ['Patch 1 weight', '0.123']]) {
+      expect(input(label).value).toBe(displayed);
+      await act(async () => input(label).focus());
+      await act(async () => input(label).blur());
+    }
+    expect(input('Radius preset').value).toBe('10.00');
+    expect(input('Mesh size').value).toBe('2.000');
+    await enter('Drive channel ID', 'changed'); await settle();
+    expect(readSourceDraft().contour).toEqual(doc.contour);
+    expect(readSourceDraft().drive.weights).toEqual(doc.drive.weights);
+  });
+  it.each(['Physical source ID', 'Rim ID', 'Drive channel ID'])('keeps %s editable and validated inside Identifiers', async (label) => {
+    await mount();
+    const disclosure = input(label).closest('details')!;
+    expect(disclosure.open).toBe(false);
+    expect(disclosure.querySelector('summary')?.textContent).toBe('Identifiers');
+    await act(async () => { disclosure.open = true; input(label).focus(); });
+    expect(document.activeElement).toBe(input(label));
+    await enter(label, 'edited'); await settle();
+    const doc = readSourceDraft();
+    expect(label === 'Drive channel ID' ? doc.drive.channel_id : doc.contour[label === 'Rim ID' ? 'rim_id' : 'physical_source_id']).toBe('edited');
+    vi.mocked(sourceEditorApi.validate).mockRejectedValueOnce(new Error('Invalid identifier'));
+    await enter(label, ''); await settle();
+    expect(host.textContent).toContain('Invalid identifier');
+    expect(button('Export STEP + mesh bundle').disabled).toBe(true);
+  });
+  it('retains modal focus, Tab wrapping and Escape while editing disclosed identifiers', async () => {
+    const close = vi.fn();
+    await act(async () => root.render(<Editor onClose={close}/>)); await settle();
+    expect(document.activeElement).toBe(button('Close'));
+    const last = button('Export STEP + mesh bundle');
+    await act(async () => { last.focus(); last.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })); });
+    expect(document.activeElement).toBe(button('Close'));
+    await act(async () => { input('Rim ID').closest('details')!.open = true; input('Rim ID').focus(); input('Rim ID').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it('edits table coordinates, keeps IDs, persists draft, and can undo', async () => {
     await mount(); await enter('Point 2 radius', '10'); await settle();
     expect(sourceEditorApi.validate).toHaveBeenLastCalledWith(expect.objectContaining({ contour: expect.objectContaining({ points: [{ id: 'pole', r_mm: 0, z_mm: 0 }, { id: 'rim', r_mm: 10, z_mm: 0 }] }) }));

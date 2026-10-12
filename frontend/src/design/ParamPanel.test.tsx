@@ -210,6 +210,25 @@ describe('ParamPanel inventory UX', () => {
     expect(serializeDesign(useDesignStore.getState().design)).toMatchObject({ source: { velocity_convention: 'axial' } });
   });
 
+  it('loads a native circular throat arc and retires its option after selecting OS-SE', () => {
+    act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
+      formula: 'OSSE', throat_profile: 3, circ_arc_radius: 123.456, circ_arc_term_angle: 35,
+    })));
+    act(() => root.render(withQueryClient(<ParamPanel tab="geometry" />)));
+    const selector = '[data-parameter-id="osse.throat_profile"] select';
+    expect(host.querySelector<HTMLSelectElement>(selector)?.value).toBe('3');
+    expect(host.querySelector(`${selector} option[value="3"]`)?.textContent).toBe('Circular arc (legacy)');
+    for (const id of ['osse.circ_arc_radius', 'osse.circ_arc_term_angle']) expect(host.querySelector(`[data-parameter-id="${id}"]`)).not.toBeNull();
+    expect(serializeDesign(useDesignStore.getState().design)).toMatchObject({ throat_profile: 3, circ_arc_radius: 123.456, circ_arc_term_angle: 35 });
+    act(() => {
+      const select = host.querySelector<HTMLSelectElement>(selector)!;
+      select.value = '1'; select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(host.querySelector(`${selector} option[value="3"]`)).toBeNull();
+    for (const id of ['osse.circ_arc_radius', 'osse.circ_arc_term_angle']) expect(host.querySelector(`[data-parameter-id="${id}"]`)).toBeNull();
+    expect(serializeDesign(useDesignStore.getState().design)).toMatchObject({ throat_profile: 1, circ_arc_radius: 123.456, circ_arc_term_angle: 35 });
+  });
+
   it('shows imported ATH lip, Opus rear and NAC values as read-only geometry', () => {
     act(() => useDesignStore.getState().loadDesign(hydrateDesignDocument({
       formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', ath_nac_present: true, ath_nac: 10,

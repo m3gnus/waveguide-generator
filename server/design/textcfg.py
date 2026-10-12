@@ -1891,10 +1891,11 @@ def _serialize_canonical(
             ("GCurve.SF.n2", guide.sf_n2),
             ("GCurve.SF.n3", guide.sf_n3),
             ("GCurve.Rot", guide.rotation),
-            ("CircArc.Radius", config.circ_arc_radius),
-            ("CircArc.TermAngle", config.circ_arc_term_angle),
         ):
             _line(lines, key, value)
+        if config.throat_profile is not None and config.throat_profile.value == 3:
+            _line(lines, "CircArc.Radius", config.circ_arc_radius)
+            _line(lines, "CircArc.TermAngle", config.circ_arc_term_angle)
 
     if not isinstance(config, OSSEConfig):
         _line(lines, "Throat.Ext.Angle", config.throat_ext_angle)

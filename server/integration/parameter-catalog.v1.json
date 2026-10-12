@@ -2979,14 +2979,14 @@
         },
         {
           "value": 3,
-          "label": "Circular arc",
+          "label": "Circular arc (legacy)",
           "requires_feature": null,
           "degraded_without": null,
           "degraded_label": null,
-          "current_only": false
+          "current_only": true
         }
       ],
-      "description": "Which curve carries the wall from throat to mouth: the OS-SE formula above, or a plain circular arc driven by the two arc controls at the bottom of this section. The arc ignores a0, k, s, n and q; Shape factor h and Profile rotation still apply."
+      "description": "OS-SE carries the wall from throat to mouth. Existing native designs can retain the legacy circular arc, driven by the two arc controls below. The legacy arc ignores a0, k, s, n and q; Shape factor h and Profile rotation still apply. For a terminating arc on a new design, use OSSE-ARC."
     },
     {
       "id": "osse.rotation",

@@ -262,6 +262,20 @@ describe('complete parameter registry', () => {
     }
   });
 
+  it('offers the legacy circular throat arc only while held, with its controls visible only then', () => {
+    const field = PARAMETER_REGISTRY.find((entry) => entry.id === 'osse.throat_profile')!;
+    const design = designForFamily('OSSE');
+    for (const profile of [1, 3]) {
+      design.throat_profile = profile;
+      expect(fieldOptionsForBackend(field, profile, null).map((option) => [option.value, option.label])).toEqual(
+        profile === 3 ? [[1, 'OS-SE'], [3, 'Circular arc (legacy)']] : [[1, 'OS-SE']],
+      );
+      for (const id of ['osse.circ_arc_radius', 'osse.circ_arc_term_angle']) {
+        expect(fieldIsVisible(PARAMETER_REGISTRY.find((entry) => entry.id === id)!, design)).toBe(profile === 3);
+      }
+    }
+  });
+
   it('leaves dimensionless throat stretch controls without units', () => {
     for (const id of ['common.s1', 'common.s2']) expect(PARAMETER_REGISTRY.find((field) => field.id === id)?.unit).toBeUndefined();
   });
