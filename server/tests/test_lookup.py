@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from server.cadlink.store import CadLinkStore
 from server.exports.api import WgLinkExportRequest, _export_wglink_sync
 from server.design.schema import DesignConfig
-from server.design.textcfg import parse, serialize
+from server.design.textcfg import TextConfigError, parse, serialize
 from server.design_io.api import open_design, save_design, serialize_design
 from server.preview.core import preview_options
 from server.preview.translate import design_to_mesher_config, outer_body_mode
@@ -169,3 +169,11 @@ def test_cad_cfg_transport_refused_before_writing(tmp_path):
     with pytest.raises(HTTPException, match="ATH has no LOOKUP profile"):
         _export_wglink_sync(WgLinkExportRequest(design=design(), designRevision=1), CadLinkStore(":memory:"), tmp_path, "lookup")
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("text", ['{"formula": "OSSE"}\n', '{\n "setting": 1\n}\n', "{ not json"])
+def test_only_lookup_json_takes_the_json_design_path(text: str) -> None:
+    # Anything else starting with "{" keeps the config parser's own refusal.
+    with pytest.raises(TextConfigError) as raised:
+        parse(text)
+    assert "LOOKUP" not in str(raised.value)

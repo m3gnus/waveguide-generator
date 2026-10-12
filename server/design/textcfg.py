@@ -1425,14 +1425,18 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     if not isinstance(text, str):
         raise TypeError("text must be a string")
     if text.lstrip("\ufeff \t\r\n").startswith("{"):
+        # Only a JSON object naming the LOOKUP formula is a JSON design; any
+        # other text keeps the config parser and its established refusals.
         try:
             payload = json.loads(text.removeprefix("\ufeff"))
-            if not isinstance(payload, dict) or payload.get("formula") != "LOOKUP":
-                raise ValueError("JSON design files require a LOOKUP design")
-            design = DesignConfig.model_validate(payload)
-        except (ValueError, TypeError) as exc:
-            raise TextConfigError(f"invalid LOOKUP JSON design: {exc}") from exc
-        return ParsedDesign(design=design, dialect="mwg", source_text=text)
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict) and payload.get("formula") == "LOOKUP":
+            try:
+                design = DesignConfig.model_validate(payload)
+            except (ValueError, TypeError) as exc:
+                raise TextConfigError(f"invalid LOOKUP JSON design: {exc}") from exc
+            return ParsedDesign(design=design, dialect="mwg", source_text=text)
     repeated: list[tuple[str, _RawBlock]] = []
     flat, blocks, comments, raw_values = _lex(text.removeprefix("\ufeff"), repeated)
     for comment in comments:
