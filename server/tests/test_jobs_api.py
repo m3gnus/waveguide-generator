@@ -727,3 +727,24 @@ def test_metadata_patch_maps_malformed_stored_merge_shape_to_422(tmp_path: Path)
         await app.state.jobs_runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('solve_path', ['interior-fem', 'coupled-fem-bem'])
+def test_completed_fem_job_status_and_list_preserve_solve_path(tmp_path, solve_path):
+    async def scenario():
+        app = create_app(data_dir=tmp_path)
+        runtime = app.state.jobs_runtime
+        runtime.store.initialize()
+        row = _complete_job('completed-fem')
+        row['task_metadata']['solve_path'] = solve_path
+        runtime.store.create_job(row)
+        try:
+            status, raw = await _request(app, 'GET', '/api/status/completed-fem')
+            assert status == 200
+            assert json.loads(raw)['solve_path'] == solve_path
+            status, raw = await _request(app, 'GET', '/api/jobs')
+            assert status == 200
+            assert json.loads(raw)['items'][0]['solve_path'] == solve_path
+        finally:
+            await runtime.shutdown()
+    asyncio.run(scenario())

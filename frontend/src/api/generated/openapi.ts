@@ -4426,7 +4426,7 @@ export interface components {
             solve_execution: components["schemas"]["SolveExecution"] | null;
             solve_options: components["schemas"]["SolveOptionsResponse"];
             /** Solve Path */
-            solve_path?: ("full-3d" | "axisymmetric-meridian") | null;
+            solve_path?: ("full-3d" | "axisymmetric-meridian" | "interior-fem" | "coupled-fem-bem") | null;
             /** Solve Wall Time Seconds */
             solve_wall_time_seconds?: number | null;
             /** Stage */
@@ -4626,7 +4626,7 @@ export interface components {
             solve_execution: components["schemas"]["SolveExecution"] | null;
             solve_options: components["schemas"]["SolveOptionsResponse"];
             /** Solve Path */
-            solve_path?: ("full-3d" | "axisymmetric-meridian") | null;
+            solve_path?: ("full-3d" | "axisymmetric-meridian" | "interior-fem" | "coupled-fem-bem") | null;
             /** Solve Wall Time Seconds */
             solve_wall_time_seconds?: number | null;
             /** Stage */

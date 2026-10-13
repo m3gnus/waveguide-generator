@@ -100,7 +100,7 @@ export interface JobItem extends JobNullableFields {
   log_tail: string[];
   design_availability?: components['schemas']['DesignAvailability'] | null;
   symmetry?: Record<string, unknown>;
-  solve_path?: 'full-3d' | 'axisymmetric-meridian' | null;
+  solve_path?: 'full-3d' | 'axisymmetric-meridian' | 'interior-fem' | 'coupled-fem-bem' | null;
   axisymmetric_eligibility_reasons?: string[];
   solve_wall_time_seconds?: number | null;
   /** Where an imported run came from. Absent on parametric runs. */
@@ -433,6 +433,7 @@ function isJobItem(value: unknown): value is JobItem {
   if (hasOwn(value, 'mesh_discarded_at') && !isNullableTimestamp(value.mesh_discarded_at)) return false;
   if (hasOwn(value, 'solve_path') && !(
     value.solve_path === null || value.solve_path === 'full-3d' || value.solve_path === 'axisymmetric-meridian'
+    || value.solve_path === 'interior-fem' || value.solve_path === 'coupled-fem-bem'
   )) return false;
   if (hasOwn(value, 'axisymmetric_eligibility_reasons') && !isStringArray(value.axisymmetric_eligibility_reasons)) return false;
   if (hasOwn(value, 'solve_wall_time_seconds') && !(

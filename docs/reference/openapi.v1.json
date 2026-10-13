@@ -6558,7 +6558,9 @@
               {
                 "enum": [
                   "full-3d",
-                  "axisymmetric-meridian"
+                  "axisymmetric-meridian",
+                  "interior-fem",
+                  "coupled-fem-bem"
                 ],
                 "type": "string"
               },
@@ -7249,7 +7251,9 @@
               {
                 "enum": [
                   "full-3d",
-                  "axisymmetric-meridian"
+                  "axisymmetric-meridian",
+                  "interior-fem",
+                  "coupled-fem-bem"
                 ],
                 "type": "string"
               },

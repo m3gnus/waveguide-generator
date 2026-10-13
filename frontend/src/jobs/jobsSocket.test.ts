@@ -38,6 +38,18 @@ describe('jobs websocket state machine', () => {
   beforeEach(() => { vi.useFakeTimers(); compareSelection.clear(); provisionalResults.clear(); });
   afterEach(() => { provisionalResults.clear(); vi.useRealTimers(); });
 
+  it.each(['interior-fem', 'coupled-fem-bem'] as const)('accepts a completed %s job snapshot', (solvePath) => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1,
+      jobs: [{ ...job({ status: 'complete' }), solve_path: solvePath }] });
+    expect(manager.getSnapshot().jobs).toHaveLength(1);
+    expect(manager.getSnapshot().jobs[0].solve_path).toBe(solvePath);
+    manager.stop();
+  });
+
   it('accepts legacy snapshots without advertising a FEM field', () => {
     const socket = new MockSocket();
     const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');

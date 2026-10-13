@@ -1520,7 +1520,7 @@ class JobItem(JobModel):
     mesh_discarded_at: str | None = None
     log_tail: list[str]
     symmetry: dict[str, Any] = Field(default_factory=dict)
-    solve_path: Literal["full-3d", "axisymmetric-meridian"] | None = None
+    solve_path: Literal["full-3d", "axisymmetric-meridian", "interior-fem", "coupled-fem-bem"] | None = None
     axisymmetric_eligibility_reasons: list[str] = Field(default_factory=list)
     solve_wall_time_seconds: float | None = None
     cad_source: CadSource | None = None
