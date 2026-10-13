@@ -823,3 +823,45 @@ def test_sweep_end_clearance_masks_wrong_noisy_surface_source_samples(stored, fr
         assert raw_error > .01
         assert not calls
         assert (decode(result, 'mask_reason', 'u1') == 2).all()
+
+
+
+@pytest.mark.parametrize("symmetry", ["off", "xy"])
+def test_distance_traversal_work_does_not_depend_on_last_bit_rounding(monkeypatch, symmetry):
+    """Points a fixed height above a flat skin tie with every leaf beneath them.
+    Different CPUs (AVX-512 or AVX2 numpy and BLAS kernels) round those bounds
+    differently in the last bit; the visited work must not depend on it."""
+    import server.jobs.body_index as body_index
+    from server.jobs.body_index import SkinDistanceIndex, skin_triangles
+    from types import SimpleNamespace
+
+    resolution = 64
+    grid = np.linspace(0, .01, resolution + 1)
+    x, y = np.meshgrid(grid, grid)
+    vertices = np.column_stack([x.ravel(), y.ravel(), np.zeros(x.size)])
+    row, col = np.meshgrid(np.arange(resolution), np.arange(resolution), indexing="ij")
+    a = (row * (resolution + 1) + col).ravel()
+    faces = np.concatenate([np.column_stack([a, a + 1, a + resolution + 2]),
+                            np.column_stack([a, a + resolution + 2, a + resolution + 1])])
+    triangles = np.concatenate([vertices[faces], [[[-1, -1, -1], [1, -1, -1], [-1, 1, -1]]]])
+    mesh = SimpleNamespace(points_m=triangles.reshape(-1, 3), faces=np.arange(triangles.size // 3).reshape(-1, 3))
+    triangles = skin_triangles(mesh, symmetry)
+    query = np.linspace(.00001, .00999, 48)
+    qx, qy = np.meshgrid(query, query)
+    points = np.column_stack([qx.ravel(), qy.ravel(), np.full(qx.size, .1)])
+    exact = body_index.point_triangle_distances
+
+    def run(noise, seed):
+        rng = np.random.default_rng(seed)
+
+        def rounded(p, t):
+            distances = exact(p, t)
+            return distances * (1 + noise * rng.standard_normal(distances.shape)) if noise else distances
+
+        monkeypatch.setattr(body_index, "point_triangle_distances", rounded)
+        index = SkinDistanceIndex(triangles)
+        np.testing.assert_allclose(index.query(points), .1, rtol=1e-9)
+        return index.pair_count
+
+    counts = {run(0, 0) for _ in range(20)} | {run(1e-13, seed) for seed in range(6)}
+    assert len(counts) == 1

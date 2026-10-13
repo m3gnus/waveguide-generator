@@ -88,6 +88,13 @@ def point_triangle_distances(points, triangles):
     return np.sqrt(squared)
 
 
+# A box whose lower bound cannot beat the best distance by more than this
+# relative margin is skipped. Points equidistant from many leaves (a plane
+# parallel to a flat skin) would otherwise visit or skip each tied leaf on
+# the last rounding bit; the returned distance is exact to 1e-9 relative.
+PRUNE_SLACK = 1 - 2e-9
+
+
 class SkinDistanceIndex:
     """Best-first exact nearest-triangle traversal, with small distance leaves."""
     def __init__(self, triangles, check=lambda: None):
@@ -118,7 +125,7 @@ class SkinDistanceIndex:
             xyz = (points[indices] - origin) @ basis
             delta = np.maximum(np.maximum(lo - xyz, xyz - hi), 0)
             bound = np.einsum("ij,ij->i", delta, delta)
-            keep = bound <= distances[indices] ** 2
+            keep = bound < distances[indices] ** 2 * PRUNE_SLACK
             if keep.any():
                 serial += 1
                 heapq.heappush(pending, (float(bound[keep].min()), serial, node, indices[keep], bound[keep]))
@@ -129,7 +136,7 @@ class SkinDistanceIndex:
             _, _, node, indices, bound = heapq.heappop(pending)
             # Bounds are reconsidered after every nearer leaf. For each point,
             # traversal stops once the next box is farther than its best hit.
-            indices = indices[bound <= distances[indices] ** 2]
+            indices = indices[bound < distances[indices] ** 2 * PRUNE_SLACK]
             if not len(indices):
                 continue
             _, _, left, right = node
