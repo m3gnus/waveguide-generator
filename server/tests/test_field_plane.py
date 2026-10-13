@@ -1081,9 +1081,12 @@ def test_evaluation_timeout_returns_504_but_holds_permit_until_thread_finishes(
         assert status == 504
         assert json.loads(raw)["detail"]["code"] == "evaluation_timeout"
         assert app.state.jobs_runtime.metal_permit.field_running is True
+        next_solve = asyncio.create_task(app.state.jobs_runtime.metal_permit.acquire_solve())
+        await asyncio.sleep(.01)
+        assert not next_solve.done()  # HTTP timeout cannot release live native work
         release.set()
-        while app.state.jobs_runtime.metal_permit.field_running:
-            await asyncio.sleep(0.001)
+        lease = await asyncio.wait_for(next_solve, timeout=2)
+        await lease.release()
         await app.state.jobs_runtime.shutdown()
 
     asyncio.run(scenario())

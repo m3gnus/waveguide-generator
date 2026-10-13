@@ -419,6 +419,7 @@ class BemppProcessHost:
         self._pipe_lock = threading.Lock()
         self._warm_requested = False
         self._state_lock = threading.Lock()
+        self._close_generation = 0
 
     def _ensure_started(self) -> Connection:
         process = self._process
@@ -602,6 +603,7 @@ class BemppProcessHost:
         """Stop the reusable worker during application/interpreter shutdown."""
 
         with self._state_lock:
+            self._close_generation += 1
             connection = self._connection
             process = self._process
             if connection is not None and process is not None and process.is_alive():
@@ -673,8 +675,10 @@ class BemppProcessHost:
         cancel_cb: CancelCallback,
         stage_cb: StageCallback,
         result_cb: ResultCallback | None,
+        rewarm_on_cancel: bool = False,
     ) -> Any:
         with self._state_lock:
+            generation = self._close_generation
             if self._active_job_id is not None:
                 raise BemppWorkerError(
                     "The BEMPP worker already has an active solve; the runtime "
@@ -746,14 +750,19 @@ class BemppProcessHost:
             await asyncio.to_thread(self._terminate_sync)
             with self._state_lock:
                 self._active_job_id = None
-            if not isinstance(exc, asyncio.CancelledError):
+            if rewarm_on_cancel or not isinstance(exc, asyncio.CancelledError):
                 # Rebuild the warm child now.  Waiting until the next solve puts
                 # the whole initialization cost the kill just threw away onto
                 # the user's next action -- 24.5 s on the reference Windows VM.
-                # asyncio.CancelledError is the exception: that is the server
-                # going away, and resurrecting a worker into a closing app only
-                # gives shutdown something else to kill.
-                await asyncio.to_thread(self.prewarm)
+                # Solver task cancellation usually means shutdown. Field replay
+                # also cancels on its HTTP deadline, so it opts into rewarming.
+                # A close generation prevents that rewarm resurrecting a worker
+                # after application shutdown has closed this host.
+                def rewarm_if_open():
+                    with self._state_lock:
+                        if self._close_generation == generation:
+                            self._prewarm_locked()
+                await asyncio.to_thread(rewarm_if_open)
             raise
         finally:
             with self._state_lock:
@@ -781,6 +790,7 @@ async def evaluate_field_bempp_in_process(payload: Mapping[str, Any]) -> Any:
     return await _HOST._run_payload(
         {**payload, "kind": "field"},
         cancel_cb=lambda: None, stage_cb=lambda *_args: None, result_cb=None,
+        rewarm_on_cancel=True,
     )
 
 

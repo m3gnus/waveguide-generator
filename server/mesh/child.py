@@ -10,10 +10,9 @@ child instead:
 * a crash (any signal or a nonzero exit) kills only the child and surfaces as
   :class:`MesherCrashError`, a named, user-facing error; the server stays up.
   Nothing is retried automatically (Magnus, 2026-10-05).
-* there is no default wall-clock limit: mesh density is the user's choice and a
-  fine mesh may legitimately take minutes. A hang is ended by the user's cancel,
-  which kills the child. ``WG2_MESH_BUILD_TIMEOUT_S`` sets a limit for
-  qualification runs.
+* builds have a conservative one-hour wall-clock ceiling.
+  ``WG2_MESH_BUILD_TIMEOUT_S`` selects a longer or shorter positive ceiling.
+  A deadline or user cancellation kills and reaps the child.
 * one child stays warm across builds, so the 1-2 s import of gmsh, OCC and
   scipy is paid at boot (in the background) and again only after a death. gmsh
   itself is initialised and finalised around every build, as it always was.
@@ -42,6 +41,7 @@ import asyncio
 import atexit
 import contextlib
 import logging
+import math
 import multiprocessing
 from multiprocessing.connection import Connection
 import os
@@ -101,15 +101,17 @@ def child_enabled() -> bool:
     return os.environ.get(IN_PROCESS_ENV, "").strip() != "1"
 
 
-def build_timeout_seconds() -> float | None:
-    """The qualification limit from the environment; ``None`` (no limit) otherwise."""
+DEFAULT_BUILD_TIMEOUT_SECONDS = 60 * 60.0
 
+
+def build_timeout_seconds() -> float:
+    """Conservative killable-build limit; malformed overrides retain the default."""
     raw = os.environ.get(TIMEOUT_ENV, "").strip()
     try:
-        value = float(raw) if raw else 0.0
+        value = float(raw) if raw else DEFAULT_BUILD_TIMEOUT_SECONDS
     except ValueError:
-        return None
-    return value if value > 0 else None
+        return DEFAULT_BUILD_TIMEOUT_SECONDS
+    return value if math.isfinite(value) and value > 0 else DEFAULT_BUILD_TIMEOUT_SECONDS
 
 
 def _describe_exit(exitcode: int | None) -> str:

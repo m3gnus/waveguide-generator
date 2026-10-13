@@ -64,6 +64,26 @@ class MetalPermit:
         self._solve_owner: object | None = None
         self._field_owner: object | None = None
         self._pending_field: _FieldWaiter | None = None
+        self.quarantine_reason: str | None = None
+
+    def quarantine(self, reason: str) -> None:
+        """Permanently close admission when in-process native work may survive.
+
+        Called on the owning event loop. Lease release must never reopen a
+        quarantined process, including when shutdown cancels its caller.
+        """
+        self.quarantine_reason = reason
+        for _, future in self._solve_waiters:
+            if not future.done():
+                future.set_exception(FieldEvaluationBusy(reason))
+        self._solve_waiters.clear()
+        pending, self._pending_field = self._pending_field, None
+        if pending is not None and not pending.future.done():
+            pending.future.set_exception(FieldEvaluationBusy(reason))
+
+    def _require_available(self) -> None:
+        if self.quarantine_reason is not None:
+            raise FieldEvaluationBusy(self.quarantine_reason)
 
     @property
     def solve_active_or_waiting(self) -> bool:
@@ -100,6 +120,7 @@ class MetalPermit:
     async def acquire_solve(self) -> MetalLease:
         """Wait for current field work, ahead of every pending field request."""
 
+        self._require_available()
         lock = self._loop_lock()
         loop = asyncio.get_running_loop()
         token = object()
@@ -130,6 +151,7 @@ class MetalPermit:
         small gap before its own solve waiter reaches this permit.
         """
 
+        self._require_available()
         lock = self._loop_lock()
         loop = asyncio.get_running_loop()
         token = object()
@@ -179,6 +201,8 @@ class MetalPermit:
             self._advance_locked()
 
     def _advance_locked(self) -> None:
+        if self.quarantine_reason is not None:
+            return
         if self._solve_owner is not None or self._field_owner is not None:
             return
         while self._solve_waiters:

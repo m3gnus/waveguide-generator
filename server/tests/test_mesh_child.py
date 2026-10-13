@@ -713,13 +713,16 @@ def test_the_child_uses_the_servers_session_directory(host) -> None:
         session.close(remove=True)
 
 
-def test_there_is_no_default_deadline(monkeypatch) -> None:
+def test_default_deadline_and_invalid_override(monkeypatch) -> None:
     monkeypatch.delenv("WG2_MESH_BUILD_TIMEOUT_S", raising=False)
-    assert build_timeout_seconds() is None
+    assert build_timeout_seconds() == 3600.0
     monkeypatch.setenv("WG2_MESH_BUILD_TIMEOUT_S", "90")
     assert build_timeout_seconds() == 90.0
     monkeypatch.setenv("WG2_MESH_BUILD_TIMEOUT_S", "nonsense")
-    assert build_timeout_seconds() is None
+    assert build_timeout_seconds() == 3600.0
+    for raw in ("0", "-1", "nan", "inf"):
+        monkeypatch.setenv("WG2_MESH_BUILD_TIMEOUT_S", raw)
+        assert build_timeout_seconds() == 3600.0
 
 
 def test_cancelling_before_the_build_is_sent_leaves_the_warm_child_alone(host) -> None:
@@ -811,6 +814,12 @@ def test_app_shutdown_does_not_respawn_the_mesh_child(
     from server.engines.registry import EngineInfo, EngineRegistry
     from server.jobs.models import SolveRequest
     from server.solver.base import EngineRunResult
+    from server.solver.metal_permit import MetalPermit
+
+    # Each parameter is a fresh app process. Native quarantine deliberately
+    # survives runtime recreation within one actual process.
+    permit = MetalPermit()
+    monkeypatch.setattr(runtime_module, "process_metal_permit", lambda: permit)
 
     # Static assets are unused here; keep app construction independent of a SPA build.
     monkeypatch.setattr(app_module, "FRONTEND_DIST", tmp_path)
@@ -854,7 +863,8 @@ def test_app_shutdown_does_not_respawn_the_mesh_child(
                 await run_mesh_build(marked_hang_build, str(marker), cancel_cb=checkpoint)
             except runtime_module._CancelledAtCheckpoint:
                 if mode == "task_cancel":
-                    # Leave cleanup pending so runtime.shutdown also exercises task.cancel().
+                    # Leave adapter cleanup pending so runtime.shutdown cancels
+                    # its caller while retaining the adapter behind quarantine.
                     try:
                         await asyncio.Event().wait()
                     except asyncio.CancelledError:
@@ -893,7 +903,15 @@ def test_app_shutdown_does_not_respawn_the_mesh_child(
             shutdown_finished = True
             assert time.monotonic() - began < 3
             assert cooperative_cancel.is_set() == (mode != "completed")
-            assert task_cancel.is_set() == (mode == "task_cancel")
+            if mode == "task_cancel":
+                # Cancelling the caller cannot cancel an adapter whose native
+                # work may survive. Keep it strongly referenced and close all
+                # admission; interpreter shutdown disposes it after this test.
+                assert not task_cancel.is_set()
+                assert runtime._native_tasks
+                assert permit.quarantine_reason is not None
+            else:
+                assert not task_cancel.is_set()
             assert len(processes) == 1, "shutdown spawned a replacement mesh child"
             assert host._channel is None
             assert not channel.process.is_alive() and not channel.reader.is_alive()

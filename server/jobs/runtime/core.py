@@ -23,6 +23,7 @@ import math
 import os
 from pathlib import Path
 import time
+import threading
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Mapping, Sequence
 import uuid
 
@@ -91,6 +92,7 @@ from server.solver.polar_arc import effective_polar_config, effective_polar_grid
 from server.solver.formulation import bem_formulation
 from server.solver.metal_permit import MetalPermit, process_metal_permit
 from server.solver.base import is_full3d_solver_port, run_full3d_solver_port
+from server.solver.watchdog import watch_native_operation, stall_timeout_seconds
 
 from . import logger
 from .provisional import (
@@ -1638,6 +1640,8 @@ class JobRuntime:
         self.events = EventBroker()
         self._queue: deque[str] = deque()
         self._running: set[str] = set()
+        self._cancellation_flags: dict[str, threading.Event] = {}
+        self._native_tasks: set[asyncio.Task[Any]] = set()
         #: The CAD preparation lane: accepted CAD solves waiting for a worker,
         #: the ones being prepared now, and what prepares them
         #: (``configure_cad_preparation``). Separate from ``_queue`` and
@@ -1931,7 +1935,11 @@ class JobRuntime:
                 self._restart_interrupted.add(job_id)
             self.events.publish(event)
         state = self.store.cancellation_state(job_id)
-        return bool(state is not None and state[0] == "running" and state[1])
+        requested = bool(state is not None and state[0] == "running" and state[1])
+        flag = self._cancellation_flags.get(job_id)
+        if requested and flag is not None:
+            flag.set()
+        return requested
 
     async def submit(
         self,
@@ -2902,6 +2910,11 @@ class JobRuntime:
             },
             {"stage": "cancelling", "message": "Cancellation requested"},
         )
+        # The native checkpoint may act immediately: persist intent before
+        # signalling it, with no intervening event-loop yield.
+        flag = self._cancellation_flags.get(job_id)
+        if flag is not None:
+            flag.set()
         if event is None:
             current = self._require_job(job_id)
             if current.get("status") != "running":
@@ -3489,6 +3502,8 @@ class JobRuntime:
         return await asyncio.to_thread(self.resume, cursor)
 
     def _ensure_scheduler(self) -> None:
+        if self.metal_permit.quarantine_reason is not None:
+            return
         if self._shutting_down or self._stopping or not self._started or not self._queue:
             return
         if self._restart_pending():
@@ -3523,6 +3538,7 @@ class JobRuntime:
                 # called off.
                 while (
                     self._queue
+                    and self.metal_permit.quarantine_reason is None
                     and not self._shutting_down
                     and not self._stopping
                     and not self._restart_pending()
@@ -3531,11 +3547,17 @@ class JobRuntime:
                     row = self.store.get_job_row(job_id)
                     if row is None or row["status"] != "queued":
                         continue
+                    flag = threading.Event()
+                    if row.get("cancellation_requested"):
+                        flag.set()
+                    self._cancellation_flags[job_id] = flag
                     self._running.add(job_id)
                     try:
                         await self._run_job(job_id, row)
                     finally:
                         self._running.discard(job_id)
+                        if self.metal_permit.quarantine_reason is None:
+                            self._cancellation_flags.pop(job_id, None)
                         try:
                             prune_results = self._results_cleanup_enabled()
                             _removed_ids, prune_events = await asyncio.to_thread(
@@ -3906,6 +3928,7 @@ class JobRuntime:
 
         refusal = await _imported_request_refusal_async(
             request, record, cancel_check=lambda: self._check_cancelled(job_id))
+        self._check_cancelled(job_id)
         if refusal:
             raise ImportedSolveRefusal(*refusal)
         from server.solver.beat import beat_engine_backend
@@ -3925,6 +3948,7 @@ class JobRuntime:
             frequencies_hz=canonical_frequencies(context),
             resolved_quadrants=(symmetry_metadata or {}).get("resolved_quadrants"),
             backend=backend, precision=precision)
+        self._check_cancelled(job_id)
         options = compiled.wire["solver_options"]
         execution = {"engine": f"beat-{options['bem_backend']}",
                      "backend": options["bem_backend"], "precision": options["precision"]}
@@ -3951,6 +3975,7 @@ class JobRuntime:
             status_callback=lambda message: stage_cb("solve", .45, message),
             progress_callback=lambda i, total, freq: stage_cb(
                 "solve", .45 + .4 * (i + 1) / total, f"Solving FEM at {freq:g} Hz"))
+        self._check_cancelled(job_id)
         results = coupled_envelope(sweep, compiled, context=context, geometry=request.geometry,
                                    record=record, config=response_config(compiled, context), started=started)
 
@@ -4050,9 +4075,17 @@ class JobRuntime:
         loop = asyncio.get_running_loop()
         stage_tasks: set[asyncio.Task[Any]] = set()
         artifact_persisted = False
+        last_progress = time.monotonic()
+        callbacks_stopped = threading.Event()
 
         def stage_callback(stage: str, progress: float, message: str) -> None:
+            nonlocal last_progress
+            if callbacks_stopped.is_set():
+                return
+            last_progress = time.monotonic()
             def schedule() -> None:
+                if callbacks_stopped.is_set():
+                    return
                 task = asyncio.create_task(
                     self._report_real_stage(job_id, stage, progress, message),
                     name=f"wg2-stage-{job_id}",
@@ -4062,19 +4095,23 @@ class JobRuntime:
             loop.call_soon_threadsafe(schedule)
 
         def result_callback(index: int, result: dict[str, Any]) -> None:
+            nonlocal last_progress
+            if callbacks_stopped.is_set():
+                return
+            last_progress = time.monotonic()
             # Native callbacks run in the solver worker. Provisional state and
             # subscriber queues remain owned by the asyncio thread.
-            loop.call_soon_threadsafe(
-                self._accept_partial_result,
-                job_id,
-                int(index),
-                result,
-            )
+            def accept():
+                if not callbacks_stopped.is_set():
+                    self._accept_partial_result(job_id, int(index), result)
+            loop.call_soon_threadsafe(accept)
 
         async def artifact_callback(msh_text: str, mesh_stats: dict[str, Any]) -> None:
             """Persist immediately after meshing, before native solve like v1 lines 451-493."""
 
             nonlocal artifact_persisted
+            if callbacks_stopped.is_set():
+                raise _CancelledAtCheckpoint(CANCELLED_MESSAGE)
             if mesh_stats:
                 self.store.update_job(job_id, mesh_stats_json=json.dumps(mesh_stats))
                 # A mesh diagnosis that only reaches mesh_stats is a diagnosis
@@ -4093,36 +4130,49 @@ class JobRuntime:
 
         try:
             solve_started = time.perf_counter()
-            if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
-                outcome = await self._run_coupled_regions(
-                    job_id, request, imported_record, stage_callback, symmetry_metadata)
-            elif is_full3d_solver_port(engine):
-                # BEAT and Metal have one HornLab-facing port. Their native
-                # protocols differ; the scheduler never needs to inspect them.
-                outcome = await run_full3d_solver_port(
-                    engine,
-                    request,
-                    cancel_cb=lambda: self._check_cancelled(job_id),
-                    stage_cb=stage_callback,
-                    artifact_cb=artifact_callback,
-                    result_cb=result_callback,
-                    imported_record=imported_record,
-                )
-            else:
-                run_kwargs: dict[str, Any] = {
-                    "cancel_cb": lambda: self._check_cancelled(job_id),
-                    "stage_cb": stage_callback,
-                }
-                if "artifact_cb" in inspect.signature(engine.run).parameters:
-                    run_kwargs["artifact_cb"] = artifact_callback
-                if "result_cb" in inspect.signature(engine.run).parameters:
-                    run_kwargs["result_cb"] = result_callback
-                if (
-                    imported_record is not None
-                    and "imported_record" in inspect.signature(engine.run).parameters
-                ):
-                    run_kwargs["imported_record"] = imported_record
-                outcome = await engine.run(request, **run_kwargs)
+            async def invoke():
+                if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
+                    return await self._run_coupled_regions(
+                        job_id, request, imported_record, stage_callback, symmetry_metadata)
+                elif is_full3d_solver_port(engine):
+                    # BEAT and Metal have one HornLab-facing port. Their native
+                    # protocols differ; the scheduler never needs to inspect them.
+                    return await run_full3d_solver_port(
+                        engine,
+                        request,
+                        cancel_cb=lambda: self._check_cancelled(job_id),
+                        stage_cb=stage_callback,
+                        artifact_cb=artifact_callback,
+                        result_cb=result_callback,
+                        imported_record=imported_record,
+                    )
+                else:
+                    run_kwargs: dict[str, Any] = {
+                        "cancel_cb": lambda: self._check_cancelled(job_id),
+                        "stage_cb": stage_callback,
+                    }
+                    if "artifact_cb" in inspect.signature(engine.run).parameters:
+                        run_kwargs["artifact_cb"] = artifact_callback
+                    if "result_cb" in inspect.signature(engine.run).parameters:
+                        run_kwargs["result_cb"] = result_callback
+                    if (
+                        imported_record is not None
+                        and "imported_record" in inspect.signature(engine.run).parameters
+                    ):
+                        run_kwargs["imported_record"] = imported_record
+                    return await engine.run(request, **run_kwargs)
+            def stop_callbacks():
+                callbacks_stopped.set()
+                flag = self._cancellation_flags.get(job_id)
+                if flag is not None:
+                    flag.set()
+
+            stall_limit = stall_timeout_seconds()
+            outcome = await watch_native_operation(
+                invoke(), permit=self.metal_permit, retained=self._native_tasks,
+                last_progress=lambda: last_progress,
+                timeout_seconds=stall_limit, stop_callbacks=stop_callbacks,
+            )
         finally:
             # Drain callbacks queued by the final native frequency/result hook.
             await asyncio.sleep(0)
@@ -4642,6 +4692,11 @@ class JobRuntime:
             )
 
     def _check_cancelled(self, job_id: str) -> None:
+        flag = self._cancellation_flags.get(job_id)
+        if flag is not None:
+            if flag.is_set():
+                raise _CancelledAtCheckpoint(CANCELLED_MESSAGE)
+            return
         # Deliberately synchronous: the solver thread calls this from inside a
         # native progress callback, where there is no event loop to await on.
         state = self.store.cancellation_state(job_id)

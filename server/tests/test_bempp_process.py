@@ -813,7 +813,7 @@ def _host_over_a_dying_worker(monkeypatch, buffered: list, *, dead_at_start: boo
 
     async def exercise() -> str:
         host = BemppProcessHost(process_context=Context())
-        monkeypatch.setattr(host, "prewarm", lambda: None)
+        monkeypatch.setattr(host, "_prewarm_locked", lambda: None)
         with pytest.raises(bempp_process.BemppWorkerError) as raised:
             await _run_once(host)
         return str(raised.value)
@@ -937,7 +937,7 @@ def test_an_announcement_read_by_a_cancelled_await_is_not_lost(monkeypatch) -> N
 
     async def exercise() -> None:
         host = BemppProcessHost(process_context=Context())
-        monkeypatch.setattr(host, "prewarm", lambda: None)
+        monkeypatch.setattr(host, "_prewarm_locked", lambda: None)
         task = asyncio.create_task(_run_once(host))
         assert await asyncio.to_thread(reading.wait, 10.0)
         task.cancel()
@@ -984,7 +984,7 @@ def test_a_windows_job_is_used_and_the_pipe_is_not_read_for_a_group(
 
     async def exercise() -> None:
         host = BemppProcessHost(process_context=Context())
-        monkeypatch.setattr(host, "prewarm", lambda: None)
+        monkeypatch.setattr(host, "_prewarm_locked", lambda: None)
         with pytest.raises(bempp_process.BemppWorkerError, match="exit code 3"):
             await _run_once(host)
 
@@ -1072,3 +1072,35 @@ def test_a_crashed_workers_sweep_children_do_not_outlive_the_job(
     finally:
         if not _process_is_gone(sweep_pid):  # pragma: no cover - cleanup on failure
             os.kill(sweep_pid, 9)
+
+
+@pytest.mark.parametrize("close_before_rewarm", [False, True])
+def test_field_timeout_rewarms_unless_shutdown_closed_host(monkeypatch, close_before_rewarm):
+    async def scenario():
+        host = BemppProcessHost(target=_blocking_worker)
+        monkeypatch.setattr(bempp_process, "_HOST", host)
+        original_to_thread = asyncio.to_thread
+
+        async def to_thread(function, *args, **kwargs):
+            if close_before_rewarm and function.__name__ == "rewarm_if_open":
+                # App shutdown closes while the cancellation cleanup has yielded
+                # to its executor, immediately before the attempted respawn.
+                await original_to_thread(host.close)
+            return await original_to_thread(function, *args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "to_thread", to_thread)
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    bempp_process.evaluate_field_bempp_in_process({}), timeout=.1,
+                )
+            if close_before_rewarm:
+                assert host._process is None
+                assert host._warm_requested is False
+            else:
+                assert host._process is not None and host._process.is_alive()
+                assert host._warm_requested is True
+        finally:
+            await original_to_thread(host.close)
+
+    asyncio.run(scenario())

@@ -38,6 +38,16 @@ from server.platform.shutdown_backstop import CLEANUP_RESERVE_SECONDS, ShutdownB
 from server.solver.base import EngineRunResult
 
 
+@pytest.fixture(autouse=True)
+def isolated_native_admission(monkeypatch):
+    # Each test models a fresh application process. Quarantine deliberately
+    # persists for a real process, even across JobRuntime recreation.
+    from server.jobs.runtime import core
+    from server.solver.metal_permit import MetalPermit
+    permit = MetalPermit()
+    monkeypatch.setattr(core, "process_metal_permit", lambda: permit)
+
+
 def _request(*, delay_ms: int = 2, count: int = 5) -> SolveRequest:
     return SolveRequest.model_validate(
         {
@@ -2096,3 +2106,109 @@ def test_native_non_bempp_does_not_apply_wall_default(formula):
 
     request = SolveRequest.model_validate({"design": design_payload(formula)})
     assert _apply_bempp_wall_default(request, "metal") == (request, None)
+
+
+def test_stalled_solver_fails_without_starting_queued_job_or_late_callbacks(tmp_path, monkeypatch):
+    monkeypatch.setenv("WG2_NATIVE_STALL_TIMEOUT_SECONDS", "0.04")
+
+    async def scenario():
+        entered, release = threading.Event(), threading.Event()
+        starts = []
+
+        class StalledEngine:
+            name = "stalled"
+
+            async def run(self, request, *, cancel_cb, stage_cb, result_cb):
+                def native():
+                    starts.append(1)
+                    entered.set()
+                    assert release.wait(5)
+                    stage_cb("solve", .8, "late native progress")
+                    result_cb(0, {"late": True})
+                    cancel_cb()
+                return await asyncio.to_thread(native)
+
+        runtime = JobRuntime(
+            JobStore(tmp_path / "stalled.db"),
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+                factory=lambda _: StalledEngine(),
+            ),
+        )
+        try:
+            first = await runtime.submit(_bare_request())
+            second = await runtime.submit(_bare_request())
+            deadline = time.monotonic() + 3
+            while runtime.store.get_job_row(first)["status"] != "error":
+                assert time.monotonic() < deadline
+                await asyncio.sleep(.005)
+            assert entered.is_set()
+            assert runtime.store.get_job_row(second)["status"] == "queued"
+            assert "Restart" in runtime.store.get_job_row(first)["error_message"]
+            assert starts == [1]
+            from server.solver.metal_permit import FieldEvaluationBusy
+            with pytest.raises(FieldEvaluationBusy, match="Restart"):
+                await runtime.metal_permit.acquire_field("blocked")
+            # Checkpoint cancellation reads memory after terminal publication.
+            monkeypatch.setattr(runtime.store, "cancellation_state", lambda *_: pytest.fail("SQLite poll"))
+            release.set()
+            await asyncio.gather(*runtime._native_tasks, return_exceptions=True)
+            await asyncio.sleep(.01)
+            assert starts == [1]
+            assert runtime.store.get_job_row(first)["status"] == "error"
+            assert first not in runtime._partial_results
+        finally:
+            release.set()
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("shutdown", [False, True])
+def test_cached_cancel_waits_for_durable_intent_and_preserves_stop_reason(tmp_path, monkeypatch, shutdown):
+    async def scenario():
+        entered, release = threading.Event(), threading.Event()
+
+        class CheckpointEngine:
+            name = "checkpoint"
+            async def run(self, request, *, cancel_cb, stage_cb):
+                def native():
+                    entered.set()
+                    assert release.wait(5)
+                    cancel_cb()
+                return await asyncio.to_thread(native)
+
+        runtime = JobRuntime(
+            JobStore(tmp_path / "ordering.db"),
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+                factory=lambda _: CheckpointEngine(),
+            ),
+        )
+        try:
+            job_id = await runtime.submit(_bare_request())
+            assert await asyncio.to_thread(entered.wait, 3)
+            real_flush = runtime._flush_runtime_update
+            async def flush_before_signal(*args, **kwargs):
+                await asyncio.sleep(0)
+                runtime._check_cancelled(job_id)  # log flushing is not cancellation
+                assert runtime.store.cancellation_state(job_id) == ("running", False)
+                return await real_flush(*args, **kwargs)
+            monkeypatch.setattr(runtime, "_flush_runtime_update", flush_before_signal)
+            if shutdown:
+                runtime.mark_running_interrupted_by_quit("test Quit")
+                runtime._check_cancelled(job_id)  # backstop marks cause, not cancellation
+                assert runtime._request_shutdown_cancellation(job_id, False)
+            else:
+                assert (await runtime.stop(job_id))["status"] == "cancelling"
+            monkeypatch.setattr(runtime, "_flush_runtime_update", real_flush)
+            release.set()
+            await runtime.wait_idle()
+            row = runtime.store.get_job_row(job_id)
+            assert row["status"] == "cancelled"
+            assert row["error_message"] == (QUIT_INTERRUPTED_MESSAGE if shutdown else CANCELLED_MESSAGE)
+        finally:
+            release.set()
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
