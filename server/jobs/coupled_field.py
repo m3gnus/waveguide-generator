@@ -116,7 +116,7 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
                 distance = SkinDistanceIndex(triangles, check).query(selected, check)
                 step = np.minimum(step, distance * 0.05)
                 rounding = np.max(np.abs(np.spacing(selected.astype(np.float32))), axis=1).astype(float)
-                # BEAT pressure evaluations are complex64 even for CPU solves.
+                # Keep the conservative step bound for Float32 accelerator evaluations.
                 # Relative pressure noise ~1e-5 needs k*h >= 1e-3 rad (~1% velocity error).
                 k = 2 * np.pi * frequency / speed
                 minimum_step = .001 / k

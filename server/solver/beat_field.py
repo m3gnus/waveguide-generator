@@ -51,17 +51,18 @@ def _stage_array(directory: Path, name: str, values: Any, dtype: str) -> dict[st
                 dtype=array.dtype.name, order="C", byte_order="little")
 
 
-def _read_result(directory: Path, event: Mapping[str, Any], count: int) -> np.ndarray:
+def _read_result(directory: Path, event: Mapping[str, Any], count: int, dtype: str) -> np.ndarray:
     descriptor = event.get("values_binary")
-    expected = dict(file="field.bin", offset=0, nbytes=count * 8, shape=[count],
-                    dtype="complex64", order="C", byte_order="little")
+    result_dtype = np.dtype(dtype)
+    expected = dict(file="field.bin", offset=0, nbytes=count * result_dtype.itemsize, shape=[count],
+                    dtype=result_dtype.name, order="C", byte_order="little")
     if (event.get("phasor_convention") != SOLVER_TIME_CONVENTION
             or descriptor != expected):
         raise RuntimeError("BEAT field result has an invalid binary array or phase convention")
     path = directory / "field.bin"
     if not path.is_file() or path.stat().st_size != expected["nbytes"]:
         raise RuntimeError("BEAT field result is missing or truncated")
-    pressure = np.frombuffer(path.read_bytes(), dtype="<c8").copy()
+    pressure = np.frombuffer(path.read_bytes(), dtype=dtype).copy()
     if not np.isfinite(pressure).all():
         raise RuntimeError("BEAT field result contains nonfinite pressure")
     return pressure
@@ -94,6 +95,11 @@ def evaluate_exterior_from_traces(
         raise FieldPlaneUnsupported(f"BEAT field runtime is unavailable: {status['reason']}")
     if not math.isfinite(k_real) or k_real <= 0:
         raise ArtifactCorrupt("Retained BEAT field wavenumber must be positive and finite")
+    # CPU potential evaluation supports Float64. Preserve retained trace precision
+    # there; accelerators keep their qualified Float32 path. Geometry arrays
+    # remain Float32 as required by the pinned field-operation contract.
+    precision = "float64" if status["backend"] == "cpu" else "float32"
+    complex_dtype = "<c16" if precision == "float64" else "<c8"
     pressure = np.asarray(pressure_p1)
     neumann = np.asarray(neumann_dp0)
     if pressure.shape != (len(mesh.points_m),) or neumann.shape != (len(mesh.faces),):
@@ -122,8 +128,8 @@ def evaluate_exterior_from_traces(
             arrays = {
                 "boundary_points_m": _stage_array(directory, "vertices", vertices, "<f4"),
                 "boundary_triangles": _stage_array(directory, "triangles", mesh.faces, "<i8"),
-                "boundary_pressure": _stage_array(directory, "pressure", pressure, "<c8"),
-                "boundary_normal_derivative": _stage_array(directory, "neumann", neumann, "<c8"),
+                "boundary_pressure": _stage_array(directory, "pressure", pressure, complex_dtype),
+                "boundary_normal_derivative": _stage_array(directory, "neumann", neumann, complex_dtype),
                 "points_m": _stage_array(directory, "points", points, "<f4"),
             }
             request = dict(
@@ -131,7 +137,7 @@ def evaluate_exterior_from_traces(
                 binary_result_file="field.bin", domain_key=key,
                 frequency_hz=float(frequency_hz),
                 sound_speed_m_per_s=2 * math.pi * frequency_hz / k_real,
-                precision="float32", bem_backend=status["backend"], symmetry=symmetry,
+                precision=precision, bem_backend=status["backend"], symmetry=symmetry,
                 phasor_convention=SOLVER_TIME_CONVENTION, quadrature_order=4,
             )
             session.submit(get_manager().get_worker(status["backend"]), request,
@@ -144,7 +150,7 @@ def evaluate_exterior_from_traces(
                     if result is not None:
                         raise RuntimeError("BEAT returned more than one field result")
                     # events() closes staging when it reaches the terminal.
-                    result = _read_result(directory, event, len(points))
+                    result = _read_result(directory, event, len(points), complex_dtype)
                 elif kind == "completed":
                     completed = True
                 elif kind in {"failed", "cancelled"}:

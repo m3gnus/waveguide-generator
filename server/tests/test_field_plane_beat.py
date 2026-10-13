@@ -78,10 +78,11 @@ def runtime(monkeypatch, tmp_path):
                 if state.failed:
                     yield dict(type="failed", error="field kernel failed")
                     return
-                values = np.asarray(state.field_function(arrays, wire), dtype="<c8") if hasattr(state, "field_function") else np.full(len(arrays["points_m"]), arrays["boundary_pressure"][0], dtype="<c8")
+                dtype = "<c16" if wire["precision"] == "float64" else "<c8"
+                values = np.asarray(state.field_function(arrays, wire), dtype=dtype) if hasattr(state, "field_function") else np.full(len(arrays["points_m"]), arrays["boundary_pressure"][0], dtype=dtype)
                 (path.parent / "field.bin").write_bytes(values.tobytes())
                 descriptor = dict(file="field.bin", offset=0, nbytes=values.nbytes,
-                                  dtype="complex64", shape=[len(values)], order="C", byte_order="little")
+                                  dtype=values.dtype.name, shape=[len(values)], order="C", byte_order="little")
                 event = dict(type="field_result", phasor_convention=wire["phasor_convention"], values_binary=descriptor)
                 if state.mutate:
                     state.mutate(event)
@@ -194,6 +195,14 @@ def test_field_operation_uses_the_available_device(runtime, monkeypatch, tmp_pat
                                            artifact.channels[0].pressure_p1[0], artifact.channels[0].neumann_dp0[0],
                                            [[2., 3., 4.]])
     assert runtime.requests[0]["bem_backend"] == backend
+    precision = "float64" if backend == "cpu" else "float32"
+    assert runtime.requests[0]["precision"] == precision
+    expected_dtype = np.complex128 if backend == "cpu" else np.complex64
+    assert runtime.arrays[0]["boundary_pressure"].dtype == expected_dtype
+    assert runtime.arrays[0]["boundary_normal_derivative"].dtype == expected_dtype
+    # Geometry remains Float32 in the pinned BEAT field-operation contract.
+    assert runtime.arrays[0]["boundary_points_m"].dtype == np.float32
+    assert runtime.arrays[0]["points_m"].dtype == np.float32
     assert runtime.requests[0]["phasor_convention"] == SOLVER_TIME_CONVENTION
 
 
@@ -217,8 +226,10 @@ def test_beat_unavailable_is_unsupported_with_reason_not_corrupt(monkeypatch, tm
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("failure", ["phase", "path", "shape", "truncated", "nonfinite", "failed", "incomplete", "duplicate"])
-def test_invalid_field_results_do_not_return_pressure(runtime, tmp_path, failure):
+@pytest.mark.parametrize("backend", ["cpu", "metal"])
+@pytest.mark.parametrize("failure", ["phase", "path", "shape", "precision", "truncated", "nonfinite", "failed", "incomplete", "duplicate"])
+def test_invalid_field_results_do_not_return_pressure(runtime, monkeypatch, tmp_path, failure, backend):
+    monkeypatch.setattr(beat_field, "field_status", lambda: dict(available=True, backend=backend))
     def mutate(event):
         descriptor = event["values_binary"]
         if failure == "phase":
@@ -227,6 +238,8 @@ def test_invalid_field_results_do_not_return_pressure(runtime, tmp_path, failure
             descriptor["file"] = "../field.bin"
         elif failure == "shape":
             descriptor["shape"] = [2]
+        elif failure == "precision":
+            descriptor["dtype"] = "complex64" if backend == "cpu" else "complex128"
         elif failure in {"truncated", "nonfinite"}:
             directory = next(tmp_path.glob("wg2-beat-solve-*"))
             (directory / "field.bin").write_bytes(b"" if failure == "truncated" else np.asarray([np.nan], dtype="<c8").tobytes())
@@ -448,3 +461,17 @@ def test_retained_ground_plane_job_cannot_silently_evaluate_free_field(runtime, 
             await app.state.jobs_runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_cpu_replay_preserves_trace_bits_below_float32_resolution(runtime, tmp_path):
+    path = tmp_path / "mesh.msh"
+    path.write_text(MESH_TEXT)
+    mesh = beat_field.load_mesh(path)
+    pressure = np.full(len(mesh.points_m), 1. + 2e-10 + (1. + 3e-10) * 1j, dtype=np.complex128)
+    neumann = np.full(len(mesh.faces), 2. + 4e-10j, dtype=np.complex128)
+    result = beat_field.evaluate_exterior_from_traces(
+        mesh, 1000., 18.3, pressure, neumann, [[2., 3., 4.]])
+    np.testing.assert_array_equal(runtime.arrays[0]["boundary_pressure"], pressure)
+    np.testing.assert_array_equal(runtime.arrays[0]["boundary_normal_derivative"], neumann)
+    assert result.dtype == np.complex128
+    np.testing.assert_array_equal(result, pressure[:1])
