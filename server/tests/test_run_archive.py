@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 import re
 
+import pytest
+
 from server.workspace.archive import (
     archive_cad_document,
     archive_folder_slug,
@@ -655,3 +657,19 @@ def test_a_digest_fragment_collision_is_disambiguated_by_the_sidecar(
 
     assert found_one is not None and found_one.read_bytes() == b"model-one"
     assert found_two is not None and found_two.read_bytes() == b"model-two"
+
+
+@pytest.mark.parametrize("member", ["../secret.f3d", "/secret.f3d", "linked.f3d"])
+def test_capture_refuses_members_outside_bundle(tmp_path, member):
+    bundle = bundle_with_document(tmp_path)
+    secret = tmp_path / "secret.f3d"
+    secret.write_bytes(b"private")
+    if member == "/secret.f3d":
+        member = str(secret)
+    elif member == "linked.f3d":
+        (bundle / member).symlink_to(secret)
+    record = record_for()
+    record["document"]["file"] = member
+    runs = tmp_path / "runs"
+    assert archive_cad_document(bundle, record, runs, "Horn") is None
+    assert not runs.exists()

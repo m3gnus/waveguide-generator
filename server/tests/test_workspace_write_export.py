@@ -2140,3 +2140,32 @@ def test_an_archive_into_a_folder_an_older_export_wrote_moves_only_the_taken_nam
     assert (run / "9_OSSE.json").read_text() == '{"timestamp": "an older export"}'
     assert (run / "archive" / "9_OSSE.json").read_text() == '{"timestamp": "completed"}'
     assert (run / "9_OSSE.csv").read_text() == _ARCHIVE_SET[1][1]
+
+
+def test_json_export_rejects_oversize_base64_before_decoding(monkeypatch):
+    from server.workspace import api
+    monkeypatch.setattr(api, "MAX_EXPORT_BYTES", 3)
+    monkeypatch.setattr(api.base64, "b64decode", lambda *_a, **_kw: pytest.fail("decoded oversized data"))
+    request = api.WriteExportRequest(subdirectory="test", members=[
+        api.ExportMember(relative_path="large.bin", content_base64="YWJjZA=="),
+    ])
+    with pytest.raises(ValueError, match="binary size limit"):
+        api._decode_json_export_request(request)
+
+
+def test_json_export_applies_cumulative_budget_before_next_decode(monkeypatch):
+    from server.workspace import api
+    monkeypatch.setattr(api, "MAX_EXPORT_BYTES", 4)
+    real_decode = api.base64.b64decode
+    decoded = []
+    def decode(value, **kwargs):
+        decoded.append(value)
+        return real_decode(value, **kwargs)
+    monkeypatch.setattr(api.base64, "b64decode", decode)
+    request = api.WriteExportRequest(subdirectory="test", members=[
+        api.ExportMember(relative_path="a.bin", content_base64="YWJj"),
+        api.ExportMember(relative_path="b.bin", content_base64="ZGU="),
+    ])
+    with pytest.raises(ValueError, match="binary size limit"):
+        api._decode_json_export_request(request)
+    assert decoded == ["YWJj"]

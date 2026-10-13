@@ -301,8 +301,10 @@ def archive_cad_document(
     digest = str(document.get("return_state_hash") or "")
     if not member or not digest:
         return None
-    source = (Path(bundle_path) / member).resolve()
-    if source.is_symlink() or not source.is_file():
+    bundle_root = Path(bundle_path).resolve()
+    member_path = bundle_root / member
+    source = member_path.resolve()
+    if bundle_root not in source.parents or member_path.is_symlink() or not source.is_file():
         return None
 
     destination_directory = design_archive_folder(runs_root, stem) / CAD_SUBDIRECTORY

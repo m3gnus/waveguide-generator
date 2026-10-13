@@ -236,11 +236,19 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _member_bytes(member: ExportMember) -> bytes:
+def _member_bytes(member: ExportMember, remaining: int = MAX_EXPORT_BYTES) -> bytes:
     if member.text is not None:
-        return member.text.encode("utf-8")
+        content = member.text.encode("utf-8")
+        if len(content) > remaining:
+            raise ValueError("Export set exceeds the binary size limit")
+        return content
+    encoded = member.content_base64 or ""
+    padding = 2 if encoded.endswith("==") else int(encoded.endswith("="))
+    decoded_size = (len(encoded) // 4) * 3 - padding
+    if decoded_size > remaining:
+        raise ValueError("Export set exceeds the binary size limit")
     try:
-        return base64.b64decode(member.content_base64 or "", validate=True)
+        return base64.b64decode(encoded, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise ValueError(f"{member.relative_path!r} contains invalid base64 data") from exc
 
@@ -265,10 +273,16 @@ def _decode_json_export_request(
         if isinstance(payload, WriteExportRequest)
         else WriteExportRequest.model_validate_json(payload)
     )
+    members = []
+    remaining = MAX_EXPORT_BYTES
+    for member in request.members:
+        content = _member_bytes(member, remaining)
+        remaining -= len(content)
+        members.append((member.relative_path, content))
     return (
         request.subdirectory,
         request.existing,
-        [(member.relative_path, _member_bytes(member)) for member in request.members],
+        members,
         request.destination,
     )
 
