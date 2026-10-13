@@ -291,18 +291,73 @@ def test_stream_send_timeout_survives_reader_stall_beyond_control_deadline(launc
             assert not owner._stopping.is_set()
 
 
-def test_authenticate_gets_fresh_deadline_after_slow_hello(launch):
+def test_authenticate_gets_fresh_deadline_after_slow_hello(launch, monkeypatch):
     key, directory, _ = launch
+    class ControlledClock:
+        """A host-local clock that advances only when the test tells it to."""
+
+        def __init__(self, source):
+            self.source = source
+            self.now = 10_000.0
+            self.lock = threading.Lock()
+
+        def monotonic(self):
+            with self.lock:
+                return self.now
+
+        def advance(self, amount):
+            with self.lock:
+                self.now += amount
+                return self.now
+
+        def __getattr__(self, name):
+            return getattr(self.source, name)
+
+    clock = ControlledClock(time)
+    # Replace the module-local clock references only. Patching stdlib time's
+    # global monotonic would affect unrelated worker threads and socket helpers.
+    monkeypatch.setattr(host, 'time', clock)
+    monkeypatch.setattr(ipc, 'time', clock)
+    auth_deadline_started = threading.Event()
+    host_connection = []
+    receive = host.receive_frame
+    receives = 0
+
+    def observing_receive(connection, *args, **kwargs):
+        nonlocal receives
+        if not host_connection:
+            host_connection.append(connection)
+        if connection is host_connection[0]:
+            receives += 1
+            if receives == 2:
+                # This call occurs after the host has installed its AUTH deadline.
+                auth_deadline_started.set()
+        return receive(connection, *args, **kwargs)
+
+    monkeypatch.setattr(host, 'receive_frame', observing_receive)
     with running_host(key, directory) as owner:
         with owner.record.endpoint.connect(2) as connection:
-            time.sleep(host.PREAUTH_TIMEOUT * 0.7)
-            ipc.send_frame(connection, r.hello_message(owner.record))
+            def accepted_peer():
+                with owner._state:
+                    return bool(owner._pending)
+
+            wait_until(accepted_peer)
+            accepted_at = clock.monotonic()
+            clock.advance(host.PREAUTH_TIMEOUT * 0.7)
+            hello_request = r.hello_message(owner.record)
+            ipc.send_frame(connection, hello_request)
             hello = ipc.receive_frame(connection)
-            time.sleep(host.PREAUTH_TIMEOUT * 0.7)
+            r.validate_hello(owner.record, hello, hello_request['nonce'])
+            assert auth_deadline_started.wait(2), 'host did not begin the authentication phase'
+            clock.advance(host.PREAUTH_TIMEOUT * 0.7)
+            assert clock.monotonic() - accepted_at > host.PREAUTH_TIMEOUT
+            assert clock.monotonic() - accepted_at < host.PREAUTH_TIMEOUT * 2
             ipc.send_frame(connection, {**r.host_key({}), 'op': 'authenticate', 'key': key,
                                        'key_id': owner.identifier, 'nonce': hello['client_nonce'],
                                        'proof': r.auth_proof(owner.record, hello['client_nonce'], 'client_auth')})
-            assert ipc.receive_frame(connection)['type'] == 'authenticated'
+            accepted = ipc.receive_frame(connection)
+            assert accepted['type'] == 'authenticated'
+            assert accepted['proof'] == r.auth_proof(owner.record, hello['client_nonce'], 'client_auth_ok')
 
 
 def test_oversized_inline_request_refused_before_connection(launch, monkeypatch):
