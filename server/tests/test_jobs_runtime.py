@@ -38,16 +38,6 @@ from server.platform.shutdown_backstop import CLEANUP_RESERVE_SECONDS, ShutdownB
 from server.solver.base import EngineRunResult
 
 
-@pytest.fixture(autouse=True)
-def isolated_native_admission(monkeypatch):
-    # Each test models a fresh application process. Quarantine deliberately
-    # persists for a real process, even across JobRuntime recreation.
-    from server.jobs.runtime import core
-    from server.solver.metal_permit import MetalPermit
-    permit = MetalPermit()
-    monkeypatch.setattr(core, "process_metal_permit", lambda: permit)
-
-
 def _request(*, delay_ms: int = 2, count: int = 5) -> SolveRequest:
     return SolveRequest.model_validate(
         {
@@ -2212,3 +2202,20 @@ def test_cached_cancel_waits_for_durable_intent_and_preserves_stop_reason(tmp_pa
             await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_native_quarantine_survives_runtime_recreation(tmp_path):
+    from server.solver.metal_permit import FieldEvaluationBusy
+
+    store = JobStore(tmp_path / 'quarantine.db')
+    store.initialize()
+    try:
+        first = JobRuntime(store)
+        first.metal_permit.quarantine('Native work remains active; restart required')
+        second = JobRuntime(store)
+        assert second.metal_permit is first.metal_permit
+        assert second.metal_permit.quarantine_reason == first.metal_permit.quarantine_reason
+        with pytest.raises(FieldEvaluationBusy, match='restart required'):
+            asyncio.run(second.metal_permit.acquire_solve())
+    finally:
+        store.close()

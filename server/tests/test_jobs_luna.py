@@ -246,7 +246,7 @@ def test_shutdown_guard_prevents_scheduler_resurrection(tmp_path: Path) -> None:
 
         runtime._run_job = block  # type: ignore[method-assign]
         runtime._ensure_scheduler()
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), timeout=2.0)
         await runtime.shutdown()
         await asyncio.sleep(0)
         assert runtime._shutting_down is True

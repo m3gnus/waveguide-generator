@@ -278,3 +278,16 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
             free = metafunc.definition.get_closest_marker("backend_free") is not None
             metafunc.parametrize(name, BACKENDS[:1] if free else BACKENDS, indirect=True)
+
+
+@pytest.fixture(autouse=True)
+def isolated_native_admission(monkeypatch):
+    """Each test represents a server process; its runtimes share one permit.
+
+    Quarantine is deliberately permanent in production, including across runtime
+    recreation and event-loop changes. A stalled fake in one test must not
+    poison the admission lane of the next independent test.
+    """
+    from server.solver import metal_permit
+
+    monkeypatch.setattr(metal_permit, "_PROCESS_METAL_PERMIT", metal_permit.MetalPermit())
