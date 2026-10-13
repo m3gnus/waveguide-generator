@@ -74,6 +74,8 @@ def test_available_metadata_runtime_closure_is_pinned_for_platform(system: str, 
 def test_force_does_not_replace_hashed_closure_with_unhashed_dev_artifacts(tmp_path: Path, monkeypatch) -> None:
     checkout = tmp_path / "checkout"
     (checkout / ".git").mkdir(parents=True)
+    fixture(checkout)
+    (checkout / "server/requirements-dev.txt").write_text("pytest>=9\n", encoding="utf-8")
     environment = tmp_path / "venv"
     python = bootstrap._venv_python(environment)
     python.parent.mkdir(parents=True)

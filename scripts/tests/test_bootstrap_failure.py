@@ -14,6 +14,9 @@ from scripts import bootstrap
 def test_failed_reinstall_invalidates_the_previous_stamp(tmp_path: Path, monkeypatch) -> None:
     checkout = tmp_path / "checkout"
     (checkout / ".git").mkdir(parents=True)
+    (checkout / "server").mkdir()
+    (checkout / "server/requirements-lock.txt").write_text("pytest==9.0.3\n", encoding="utf-8")
+    (checkout / "server/requirements-dev.txt").write_text("pytest>=9\n", encoding="utf-8")
     monkeypatch.setattr(bootstrap, "REPO_ROOT", checkout)
     monkeypatch.setattr(bootstrap, "_fingerprint", lambda: "test-fingerprint")
     environment = tmp_path / ".venv"
@@ -104,6 +107,9 @@ def _run_fake_bootstrap(
 def test_two_bootstraps_never_run_pip_mutations_concurrently(tmp_path: Path) -> None:
     checkout = tmp_path / "checkout"
     (checkout / ".git").mkdir(parents=True)
+    (checkout / "server").mkdir()
+    (checkout / "server/requirements-lock.txt").write_text("pytest==9.0.3\n", encoding="utf-8")
+    (checkout / "server/requirements-dev.txt").write_text("pytest>=9\n", encoding="utf-8")
     environment = tmp_path / ".venv"
     python = bootstrap._venv_python(environment)
     python.parent.mkdir(parents=True)

@@ -22,5 +22,5 @@ def test_typecheck_rejects_wrong_runtime_identity_return(tmp_path: Path) -> None
         cwd=root, capture_output=True, text=True, check=False, timeout=60,
     )
     assert checked.returncode == 1, checked.stdout + checked.stderr
-    assert "shared/runtime_id.py" in checked.stdout
+    assert "shared/runtime_id.py" in checked.stdout.replace("\\", "/")
     assert "[return-value]" in checked.stdout
