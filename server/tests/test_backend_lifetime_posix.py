@@ -30,13 +30,9 @@ def _until(check, deadline, message):
 
 
 def _backend_command(entry, arguments):
-    # The owned child dumps its own stacks before the 90-second readiness bound.
-    # No external PID is signalled and no production entry point is changed.
-    return [sys.executable, "-c",
-            "import faulthandler,runpy,sys; "
-            "faulthandler.dump_traceback_later(80); "
-            "sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')",
-            str(entry), *arguments]
+    from server.tests.backend_startup_trace import startup_trace_command
+
+    return startup_trace_command([sys.executable, str(entry), *arguments])
 
 
 def _wait_for_backend(process, data, log, *, timeout=90, request_timeout=1):

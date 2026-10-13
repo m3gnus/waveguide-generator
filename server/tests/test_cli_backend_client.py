@@ -494,6 +494,8 @@ def test_real_headless_argv_preserves_gui_workspace_defaults(tmp_path, monkeypat
             # The tests-only entry refuses unsafe event names before starting serve.
             environment["WG2_TEST_RETIRE_EVENT"] = retire_event
             command = [command[0], str(ROOT / "server" / "tests" / "backend_lifetime_main.py"), *command[2:]]
+        from server.tests.backend_startup_trace import startup_trace_command
+        command = startup_trace_command(command)
         log_path = tmp_path / f"start-{index}.log"
         with log_path.open("wb") as log:
             process = subprocess.Popen(command, cwd=tmp_path, env=environment, stdout=log, stderr=log)
