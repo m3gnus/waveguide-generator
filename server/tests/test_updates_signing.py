@@ -254,3 +254,33 @@ def test_release_signing_refuses_invalid_or_unaccepted_active_key(monkeypatch, a
     monkeypatch.setattr(manifest, "UPDATE_SIGNING_PUBLIC_KEYS_HEX", accepted)
     monkeypatch.setattr(release_manifest, "_load", lambda: manifest)
     assert release_manifest.main(["pubkey-matches", active]) == 1
+
+
+def test_bounded_signature_mutations_match_openssl_oracle(tmp_path: Path) -> None:
+    import random
+    import shutil
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("OpenSSL oracle unavailable")
+    version = subprocess.run([openssl, "version"], capture_output=True, text=True, check=True)
+    if not version.stdout.startswith("OpenSSL "):
+        pytest.skip("Oracle requires OpenSSL Ed25519 support; host supplies LibreSSL")
+    public, message, signature = (bytes.fromhex(RFC_VECTORS[1][i]) for i in (1, 2, 3))
+    key, payload, sigfile = (tmp_path / name for name in ("key.der", "message", "signature"))
+    key.write_bytes(bytes.fromhex("302a300506032b6570032100") + public)
+    payload.write_bytes(message)
+    rng = random.Random(8032)
+    cases = [signature]
+    for _ in range(32):
+        mutation = bytearray(signature)
+        mutation[rng.randrange(64)] ^= 1 << rng.randrange(8)
+        cases.append(bytes(mutation))
+    cases += [signature[:63], signature + b"x", signature[:32] + ed25519._Q.to_bytes(32, "little")]
+    for candidate in cases:
+        sigfile.write_bytes(candidate)
+        oracle = subprocess.run(
+            [openssl, "pkeyutl", "-verify", "-pubin", "-inkey", str(key), "-keyform", "DER",
+             "-rawin", "-in", str(payload), "-sigfile", str(sigfile)],
+            capture_output=True, check=False,
+        )
+        assert ed25519.verify(public, message, candidate) == (oracle.returncode == 0)

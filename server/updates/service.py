@@ -36,6 +36,7 @@ from server.updates.bundle import (
     archive_size_limit,
     open_trusted_url,
     trusted_asset_url,
+    signed_layer_checksums,
     updates_api_base,
 )
 from server.updates.restart import RestartApproval, RestartRelease, revoke_request
@@ -1377,8 +1378,8 @@ class UpdateService:
     def _asset_digest(asset: dict[str, Any]) -> str | None:
         """The SHA-256 GitHub itself reports for an uploaded asset.
 
-        GitHub serves ``digest`` as ``sha256:<hex>`` on every release asset, and
-        it is strictly better evidence than the ``.sha256`` sidecar this replaced:
+        GitHub serves ``digest`` as ``sha256:<hex>`` on release assets. This
+        checks transport integrity, not release-author identity:
         it arrives inside the same authenticated release response as the download
         URL, so there is no second file that can be stale, mismatched or missing.
         The sidecars also made the release page unreadable -- seven of fourteen
@@ -1743,6 +1744,24 @@ class UpdateService:
             }
             if manifest_asset is None:
                 return base_release, False
+            signed = signed_layer_checksums(version, self.asset_fetcher)
+
+            def bind_signature(asset: dict[str, Any] | None) -> dict[str, Any] | None:
+                if asset is None:
+                    return None
+                name = str(asset["name"])
+                if name not in signed:
+                    raise RuntimeError(
+                        f"{name} is not covered by the signed update manifest. "
+                        f"Use the full installer at {RELEASE_PAGE_ROOT}/{tag}."
+                    )
+                # Keep the existing wire shape; the installer independently verifies
+                # the signature again rather than trusting cached/action digests.
+                return {key: value for key, value in asset.items()
+                        if key not in {"sha256Url", "sha256Bytes"}} | {"sha256": signed[name]}
+
+            app_asset = bind_signature(app_asset)
+            manifest_asset = bind_signature(manifest_asset)
             runtime_id, commit = self._manifest_identity(manifest_asset, version)
             runtime_name = release_assets.runtime_layer_name(
                 self._bundle_platform(), runtime_id
@@ -1752,6 +1771,7 @@ class UpdateService:
             if runtime_asset is None and installed_runtime != runtime_id:
                 runtime_asset = self._earlier_runtime_asset(runtime_id)
 
+            runtime_asset = bind_signature(runtime_asset)
             installer_name = self._bundle_installer_name(version)
             installer_asset = (
                 self._paired_asset(uploaded, installer_name, "installer", tag=tag)

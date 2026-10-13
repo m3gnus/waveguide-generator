@@ -904,22 +904,10 @@ fi
 check_interrupted
 printf 'Checking the app signature ...\n'
 if ! run_interruptible --capture-output /dev/null codesign --verify --deep --strict "$STAGED"; then
-    if [ "$UPDATE" -eq 1 ]; then
-        # Never re-sign here. An ad-hoc signature carries no identity, so it
-        # would add no authenticity, and a seal that fails after a verified
-        # copy means a damaged copy, which re-signing would bless.
-        fail "The copy of the new version does not have a valid signature." \
-             "It was not installed, and the current version was left in place."
-    fi
-    # Interactive install: re-sign only when the seal is broken, because an
-    # ad-hoc signature that no longer seals the bundle would leave the app
-    # unlaunchable with no explanation.
-    printf 'Re-signing the copy (this takes a moment) ...\n'
-    run_interruptible --capture-output /dev/null codesign --force --deep --sign - "$STAGED" || true
-    if ! run_interruptible --capture-output /dev/null codesign --verify --deep --strict "$STAGED"; then
-        fail "The copy in $TARGET_DIR does not have a valid signature." \
-             "macOS will refuse to start it. The previous installation was left in place."
-    fi
+    # A damaged verified copy is not repaired by signing its changed bytes.
+    # In particular, ad-hoc resealing would discard a Developer ID identity.
+    fail "The copy of the new version does not have a valid signature." \
+         "It was not installed, and the current version was left in place."
 fi
 
 same_object "$STAGED_PATH" "$NEW_ID" || fail "The staged app is missing or replaced."

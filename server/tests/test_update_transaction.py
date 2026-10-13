@@ -1596,12 +1596,12 @@ def _recording_runner(
     def run(command, **_kwargs):  # type: ignore[no-untyped-def]
         nonlocal codesign_calls
         commands.append(list(command))
-        if observe is not None and "codesign" in command[0]:
+        if observe is not None and "codesign" in command[0] and "--display" not in command:
             observations.append(observe())
-        if "codesign" in command[0]:
+        if "codesign" in command[0] and "--display" not in command:
             codesign_calls += 1
         code = 1 if failing is not None and failing in command[0] else 0
-        if fail_codesign_at is not None and codesign_calls == fail_codesign_at:
+        if fail_codesign_at is not None and codesign_calls == fail_codesign_at and "--display" not in command:
             code = 1
         return subprocess.CompletedProcess(list(command), code, "", "boom" if code else "")
 
@@ -1637,7 +1637,7 @@ def test_a_restore_that_finished_its_renames_is_resealed_before_it_is_called_don
     )
 
     assert outcome.action == "none"
-    assert [command[0] for command in commands] == [
+    assert [command[0] for command in commands if "--display" not in command] == [
         "/usr/bin/xattr",
         "/usr/bin/codesign",
         "/usr/bin/codesign",

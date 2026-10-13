@@ -275,6 +275,7 @@ type
   end;
 
 var
+  UninstallSetupHandle: Integer;
   OpenClHelpButton: TNewButton;
   OpenClNotice: TNewMemo;
   WgLinkStatus: String;
@@ -502,7 +503,7 @@ function WaitForSingleObject(Handle: Integer; Milliseconds: Integer): Integer;
   external 'WaitForSingleObject@kernel32.dll stdcall setuponly';
 
 function CloseHandle(Handle: Integer): Integer;
-  external 'CloseHandle@kernel32.dll stdcall setuponly';
+  external 'CloseHandle@kernel32.dll stdcall';
 
 { Pascal Script exposes no Application.ProcessMessages, so the pump is the
   three user32 calls VCL's own loop makes. }
@@ -540,7 +541,7 @@ begin
 end;
 
 function OpenMutexW(DesiredAccess, InheritHandle: Integer; Name: String): Integer;
-  external 'OpenMutexW@kernel32.dll stdcall setuponly';
+  external 'OpenMutexW@kernel32.dll stdcall';
 function OpenEventW(DesiredAccess, InheritHandle: Integer; Name: String): Integer;
   external 'OpenEventW@kernel32.dll stdcall setuponly';
 function SetEvent(Handle: Integer): Integer;
@@ -621,10 +622,54 @@ begin
   Result := False;
 end;
 
+function CreateMutexW(Security, InitialOwner: Integer; Name: String): Integer;
+  external 'CreateMutexW@kernel32.dll stdcall';
+
 function InitializeUninstall(): Boolean;
+var
+  RunningHandle, Error: Integer;
 begin
   { Initialization refusal returns a nonzero exit before any uninstall deletion. }
   Result := ValidateWgLinkAddInsOverride(UninstallSilent());
+  if not Result then
+    exit;
+  Result := False;
+  { Hold the same startup admission gate as setup for the entire uninstall.
+    Checking Running without this gate permits a new host between the check
+    and deletion. Inno's SetupMutex does not apply to its uninstaller. }
+  UninstallSetupHandle := CreateMutexW(0, 0, 'WaveguideGeneratorSetup');
+  Error := DLLGetLastError();
+  if (UninstallSetupHandle = 0) or (Error = 183) then
+  begin
+    if UninstallSetupHandle <> 0 then
+      CloseHandle(UninstallSetupHandle);
+    UninstallSetupHandle := 0;
+    if not UninstallSilent() then
+      MsgBox('Another Waveguide Generator installation or uninstall is in progress.', mbError, MB_OK);
+    exit;
+  end;
+  RunningHandle := OpenMutexW(SYNCHRONIZE, 0, 'WaveguideGeneratorRunning');
+  Error := DLLGetLastError();
+  if RunningHandle <> 0 then
+    CloseHandle(RunningHandle);
+  { Access denied and other probe errors are refusals as well. Only the
+    missing object proves that no native host/worker is holding Running. }
+  if (RunningHandle <> 0) or (Error <> 2) then
+  begin
+    CloseHandle(UninstallSetupHandle);
+    UninstallSetupHandle := 0;
+    if not UninstallSilent() then
+      MsgBox('Close Waveguide Generator and its workers before uninstalling.', mbError, MB_OK);
+    exit;
+  end;
+  Result := True;
+end;
+
+procedure DeinitializeUninstall();
+begin
+  if UninstallSetupHandle <> 0 then
+    CloseHandle(UninstallSetupHandle);
+  UninstallSetupHandle := 0;
 end;
 
 function WgLinkAddInsDirectory(): String;

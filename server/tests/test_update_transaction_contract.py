@@ -36,6 +36,10 @@ import zipfile
 
 import pytest
 
+from server.tests.test_updates_signing import SEED, PUBLIC_HEX, _sign
+from server.updates import manifest as signing
+
+
 from launch import serve
 from launch.serve_options import UPDATE_RELEASED_FILENAME
 from launchers import apply_update as apply_update_module
@@ -84,6 +88,16 @@ from server.updates.service import (
 from shared.build_identity import build_label
 
 from _release_tags import RELEASE_TAGS, skip_or_fail_missing_tag
+
+
+@pytest.fixture(autouse=True)
+def trusted_test_signer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(signing, "UPDATE_SIGNING_PUBLIC_KEYS_HEX", (PUBLIC_HEX,))
+
+
+def _signed_fetch(name: str, digest: str):
+    data = f"# version v2.0.1\n{digest}  {name}\n".encode()
+    return lambda url, _limit: _sign(SEED, data) if url.endswith(".sig") else data
 
 
 REPOSITORY_ROOT = Path(apply_update_module.__file__).resolve().parents[1]
@@ -2298,7 +2312,7 @@ def test_a_solve_submitted_after_restart_approval_is_refused(
         # The app's own installer, with the network and the disk probes replaced;
         # everything from the checksum to writing the handoff request is real.
         installer.downloader = download
-        installer.small_fetcher = lambda _url, _limit: f"{digest}  {name}\n".encode()
+        installer.small_fetcher = _signed_fetch(name, digest)
         installer.volume_probe = lambda _path: "one volume"
         installer.free_space_probe = lambda _path: 10**12
         installer.start(
@@ -2360,7 +2374,7 @@ def _stage_through_the_app(app: Any) -> dict[str, object]:
     if installer is None:
         pytest.fail("set-up: an app given an update request path has no bundle installer")
     installer.downloader = download
-    installer.small_fetcher = lambda _url, _limit: f"{digest}  {name}\n".encode()
+    installer.small_fetcher = _signed_fetch(name, digest)
     installer.volume_probe = lambda _path: "one volume"
     installer.free_space_probe = lambda _path: 10**12
     installer.start(
@@ -4268,7 +4282,10 @@ def _published_bundle(
         ],
     }
     release = {"tag_name": tag, "published_at": "2026-09-13T12:00:00Z", "assets": []}
-    return release, {manifest_name: manifest, f"{manifest_name}.sha256": checksum}, companion
+    data = (f"# version {tag}\n{'1' * 64}  {app_name}\n"
+            + f"{hashlib.sha256(manifest).hexdigest()}  {manifest_name}\n").encode()
+    return release, {manifest_name: manifest, f"{manifest_name}.sha256": checksum,
+                     "SHA256SUMS": data, "SHA256SUMS.sig": _sign(SEED, data)}, companion
 
 
 class _PublishedReleases:

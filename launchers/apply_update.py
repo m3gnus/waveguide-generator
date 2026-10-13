@@ -42,6 +42,7 @@ try:  # inside the app layer, where this module is maintained
         UpdateInProgress,
         claim_update as _claim_update,
         grant_relaunch,
+        lock_path,
         ordinary_path,
         resolved_path,
     )
@@ -59,6 +60,7 @@ except ImportError:  # a staged copy, running as a script beside its dependency
         UpdateInProgress,
         claim_update as _claim_update,
         grant_relaunch,
+        lock_path,
         ordinary_path,
         resolved_path,
     )
@@ -3892,6 +3894,21 @@ def commit_transaction(
     return True, f"update transaction {identifier} committed from state {state!r}"
 
 
+def _has_macos_developer_signature(bundle: Path, runner: CommandRunner) -> bool:
+    """Identify a certificate seal before any ad-hoc resealing can replace it."""
+    try:
+        result = runner(["/usr/bin/codesign", "--display", "--verbose=4", str(bundle)],
+                        check=False, capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ApplyUpdateError(f"Could not inspect the macOS bundle signature: {exc}") from exc
+    details = str(result.stderr or "") + "\n" + str(result.stdout or "")
+    if result.returncode != 0 and "code object is not signed at all" not in details:
+        raise ApplyUpdateError("The macOS bundle signature could not be identified; it was not re-signed.")
+    return any(line.startswith("Authority=") or (
+        line.startswith("TeamIdentifier=") and line != "TeamIdentifier=not set"
+    ) for line in details.splitlines())
+
+
 def _repair_macos_bundle(
     bundle: Path,
     *,
@@ -3915,10 +3932,13 @@ def _repair_macos_bundle(
     except (OSError, subprocess.SubprocessError) as exc:
         _emit_log(log, f"Best-effort quarantine removal could not run: {exc}")
 
-    commands = (
+    verification = ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(bundle)]
+    # A Developer ID seal is verified as-is. A damaged certificate seal is a
+    # refusal, never permission to silently replace it with an ad-hoc seal.
+    commands = ((verification,) if _has_macos_developer_signature(bundle, runner) else (
         ["/usr/bin/codesign", "--force", "--deep", "--sign", "-", str(bundle)],
-        ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(bundle)],
-    )
+        verification,
+    ))
     for command in commands:
         try:
             result = runner(
@@ -3947,7 +3967,7 @@ def repair_bundle(
     runner: CommandRunner = subprocess.run,
     log: LogCallable | None = None,
 ) -> None:
-    """Remove quarantine and restore the ad-hoc seal after a swap or rollback."""
+    """Remove quarantine, verify certificate seals, or restore an ad-hoc seal."""
 
     _repair_macos_bundle(
         resolved_path(bundle),
@@ -4026,6 +4046,105 @@ def confirm_relaunch(
         if clock() >= deadline:
             return None
         sleeper(RELAUNCH_CONFIRM_INTERVAL)
+
+
+READINESS_TIMEOUT_SECONDS = 120.0
+
+
+def readiness_path(resources: Path, *, response: bool = False) -> Path:
+    claim = lock_path(resources)
+    return claim.with_name(claim.name + (".ready-response.json" if response else ".ready-request.json"))
+
+
+def _read_readiness(path: Path) -> dict[str, Any] | None:
+    try:
+        if path.stat().st_size > 4096:
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _write_readiness(path: Path, value: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(dict(value), handle, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        sync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def prepare_readiness(resources: Path, data_dir: Path) -> dict[str, Any] | None:
+    """Bind readiness to this update's target build and one relaunch attempt.
+
+    Lives in the existing installation cache, outside sealed macOS resources.
+    LaunchServices needs no environment propagation to discover the request.
+    """
+    journal = read_journal(data_dir, resources)
+    build = read_build_identity(resources / "app")
+    if not build.get("version"):
+        return None  # legacy/manual transactions without an app manifest
+    if not journal or journal.get("state") != "installed" or not journal_describes(journal, resources):
+        raise OSError("The installed update has no matching transaction for readiness")
+    request = {"nonce": uuid.uuid4().hex, "transaction": journal["transaction"], "build": build}
+    readiness_path(resources, response=True).unlink(missing_ok=True)
+    _write_readiness(readiness_path(resources), request)
+    return request
+
+
+def signal_readiness(resources: Path, data_dir: Path) -> bool:
+    """A proven healthy interface acknowledges its exact update attempt.
+
+    Called before acquiring the settlement claim; waiting for that claim would
+    deadlock against the updater that is awaiting this evidence.
+    """
+    request = _read_readiness(readiness_path(resources))
+    journal = read_journal(data_dir, resources)
+    if (
+        not request or not journal or journal.get("state") != "installed"
+        or request.get("transaction") != journal.get("transaction")
+        or not journal_describes(journal, resources)
+        or request.get("build") != read_build_identity(resources / "app")
+        or not isinstance(request.get("nonce"), str)
+        or re.fullmatch(r"[0-9a-f]{32}", request["nonce"]) is None
+    ):
+        return False
+    _write_readiness(readiness_path(resources, response=True), request | {"pid": os.getpid()})
+    return True
+
+
+def wait_for_readiness(resources: Path, request: Mapping[str, Any], *,
+                       timeout: float = READINESS_TIMEOUT_SECONDS,
+                       process: Any = None, platform_name: str = sys.platform,
+                       clock: Callable[[], float] = time.monotonic,
+                       sleeper: Callable[[float], None] = time.sleep) -> bool:
+    deadline = clock() + timeout
+    while True:
+        response = _read_readiness(readiness_path(resources, response=True))
+        if response is not None and all(response.get(key) == value for key, value in request.items()):
+            return True
+        poll = getattr(process, "poll", None)
+        code = poll() if callable(poll) else None
+        if code is not None and (platform_name != "darwin" or code != 0):
+            return False
+        if clock() >= deadline:
+            return False
+        sleeper(0.1)
+
+
+def clear_readiness(resources: Path, request: Mapping[str, Any]) -> None:
+    # A late attempt cannot clear another attempt's request/response.
+    for response in (False, True):
+        path = readiness_path(resources, response=response)
+        found = _read_readiness(path)
+        if found is not None and found.get("nonce") == request.get("nonce"):
+            path.unlink(missing_ok=True)
 
 
 def _relaunch_environment_value(flag: str, value: str, data_dir: Path | None) -> str | None:
@@ -4446,6 +4565,11 @@ def apply_update(
         return 1
 
     try:
+        if platform_name == "darwin" and _has_macos_developer_signature(resolved_bundle, runner):
+            raise ApplyUpdateError(
+                "This macOS application has a certificate signature. Install the full "
+                "signed application to update it; layer updates cannot preserve that seal."
+            )
         # Plan, then journal, then move. Both of the first two refuse before
         # anything has changed, which is why their failure is answered by simply
         # reopening the version that is already installed. An update that could
@@ -4529,14 +4653,53 @@ def apply_update(
         environment, resources, log=log
     )
     try:
+        readiness = prepare_readiness(resources, data_dir) if confirm is None else None
+    except OSError as exc:
+        log(f"Could not prepare update readiness: {exc}. The installed files and recovery material were kept.")
+        return 5
+    try:
         process = relauncher(command, platform_name, environment=installed_environment)
     except Exception as exc:  # noqa: BLE001 - a failed launch must restore the old version
+        if readiness is not None:
+            clear_readiness(resources, readiness)
         return finish_failure_after_mutation(
             f"Could not relaunch the updated Waveguide Generator: {type(exc).__name__}: {exc}",
             3,
         )
+    if readiness is not None and callable(getattr(process, "poll", None)):
+        try:
+            confirmed = wait_for_readiness(resources, readiness, process=process, platform_name=platform_name)
+        finally:
+            clear_readiness(resources, readiness)
+        if not confirmed:
+            message = (
+                "The updated application did not confirm a healthy interface within "
+                f"{READINESS_TIMEOUT_SECONDS:.0f} seconds. Its files, journal and previous "
+                "generation were kept. Close the application before recovery; "
+                "no rollback was started under a possibly running application."
+            )
+            log(message)
+            report(message)
+            pending = read_journal(data_dir, resources)
+            if pending is not None:
+                write_completion_record(data_dir, resources, pending, outcome="unverified", detail=message, log=log)
+            return 5
+        log("The relaunched update confirmed its expected build and healthy interface.")
+        return 0
+    if readiness is not None:
+        clear_readiness(resources, readiness)
     failure = confirmer(process)
     if failure is not None:
+        poll = getattr(process, "poll", None)
+        if callable(poll) and poll() is None:
+            message = (
+                f"The relaunched Waveguide Generator {failure}, but its launch process is "
+                "still alive. The new files and recovery records were kept; close the "
+                "application before recovery. No rollback was started."
+            )
+            log(message)
+            report(message)
+            return 5
         return finish_failure_after_mutation(
             f"The relaunched Waveguide Generator {failure}; it did not stay running.",
             5,

@@ -814,6 +814,31 @@ The evidence each mode has for these:
 
 ---
 
+### 4.7 Update relaunch readiness
+
+For a target with an app manifest, the detached helper prepares a durable readiness
+request outside the sealed bundle, in the installation's existing per-user cache.
+It names the journal transaction, exact `(version, commit, runtimeId)` and a fresh
+nonce for this relaunch attempt. The same location works through macOS LaunchServices
+without depending on environment propagation.
+
+After the mode's interface/build evidence in §4.6 is available, `HealthyStartSettlement`
+acknowledges that exact request **before** acquiring the mutation claim for settlement.
+The updater is holding that claim while waiting; acquiring it before acknowledging
+would deadlock the two processes. Retained-material, build and retry-generation checks
+precede the acknowledgment. Settlement and reclamation still require the claim and
+all the existing transaction checks.
+
+The helper waits up to 120 seconds for matching evidence, allowing startup beyond the
+old six-second process-survival window. A timeout records an `unverified` outcome,
+keeps the installed and previous generations and journal, and reports recovery is
+needed after the application closes. It never replaces files beneath a possibly live
+application or tries to terminate a guessed LaunchServices PID. A readiness response
+from another nonce, transaction or build is ignored. Legacy/manual transactions with
+no app manifest retain the process-survival check; current bundle layers carry manifests.
+
+---
+
 ## 5. Pending decisions this contract depends on
 
 The updater review lists seven open decisions. None is assumed here.

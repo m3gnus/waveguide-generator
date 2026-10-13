@@ -1009,8 +1009,41 @@ def test_the_manifest_is_signed_only_in_the_environment_gated_job_and_publish_ne
 def test_signing_requires_active_accepted_key_and_both_verifiers_use_compiled_trust() -> None:
     jobs = yaml.safe_load(WORKFLOW)["jobs"]
     signing = next(s["run"] for s in jobs["sign"]["steps"] if s.get("name") == "Write and sign SHA256SUMS, then verify it")
-    publishing = next(s["run"] for s in jobs["publish"]["steps"] if s.get("name") == "Verify the signed manifest against the staged installers")
+    publishing = next(s["run"] for s in jobs["publish"]["steps"] if s.get("name") == "Verify the signed manifest against every staged installable layer")
     assert signing.index('pubkey-matches "$pub"') < signing.index("openssl pkeyutl -sign")
     for script in (signing, publishing):
         assert "scripts/release_manifest.py verify" in script
         assert "--public-key-hex" not in script
+
+
+def test_signing_inventory_covers_layers_and_identity_from_each_builder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from server.updates.manifest import parse_manifest, build_manifest
+    jobs = yaml.safe_load(WORKFLOW)["jobs"]
+    run = next(step["run"] for step in jobs["sign"]["steps"]
+               if step.get("name") == "Write and sign SHA256SUMS, then verify it")
+    code = run.split("python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RELEASE_TAG", f"v{VERSION}")
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "version.json").write_text(json.dumps({"version": VERSION}))
+    names = set(release_assets.user_download_names(VERSION)) | {
+        release_assets.app_layer_name(VERSION), release_assets.app_manifest_name(VERSION),
+        release_assets.installer_name(release_assets.WINDOWS_PLATFORM, VERSION),
+        *(release_assets.runtime_layer_name(platform, RUNTIME_ID) for platform in (
+            release_assets.MACOS_PLATFORM, release_assets.WINDOWS_PLATFORM, release_assets.LINUX_PLATFORM)),
+    }
+    for name in names:
+        _write(tmp_path / "build/sign-inputs/assets", name, name.encode())
+
+    def write_manifest(command, **kwargs):
+        assert kwargs == {"check": True}
+        assert command[1:3] == ["scripts/release_manifest.py", "write"]
+        assert command[3:5] == ["--tag", f"v{VERSION}"]
+        Path(command[6]).write_bytes(build_manifest(f"v{VERSION}", [Path(path) for path in command[7:]]))
+
+    monkeypatch.setattr(subprocess, "run", write_manifest)
+    exec(compile(code, "release signing inventory", "exec"), {})
+    tag, entries = parse_manifest((tmp_path / "build/signed/SHA256SUMS").read_bytes())
+    assert tag == f"v{VERSION}"
+    assert set(entries) == names
+    assert all(entries[name] == hashlib.sha256(name.encode()).hexdigest() for name in names)

@@ -219,6 +219,21 @@ def test_update_rejects_a_tampered_staged_copy_and_does_not_resign(dmg: Path, in
     assert calls and all(line.startswith("--verify") for line in calls), calls
 
 
+
+def test_interactive_install_refuses_a_damaged_copy_without_resigning(dmg: Path, installed: Path, tmp_path: Path) -> None:
+    log = tmp_path / "codesign.log"
+    real_ditto = shutil.which("ditto")
+    real_codesign = shutil.which("codesign")
+    bin_dir = shim(tmp_path / "bin", "ditto", f'"{real_ditto}" "$@" || exit $?\n'
+                   'echo tampered >> "${@: -1}/Contents/Resources/version.txt"\n')
+    shim(bin_dir, "codesign", f'echo "$@" >> "{log}"\nexec "{real_codesign}" "$@"\n')
+    result = run(dmg, str(installed.parent), path_prefix=bin_dir)
+    assert result.returncode != 0
+    assert version_of(installed) == "old"
+    assert leftovers(installed.parent) == []
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert calls and all(line.startswith("--verify") for line in calls), calls
+
 def test_update_restores_the_old_app_when_the_final_rename_fails(dmg: Path, installed: Path, tmp_path: Path) -> None:
     real_mv = shutil.which("mv")
     bin_dir = shim(

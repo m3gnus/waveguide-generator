@@ -47,6 +47,8 @@ from launchers.apply_update import (
     read_transaction_open_marker,
     reclaim_committed_staging,
     repair_bundle,
+    signal_readiness,
+    readiness_path,
     resources_directory,
     running_build_uses_retained_material,
     sweep_unowned_staging,
@@ -350,6 +352,22 @@ class HealthyStartSettlement:
                 if line is not None:
                     log(line)
                 return False
+            # The updater waits for a healthy interface while holding the
+            # mutation claim. Acknowledge before taking that claim, after the
+            # same retained-build/identity checks used by settlement below.
+            readiness_journal = read_journal(data_dir, resources)
+            same_retry = retry_build is None or (
+                paths == retry_build[0]
+                and read_build_identity(resources / "app") == retry_build[1]
+                and (readiness_journal or {}).get("transaction") == retry_build[2]
+            )
+            try:
+                if (readiness_path(resources).is_file() and same_retry
+                        and not running_build_uses_retained_material(resources, readiness_journal)
+                        and installed_build_mismatch(data_dir, resources) is None):
+                    signal_readiness(resources, data_dir)
+            except OSError as exc:
+                log(f"Could not acknowledge update readiness: {exc}.")
             # The detached updater/rollback helpers take this same process
             # claim. Keep it through validation, closure and all reclamation.
             try:

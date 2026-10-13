@@ -9,8 +9,17 @@ from typing import Any
 
 import pytest
 
+from server.tests.test_updates_signing import SEED, PUBLIC_HEX, _sign
+from server.updates import manifest as signing
+
+
 from server.settings.store import SettingsStore
 from server.updates.service import ReleaseResponse, UpdateService, checkout_status
+
+
+@pytest.fixture(autouse=True)
+def trusted_test_signer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(signing, "UPDATE_SIGNING_PUBLIC_KEYS_HEX", (PUBLIC_HEX,))
 
 
 OLD_RUNTIME = "111111111111"
@@ -87,13 +96,21 @@ def _release(  # noqa: PLR0913
         }[platform]
         user_assets += _pair(download, 9_000)
     checksum = f"{hashlib.sha256(manifest).hexdigest()}  {manifest_name}\n".encode()
+    # The runtime entry remains signed even when reused from an older release.
+    signed_names = {app_name: "1" * 64, manifest_name: hashlib.sha256(manifest).hexdigest(),
+                    f"update-runtime-{platform}-{runtime_id}.zip": "2" * 64}
+    signed_data = (f"# version v{version}\n" + "".join(
+        f"{digest}  {name}\n" for name, digest in sorted(signed_names.items())
+    )).encode()
+    user_assets += [_asset("SHA256SUMS", len(signed_data)), _asset("SHA256SUMS.sig", 64)]
     return (
         {
             "tag_name": f"v{version}",
             "published_at": "2026-08-22T12:00:00Z",
             "assets": user_assets + (layer_assets if layers_on_user_release else []),
         },
-        {manifest_name: manifest, manifest_name + ".sha256": checksum},
+        {manifest_name: manifest, manifest_name + ".sha256": checksum,
+         "SHA256SUMS": signed_data, "SHA256SUMS.sig": _sign(SEED, signed_data)},
         {
             "tag_name": f"v{version}-updates",
             "prerelease": True,
@@ -270,14 +287,14 @@ def test_current_release_records_all_bundle_assets_and_downloads_both_layers(
             {
                 "name": "update-app-2.0.1.zip",
                 "url": "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1-updates/update-app-2.0.1.zip",
-                "sha256Url": "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1-updates/update-app-2.0.1.zip.sha256",
+                "sha256": "1" * 64,
                 "bytes": 1_500,
                 "layer": "app",
             },
             {
                 "name": f"update-runtime-macos-arm64-{NEW_RUNTIME}.zip",
                 "url": f"https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1-updates/update-runtime-macos-arm64-{NEW_RUNTIME}.zip",
-                "sha256Url": f"https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1-updates/update-runtime-macos-arm64-{NEW_RUNTIME}.zip.sha256",
+                "sha256": "2" * 64,
                 "bytes": 7_500,
                 "layer": "runtime",
             },
@@ -488,7 +505,7 @@ def test_an_earlier_runtime_is_found_on_a_later_page(tmp_path: Path) -> None:
 def test_bad_release_manifest_digest_is_a_guarded_update_error(tmp_path: Path) -> None:
     payload, fetched, updates = _release(include_runtime=True)
     manifest_name = "update-app-2.0.1.manifest.json"
-    fetched[manifest_name + ".sha256"] = f"{'0' * 64}  {manifest_name}\n".encode()
+    fetched[manifest_name] += b" "
 
     result = _service(
         tmp_path, payload, fetched, recent_releases_fetcher=lambda: [updates]
@@ -691,11 +708,16 @@ def test_a_beta_resolves_its_layers_from_its_own_companion(tmp_path: Path) -> No
     }
     checksum = f"{hashlib.sha256(manifest).hexdigest()}  {manifest_name}\n".encode()
 
+    signed_data = (f"# version v{version}\n"
+                   + f"{'1' * 64}  {app_name}\n"
+                   + f"{hashlib.sha256(manifest).hexdigest()}  {manifest_name}\n"
+                   + f"{'2' * 64}  update-runtime-macos-arm64-{NEW_RUNTIME}.zip\n").encode()
     settings = SettingsStore(tmp_path, settings_path=tmp_path / "ui_settings.json")
     service = _service(
         tmp_path,
         beta,
-        {manifest_name: manifest, manifest_name + ".sha256": checksum},
+        {manifest_name: manifest, manifest_name + ".sha256": checksum,
+         "SHA256SUMS": signed_data, "SHA256SUMS.sig": _sign(SEED, signed_data)},
         settings=settings,
         recent_releases_fetcher=lambda: [decoy, companion, beta],
     )
@@ -892,3 +914,36 @@ def test_a_digest_that_is_not_a_usable_sha256_is_refused() -> None:
         assert (
             UpdateService._paired_asset(uploaded, name, "app", tag="v2.0.1") is None
         ), f"{bad!r} was accepted with no sidecar present"
+
+
+@pytest.mark.parametrize("failure", ["missing-signature", "bad-signature", "missing-app", "missing-runtime", "missing-identity"])
+def test_unsigned_or_partly_signed_layers_never_offer_an_update(tmp_path: Path, failure: str) -> None:
+    payload, fetched, updates = _release(include_runtime=True)
+    if failure == "missing-signature":
+        del fetched["SHA256SUMS.sig"]
+    elif failure == "bad-signature":
+        fetched["SHA256SUMS.sig"] = b"\x00" * 64
+    else:
+        name = {"missing-app": "update-app-2.0.1.zip",
+                "missing-runtime": f"update-runtime-macos-arm64-{NEW_RUNTIME}.zip",
+                "missing-identity": "update-app-2.0.1.manifest.json"}[failure]
+        data = b"\n".join(line for line in fetched["SHA256SUMS"].split(b"\n")
+                          if not line.endswith(b"  " + name.encode()))
+        fetched["SHA256SUMS"] = data
+        fetched["SHA256SUMS.sig"] = _sign(SEED, data)
+    result = _service(tmp_path, payload, fetched, recent_releases_fetcher=lambda: [updates]).get_status()
+    assert result["action"] is None
+    assert result["canInstall"] is False
+    assert "full installer" in result["lastError"]
+
+
+def test_github_digests_cannot_override_the_author_signed_identity(tmp_path: Path) -> None:
+    payload, fetched, updates = _release(include_runtime=True)
+    name = "update-app-2.0.1.manifest.json"
+    fetched[name] = _manifest(runtime_id="999999999999")
+    for asset in updates["assets"]:
+        if asset["name"] == name:
+            asset["digest"] = "sha256:" + hashlib.sha256(fetched[name]).hexdigest()
+    result = _service(tmp_path, payload, fetched, recent_releases_fetcher=lambda: [updates]).get_status()
+    assert result["action"] is None
+    assert "does not match its checksum" in result["lastError"]

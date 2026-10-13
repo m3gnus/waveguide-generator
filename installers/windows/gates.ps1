@@ -583,6 +583,20 @@ if ($landed) {
     Set-Content "$plantedRecovery\gate.pyc" "planted by the gate run"
     $unins =Get-ChildItem $installRoot -Filter "unins*.exe" | Select-Object -First 1
     if ($unins) {
+        # Running is held by native parents/contained workers until they exit.
+        # Use a real named kernel handle to qualify the uninstaller's refusal
+        # without starting a solve or writing into the installed runtime.
+        $beforeApp = TreeFingerprint (Join-Path $installRoot "app")
+        $beforeRuntime = TreeFingerprint (Join-Path $installRoot "runtime")
+        $runningHandle = [Threading.Mutex]::new($false, "WaveguideGeneratorRunning")
+        try {
+            $refused = Start-SandboxedSetup -Executable $unins.FullName -ExtraArguments "/NORESTART" -Wait
+            $unchanged = ($beforeApp -eq (TreeFingerprint (Join-Path $installRoot "app"))) -and
+                         ($beforeRuntime -eq (TreeFingerprint (Join-Path $installRoot "runtime")))
+            Gate "9a" "uninstall refuses while a native host holds Running" ($refused.ExitCode -ne 0 -and $unchanged) "exit $($refused.ExitCode); installed layers unchanged: $unchanged"
+        } finally {
+            $runningHandle.Dispose()
+        }
         $p = Start-SandboxedSetup -Executable $unins.FullName -ExtraArguments "/NORESTART" -Wait
         Start-Sleep -Seconds 3
         $left = if (Test-Path $installRoot) { (Get-ChildItem -Recurse -File $installRoot -ErrorAction SilentlyContinue).Count } else { 0 }

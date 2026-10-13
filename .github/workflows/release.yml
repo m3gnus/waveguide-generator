@@ -662,7 +662,12 @@ jobs:
           staged = Path("build/sign-files")
           staged.mkdir()
           files = []
-          for name in release_assets.user_download_names(version):
+          names = set(release_assets.user_download_names(version))
+          names.update(path.name for path in root.rglob("*") if path.is_file()
+                       and (path.name.startswith("update-")
+                            or path.name == release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version))
+                       and not path.name.endswith(".sha256"))
+          for name in sorted(names):
               found = [path for path in root.rglob(name) if path.is_file()]
               if len(found) != 1:
                   raise SystemExit(f"Expected exactly one {name}, found {found}")
@@ -885,16 +890,18 @@ jobs:
           )
           PY
 
-      - name: Verify the signed manifest against the staged installers
+      - name: Verify the signed manifest against every staged installable layer
         # The compiled accepted keys, so a manifest the
         # application could not verify never ships. Then it joins the
         # user-facing release beside the installers it covers.
         run: |
           set -euo pipefail
+          mkdir build/verify-signed
+          cp build/release-assets/* build/update-assets/* build/verify-signed/
           python3 scripts/release_manifest.py verify --tag "$RELEASE_TAG" \
             --manifest build/signed-manifest/SHA256SUMS \
             --sig build/signed-manifest/SHA256SUMS.sig \
-            --dir build/release-assets
+            --dir build/verify-signed
           cp build/signed-manifest/SHA256SUMS build/signed-manifest/SHA256SUMS.sig build/release-assets/
 
       - name: Refuse to overwrite a published release

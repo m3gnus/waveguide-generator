@@ -48,7 +48,7 @@ TYPES = {'[io.path]', '[guid]', '[pscustomobject]', '[string]', '[string[]]',
          '[int[]]', '[type]', '[wggatewindows]',
          '[security.principal.windowsprincipal]', '[security.principal.windowsidentity]',
          '[security.principal.windowsbuiltinrole]'}
-METHODS = {'::getfullpath', '::newguid', '.tostring', '.trimend', '.substring',
+METHODS = {'::new', '::getfullpath', '::newguid', '.tostring', '.trimend', '.substring',
            '.refresh', '.createshortcut', '::utcnow', '::startnew',
            '::openexisting', '::matches', '::isnullorempty', '::hasvisiblewindow',
            '.addseconds', '.dispose', '.waitforexit', '.stop',
@@ -199,6 +199,11 @@ def assert_allowed_powershell(tokens: list[str], *, extra_commands: set[str] = f
                 assert compact(tokens[index + 1:index + 3]) == ['::', 'hasvisiblewindow'], 'unreviewed window probe'
         if lower.startswith('.') and index + 1 < len(tokens) and tokens[index + 1] == '(':
             assert lower in METHODS, f'unreviewed member call: {token}'
+        if token == '::' and tokens[index + 1].lower() == 'new':
+            assert tokens[index - 1].lower() == '[threading.mutex]'
+            assert compact(tokens[index:index + 7]) == [
+                '::', 'new', '(', '$false', ',', '"waveguidegeneratorrunning"', ')'
+            ], 'only the fixed Running test handle may be created'
         if token == '::':
             assert '::' + tokens[index + 1].lower() in METHODS, 'unreviewed static member'
     commands = command_elements(tokens)
@@ -783,7 +788,7 @@ def test_early_refusal_guard_detects_bypasses(mutation: str) -> None:
     replacements = {
         'setup-bypass': ('Result := ValidateWgLinkAddInsOverride(WizardSilent());', 'Result := True;'),
         'uninstall-bypass': ('Result := ValidateWgLinkAddInsOverride(UninstallSilent());', 'Result := True;'),
-        'success': ('  Result := False;\nend;\n\nfunction InitializeUninstall', '  Result := True;\nend;\n\nfunction InitializeUninstall'),
+        'success': ('  Result := False;\nend;\n\nfunction CreateMutexW', '  Result := True;\nend;\n\nfunction CreateMutexW'),
         'silent-dialog': ('if not Silent then\n    MsgBox(Reason', 'if Silent then\n    MsgBox(Reason'),
         'no-log': ('WgLog(Reason);', ''),
         'no-empty-guard': ("if (OverrideDir <> '') and DirExists(OverrideDir) then\n    exit;", 'if DirExists(OverrideDir) then\n    exit;'),

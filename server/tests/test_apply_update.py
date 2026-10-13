@@ -400,7 +400,7 @@ def test_successful_swap_keeps_previous_layers_and_uses_injected_relauncher(
     assert (resources / "runtime" / "marker.txt").read_text() == "new runtime"
     assert (resources / "app.previous" / "marker.txt").read_text() == "old app"
     assert (resources / "runtime.previous" / "marker.txt").read_text() == "old runtime"
-    assert [command[0] for command in commands] == [
+    assert [command[0] for command in commands if "--display" not in command] == [
         "/usr/bin/xattr",
         "/usr/bin/codesign",
         "/usr/bin/codesign",
@@ -1498,3 +1498,62 @@ def test_the_rollback_command_line_needs_no_staged_directories(tmp_path: Path) -
                 "s",
             ]
         )
+
+
+def test_a_live_child_cannot_authorize_automatic_rollback(tmp_path: Path) -> None:
+    bundle, resources, staged_app, staged_runtime = _layout(tmp_path)
+
+    class LiveChild:
+        def poll(self):
+            return None
+
+    messages: list[str] = []
+    result = apply_update(
+        bundle=bundle, data_dir=tmp_path / "data", staged_app=staged_app,
+        staged_runtime=staged_runtime, parent_pid=1, platform_name="darwin",
+        runner=lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "", ""),
+        waiter=lambda _pid: True, relauncher=lambda *_args, **_kwargs: LiveChild(),
+        confirm=lambda _process: "did not report readiness", failure_reporter=messages.append,
+    )
+    assert result == 5
+    assert (resources / "app" / "marker.txt").read_text() == "new app"
+    assert (resources / "app.previous" / "marker.txt").read_text() == "old app"
+    assert "No rollback was started" in messages[0]
+
+
+def test_certificate_signed_macos_update_refuses_before_swapping(tmp_path: Path) -> None:
+    bundle, resources, staged_app, staged_runtime = _layout(tmp_path)
+    commands = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "Authority=Developer ID Application: test\nTeamIdentifier=TEST\n")
+
+    result = apply_update(
+        bundle=bundle, data_dir=tmp_path / "data", staged_app=staged_app,
+        staged_runtime=staged_runtime, parent_pid=1, platform_name="darwin", runner=run,
+        waiter=lambda _pid: True, relauncher=lambda *_args, **_kwargs: None,
+    )
+    assert result == 2
+    assert (resources / "app" / "marker.txt").read_text() == "old app"
+    assert not (resources / "app.previous").exists()
+    assert not any("--sign" in command for command in commands)
+
+
+@pytest.mark.parametrize("valid", [True, False])
+def test_repair_never_replaces_a_certificate_signature(tmp_path: Path, valid: bool) -> None:
+    commands = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        if "--display" in command:
+            return subprocess.CompletedProcess(command, 0, "", "Authority=Developer ID Application: test\n")
+        return subprocess.CompletedProcess(command, 0 if valid or "--verify" not in command else 1, "", "bad seal")
+
+    if valid:
+        apply_update_module.repair_bundle(tmp_path, platform_name="darwin", runner=run)
+    else:
+        with pytest.raises(ApplyUpdateError, match="Required bundle command failed"):
+            apply_update_module.repair_bundle(tmp_path, platform_name="darwin", runner=run)
+    assert any("--verify" in command for command in commands)
+    assert not any("--sign" in command for command in commands)

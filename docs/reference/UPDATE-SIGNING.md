@@ -1,12 +1,17 @@
 # Update signing runbook
 
 Every release carries `SHA256SUMS` and `SHA256SUMS.sig` beside its installers.
-`SHA256SUMS` is `sha256sum` output for the three installers with one leading comment
-line, `# version <tag>`. `SHA256SUMS.sig` is the raw 64-byte Ed25519 signature over
+`SHA256SUMS` is `sha256sum` output for the installers, portable Windows archive,
+application archive and identity manifest, and every platform's runtime archive,
+with one leading comment line, `# version <tag>`. `SHA256SUMS.sig` is the raw 64-byte Ed25519 signature over
 the manifest bytes. The application verifies the signature with a public key compiled
 in at `server/updates/manifest.py` (`UPDATE_SIGNING_PUBLIC_KEYS_HEX`), then that the
-manifest version equals the release tag, then the installer's SHA-256. The key is never
-fetched.
+manifest version equals the release tag, then each installable archive's SHA-256.
+The key is never fetched. Bundle checks verify the signed identity manifest before
+reading its required runtime. Staging independently re-verifies the signature and
+archive coverage, including a runtime reused from an older release. Missing or
+invalid signatures and incomplete coverage refuse layer updates; the error links
+to the full installer. GitHub transport digests never substitute for signed proof.
 
 What this protects: a swapped or corrupted release asset or redirect, and an asset
 uploaded by someone without the signing secret. What it does not protect: a compromised

@@ -15,6 +15,10 @@ import zipfile
 
 import pytest
 
+from server.tests.test_updates_signing import SEED, PUBLIC_HEX, _sign
+from server.updates import manifest as signing
+
+
 from server.updates.bundle import (
     APP_MAX_ARCHIVE_BYTES,
     BundleInstallError,
@@ -22,6 +26,11 @@ from server.updates.bundle import (
     extract_layer_archive,
 )
 from server.updates.restart import RestartApproval
+
+
+@pytest.fixture(autouse=True)
+def trusted_test_signer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(signing, "UPDATE_SIGNING_PUBLIC_KEYS_HEX", (PUBLIC_HEX,))
 
 
 RUNTIME_ID = "0123456789ab"
@@ -107,6 +116,13 @@ def _fakes(
         progress(len(payload))
 
     def fetch(url: str, limit: int) -> bytes:
+        if Path(url).name in {"SHA256SUMS", "SHA256SUMS.sig"}:
+            tag = url.split("/download/")[1].split("/")[0]
+            data = (f"# version {tag}\n" + "".join(
+                f"{hashlib.sha256(payload).hexdigest()}  {name}\n"
+                for name, payload in sorted(payloads.items())
+            )).encode()
+            return _sign(SEED, data) if Path(url).name.endswith(".sig") else data
         name = Path(url).name.removesuffix(".sha256")
         value = f"{hashlib.sha256(payloads[name]).hexdigest()}  {name}\n".encode()
         assert len(value) <= limit
@@ -607,12 +623,13 @@ def test_a_bundle_that_is_its_own_mount_point_stages_in_the_data_directory(
 def test_digest_failure_is_reported_and_never_writes_a_request(tmp_path: Path) -> None:
     app = _app_zip()
     name = "update-app-2.0.1.zip"
-    download, _fetch = _fakes({name: app})
-    installer = _installer(
-        tmp_path,
-        downloader=download,
-        small_fetcher=lambda _url, _limit: f"{'0' * 64}  {name}\n".encode(),
-    )
+    download, fetch = _fakes({name: app})
+
+    def corrupt(*args: object) -> None:
+        download(*args)
+        args[1].write_bytes(b"tampered download")
+
+    installer = _installer(tmp_path, downloader=corrupt, small_fetcher=fetch)
 
     _start(installer, "2.0.1", [_asset(name, app, "app")])
     installer.wait(2)
@@ -1093,3 +1110,28 @@ def test_production_redirects_allow_the_release_cdn_without_scheme_downgrades(
             {},
             "http://release-assets.githubusercontent.com/payload",
         )
+
+
+@pytest.mark.parametrize("failure", ["bad-signature", "missing-layer", "wrong-version"])
+def test_install_rechecks_the_author_signature_even_when_action_digests_match(tmp_path: Path, failure: str) -> None:
+    app = _app_zip()
+    name = "update-app-2.0.1.zip"
+    download, fetch = _fakes({name: app})
+    correct = fetch("https://test/download/v2.0.1/SHA256SUMS", 64 * 1024)
+    data = correct
+    if failure == "missing-layer":
+        data = b"# version v2.0.1\n"
+    elif failure == "wrong-version":
+        data = data.replace(b"v2.0.1", b"v2.0.2")
+    signature = b"\x00" * 64 if failure == "bad-signature" else _sign(SEED, data)
+    def proof(url: str, limit: int) -> bytes:
+        return signature if url.endswith(".sig") else data
+    asset = _asset(name, app, "app")
+    asset.pop("sha256Url")
+    asset["sha256"] = hashlib.sha256(app).hexdigest()
+    installer = _installer(tmp_path, downloader=download, small_fetcher=proof)
+    _start(installer, "2.0.1", [asset])
+    installer.wait(2)
+    assert installer.status()["installState"] == "failed"
+    assert not (tmp_path / "control" / "update.json").exists()
+    assert not (tmp_path / "data" / "updates" / "2.0.1" / "staged").exists()

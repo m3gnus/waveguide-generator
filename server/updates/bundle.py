@@ -21,10 +21,11 @@ import urllib.request
 import zipfile
 
 from launchers.update_lock import resolved_path
-from scripts.fetch_spa import SpaError, expected_digest, file_digest
+from scripts.fetch_spa import file_digest
 from shared import release_assets
 from shared.release_assets import is_release_tag
 from shared.safe_names import UnsafeName, collision_key, validate_relative_name
+from server.updates.manifest import ManifestError, verify_manifest
 from server.updates.restart import RestartApproval, RestartRelease, revoke_request
 # The owner marker's writer, beside its reader, the healthy-start cleanup
 # (contract §2.5). The app layer carries ``launchers``.
@@ -425,6 +426,32 @@ def fetch_url_bytes(url: str, max_bytes: int) -> bytes:
     if len(body) > max_bytes:
         raise BundleInstallError(f"Download exceeded its {max_bytes}-byte size limit: {url}")
     return body
+
+
+def signed_layer_checksums(version: str, fetcher: SmallFetcher) -> dict[str, str]:
+    """Verify the target release's author signature; transport digests cannot replace it.
+
+    Every layer, including a runtime downloaded from an older companion release,
+    must be covered by this target release's signature. No missing/invalid proof
+    falls back to GitHub metadata or a checksum sidecar.
+    """
+    if VERSION_RE.fullmatch(version) is None:
+        raise BundleInstallError("The signed update version is invalid.")
+    tag = f"v{version}"
+    origin = (GITHUB_RELEASE_ORIGIN if updates_api_base() == DEFAULT_UPDATES_API_BASE
+              else updates_api_base())
+    base = f"{origin}/{GITHUB_REPOSITORY}/releases/download/{tag}"
+    try:
+        data = fetcher(f"{base}/SHA256SUMS", MAX_CHECKSUM_BYTES)
+        signature = fetcher(f"{base}/SHA256SUMS.sig", 64)
+        if len(data) > MAX_CHECKSUM_BYTES or len(signature) != 64:
+            raise ManifestError("signed manifest exceeds its size limit")
+        return verify_manifest(data, signature, tag)
+    except Exception as exc:
+        raise BundleInstallError(
+            f"The update's signed layer manifest could not be verified: {exc}. "
+            f"Use the full installer at {GITHUB_RELEASE_ORIGIN}/{GITHUB_REPOSITORY}/releases/tag/{tag}."
+        ) from exc
 
 
 def download_url(
@@ -1100,28 +1127,20 @@ class BundleUpdateInstaller:
                 archives[str(asset["layer"])] = destination
 
             self._set_state(installState="verifying")
+            signed = signed_layer_checksums(version, self.small_fetcher)
+            for asset in assets:
+                if str(asset["name"]) not in signed:
+                    raise BundleInstallError(
+                        f"{asset['name']} is not covered by the target release's signed manifest."
+                    )
             for asset in assets:
                 archive = archives[str(asset["layer"])]
-                if asset.get("sha256"):
-                    # GitHub's own digest for the asset, delivered in the same
-                    # authenticated release response as the download URL. There is
-                    # no second file to fetch, and therefore none to be stale.
-                    wanted = str(asset["sha256"]).lower()
-                else:
-                    checksum = self.small_fetcher(
-                        str(asset["sha256Url"]), MAX_CHECKSUM_BYTES
-                    )
-                    try:
-                        wanted = expected_digest(
-                            checksum.decode("utf-8", "replace"), archive.name
-                        )
-                    except SpaError as exc:
-                        raise BundleInstallError(str(exc)) from exc
+                wanted = signed[str(asset["name"])]
                 actual = file_digest(archive)
                 if actual != wanted:
                     archive.unlink(missing_ok=True)
                     raise BundleInstallError(
-                        f"REFUSING TO EXTRACT: {archive.name} does not match its published checksum."
+                        f"REFUSING TO EXTRACT: {archive.name} does not match its signed checksum."
                     )
 
             staged: dict[str, Path] = {}
