@@ -78,7 +78,7 @@ def test_coupled_wire_passes_pinned_engine_contract():
 def test_coupled_route_documentation_describes_supported_drives_and_outputs():
     from pathlib import Path
 
-    text = (Path(__file__).parents[2] / "docs/plans/CADLINK-FEM-REGIONS.md").read_text()
+    text = (Path(__file__).parents[2] / "docs/plans/CADLINK-FEM-REGIONS.md").read_text(encoding="utf-8")
     assert "Electrodynamic voltage drives support full, half and quarter models" in text
     assert "Driver symmetry is pending" not in text
     assert "RMS input power and current" in text
