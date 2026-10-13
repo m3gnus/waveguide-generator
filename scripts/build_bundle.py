@@ -75,7 +75,7 @@ PYTHON_SERIES = "3.13"
 # file. uv's version catalog may otherwise move a Python patch request to a
 # newer standalone build without changing PYTHON_VERSION.
 PYTHON_BUILD = "20260325"
-RUNTIME_RECIPE = "wg2-bundle-runtime-v3"
+RUNTIME_RECIPE = "wg2-bundle-runtime-v4-hashed"
 MACOS_PLATFORM = "macos-arm64"
 WINDOWS_PLATFORM = "windows-x86_64"
 LINUX_PLATFORM = "linux-x86_64"
@@ -840,8 +840,11 @@ def runtime_recipe(repo_root: Path) -> str:
     # POSIX build still requires it in write_installer_logger; adding it or
     # changing its bytes always invalidates the shared recipe on every host.
     logger_fingerprint = sha256_bytes(logger_source.read_bytes() if logger_source.is_file() else b"")
+    hashed_source = repo_root / "server" / "requirements-runtime-hashed.txt"
+    hash_fingerprint = sha256_bytes(hashed_source.read_bytes() if hashed_source.is_file() else b"")
     return (RUNTIME_RECIPE + ":windows-native-" + fingerprint +
-            ":posix-installer-log-macos11-v1-" + logger_fingerprint)
+            ":posix-installer-log-macos11-v1-" + logger_fingerprint +
+            ":distribution-hashes-" + hash_fingerprint)
 
 
 def write_windows_launcher(
@@ -2057,6 +2060,7 @@ class BundleBuilder:
         requirements: bytes,
         pins: bytes,
         lock: bytes,
+        hashed_lock: bytes,
         platform_name: str = MACOS_PLATFORM,
     ) -> None:
         install_parent = destination.parent / "python-install"
@@ -2112,9 +2116,11 @@ class BundleBuilder:
         requirements_path = inputs / "requirements-runtime.txt"
         pins_path = inputs / "requirements-pins.txt"
         lock_path = inputs / "requirements-lock.txt"
+        hashed_path = inputs / "requirements-runtime-hashed.txt"
         requirements_path.write_bytes(requirements)
         pins_path.write_bytes(pins)
         lock_path.write_bytes(lock)
+        hashed_path.write_bytes(hashed_lock)
         self.run_command(
             [
                 "uv",
@@ -2123,14 +2129,15 @@ class BundleBuilder:
                 "--python",
                 str(runtime_python),
                 "--no-cache",
-                "-c",
-                str(lock_path),
+                "--require-hashes",
                 "-r",
-                str(requirements_path),
-                "-r",
-                str(pins_path),
+                str(hashed_path),
             ]
         )
+        self.run_command([
+            "uv", "pip", "install", "--python", str(runtime_python),
+            "--no-cache", "--no-deps", "-r", str(pins_path),
+        ])
         self.run_command(["uv", "pip", "check", "--python", str(runtime_python)])
         helper = destination / METAL_HELPER
         if platform_name == MACOS_PLATFORM and self.machine() == "arm64" and not helper.is_file():
@@ -3296,11 +3303,18 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
         )
 
     builder.require_clean_worktree()
+    from scripts.hash_lock_requirements import check as check_hash_lock
+
+    try:
+        check_hash_lock(builder.repo_root)
+    except (OSError, ValueError) as exc:
+        raise BundleError(f"Dependency hash lock is invalid: {exc}") from exc
     commit = builder.git_commit()
     version = declared_version(builder.repo_root)
     requirements = builder.git_blob(commit, PurePosixPath("server/requirements-runtime.txt"))
     pins = builder.git_blob(commit, PurePosixPath("server/requirements-pins.txt"))
     lock = builder.git_blob(commit, PurePosixPath("server/requirements-lock.txt"))
+    hashed_lock = builder.git_blob(commit, PurePosixPath("server/requirements-runtime-hashed.txt"))
     recipe = runtime_recipe(builder.repo_root)
     runtime_id = compute_runtime_id(
         requirements,
@@ -3331,6 +3345,7 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                 requirements=requirements,
                 pins=pins,
                 lock=lock,
+                hashed_lock=hashed_lock,
                 platform_name=platform_name,
             )
             runtime_asset = output / release_assets.runtime_layer_name(

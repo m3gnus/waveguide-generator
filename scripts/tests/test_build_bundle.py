@@ -1776,6 +1776,7 @@ def test_windows_runtime_build_requests_the_explicit_host_target_and_copies_msvc
         requirements=b"runtime\n",
         pins=b"pins\n",
         lock=b"lock\n",
+        hashed_lock=b"hashes\n",
         platform_name=WINDOWS_PLATFORM,
     )
 
@@ -1783,9 +1784,13 @@ def test_windows_runtime_build_requests_the_explicit_host_target_and_copies_msvc
     assert install[-1] == "cpython-3.13.12-windows-x86_64-none"
     pip = next(command for command in commands if command[:3] == ["uv", "pip", "install"])
     assert pip[pip.index("--python") + 1] == str(destination / "python.exe")
-    constraint = Path(pip[pip.index("-c") + 1])
-    assert constraint.name == "requirements-lock.txt"
-    assert constraint.read_bytes() == b"lock\n"
+    assert "--require-hashes" in pip
+    installation_lock = Path(pip[pip.index("-r") + 1])
+    assert installation_lock.name == "requirements-runtime-hashed.txt"
+    assert installation_lock.read_bytes() == b"hashes\n"
+    vcs = [command for command in commands if command[:3] == ["uv", "pip", "install"]][1]
+    assert "--no-deps" in vcs and "--require-hashes" not in vcs
+    assert Path(vcs[vcs.index("-r") + 1]).name == "requirements-pins.txt"
     assert any(command[:3] == ["uv", "pip", "check"] for command in commands)
     for filename in MSVC_RUNTIME_DLLS:
         assert (destination / filename).read_bytes() == (redist / filename).read_bytes()

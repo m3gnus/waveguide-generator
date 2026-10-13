@@ -361,7 +361,8 @@ jobs:
       - name: Install locked dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r server/requirements-lock.txt
+          python scripts/hash_lock_requirements.py --check
+          pip install --require-hashes -r server/requirements-hashed.txt
           pip install --no-deps -r server/requirements-pins.txt
           pip install -r server/requirements-dev.txt
       # The 2022 PoCL 3.0 wheel failed on newer hosted EPYC CPUs with both an

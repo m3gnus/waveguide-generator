@@ -49,6 +49,7 @@ REQUIREMENT_FILES = (
     REPO_ROOT / "server" / "requirements-pins.txt",
     REPO_ROOT / "server" / "requirements-dev.txt",
     REPO_ROOT / "server" / "requirements-lock.txt",
+    REPO_ROOT / "server" / "requirements-hashed.txt",
     REPO_ROOT / "pins.json",
 )
 REQUIRED_DISTRIBUTIONS = (
@@ -306,6 +307,12 @@ def _venv_evidence(environment: Path) -> dict[str, object] | None:
 
 
 def _fingerprint() -> str:
+    from scripts.hash_lock_requirements import check
+
+    try:
+        check(REPO_ROOT)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Dependency hash lock is invalid: {exc}") from exc
     digest = hashlib.sha256()
     digest.update(f"bootstrap:{BOOTSTRAP_VERSION}\n".encode())
     digest.update(f"python:{PYTHON_SERIES[0]}.{PYTHON_SERIES[1]}\n".encode())
@@ -346,7 +353,7 @@ def _declared_distribution_names() -> set[str]:
             continue
         for raw_line in path.read_text(encoding="utf-8").splitlines():
             line = raw_line.strip()
-            if not line or line.startswith("#"):
+            if not line or line.startswith(("#", "--hash=")):
                 continue
             git_requirement = GIT_REQUIREMENT_RE.fullmatch(line)
             if git_requirement is not None:
@@ -722,24 +729,24 @@ def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
             "pip",
             "install",
             *force_reinstall,
-            "-r" if force else "-c",
-            str(REPO_ROOT / "server" / "requirements-lock.txt"),
+            "--require-hashes",
             "-r",
-            str(REPO_ROOT / "server" / "requirements-runtime.txt"),
-            "-r",
-            str(REPO_ROOT / "server" / "requirements-pins.txt"),
+            str(REPO_ROOT / "server" / "requirements-hashed.txt"),
+        ],
+        # VCS requirements cannot be hashed by pip. Exact commits are checked
+        # by validation; --no-deps prevents an unhashed transitive install.
+        [
+            str(python), "-m", "pip", "install", "--force-reinstall", "--no-deps",
+            "-r", str(REPO_ROOT / "server" / "requirements-pins.txt"),
+        ],
+        # Development-only tools are outside the shipped hash boundary. Plain
+        # constraints deliberately have no hashes, so this cannot accidentally
+        # enable pip hash mode for unpinned developer tools.
+        [
+            str(python), "-m", "pip", "install",
+            "-c", str(REPO_ROOT / "server" / "requirements-lock.txt"),
             "-r",
             str(REPO_ROOT / "server" / "requirements-dev.txt"),
-        ],
-        [
-            str(python),
-            "-m",
-            "pip",
-            "install",
-            "--force-reinstall",
-            "--no-deps",
-            "-r",
-            str(REPO_ROOT / "server" / "requirements-pins.txt"),
         ],
     )
     for command in commands:

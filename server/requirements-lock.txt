@@ -8,6 +8,8 @@ bempp-cl==0.4.2
 bottle==0.13.4
 cffi==2.1.0; sys_platform == "win32"
 click==8.4.2
+# Click and uvicorn[standard] require this in shipped Windows runtimes.
+colorama==0.4.6; sys_platform == "win32"
 clr-loader==0.2.10; sys_platform == "win32"
 contourpy==1.3.3
 cycler==0.12.1
