@@ -259,12 +259,93 @@ def test_exact_old_receiver_death_between_publications_never_exposes_native_with
         assert public.read_bytes() == b"previous pythonw"
 
 
+# Only the disposable test helper gets tracing; shipped launcher bytes stay intact.
+_NATIVE_FAILURE_TRACE = r'''
+static int test_refusal(int line, DWORD error) {
+    fprintf(stderr, "native refusal line=%d last_win32=%lu\n", line, (unsigned long)error);
+    fflush(stderr); SetLastError(error); return 3;
+}
+static BOOL test_move(LPCWSTR from, LPCWSTR to, DWORD flags, int line) {
+    BOOL result = MoveFileExW(from, to, flags); DWORD error = GetLastError();
+    if (!result) {
+        fprintf(stderr, "MoveFileExW line=%d win32=%lu from=%ls to=%ls\n",
+                line, (unsigned long)error, from, to); fflush(stderr);
+    }
+    SetLastError(error); return result;
+}
+static HANDLE test_open(LPCWSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES security,
+                        DWORD disposition, DWORD flags, HANDLE template_file, int line) {
+    HANDLE result = CreateFileW(name, access, share, security, disposition, flags, template_file);
+    DWORD error = GetLastError();
+    if (result == INVALID_HANDLE_VALUE) {
+        fprintf(stderr, "CreateFileW line=%d win32=%lu access=%lu share=%lu path=%ls\n",
+                line, (unsigned long)error, (unsigned long)access, (unsigned long)share, name);
+        fflush(stderr);
+    }
+    SetLastError(error); return result;
+}
+static BOOL test_flush(HANDLE file, int line) {
+    BOOL result = FlushFileBuffers(file); DWORD error = GetLastError();
+    if (!result) {
+        fprintf(stderr, "FlushFileBuffers line=%d win32=%lu handle=%p\n",
+                line, (unsigned long)error, file); fflush(stderr);
+    }
+    SetLastError(error); return result;
+}
+static BOOL test_spawn(LPCWSTR app, LPWSTR command, LPSECURITY_ATTRIBUTES process,
+                       LPSECURITY_ATTRIBUTES thread, BOOL inherit, DWORD flags,
+                       LPVOID environment, LPCWSTR cwd, LPSTARTUPINFOW startup,
+                       LPPROCESS_INFORMATION child, int line) {
+    BOOL result = CreateProcessW(app, command, process, thread, inherit, flags,
+                                 environment, cwd, startup, child);
+    DWORD error = GetLastError();
+    if (!result) {
+        fprintf(stderr, "CreateProcessW line=%d win32=%lu app=%ls cwd=%ls\n",
+                line, (unsigned long)error, app ? app : L"<null>", cwd ? cwd : L"<null>");
+        fflush(stderr);
+    }
+    SetLastError(error); return result;
+}
+#define MoveFileExW(a,b,c) test_move(a,b,c,__LINE__)
+#define CreateFileW(a,b,c,d,e,f,g) test_open(a,b,c,d,e,f,g,__LINE__)
+#define FlushFileBuffers(a) test_flush(a,__LINE__)
+#define CreateProcessW(a,b,c,d,e,f,g,h,i,j) test_spawn(a,b,c,d,e,f,g,h,i,j,__LINE__)
+'''
+
+
+def _native_failure_trace(source: str) -> str:
+    """Preserve API results/last-error and annotate refusals before recovery."""
+    anchor = '#include "startup-hook.h"\n'
+    assert source.count(anchor) == 1
+    assert "return 3;" in source
+    # Rewrite original refusal sites before adding the trace helper itself.
+    traced = source.replace("return 3;", "return test_refusal(__LINE__, GetLastError());")
+    next_line = source[:source.index(anchor) + len(anchor)].count("\n") + 1
+    return traced.replace(anchor, anchor + _NATIVE_FAILURE_TRACE + f"\n#line {next_line}\n", 1)
+
+
+def test_native_failure_trace_preserves_calls_and_original_refusal_locations():
+    source = '#include "startup-hook.h"\nBOOL ok = MoveFileExW(a,b,c);\nif (!ok) return 3;\n'
+    traced = _native_failure_trace(source)
+    assert "BOOL result = MoveFileExW(from, to, flags); DWORD error = GetLastError();" in traced
+    assert "SetLastError(error); return result;" in traced
+    assert 'if (!ok) return test_refusal(__LINE__, GetLastError());' in traced
+    assert '#line 2\nBOOL ok = MoveFileExW(a,b,c);' in traced
+    assert source.endswith("if (!ok) return 3;\n")
+
+
 @pytest.fixture(scope="module")
 def native(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if sys.platform != "win32":
         pytest.skip("requires real Windows C compiler and Win32 filesystem/process APIs")
     target = tmp_path_factory.mktemp("native") / "helper.exe"
-    build_bundle.write_windows_launcher(target, repo_root=ROOT)
+    repo = target.parent / "source"
+    source = repo / build_bundle.WINDOWS_NATIVE_SOURCE
+    source.parent.mkdir(parents=True)
+    source.write_text(_native_failure_trace((ROOT / build_bundle.WINDOWS_NATIVE_SOURCE).read_text()))
+    hook = repo / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE
+    hook.write_bytes((ROOT / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).read_bytes())
+    build_bundle.write_windows_launcher(target, repo_root=repo)
     _wait_for_fixture_files([target], write=False)
     return target
 
@@ -403,6 +484,58 @@ def _owner_failure_detail(pid: int, returncode: int | None, diagnostic: Path, ou
         entries = None
     return _owner_failure_message(pid, returncode, _read_if_present(diagnostic) or "",
                                   _read_if_present(outcome), entries)
+
+
+def _native_transaction_detail(root: Path, outcome: Path, transcript: str) -> str:
+    """Bounded failure evidence from this fixture's transaction, never a retry."""
+    lines = ["native transcript:\n" + _tail_text(transcript),
+             "outcome record: " + _tail_text(_read_if_present(outcome) or "<not written>")]
+    journal = root / ".upgrade-in-progress"
+    try:
+        with journal.open("rb") as stream:
+            header = stream.read(88)
+        if len(header) == 88 and header[:20] == b"WG-INSTALL-JOURNAL-2":
+            schema, committed, boot_ready, _ = struct.unpack_from("<4I", header, 24)
+            owner = struct.unpack_from("<I", header, 40)[0]
+            loader, worker, watchdog = struct.unpack_from("<3I", header, 52)
+            lines.append(f"journal: schema={schema} committed={committed} boot_ready={boot_ready} "
+                         f"owner={owner} loader={loader} worker={worker} watchdog={watchdog}")
+        else:
+            lines.append(f"journal header: {header.hex()}")
+    except OSError as error:
+        lines.append(f"journal: {error}")
+    for folder in [root, root / ".wg-install-old", root / ".wg-install-new"]:
+        entries = []
+        try:
+            with os.scandir(folder) as iterator:
+                for item in iterator:
+                    info = item.stat(follow_symlinks=False)
+                    entries.append(f"{item.name}: size={info.st_size} id={info.st_dev}/{info.st_ino}")
+                    if len(entries) == 40:
+                        entries.append("<inventory limited to 40 entries>")
+                        break
+        except OSError as error:
+            entries.append(str(error))
+        lines.append(f"entries {folder.name}: " + ", ".join(entries))
+    return "\n".join(lines)
+
+
+def test_native_transaction_detail_retains_verdict_and_journal_flags(tmp_path):
+    root = tmp_path / "WG"
+    root.mkdir()
+    outcome = tmp_path / "outcome.json"
+    outcome.write_text('{"result":"rollback_incomplete"}')
+    header = bytearray(88)
+    header[:20] = b"WG-INSTALL-JOURNAL-2"
+    struct.pack_into("<4I", header, 24, 2, 0, 1, 0)
+    struct.pack_into("<I", header, 40, 17)
+    struct.pack_into("<3I", header, 52, 18, 19, 20)
+    (root / ".upgrade-in-progress").write_bytes(header)
+    detail = _native_transaction_detail(root, outcome, "MoveFileExW win32=32")
+    assert "rollback_incomplete" in detail and "win32=32" in detail
+    assert "schema=2 committed=0 boot_ready=1" in detail
+    assert "owner=17 loader=18 worker=19 watchdog=20" in detail
+    assert "entries .wg-install-old:" in detail
 
 
 def _prepare_owner(command: list[str], outcome: Path) -> subprocess.Popen[str]:

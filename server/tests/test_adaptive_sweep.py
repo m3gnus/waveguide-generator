@@ -1,10 +1,17 @@
 """Offline acquisition tests: reference truth is accessed only at requested rows."""
 
+from contextlib import contextmanager, redirect_stdout
+import io
+import json
+import os
 from pathlib import Path
+import platform
+import sys
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import scipy
 from scipy.signal import find_peaks
 
 from server.jobs.models import SolveOptions
@@ -21,33 +28,166 @@ def reference():
         return data["frequencies_hz"], data["values"]
 
 
-def test_reference_fit_and_batched_acquisition():
-    f, truth = reference()
-    planner = SweepPlanner(f, delays_s=np.r_[np.full(37, 2 / 343), 0])
-    batches = []
-    while len(planner.pending):
-        ids = planner.pending.copy()
-        batches.append(ids)
-        planner.add(ids, truth[ids])
-    assert batches[0].size == 8
-    assert batches[0][0] == 0 and batches[0][-1] == len(f) - 1
-    assert all(0 < len(ids) <= 4 for ids in batches[1:])
-    assert sum(map(len, batches)) == len(planner.observed) <= 32
-    assert planner.stop_reason == "estimated_convergence"
-    ids = np.array(sorted(planner.observed))
-    np.testing.assert_array_equal(planner.prediction[ids], truth[ids])
-    errors = abs(20 * np.log10(abs(planner.prediction[:, :-1]) / abs(truth[:, :-1])))
-    mask = abs(truth[:, :-1]) >= abs(truth[:, :-1]).max(axis=0) * 10 ** (-30 / 20)
-    assert errors[mask].max() < 0.1
-    for a, b in [
-        (abs(truth[:, 0]), abs(planner.prediction[:, 0])),
-        (abs(truth[:, -1]), abs(planner.prediction[:, -1])),
-        (truth[:, -1].real, planner.prediction[:, -1].real),
-    ]:
-        for sign in [-1, 1]:
-            np.testing.assert_array_equal(find_peaks(sign * a)[0], find_peaks(sign * b)[0])
-    assert planner.status[0] == planner.status[-1] == "solved"
-    assert "interpolated" in planner.status
+_DIAGNOSTIC_ROUNDS = 64  # The 193-row reference needs at most 48 acquisition rounds.
+_DIAGNOSTIC_PREFIX = "Adaptive acquisition diagnostics: "
+
+
+def _adaptive_failure_report(rounds, omitted):
+    config = io.StringIO()
+    with redirect_stdout(config):
+        np.show_config()
+        scipy.show_config()
+    return _DIAGNOSTIC_PREFIX + json.dumps({
+        "platform": platform.platform(), "machine": platform.machine(), "python": sys.version,
+        "numpy": np.__version__, "scipy": scipy.__version__, "blas_config": config.getvalue()[:16384],
+        "thread_environment": {name: os.environ.get(name) for name in (
+            "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")},
+        "numpy_errors": np.geterr(), "rounds": rounds, "omitted_rounds": omitted,
+    }, sort_keys=True)
+
+
+@contextmanager
+def _adaptive_diagnostics(monkeypatch):
+    """Observe the existing calls; do not refit or add numerical guard checks."""
+    from server.solver import adaptive_sweep
+
+    rounds, current = [], None
+    omitted = 0
+    base_model = adaptive_sweep.SweepModel
+
+    class ObservedModel(base_model):
+        def __init__(self, *args, **kwargs):
+            self.record = {"physical": kwargs.get("physical", False), "safe_checks": [], "exceptions": []}
+            if current is not None:
+                current["fits"].append(self.record)
+            try:
+                super().__init__(*args, **kwargs)
+            except Exception as exc:
+                self.record["exceptions"].append({"stage": "fit", "type": type(exc).__name__, "message": str(exc)[:1000]})
+                raise
+            self.record.update(support_count=len(self.fit.support), removed_count=len(self.fit.removed))
+            if self.record["physical"]:
+                self.record.update(support=self.fit.support[:30].tolist(), removed=self.fit.removed[:30])
+
+        def safe(self):
+            try:
+                safe = super().safe()
+            except Exception as exc:
+                self.record["exceptions"].append({"stage": "safe", "type": type(exc).__name__, "message": str(exc)[:1000]})
+                raise
+            self.record["safe_checks"].append(bool(safe))
+            return safe
+
+        def __call__(self, frequencies):
+            try:
+                return super().__call__(frequencies)
+            except Exception as exc:
+                self.record["exceptions"].append({"stage": "prediction", "type": type(exc).__name__, "message": str(exc)[:1000]})
+                raise
+
+    def add(planner, indices, values):
+        nonlocal current, omitted
+        current = {"indices": indices.tolist(), "fits": []}
+        if len(rounds) < _DIAGNOSTIC_ROUNDS:
+            rounds.append(current)
+        else:
+            omitted += 1
+        try:
+            planner.add(indices, values)
+        finally:
+            current.update(observed_count=len(planner.observed), safe=bool(planner.safe),
+                           stable=planner.stable, estimate_db=planner.estimate_db,
+                           pending=planner.pending.tolist(), stop_reason=planner.stop_reason)
+            current = None
+
+    with monkeypatch.context() as patch:
+        patch.setattr(adaptive_sweep, "SweepModel", ObservedModel)
+        try:
+            yield add
+        except Exception:
+            # pytest retains captured stdout with the original assertion. Config
+            # collection occurs only on failure, so success adds no BLAS queries.
+            try:
+                print(_adaptive_failure_report(rounds, omitted))
+            except Exception as diagnostic_error:
+                print(f"{_DIAGNOSTIC_PREFIX}report unavailable: {diagnostic_error!r}")
+            raise
+
+
+def test_reference_fit_and_batched_acquisition(monkeypatch):
+    with _adaptive_diagnostics(monkeypatch) as add:
+        f, truth = reference()
+        planner = SweepPlanner(f, delays_s=np.r_[np.full(37, 2 / 343), 0])
+        batches = []
+        while len(planner.pending):
+            ids = planner.pending.copy()
+            batches.append(ids)
+            add(planner, ids, truth[ids])
+        assert batches[0].size == 8
+        assert batches[0][0] == 0 and batches[0][-1] == len(f) - 1
+        assert all(0 < len(ids) <= 4 for ids in batches[1:])
+        assert sum(map(len, batches)) == len(planner.observed) <= 32
+        assert planner.stop_reason == "estimated_convergence"
+        ids = np.array(sorted(planner.observed))
+        np.testing.assert_array_equal(planner.prediction[ids], truth[ids])
+        errors = abs(20 * np.log10(abs(planner.prediction[:, :-1]) / abs(truth[:, :-1])))
+        mask = abs(truth[:, :-1]) >= abs(truth[:, :-1]).max(axis=0) * 10 ** (-30 / 20)
+        assert errors[mask].max() < 0.1
+        for a, b in [
+            (abs(truth[:, 0]), abs(planner.prediction[:, 0])),
+            (abs(truth[:, -1]), abs(planner.prediction[:, -1])),
+            (truth[:, -1].real, planner.prediction[:, -1].real),
+        ]:
+            for sign in [-1, 1]:
+                np.testing.assert_array_equal(find_peaks(sign * a)[0], find_peaks(sign * b)[0])
+        assert planner.status[0] == planner.status[-1] == "solved"
+        assert "interpolated" in planner.status
+
+
+@pytest.mark.parametrize("failure", ["budget", "fit"])
+def test_adaptive_diagnostics_preserve_failure_and_report_fit_state(monkeypatch, capsys, failure):
+    f = np.geomspace(200, 1000, 24)
+    planner = SweepPlanner(f, delays_s=0)
+    if failure == "fit":
+        def failed_fit(*args, **kwargs):
+            raise np.linalg.LinAlgError("injected fitting failure")
+        monkeypatch.setattr(SweepModel, "__init__", failed_fit)
+    with pytest.raises(AssertionError, match="diagnostic sample cap"):
+        with _adaptive_diagnostics(monkeypatch) as add:
+            ids = planner.pending.copy()
+            add(planner, ids, (1 / (f[ids] + 600j))[:, None])
+            # Deliberately smaller than the unchanged eight-point seed. This
+            # exercises reporting without changing the reference's 32-row cap.
+            assert len(planner.observed) <= 4, "diagnostic sample cap"
+    output = capsys.readouterr().out
+    report = json.loads(output.removeprefix(_DIAGNOSTIC_PREFIX))
+    assert report["python"] and report["platform"] and report["machine"]
+    assert report["numpy"] == np.__version__ and report["scipy"] == scipy.__version__
+    assert "blas" in report["blas_config"].lower()
+    row = report["rounds"][0]
+    assert row["observed_count"] == 8 and row["indices"] == ids.tolist()
+    assert row["pending"] == planner.pending.tolist() and row["stable"] == 0
+    assert report["omitted_rounds"] == 0
+    fit = row["fits"][0]
+    assert fit["physical"] is True
+    if failure == "fit":
+        assert row["safe"] is False and row["estimate_db"] is None
+        assert fit["exceptions"] == [{"stage": "fit", "type": "LinAlgError", "message": "injected fitting failure"}]
+    else:
+        assert fit["safe_checks"] == [True, True]
+        assert fit["support_count"] == len(fit["support"]) > 0
+        assert fit["removed_count"] == len(fit["removed"]) == 0
+        assert not fit["exceptions"]
+
+
+def test_adaptive_diagnostic_collection_cannot_replace_original_failure(monkeypatch, capsys):
+    def unavailable_config():
+        raise RuntimeError("injected configuration failure")
+    monkeypatch.setattr(np, "show_config", unavailable_config)
+    with pytest.raises(AssertionError, match="original acquisition failure"):
+        with _adaptive_diagnostics(monkeypatch):
+            raise AssertionError("original acquisition failure")
+    assert "report unavailable" in capsys.readouterr().out
 
 
 def test_real_axis_and_wrong_half_plane_poles_are_rejected():

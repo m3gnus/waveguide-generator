@@ -16,7 +16,7 @@ import pytest
 
 from scripts.tests.test_windows_native_recovery import (
     BOOT, EXIT_TIMEOUT, NATIVE_TIMEOUT, _old_root, _read_pause_marker,
-    _wait_for_fixture_files, native as native,
+    _wait_for_fixture_files, _native_transaction_detail, native as native,
 )
 from scripts import build_bundle
 
@@ -405,7 +405,10 @@ def test_real_native_commit_caps_flooded_diagnostics_without_overriding_its_verd
     # never retry commit itself or accept a different verdict.
     _wait_for_fixture_files([root / name / "new.txt" for name in ("app", "runtime", "recovery")] +
                             [root / ".wg-install-new" / name for name in BOOT] + [log, backup])
-    assert subprocess.run([str(native), "--installer-commit", str(root)], timeout=NATIVE_TIMEOUT).returncode == 0
+    committed = subprocess.run([str(native), "--installer-commit", str(root)],
+                               timeout=NATIVE_TIMEOUT, capture_output=True, text=True, errors="replace")
+    assert committed.returncode == 0, _native_transaction_detail(
+        root, record, committed.stdout + committed.stderr)
     import json
     outcome = json.loads(record.read_text())
     assert outcome["result"] == "installed" and outcome["previousKept"] is False
