@@ -396,8 +396,88 @@ def _installed_distribution_names(python: Path) -> set[str]:
     return {_canonical_distribution_name(name) for name in installed}
 
 
+def _force_developer_requirements() -> list[str]:
+    """Force only developer roots outside the hash-verified locked closure."""
+    locked = {_canonical_distribution_name(name) for name in _locked_versions()}
+    requirements = []
+    for raw in (REPO_ROOT / "server" / "requirements-dev.txt").read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.match(r"[A-Za-z0-9_.-]+", line)
+        if match is None:
+            raise RuntimeError(f"Invalid developer requirement: {raw!r}")
+        if _canonical_distribution_name(match.group()) not in locked:
+            requirements.append(line)
+    return requirements
+
+
+def _required_distribution_closure(roots, requirements_by_name, environment):
+    """Follow active metadata dependencies, revisiting newly requested extras."""
+    from packaging.requirements import Requirement
+
+    canonical = _canonical_distribution_name
+    pending = []
+    for raw in roots:
+        requirement = Requirement(raw)
+        if requirement.marker is None or requirement.marker.evaluate({**environment, "extra": ""}):
+            pending.append((canonical(requirement.name), requirement.extras))
+    required = set()
+    extras_by_name = {}
+    visited = set()
+    while pending:
+        name, extras = pending.pop()
+        requested = extras_by_name.setdefault(name, set())
+        requested.update(extras)
+        key = (name, frozenset(requested))
+        if key in visited:
+            continue
+        visited.add(key)
+        required.add(name)
+        if name not in requirements_by_name:
+            raise RuntimeError(f"Required distribution metadata is missing: {name}")
+        for raw in requirements_by_name[name]:
+            dependency = Requirement(raw)
+            if dependency.marker is None or any(
+                dependency.marker.evaluate({**environment, "extra": extra})
+                for extra in {"", *requested}
+            ):
+                pending.append((canonical(dependency.name), dependency.extras))
+    return required
+
+
+def _retained_distribution_names(python: Path) -> set[str]:
+    roots = [f"pip=={PIP_VERSION}", *_locked_git_commits()]
+    for filename in ("requirements-runtime.txt", "requirements-dev.txt", "requirements-lock.txt"):
+        roots.extend(line.strip() for line in (REPO_ROOT / "server" / filename).read_text(encoding="utf-8").splitlines()
+                     if line.strip() and not line.lstrip().startswith("#"))
+    # Parse metadata and platform/extra markers inside the target interpreter;
+    # the Python running bootstrap itself may have no third-party packages.
+    probe = (
+        "import json,sys,runpy; from importlib.metadata import distributions; "
+        "from packaging.markers import default_environment; "
+        "module=runpy.run_path(sys.argv[1]); canonical=module['_canonical_distribution_name']; "
+        "metadata={canonical(d.metadata['Name']):list(d.requires or []) for d in distributions()}; "
+        "closure=module['_required_distribution_closure'](json.loads(sys.argv[2]),metadata,default_environment()); "
+        "print(json.dumps(sorted(closure)))"
+    )
+    completed = subprocess.run([str(python), "-c", probe, str(Path(__file__).resolve()), json.dumps(roots)],
+                               cwd=REPO_ROOT, env={**os.environ, "PIP_DISABLE_PIP_VERSION_CHECK": "1"},
+                               text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError("Could not validate required dependency metadata before forced cleanup: "
+                           + completed.stderr.strip())
+    try:
+        retained = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Required dependency inventory was not valid JSON") from exc
+    if not isinstance(retained, list) or not all(isinstance(name, str) for name in retained):
+        raise RuntimeError("Required dependency inventory was invalid")
+    return {_canonical_distribution_name(name) for name in retained}
+
+
 def _remove_undeclared_distributions(python: Path) -> None:
-    extras = sorted(_installed_distribution_names(python) - _declared_distribution_names())
+    extras = sorted(_installed_distribution_names(python) - _retained_distribution_names(python))
     if not extras:
         return
     print("Removing undeclared distributions: " + ", ".join(extras))
@@ -714,7 +794,7 @@ def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
     (environment / STAMP_NAME).unlink(missing_ok=True)
     print(f"Installing locked dependencies ({reason})")
     force_reinstall = ["--force-reinstall"] if force else []
-    commands = (
+    commands = [
         [
             str(python),
             "-m",
@@ -748,7 +828,14 @@ def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
             "-r",
             str(REPO_ROOT / "server" / "requirements-dev.txt"),
         ],
-    )
+    ]
+    if force:
+        developer_roots = _force_developer_requirements()
+        if developer_roots:
+            # Force direct tools without touching hashed packages or resolving
+            # their dependencies again; the final normal install fills closure.
+            commands.insert(-1, [str(python), "-m", "pip", "install", "--force-reinstall", "--no-deps",
+                                 "-c", str(REPO_ROOT / "server" / "requirements-lock.txt"), *developer_roots])
     for command in commands:
         if _run(command).returncode != 0:
             raise RuntimeError("Dependency installation failed; review the pip output above.")

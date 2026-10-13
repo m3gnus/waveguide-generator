@@ -11,6 +11,8 @@ from contextlib import nullcontext
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -341,18 +343,27 @@ def test_bootstrap_force_reinstalls_all_declared_packages_and_removes_extras(
         lambda command, **_kwargs: commands.append(command) or SimpleNamespace(returncode=0),
     )
 
+    monkeypatch.setattr(bootstrap, "_retained_distribution_names", lambda _python: bootstrap._declared_distribution_names())
     bootstrap.bootstrap(environment, force=True)
 
     install_commands = [command for command in commands if "install" in command]
-    assert len(install_commands) == 3
-    assert all("--force-reinstall" in command for command in install_commands)
-    locked_install = next(
-        command
-        for command in install_commands
-        if str(ROOT / "server" / "requirements-lock.txt") in command
-    )
+    assert len(install_commands) == 5
+    assert all("--force-reinstall" in command for command in install_commands[:-1])
+    assert "--force-reinstall" not in install_commands[-1]
+    locked_install = install_commands[-1]
     lock_index = locked_install.index(str(ROOT / "server" / "requirements-lock.txt"))
-    assert locked_install[lock_index - 1] == "-r"
+    assert locked_install[lock_index - 1] == "-c"
+    hashed_install = next(command for command in install_commands if "--require-hashes" in command)
+    assert str(ROOT / "server" / "requirements-hashed.txt") in hashed_install
+    assert "--require-hashes" not in locked_install
+    pinned_install = next(command for command in install_commands
+                          if str(ROOT / "server" / "requirements-pins.txt") in command)
+    assert "--no-deps" in pinned_install
+    assert "--require-hashes" not in pinned_install
+    forced_tools = install_commands[-2]
+    assert "--no-deps" in forced_tools
+    assert "mypy==2.4.0" in forced_tools
+    assert not any(argument.startswith("pytest") for argument in forced_tools)
     assert [
         command
         for command in commands
@@ -380,3 +391,37 @@ def test_an_environment_without_beat_provisions_nothing(tmp_path, monkeypatch) -
     bootstrap._provision_beat_runtime(tmp_path / "python")
 
     assert commands == [[str(tmp_path / "python"), "-c", "import beat_engine"]]
+
+
+
+def test_force_cleanup_follows_active_markers_and_propagated_extras():
+    bootstrap = _load_bootstrap()
+    metadata = {
+        "top": ["plugin; extra == 'cli'", "base", "windows-only; sys_platform == 'win32'"],
+        "plugin": ["base[advanced]"],
+        "base": ["leaf; extra == 'advanced'"],
+        "leaf": ["top"], "windows-only": [], "unrelated": [],
+    }
+    roots = ["top[cli]==1.0"]
+    closure = bootstrap._required_distribution_closure(roots, metadata, {"sys_platform": "darwin"})
+    assert closure == {"top", "plugin", "base", "leaf"}
+    assert bootstrap._required_distribution_closure(["top"], metadata, {"sys_platform": "darwin"}) == {"top", "base"}
+
+
+@pytest.mark.parametrize("metadata", [{"top": ["missing"]}, {"top": ["not a valid requirement @@@"]}])
+def test_force_cleanup_refuses_incomplete_or_invalid_metadata(metadata):
+    bootstrap = _load_bootstrap()
+    with pytest.raises((RuntimeError, ValueError)):
+        bootstrap._required_distribution_closure(["top"], metadata, {"sys_platform": "darwin"})
+
+
+
+def test_force_cleanup_does_not_delete_after_metadata_failure(monkeypatch):
+    bootstrap = _load_bootstrap()
+    monkeypatch.setattr(bootstrap, "_installed_distribution_names", lambda _python: {"top", "unrelated"})
+    def invalid_metadata(_python):
+        raise RuntimeError("invalid required metadata")
+    monkeypatch.setattr(bootstrap, "_retained_distribution_names", invalid_metadata)
+    monkeypatch.setattr(bootstrap, "_run", lambda *_args, **_kwargs: pytest.fail("unsafe uninstall"))
+    with pytest.raises(RuntimeError, match="invalid required metadata"):
+        bootstrap._remove_undeclared_distributions(Path("unused-python"))

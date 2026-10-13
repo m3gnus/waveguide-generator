@@ -471,7 +471,8 @@ def test_posix_runtime_build_archives_logger_and_manifest_before_bundle_assembly
     runtime.parent.mkdir()
     builder.build_runtime(runtime, python_version="3.13.12", python_build=build_bundle.PYTHON_BUILD,
         runtime_recipe=build_bundle.runtime_recipe(ROOT), runtime_id="new-source-bound-runtime",
-        requirements=b"runtime", pins=b"pins", lock=b"lock", platform_name=build_bundle.LINUX_PLATFORM)
+        requirements=b"runtime", pins=b"pins", lock=b"lock", hashed_lock=b"hashed-lock",
+            platform_name=build_bundle.LINUX_PLATFORM)
     archive = tmp_path / "runtime.zip"
     build_bundle.deterministic_zip(runtime, archive)
     with zipfile.ZipFile(archive) as zipped:

@@ -202,17 +202,24 @@ def test_field_service_sends_bempp_work_across_process_boundary(monkeypatch, tmp
     assert calls[0]["traces"][6] == BEMPP_FIELD_TRACE_BACKEND
 
 
-def test_field_timeout_kills_native_worker(monkeypatch):
+def test_field_timeout_kills_native_worker_before_requesting_rewarm(monkeypatch):
     from server.tests.test_bempp_process import _blocking_worker
 
     async def exercise():
         worker = bempp_process.BemppProcessHost(target=_blocking_worker)
         monkeypatch.setattr(bempp_process, "_HOST", worker)
+        warm_requests = []
+        def rewarm():
+            assert worker._process is None
+            assert worker._active_job_id is None
+            warm_requests.append(True)
+        monkeypatch.setattr(worker, "_prewarm_locked", rewarm)
         try:
             with pytest.raises(asyncio.TimeoutError):
                 await asyncio.wait_for(bempp_process.evaluate_field_bempp_in_process({}), 0.2)
             assert worker._process is None
             assert worker._active_job_id is None
+            assert warm_requests == [True]
         finally:
             worker.close()
     asyncio.run(exercise())
@@ -229,11 +236,17 @@ def test_field_native_crash_is_contained(monkeypatch):
     async def exercise():
         worker = bempp_process.BemppProcessHost(target=_crashing_field_worker)
         monkeypatch.setattr(bempp_process, "_HOST", worker)
-        monkeypatch.setattr(worker, "prewarm", lambda: None)
+        warm_requests = []
+        def rewarm():
+            assert worker._process is None
+            assert worker._active_job_id is None
+            warm_requests.append(True)
+        monkeypatch.setattr(worker, "_prewarm_locked", rewarm)
         try:
             with pytest.raises(bempp_process.BemppWorkerError, match="exited|disconnected"):
                 await bempp_process.evaluate_field_bempp_in_process({})
             assert worker._process is None
+            assert warm_requests == [True]
         finally:
             worker.close()
     asyncio.run(exercise())

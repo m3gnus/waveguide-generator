@@ -201,7 +201,7 @@ def test_compiled_source_changes_shared_runtime_identity(tmp_path: Path) -> None
     first = build_bundle.runtime_recipe(tmp_path)
     source.write_bytes(b"changed source")
     assert first != build_bundle.runtime_recipe(tmp_path)
-    assert first.startswith("wg2-bundle-runtime-v3:windows-native-")
+    assert first.startswith("wg2-bundle-runtime-v4-hashed:windows-native-")
     second = build_bundle.runtime_recipe(tmp_path)
     hook.write_bytes(b"changed hook")
     assert second != build_bundle.runtime_recipe(tmp_path)
