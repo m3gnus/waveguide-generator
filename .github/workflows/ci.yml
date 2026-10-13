@@ -48,8 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: npm
@@ -69,8 +69,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
       # The JS decoder and the Python encoder must agree on WS-PROTOCOL frames;
@@ -85,10 +85,10 @@ jobs:
     steps:
       # Needs full history and every remote branch: the signal is where a
       # branch's merge base sits relative to main's first-parent chain.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
       - name: Fetch every branch the check compares against
@@ -115,10 +115,10 @@ jobs:
       # branches on 2026-08-27 through reviewed pull requests, hours after the
       # rewrite that stripped the previous ones. The tooling adds them by
       # default, so the rule needs something that executes.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
       - name: Fetch the base this branch is measured against
@@ -162,8 +162,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
       # requirements-pins.txt is generated from pins.json. A hand-edit here is
@@ -194,7 +194,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
       - name: Install the pinned Inno Setup
@@ -307,15 +307,15 @@ jobs:
       # must fail the pipeline test rather than silently skip the CAD path.
       WG_REQUIRE_IMPORTED_PIPELINE: ${{ matrix.os == 'ubuntu-latest' && matrix.suite == 'server' && '1' || '0' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # The domain compatibility test loads a pre-M1c reader with git show.
           # A shallow checkout contains only this candidate and cannot read it.
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: npm
@@ -365,6 +365,9 @@ jobs:
           pip install --require-hashes -r server/requirements-hashed.txt
           pip install --no-deps -r server/requirements-pins.txt
           pip install -r server/requirements-dev.txt
+      - name: Check typed Python boundaries
+        if: matrix.os == 'ubuntu-latest' && matrix.suite == 'server'
+        run: python -m mypy
       # The 2022 PoCL 3.0 wheel failed on newer hosted EPYC CPUs with both an
       # unknown LLVM CPU target and missing compiled kernels. Use the pinned
       # distro CPU ICD instead; app dependencies and required CAD tests stay

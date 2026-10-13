@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self, cast
 
-from pydantic import Field, field_validator, model_serializer, model_validator
+from pydantic import Field, SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator
 
 from server.contracts.canonical import canonical_utf8_strict_json
 
@@ -15,7 +15,14 @@ from server.design.defaults import default_sweep_start_hz
 from server.design.schema import DesignConfig
 
 
+# Serializer return annotations intentionally remain absent: Pydantic uses them
+# to replace the public serialization schema, hiding the model fields. The
+# narrow no-untyped-def exceptions below preserve the existing wire contract.
 MAX_EXPLICIT_FREQUENCIES = 401
+
+
+def _default_polar_axes() -> list[Literal["horizontal", "vertical", "diagonal"]]:
+    return ["horizontal", "vertical", "diagonal"]
 
 
 class PolarConfig(JobModel):
@@ -29,7 +36,7 @@ class PolarConfig(JobModel):
     norm_angle: float = 5.0
     inclination: float = 45.0
     enabled_axes: list[Literal["horizontal", "vertical", "diagonal"]] = Field(
-        default_factory=lambda: ["horizontal", "vertical", "diagonal"],
+        default_factory=_default_polar_axes,
         min_length=1,
     )
     observation_origin: Literal["mouth", "throat"] = "mouth"
@@ -154,7 +161,7 @@ class SolveOptions(JobModel):
     adaptive_frequency_sampling: bool = False
 
     @model_serializer(mode="wrap")
-    def serialize_sampling_option(self, handler):
+    def serialize_sampling_option(self, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
         """Keep every legacy wire encoding unchanged when sampling is off."""
         wire = handler(self)
         if not self.adaptive_frequency_sampling:
@@ -354,13 +361,13 @@ class SemiInductanceSpec(JobModel):
     rss_ohm: PositiveTransducerScalar | None = None
 
     @model_validator(mode="after")
-    def require_enabled_parameters(self):
+    def require_enabled_parameters(self) -> Self:
         if self.enabled and any(getattr(self, name) is None for name in type(self).model_fields if name != "enabled"):
             raise ValueError("enabled semi_inductance requires Re′, Leb, Le, Ke and Rss")
         return self
 
     @model_serializer(mode="wrap")
-    def omit_absent_parameters(self, handler):
+    def omit_absent_parameters(self, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
         return {key: value for key, value in handler(self).items() if value is not None}
 
 
@@ -371,13 +378,13 @@ class LumpedSealedRearChamberSpec(JobModel):
     volume_m3: PositiveTransducerScalar | None = None
 
     @model_validator(mode="after")
-    def require_enabled_volume(self):
+    def require_enabled_volume(self) -> Self:
         if self.enabled and self.volume_m3 is None:
             raise ValueError("enabled lumped_sealed_rear_chamber requires volume_m3")
         return self
 
     @model_serializer(mode="wrap")
-    def omit_absent_parameters(self, handler):
+    def omit_absent_parameters(self, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
         return {key: value for key, value in handler(self).items() if value is not None}
 
 
@@ -400,7 +407,7 @@ class ExteriorTransducerSpec(JobModel):
                        Annotated[float, Field(strict=True, allow_inf_nan=False)]]
 
     @model_serializer(mode="wrap")
-    def omit_absent_options(self, handler):
+    def omit_absent_options(self, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
         wire = handler(self)
         for name in ("semi_inductance", "lumped_sealed_rear_chamber", "power_w", "xmax_mm", "sd_m2"):
             if getattr(self, name) is None:
@@ -408,7 +415,7 @@ class ExteriorTransducerSpec(JobModel):
         return wire
 
     @model_validator(mode="after")
-    def nonzero_axis(self):
+    def nonzero_axis(self) -> Self:
         if self.version == 1 and any(getattr(self, name) is not None for name in
                                      ("semi_inductance", "lumped_sealed_rear_chamber", "power_w", "xmax_mm", "sd_m2")):
             raise ValueError("transducer options require version 2")
@@ -427,7 +434,7 @@ class DriveChannel(JobModel):
     exterior_transducer: ExteriorTransducerSpec | None = None
 
     @model_serializer(mode="wrap")
-    def omit_absent_transducer(self, handler):
+    def omit_absent_transducer(self, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
         wire = handler(self)
         if self.exterior_transducer is None:
             wire.pop("exterior_transducer", None)
@@ -739,7 +746,7 @@ class FieldPlaneSpec(JobModel):
             for component in value
         ):
             raise ValueError(f"plane.{info.field_name} must contain finite numbers")
-        return tuple(float(component) for component in value)
+        return float(value[0]), float(value[1]), float(value[2])
 
     @field_validator("width_m", "height_m", mode="before")
     @classmethod
@@ -920,7 +927,7 @@ class ImportedGeometrySource(JobModel):
     passive_cardioid_coupled: bool = False
 
     @model_serializer(mode="wrap")
-    def omit_empty_native_features(self, handler):
+    def omit_empty_native_features(self, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
         wire = handler(self)
         if not self.required_features:
             wire.pop("required_features", None)
@@ -1078,8 +1085,8 @@ class ImportedGeometrySource(JobModel):
                 "passive cardioid requires " + ", ".join(missing)
             )
         if self.port_area_source == "bem_aperture" and not math.isclose(
-            float(self.model_port_area_m2),
-            float(self.bem_port_area_m2),
+            cast(float, self.model_port_area_m2),
+            cast(float, self.bem_port_area_m2),
             rel_tol=1.0e-12,
             abs_tol=0.0,
         ):
@@ -1139,7 +1146,7 @@ class SolveRequest(JobModel):
         return result
 
     @model_validator(mode="after")
-    def validate_exterior_transducer_mode(self):
+    def validate_exterior_transducer_mode(self) -> Self:
         geometry = self.geometry
         if not isinstance(geometry, ImportedGeometrySource) or not any(c.exterior_transducer for c in geometry.drive_channels):
             return self

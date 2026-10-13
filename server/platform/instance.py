@@ -804,14 +804,3 @@ def reserve_port(
         f"Ports {preferred} through {last} are all busy on {host}. Stop an existing "
         "server or start with --port PORT using an available port."
     )
-
-
-def acquire_port(
-    cli_port: int | None = None,
-    *,
-    environ: Mapping[str, str] | None = None,
-    host: str = "127.0.0.1",
-) -> int:
-    """Resolve configuration and select an available local port."""
-
-    return select_port(requested_port(cli_port, environ=environ), host=host)

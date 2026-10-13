@@ -71,6 +71,20 @@ JS frame codec (explicit file path — directory mode trips the node runner): `n
 
 Frontend unit tests: `npm --prefix frontend test`
 
+### Python static checking
+
+Run `.venv/bin/python -m mypy` from the repository root after installing the
+locked runtime dependencies and `server/requirements-dev.txt`. CI runs this
+check in the Linux server job with those same runtime dependencies installed.
+
+The first phase checks six boundary modules: job request/response models,
+imported mesh integrity, the native-work permit, safe archive names, runtime
+identity, and release asset names. `mypy.ini` lists the exact scope and enables
+strict checking. Imported modules supply their types; errors outside the
+listed modules are deferred with `follow_imports = silent`. This does not
+claim whole-backend type safety. Extend the list with small, validated changes;
+do not hide existing errors with a blanket project ignore list.
+
 Real solves are never run in hosted CI; Metal and bempp parity run on owned
 qualification hardware, and their archived reports back the release gates. Use
 the [solver release qualification checklist](validation/SOLVER-QUALIFICATION.md)

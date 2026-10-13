@@ -2654,34 +2654,6 @@ class JobStore:
             artifact_dir=self._field_trace_path(str(record["path"])),
         )
 
-    def delete_field_traces(self, job_id: str) -> bool:
-        """Delete the metadata row first, then remove its sidecar directory."""
-
-        with self._lock, self._transaction() as conn:
-            row = conn.execute(
-                "SELECT path FROM simulation_field_traces WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()
-            deleted = conn.execute(
-                "DELETE FROM simulation_field_traces WHERE job_id = ?",
-                (job_id,),
-            ).rowcount
-            conn.execute(
-                """UPDATE simulation_jobs
-                   SET task_metadata_json = json_set(
-                         COALESCE(task_metadata_json, '{}'),
-                         '$.field_plane_available', json('false'),
-                         '$.field_trace_bytes', json('null'),
-                         '$.unavailable_reason', 'artifact_pruned'
-                       ),
-                       updated_at = ?
-                   WHERE id = ?""",
-                (_now_iso(), job_id),
-            )
-        path = self._field_trace_path(str(row["path"])) if row is not None else None
-        if path is not None:
-            self._remove_field_trace_path(job_id, path)
-        return bool(deleted)
 
     def delete_job_with_event(self, job_id: str) -> tuple[bool, dict[str, Any] | None]:
         """Delete one row and retain a terminal deleted event."""
@@ -3427,11 +3399,6 @@ class JobStore:
         self._delete_discarded_result_logs()
         return removed_ids, affected_ids, events
 
-    def append_event(
-        self, job_id: str, event_type: str, payload: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        with self._lock, self._transaction() as conn:
-            return self._append_event(conn, job_id, event_type, payload)
 
     def current_event_cursor(self) -> int:
         with self._lock, self._connection() as conn:

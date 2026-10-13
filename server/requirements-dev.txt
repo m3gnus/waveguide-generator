@@ -1,6 +1,8 @@
 # Development and qualification tools for the v2-local environment.
 pytest==9.0.3
 pytest-xdist==3.8.0
+# Static checking is phased by mypy.ini; runtime dependencies provide real types.
+mypy==2.4.0
 # Starlette TestClient used by native authoring API regressions.
 httpx2==2.13.1
 # Deliberately unpinned, to match what CI installs: the drift job runs
