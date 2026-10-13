@@ -18,9 +18,9 @@ from shared import build_identity as identity
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
-    identity.build_identity.cache_clear()
+    identity._cached_build_identity.cache_clear()
     yield
-    identity.build_identity.cache_clear()
+    identity._cached_build_identity.cache_clear()
 
 
 def _tree(root, version="1.2.3"):
@@ -204,3 +204,66 @@ def test_a_corrupt_manifest_degrades_instead_of_raising(tmp_path):
 
     assert identity.build_label(root) == "0.2.5+unknown"
     assert identity.build_identity(root)["source"] == "unavailable"
+
+
+def test_startup_identity_is_reused_by_default_root_and_store(tmp_path, monkeypatch):
+    """Native warmups must not cause a second Git fork in store startup."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from server.jobs import store as store_module
+    from server.jobs.store import JobStore
+
+    root = _tree(tmp_path / "app")
+    monkeypatch.setattr(identity, "_REPOSITORY_ROOT", root)
+    monkeypatch.setattr(store_module, "app_root", lambda: root)
+    probes = []
+
+    def probe(base):
+        probes.append(base)
+        assert len(probes) == 1, "store startup re-probed Git after app warmups"
+        return "abcdef1234", False, "git"
+
+    monkeypatch.setattr(identity, "_probed_identity", probe)
+    # server.app resolves an explicit APP_ROOT before registering warmups.
+    assert identity.build_label(root) == "1.2.3+gabcdef12"
+    assert identity.build_identity()["commit"] == "abcdef1234"
+    assert identity.build_identity(None)["commit"] == "abcdef1234"
+    assert identity.build_identity(root / "shared" / "..")["commit"] == "abcdef1234"
+    store = JobStore(tmp_path / "data" / "jobs" / "jobs.db")
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(store.initialize).result(timeout=10)
+    with store._connect() as conn:
+        build = conn.execute("SELECT build FROM wg_install_provenance").fetchone()[0]
+    assert build == "1.2.3+gabcdef12"
+    assert probes == [root.resolve()]
+
+
+def test_store_uses_warmed_overridden_app_identity(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from server.jobs import store as store_module
+
+    source = _tree(tmp_path / "source", "1.2.3")
+    override = _tree(tmp_path / "override", "4.5.6")
+    monkeypatch.setattr(identity, "_REPOSITORY_ROOT", source)
+    monkeypatch.setattr(store_module, "app_root", lambda: override)
+    probes = []
+
+    def probe(base):
+        probes.append(base)
+        assert base == override.resolve(), "store used source identity instead of app root"
+        assert len(probes) == 1, "store forked another Git probe during startup"
+        return "abcdef1234", False, "git"
+
+    monkeypatch.setattr(identity, "_probed_identity", probe)
+    assert identity.build_label(override) == "4.5.6+gabcdef12"
+    store = store_module.JobStore(tmp_path / "data" / "jobs" / "jobs.db")
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(store.initialize).result(timeout=10)
+    with store._connect() as conn:
+        row = conn.execute("SELECT build, app_root FROM wg_install_provenance").fetchone()
+    assert tuple(row) == ("4.5.6+gabcdef12", str(override))
+    with store._connect() as conn:
+        message = store._schema_too_new_message(conn, 999)
+    assert "(4.5.6+gabcdef12) supports schemas" in message
+    assert probes == [override.resolve()]

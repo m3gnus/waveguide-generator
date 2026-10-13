@@ -567,7 +567,7 @@ class JobStore:
         return (
             f"Database {self.db_path} was created by a newer version of "
             f"Waveguide Generator (schema {schema_version}); this version "
-            f"({build_label()}) supports schemas up to "
+            f"({build_label(app_root())}) supports schemas up to "
             f"{SUPPORTED_SCHEMA_VERSION}.{culprit} Two installs sharing one data "
             "directory cannot use different schema versions: run the newer "
             "install, or give this one its own data directory by setting "
@@ -588,7 +588,7 @@ class JobStore:
                 "schema_version = excluded.schema_version",
                 (
                     _now_iso(),
-                    build_label(),
+                    build_label(app_root()),
                     str(app_root()),
                     int(schema_version),
                 ),

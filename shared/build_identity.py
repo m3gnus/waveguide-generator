@@ -120,11 +120,19 @@ def _probed_identity(root: Path) -> tuple[str | None, bool, str] | None:
     return commit, bool(status), "git"
 
 
-@lru_cache(maxsize=1)
 def build_identity(root: Path | None = None) -> dict[str, Any]:
     """Resolve version, commit and provenance for the running build."""
 
-    base = _REPOSITORY_ROOT if root is None else Path(root)
+    # The app resolves its explicit root before starting native warmups. Later
+    # callers can use the default root. Cache the
+    # resolved directory, not those different calling conventions: a second git
+    # probe can block inside process creation before subprocess's timeout starts.
+    base = (_REPOSITORY_ROOT if root is None else Path(root)).resolve()
+    return _cached_build_identity(base)
+
+
+@lru_cache(maxsize=1)
+def _cached_build_identity(base: Path) -> dict[str, Any]:
     manifest = _read_json(base / "shared" / "version.json") or {}
     raw_version = manifest.get("version")
     version = str(raw_version) if isinstance(raw_version, str) and raw_version else "unknown"
