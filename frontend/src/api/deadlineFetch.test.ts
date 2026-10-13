@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { deadlineFetch } from './deadlineFetch';
+import { deadlineFetch, deadlineSignal } from './deadlineFetch';
 
 describe('REST read deadlines', () => {
   it('preserves lifetime cancellation and request options', async () => {
@@ -51,4 +51,70 @@ describe('REST read deadlines', () => {
     await deadlineFetch(fetcher, '/api/solve', init);
     expect(fetcher).toHaveBeenCalledWith('/api/solve', init);
   });
+});
+
+describe.each(['any', 'timeout', 'both'] as const)('WebView fallback without %s', (missing) => {
+  function withoutHelpers(run: () => void) {
+    const any = Object.getOwnPropertyDescriptor(AbortSignal, 'any')!;
+    const timeout = Object.getOwnPropertyDescriptor(AbortSignal, 'timeout')!;
+    if (missing !== 'timeout') Object.defineProperty(AbortSignal, 'any', { value: undefined, configurable: true });
+    if (missing !== 'any') Object.defineProperty(AbortSignal, 'timeout', { value: undefined, configurable: true });
+    vi.useFakeTimers();
+    try { run(); } finally {
+      Object.defineProperty(AbortSignal, 'any', any);
+      Object.defineProperty(AbortSignal, 'timeout', timeout);
+      vi.useRealTimers();
+    }
+  }
+
+  it('reaches fetch with a composed signal on legacy WebViews', () => withoutHelpers(() => {
+    const lifetime = new AbortController();
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response('{}'));
+    void deadlineFetch(fetcher, '/api/jobs', { signal: lifetime.signal });
+    expect(fetcher).toHaveBeenCalledWith('/api/jobs', { signal: expect.any(AbortSignal) });
+    lifetime.abort('unmounted');
+    expect(fetcher.mock.calls[0][1]?.signal?.reason).toBe('unmounted');
+    expect(vi.getTimerCount()).toBe(0);
+  }));
+
+  it('preserves the lifetime reason and clears the timer and listener', () => withoutHelpers(() => {
+    const lifetime = new AbortController();
+    const remove = vi.spyOn(lifetime.signal, 'removeEventListener');
+    const composed = deadlineSignal(lifetime.signal, 10);
+    const reason = new Error('component unmounted');
+    lifetime.abort(reason);
+    expect(composed.reason).toBe(reason);
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(20);
+    expect(composed.reason).toBe(reason);
+  }));
+
+  it('expires after headers while the body still waits and removes the lifetime listener', () => withoutHelpers(() => {
+    const lifetime = new AbortController();
+    const remove = vi.spyOn(lifetime.signal, 'removeEventListener');
+    const composed = deadlineSignal(lifetime.signal, 10);
+    const bodyAbort = vi.fn();
+    composed.addEventListener('abort', bodyAbort);
+    vi.advanceTimersByTime(9);
+    expect(bodyAbort).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(bodyAbort).toHaveBeenCalledOnce();
+    expect(composed.reason.name).toBe('TimeoutError');
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+    expect(vi.getTimerCount()).toBe(0);
+    const firstReason = composed.reason;
+    lifetime.abort(new Error('late cancellation'));
+    expect(composed.reason).toBe(firstReason);
+  }));
+
+  it('does not install listeners or timers for an already cancelled lifetime', () => withoutHelpers(() => {
+    const lifetime = new AbortController();
+    lifetime.abort('already unmounted');
+    const add = vi.spyOn(lifetime.signal, 'addEventListener');
+    const composed = deadlineSignal(lifetime.signal, 10);
+    expect(composed.reason).toBe('already unmounted');
+    expect(add).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  }));
 });
