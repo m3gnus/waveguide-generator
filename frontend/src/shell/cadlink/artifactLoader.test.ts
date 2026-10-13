@@ -164,7 +164,7 @@ describe('ingest-keyed artifact loading without the coordinator', () => {
     expect(scene?.scene.bounds.max.x).toBe(1);
     expect(importedMeshStore.getSnapshot().cad).toBeNull();
     await showIngestedSolverMeshInViewport(record, 'Speaker', fetcher);
-    expect(fetcher).toHaveBeenCalledExactlyOnceWith(`/api/cadlink/ingest/${record.ingest_id}/mesh`);
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith(`/api/cadlink/ingest/${record.ingest_id}/mesh`, { signal: expect.any(AbortSignal) });
     expect(importedMeshStore.getSnapshot().cadSolver).toBe(scene);
   });
 

@@ -1,3 +1,4 @@
+import { deadlineFetch } from '../api/deadlineFetch';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -19,7 +20,7 @@ export async function prepareNativeAssembly(
   if (!channels || ![1, 2].includes(channels.length)
       || (channels.length === 1 && !record.native_source?.required_features.includes('native-general-horn-attachment-v1')))
     throw new Error('The prepared assembly has no verified physical source contract.');
-  const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(record.ingest_id)}/mesh`);
+  const response = await deadlineFetch(fetcher, `/api/cadlink/ingest/${encodeURIComponent(record.ingest_id)}/mesh`);
   if (!response.ok) throw new Error('The prepared mesh could not be verified. Previous geometry retained.');
   const mesh = parseMSH(await response.text());
   const current = useCadReturnStore.getState();

@@ -1,3 +1,4 @@
+import { deadlineFetch } from '../api/deadlineFetch';
 /**
  * Would replacing the design on screen lose it?
  *
@@ -148,7 +149,7 @@ async function fetchRuns(fetcher: typeof fetch): Promise<void> {
     const pageSize = 200;
     let offset = 0;
     for (let page = 0; page < 100; page += 1) {
-      const response = await fetcher(`/api/jobs?limit=${pageSize}&offset=${offset}`);
+      const response = await deadlineFetch(fetcher, `/api/jobs?limit=${pageSize}&offset=${offset}`);
       if (!response.ok) throw new Error(`jobs list answered ${response.status}`);
       const body = await response.json() as unknown;
       if (!isRecord(body) || !Array.isArray(body.items)) throw new Error('Invalid jobs list response');

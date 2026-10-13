@@ -1,3 +1,4 @@
+import { deadlineFetch } from '../../api/deadlineFetch';
 import { currentDocumentLoad, isCurrentDocumentLoad } from '../../stores/design';
 import type { CadReturnIngestRecord } from '../../api/cadlink';
 import { jobsSocket } from '../../api/jobsSocket';
@@ -27,7 +28,7 @@ async function fetchMeshOnce(url: string, fetcher: typeof fetch): Promise<Fetche
   const existing = inFlightMeshRequests.get(url);
   if (existing) return existing;
   const request = (async (): Promise<FetchedMesh> => {
-    const response = await fetcher(url);
+    const response = await deadlineFetch(fetcher, url);
     // 202 is "still being built", not a mesh; reading its body would only
     // hand `parseMSH` an empty string to reject.
     const text = response.ok && response.status !== 202 ? await response.text() : '';
@@ -274,7 +275,7 @@ export async function showIngestedSolverMeshInViewport(
   }
   let response: Response;
   try {
-    response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
+    response = await deadlineFetch(fetcher, `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
   } catch (error) {
     return current() ? (error instanceof Error ? error.message : String(error)) : null;
   }

@@ -1,3 +1,4 @@
+import { deadlineFetch } from '../api/deadlineFetch';
 import { samplingComments, samplingProvenance } from './sampling';
 import { downloadBlob, downloadText } from '../api/designIo';
 import {
@@ -642,7 +643,7 @@ async function writeManualPolarFrd(
   files: ReturnType<typeof buildPolarFrdSet>,
 ): Promise<string[]> {
   const fetcher = context.fetcher ?? fetch;
-  const pathResponse = await fetcher('/api/workspace/path');
+  const pathResponse = await deadlineFetch(fetcher, '/api/workspace/path');
   if (!pathResponse.ok) throw await responseError(pathResponse);
   let workspace = await pathResponse.json() as { selected?: boolean };
   if (!workspace.selected) {
@@ -1005,7 +1006,7 @@ export async function downloadMeshArtifact(
   fetcher: typeof fetch = fetch,
   saveBlob: (blob: Blob, filename: string) => void = downloadBlob,
 ): Promise<string> {
-  const response = await fetcher(`/api/mesh-artifact/${encodeURIComponent(job.id)}`);
+  const response = await deadlineFetch(fetcher, `/api/mesh-artifact/${encodeURIComponent(job.id)}`);
   if (!response.ok) throw await responseError(response);
   const filename = `${exportStemForJob(job)}.msh`;
   saveBlob(await response.blob(), filename);

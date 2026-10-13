@@ -781,7 +781,7 @@ describe('result exporters', () => {
       id: 'artifact-uuid', run_number: 123, label: 'asro68', config_summary: {},
     }, fetcher, saveBlob);
 
-    expect(fetcher).toHaveBeenCalledWith('/api/mesh-artifact/artifact-uuid');
+    expect(fetcher).toHaveBeenCalledWith('/api/mesh-artifact/artifact-uuid', { signal: expect.any(AbortSignal) });
     expect(filename).toBe('123_asro68.msh');
     expect(saveBlob.mock.calls[0][1]).toBe('123_asro68.msh');
     expect(await (saveBlob.mock.calls[0][0] as Blob).text()).toBe('stored mesh bytes');

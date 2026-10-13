@@ -1,3 +1,4 @@
+import { deadlineFetch } from '../api/deadlineFetch';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { confirmSolverFrame, type SolverFrameState } from '../api/solverFrame';
 import { cadJobSummaries, useCadJobs } from '../jobs/cadSolve';
@@ -12,7 +13,7 @@ import {
 async function loadModel(ingestId: string, fetcher: typeof fetch): Promise<ParsedMSH> {
   // This thumbnail draws every triangle twice on a 220×150 canvas. The exact
   // solve mesh is already available and preserves the same source tags.
-  const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
+  const response = await deadlineFetch(fetcher, `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
   if (response.ok) return parseMSH(await response.text());
   throw new Error('the prepared model’s mesh is not available to preview');
 }
