@@ -281,7 +281,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
 
 @pytest.fixture(autouse=True)
-def isolated_native_admission(monkeypatch):
+def isolated_native_admission():
     """Each test represents a server process; its runtimes share one permit.
 
     Quarantine is deliberately permanent in production, including across runtime
@@ -290,4 +290,10 @@ def isolated_native_admission(monkeypatch):
     """
     from server.solver import metal_permit
 
-    monkeypatch.setattr(metal_permit, "_PROCESS_METAL_PERMIT", metal_permit.MetalPermit())
+    # Do not reorder shared monkeypatch/cache-cleanup fixture teardown.
+    patcher = pytest.MonkeyPatch()
+    try:
+        patcher.setattr(metal_permit, "_PROCESS_METAL_PERMIT", metal_permit.MetalPermit())
+        yield
+    finally:
+        patcher.undo()

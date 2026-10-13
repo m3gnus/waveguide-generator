@@ -227,7 +227,7 @@ describe('would replacing the design on screen lose it', () => {
 
     expect(replacingWouldLoseNow()).toBe(true);
     await expect(replacingWouldLose(fetcher as unknown as typeof fetch)).resolves.toBe(false);
-    expect(fetcher).toHaveBeenCalledWith('/api/jobs?limit=200&offset=0');
+    expect(fetcher).toHaveBeenCalledWith('/api/jobs?limit=200&offset=0', { signal: expect.any(AbortSignal) });
     // What that read found is what a synchronous guard then asks, unfetched.
     expect(replacingWouldLoseNow()).toBe(false);
   });
