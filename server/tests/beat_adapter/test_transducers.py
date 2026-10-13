@@ -274,12 +274,28 @@ SEMI = dict(enabled=True, re_prime_ohm=5.5, leb_h=.0001, le_h=.002,
             ke_semi_h=.03, rss_ohm=20.)
 
 
-def test_absent_options_keep_original_request_bytes(built):
+def test_absent_options_keep_original_request_bytes(built, layout):
+    import copy
     import hashlib
 
+    # Observation points come from np.sin/np.cos, whose last bit differs between
+    # platforms (arm64 macOS vs x86-64 Windows), so they are compared numerically
+    # and left out of the frozen hash; every other byte is platform-independent.
+    wire = copy.deepcopy(built.wire)
+    points = {}
+    for output in wire["outputs"]:
+        if "points_m" in output.get("options", {}):
+            points[output["id"]] = output["options"].pop("points_m")
+    expected = {output["id"]: output["options"]["points_m"]
+                for output in layout.exterior_outputs() if "points_m" in output.get("options", {})}
+    assert points.keys() == expected.keys()
+    for name, values in points.items():
+        assert np.shape(values) == np.shape(expected[name])
+        np.testing.assert_allclose(values, expected[name], rtol=0, atol=1e-12)
     # Frozen from the v1 builder before the optional physical models were added.
-    encoded = json.dumps(built.wire, allow_nan=False, separators=(",", ":")).encode()
-    assert hashlib.sha256(encoded).hexdigest() == "7b89d3dbb9459b295ebabaeec5b2abfeda334c0bc42aedf29f073260f38ec7c2"
+    encoded = json.dumps(wire, allow_nan=False, separators=(",", ":")).encode()
+    # Re-frozen without the points from the same v1 bytes (full-wire sha256 7b89d3db… on arm64 macOS).
+    assert hashlib.sha256(encoded).hexdigest() == "3083bb5ace599d7ac2da2446bb8c77b4294d62136c9c96c01c69e80686c4e17b"
 
 
 def test_optional_models_match_engine_contract(mesh, layout, official_contract):
