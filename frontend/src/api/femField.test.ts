@@ -9,7 +9,9 @@ describe('FEM result wire route', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(femFieldFixture(1000, 'rear'))));
     const controller = new AbortController();
     const field = await fetchFemField('run/id', 1000, 'rear', controller.signal);
-    expect(fetchSpy).toHaveBeenCalledWith('/api/results/run%2Fid/fem-field?frequency=1000&channel=rear', { signal: controller.signal });
+    expect(fetchSpy).toHaveBeenCalledWith('/api/results/run%2Fid/fem-field?frequency=1000&channel=rear', { signal: expect.any(AbortSignal) });
+    controller.abort();
+    expect((fetchSpy.mock.calls[0][1] as RequestInit).signal?.aborted).toBe(true);
     expect(Array.from(field.values.real)).toEqual([1, 2, 3, 4]);
     expect(Array.from(field.values.imag)).toEqual([-1, -2, -3, -4]);
     expect(field.domain.surfaces[0].kind).toBe('rigid');

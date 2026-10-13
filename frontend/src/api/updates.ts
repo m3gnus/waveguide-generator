@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 /** Full-installer update contract: server/updates/installer_client.py. */
 export type UpdateChannel = 'stable' | 'beta';
 export type UpdateInstallState = 'idle' | 'downloading' | 'verifying' | 'ready' | 'failed';
@@ -105,21 +106,21 @@ async function responseError(response: Response, fallback: string): Promise<Erro
   return new Error(`${fallback} (${response.status})`);
 }
 export async function getUpdateStatus(refresh = false, signal?: AbortSignal): Promise<UpdateStatus> {
-  const response = await fetch(`/api/updates/status${refresh ? '?refresh=true' : ''}`, { signal });
+  const response = await deadlineFetch(fetch, `/api/updates/status${refresh ? '?refresh=true' : ''}`, { signal });
   if (!response.ok) throw await responseError(response, 'Update status request failed');
   const payload: unknown = await response.json();
   if (!status(payload)) throw new Error('Update status response is invalid');
   return payload;
 }
 export async function getUpdateChannel(signal?: AbortSignal): Promise<UpdateChannel> {
-  const response = await fetch('/api/updates/channel', { signal });
+  const response = await deadlineFetch(fetch, '/api/updates/channel', { signal });
   if (!response.ok) throw await responseError(response, 'Update channel request failed');
   const payload: unknown = await response.json();
   if (!record(payload) || !channel(payload.channel)) throw new Error('Update channel response is invalid');
   return payload.channel;
 }
 export async function getUpdateDiagnostics(): Promise<UpdateDiagnostics> {
-  const response = await fetch('/api/updates/diagnostics');
+  const response = await deadlineFetch(fetch, '/api/updates/diagnostics');
   if (!response.ok) throw await responseError(response, 'Update diagnostics request failed');
   const payload: unknown = await response.json();
   if (!record(payload) || !bytes(payload.tailBytes) || !record(payload.logs)

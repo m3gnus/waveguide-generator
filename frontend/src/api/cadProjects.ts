@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 import type { CadReturnBundle } from './cadlink';
 import type { JobItem } from './jobsSocket';
 import { listCadLinkedDesigns, type CadLinkedDesignSummary } from './cadlink';
@@ -109,7 +110,7 @@ export async function listProjectDocuments(
   lineageId: string,
   fetcher: typeof fetch = fetch,
 ): Promise<CadProjectDocumentListing> {
-  const response = await fetcher(`/api/cadlink/projects/${encodeURIComponent(lineageId)}/documents`);
+  const response = await deadlineFetch(fetcher, `/api/cadlink/projects/${encodeURIComponent(lineageId)}/documents`);
   if (!response.ok) throw await failure(response);
   return response.json() as Promise<CadProjectDocumentListing>;
 }

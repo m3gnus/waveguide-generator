@@ -56,7 +56,7 @@ describe('full-installer update control', () => {
     const diagnostics = { tailBytes: 32768, logs: { 'install.log': 'Installer recovery failed.' } };
     fetch.mockResolvedValue(reply(diagnostics)); render(value);
     await click('Copy update diagnostics');
-    expect(fetch.mock.calls).toEqual([['/api/updates/diagnostics']]);
+    expect(fetch.mock.calls).toEqual([['/api/updates/diagnostics', { signal: expect.any(AbortSignal) }]]);
     const copied = JSON.parse(writeText.mock.calls[0][0]);
     expect(copied).toMatchObject({ frontendVersion: __WG2_VERSION__, status: { installState: 'failed', error: value.error, lastOutcome },
       progress: null, statusError: null, ...diagnostics });

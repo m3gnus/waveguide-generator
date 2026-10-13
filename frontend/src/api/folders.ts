@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 export interface FolderRoot {
   path: string | null;
   selected: boolean;
@@ -9,7 +10,7 @@ export interface FolderRoot {
 }
 
 async function request(action: 'path' | 'open' | 'select', path?: string): Promise<FolderRoot> {
-  const response = await fetch(`/api/folders/${action}`, action === 'path' ? undefined : {
+  const response = await deadlineFetch(fetch, `/api/folders/${action}`, action === 'path' ? undefined : {
     method: 'POST',
     ...(path ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) } : {}),
   });

@@ -18,6 +18,12 @@ describe('AppQueryProvider', () => {
     hosts.splice(0).forEach((host) => host.remove());
   });
 
+  it('sets bounded read retries and never retries mutations', () => {
+    expect(appQueryClient.getDefaultOptions()).toEqual({
+      queries: { retry: 1, refetchOnWindowFocus: false }, mutations: { retry: false },
+    });
+  });
+
   it('reuses one query cache across independent React roots', () => {
     const observed: unknown[] = [];
     function Probe() {

@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 import type { ExteriorTransducerForm } from '../stores/exteriorTransducer';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import type { components } from './generated/openapi';
@@ -911,8 +912,9 @@ export class JobsSocketManager {
     this.update({ connection: reconnecting ? 'reconnecting' : 'connecting', epoch: null, error: null });
     const socket = this.factory(this.url);
     this.socket = socket;
+    this.armHeartbeat();
     this.helloSeen = false;
-    socket.onopen = () => undefined;
+    socket.onopen = () => { if (this.socket === socket) this.armHeartbeat(); };
     socket.onmessage = (event) => this.onMessage(socket, event.data);
     socket.onerror = () => this.update({ error: 'Jobs connection error' });
     socket.onclose = () => {
@@ -1227,7 +1229,7 @@ export class JobsSocketManager {
       let offset = 0;
       let total = Infinity;
       while (offset < total) {
-        const response = await this.fetcher(`/api/jobs?limit=${pageSize}&offset=${offset}`);
+        const response = await deadlineFetch(this.fetcher, `/api/jobs?limit=${pageSize}&offset=${offset}`);
         if (!response.ok) throw await responseError(response);
         const body = await response.json() as unknown;
         if (!isRecord(body) || !Array.isArray(body.items) || !body.items.every(isJobItem)) {
@@ -1308,7 +1310,7 @@ export class JobsSocketManager {
     if (existing) return existing;
     const refresh = (async () => {
       try {
-        const response = await this.fetcher(`/api/partial-results/${encodeURIComponent(jobId)}`);
+        const response = await deadlineFetch(this.fetcher, `/api/partial-results/${encodeURIComponent(jobId)}`);
         if (response.status === 404) {
           provisionalResults.remove(jobId);
           return;
@@ -1354,7 +1356,7 @@ export class JobsSocketManager {
         attempt < MAX_JOB_REFRESH_ATTEMPTS - 1 || this.snapshot.jobs.some((item) => item.id === jobId)
       );
       try {
-        const response = await this.fetcher(`/api/status/${encodeURIComponent(jobId)}`);
+        const response = await deadlineFetch(this.fetcher, `/api/status/${encodeURIComponent(jobId)}`);
         if (this.jobGenerations.get(jobId) !== generation) return false;
         if (retry()) continue;
         if (response.status === 404) {

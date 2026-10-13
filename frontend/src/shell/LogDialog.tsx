@@ -1,3 +1,4 @@
+import { deadlineFetch } from '../api/deadlineFetch';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './icons';
@@ -57,7 +58,7 @@ export function LogDialog({ jobId, onClose }: { jobId: string; onClose: () => vo
     setError(undefined);
     setCopyStatus(undefined);
     try {
-      const response = await fetch(logUrl, { signal: controller.signal });
+      const response = await deadlineFetch(fetch, logUrl, { signal: controller.signal });
       if (!response.ok) throw new Error(`Log request failed (${response.status})`);
       const preview = await readLogPreview(response);
       if (request === requestGeneration.current) {

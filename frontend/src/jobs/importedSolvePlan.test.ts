@@ -37,6 +37,12 @@ describe('the imported solve plan', () => {
       .rejects.toBeInstanceOf(SolvePlanRefused);
   });
 
+  it.each([500, 503, 408, 429])('keeps HTTP %s retryable', async (status) => {
+    const error = await postImportedSolvePlan('{}', respond({ detail: 'temporary failure' }, status)).catch(error => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(SolvePlanRefused);
+  });
+
   it('rejects a malformed plan rather than drawing it', async () => {
     await expect(postImportedSolvePlan('{}', respond({ ...PLAN, engines: [{ name: 'metal' }] })))
       .rejects.toThrow('Imported solve plan response is invalid');

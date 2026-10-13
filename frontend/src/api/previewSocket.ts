@@ -244,13 +244,14 @@ export class PreviewSocketManager {
     this.update({ connection: reconnecting ? 'reconnecting' : 'connecting', error: null, errorFields: null, errorRevision: null });
     const socket = this.factory(this.url);
     this.socket = socket;
+    this.armHeartbeat();
     this.connectionGeneration += 1;
     this.seq = 0;
     this.latestOutcomeSeq = 0;
     this.loadFloorSeq = 0;
     this.helloSeen = false;
     socket.binaryType = 'arraybuffer';
-    socket.onopen = () => undefined;
+    socket.onopen = () => { if (this.socket === socket) this.armHeartbeat(); };
     socket.onmessage = (event) => this.onMessage(socket, event.data);
     socket.onerror = () => this.update({ error: 'Preview connection error', errorFields: null, errorRevision: null });
     socket.onclose = () => {

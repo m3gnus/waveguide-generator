@@ -68,6 +68,20 @@ describe('preview socket state machine', () => {
   beforeEach(() => { vi.useFakeTimers(); resetDesignStore(); });
   afterEach(() => vi.useRealTimers());
 
+  it('reconnects when the server never sends hello', () => {
+    const sockets: MockSocket[] = [];
+    const manager = new PreviewSocketManager(() => { const socket = new MockSocket(); sockets.push(socket); return socket; });
+    manager.start();
+    vi.advanceTimersByTime(30_000);
+    expect(sockets[0].readyState).toBe(3);
+    vi.advanceTimersByTime(1_000);
+    expect(sockets).toHaveLength(2);
+    manager.stop();
+    const count = sockets.length;
+    vi.advanceTimersByTime(60_000);
+    expect(sockets).toHaveLength(count);
+  });
+
   it('accepts one hello, echoes its epoch, and sends the current full design', () => {
     const sockets: MockSocket[] = [];
     const manager = new PreviewSocketManager(() => { const socket = new MockSocket(); sockets.push(socket); return socket; }, 'ws://test/ws/preview');

@@ -50,6 +50,20 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
+  it('reconnects when the server never sends hello', () => {
+    const sockets: MockSocket[] = [];
+    const manager = new JobsSocketManager(() => { const socket = new MockSocket(); sockets.push(socket); return socket; });
+    manager.start();
+    vi.advanceTimersByTime(30_000);
+    expect(sockets[0].readyState).toBe(3);
+    vi.advanceTimersByTime(1_000);
+    expect(sockets).toHaveLength(2);
+    manager.stop();
+    const count = sockets.length;
+    vi.advanceTimersByTime(60_000);
+    expect(sockets).toHaveLength(count);
+  });
+
   it('accepts legacy snapshots without advertising a FEM field', () => {
     const socket = new MockSocket();
     const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
@@ -216,7 +230,7 @@ describe('jobs websocket state machine', () => {
     await manager.retryJob('job-1');
 
     expect(fetcher).toHaveBeenNthCalledWith(1, '/api/jobs/job-1/retry', { method: 'POST' });
-    expect(fetcher).toHaveBeenNthCalledWith(2, '/api/jobs?limit=200&offset=0');
+    expect(fetcher).toHaveBeenNthCalledWith(2, '/api/jobs?limit=200&offset=0', { signal: expect.any(AbortSignal) });
     expect(manager.getSnapshot().jobs[0]).toMatchObject({ id: 'child', parent_job_id: 'job-1' });
   });
 
@@ -456,7 +470,7 @@ describe('jobs websocket state machine', () => {
     await vi.waitFor(() => expect(manager.getSnapshot()).toMatchObject({
       cursor: 2, error: null, jobs: [expect.objectContaining({ status: 'complete', progress: 1 })],
     }));
-    expect(fetcher).toHaveBeenCalledWith('/api/jobs?limit=200&offset=0');
+    expect(fetcher).toHaveBeenCalledWith('/api/jobs?limit=200&offset=0', { signal: expect.any(AbortSignal) });
     manager.stop();
   });
 
@@ -673,7 +687,7 @@ describe('jobs websocket state machine', () => {
     compareSelection.toggleOverlay('orphan');
     socket.message({ v: 1, kind: 'event', epoch: 9, cursor: 8, jobId: 'job-1', type: 'completed', payload: {} });
     expect(socket.sent.map((message) => JSON.parse(message))).toContainEqual({ v: 1, kind: 'resume', epoch: 9, cursor: 3 });
-    expect(fetcher).not.toHaveBeenCalledWith('/api/jobs?limit=200&offset=0');
+    expect(fetcher).not.toHaveBeenCalledWith('/api/jobs?limit=200&offset=0', { signal: expect.any(AbortSignal) });
     expect(manager.getSnapshot()).toMatchObject({ cursor: 3 });
     expect(manager.getSnapshot().error).toContain('gap');
     for (let cursor = 4; cursor <= 8; cursor += 1) {

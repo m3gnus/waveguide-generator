@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import type { components } from './generated/openapi';
 export type NullableNumber = number | null;
@@ -372,7 +373,7 @@ export async function fetchJobResults(jobId: string, fetcher: typeof fetch = fet
   const existing = inFlightResults.get(jobId);
   if (existing) return existing;
   const request = (async () => {
-    const response = await fetcher(`/api/results/${encodeURIComponent(jobId)}`);
+    const response = await deadlineFetch(fetcher, `/api/results/${encodeURIComponent(jobId)}`);
     if (!response.ok) {
       let detail = `Results request failed: ${response.status}`;
       try {
@@ -416,7 +417,7 @@ export async function fetchJobArchiveSnapshot(
   jobId: string,
   fetcher: typeof fetch = fetch,
 ): Promise<JobArchiveSnapshot> {
-  const response = await fetcher(`/api/jobs/${encodeURIComponent(jobId)}/archive-snapshot`);
+  const response = await deadlineFetch(fetcher, `/api/jobs/${encodeURIComponent(jobId)}/archive-snapshot`);
   if (!response.ok) {
     let detail = `Archive snapshot request failed: ${response.status}`;
     try {
@@ -439,7 +440,7 @@ export async function fetchRadiationImpedancePresentation(
   jobId: string,
   fetcher: typeof fetch = fetch,
 ): Promise<RadiationImpedancePresentation | null> {
-  const response = await fetcher(`/api/radiation-impedance/${encodeURIComponent(jobId)}/presentation`);
+  const response = await deadlineFetch(fetcher, `/api/radiation-impedance/${encodeURIComponent(jobId)}/presentation`);
   if (response.status === 404) return null;
   if (!response.ok) {
     let detail = `Radiation-impedance request failed: ${response.status}`;

@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 /**
  * The driver library's REST surface (CADLINK-CROSSOVER-DRIVERS.md section 4).
  *
@@ -125,7 +126,7 @@ export async function searchDrivers(
   const params = new URLSearchParams({ q, kind, limit: String(limit) });
   if (z !== null && Number.isFinite(z)) params.set('z', String(z));
   if (complete) params.set('complete', 'true');
-  const response = await fetcher(`/api/drivers?${params.toString()}`);
+  const response = await deadlineFetch(fetcher, `/api/drivers?${params.toString()}`);
   if (!response.ok) throw new Error(await errorMessage(response));
   const body = await response.json() as {
     items?: DriverHit[];
@@ -154,7 +155,7 @@ export async function getDriver(
   driverId: string,
   fetcher: typeof fetch = fetch,
 ): Promise<DriverDetail> {
-  const response = await fetcher(`/api/drivers/${encodeURIComponent(driverId)}?complete=true`);
+  const response = await deadlineFetch(fetcher, `/api/drivers/${encodeURIComponent(driverId)}?complete=true`);
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<DriverDetail>;
 }
@@ -162,7 +163,7 @@ export async function getDriver(
 export async function getDriverLibrary(
   fetcher: typeof fetch = fetch,
 ): Promise<DriverLibraryInfo> {
-  const response = await fetcher('/api/drivers/library');
+  const response = await deadlineFetch(fetcher, '/api/drivers/library');
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<DriverLibraryInfo>;
 }

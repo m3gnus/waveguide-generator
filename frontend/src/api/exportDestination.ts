@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 /**
  * Where one manual export goes, chosen for that export and no other.
  *
@@ -42,7 +43,7 @@ async function read(response: Response): Promise<ExportDestination> {
 
 /** The folder the next export would default to: the last one used, or the workspace. */
 export async function getExportDestination(fetcher: typeof fetch = fetch): Promise<ExportDestination> {
-  return read(await fetcher('/api/workspace/export-destination'));
+  return read(await deadlineFetch(fetcher, '/api/workspace/export-destination'));
 }
 
 /**

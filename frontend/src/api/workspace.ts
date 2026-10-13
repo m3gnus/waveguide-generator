@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import {
   collisionFrom,
@@ -29,7 +30,7 @@ async function read(response: Response): Promise<WorkspaceFolder> {
 }
 
 export async function getWorkspaceFolder(fetcher: typeof fetch = fetch): Promise<WorkspaceFolder> {
-  return read(await fetcher('/api/workspace/path'));
+  return read(await deadlineFetch(fetcher, '/api/workspace/path'));
 }
 
 export async function openWorkspaceFolder(fetcher: typeof fetch = fetch): Promise<WorkspaceFolder> {

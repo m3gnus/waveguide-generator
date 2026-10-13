@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 import type { CadReturnIngestRecord } from './cadlink';
 
 export interface SourcePoint { id: string; r_mm: number; z_mm: number }
@@ -33,7 +34,7 @@ export interface AssemblyValidation {
 export interface AssemblyIngestion { ingestion: CadReturnIngestRecord }
 
 async function response(path: string, method = 'GET', body?: unknown): Promise<Response> {
-  const result = await fetch(`/api/source-editor${path}`, {
+  const result = await deadlineFetch(fetch, `/api/source-editor${path}`, {
     method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });

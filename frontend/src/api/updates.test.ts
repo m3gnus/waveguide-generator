@@ -23,7 +23,7 @@ describe('full-installer API', () => {
     const diagnostics = { tailBytes: 32768, logs: { 'install.log': 'Download failed at ~/WG.', 'missing.log': null } };
     const fetch = vi.fn(async () => reply(diagnostics)); vi.stubGlobal('fetch', fetch);
     await expect(getUpdateDiagnostics()).resolves.toEqual(diagnostics);
-    expect(fetch.mock.calls).toEqual([['/api/updates/diagnostics']]);
+    expect(fetch.mock.calls).toEqual([['/api/updates/diagnostics', { signal: expect.any(AbortSignal) }]]);
   });
   it.each([null, {}, { tailBytes: -1, logs: {} }, { tailBytes: 1.5, logs: {} },
     { tailBytes: 32768, logs: [] }, { tailBytes: 32768, logs: { 'install.log': 42 } }])('rejects malformed diagnostics %#', async (value) => {
@@ -41,7 +41,9 @@ describe('full-installer API', () => {
     const controller = new AbortController();
     await expect(getUpdateStatus()).resolves.toEqual(installerStatus());
     await getUpdateStatus(true, controller.signal);
-    expect(fetch.mock.calls).toEqual([['/api/updates/status', { signal: undefined }], ['/api/updates/status?refresh=true', { signal: controller.signal }]]);
+    expect(fetch.mock.calls).toEqual([['/api/updates/status', { signal: expect.any(AbortSignal) }], ['/api/updates/status?refresh=true', { signal: expect.any(AbortSignal) }]]);
+    controller.abort();
+    expect((fetch.mock.calls[1] as unknown as [string, RequestInit])[1].signal?.aborted).toBe(true);
   });
   it('accepts checking and notify-only states', async () => {
     const value = installerStatus({ availability: 'unknown', checking: true, release: null, action: null, canInstall: false,

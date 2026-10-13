@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 
 /**
@@ -30,7 +31,7 @@ async function errorMessage(response: Response): Promise<string> {
 export async function getCadWorkspace(
   fetcher: typeof fetch = fetch,
 ): Promise<CadWorkspacePath> {
-  const response = await fetcher('/api/cad-workspace/path');
+  const response = await deadlineFetch(fetcher, '/api/cad-workspace/path');
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<CadWorkspacePath>;
 }

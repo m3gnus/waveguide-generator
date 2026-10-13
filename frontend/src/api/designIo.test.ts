@@ -488,7 +488,7 @@ describe('Send to CAD requests', () => {
       hydrateDesignDocument({ formula: 'OSSE' }), 1, 'horn', null, fetcher, 'attempt-1',
     )).rejects.toThrow('Settings → WG root folder');
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher).toHaveBeenCalledWith('/api/cad-workspace/path');
+    expect(fetcher).toHaveBeenCalledWith('/api/cad-workspace/path', { signal: expect.any(AbortSignal) });
   });
 });
 

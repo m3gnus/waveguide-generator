@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 import { serializeDesign, type DesignDocument } from '../stores/design';
 import { currentDesignWire, designWireWithSolveSettings, wgSolveSettingsFromStore } from '../stores/designWire';
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
@@ -100,7 +101,7 @@ export async function getOnshapeConnection(
   refresh = false,
   fetcher: typeof fetch = fetch,
 ): Promise<OnshapeConnection> {
-  const response = await fetcher(`/api/cadlink/onshape/connection${refresh ? '?refresh=true' : ''}`);
+  const response = await deadlineFetch(fetcher, `/api/cadlink/onshape/connection${refresh ? '?refresh=true' : ''}`);
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<OnshapeConnection>;
 }

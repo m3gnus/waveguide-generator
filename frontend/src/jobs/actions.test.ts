@@ -212,7 +212,9 @@ describe('symmetry resolution', () => {
     };
     const resolution = await postSymmetry(body, fetcher as typeof fetch, controller.signal);
     expect(seen?.body).toBe(body);
-    expect(seen?.signal).toBe(controller.signal);
+    expect(seen?.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(seen?.signal?.aborted).toBe(true);
     expect(resolution.quadrants).toBe(14);
   });
 

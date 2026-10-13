@@ -182,7 +182,7 @@ describe('results LRU', () => {
       { status: 404, headers: { 'Content-Type': 'application/json' } },
     ));
     await expect(fetchRadiationImpedancePresentation('ordinary', fetcher)).resolves.toBeNull();
-    expect(fetcher).toHaveBeenCalledWith('/api/radiation-impedance/ordinary/presentation');
+    expect(fetcher).toHaveBeenCalledWith('/api/radiation-impedance/ordinary/presentation', { signal: expect.any(AbortSignal) });
   });
 
   it('prunes deleted primary and overlay job ids', () => {

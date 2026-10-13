@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 /**
  * The problem-report surface.
  *
@@ -52,7 +53,7 @@ async function errorMessage(response: Response, fallback: string): Promise<strin
 }
 
 export async function getDiagnosticsReport(fetcher: typeof fetch = fetch): Promise<DiagnosticsReport> {
-  const response = await fetcher('/api/diagnostics/summary');
+  const response = await deadlineFetch(fetcher, '/api/diagnostics/summary');
   if (!response.ok) throw new Error(await errorMessage(response, 'Problem report details are unavailable'));
   return response.json() as Promise<DiagnosticsReport>;
 }

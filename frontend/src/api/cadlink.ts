@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 import { serializeDesign, type DesignDocument } from '../stores/design';
 import { currentDesignWire } from '../stores/designWire';
 import type { DesignIdentity } from '../stores/document';
@@ -443,7 +444,7 @@ async function responseError(response: Response): Promise<CadLinkApiError> {
 }
 
 export async function jsonRequest<T>(path: string, init: RequestInit | undefined, fetcher: typeof fetch): Promise<T> {
-  const response = await fetcher(path, init);
+  const response = await deadlineFetch(fetcher, path, init);
   if (!response.ok) throw await responseError(response);
   return response.json() as Promise<T>;
 }

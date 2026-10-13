@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 export interface AclRepairRootStatus {
   scope: 'appData' | 'workspace';
   source: 'current' | 'previous';
@@ -19,7 +20,7 @@ function count(value: unknown): number {
 }
 
 export async function getAclRepairStatus(fetcher: typeof fetch = fetch): Promise<AclRepairStatus> {
-  const response = await fetcher('/api/acl-repair/status');
+  const response = await deadlineFetch(fetcher, '/api/acl-repair/status');
   if (!response.ok) throw new Error(`File access status request failed (${response.status})`);
   const payload = await response.json() as { platform?: unknown; roots?: unknown };
   if (payload.platform !== 'windows' || !Array.isArray(payload.roots)) {

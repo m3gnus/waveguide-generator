@@ -183,7 +183,7 @@ export function ObservationOverlay({ unitsPerMetre, scheduler }: {
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     mesh.computeBoundingSphere();
     scheduler.schedule();
-  }, [markerRadius, rig, scheduler, selected]);
+  }, [markerRadius, rig, scheduler, selected, visible]);
 
   useEffect(() => {
     scheduler.schedule();

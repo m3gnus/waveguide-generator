@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 import { decodeFemFieldPayload, type FemFieldPayload } from '../viewport/femField';
 
 /** Additive selection metadata; the domain still uses the F5 wire format. */
@@ -17,7 +18,7 @@ export async function fetchFemField(jobId: string, frequency?: number, channel?:
   const query = new URLSearchParams();
   if (frequency !== undefined) query.set('frequency', String(frequency));
   if (channel !== undefined) query.set('channel', channel);
-  const response = await fetch(`/api/results/${encodeURIComponent(jobId)}/fem-field?${query}`, { signal });
+  const response = await deadlineFetch(fetch, `/api/results/${encodeURIComponent(jobId)}/fem-field?${query}`, { signal });
   if (!response.ok) throw new Error(response.status === 404
     ? 'No retained FEM field is available for this run.' : `FEM field request failed (${response.status}).`);
   const payload: FemFieldResponse = await response.json();

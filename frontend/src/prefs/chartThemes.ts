@@ -1,3 +1,4 @@
+import { deadlineFetch } from '../api/deadlineFetch';
 import { preferencesStore } from './preferences';
 
 export interface ChartTheme {
@@ -8,7 +9,7 @@ export interface ChartTheme {
 
 export async function loadChartThemes(signal?: AbortSignal): Promise<{ themes: ChartTheme[]; defaultId?: string }> {
   try {
-    const response = await fetch('/api/themes', { signal });
+    const response = await deadlineFetch(fetch, '/api/themes', { signal });
     if (!response.ok) return { themes: [] };
     const body = await response.json() as { themes?: Array<string | { id?: string; name?: string; label?: string; default?: boolean }>; default?: string };
     const themes = (body.themes ?? []).map((item): ChartTheme => {

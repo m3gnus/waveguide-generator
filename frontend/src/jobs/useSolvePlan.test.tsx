@@ -168,6 +168,18 @@ describe('useSolvePlan', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([500, 503, 408, 429])('recovers from HTTP %s without a design edit', async (status) => {
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ detail: 'temporarily unavailable' }), { status }));
+    await mount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    await flushReact();
+    expect(text()).toContain('temporarily unavailable');
+    fetchMock.mockImplementation(async () => ok());
+    await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_RECOVERY_MS); });
+    await flushReact();
+    expect(text()).toBe('ready');
+  });
+
   it('takes a refusal as the answer: no retry, no polling, message shown', async () => {
     // 422 is the server considering the submission and declining it. Asking
     // again cannot change it, and polling would replace the reason the user

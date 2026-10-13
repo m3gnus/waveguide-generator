@@ -1,3 +1,4 @@
+import { deadlineFetch } from './deadlineFetch';
 import {
   NATIVE_FAMILIES,
   designForFamily,
@@ -162,7 +163,7 @@ export async function sendDesignToCad(
   // CAD-link registry as part of the export, so an unsaved or edited design
   // sends like any other; `identity` is the optimistic-concurrency token when
   // there is one, not a precondition.
-  const pathResponse = await fetcher('/api/cad-workspace/path');
+  const pathResponse = await deadlineFetch(fetcher, '/api/cad-workspace/path');
   if (!pathResponse.ok) throw new Error(await errorMessage(pathResponse));
   const workspace = await pathResponse.json() as { selected?: boolean; path?: string };
   if (!workspace.selected) {

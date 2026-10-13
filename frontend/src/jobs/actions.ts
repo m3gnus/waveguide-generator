@@ -1,3 +1,4 @@
+import { deadlineSignal, PLAN_TIMEOUT_MS } from '../api/deadlineFetch';
 import type { ExteriorTransducerForm } from '../stores/exteriorTransducer';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
@@ -307,7 +308,7 @@ export async function postSymmetry(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,
-    signal,
+    signal: deadlineSignal(signal, PLAN_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(await detail(response));
   return response.json() as Promise<SymmetryResolution>;
@@ -380,9 +381,13 @@ export async function postSolvePlan(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,
-    signal,
+    signal: deadlineSignal(signal, PLAN_TIMEOUT_MS),
   });
-  if (!response.ok) throw new SolvePlanRefused(await detail(response), response.status);
+  if (!response.ok) {
+    const message = await detail(response);
+    if (response.status >= 500 || response.status === 408 || response.status === 429) throw new Error(message);
+    throw new SolvePlanRefused(message, response.status);
+  }
   const plan = await response.json() as Partial<SolvePlan>;
   if (
     typeof plan.engine !== 'string'
@@ -440,9 +445,13 @@ export async function postImportedSolvePlan(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,
-    signal,
+    signal: deadlineSignal(signal, PLAN_TIMEOUT_MS),
   });
-  if (!response.ok) throw new SolvePlanRefused(await detail(response), response.status);
+  if (!response.ok) {
+    const message = await detail(response);
+    if (response.status >= 500 || response.status === 408 || response.status === 429) throw new Error(message);
+    throw new SolvePlanRefused(message, response.status);
+  }
   const plan = await response.json() as Partial<ImportedSolvePlan>;
   if (
     typeof plan.ingest_id !== 'string'
