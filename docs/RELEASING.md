@@ -171,7 +171,9 @@ The optional signing job uses the existing protected `update-signing`
 Environment and its reviewer gate. It validates the complete inventory, source
 identity, runtime closure and checksums before signing nine unchanged subjects.
 The SPA is checked separately, as in the release pipeline. The signature is
-verified against the active compiled key before `rc-signed-candidate` is uploaded.
+verified against the active compiled key before `rc-signed-candidate` is uploaded. The compact `rc-signed-manifest`
+artifact also provides the signature, manifest and exact installer sizes/digests,
+so a platform rehearsal can download only its own installer.
 This workflow creates no tag or GitHub release and has no publisher job.
 The signatures authenticate updates; they do not provide Apple Developer ID
 notarization or a Windows code-signing certificate.

@@ -896,3 +896,34 @@ jobs:
           name: rc-signed-candidate
           path: build/sign-files/*
           if-no-files-found: error
+      - name: Prepare compact verification metadata for platform rehearsals
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, shutil
+          from pathlib import Path
+          from shared.release_assets import user_download_names
+          from scripts.release_manifest import _load
+          files = Path('build/sign-files')
+          out = Path('build/manifest-only')
+          out.mkdir()
+          for name in ('SHA256SUMS', 'SHA256SUMS.sig'):
+              shutil.copyfile(files / name, out / name)
+          version = os.environ['CANDIDATE_VERSION']
+          manifest = _load()
+          digests = manifest.verify_manifest((files / 'SHA256SUMS').read_bytes(),
+                                            (files / 'SHA256SUMS.sig').read_bytes(), 'v' + version)
+          assets = []
+          for name in user_download_names(version):
+              manifest.verify_file(digests, name, files / name)
+              assets.append({'name': name, 'size': (files / name).stat().st_size,
+                             'digest': 'sha256:' + digests[name]})
+          (out / 'candidate.json').write_text(json.dumps({'version': version,
+              'commit': os.environ['GITHUB_SHA'], 'assets': assets}, indent=2) + '\n')
+          PY
+      - name: Upload compact candidate verification files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rc-signed-manifest
+          path: build/manifest-only/*
+          if-no-files-found: error

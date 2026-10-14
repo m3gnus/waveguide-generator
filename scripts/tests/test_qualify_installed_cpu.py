@@ -868,7 +868,14 @@ def test_the_gate_changes_no_permission_and_no_trigger() -> None:
     triggers = spec[True] if True in spec else spec["on"]
     assert spec["permissions"] == {"contents": "read"}
     assert set(triggers) == {"workflow_dispatch"}
-    assert "secrets" not in RC_WORKFLOW
+    for name, job in spec["jobs"].items():
+        if name != "sign-candidate":
+            assert "secrets" not in json.dumps(job), name
+    signer = spec["jobs"]["sign-candidate"]
+    assert signer["if"] == "${{ inputs.sign_candidate }}"
+    assert signer["environment"] == "update-signing"
+    assert signer["env"] == {"UPDATE_SIGNING_KEY": "${{ secrets.UPDATE_SIGNING_KEY }}"}
+    assert signer.get("permissions", spec["permissions"]) == {"contents": "read"}
 
 
 # ---------------------------------------------------------------------------

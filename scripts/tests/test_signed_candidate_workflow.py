@@ -72,3 +72,14 @@ def test_actual_guard_refuses_abbreviations_and_nonrelease_versions(tmp_path, sh
         assert output.read_text() == 'CANDIDATE_VERSION=0.3.6\nRELEASE_TAG=v0.3.6\n'
     else:
         assert not output.exists()
+
+
+def test_compact_candidate_artifact_keeps_signature_and_exact_installer_digests():
+    steps = WORKFLOW['jobs']['sign-candidate']['steps']
+    metadata = next(s['run'] for s in steps if s.get('name', '').startswith('Prepare compact'))
+    assert 'manifest.verify_manifest' in metadata and 'manifest.verify_file' in metadata
+    assert 'user_download_names(version)' in metadata
+    assert "os.environ['GITHUB_SHA']" in metadata
+    assert "('SHA256SUMS', 'SHA256SUMS.sig')" in metadata
+    uploaded = {s.get('with', {}).get('name') for s in steps}
+    assert {'rc-signed-candidate', 'rc-signed-manifest'} <= uploaded
