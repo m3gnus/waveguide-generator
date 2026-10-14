@@ -8,7 +8,8 @@ param(
     # Manual opt-in: exercises the production 120 s cap, with no test override.
     [switch]$RunWaitPidTimeout,
     # Opt-in because these intentionally taskkill only the recorded gate setup.
-    [switch]$RunInterruptedInstall
+    [switch]$RunInterruptedInstall,
+    [string]$EvidenceDir
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,6 +18,121 @@ $ErrorActionPreference = "Stop"
 # ShellExecute on an installer hangs invisibly here. -NoNewWindow goes through
 # CreateProcess and returns. This cost one 600 s stall before it was believed.
 $results = @()
+
+# Evidence is a fresh private sibling of the disposable install tree. No evidence
+# writer starts a process, changes an installation, or accepts a profile path.
+function Assert-EvidencePath {
+    param([string]$Path)
+    $cursor = [IO.Path]::GetFullPath($Path)
+    while ($cursor) {
+        if (Test-Path -LiteralPath $cursor) {
+            $item = Get-Item -LiteralPath $cursor -Force
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "Evidence paths cannot traverse reparse points: $cursor"
+            }
+        }
+        $cursor = Split-Path -Parent $cursor
+    }
+}
+
+function New-GateEvidence {
+    param([string]$Requested)
+    if (-not $Requested) {
+        $Requested = Join-Path $env:TEMP ("WG-inst-evidence-" + [guid]::NewGuid().ToString("N"))
+    }
+    $full = [IO.Path]::GetFullPath($Requested)
+    $parent = Split-Path -Parent $full
+    $allowed = @([IO.Path]::GetFullPath($env:TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar))
+    if ($env:RUNNER_TEMP) { $allowed += [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar) }
+    if ($parent -notin $allowed -or (Split-Path -Leaf $full) -notmatch '^WG-inst-evidence-[a-zA-Z0-9-]+$') {
+        throw "EvidenceDir must be a fresh WG-inst-evidence-* child of TEMP or RUNNER_TEMP."
+    }
+    Assert-EvidencePath $full
+    if (Test-Path -LiteralPath $full) { throw "EvidenceDir already exists: $full" }
+    New-Item -ItemType Directory -Path $full -ErrorAction Stop | Out-Null
+    return $full
+}
+
+function Save-GateState {
+    param([string]$Destination)
+    # Fixed, bounded metadata only; never copy payloads or follow linked trees.
+    $state = @()
+    foreach ($relative in @('.upgrade-in-progress', '.wg-install-old', '.wg-install-new', 'app', 'runtime')) {
+        $path = Join-Path $installRoot $relative
+        if (Test-Path -LiteralPath $path) {
+            $item = Get-Item -LiteralPath $path -Force
+            $state += @{ name = $relative; attributes = [string]$item.Attributes; lastWriteUtc = $item.LastWriteTimeUtc.ToString('o') }
+        }
+    }
+    ConvertTo-Json -InputObject $state -Depth 5 | Set-Content -LiteralPath (Join-Path $Destination 'state.json') -Encoding utf8
+    $sources = @{
+        'native-journal.txt' = (Join-Path $installRoot '.upgrade-in-progress')
+        'app-manifest.json' = (Join-Path $installRoot 'app\APP-MANIFEST.json')
+        'managed-wglink.json' = (Join-Path $wglinkAddins 'WGLink\wglink_install.json')
+        'developer-collision.json' = (Join-Path $developerAddins 'WGLink\wglink_install.json')
+        'developer-marker.json' = (Join-Path $developerAddins 'WGLink\wglink_dev.json')
+    }
+    foreach ($name in $sources.Keys) {
+        $path = $sources[$name]
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Assert-EvidencePath $path
+            if ((Get-Item -LiteralPath $path -Force).Length -le 262144) {
+                Copy-Item -LiteralPath $path -Destination (Join-Path $Destination $name)
+            }
+        }
+    }
+}
+
+function New-SetupEvidence {
+    param([string]$Executable, [string[]]$Arguments)
+    $folder = Join-Path $evidenceRoot ([guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $folder | Out-Null
+    $paths = @{}
+    foreach ($kind in @('LOG', 'WGLOG', 'OUTCOME')) {
+        $specified = @($Arguments | Where-Object { $_ -match ('^/' + $kind + '(=|$)') })
+        if ($specified.Count -gt 1) { throw "Duplicate diagnostic argument: $kind" }
+        if ($specified.Count -eq 1) {
+            if ($specified[0] -notmatch ('^/' + $kind + '="?([^"\r\n]+)"?$')) { throw "Diagnostic arguments require an explicit private path." }
+            $path = [IO.Path]::GetFullPath($Matches[1])
+            $gatePrefix = [IO.Path]::GetFullPath($gateRoot) + [IO.Path]::DirectorySeparatorChar
+            if (-not $path.StartsWith($gatePrefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Diagnostic argument escaped the private gate root." }
+            Assert-EvidencePath $path
+            $paths[$kind] = $path
+        }
+    }
+    if ($paths.ContainsKey('LOG') -and $paths.ContainsKey('WGLOG')) { throw 'Inno /LOG and native /WGLOG are mutually exclusive.' }
+    if (-not $paths.ContainsKey('LOG') -and -not $paths.ContainsKey('WGLOG')) {
+        # /LOG also captures WgLog's native entry/prepare/commit diagnostics.
+        # Unlike /WGLOG it includes Inno phase-transition errors (setup exit 3).
+        $paths['LOG'] = Join-Path $folder 'setup.log'
+        $Arguments += "/LOG=`"$($paths['LOG'])`""
+    }
+    # Preserve the original transaction arguments. An automatic /OUTCOME would
+    # change native prepare/recovery behavior; only retain explicitly supplied ones.
+    $record = @{ executable = $Executable; arguments = $Arguments; sha256 = $(if ($Executable -eq $Setup) { $setupSha256 } else { (Get-FileHash -LiteralPath $Executable -Algorithm SHA256).Hash }); startedUtc = [DateTime]::UtcNow.ToString('o'); exitCode = $null; status = 'starting' }
+    $entry = @{ folder = $folder; paths = $paths; record = $record; process = $null; complete = $false }
+    $record | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $folder 'invocation.json') -Encoding utf8
+    return $entry
+}
+
+function Complete-SetupEvidence {
+    foreach ($entry in $setupEvidence) {
+        if ($entry.complete -or $null -eq $entry.process -or -not $entry.process.HasExited) { continue }
+        $entry.process.Refresh()
+        $entry.record.exitCode = $entry.process.ExitCode
+        $entry.record.status = 'exited'
+        $entry.record.finishedUtc = [DateTime]::UtcNow.ToString('o')
+        foreach ($kind in $entry.paths.Keys) {
+            $path = $entry.paths[$kind]
+            if ((Split-Path -Parent $path) -eq $entry.folder -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+            Assert-EvidencePath $path
+            Copy-Item -LiteralPath $path -Destination (Join-Path $entry.folder ($kind + '-' + (Split-Path -Leaf $path)))
+        }
+        if ($entry.record.exitCode -ne 0) { Save-GateState $entry.folder }
+        $entry.record | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $entry.folder 'invocation.json') -Encoding utf8
+        $entry.complete = $true
+    }
+}
 
 function Start-SandboxedSetup {
     param(
@@ -44,9 +160,14 @@ function Start-SandboxedSetup {
         $ExtraArguments = @("/DIR=`"$installRoot`"") + $ExtraArguments
     }
     $arguments = @("/VERYSILENT", "/SUPPRESSMSGBOXES") + $ExtraArguments + @("/WGLINKADDINSDIR=`"$AddIns`"")
-    $p = Start-Process -FilePath $Executable -ArgumentList $arguments -PassThru -Wait:$Wait -NoNewWindow
+    Complete-SetupEvidence
+    $entry = New-SetupEvidence -Executable $Executable -Arguments $arguments
+    $script:setupEvidence += $entry
+    $p = Start-Process -FilePath $Executable -ArgumentList $entry.record.arguments -PassThru -Wait:$Wait -NoNewWindow
+    $entry.process = $p
     # Force a retained handle so Windows PowerShell 5.1 can report ExitCode.
     $null = $p.Handle
+    Complete-SetupEvidence
     return $p
 }
 
@@ -85,6 +206,12 @@ function Stop-SandboxedProcess {
 }
 
 function Gate($id, $name, $pass, $detail) {
+    Complete-SetupEvidence
+    if ($pass -eq $false) {
+        $failure = Join-Path $evidenceRoot ("gate-" + $id)
+        New-Item -ItemType Directory -Path $failure | Out-Null
+        Save-GateState $failure
+    }
     $script:results += [pscustomobject]@{
         Gate = $id; Name = $name
         Result = $(if ($pass -eq $null) { "SKIP" } elseif ($pass) { "PASS" } else { "FAIL" })
@@ -121,6 +248,10 @@ function LayerFingerprint([string]$root) {
     return ($parts -join "`n")
 }
 
+$evidenceRoot = New-GateEvidence $EvidenceDir
+$script:setupEvidence = @()
+$setupSha256 = (Get-FileHash -LiteralPath $Setup -Algorithm SHA256).Hash
+Write-Host "Installer gate evidence: $evidenceRoot"
 $gateRoot = Join-Path $env:TEMP ("WG-inst-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
 $installRoot = Join-Path $gateRoot "i"
 $wglinkAddins = Join-Path $gateRoot "Fusion\API\AddIns"
@@ -504,7 +635,11 @@ $developerMarker = Join-Path $developerAddins "WGLink\wglink_dev.json"
 $managedMarker = Join-Path $developerAddins "WGLink\wglink_install.json"
 $developerFile = Join-Path $developerAddins "WGLink\developer.py"
 Set-Content -LiteralPath $developerMarker -Value '{"sourceCommit":"local"}' -NoNewline
-@{ managedBy = "waveguide-generator"; waveguideGeneratorRoot = $expectedRoot } | ConvertTo-Json -Compress | Set-Content -LiteralPath $managedMarker -NoNewline
+# Use the genuine marker from gate 10: it carries the exact schema, source pin,
+# WG/add-in versions and installation root. Without the developer marker this
+# is a managed target, so this case actually exercises developer precedence.
+if (-not $wglinkOk) { throw "Cannot construct a valid colliding marker: gate 10 failed." }
+Copy-Item -LiteralPath $wglinkMarker -Destination $managedMarker
 Set-Content -LiteralPath $developerFile -Value 'keep me' -NoNewline
 $developerBefore = Get-Content -Raw $developerMarker
 $managedBefore = Get-Content -Raw $managedMarker
@@ -611,6 +746,8 @@ if ($landed) {
 }
 Gate 9 "uninstall clears the tree including planted bytecode" $uninstallOk $uninstallDetail
 
+Complete-SetupEvidence
+$results | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'results.json') -Encoding utf8
 # Remove the private fixtures after inspecting managed AddIns cleanup.
 # Ordinary uninstall preserves the shared runtime payloads and package cache.
 if (Test-Path $gateRoot) { Remove-Item -Recurse -Force $gateRoot }

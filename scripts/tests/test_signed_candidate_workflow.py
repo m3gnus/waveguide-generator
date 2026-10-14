@@ -83,3 +83,23 @@ def test_compact_candidate_artifact_keeps_signature_and_exact_installer_digests(
     assert "('SHA256SUMS', 'SHA256SUMS.sig')" in metadata
     uploaded = {s.get('with', {}).get('name') for s in steps}
     assert {'rc-signed-candidate', 'rc-signed-manifest'} <= uploaded
+
+
+def test_windows_failed_setup_retains_diagnostics_without_becoming_candidate():
+    steps = WORKFLOW['jobs']['windows-bundle']['steps']
+    gate = next(s for s in steps if s.get('id') == 'installer_gates')
+    assert '-EvidenceDir $evidence' in gate['run']
+    assert 'WG-inst-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT' in gate['run']
+    evidence = next(s for s in steps if s.get('with', {}).get('name') == 'rc-windows-installer-gates')
+    assert evidence['if'] == 'always()'
+    assert evidence['with']['path'].startswith('${{ runner.temp }}/WG-inst-evidence-')
+    failed = next(s for s in steps if s.get('with', {}).get('name') == 'rc-windows-setup-failure')
+    assert failed['if'] == "${{ failure() && steps.installer_gates.outcome == 'failure' }}"
+    attestation = next(s for s in steps if s.get('name') == 'Attest the exact Windows installer before transfer')
+    assert steps.index(gate) < steps.index(attestation) < steps.index(evidence)
+    assert 'if' not in attestation  # failed gates still prevent attestation
+    signer = WORKFLOW['jobs']['sign-candidate']
+    assert 'windows-bundle' in signer['needs']
+    downloads = {s.get('with', {}).get('name') for s in signer['steps'] if 'download-artifact@' in s.get('uses', '')}
+    assert 'rc-windows-sign-inputs' in downloads
+    assert not {'rc-windows-setup-failure', 'rc-windows-installer-gates'} & downloads

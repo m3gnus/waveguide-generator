@@ -439,6 +439,7 @@ jobs:
           }
           Write-Host "Cross-platform app layer treeSha256: $localTree"
       - name: Run setup-driven Windows installer gates
+        id: installer_gates
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -446,7 +447,8 @@ jobs:
           if ($setups.Count -ne 1) {
             throw "Expected exactly one Windows setup executable, found $($setups.Count)."
           }
-          & ./installers/windows/gates.ps1 -Setup $setups[0].FullName
+          $evidence = Join-Path $env:RUNNER_TEMP "WG-inst-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          & ./installers/windows/gates.ps1 -Setup $setups[0].FullName -EvidenceDir $evidence
       - name: Attest the exact Windows installer before transfer
         # The SPA and canonical app layer were produced by other jobs. Only the
         # installer built here is a subject of this job's attestation. After the
@@ -618,6 +620,23 @@ jobs:
             Get-Content -Tail 4000 -LiteralPath $_.FullName
             Write-Host ""
           }
+
+      - name: Retain Windows installer gate diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rc-windows-installer-gates
+          path: ${{ runner.temp }}/WG-inst-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+      - name: Retain the failed setup only for diagnosis
+        if: ${{ failure() && steps.installer_gates.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rc-windows-setup-failure
+          path: |
+            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe
+            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe.sha256
+          if-no-files-found: warn
 
   linux-bundle:
     name: Build the Linux standalone app

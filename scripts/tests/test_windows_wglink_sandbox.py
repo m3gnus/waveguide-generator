@@ -40,6 +40,7 @@ COMMANDS = frozenset('''
     New-Object Split-Path Rename-Item Start-Sleep Unblock-File
     Get-Process Get-CimInstance Select-String Copy-Item Get-ItemProperty
     Start-SandboxedSetup Start-StandIn Start-SandboxedNativeProbe Stop-SandboxedProcess Gate TreeFingerprint LayerFingerprint
+    New-GateEvidence New-SetupEvidence Complete-SetupEvidence Save-GateState Write-Host
 '''.lower().split())
 TYPES = {'[io.path]', '[guid]', '[pscustomobject]', '[string]', '[string[]]',
          '[switch]', '[parameter(mandatory = $true)]', '[datetime]',
@@ -56,10 +57,13 @@ METHODS = {'::new', '::getfullpath', '::newguid', '.tostring', '.trimend', '.sub
 KEYWORDS = {'param', 'if', 'elseif', 'else', 'foreach', 'try', 'catch', 'finally',
             'return', 'throw', 'exit', 'do', 'while', 'break', 'continue'}
 FUNCTIONS = {'gate', 'treefingerprint', 'layerfingerprint', 'start-sandboxedsetup', 'start-standin',
-             'start-sandboxednativeprobe', 'stop-sandboxedprocess'}
+             'start-sandboxednativeprobe', 'stop-sandboxedprocess', 'assert-evidencepath',
+             'new-gateevidence', 'save-gatestate', 'new-setupevidence', 'complete-setupevidence'}
 
 # Reviewed user32 window/PID queries only. Pin the entire literal C# body;
 # Add-Type is never part of the general command allowlist.
+EVIDENCE_HELPERS_SHA256 = 'e3479a28c0091ad837a816209aadac174c09c0564011f6003747c2db56e4e55f'
+
 WINDOW_PROBE_SHA256 = '0995b50d5e29146ca645957c33e0ec0f6a1632a9b7a01427b9b129c5eace14b6'
 
 
@@ -190,7 +194,7 @@ def assert_allowed_powershell(tokens: list[str], *, extra_commands: set[str] = f
     for index, token in enumerate(tokens):
         lower = token.lower()
         if lower.startswith('$') and ':' in lower and not lower.startswith('$env:'):
-            assert lower == '$script:results', f'unreviewed scoped variable: {token}'
+            assert lower in {'$script:results', '$script:setupevidence'}, f'unreviewed scoped variable: {token}'
         if token in {'&', '.'}:
             assert token == '&' and tokens[index + 1].lower() in delegated, 'unreviewed call operator'
         if token.startswith('[') and not re.fullmatch(r'\[\d+\]', token):
@@ -258,6 +262,14 @@ def assert_environment_pair(tokens: list[str], expected: list[str]) -> None:
 
 
 def assert_gate_allowlist(source: str) -> None:
+    # These read-only, process-free diagnostics are also executed adversarially
+    # in test_windows_gate_evidence. Pin their complete reviewed bodies here so
+    # they cannot widen the existing launcher/write allowlist unnoticed.
+    start = source.index("# Evidence is a fresh private sibling")
+    end = source.index("function Start-SandboxedSetup {")
+    evidence = source[start:end].replace('\r\n', '\n')
+    assert hashlib.sha256(evidence.encode()).hexdigest() == EVIDENCE_HELPERS_SHA256
+    source = source[:start] + source[end:]
     tokens = powershell_tokens(source)
     setup_body, outside = function_body(tokens, 'Start-SandboxedSetup')
     standin_body, outside = function_body(outside, 'Start-StandIn')
@@ -290,8 +302,13 @@ def assert_gate_allowlist(source: str) -> None:
             $ExtraArguments = @("/DIR=`"$installRoot`"") + $ExtraArguments
         }
         $arguments = @("/VERYSILENT", "/SUPPRESSMSGBOXES") + $ExtraArguments + @("/WGLINKADDINSDIR=`"$AddIns`"")
-        $p = Start-Process -FilePath $Executable -ArgumentList $arguments -PassThru -Wait:$Wait -NoNewWindow
+        Complete-SetupEvidence
+        $entry = New-SetupEvidence -Executable $Executable -Arguments $arguments
+        $script:setupEvidence += $entry
+        $p = Start-Process -FilePath $Executable -ArgumentList $entry.record.arguments -PassThru -Wait:$Wait -NoNewWindow
+        $entry.process = $p
         $null = $p.Handle
+        Complete-SetupEvidence
         return $p
     """
     standin_contract = '''
@@ -340,6 +357,8 @@ def assert_gate_allowlist(source: str) -> None:
     # the first call. Pin their definitions rather than infer arbitrary PS code.
     fixtures = {
         '$installRoot': 'Join-Path $gateRoot "i"',
+        '$evidenceRoot': 'New-GateEvidence $EvidenceDir',
+        '$script:setupEvidence': '@()',
         '$longDir': 'Join-Path $gateRoot ("g" * 200)',
         '$contenderRoot': 'Join-Path $gateRoot "mutex-contender"',
         '$gateRoot': 'Join-Path $env:TEMP ("WG-inst-" + [guid]::NewGuid().ToString("N").Substring(0, 12))',
@@ -397,13 +416,24 @@ def assert_gate_allowlist(source: str) -> None:
         'New-Item -ItemType Directory -Force $plantedRecovery',
         'New-Item -ItemType Directory -Force $removedPackage',
         'New-Item -ItemType Directory $timeoutEvidence',
+        'New-Item -ItemType Directory -Path $failure',
     )]
     for command in commands:
         lower = compact(command)
+        if lower[0] == 'new-gateevidence':
+            assert lower == ['new-gateevidence', '$evidencedir'], 'unreviewed evidence root'
+        if lower[0] == 'new-setupevidence':
+            raise AssertionError('invocation evidence belongs inside the checked launcher')
+        if lower[0] == 'complete-setupevidence':
+            assert len(lower) == 1, 'completion takes no external arguments'
+        if lower[0] == 'save-gatestate':
+            assert lower == ['save-gatestate', '$failure'], 'unreviewed state snapshot'
         if lower[0] == 'new-item':
             assert lower in directory_commands, f'unreviewed directory creation: {command}'
         if lower[0] == 'copy-item':
-            assert lower == ['copy-item', '-literalpath', '$evidencefile', '-destination', '$timeoutevidence'], 'unreviewed evidence copy'
+            assert lower in ([
+                'copy-item', '-literalpath', '$evidencefile', '-destination', '$timeoutevidence'], [
+                'copy-item', '-literalpath', '$wglinkmarker', '-destination', '$managedmarker']), 'unreviewed evidence copy'
         if lower[0] == 'get-itemproperty':
             assert lower == ['get-itemproperty', '-literalpath',
                              '"hklm:\\software\\microsoft\\windows\\currentversion\\policies\\system"',
@@ -889,3 +919,15 @@ def test_explicit_setup_roots_cannot_escape_private_fixtures(old: str, new: str)
     assert changed != source
     with pytest.raises(AssertionError):
         assert_gate_allowlist(changed)
+
+
+@pytest.mark.parametrize("line", [
+    '$evidenceRoot = $env:APPDATA',
+    'Save-GateState $env:APPDATA',
+    'New-SetupEvidence -Executable $Setup -Arguments @()',
+    '$script:setupEvidence = @($foreign)',
+])
+def test_evidence_writers_cannot_escape_private_factory(line: str) -> None:
+    source = (ROOT / 'installers/windows/gates.ps1').read_text()
+    with pytest.raises(AssertionError):
+        assert_gate_allowlist(source + '\n' + line + '\n')
