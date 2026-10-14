@@ -11910,7 +11910,7 @@
   },
   "info": {
     "title": "Waveguide Generator",
-    "version": "0.3.5"
+    "version": "0.3.6"
   },
   "openapi": "3.1.0",
   "paths": {
