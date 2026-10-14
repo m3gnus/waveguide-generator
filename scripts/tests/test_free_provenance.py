@@ -45,7 +45,7 @@ QUALIFY = {"contents": "read"}
 #: Every job each workflow has, and its exact permission block (None: inherits
 #: the workflow's). Exact, so a job that gains anything is caught.
 JOB_PERMISSIONS = {
-    RC_WORKFLOW: {"qualify": QUALIFY, **dict.fromkeys(BUILD_JOBS, RC_BUILD)},
+    RC_WORKFLOW: {"qualify": QUALIFY, **dict.fromkeys(BUILD_JOBS, RC_BUILD), "sign-candidate": None},
     RELEASE_WORKFLOW: {
         "qualify": QUALIFY,
         **dict.fromkeys(BUILD_JOBS, RELEASE_BUILD),

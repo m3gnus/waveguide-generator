@@ -157,3 +157,30 @@ that whitelist, and every place both can appear asks it:
 A whitelist rather than a pattern, because that is the safe direction: a
 build-stamp prefix nobody has thought of yet is refused by the release path the
 day it is invented, where the reverse would publish it as a release.
+
+
+## Signed candidate artifacts without publication
+
+After authorized version preparation, dispatch `rc-build.yml` on `main` with
+`sha` set to the exact full 40-character tip and `sign_candidate=true`.
+The normal candidate build and installed gates run first. Extra artifacts retain
+all three installers, the Windows portable archive, canonical app archive and
+identity manifest, three runtime archives, SPA, and checksum sidecars.
+
+The optional signing job uses the existing protected `update-signing`
+Environment and its reviewer gate. It validates the complete inventory, source
+identity, runtime closure and checksums before signing nine unchanged subjects.
+The SPA is checked separately, as in the release pipeline. The signature is
+verified against the active compiled key before `rc-signed-candidate` is uploaded.
+This workflow creates no tag or GitHub release and has no publisher job.
+The signatures authenticate updates; they do not provide Apple Developer ID
+notarization or a Windows code-signing certificate.
+
+For a private 0.3.5-to-candidate rehearsal, start the installed client with
+`WG2_UPDATES_API_BASE=http://127.0.0.1:<port>`. Serve GitHub-shaped release metadata
+and exact artifact bytes at that literal loopback origin. The primary release
+metadata must expose exactly three installers plus `SHA256SUMS` and
+`SHA256SUMS.sig`; layer machinery belongs in separate companion metadata.
+Actions artifact URLs are not accepted installer URLs. Keep signature, version,
+checksum and same-origin verification enabled. This exercises a private update,
+not production channel discovery. Publication remains a separate owner decision.
