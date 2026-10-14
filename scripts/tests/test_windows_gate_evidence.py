@@ -61,6 +61,9 @@ def test_actual_launcher_retains_failure_before_next_invocation(pwsh, tmp_path):
     root = run_ps(pwsh, tmp_path, r'''
 function Start-Process {
     param($FilePath, $ArgumentList, [switch]$PassThru, [switch]$Wait, [switch]$NoNewWindow)
+    foreach ($required in @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')) {
+        if ($required -notin $ArgumentList) { throw "launch dropped $required" }
+    }
     # Simulate native/Inno failure plus its durable journal. The real launcher
     # function must collect this before returning to the next installer.
     Set-Content -LiteralPath (Join-Path $installRoot '.upgrade-in-progress') -Value 'failed native state'
@@ -79,6 +82,7 @@ Remove-Item -LiteralPath $gateRoot -Recurse -Force
     record = json.loads((folder / "invocation.json").read_text(encoding="utf-8-sig"))
     assert record["exitCode"] == 3 and record["status"] == "exited"
     assert len(record["sha256"]) == 64
+    assert all(flag in record["arguments"] for flag in ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"))
     assert any(x.startswith('/WGLINKADDINSDIR="') for x in record["arguments"])
     assert (folder / "native-journal.txt").read_text().strip() == "failed native state"
     assert (folder / "setup.log").exists()

@@ -546,7 +546,8 @@ def test_timeout_gate_requires_self_exit_without_a_window(gates: str) -> None:
     # Mandatory silent flags belong to the checked launch helper on this branch.
     helper = gates.split("function Start-SandboxedSetup {", 1)[1].split("\nfunction ", 1)[0]
     assert '$arguments = @("/VERYSILENT", "/SUPPRESSMSGBOXES") + $ExtraArguments' in helper
-    assert "-ArgumentList $arguments" in helper
+    assert "New-SetupEvidence -Executable $Executable -Arguments $arguments" in helper
+    assert "-ArgumentList $entry.record.arguments" in helper
     assert "$timingOut = Start-SandboxedSetup -Executable $Setup" in timeout
     for switch in ("/WAITPID=", "/OUTCOME=", "/LOG=", "/RELAUNCH"):
         assert switch in timeout
