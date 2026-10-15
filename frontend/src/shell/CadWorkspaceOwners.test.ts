@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cadCoordinationStore, resetCadCoordinationForTests } from '../api/cadCoordination';
 import { jobsSocket, type CadOperationListener } from '../api/jobsSocket';
+import { publishCadJobs } from '../jobs/cadSolve.fixtures';
+import { compareSelection } from '../api/results';
 import { cadReceiptsStore, type CadReceipt } from '../stores/cadReceipts';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
@@ -18,7 +20,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { mountCadWorkspaceOwners } from './CadWorkspaceOwners';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { identity, status, exported } from './cadlink/outbound.fixtures';
-import { bundle, deferred, json, mesh, record } from './cadlink/selection.fixtures';
+import { bundle, deferred, json, mesh, record, job } from './cadlink/selection.fixtures';
 
 let stop: (() => void) | undefined;
 let returns: typeof bundle[];
@@ -30,6 +32,7 @@ const calls = (path: string) => fetcher.mock.calls.filter(([input]) => String(in
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime('2026-10-11T12:00:00Z');
   localStorage.clear(); sessionStorage.clear(); preferencesStore.resetForTests();
+  publishCadJobs([]); compareSelection.clear();
   resetCadCoordinationForTests();
   resetDesignStore(); resetDocumentStore(); resetCadReturnStore(); resetSolveOptionsStore();
   importedMeshStore.clear(); useCadConnectionStore.invalidate(); workspaceModeStore.setMode('parametric');
@@ -50,6 +53,7 @@ beforeEach(() => {
     if (path === '/api/cadlink/request-fusion-return') return json({ requestId: 'pull-1', documentName: 'Speaker' });
     if (path === '/api/cadlink/return-requests/pull-1') return json({ requestId: 'pull-1', state: 'processing', reason: null, message: null });
     if (path === '/api/cadlink/ingest') return json(record);
+    if (path === `/api/cadlink/ingest/${record.ingest_id}`) return json(record);
     if (path.endsWith('/viewport-mesh') || path.endsWith('/mesh')) return new Response(mesh);
     throw new Error(`Unexpected request ${path} ${init?.method ?? 'GET'}`);
   });
@@ -58,6 +62,38 @@ beforeEach(() => {
 afterEach(async () => {
   stop?.(); stop = undefined;
   await flush(); importedMeshStore.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers();
+});
+
+it('opens the prepared model of a Fusion solve first seen as already accepted', async () => {
+  const run = { ...job(), id: 'accepted-before-window', status: 'running',
+    client_request_id: 'cad-solve:accepted-before-window', created_at: new Date(Date.now() - 120_000).toISOString(),
+    cad_state: { state: 'accepted', operation_id: 'accepted-before-window' },
+  } as ReturnType<typeof job>;
+  publishCadJobs([run]);
+  stop = mountCadWorkspaceOwners(); await flush();
+  expect(calls(`/api/cadlink/ingest/${record.ingest_id}`)).toHaveLength(1);
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+  expect(compareSelection.getSnapshot().awaiting).toBe(run.id);
+});
+
+it('an older startup Send cannot cancel the model load of a newer accepted Fusion solve', async () => {
+  const run = { ...job(), id: 'fusion-newer-than-send', status: 'running',
+    client_request_id: 'cad-solve:fusion-newer-than-send', created_at: new Date(Date.now() - 60_000).toISOString(),
+    cad_state: { state: 'accepted', operation_id: 'fusion-newer-than-send' },
+  } as ReturnType<typeof job>;
+  const prepared = deferred<Response>(); const feed = deferred<Response>();
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => String(input).includes('/receipts?') ? feed.promise
+    : String(input) === `/api/cadlink/ingest/${record.ingest_id}` ? prepared.promise : base(input, init));
+  publishCadJobs([run]); stop = mountCadWorkspaceOwners(); await flush();
+  receipts = [{ ...sendReceipt(), created_at: new Date(Date.now() - 120_000).toISOString(),
+    sent_at: new Date(Date.now() - 120_000).toISOString() }];
+  returns = [bundle];
+  feed.resolve(json({ feed_id: 'cutover', receipts, cursor: 1, has_more: false })); await flush();
+  prepared.resolve(json(record)); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+  expect(compareSelection.getSnapshot().awaiting).toBe(run.id);
 });
 
 it('gives a correlated pull one selection and ingest owner despite simultaneous observation listings (rows 5, 25)', async () => {
