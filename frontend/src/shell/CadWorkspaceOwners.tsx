@@ -22,6 +22,7 @@ import { showIngestedMeshInViewport } from './cadlink/artifactLoader';
 import { createCadOutboundController } from './cadlink/outbound';
 import { createCadReturnWaiter } from './cadlink/returnWaiter';
 import { createReceiptDisplay } from './cadlink/receiptDisplay';
+import { createFusionSolveDisplay } from './cadlink/fusionSolveDisplay';
 import { observeCadProjectLoads, observeRememberedCadProject, refreshChannelDriverBases } from './cadlink/restores';
 import { solvedCadModels } from './cadlink/solvedModel';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
@@ -222,7 +223,14 @@ export function mountCadWorkspaceOwners(): () => void {
       onshapeInstance = id; actions.supersedePreparation(); publish({ onshapeStatus: null }); void refreshOnshapeStatus();
     },
   });
+  const fusionSolves = createFusionSolveDisplay({ isActive: fusionActive, enterCadWorkspace, reportStatus, reportViewportNotice,
+    showIngestedMesh: showIngestedMeshInViewport,
+    newestSendAt: () => Math.max(cadReceiptsStore.getState().newestSentAt,
+      ...Object.values(cadReceiptsStore.getState().receipts).map((receipt) => Date.parse(receipt.sent_at))),
+    onIntent: () => { initialChoiceOwed.current = false; },
+  });
   const display = createReceiptDisplay({ enterCadWorkspace, reportViewportNotice, isActive: fusionActive,
+    automaticSelectionAt: fusionSolves.latestSentAt,
     refuseAutomaticRestore: () => { refusedForeignReturn.current = true; },
     showIngestedMesh: showIngestedMeshInViewport, manualSelectionAt: () => manualSelectionAt.current });
   let initialRefreshQueued = false;
@@ -246,6 +254,7 @@ export function mountCadWorkspaceOwners(): () => void {
   const settleModels = () => solvedCadModels.settle(jobsSocket.getSnapshot().jobs, {
     showIngestedMesh: showIngestedMeshInViewport, reportViewportNotice,
   });
+  const followFusionSolve = () => { void fusionSolves.observe(jobsSocket.getSnapshot().jobs); };
   const subscribeContext = () => {
     const nextApplication = preferencesStore.getSnapshot().cadApplication;
     if (nextApplication !== application) {
@@ -300,6 +309,7 @@ export function mountCadWorkspaceOwners(): () => void {
       returnListRequest, seenReturnRevisions, refreshRef: { current: refreshReturns }, selectBundleRef: { current: selectBundle },
       setError: reportError, setStatus: reportStatus }),
     observeRememberedCadProject({ restoringCadProject, refusedForeignReturn, selectBundle, reportStatus }),
+    jobsSocket.subscribe(followFusionSolve), () => fusionSolves.dispose(),
     jobsSocket.subscribe(settleModels), solvedCadModels.subscribe(settleModels),
     useDesignStore.subscribe(contextChanged), useDocumentStore.subscribe(contextChanged),
     useCadReturnStore.subscribe(contextChanged), useSolveOptionsStore.subscribe(contextChanged),
@@ -308,7 +318,7 @@ export function mountCadWorkspaceOwners(): () => void {
     subscribeRevision((event) => { if (event.reason !== 'load') actions.supersedePreparation(); }),
   ];
   Object.values(useCadDeliveryHealthStore.getState().outboundOperations).forEach(outbound.observeOperation);
-  contextChanged(); settleModels(); void refreshOnshapeStatus();
+  contextChanged(); followFusionSolve(); settleModels(); void refreshOnshapeStatus();
   return () => {
     mounted.current = false;
     stops.forEach((stop) => stop()); observation(); arrivals.cancel();

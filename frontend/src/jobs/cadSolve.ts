@@ -55,7 +55,7 @@ export function rememberCadSolve(key: string, designName: string, sourceIngestId
     write(CLAIM + key, { ...held, designName: held.designName || designName, sourceIngestId: held.sourceIngestId ?? sourceIngestId });
   }
 }
-export function cadSolveClaim(job: JobItem): CadSolveClaim | null {
+export function cadSolveClaim(job: Pick<JobItem, 'id' | 'client_request_id'>): CadSolveClaim | null {
   return read(CLAIM + job.id) ?? (job.client_request_id ? read(CLAIM + job.client_request_id) : null);
 }
 export function acknowledgeCadSolve(job: JobItem, outcome: 'completion' | 'refusal'): CadSolveClaim | null {

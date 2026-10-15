@@ -15,6 +15,7 @@ export interface ReceiptDisplay extends SolvedModelDisplay {
   isActive?(): boolean;
   refuseAutomaticRestore?(): void;
   manualSelectionAt?(): number | null;
+  automaticSelectionAt?(): number;
 }
 
 /** Receipt-keyed Send display mounted beside the feed.
@@ -50,6 +51,12 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       return true;
     }
     const sentAt = Date.parse(receipt.sent_at);
+    // Do not even take an ingest/viewport intent from a newer solve. Rejecting
+    // only after listing would cancel that solve's in-flight model load.
+    if ((display.automaticSelectionAt?.() ?? 0) > sentAt) {
+      report(receipt, 'superseded', `Received ${name}; your newer selection stays on screen.`);
+      return true;
+    }
     if ((receipt.send_sequence !== null && receipt.send_sequence < newestSequence)
       || (receipt.send_sequence === null && (sentAt < newestSentAt
         || (sentAt === newestSentAt && receipt.receipt_id !== newestReceiptId)))) {
@@ -66,6 +73,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
     let generation = useCadReturnStore.getState().beginIngestIntent();
     let baselineViewport = importedMeshStore.beginIntent();
     const current = () => display.isActive?.() !== false && store.getState().feedId === receiptFeed && receipt.cursor === newestCursor
+      && (display.automaticSelectionAt?.() ?? 0) <= sentAt
       && useDocumentStore.getState().identity === document.identity
       && useCadReturnStore.getState().isCurrentModelChoice(choice)
       && (phase === 'listing' || (useCadReturnStore.getState().isCurrentIngestIntent(generation)
@@ -105,7 +113,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
         return true;
       }
       const pickedAt = display.manualSelectionAt?.();
-      if (pickedAt != null && pickedAt > Date.parse(receipt.sent_at)) return superseded();
+      if ((pickedAt != null && pickedAt > sentAt) || (display.automaticSelectionAt?.() ?? 0) > sentAt) return superseded();
       // One settings-retention policy, owned by cadReturn (S5-4).
       useCadReturnStore.getState().selectArrivedBundle(bundle, receipt.project_id);
       const selected = useCadReturnStore.getState();

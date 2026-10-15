@@ -216,6 +216,8 @@ export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch): 
 }
 
 export interface CadJobRestoreIntegration {
+  /** Automatic callers relinquish their display when the user moves on. */
+  isCurrent?(): boolean;
   enterCadWorkspace(): void;
   reportStatus(message: string): void;
   reportViewportNotice(message: string | null): void;
@@ -255,7 +257,7 @@ export async function restoreCadJobModel(
   const documentLoad = currentDocumentLoad();
   const superseded = () => !useCadReturnStore.getState().isCurrentIngestIntent(selection)
     || !importedMeshStore.isCurrentGeneration(viewportGeneration)
-    || !isCurrentDocumentLoad(documentLoad);
+    || !isCurrentDocumentLoad(documentLoad) || integration.isCurrent?.() === false;
   try {
     const record = await getIngest(ingestId, fetcher);
     if (superseded()) return false;

@@ -49,6 +49,28 @@ function renderer(): ReceiptDisplay {
   };
 }
 
+it('does not front an older Send after a newer Fusion solve claimed the viewport', async () => {
+  const store = createCadReceiptsStore(null, () => NOW);
+  const display = renderer();
+  display.automaticSelectionAt = () => NOW + 1;
+  await expect(createReceiptDisplay(display, store, serving())(receipt())).resolves.toBe(true);
+  expect(display.showIngestedMesh).not.toHaveBeenCalled();
+  expect(store.getState().feedback['send:1'].outcome).toBe('superseded');
+});
+
+it('cancels an in-flight Send when a newer Fusion solve claims its viewport', async () => {
+  const store = createCadReceiptsStore(null, () => NOW);
+  const display = renderer(); let solveAt = 0;
+  display.automaticSelectionAt = () => solveAt;
+  const response = deferred<Response>();
+  const action = createReceiptDisplay(display, store, vi.fn(() => response.promise))(receipt());
+  solveAt = NOW + 1;
+  response.resolve(new Response(JSON.stringify({ items: [bundle], cadFolderConfigured: true })));
+  await expect(action).resolves.toBe(true);
+  expect(display.showIngestedMesh).not.toHaveBeenCalled();
+  expect(store.getState().feedback['send:1'].outcome).toBe('superseded');
+});
+
 function editedParametricState() {
   useDesignStore.getState().updateValue('length', 180);
   useDesignStore.getState().updateValue('length', 190);
