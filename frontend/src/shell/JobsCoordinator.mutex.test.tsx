@@ -20,6 +20,7 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { useMeshImportStore } from '../stores/meshImport';
 import * as meshImport from '../stores/meshImport';
+import { durableSettings } from '../stores/durableSettings';
 import type { RegisteredMesh } from '../api/meshImport';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
 import { cadWorkspace } from '../stores/cadWorkspace';
@@ -321,6 +322,24 @@ describe('solve invocation mutex', () => {
     act(() => importedMeshStore.showParametric());
     await act(async () => { pending.resolve(false); await pending.promise; });
     expect(saved).not.toHaveBeenCalled();
+  });
+  it('recovers a saved pointer hydrated after startup, only while the empty view still owns intent', async () => {
+    act(() => root.unmount());
+    let hydrated: (() => void) | undefined;
+    vi.spyOn(durableSettings, 'subscribe').mockImplementation((namespace, listener) => {
+      if (namespace === 'meshImport') hydrated = () => listener('wgi_remote');
+      return () => undefined;
+    });
+    vi.spyOn(meshImport, 'restorePendingMeshPress').mockResolvedValue(false);
+    const saved = vi.spyOn(meshImport, 'restoreSavedMeshSetup').mockResolvedValue(false);
+    root = createRoot(host);
+    await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
+    expect(saved).toHaveBeenCalledOnce();
+    await act(async () => { hydrated?.(); });
+    expect(saved).toHaveBeenCalledTimes(2);
+    act(() => importedMeshStore.showParametric());
+    await act(async () => { hydrated?.(); });
+    expect(saved).toHaveBeenCalledTimes(2);
   });
   const mountPlanning = async (mode: 'parametric' | 'cad') => {
     act(() => root.unmount());

@@ -1,4 +1,4 @@
-import { act } from 'react';
+import { act, isValidElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { compareSelection } from '../api/results';
@@ -12,6 +12,10 @@ import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { cadProjectReference } from '../api/cadProjects';
 import { CadProjectHeader, CadProjectHistory, modelStateLabel, newestReturnForProject, projectName } from './CadProjectPanel';
 import { cadWorkspace } from '../stores/cadWorkspace';
+import { JobsPanel } from './JobsPanel';
+import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { preferencesStore } from '../prefs/preferences';
+import { useRunFilters } from '../jobs/runFilters';
 import type { CadReturnBundle } from '../api/cadlink';
 
 const LINEAGE = 'wgl_project';
@@ -24,7 +28,10 @@ function deferred<T>() {
 
 function run(overrides: Partial<JobItem> & { id: string; returnStateHash?: string | null }): JobItem {
   return {
-    run_number: 1,
+    run_number: 1, queued_at: '2026-08-21T09:00:00Z', started_at: '2026-08-21T09:00:00Z',
+    solve_options: {}, auto_export_formats: {}, exported_files: [], log_tail: [],
+    has_mesh_artifact: false, mesh_stats: null, polar_grid: {},
+    design_availability: { reopenable: false },
     label: overrides.label ?? `run ${overrides.id}`,
     status: 'complete',
     has_results: true,
@@ -75,19 +82,33 @@ describe('CAD project history', () => {
 
   const setJobs = (jobs: JobItem[]) => {
     vi.spyOn(jobsSocket, 'getSnapshot').mockReturnValue({
-      ...jobsSocket.getSnapshot(), jobs,
+      ...jobsSocket.getSnapshot(), connection: 'connected', cursor: 1, jobs,
     });
   };
 
-  const render = (node: React.ReactNode) => {
-    act(() => root.render(node));
-    // The document listing resolves on a microtask after mount.
-    return act(async () => { await Promise.resolve(); });
+  const reportError = vi.fn();
+  const render = async (node: React.ReactNode) => {
+    await act(async () => { root.render(node); });
+    if (isValidElement(node) && node.type === CadProjectHistory) {
+      const link = host.querySelector<HTMLButtonElement>('.cad-project-history button');
+      if (link) {
+        // The CAD panel now navigates to the actual shared Runs owner.
+        act(() => { link.click(); });
+        const first = jobsSocket.getSnapshot().jobs.find(job => job.cad_source?.lineage_id === useRunFilters.getState().project);
+        if (first) act(() => compareSelection.setPrimary(first.id));
+        await act(async () => { root.render(<>{node}<JobsPanel/></>); });
+      }
+    }
+    await act(async () => { await Promise.resolve(); });
   };
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetCadReturnStore(); resetDocumentStore(); resetDesignStore(); resetWorkspaceFolderStore();
+    preferencesStore.resetForTests();
+    useRunFilters.setState({ query: '', source: 'all', project: '', model: '' });
+    reportError.mockClear();
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({ ...jobsCoordinatorBridge.getSnapshot(), reportError });
     compareSelection.clear();
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -114,7 +135,7 @@ describe('CAD project history', () => {
 
     await render(<CadProjectHistory/>);
 
-    const names = [...host.querySelectorAll('.cad-run-open b')].map((node) => node.textContent);
+    const names = [...host.querySelectorAll('.job-select .job-title')].map((node) => node.textContent);
     // Named exactly as the jobs rail names them: one run has one name.
     expect(names).toEqual(['#1 \u00b7 run mine-new', '#1 \u00b7 run mine-old']);
   });
@@ -128,13 +149,11 @@ describe('CAD project history', () => {
     await render(<CadProjectHistory/>);
 
     const downloads = [...host.querySelectorAll<HTMLAnchorElement>('.cad-model-download')];
-    expect(downloads).toHaveLength(2);
-    expect(downloads[0].getAttribute('href')).toBe(
-      `/api/cadlink/projects/${LINEAGE}/documents/sha256%3Abbb`,
-    );
-    expect(downloads[1].getAttribute('href')).toBe(
-      `/api/cadlink/projects/${LINEAGE}/documents/sha256%3Aaaa`,
-    );
+    expect(host.querySelectorAll('.cad-model-divider')).toHaveLength(2);
+    expect(downloads).toHaveLength(1);
+    expect(downloads[0].getAttribute('href')).toBe(`/api/cadlink/projects/${LINEAGE}/documents/sha256%3Abbb`);
+    await act(async () => { compareSelection.setPrimary('a1'); });
+    expect(host.querySelector('.cad-model-download')?.getAttribute('href')).toBe(`/api/cadlink/projects/${LINEAGE}/documents/sha256%3Aaaa`);
   });
 
   it('says why a model has no Fusion file rather than offering a broken link', async () => {
@@ -147,12 +166,20 @@ describe('CAD project history', () => {
     expect(missing?.textContent).toBe('no Fusion file');
     expect(missing?.getAttribute('title')).toContain('Capture was off');
   });
+  it('keeps runs usable when the attachment listing has an invalid items shape', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ items: 'invalid' })));
+    setJobs([run({ id: 'x' })]);
+    await render(<CadProjectHistory/>);
+    expect(host.querySelectorAll('.job-card')).toHaveLength(1);
+    expect(host.textContent).not.toContain('Loading model attachment');
+    expect(host.querySelector('.cad-model-missing')?.textContent).toBe('no Fusion file');
+  });
 
   it('compares a run against the one being shown', async () => {
     setJobs([run({ id: 'a' }), run({ id: 'b' })]);
     await render(<CadProjectHistory/>);
 
-    const compare = host.querySelectorAll<HTMLButtonElement>('.cad-run-compare');
+    const compare = host.querySelectorAll<HTMLButtonElement>('.job-compare');
     act(() => compare[1].click());
 
     expect(compareSelection.getSnapshot().overlays).toEqual(['b']);
@@ -169,7 +196,7 @@ describe('CAD project history', () => {
     await render(<CadProjectHistory/>);
 
     // A run still in flight is stopped from the jobs rail, not removed here.
-    const remove = host.querySelectorAll<HTMLButtonElement>('.cad-run-remove');
+    const remove = host.querySelectorAll<HTMLButtonElement>('.job-remove');
     expect(remove).toHaveLength(1);
     expect(remove[0].getAttribute('aria-label')).toBe('Remove #1 · run a');
 
@@ -190,18 +217,18 @@ describe('CAD project history', () => {
     await render(<CadProjectHistory/>);
 
     await act(async () => {
-      host.querySelector<HTMLButtonElement>('.cad-run-remove')!.click();
+      host.querySelector<HTMLButtonElement>('.job-remove')!.click();
       await Promise.resolve();
     });
 
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Run is still exporting.');
+    expect(reportError).toHaveBeenCalledWith(expect.stringContaining('Run is still exporting.'));
   });
 
   it('shows a run when its row is chosen', async () => {
     setJobs([run({ id: 'a' })]);
     await render(<CadProjectHistory/>);
 
-    act(() => host.querySelector<HTMLButtonElement>('.cad-run-open')!.click());
+    act(() => host.querySelector<HTMLButtonElement>('.job-select')!.click());
 
     expect(compareSelection.getSnapshot().primary).toBe('a');
   });
@@ -214,7 +241,7 @@ describe('CAD project history', () => {
 
     await render(<CadProjectHistory/>);
 
-    expect(host.querySelectorAll('.cad-run-row')).toHaveLength(1);
+    expect(host.querySelectorAll('.job-card')).toHaveLength(1);
     expect(host.textContent).toContain('No run archive folder is available.');
   });
 
@@ -223,10 +250,10 @@ describe('CAD project history', () => {
 
     await render(<CadProjectHistory/>);
 
-    expect(host.querySelector('.cad-run-list')).toBeNull();
+    expect(host.querySelector('.job-list')).toBeNull();
     expect(host.textContent).toContain('No runs yet');
     // Positive control for the case below: with no model on screen, it says how to get one.
-    expect(host.textContent).toContain('Bring geometry in from CAD');
+    expect(host.textContent).toContain('Prepare the CAD model and press Solve');
   });
 
   it('says only "No runs yet." once a model is on screen: its geometry is already in', async () => {
@@ -235,7 +262,7 @@ describe('CAD project history', () => {
 
     await render(<CadProjectHistory/>);
 
-    expect(host.querySelector('.empty-state')?.textContent).toBe('No runs yet.');
+    expect(host.querySelector('.empty-state')?.textContent).toContain('No runs yet');
   });
 
   it('renders nothing at all when no project is open', async () => {
@@ -345,6 +372,8 @@ describe('CAD project history', () => {
         { designId: 'wgd_next', lineageId: nextLineage, baseEditVersion: 1 }, 'current',
       );
       await Promise.resolve();
+      host.querySelector<HTMLButtonElement>('.cad-project-history button')?.click();
+      compareSelection.setPrimary('next');
     });
 
     expect(host.querySelector('.cad-model-download')).toBeNull();
@@ -383,6 +412,8 @@ describe('CAD project history', () => {
         { designId: 'wgd_next', lineageId: nextLineage, baseEditVersion: 1 }, 'current',
       );
       await Promise.resolve();
+      host.querySelector<HTMLButtonElement>('.cad-project-history button')?.click();
+      compareSelection.setPrimary('next');
       await Promise.resolve();
     });
     expect(host.querySelector('.cad-model-download')).toBeNull();

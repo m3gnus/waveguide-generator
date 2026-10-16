@@ -1439,3 +1439,11 @@ textarea:disabled { opacity: .48; }
 
 /* Shared by the native source-assembly editors and the CAD panel. */
 .experimental-badge { display: inline-block; justify-self: start; align-self: start; margin: 2px 0; padding: 1px 6px; border: 1px solid rgba(var(--amber-rgb), .45); border-radius: var(--r3); background: rgba(var(--amber-rgb), .1); color: var(--amber); font-size: var(--text-micro); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; vertical-align: middle; white-space: nowrap; cursor: help; }
+
+/* Shared Runs scopes: narrow rails keep every selector within the panel. */
+.jobs-scope-filter { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin: 6px; }
+.jobs-scope-filter select { width: 100%; min-width: 0; font-size: var(--text-micro); }
+.jobs-scope-filter select[aria-label="Run model"] { grid-column: 1 / -1; }
+.job-compare { padding: 2px 5px; font-size: var(--text-micro); }
+.job-compare.on { color: var(--acc); border-color: var(--acc); }
+.job-card .cad-model-missing { white-space: normal; margin-left: 0; }

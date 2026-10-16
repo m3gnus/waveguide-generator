@@ -1,3 +1,4 @@
+import { useRunFilters } from '../jobs/runFilters';
 import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -72,6 +73,7 @@ describe('jobs panel run list', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     localStorage.clear();
+    useRunFilters.setState({ query: '', source: 'all', project: '', model: '' });
     preferencesStore.resetForTests();
     resetCadReturnStore();
     resetDesignStore();
@@ -84,6 +86,39 @@ describe('jobs panel run list', () => {
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
+  });
+
+  it('filters source, stable project and retained model without joining same-named imports', async () => {
+    const imported = (number: number, lineage: string | null, ingest: string, origin = 'cadlink'): JobItem => ({
+      ...job(number, 'same name'), config_summary: { geometry_type: 'imported', ...(origin === 'mesh-file' ? { import_origin: origin } : {}) },
+      cad_source: { ingest_id: ingest, lineage_id: lineage, document_name: 'Same name',
+        archive_stem: null, design_id: null, manifest_sha256: null, return_state_hash: null },
+    } as JobItem);
+    const runs = [imported(1, 'project-a', 'wgi_first'), imported(2, 'project-a', 'wgi_second'),
+      imported(3, 'project-b', 'wgi_first'), imported(4, null, 'wgi_file', 'mesh-file'), job(5, 'parametric')];
+    act(() => publishJobs(runs));
+    await act(async () => { root.render(<JobsPanel/>); });
+    const choose = (label: string, value: string) => {
+      const select = host.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!;
+      act(() => { select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    };
+    choose('Run source', 'cadlink');
+    expect(host.querySelectorAll('.job-card')).toHaveLength(3);
+    choose('Run project', 'project-a');
+    expect(host.querySelectorAll('.job-card')).toHaveLength(2);
+    expect(host.querySelectorAll('.cad-model-divider')).toHaveLength(2);
+    const model = host.querySelector<HTMLSelectElement>('[aria-label="Run model"]')!.options[1].value;
+    choose('Run model', model);
+    expect(host.querySelectorAll('.job-card')).toHaveLength(1);
+    act(() => publishJobs(runs.map(run => run.cad_source?.lineage_id === 'project-a'
+      ? { ...run, cad_source: { ...run.cad_source, document_name: 'Renamed project' } } : run)));
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Run project"]')?.value).toBe('project-a');
+    expect(host.querySelectorAll('.job-card')).toHaveLength(1);
+    act(() => publishJobs([{ ...runs[0], cad_source: { ...runs[0].cad_source!, document_name: 'Newest name' } }, ...runs.slice(1)]));
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Run project"]')?.selectedOptions[0].textContent).toContain('Newest name');
+    act(() => useRunFilters.setState({ project: 'empty-project', model: '' }));
+    expect(host.querySelector('.empty-state')?.textContent).toContain('Clear filters');
+    expect(host.querySelector('.empty-state')?.textContent).not.toContain('kept-only');
   });
 
   afterEach(() => {

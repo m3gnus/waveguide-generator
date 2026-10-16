@@ -471,7 +471,14 @@ plane supports only the default 45° inclination.
    option is disabled.
 
 Returned snapshots appear under **Model versions** in CAD Link; completed
-solves appear under **Runs**. On WG startup, an existing return is selected
+solves appear in the shared **Runs** view. **View project runs** opens that
+view with the current project's stable identity selected. Filter by source,
+project or retained model; clear filters to see other runs. Model boundaries
+distinguish changed snapshots. Select a run to find its captured **Fusion file**
+in the details, when document capture was enabled. Compare, rerun, remove and
+export use the same controls as parametric and standalone mesh runs.
+
+On WG startup, an existing return is selected
 without preparation; choose **Prepare simulation**. Newly arriving returns and
 ones you select from **Model versions** are prepared automatically. If a
 preparation fails, use **Prepare simulation** to retry, or **Prepare again**
