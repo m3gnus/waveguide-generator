@@ -75,6 +75,7 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   dockviewMode: 'inert',
   workspaceMode: 'inert',
   cadProject: 'inert',
+  meshImport: 'inert',
   // Which face of the crossover section is shown; the spec itself lives in
   // the return store and is unchanged by flipping the view.
   crossoverView: 'inert',
