@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { inspectMesh, registerMesh, readMeshImport, type MeshSummary, type RegisteredMesh } from '../api/meshImport';
+import { inspectMesh, registerMesh, readMeshImport, readMeshJobRequest, type MeshSummary, type RegisteredMesh } from '../api/meshImport';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
@@ -187,7 +187,19 @@ async function restoreRetainedFile(id: string, options: FileOptions,
   const record = await readMeshImport(id, fetcher);
   if (!importedMeshStore.isCurrentGeneration(generation)) return false;
   if (record.ingest_id !== id) throw new Error('The retained mesh response names a different import. Select the run again.');
-  return restoreFile(record, options, channels, generation, exactSubmission?.(record));
+  const submission = exactSubmission?.(record);
+  if (submission) assertFileRequest(record, submission);
+  return restoreFile(record, options, channels, generation, submission);
+}
+
+function assertFileRequest(record: RegisteredMesh, submission: ImportedSolveSubmission): void {
+  if (record.producer !== 'mesh-file' || submission?.geometry?.type !== 'imported'
+    || submission.geometry.ingest_id !== record.ingest_id
+    || submission.geometry.manifest_sha256 !== record.manifest_sha256
+    || submission.geometry.artifact_sha256 !== record.artifact_sha256
+    || !submission.options || !Array.isArray(submission.geometry.drive_channels)) {
+    throw new Error('The mesh replay response does not match its retained mesh.');
+  }
 }
 
 function restoreFile(record: RegisteredMesh, options: FileOptions,
@@ -218,12 +230,7 @@ export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch
   try {
     const opened = await openMeshReplay(text, fetcher);
     if (!importedMeshStore.isCurrentGeneration(generation)) return false;
-    if (opened.record.producer !== 'mesh-file' || opened.request.geometry.type !== 'imported'
-      || opened.request.geometry.ingest_id !== opened.record.ingest_id
-      || opened.request.geometry.manifest_sha256 !== opened.record.manifest_sha256
-      || opened.request.geometry.artifact_sha256 !== opened.record.artifact_sha256) {
-      throw new Error('The mesh replay response does not match its retained mesh.');
-    }
+    assertFileRequest(opened.record, opened.request);
     const restored = restoreFile(opened.record, opened.request.options,
       opened.request.geometry.drive_channels, generation, opened.request);
     if (restored) useMeshImportStore.setState({ notice: 'Mesh replay opened. Solve preserves its exact settings. Editing a setup or global solve control starts a new setup.' });
@@ -278,5 +285,27 @@ export async function restorePendingMeshPress(fetcher: typeof fetch = fetch): Pr
 export async function restoreMeshImport(job: JobItem, fetcher: typeof fetch = fetch): Promise<boolean> {
   const id = job.cad_source?.ingest_id;
   if (!id) throw new Error('This run has no retained mesh identity. Import the mesh again.');
-  return restoreRetainedFile(id, job.solve_options, job.cad_setup?.drive_channels ?? [], fetcher);
+  const generation = importedMeshStore.beginIntent();
+  const request = ++requestNumber;
+  // Until both retained inputs arrive, Solve must not use the previously open model.
+  useMeshImportStore.setState({ busy: true, registered: null, exactSubmission: null, error: null, request });
+  try {
+    const { effective_request: effective } = await readMeshJobRequest(job.id, fetcher);
+    // Job ancestry and spent request IDs are not part of a new Solve.
+    const submission = { geometry: effective?.geometry, options: effective?.options };
+    if (!importedMeshStore.isCurrentGeneration(generation)) return false;
+    if (submission?.geometry?.type !== 'imported' || submission.geometry.ingest_id !== id || !submission.options
+      || !Array.isArray(submission.geometry.drive_channels)) {
+      throw new Error('This run’s saved request does not match its retained mesh. Select the run again.');
+    }
+    return await restoreRetainedFile(id, submission.options, submission.geometry.drive_channels,
+      fetcher, generation, () => submission);
+  } catch (error) {
+    if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({
+      error: `Could not restore this run’s mesh setup: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    throw error;
+  } finally {
+    if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
+  }
 }
