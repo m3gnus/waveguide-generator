@@ -9,6 +9,7 @@ import { useSolveOptionsStore } from './solveOptions';
 import type { ImportedSolveSubmission } from '../jobs/actions';
 import { bindImportedSetup } from '../jobs/importedSetup';
 import { readImportedSetup, saveImportedSetup } from '../api/importedModels';
+import { namespaceStorage } from './durableSettings';
 import type { JobItem } from '../api/jobsSocket';
 
 interface MeshImportState {
@@ -36,6 +37,7 @@ const initial: MeshImportState = {
   registered: null, motions: {}, engine: null, accuracy: null, startHz: DEFAULT_SWEEP.startHz, endHz: DEFAULT_SWEEP.endHz,
   count: DEFAULT_SWEEP.points, busy: false, error: null, notice: null, request: 0,
 };
+const savedSetupStorage = namespaceStorage('meshImport');
 let requestNumber = 0;
 export const useMeshImportStore = create<MeshImportState>(() => ({ ...initial }));
 
@@ -187,7 +189,7 @@ export async function saveMeshSetup(fetcher: typeof fetch = fetch): Promise<void
     acknowledged_findings: _findings, ...geometry } = submission.geometry;
   await saveImportedSetup(ingest_id, { geometry, options: submission.options }, fetcher);
   if (useMeshImportStore.getState().registered?.ingest_id === ingest_id) {
-    localStorage.setItem('wg-saved-mesh-setup', ingest_id);
+    savedSetupStorage.setItem('wg-saved-mesh-setup', ingest_id);
     useMeshImportStore.setState({ notice: fingerprint === setupFingerprint(useMeshImportStore.getState())
       ? 'Mesh setup saved. It can be resumed after restart.'
       : 'Earlier mesh settings were saved. Your current edits are not saved.' });
@@ -195,7 +197,7 @@ export async function saveMeshSetup(fetcher: typeof fetch = fetch): Promise<void
 }
 
 export async function restoreSavedMeshSetup(fetcher: typeof fetch = fetch): Promise<boolean> {
-  const id = localStorage.getItem('wg-saved-mesh-setup');
+  const id = savedSetupStorage.getItem('wg-saved-mesh-setup');
   if (!id) return false;
   const generation = importedMeshStore.beginIntent();
   const { setup } = await readImportedSetup(id, fetcher);

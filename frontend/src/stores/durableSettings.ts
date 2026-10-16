@@ -40,6 +40,7 @@ export const SETTINGS_NAMESPACES = {
   dockviewMode: 'wg2.dockview.mode.v4',
   workspaceMode: 'wg2.workspace.mode.v1',
   cadProject: 'wg2.cad.project.v1',
+  meshImport: 'wg-saved-mesh-setup',
   crossoverView: 'wg2.crossover.view.v1',
   crossoverGainUnit: 'wg2.crossover.gain-unit.v1',
   paramHelp: 'wg-param-help-visible',
