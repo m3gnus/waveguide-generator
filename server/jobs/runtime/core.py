@@ -27,7 +27,8 @@ import threading
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Mapping, Sequence
 import uuid
 
-from server.cadlink.intake.ingest import IngestRefusal, current_fem_evidence, get_ingestion_record
+from server.cadlink.intake.ingest import IngestRefusal, current_fem_evidence
+from server.mesh.records import get_prepared_mesh as get_ingestion_record
 from server.cadlink.interpretation.domain_decision import (
     decision_summary,
 )
@@ -2049,6 +2050,13 @@ class JobRuntime:
         symmetry_metadata = resolved.symmetry_metadata
 
         summary = self._config_summary(request)
+        if imported is not None and imported.record.get("producer") == "mesh-file":
+            summary["import_origin"] = "mesh-file"
+            summary["formula_type"] = "mesh-import"
+            summary["mesh_import"] = {
+                "source_file": imported.record["source_file"],
+                "source_tags": imported.record["source_tags"],
+            }
         summary["symmetry"] = symmetry_metadata
         polar_grid = effective_polar_grid(request)
         if isinstance(request.geometry, ParametricGeometrySource):
@@ -2210,7 +2218,8 @@ class JobRuntime:
         # own -- so no path solves a frame that is neither confirmed nor
         # confidently inferred (docs/architecture/CAD-OPERATIONS.md,
         # "Unlinked solver frame").
-        frame_refusal = None if record.get("native_source") is not None else await asyncio.to_thread(
+        file_mesh = record.get("producer") == "mesh-file"
+        frame_refusal = None if file_mesh or record.get("native_source") is not None else await asyncio.to_thread(
             record_frame_refusal, self.cadlink_store, record
         )
         if frame_refusal is not None:
@@ -2283,12 +2292,14 @@ class JobRuntime:
             )
         _validate_passive_cardioid_topology(geometry, record)
         recorded_sizes = record.get("mesh_sizes")
-        if not isinstance(recorded_sizes, Mapping):
+        if file_mesh and geometry.mesh is not None:
+            raise ImportedSolveRefusal("mesh_sizes_not_applicable", "This is a ready mesh; import a new mesh to change its triangles.")
+        if not file_mesh and not isinstance(recorded_sizes, Mapping):
             raise ImportedSolveRefusal(
                 "ingest_record_incomplete",
                 "the ingestion record has no authoritative mesh sizes; re-ingest the CAD return",
             )
-        if geometry.mesh.model_dump(mode="json") != dict(recorded_sizes):
+        if not file_mesh and (geometry.mesh is None or geometry.mesh.model_dump(mode="json") != dict(recorded_sizes)):
             raise ImportedSolveRefusal(
                 "mesh_sizes_mismatch",
                 "request mesh sizes do not match the sizes used to create the ingestion artifact",
@@ -2420,6 +2431,8 @@ class JobRuntime:
             anchor_lineage_id, archive_stem = await _cad_authored_project(
                 self.cadlink_store, record
             )
+        if file_mesh:
+            archive_stem = str(record["archive_stem"])
         identity = _cad_identity_provenance(record, geometry)
         return _ImportedSubmission(
             record=dict(record),
@@ -4976,8 +4989,10 @@ class JobRuntime:
                 "source": "cad-import",
                 "reason_code": "imported_geometry",
                 "reason": (
-                    "This job was solved from an immutable CAD-return ingestion and cannot "
-                    "be reopened as a parametric design."
+                    ("This job was solved from an imported mesh and cannot "
+                     if row.get("config_summary_json", {}).get("import_origin") == "mesh-file"
+                     else "This job was solved from an immutable CAD-return ingestion and cannot ")
+                    + "be reopened as a parametric design."
                     + anchor_note
                 ),
                 "note": None,

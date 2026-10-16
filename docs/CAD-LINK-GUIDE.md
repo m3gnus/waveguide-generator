@@ -525,9 +525,12 @@ export error's full traceback, use **View → Show Text Commands** in Fusion.
 ## 11. STEP from another CAD program
 
 There is **no standalone STEP import-and-solve command in WG's current UI**.
-**Open…** reads WG/ATH design files; **Import mesh…** is a viewport-only Gmsh
-mesh import, not a STEP solve or a source-assignment tool. The CAD solve route
-expects a validated return bundle containing geometry and source information.
+**Open…** reads WG/ATH design files. **Import mesh…** independently imports
+ASCII Gmsh 2.2 triangular surface meshes for inspection and full-domain solving;
+choose units and driven physical groups in its setup panel. See the
+[mesh workflow](USER-GUIDE.md#import-and-solve-a-mesh) for its first-slice limits.
+This is not standalone STEP import. The CAD solve route still accepts a
+validated return bundle containing geometry and source information.
 
 1. Export STEP from your other CAD program and open it in Fusion.
 2. Inspect the imported bodies, mark the source faces with WGLink, and save the

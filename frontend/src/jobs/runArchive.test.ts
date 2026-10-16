@@ -18,6 +18,13 @@ function jobItem(overrides: Partial<JobItem> = {}): JobItem {
 }
 
 describe('run archive layout', () => {
+  it('archives the file mesh transform, physical tag mapping and resolved drive setup', () => {
+    const setup = { type: 'imported' as const, drive_channels: [{ id: 'group_2', source_ids: ['group_2'], motion: 'axial' as const }] };
+    const spec = { source_tags: { group_2: 2 }, source_file: { transform: { units: 'mm', forward: '+x', up: '+z' } } };
+    const record = JSON.parse(buildRunRecord(jobItem({ config_summary: { geometry_type: 'imported', import_origin: 'mesh-file', mesh_import: spec }, cad_setup: setup })).text);
+    expect(record.source).toBe('mesh-file');
+    expect(record.importedMesh).toEqual({ ...spec, setup });
+  });
   it('does not archive an unnumbered preparation as a run', () => {
     const unnumbered = jobItem({ run_number: null });
     expect(needsArchiving(unnumbered)).toBe(false);

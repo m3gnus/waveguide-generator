@@ -902,7 +902,9 @@ class ImportedGeometrySource(JobModel):
     #: ``None`` means the drivers are the only limit, which is what a solve
     #: that has never been told about an amplifier should assume.
     max_drive_voltage_v: float | None = Field(default=None, gt=0, allow_inf_nan=False)
-    mesh: ImportedMeshSizes
+    # Ready file meshes have no generation sizes. CAD admission still requires
+    # these and verifies them against the prepared record.
+    mesh: ImportedMeshSizes | None = None
     acknowledged_findings: list[str] = Field(default_factory=list)
     skipped_source_ids: list[str] = Field(default_factory=list)
     exterior_only: bool = False
@@ -983,7 +985,7 @@ class ImportedGeometrySource(JobModel):
             raise ValueError(
                 "skipped sources cannot also be driven: " + ", ".join(sorted(overlap))
             )
-        sized = set(self.mesh.source_size_mm)
+        sized = set(self.mesh.source_size_mm) if self.mesh is not None else driven
         if sized != driven:
             missing = sorted(driven - sized)
             extra = sorted(sized - driven)

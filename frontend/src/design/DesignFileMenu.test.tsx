@@ -219,6 +219,10 @@ describe('design file export menu', () => {
   });
 
   it('imports standalone meshes from the file menu instead of the viewport toolbar', async () => {
+    const inspect = vi.fn(async () => new Response(JSON.stringify({ node_count: 6, triangle_count: 2,
+      dimensions: [160, 419, 310], groups: [{ tag: 2, name: 'LF', triangle_count: 1 }, { tag: 4, name: 'HF', triangle_count: 1 }] }),
+      { headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', inspect);
     act(() => root.render(<DesignFileMenu/>));
     const input = container.querySelector<HTMLInputElement>('[aria-label="Import Gmsh mesh file"]');
     const file = new File([meshFixture], 'reference.msh', { type: 'text/plain' });
@@ -228,7 +232,8 @@ describe('design file export menu', () => {
 
     expect(importedMeshStore.getSnapshot().file?.name).toBe('reference.msh');
     expect(importedMeshStore.getSnapshot().showing).toBe('file');
-    expect(container.querySelector('[role="status"]')?.textContent).toContain('2 triangles');
+    expect(inspect).toHaveBeenCalledWith('/api/mesh-import/inspect', expect.objectContaining({ method: 'POST' }));
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('Choose units and driven groups');
   });
 
   it('offers both STEP bodies', () => {

@@ -127,7 +127,7 @@ export interface ImportedGeometrySubmission {
   drive_voltage_v?: number;
   max_drive_voltage_v?: number;
   rg_ohm?: number;
-  mesh: { rigid_size_mm: number; transition_mm: number; source_size_mm: Record<string, number> };
+  mesh?: { rigid_size_mm: number; transition_mm: number; source_size_mm: Record<string, number> };
   acknowledged_findings: string[];
   skipped_source_ids: string[];
   exterior_only?: boolean;
@@ -547,11 +547,12 @@ export async function submitImported(
   submission: ImportedSolveSubmission,
   fetcher: typeof fetch = fetch,
   label = 'cad-import',
+  clientRequestId?: string,
 ): Promise<string> {
   const response = await fetcher('/api/solve', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...submission, label }),
+    body: JSON.stringify({ ...submission, label, ...(clientRequestId ? { client_request_id: clientRequestId } : {}) }),
   });
   if (!response.ok) throw await submissionRefusal(response);
   return ((await response.json()) as { job_id: string }).job_id;

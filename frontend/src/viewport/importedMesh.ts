@@ -23,6 +23,8 @@ export interface ImportedMeshScene {
 }
 
 export interface ImportedMeshSceneOptions {
+  /** File imports assign excitation by tag, independent of physical names. */
+  drivenTags?: readonly number[];
   /** The supplied mesh already covers the complete display domain. */
   fullDomain?: boolean;
   /** Actual solver-domain count when the supplied visual artifact is separate. */
@@ -270,12 +272,12 @@ export function createImportedMeshScene(
     const group = describeTag(tag, mesh.physicalNames);
     return {
       key: `msh:${name}:${tag}`,
-      role: group.role,
+      role: options.drivenTags ? `imported.${options.drivenTags.includes(tag) ? 'driven' : 'rigid'}.${mesh.physicalNames.get(tag) ?? tag}` : group.role,
       shading: 'smooth',
-      materialClass: group.sourceRole
+      materialClass: options.drivenTags ? (options.drivenTags.includes(tag) ? 'source-smooth' : 'horn-smooth') : group.sourceRole
         ? (`${ROLE_MATERIAL_FAMILY[group.sourceRole]}-smooth` as const)
         : ('horn-smooth' as const),
-      sourceRole: group.sourceRole,
+      sourceRole: options.drivenTags ? null : group.sourceRole,
       enclosure: false,
       positions: geometry.positions,
       normals: geometry.normals,

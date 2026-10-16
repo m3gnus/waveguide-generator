@@ -31,9 +31,8 @@ import { designNameSlug } from '../stores/designName';
 import { usePreferences } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
-import { createImportedMeshScene } from '../viewport/importedMesh';
+import { loadMeshFile } from '../stores/meshImport';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { isOutboundSupersededError } from '../shell/cadlink/outbound';
 import { cadWorkspace } from '../stores/cadWorkspace';
@@ -279,10 +278,11 @@ export function DesignFileMenu() {
     input.value = '';
     if (!file || workspaceMode === 'cad') return;
     await act(async () => {
+      if (file.size > 16 * 1024 * 1024) throw new Error('Mesh exceeds the 16 MiB import limit.');
       const generation = importedMeshStore.beginIntent();
-      const imported = createImportedMeshScene(file.name, parseMSH(await file.text()));
-      importedMeshStore.setFile(imported, generation);
-      setMessage(`Showing ${file.name} in the viewport · ${imported.triangleCount.toLocaleString()} triangles`);
+      await loadMeshFile(file.name, await file.text(), fetch, generation);
+      if (!importedMeshStore.isCurrentGeneration(generation)) return;
+      setMessage(`Imported ${file.name}. Choose units and driven groups in the parameter panel, then prepare the mesh.`);
     });
   }
 
@@ -421,7 +421,7 @@ export function DesignFileMenu() {
         role="menuitem"
         className="design-menu-item"
         disabled={busy || workspaceMode === 'cad'}
-        title={workspaceMode === 'cad' ? 'Standalone mesh import is available in Parametric mode only.' : 'Show an ASCII Gmsh 2.2 mesh in the viewport'}
+        title={workspaceMode === 'cad' ? 'Switch to Parametric mode to import a standalone mesh.' : 'Import an ASCII Gmsh 2.2 triangular surface mesh for inspection and solving'}
         onClick={() => meshInput.current?.click()}
       ><span>Import mesh…</span><kbd>msh</kbd></button>
       <button role="menuitem" aria-expanded={exportsOpen} className="design-menu-item" disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>

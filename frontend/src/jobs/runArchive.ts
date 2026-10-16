@@ -74,6 +74,9 @@ export function buildRunRecord(
       },
       // The folder groups by design, so provenance lives here instead.
       source: runSourceForJob(job),
+      ...(job.config_summary.import_origin === 'mesh-file' ? {
+        importedMesh: { ...(job.config_summary.mesh_import as Record<string, unknown> ?? {}), setup: job.cad_setup },
+      } : {}),
       design: {
         name: job.label ?? null,
         lineageId: cad?.lineage_id ?? null,

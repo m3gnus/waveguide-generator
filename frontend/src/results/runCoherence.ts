@@ -16,6 +16,7 @@ export interface RunContext {
   displayedIngestId?: string | null;
   displayedSolveModelSha256?: string | null;
   designId: string | null;
+  fileIngestId?: string | null;
 }
 
 export type RunContextVerdict = 'current' | 'older-revision' | 'other-model' | 'run-model-not-loaded';
@@ -111,6 +112,7 @@ export function displayedCadIngestId(selectedIngestId: string | null): string | 
 export function runContext(): RunContext {
   const design = useDesignStore.getState();
   return {
+    fileIngestId: importedMeshStore.getSnapshot().showing === 'file' ? importedMeshStore.getSnapshot().file?.ingestId ?? null : undefined,
     mode: workspaceModeStore.getSnapshot().mode,
     designRevision: design.designRevision,
     designFingerprint: designFingerprint(design.design),
@@ -133,8 +135,9 @@ export function useRunContext(): RunContext {
   const ingestId = useCadReturnStore((state) => state.ingestRecord?.ingest_id ?? null);
   const displayedSolveModelSha256 = useCadReturnStore((state) => state.ingestRecord?.solve_model_sha256 ?? null);
   const designId = useDocumentStore((state) => state.identity?.designId ?? null);
-  useSyncExternalStore(importedMeshStore.subscribe, importedMeshStore.getSnapshot, importedMeshStore.getSnapshot);
-  return { mode, designRevision, designFingerprint: useMemo(() => designFingerprint(design), [design]), ingestId, displayedIngestId: displayedCadIngestId(ingestId), displayedSolveModelSha256, designId };
+  const viewport = useSyncExternalStore(importedMeshStore.subscribe, importedMeshStore.getSnapshot, importedMeshStore.getSnapshot);
+  return { mode, designRevision, designFingerprint: useMemo(() => designFingerprint(design), [design]), ingestId, displayedIngestId: displayedCadIngestId(ingestId), displayedSolveModelSha256, designId,
+    fileIngestId: viewport.showing === 'file' ? viewport.file?.ingestId ?? null : undefined };
 }
 
 /**
@@ -148,6 +151,10 @@ export function useRunContext(): RunContext {
  * read back is not the design on screen as far as anything here can tell.
  */
 export function runMatchesContext(job: JobItem, context: RunContext): RunContextVerdict {
+  if (context.mode === 'parametric' && context.fileIngestId !== undefined) {
+    return job.config_summary.import_origin === 'mesh-file' && context.fileIngestId !== null
+      && job.cad_source?.ingest_id === context.fileIngestId ? 'current' : 'other-model';
+  }
   const imported = job.config_summary?.geometry_type === 'imported';
   if (!imported && context.mode === 'parametric') {
     const fingerprint = jobDesignFingerprint(job);
@@ -176,6 +183,7 @@ export function runDisplayVerdict(job: JobItem, context: RunContext): RunContext
  * of them says nothing. The marker is the exception, never the rule.
  */
 export function runProvenanceMarker(job: Pick<JobItem, 'config_summary'>, mode: WorkspaceMode): string | null {
+  if (job.config_summary.import_origin === 'mesh-file') return 'Mesh';
   if (job.config_summary?.geometry_type === 'imported') return mode === 'cad' ? null : 'CAD';
   return mode === 'cad' ? 'Parametric' : null;
 }

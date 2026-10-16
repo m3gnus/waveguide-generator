@@ -5,6 +5,7 @@ import { currentDesignLoadSource } from '../stores/design';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { noteExplicitNavigation } from '../shell/workspaceNavigation';
 import { canLoadJobDesign, replaceWithJobDesign } from './jobDesign';
+import { restoreMeshImport } from '../stores/meshImport';
 
 /** Put the model represented by a history run back into its owning workspace. */
 export async function showJobModel(
@@ -13,6 +14,10 @@ export async function showJobModel(
 ): Promise<boolean> {
   // Asked for from a run's own controls: the user is choosing what to look at.
   noteExplicitNavigation();
+  if (job.config_summary.import_origin === 'mesh-file') {
+    try { return await restoreMeshImport(job); }
+    catch (error) { onError(error instanceof Error ? error.message : String(error)); return false; }
+  }
   if (job.config_summary.geometry_type === 'imported') return restoreCadJobModel(job, {
     reportStatus: cadWorkspace.getSnapshot().reportStatus,
     reportViewportNotice: cadWorkspace.getSnapshot().reportViewportNotice,

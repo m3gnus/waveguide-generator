@@ -5907,7 +5907,14 @@
             "title": "Max Drive Voltage V"
           },
           "mesh": {
-            "$ref": "#/components/schemas/ImportedMeshSizes"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportedMeshSizes"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "model_port_area_m2": {
             "anyOf": [
@@ -6020,8 +6027,7 @@
           "ingest_id",
           "manifest_sha256",
           "artifact_sha256",
-          "drive_channels",
-          "mesh"
+          "drive_channels"
         ],
         "title": "ImportedGeometrySource",
         "type": "object"
@@ -7935,6 +7941,99 @@
           }
         },
         "title": "MeshConfig",
+        "type": "object"
+      },
+      "MeshFile": {
+        "additionalProperties": false,
+        "properties": {
+          "filename": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "msh_text": {
+            "maxLength": 16777216,
+            "minLength": 1,
+            "title": "Msh Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename",
+          "msh_text"
+        ],
+        "title": "MeshFile",
+        "type": "object"
+      },
+      "MeshRegistration": {
+        "additionalProperties": false,
+        "properties": {
+          "filename": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "forward": {
+            "enum": [
+              "+x",
+              "-x",
+              "+y",
+              "-y",
+              "+z",
+              "-z"
+            ],
+            "title": "Forward",
+            "type": "string"
+          },
+          "msh_text": {
+            "maxLength": 16777216,
+            "minLength": 1,
+            "title": "Msh Text",
+            "type": "string"
+          },
+          "source_tags": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "title": "Source Tags",
+            "type": "array"
+          },
+          "units": {
+            "enum": [
+              "mm",
+              "cm",
+              "m",
+              "in"
+            ],
+            "title": "Units",
+            "type": "string"
+          },
+          "up": {
+            "enum": [
+              "+x",
+              "-x",
+              "+y",
+              "-y",
+              "+z",
+              "-z"
+            ],
+            "title": "Up",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename",
+          "msh_text",
+          "units",
+          "forward",
+          "up",
+          "source_tags"
+        ],
+        "title": "MeshRegistration",
         "type": "object"
       },
       "MetadataResponse": {
@@ -15567,6 +15666,136 @@
           }
         },
         "summary": "Mesh Artifact"
+      }
+    },
+    "/api/mesh-import": {
+      "post": {
+        "operationId": "register_api_mesh_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeshRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Register Api Mesh Import Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "Mesh import"
+        ]
+      }
+    },
+    "/api/mesh-import/inspect": {
+      "post": {
+        "operationId": "inspect_api_mesh_import_inspect_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeshFile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Inspect Api Mesh Import Inspect Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inspect",
+        "tags": [
+          "Mesh import"
+        ]
+      }
+    },
+    "/api/mesh-import/{ingest_id}": {
+      "get": {
+        "operationId": "read_api_mesh_import__ingest_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ingest_id",
+            "required": true,
+            "schema": {
+              "title": "Ingest Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Read Api Mesh Import  Ingest Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read",
+        "tags": [
+          "Mesh import"
+        ]
       }
     },
     "/api/partial-results/{job_id}": {

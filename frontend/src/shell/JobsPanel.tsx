@@ -142,7 +142,8 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
   const rating = job.rating ?? 0;
   const [editing, setEditing] = useState(false);
   const cadOperationId = cadJobOperationId(job);
-  const cadInputs = Boolean(cadOperationId || job.cad_state || job.cad_setup || job.cad_source || job.config_summary.geometry_type === 'imported'
+  const fileImport = job.config_summary.import_origin === 'mesh-file';
+  const cadInputs = !fileImport && Boolean(cadOperationId || job.cad_state || job.cad_setup || job.cad_source || job.config_summary.geometry_type === 'imported'
     || job.config_summary.imported_geometry);
   const [titleDraft, setTitleDraft] = useState(job.label ?? '');
   const [displayLabel, setDisplayLabel] = useState(job.label);
@@ -217,7 +218,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
     {logOpen && <LogDialog jobId={job.id} onClose={() => setLogOpen(false)}/>}
     <header>
       {selectable
-        ? <button className={`job-select${editing ? ' editing' : ''}`} aria-label={`Select ${displayName}`} aria-pressed={selected} title={selected ? 'Showing this run' : job.has_results ? 'Show this run in the viewport and charts' : cleanedUp ? 'Select this run (its results were cleaned up)' : 'Show this run design in the viewport'} onClick={() => selectJob(job)}>{heading}</button>
+        ? <button className={`job-select${editing ? ' editing' : ''}`} aria-label={`Select ${displayName}`} aria-pressed={selected} title={selected ? 'Showing this run' : job.has_results ? 'Show this run in the viewport and charts' : cleanedUp ? 'Select this run (its results were cleaned up)' : 'Show this run design in the viewport'} onClick={() => selectJob(job, onError)}>{heading}</button>
         : <span className={`job-select${editing ? ' editing' : ''}`} title={job.error_message ?? job.status}>{heading}</span>}
       {editing ? <input
         className="job-title-input"
@@ -244,6 +245,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
     </header>
     {renameError && <div className="job-error job-rename-error" role="alert">{renameError}</div>}
     {job.results_discarded_at && <div className="job-retention-note">Results were cleaned up to save space.</div>}
+    {expanded && fileImport && <p>Imported mesh · {job.cad_source?.document_name} · full domain · unit acceleration</p>}
     {expanded && cadInputs && <CadSolveInputs
       className="job-cad-operation"
       operationId={cadOperationId ?? 'not recorded'}
@@ -322,18 +324,20 @@ function RunNameField({ actions, now = new Date() }: { actions?: ReactNode; now?
     setEditing(false);
   };
   const fromCad = origin === 'cad';
+  const fromMesh = origin === 'mesh';
+  const readOnlyName = fromCad || fromMesh;
   return <div className="run-name-field">
-    <label className="ui-field">{fromCad ? 'CAD document' : 'Design name'}<input
-      aria-label={fromCad ? 'CAD document name' : 'Design name'}
-      value={fromCad ? name : draft}
-      readOnly={fromCad}
+    <label className="ui-field">{fromMesh ? 'Mesh file' : fromCad ? 'CAD document' : 'Design name'}<input
+      aria-label={fromMesh ? 'Mesh file name' : fromCad ? 'CAD document name' : 'Design name'}
+      value={readOnlyName ? name : draft}
+      readOnly={readOnlyName}
       placeholder={fromCad ? 'No CAD return selected' : 'Untitled'}
-      title={fromCad
+      title={fromMesh ? 'Runs are named from the imported mesh file.' : fromCad
         ? 'CAD Link runs are named by the Fusion document. Rename the document in Fusion 360 and send it again to change it.'
         : 'Names the design, its Export a copy file, and every run and export made from it'}
       onChange={(event) => setDraft(event.target.value)}
-      onFocus={() => { if (!fromCad) setEditing(true); }}
-      onBlur={(event) => { if (!fromCad) commit(event.target.value); }}
+      onFocus={() => { if (!readOnlyName) setEditing(true); }}
+      onBlur={(event) => { if (!readOnlyName) commit(event.target.value); }}
       onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
     /></label>
     <div className="run-name-actions">{actions}</div>

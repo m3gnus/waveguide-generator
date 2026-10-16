@@ -30,6 +30,34 @@ Edits update the live preview. Viewer controls change the display, not the desig
 parameters. A solve always receives a revisioned design snapshot, so later editor changes
 cannot alter an existing run.
 
+### Import and solve a mesh
+
+In Parametric mode, choose **Import mesh…** from the design file menu. No CAD
+application, add-in or CAD Link folder is needed. The first importer accepts
+ASCII Gmsh 2.2 linear triangular surface meshes, up to 16 MiB.
+
+Choose the file's units, forward and up axes, and the physical surface groups
+to drive. Other groups are rigid. Press **Prepare mesh**, check its dimensions,
+then choose the frequency range, engine and source motion and press **Solve**.
+The mesh must be a closed outward-facing surface, with physical groups on
+every triangle, and must pass topology/intersection checks. No automatic
+repair or remeshing occurs. Untagged meshes can still be inspected.
+
+This first slice solves full-domain, free-space meshes with one unit-acceleration
+source (1 m/s²) per selected group. It uses a logarithmic sweep and full 5°
+horizontal, vertical and diagonal polars at 2 m from the mesh origin; the origin
+is not moved automatically. Electrical driver models, crossover controls,
+reduced domains, STL/OBJ/binary meshes and volume-mesh import are outside this
+first slice. Existing CAD simulation capabilities remain available separately.
+
+Runs retains the exact mesh and resolved settings. Select a run to restore its
+setup, or **Rerun** to replay its stored request. Changing or moving the original
+file does not change retained runs. After an unanswered submission and page
+reload, WG restores that same import; pressing Solve recovers the original
+request before a later deliberate press starts a new run. Run archives include
+source mappings and transforms; portable replay after deleting the job database
+is a separate feature.
+
 ### Parameter tabs and size readout
 
 The parametric **Geometry** tab contains **Model Type**, **Profile**, **Throat**

@@ -18,6 +18,9 @@ import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
+import { useMeshImportStore } from '../stores/meshImport';
+import * as meshImport from '../stores/meshImport';
+import type { RegisteredMesh } from '../api/meshImport';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import {
@@ -298,6 +301,16 @@ describe('solve invocation mutex', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
   };
+  it('keeps unanswered file recovery eligible while startup is in CAD mode', async () => {
+    act(() => root.unmount());
+    workspaceModeStore.setMode('cad');
+    const restore = vi.spyOn(meshImport, 'restorePendingMeshPress').mockResolvedValue(false);
+    root = createRoot(host);
+    await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
+    expect(restore).not.toHaveBeenCalled();
+    await act(async () => { workspaceModeStore.setMode('parametric'); });
+    expect(restore).toHaveBeenCalledOnce();
+  });
   const mountPlanning = async (mode: 'parametric' | 'cad') => {
     act(() => root.unmount());
     root = createRoot(host);
@@ -1247,14 +1260,40 @@ describe('solve invocation mutex', () => {
     expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('refused with 409');
   });
 
-  it('keeps a standalone msh import inspection-only', async () => {
-    importedMeshStore.setFile({ name: 'inspection.msh', source: 'file' } as ImportedMeshScene);
+  it('requires explicit setup before solving a standalone msh import', async () => {
+    act(() => importedMeshStore.setFile({ name: 'inspection.msh', source: 'file' } as ImportedMeshScene));
     await act(async () => { root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>); });
     const solve = host.querySelector<HTMLButtonElement>('button')!;
     expect(solve.disabled).toBe(true);
-    expect(solve.title).toContain('viewport-only');
+    expect(solve.title).toContain('Choose units and driven groups');
     expect(mocks.submitCadSolve).not.toHaveBeenCalled();
     expect(mocks.submitImported).not.toHaveBeenCalled();
+  });
+
+  it('solves the prepared file from the main command, with one durable press and no CAD job', async () => {
+    const accepted = deferred<string>();
+    mocks.submitImported.mockReturnValueOnce(accepted.promise);
+    act(() => {
+      useMeshImportStore.setState({ busy: false, filename: 'standalone.msh', startHz: 100, endHz: 200, count: 2,
+        registered: { ingest_id: 'wgi_file', manifest_sha256: 'sha256:mesh', artifact_sha256: 'sha256:original',
+          source_tags: { group_2: 2 } } as unknown as RegisteredMesh });
+      importedMeshStore.setFile({ name: 'standalone.msh', source: 'file', ingestId: 'wgi_file' } as ImportedMeshScene);
+    });
+    await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));
+    const solve = host.querySelector<HTMLButtonElement>('button')!;
+    expect(solve.disabled).toBe(false);
+    await act(async () => { solve.click(); solve.click(); });
+    expect(mocks.submitImported).toHaveBeenCalledOnce();
+    expect(mocks.submitImported.mock.calls[0][0].geometry).toMatchObject({ ingest_id: 'wgi_file',
+      drive_channels: [{ id: 'group_2', source_ids: ['group_2'], motion: 'normal' }] });
+    expect(mocks.submitImported.mock.calls[0][0].geometry).not.toHaveProperty('mesh');
+    expect(mocks.submitImported.mock.calls[0][2]).toContain('standalone');
+    expect(mocks.submitImported.mock.calls[0][3]).toMatch(/^mesh-/);
+    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+    await act(async () => { accepted.resolve('file-run'); await accepted.promise; });
+    expect(compareSelection.getSnapshot().awaiting).toBe('file-run');
+    act(() => useMeshImportStore.setState({ registered: null }));
   });
 
   // V2: Solve has one meaning. It solves the model and settings on screen;

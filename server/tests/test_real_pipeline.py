@@ -451,6 +451,61 @@ def test_a_parametric_design_solves_on_the_real_mesher_and_bempp(tmp_path: Path)
     asyncio.run(scenario())
 
 
+# -- Standalone mesh import -------------------------------------------------------
+
+
+@pytest.mark.real_runtime
+def test_a_mesh_file_solves_without_cad_and_replays_after_restart(tmp_path: Path) -> None:
+    """Real engine, ready triangles, no CAD exchange, meshing or operations."""
+    mesh = (Path(__file__).parent / "fixtures/mesh_import/tetra.msh").read_text()
+
+    async def scenario() -> None:
+        data_dir = tmp_path / "data"
+        app = create_app(data_dir=data_dir)
+        try:
+            engine, reason = await _imported_engine(app)
+            if engine is None:
+                if _imported_engine_expected() is not None:
+                    pytest.fail(reason)
+                pytest.skip(reason)
+            record = await _call(app, "POST", "/api/mesh-import", {
+                "filename": "standalone.msh", "msh_text": mesh, "units": "mm",
+                "forward": "+z", "up": "+y", "source_tags": [2],
+            })
+            body = {"geometry": {"type": "imported", "ingest_id": record["ingest_id"],
+                "manifest_sha256": record["manifest_sha256"], "artifact_sha256": record["artifact_sha256"],
+                "drive_channels": [{"id": "group_2", "source_ids": ["group_2"], "motion": "normal"}]},
+                "options": {"engine": engine, "frequencies_hz": [500.0, 1000.0],
+                    "polar_config": {"angle_range": [-180, 180, 73]}},
+                "client_request_id": "standalone-real-pipeline"}
+            job_id = (await _call(app, "POST", "/api/solve", body))["job_id"]
+            first = await _finish(app, job_id)
+            channel = first["channels"]["group_2"]
+            assert channel["frequencies"] == [500.0, 1000.0]
+            first_spl = _finite_series(channel["spl_on_axis"]["spl"], "mesh-file SPL", 2)
+            assert all(-60 < value < 100 for value in first_spl), first_spl
+            status = await _call(app, "GET", f"/api/status/{job_id}")
+            assert status["config_summary"]["import_origin"] == "mesh-file"
+            assert status["config_summary"]["mesh_import"]["source_tags"] == {"group_2": 2}
+            assert status["cad_source"]["identity"] is None
+        finally:
+            await _close(app)
+
+        app = create_app(data_dir=data_dir)
+        try:
+            await _settled_capabilities(app.state.engine_registry)
+            retry_id = (await _call(app, "POST", f"/api/jobs/{job_id}/retry"))["job_id"]
+            replayed = await _finish(app, retry_id)
+            second_spl = _finite_series(replayed["channels"]["group_2"]["spl_on_axis"]["spl"], "mesh replay SPL", 2)
+            assert max(abs(a - b) for a, b in zip(first_spl, second_spl)) < 0.001
+            restored = await _call(app, "GET", f"/api/mesh-import/{record['ingest_id']}")
+            assert restored["msh_text"] == record["msh_text"]
+        finally:
+            await _close(app)
+
+    asyncio.run(scenario())
+
+
 # -- CAD import ------------------------------------------------------------------
 
 

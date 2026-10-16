@@ -69,6 +69,7 @@ export function autoExportSubdirectoryForJob(
 }
 
 /** Which side of the app produced a run, for the run record. */
-export function runSourceForJob(job: Pick<JobItem, 'config_summary'>): 'parametric' | 'cadlink' {
+export function runSourceForJob(job: Pick<JobItem, 'config_summary'>): 'parametric' | 'cadlink' | 'mesh-file' {
+  if (job.config_summary.import_origin === 'mesh-file') return 'mesh-file';
   return job.config_summary.geometry_type === 'imported' ? 'cadlink' : 'parametric';
 }

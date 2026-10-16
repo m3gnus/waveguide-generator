@@ -69,7 +69,7 @@ describe('?job= deep link', () => {
     expect(window.location.search).toBe('?job=done-1&keep=1');
     await act(async () => { publish([job('other', 'complete', true), job('done-1', 'complete', true)]); });
     expect(compareSelection.getSnapshot().primary).toBe('done-1');
-    expect(mocks.showJobModel).toHaveBeenCalledWith(expect.objectContaining({ id: 'done-1' }));
+    expect(mocks.showJobModel).toHaveBeenCalledWith(expect.objectContaining({ id: 'done-1' }), expect.any(Function));
     expect(window.location.search).toBe('?keep=1');
     expect(window.location.hash).toBe('#frag');
   });
@@ -77,7 +77,7 @@ describe('?job= deep link', () => {
   it('selects a run that is still running and claims its results', async () => {
     publish([job('live-1', 'running', false)]);
     await mount('?job=live-1');
-    expect(mocks.showJobModel).toHaveBeenCalledWith(expect.objectContaining({ id: 'live-1' }));
+    expect(mocks.showJobModel).toHaveBeenCalledWith(expect.objectContaining({ id: 'live-1' }), expect.any(Function));
     expect(compareSelection.getSnapshot().awaiting).toBe('live-1');
     expect(window.location.search).toBe('');
   });

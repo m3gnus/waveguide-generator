@@ -26,7 +26,7 @@ export function openLinkedJob(
     report(`No run with id ${id} in this WG data folder.`);
     return;
   }
-  selectJob(job);
+  selectJob(job, report);
   if (isActiveJobStatus(job.status)) compareSelection.awaitRun(job.id);
 }
 

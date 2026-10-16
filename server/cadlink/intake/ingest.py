@@ -2418,10 +2418,9 @@ def current_fem_evidence(record: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def get_ingestion_record(store: CadLinkStore, ingest_id: str) -> dict[str, Any] | None:
-    row = store.get_ingest(ingest_id)
-    if row is None:
-        return None
-    return json.loads(str(row["record_json"]))
+    from server.mesh.records import get_prepared_mesh
+
+    return get_prepared_mesh(store, ingest_id)
 
 
 def deferred_viewport_lookup_key(record: Mapping[str, Any]) -> str | None:

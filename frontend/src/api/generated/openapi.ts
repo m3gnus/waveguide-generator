@@ -1561,6 +1561,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/mesh-import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register */
+        post: operations["register_api_mesh_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mesh-import/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Inspect */
+        post: operations["inspect_api_mesh_import_inspect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mesh-import/{ingest_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read */
+        get: operations["read_api_mesh_import__ingest_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/partial-results/{job_id}": {
         parameters: {
             query?: never;
@@ -4210,7 +4261,7 @@ export interface components {
             manifest_sha256: string;
             /** Max Drive Voltage V */
             max_drive_voltage_v?: number | null;
-            mesh: components["schemas"]["ImportedMeshSizes"];
+            mesh?: components["schemas"]["ImportedMeshSizes"] | null;
             /** Model Port Area M2 */
             model_port_area_m2?: number | null;
             /**
@@ -4777,6 +4828,37 @@ export interface components {
             wall_thickness?: components["schemas"]["Expr"] | null;
             /** Z Map Points */
             z_map_points?: string | null;
+        };
+        /** MeshFile */
+        MeshFile: {
+            /** Filename */
+            filename: string;
+            /** Msh Text */
+            msh_text: string;
+        };
+        /** MeshRegistration */
+        MeshRegistration: {
+            /** Filename */
+            filename: string;
+            /**
+             * Forward
+             * @enum {string}
+             */
+            forward: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+            /** Msh Text */
+            msh_text: string;
+            /** Source Tags */
+            source_tags: number[];
+            /**
+             * Units
+             * @enum {string}
+             */
+            units: "mm" | "cm" | "m" | "in";
+            /**
+             * Up
+             * @enum {string}
+             */
+            up: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
         };
         /** MetadataResponse */
         MetadataResponse: {
@@ -8759,6 +8841,109 @@ export interface operations {
                 };
                 content: {
                     "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_api_mesh_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MeshRegistration"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_api_mesh_import_inspect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MeshFile"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_api_mesh_import__ingest_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ingest_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

@@ -2329,7 +2329,7 @@ describe('CadLinkPanel', () => {
 
     const range = buildImportedSubmission(useCadReturnStore.getState());
     expect(range.geometry.acknowledged_findings).toEqual([`${record.report_sha256}:finding-a`]);
-    expect(range.geometry.mesh.source_size_mm).toEqual({ 'source-hf': 3.25 });
+    expect(range.geometry.mesh?.source_size_mm).toEqual({ 'source-hf': 3.25 });
     expect(range.options).toMatchObject({ frequency_range: [250, 12_000], num_frequencies: 31 });
     expect(range.options).not.toHaveProperty('frequencies_hz');
 

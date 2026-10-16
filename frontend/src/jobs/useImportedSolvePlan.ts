@@ -5,6 +5,7 @@ import {
   postImportedSolvePlan,
   SolvePlanRefused,
   type ImportedSolvePlan,
+  type ImportedSolveSubmission,
 } from './actions';
 import { buildImportedSubmission } from './importedSubmission';
 import { capabilityFingerprint } from './capabilityFingerprint';
@@ -44,12 +45,14 @@ function isFault(error: unknown): boolean {
  * becoming available -- BEAT's CPU runtime finishing its preparation -- changes
  * the answer without anything the user did.
  */
-export function useImportedSolvePlan(enabled: boolean): ImportedSolvePlanSnapshot {
+export function useImportedSolvePlan(enabled: boolean, preparedSubmission?: ImportedSolveSubmission | null): ImportedSolvePlanSnapshot {
   const cadReturn = useCadReturnStore();
   const solveOptions = useSolveOptionsStore();
   const { engines } = useCapabilities();
   const currentBody = useMemo(() => {
-    if (!enabled || !cadReturn.ingestRecord) return null;
+    if (!enabled) return null;
+    if (preparedSubmission !== undefined) return preparedSubmission === null ? null : importedSolvePlanRequestBody(preparedSubmission);
+    if (!cadReturn.ingestRecord) return null;
     try {
       return importedSolvePlanRequestBody(buildImportedSubmission(cadReturn));
     } catch {
@@ -59,7 +62,7 @@ export function useImportedSolvePlan(enabled: boolean): ImportedSolvePlanSnapsho
     }
     // `solveOptions` is read inside buildImportedSubmission, from the store.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, cadReturn, solveOptions]);
+  }, [enabled, cadReturn, solveOptions, preparedSubmission]);
   const capabilityKey = capabilityFingerprint(engines);
   const [settledBody, setSettledBody] = useState<string | null>(currentBody);
 

@@ -1,0 +1,185 @@
+import { create } from 'zustand';
+import { inspectMesh, registerMesh, readMeshImport, type MeshSummary, type RegisteredMesh } from '../api/meshImport';
+import { createImportedMeshScene } from '../viewport/importedMesh';
+import { importedMeshStore } from '../viewport/importedMeshStore';
+import { parseMSH } from '../viewport/mshParser';
+import { workspaceModeStore } from './workspaceMode';
+import { DEFAULT_SWEEP } from './solveDefaults';
+import { useSolveOptionsStore } from './solveOptions';
+import type { ImportedSolveSubmission } from '../jobs/actions';
+import type { JobItem } from '../api/jobsSocket';
+
+interface MeshImportState {
+  filename: string;
+  original: string | null;
+  summary: MeshSummary | null;
+  units: string;
+  forward: string;
+  up: string;
+  selected: number[];
+  registered: RegisteredMesh | null;
+  motions: Record<string, 'normal' | 'axial'>;
+  engine: string | null;
+  accuracy: 'fast' | 'accurate' | null;
+  startHz: number;
+  endHz: number;
+  count: number;
+  busy: boolean;
+  error: string | null;
+  notice: string | null;
+  request: number;
+}
+const initial: MeshImportState = {
+  filename: '', original: null, summary: null, units: '', forward: '+z', up: '+y', selected: [],
+  registered: null, motions: {}, engine: null, accuracy: null, startHz: DEFAULT_SWEEP.startHz, endHz: DEFAULT_SWEEP.endHz,
+  count: DEFAULT_SWEEP.points, busy: false, error: null, notice: null, request: 0,
+};
+let requestNumber = 0;
+export const useMeshImportStore = create<MeshImportState>(() => ({ ...initial }));
+
+/** Invalidating registration leaves the preview visible but never solvable. */
+export function editMeshImport(patch: Partial<Pick<MeshImportState, 'units' | 'forward' | 'up' | 'selected'>>) {
+  useMeshImportStore.setState({ ...patch, registered: null, error: null });
+}
+
+export async function loadMeshFile(filename: string, text: string, fetcher: typeof fetch = fetch, generation = importedMeshStore.beginIntent()): Promise<void> {
+  if (!importedMeshStore.isCurrentGeneration(generation)) return;
+  const request = ++requestNumber;
+  useMeshImportStore.setState({ ...initial, filename, original: text, busy: true, request });
+  try {
+    const summary = await inspectMesh(filename, text, fetcher);
+    if (!importedMeshStore.isCurrentGeneration(generation)) return;
+    const scene = createImportedMeshScene(filename, parseMSH(text));
+    if (!importedMeshStore.setFile(scene, generation)) return;
+    useMeshImportStore.setState({ summary, selected: summary.groups.filter(group => /^(LF|MF|HF|source|drive)$/i.test(group.name)).map(group => group.tag), busy: false });
+  } catch (error) {
+    if (importedMeshStore.isCurrentGeneration(generation)) {
+      useMeshImportStore.setState({ busy: false, error: String(error) });
+    }
+    throw error;
+  } finally {
+    if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
+  }
+}
+
+export async function prepareMeshFile(fetcher: typeof fetch = fetch): Promise<void> {
+  const state = useMeshImportStore.getState();
+  if (state.busy || !state.original) return;
+  const generation = importedMeshStore.beginIntent();
+  const request = ++requestNumber;
+  useMeshImportStore.setState({ busy: true, error: null, request });
+  try {
+    const record = await registerMesh({ filename: state.filename, msh_text: state.original,
+      units: state.units, forward: state.forward, up: state.up, source_tags: state.selected }, fetcher);
+    if (!importedMeshStore.isCurrentGeneration(generation)) return;
+    // Form edits during the request invalidate its result even when the viewport
+    // has not changed. A submitted snapshot cannot acquire newer assignments.
+    const current = useMeshImportStore.getState();
+    if (current.original !== state.original || current.units !== state.units || current.forward !== state.forward
+      || current.up !== state.up || JSON.stringify(current.selected) !== JSON.stringify(state.selected)) return;
+    const scene = preparedFileScene(record);
+    if (importedMeshStore.setFile(scene, generation)) useMeshImportStore.setState({ registered: record });
+  } catch (error) {
+    if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error) });
+  } finally {
+    if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
+  }
+}
+
+export function fileMeshSubmission(): ImportedSolveSubmission {
+  const state = useMeshImportStore.getState();
+  const record = state.registered;
+  const viewport = importedMeshStore.getSnapshot();
+  if (state.busy) throw new Error('Wait for mesh preparation to finish.');
+  if (!record || viewport.showing !== 'file' || viewport.file?.ingestId !== record.ingest_id) {
+    throw new Error('Choose units and driven groups, then prepare this mesh before solving.');
+  }
+  if (!(state.startHz > 0) || !(state.endHz > state.startHz) || !Number.isInteger(state.count) || state.count < 2 || state.count > 401) {
+    throw new Error('Enter an increasing frequency range and 2–401 frequencies.');
+  }
+  // These are this import workflow's stated controls, independent of any
+  // parametric design left open behind the file view.
+  const selected = useSolveOptionsStore.getState();
+  return {
+    geometry: { type: 'imported', ingest_id: record.ingest_id, manifest_sha256: record.manifest_sha256,
+      artifact_sha256: record.artifact_sha256, acknowledged_findings: [], skipped_source_ids: [],
+      drive_channels: Object.keys(record.source_tags).map(id => ({ id, source_ids: [id], motion: state.motions[id] ?? 'normal' })) },
+    options: { engine: state.engine ?? selected.engine, accuracy: state.accuracy ?? selected.accuracy, symmetry: 'full', solver_mode: 'full_3d',
+      mesh_validation_mode: 'strict', verbose: false, frequency_spacing: 'log',
+      frequency_range: [state.startHz, state.endHz], num_frequencies: state.count,
+      polar_config: { angle_range: [-180, 180, 73], angle_step: 5, enabled_axes: ['horizontal', 'vertical', 'diagonal'],
+        distance: 2, norm_angle: 5, inclination: 45, observation_origin: 'mouth', spherical_sampling: false, field_plane: true } },
+  };
+}
+
+/** An unanswered transport replay keeps its ID and label across a page reload. */
+export function fileSolvePress(submission: ImportedSolveSubmission, label: string): { id: string; label: string } {
+  const body = JSON.stringify(submission);
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('wg-mesh-solve-press') ?? 'null');
+    if (saved?.body === body && typeof saved.id === 'string' && typeof saved.label === 'string') return saved;
+  } catch { /* A missing/corrupt cache cannot claim an earlier submission. */ }
+  const press = { id: `mesh-${crypto.randomUUID()}`, label, body };
+  sessionStorage.setItem('wg-mesh-solve-press', JSON.stringify(press));
+  return press;
+}
+
+export function finishFileSolvePress(id: string): void {
+  try {
+    if (JSON.parse(sessionStorage.getItem('wg-mesh-solve-press') ?? 'null')?.id === id) sessionStorage.removeItem('wg-mesh-solve-press');
+  } catch { /* Best-effort cache cleanup after durable backend acceptance. */ }
+}
+
+function preparedFileScene(record: RegisteredMesh) {
+  return createImportedMeshScene(record.source_file.filename, parseMSH(record.msh_text), 'file', record.ingest_id,
+    [], { drivenTags: Object.values(record.source_tags) });
+}
+
+interface FileOptions {
+  engine?: string;
+  accuracy?: 'fast' | 'accurate';
+  frequencies_hz?: number[] | null;
+  frequency_range?: number[] | null;
+  num_frequencies?: number | null;
+}
+
+async function restoreRetainedFile(id: string, options: FileOptions,
+  channels: Array<{ id: string; motion?: 'normal' | 'axial' }>, fetcher: typeof fetch): Promise<boolean> {
+  const generation = importedMeshStore.beginIntent();
+  const record = await readMeshImport(id, fetcher);
+  if (!importedMeshStore.isCurrentGeneration(generation)) return false;
+  if (record.ingest_id !== id) throw new Error('The retained mesh response names a different import. Select the run again.');
+  if (!importedMeshStore.setFile(preparedFileScene(record), generation)) return false;
+  workspaceModeStore.setMode('parametric');
+  const frequencies = options.frequencies_hz;
+  useMeshImportStore.setState({ ...initial, filename: record.source_file.filename,
+    summary: record.summary, registered: record, ...record.source_file.transform, selected: record.source_file.source_tags,
+    engine: options.engine ?? null, accuracy: options.accuracy ?? null,
+    motions: Object.fromEntries(channels.map(channel => [channel.id, channel.motion ?? 'normal'])),
+    startHz: frequencies?.[0] ?? options.frequency_range?.[0] ?? initial.startHz,
+    endHz: frequencies?.at(-1) ?? options.frequency_range?.[1] ?? initial.endHz,
+    count: frequencies?.length ?? options.num_frequencies ?? initial.count,
+  });
+  return true;
+}
+
+/** An unanswered request restores its SAME retained mesh and setup, so a new
+ * press replays its durable ID rather than registering a new ingest after reload. */
+export async function restorePendingMeshPress(fetcher: typeof fetch = fetch): Promise<boolean> {
+  let saved: { id?: string; body?: string } | null = null;
+  try { saved = JSON.parse(sessionStorage.getItem('wg-mesh-solve-press') ?? 'null'); }
+  catch { return false; }
+  if (!saved?.id?.startsWith('mesh-') || !saved.body) return false;
+  const body = JSON.parse(saved.body) as ImportedSolveSubmission;
+  if (body.geometry?.type !== 'imported' || !body.geometry.ingest_id || !body.options) return false;
+  const restored = await restoreRetainedFile(body.geometry.ingest_id, body.options, body.geometry.drive_channels, fetcher);
+  if (restored) useMeshImportStore.setState({ notice: 'An unanswered mesh solve was restored. Press Solve to recover that request before starting another run.' });
+  return restored;
+}
+
+/** Restore one retained file mesh, never route it through the CAD workspace. */
+export async function restoreMeshImport(job: JobItem, fetcher: typeof fetch = fetch): Promise<boolean> {
+  const id = job.cad_source?.ingest_id;
+  if (!id) throw new Error('This run has no retained mesh identity. Import the mesh again.');
+  return restoreRetainedFile(id, job.solve_options, job.cad_setup?.drive_channels ?? [], fetcher);
+}
