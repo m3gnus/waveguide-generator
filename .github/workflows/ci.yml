@@ -31,6 +31,12 @@ on:
   push:
     branches: [dev]
   workflow_dispatch:
+    inputs:
+      installer_gate_run:
+        description: "Replay installer gates using the retained failed setup from this RC run (diagnosis only)"
+        type: string
+        required: false
+        default: ""
   workflow_call:
 
 # Only a push is ever cancelled, and only by a newer push to the same ref: a
@@ -412,3 +418,51 @@ jobs:
         # split the macOS anomaly above needs and that -v timestamps cannot
         # give.
         run: python -m pytest ${{ matrix.paths }} -v --durations=25
+
+  windows-installer-replay:
+    name: Replay retained Windows installer gates
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.installer_gate_run != '' }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Validate and download the original diagnostic installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPLAY_RUN: ${{ inputs.installer_gate_run }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:REPLAY_RUN -notmatch '^[0-9]+$') { throw "Expected a numeric RC run ID" }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:REPLAY_RUN" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Cannot read the source run" }
+          if (($run.path -split '@', 2)[0] -ne '.github/workflows/rc-build.yml') { throw "Expected an RC build run" }
+          $changed = @(git diff --name-only $run.head_sha HEAD)
+          if ($LASTEXITCODE -ne 0) { throw "Cannot compare installer source" }
+          foreach ($path in $changed) {
+            if ($path -ne 'installers/windows/gates.ps1' -and $path -ne '.github/workflows/ci.yml' -and $path -notlike 'scripts/tests/test_windows_*.py') {
+              throw "Replay cannot qualify changed production input: $path"
+            }
+          }
+          gh run download $env:REPLAY_RUN --repo $env:GITHUB_REPOSITORY --name rc-windows-setup-failure --dir replay-setup
+          if ($LASTEXITCODE -ne 0) { throw "Cannot download diagnostic setup" }
+          $setup = @(Get-ChildItem -File replay-setup/*-setup.exe)
+          if ($setup.Count -ne 1) { throw "Expected exactly one retained setup" }
+          $expected = ((Get-Content -Raw ($setup[0].FullName + '.sha256')).Trim() -split '\s+')[0]
+          if ($expected -notmatch '^[0-9a-fA-F]{64}$' -or (Get-FileHash $setup[0].FullName -Algorithm SHA256).Hash -ne $expected) { throw "Setup checksum mismatch" }
+          Write-Host "Replaying original RC $($run.head_sha) with current gate code; this does not produce a release candidate."
+          "REPLAY_SETUP=$($setup[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Run unchanged safety criteria against retained setup
+        shell: pwsh
+        run: |
+          & ./installers/windows/gates.ps1 -Setup $env:REPLAY_SETUP -EvidenceDir (Join-Path $env:RUNNER_TEMP "WG-inst-evidence-replay")
+          if ($LASTEXITCODE -ne 0) { throw "Installer gate replay failed: $LASTEXITCODE" }
+      - name: Retain replay diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-installer-replay
+          path: ${{ runner.temp }}/WG-inst-evidence-replay
+          if-no-files-found: warn

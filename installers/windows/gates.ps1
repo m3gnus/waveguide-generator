@@ -475,12 +475,7 @@ try {
         if ($waitingLogged -or $waiting.HasExited) { break }
         Start-Sleep -Milliseconds 250
     } while ([DateTime]::UtcNow -lt $readyDeadline)
-    Start-Sleep -Seconds 8
-    $heldWhileAlive = $waitingLogged -and (-not $standIn.HasExited) -and (-not $waiting.HasExited) -and -not (Test-Path $waitOutcome) -and (Test-Path $waitSentinel) -and ($beforeWait -eq (LayerFingerprint $installRoot))
-    foreach ($aside in @(".app.old", ".runtime.old", ".wg-install-old", ".wg-install-new", ".upgrade-in-progress")) {
-        if (Test-Path (Join-Path $installRoot $aside)) { $heldWhileAlive = $false }
-    }
-
+    Write-Host "WAITPID gate: wait observed at $([DateTime]::UtcNow.ToString('o')); logged=$waitingLogged; setup exited=$($waiting.HasExited)"
     # --- Gate 15: a second setup cannot proceed while the first waits --------
     # OpenExisting probes the exact mutex the launcher checks. Dispose the probe
     # immediately so the gate itself cannot keep the mutex alive after setup.
@@ -498,6 +493,19 @@ try {
     $contender.Refresh()
     $contenderData = if (Test-Path $contenderOutcome) { Get-Content -Raw $contenderOutcome | ConvertFrom-Json } else { $null }
     $contenderBlocked = $waitingLogged -and $mutexPresent -and (-not $standIn.HasExited) -and (-not $waiting.HasExited) -and -not (Test-Path $waitOutcome) -and -not (Test-Path $contenderRoot) -and ($null -eq $contenderData -or $contenderData.result -eq "failed") -and ((-not $contenderReturned) -or ($null -ne $contender.ExitCode -and $contender.ExitCode -ne 0))
+    Write-Host "WAITPID gate: contender observed at $([DateTime]::UtcNow.ToString('o')); mutex=$mutexPresent; setup exited=$($waiting.HasExited)"
+    # Keep the byte-for-byte check inside the live wait, after testing the
+    # mutex/contender. Recheck liveness after hashing: the pre-hash observation
+    # alone can become stale while a slow filesystem operation is in progress.
+    Write-Host "WAITPID gate: fingerprint starting at $([DateTime]::UtcNow.ToString('o'))"
+    Start-Sleep -Seconds 8
+    $heldWhileAlive = $waitingLogged -and (-not $standIn.HasExited) -and (-not $waiting.HasExited) -and -not (Test-Path $waitOutcome) -and (Test-Path $waitSentinel) -and ($beforeWait -eq (LayerFingerprint $installRoot))
+    foreach ($aside in @(".app.old", ".runtime.old", ".wg-install-old", ".wg-install-new", ".upgrade-in-progress")) {
+        if (Test-Path (Join-Path $installRoot $aside)) { $heldWhileAlive = $false }
+    }
+
+    $heldWhileAlive = $heldWhileAlive -and (-not $standIn.HasExited) -and (-not $waiting.HasExited) -and -not (Test-Path $waitOutcome)
+    Write-Host "WAITPID gate: fingerprint finished at $([DateTime]::UtcNow.ToString('o')); live=$heldWhileAlive"
     Stop-Process -Id $standIn.Id -Force
     $finishedAfter = $waiting.WaitForExit(90000)
     if ($finishedAfter) { $waiting.Refresh(); $waitExit = $waiting.ExitCode }

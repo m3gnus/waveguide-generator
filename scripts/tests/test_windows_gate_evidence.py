@@ -199,3 +199,122 @@ Remove-Item -LiteralPath $gateRoot -Recurse -Force
     record = json.loads((folder / "invocation.json").read_text(encoding="utf-8-sig"))
     assert record["exitCode"] == 3 and record["status"] == "exited"
     assert isinstance(json.loads((folder / "state.json").read_text(encoding="utf-8-sig")), list)
+
+
+@pytest.mark.parametrize("expires_during_fingerprint", [False, True])
+def test_wait_gate_probes_contender_before_hash_and_rechecks_liveness(
+    pwsh, tmp_path, expires_during_fingerprint
+):
+    """Execute the real gate with an expiry injected inside its byte check."""
+    fragment = SOURCE[SOURCE.index('$waitOutcome ='):SOURCE.index('# --- Gate 16:')]
+    code = r'''
+New-Item -ItemType Directory (Join-Path $installRoot 'app') | Out-Null
+$script:expired = EXPIRES
+$script:hashes = 0
+$script:events = @()
+$script:gateResults = @()
+$layerBaseline = 'baseline'
+$script:stand = [pscustomobject]@{ Id = 42; HasExited = $false }
+$script:waiter = [pscustomobject]@{ Handle = 1; HasExited = $false; ExitCode = 0 }
+$script:waiter | Add-Member ScriptMethod WaitForExit { param($timeout) return $this.HasExited }
+$script:waiter | Add-Member ScriptMethod Refresh {}
+$script:other = [pscustomobject]@{ Handle = 2; HasExited = $true; ExitCode = 1 }
+$script:other | Add-Member ScriptMethod WaitForExit { param($timeout) return $true }
+$script:other | Add-Member ScriptMethod Refresh {}
+function Start-StandIn { return $script:stand }
+function Start-SandboxedSetup {
+    param($Executable, $ExtraArguments)
+    if ($ExtraArguments -match '/WAITPID=') {
+        Set-Content -LiteralPath $waitLog -Value '/WAITPID: waiting up to 120 s'
+        return $script:waiter
+    }
+    if (-not $mutexPresent) { throw 'contender launch did not observe the setup mutex' }
+    $script:events += 'contender'
+    return $script:other
+}
+function Start-Sleep { param($Seconds, $Milliseconds) }
+function LayerFingerprint {
+    param($root)
+    $script:hashes++
+    if ($script:hashes -eq 2) {
+        $script:events += 'in-wait-hash'
+        if ($script:expired) {
+            $script:waiter.HasExited = $true
+            $script:waiter.ExitCode = 3
+            Set-Content -LiteralPath $waitOutcome -Value '{"result":"failed"}'
+        }
+    }
+    return 'baseline'
+}
+function Stop-Process {
+    param($Id, [switch]$Force)
+    if ($Id -ne $script:stand.Id) { throw 'unexpected process stop' }
+    $script:stand.HasExited = $true
+    $script:waiter.HasExited = $true
+    if (-not $script:expired) {
+        Set-Content -LiteralPath $waitOutcome -Value '{"result":"installed"}'
+        Remove-Item -LiteralPath $waitSentinel
+    }
+}
+function Gate {
+    param($id, $name, $pass, $detail)
+    $script:gateResults += @{ id = $id; pass = $pass }
+}
+$ownedMutex = [Threading.Mutex]::new($false, 'WaveguideGeneratorSetup')
+try {
+FRAGMENT
+    if (($script:events -join ',') -ne 'contender,in-wait-hash') { throw 'hash consumed the wait before contender probe' }
+    $expected = -not $script:expired
+    if ($heldWhileAlive -ne $expected) { throw 'pre-hash liveness was incorrectly retained after expiry' }
+    if ($script:gateResults.Count -ne 2) { throw 'missing gate verdicts' }
+    foreach ($gate in $script:gateResults) {
+        if ($gate.pass -ne $expected) { throw "wrong gate verdict: $($gate.id)" }
+    }
+} finally { $ownedMutex.Dispose() }
+'''.replace("EXPIRES", "$true" if expires_during_fingerprint else "$false").replace("FRAGMENT", fragment)
+    run_ps(pwsh, tmp_path, code)
+
+
+@pytest.mark.parametrize("workflow_path", [
+    ".github/workflows/rc-build.yml", ".github/workflows/rc-build.yml@refs/heads/dev",
+])
+@pytest.mark.parametrize("production_changed", [False, True])
+def test_installer_replay_validates_actual_workflow_and_production_diff(
+    pwsh, tmp_path, workflow_path, production_changed
+):
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
+    source = workflow['jobs']['windows-installer-replay']['steps'][1]['run']
+    script = tmp_path / 'replay-check.ps1'
+    script.write_text(r'''
+$ErrorActionPreference = 'Stop'
+$env:REPLAY_RUN = '123'
+$env:GITHUB_REPOSITORY = 'example/fixture'
+$env:GITHUB_ENV = Join-Path $pwd 'github-env.txt'
+function gh {
+    $global:LASTEXITCODE = 0
+    if ($args[0] -eq 'api') {
+        return '{"path":"WORKFLOW_PATH","head_sha":"baseline"}'
+    }
+    New-Item -ItemType Directory replay-setup | Out-Null
+    Set-Content replay-setup/fixture-setup.exe 'diagnostic fixture, never executed'
+    $hash = (Get-FileHash replay-setup/fixture-setup.exe -Algorithm SHA256).Hash
+    Set-Content replay-setup/fixture-setup.exe.sha256 ($hash + '  fixture-setup.exe')
+}
+function git {
+    $global:LASTEXITCODE = 0
+    return 'CHANGED_PATH'
+}
+'''.replace('WORKFLOW_PATH', workflow_path).replace(
+        'CHANGED_PATH', 'server/app.py' if production_changed else 'installers/windows/gates.ps1'
+    ) + source)
+    result = subprocess.run([pwsh, '-NoLogo', '-NoProfile', '-NonInteractive', '-File', str(script)],
+                            cwd=tmp_path, text=True, capture_output=True, timeout=25)
+    if production_changed:
+        assert result.returncode != 0
+        assert 'Replay cannot qualify changed production input' in result.stderr
+        assert not (tmp_path / 'replay-setup').exists()
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert 'REPLAY_SETUP=' in (tmp_path / 'github-env.txt').read_text(encoding='utf-8-sig')
