@@ -243,19 +243,205 @@ describe('CAD setup publisher', () => {
   });
 
   it('records both accuracy and engine at start and whenever either changes', async () => {
+    vi.useFakeTimers();
     const { fetcher, to } = recorder();
     const stop = startCadSetupPublisher({ fetcher, debounceMs: 500 });
+    await vi.advanceTimersByTimeAsync(0);
     useSolveOptionsStore.getState().setEngine('bempp');
+    await vi.advanceTimersByTimeAsync(0);
     useSolveOptionsStore.getState().setEngine('bempp');
     useSolveOptionsStore.getState().setEngine('metal');
+    await vi.advanceTimersByTimeAsync(0);
     useSolveOptionsStore.getState().setAccuracy('accurate');
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     expect(to('/solver-selection')).toEqual([
       { engine: 'auto', accuracy: 'fast' },
       { engine: 'bempp', accuracy: 'fast' },
       { engine: 'metal', accuracy: 'fast' },
       { engine: 'auto', accuracy: 'accurate' },
     ]);
+    stop();
+  });
+});
+
+describe('CAD solver selection publication', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    localStorage.clear();
+    resetCadReturnStore();
+    resetCadPreparationStore();
+    resetDocumentStore();
+    resetSolveOptionsStore();
+    workspaceModeStore.setMode('cad');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
+    workspaceModeStore.setMode('parametric');
+  });
+
+  function controlled() {
+    const calls: Array<{
+      selection: { engine: string; accuracy: string };
+      resolve: (response: Response) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).endsWith('/solver-selection')) return Promise.resolve(json({}));
+      return new Promise<Response>((resolve, reject) => {
+        calls.push({ selection: JSON.parse(String(init?.body)), resolve, reject });
+      });
+    }) as unknown as typeof fetch;
+    return { calls, fetcher };
+  }
+
+  it('finishes the old write before publishing the latest choice and coalesces intermediate choices', async () => {
+    const { calls, fetcher } = controlled();
+    const stop = startCadSetupPublisher({ fetcher });
+    expect(calls[0].selection).toEqual({ engine: 'auto', accuracy: 'fast' });
+    useSolveOptionsStore.getState().setEngine('bempp');
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    expect(calls).toHaveLength(1);
+    calls[0].resolve(json({}));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].selection).toEqual({ engine: 'auto', accuracy: 'accurate' });
+    calls[1].resolve(json({}));
+    await vi.advanceTimersByTimeAsync(0);
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(2);
+    stop();
+  });
+
+  it.each(['network', 503, 408, 429] as const)('recovers a transient %s failure without another edit', async (failure) => {
+    const { calls, fetcher } = controlled();
+    const states: string[] = [];
+    const stop = startCadSetupPublisher({ fetcher, retryDelaysMs: [100], onSaveState: (state) => states.push(state) });
+    if (failure === 'network') calls[0].reject(new TypeError('offline'));
+    else calls[0].resolve(new Response('{"detail":"temporary"}', { status: failure }));
+    await vi.advanceTimersByTimeAsync(99);
+    expect(calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].selection).toEqual(calls[0].selection);
+    calls[1].resolve(json({}));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toHaveLength(2);
+    expect(states).toEqual([]);
+    stop();
+  });
+
+  it('bounds retries, reports exhaustion and clears the error after a later successful selection', async () => {
+    const { calls, fetcher } = controlled();
+    const states: string[] = [];
+    const stop = startCadSetupPublisher({ fetcher, retryDelaysMs: [100], onSaveState: (state) => states.push(state) });
+    calls[0].reject(new TypeError('offline'));
+    await vi.advanceTimersByTimeAsync(100);
+    calls[1].reject(new TypeError('offline'));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toHaveLength(2);
+    expect(states).toEqual(['failed']);
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    expect(calls).toHaveLength(3);
+    calls[2].resolve(json({}));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(states).toEqual(['failed', 'saved']);
+    stop();
+  });
+
+  it('reports a permanent refusal without retrying it', async () => {
+    const { calls, fetcher } = controlled();
+    const states: string[] = [];
+    const stop = startCadSetupPublisher({ fetcher, retryDelaysMs: [100], onSaveState: (state) => states.push(state) });
+    calls[0].resolve(new Response('{"detail":"unsupported selection"}', { status: 422 }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toHaveLength(1);
+    expect(states).toEqual(['failed']);
+    stop();
+  });
+
+  it('replaces an old retry with the new choice', async () => {
+    const { calls, fetcher } = controlled();
+    const stop = startCadSetupPublisher({ fetcher, retryDelaysMs: [100] });
+    calls[0].reject(new TypeError('offline'));
+    await vi.advanceTimersByTimeAsync(0);
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    expect(calls).toHaveLength(2);
+    expect(calls[1].selection.accuracy).toBe('accurate');
+    calls[1].resolve(json({}));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toHaveLength(2);
+    stop();
+  });
+
+  it('sends the current choice when an older in-flight write fails', async () => {
+    const { calls, fetcher } = controlled();
+    const stop = startCadSetupPublisher({ fetcher, retryDelaysMs: [100] });
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    calls[0].reject(new TypeError('offline'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].selection.accuracy).toBe('accurate');
+    calls[1].resolve(json({}));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toHaveLength(2);
+    stop();
+  });
+
+  it('cancels retry timers on stop', async () => {
+    const { calls, fetcher } = controlled();
+    const states: string[] = [];
+    const stop = startCadSetupPublisher({ fetcher, retryDelaysMs: [100], onSaveState: (state) => states.push(state) });
+    calls[0].reject(new TypeError('offline'));
+    await vi.advanceTimersByTimeAsync(0);
+    stop();
+    await vi.advanceTimersByTimeAsync(10_000);
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    expect(calls).toHaveLength(1);
+    expect(states).toEqual([]);
+  });
+
+  it.each(['success', 'failure'])('does not publish a queued choice or feedback after an in-flight %s settles following stop', async (outcome) => {
+    const { calls, fetcher } = controlled();
+    const states: string[] = [];
+    const stop = startCadSetupPublisher({ fetcher, retryDelaysMs: [100], onSaveState: (state) => states.push(state) });
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    stop();
+    if (outcome === 'success') calls[0].resolve(json({}));
+    else calls[0].reject(new TypeError('offline'));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toHaveLength(1);
+    expect(states).toEqual([]);
+  });
+
+  it('keeps a solver save error visible when the project setup saves successfully', async () => {
+    const { calls, fetcher } = controlled();
+    const states: string[] = [];
+    const stop = startCadSetupPublisher({ fetcher, debounceMs: 100, retryDelaysMs: [], onSaveState: (state) => states.push(state) });
+    calls[0].reject(new TypeError('offline'));
+    await vi.advanceTimersByTimeAsync(0);
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(states).toEqual(['failed']);
+    stop();
+  });
+
+  it('keeps a project setup error visible when the solver selection saves successfully', async () => {
+    const states: string[] = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/project-setups')) throw new TypeError('offline');
+      return json({});
+    }) as unknown as typeof fetch;
+    const stop = startCadSetupPublisher({ fetcher, debounceMs: 100, retryDelaysMs: [], onSaveState: (state) => states.push(state) });
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(states).toEqual(['failed']);
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(states).toEqual(['failed']);
     stop();
   });
 });

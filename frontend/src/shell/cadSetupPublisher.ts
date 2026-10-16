@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { CadLinkApiError } from '../api/cadlink';
 import { create } from 'zustand';
 import { exteriorModeBlocker } from '../jobs/importedSubmission';
 import {
@@ -185,8 +186,20 @@ export function startCadSetupPublisher(
   let published: string | null = null;
   let pending: CadProjectSetup | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let solverSelection: string | null = null;
   let failed = false;
+  let solverFailed = false;
+  let reportedFailure = false;
+  const reportSaveState = () => {
+    const next = failed || solverFailed;
+    if (next === reportedFailure) return;
+    reportedFailure = next;
+    onSaveState(next ? 'failed' : 'saved');
+  };
+  type SolverSelection = { engine: string; accuracy: 'fast' | 'accurate' };
+  let solverSelection: SolverSelection | null = null;
+  let savedSolverSelection: string | null = null;
+  let solverInFlight = false;
+  let solverRetry: ReturnType<typeof setTimeout> | null = null;
   // The recording that failed and waits for its next attempt.
   let retrying: { next: CadProjectSetup; key: string; attempt: number; timer: ReturnType<typeof setTimeout> } | null = null;
   let stopped = false;
@@ -194,7 +207,7 @@ export function startCadSetupPublisher(
   const send = (next: CadProjectSetup, key: string, attempt: number, keepalive: boolean) => {
     retrying = null;
     putProjectSetup(next, fetcher, { keepalive }).then(() => {
-      if (failed && published === key) { failed = false; onSaveState('saved'); }
+      if (failed && published === key) { failed = false; reportSaveState(); }
     }, () => {
       // A newer edit has taken over: it is what needs recording now.
       if (published !== key) return;
@@ -204,7 +217,7 @@ export function startCadSetupPublisher(
         return;
       }
       published = null;
-      if (!failed) { failed = true; onSaveState('failed'); }
+      if (!failed) { failed = true; reportSaveState(); }
     });
   };
 
@@ -253,14 +266,54 @@ export function startCadSetupPublisher(
     flush();
   };
 
+  // One outstanding write: the backend must finish an older choice before
+  // it receives the latest one. Changes during a write replace the queued
+  // choice rather than publishing intermediate selections out of order.
+  const sendSolverSelection = (next: SolverSelection, attempt = 0) => {
+    solverInFlight = true;
+    const key = JSON.stringify(next);
+    const latest = () => solverSelection !== null && JSON.stringify(solverSelection) === key;
+    void putSolverSelection(next, fetcher).then(() => {
+      solverInFlight = false;
+      if (stopped) return;
+      savedSolverSelection = key;
+      if (!latest()) { sendSolverSelection(solverSelection!); return; }
+      solverFailed = false;
+      reportSaveState();
+    }, (error: unknown) => {
+      solverInFlight = false;
+      if (stopped) return;
+      // An unsuccessful response may follow a committed write. Reassert the
+      // current choice even when it matches a previously successful save.
+      savedSolverSelection = null;
+      if (!latest()) { sendSolverSelection(solverSelection!); return; }
+      const status = error instanceof CadLinkApiError ? error.status : null;
+      const transient = status === null || status >= 500 || status === 408 || status === 429;
+      if (transient && attempt < retryDelays.length) {
+        solverRetry = setTimeout(() => {
+          solverRetry = null;
+          if (!stopped) sendSolverSelection(solverSelection!, attempt + 1);
+        }, retryDelays[attempt]);
+        return;
+      }
+      solverFailed = true;
+      reportSaveState();
+    });
+  };
+
   const observeSolverSelection = () => {
     const { engine, accuracy } = useSolveOptionsStore.getState();
-    const next = JSON.stringify({ engine, accuracy });
-    if (next === solverSelection) return;
+    const next = { engine, accuracy };
+    const key = JSON.stringify(next);
+    const changed = key !== JSON.stringify(solverSelection);
     solverSelection = next;
-    void putSolverSelection({ engine, accuracy }, fetcher).catch(() => {
-      if (solverSelection === next) solverSelection = null;
-    });
+    if (solverInFlight) return;
+    if (solverRetry !== null) {
+      if (!changed) return;
+      clearTimeout(solverRetry);
+      solverRetry = null;
+    }
+    if (key !== savedSolverSelection) sendSolverSelection(next);
   };
 
   const unsubscribers = [
@@ -277,6 +330,9 @@ export function startCadSetupPublisher(
     if (typeof window !== 'undefined') window.removeEventListener('pagehide', leave);
     flush();
     stopped = true;
+    if (solverRetry !== null) clearTimeout(solverRetry);
+    solverRetry = null;
+    solverSelection = null;
     if (retrying) clearTimeout(retrying.timer);
     retrying = null;
   };
