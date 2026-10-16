@@ -1232,7 +1232,7 @@ async def resolve_imported_submission(
         candidates = (requested,)
         reason = cpu_fallback or f"explicit engine={requested!r} declares imported geometry"
     if requested != "auto" and not any(name in capable for name in candidates):
-        if requested not in declared and requested in _BEAT_FAST_IMPORTED_EXPLICIT:
+        if requested not in declared and requested in _BEAT_ACCELERATORS:
             # Not detected on this host at all: say so, not that the engine
             # cannot take CAD returns.
             raise EngineUnavailableError(

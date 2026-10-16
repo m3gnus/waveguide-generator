@@ -3665,13 +3665,35 @@ def test_beat_cuda_fast_refusal_offers_beat_metal_and_never_an_empty_auto() -> N
     assert "AUTO" not in message
 
 
-def test_explicit_beat_metal_not_detected_says_it_is_unavailable() -> None:
-    from server.jobs.runtime import EngineUnavailableError, resolve_imported_submission
+@pytest.mark.parametrize("engine", ["beat-metal", "beat-cuda", "beat-rocm"])
+@pytest.mark.parametrize("accuracy", ["fast", "accurate"])
+def test_explicit_beat_gpu_not_detected_says_it_is_unavailable(
+    engine: str, accuracy: str,
+) -> None:
+    from server.jobs.runtime import resolve_imported_submission
 
     request = _request("wgi_" + "0" * 26)
-    request.options.engine = "beat-metal"
-    with pytest.raises(EngineUnavailableError, match="unavailable"):
+    request.options.engine = engine
+    request.options.accuracy = accuracy
+    with pytest.raises(EngineUnavailableError, match=f"'{engine}' is unavailable"):
         asyncio.run(resolve_imported_submission(request, _DeclaredRegistry(_metal(), _beat_cpu())))
+
+
+@pytest.mark.parametrize("engine", ["beat-cuda", "beat-rocm"])
+def test_imported_plan_for_undetected_gpu_returns_unavailable(engine: str) -> None:
+    from server.jobs.runtime import plan_imported_submission
+
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = engine
+    plan = asyncio.run(plan_imported_submission(
+        request, _AlwaysDeclaredRegistry(_metal(), _beat_cpu())
+    ))
+
+    assert plan["requested"] == engine
+    assert plan["engine"] is None
+    assert plan["code"] == "engine_unavailable"
+    assert f"'{engine}' is unavailable" in plan["reason"]
+    assert request.options.engine == engine
 
 
 def test_explicit_beat_metal_fast_is_capable_in_the_imported_plan() -> None:
