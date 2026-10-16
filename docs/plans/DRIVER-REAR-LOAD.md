@@ -1,7 +1,16 @@
 # Per-channel rear loads for LEM-coupled BEM drive channels
 
-Status: proposed, 2026-08-27. Nothing implemented. Written after the driver
-review that produced [PR #38](https://github.com/m3gnus/waveguide-generator/pull/38),
+Status: proposed design, originally 2026-08-27; partial overlap with later
+implemented features, reviewed 2026-10-16. This is not a current claim that all
+rear loading is absent. The BEAT transducer route supports a lumped sealed rear
+chamber, and coupled CAD FEM supports meshed chambers; see
+[the F10a contract](CADLINK-FEM-REGIONS.md#f-t-exterior-driver-options-and-f10a-rear-loading).
+The sealed chamber requires declared Sd and refuses a double rear load.
+
+The broader per-channel lossy/vented model and its hornlab-sim prerequisite
+remain proposals. The original one-port/passive-cardioid call-site analysis
+below describes its August baseline and must be rechecked before implementation.
+Written after the driver review that produced [PR #38](https://github.com/m3gnus/waveguide-generator/pull/38),
 whose first commit guards a bug class this plan would delete outright.
 
 A drive channel's rear load is today one optional number — `rear_volume_l`, a

@@ -26,7 +26,8 @@ the exception in `validation/`: it is a blank form to copy, not evidence.
 | [Update transaction contract](reference/UPDATE-TRANSACTION-CONTRACT.md) | Updater and launcher maintainers | Implementation contract; strict expected-failure tests | `launchers/`, `server/updates/`, 2026-09-13 |
 | [Shutdown and recovery](reference/SHUTDOWN-AND-RECOVERY.md) | Server, launcher, and release maintainers | Current behaviour; process-level tests and an RC gate | `launch/serve.py`, `server/platform/`, 2026-09-13 |
 | [Multi-instance CAD identity](reference/MULTI-INSTANCE-CAD-IDENTITY.md) | CAD adapter, server, and UI developers | Implemented first-slice contract | Fusion status, return listing/ingest, and UI, 2026-08-20 |
-| [External STEP isolation](plans/STEP-PARSER-ISOLATION.md) | Security reviewers and CAD developers | Accepted design gate | Child-process boundary, 2026-08-13 |
+| [Design plans and implementation records](plans/README.md) | Contributors and maintainers | Index of implemented contracts, accepted gates and open proposals | Planning classification reviewed 2026-10-16; qualification remains artifact-specific |
+| [External STEP isolation](plans/STEP-PARSER-ISOLATION.md) | Security reviewers and CAD developers | Implemented boundary; explicit enforcement and qualification limits | Implementation record, 2026-08-20 |
 | [V1 compatibility](legacy/V1-COMPATIBILITY.md) | Maintainers and migration work | Maintained legacy summary | Current code plus archived v1 inventory |
 | [August 2026 rebuild](history/REBUILD-2026-08.md) | Maintainers | Historical summary | Git history; not an implementation brief |
 | [Measurement template](validation/MEASUREMENT-TEMPLATE.md) | Anyone validating a build against a solve | Current template | Copy per case; pairs with the Results panel's measured overlay |

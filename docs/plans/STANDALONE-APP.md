@@ -1,12 +1,22 @@
 # Standalone application
 
-Status: all four steps implemented on `feature/standalone-app`, macOS verified
-end to end, four-lens review remediation applied, and Windows still unverified
-(see "Verification status"). This plan turns the
-checkout-bound `.app` into a self-contained, self-updating desktop application
-without Electron, Tauri, or a frozen interpreter. It is written as the contract
-for the implementation batches; each numbered step is independently shippable
-and is reviewed before the next starts.
+Status: implemented design and historical qualification record. Reviewed for
+planning status on 2026-10-16. Standalone bundles and full installers exist for
+macOS, Windows and Linux. The original four-step implementation and its dated
+verification notes below are retained for design history; an old "unverified"
+row is not a statement about every later artifact.
+
+Use the [install guide](../INSTALL.md), [release guide](../RELEASING.md),
+[full-installer handoff](../reference/INSTALLER-HANDOFF-CONTRACT.md) and
+[native updater qualification](../reference/UPDATER-NATIVE-QUALIFICATION.md)
+for current behavior and qualification requirements. In particular, the
+app/runtime layer updater described in Step 3 is the legacy receiving path;
+current installations receive full installers. Publisher signatures,
+provenance, recovery and installed checks must be assessed against the exact
+candidate, rather than reopening the old release decisions below.
+
+The graphical Linux install option at the end remains a future design idea,
+not an unimplemented standalone-app milestone.
 
 ## Verification status
 

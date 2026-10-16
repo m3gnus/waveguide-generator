@@ -1,6 +1,11 @@
 # CAD Link: customizable crossovers, delay alignment, driver presets
 
-Status: implemented on `feature/cadlink-crossover-drivers` (2026-08-23); slice 6 open.
+Status: implemented reference for slices 1–5; slice 6 (*Optimise* and add-in
+parity) remains proposed. Planning status reviewed 2026-10-16. The branch name
+and implementation sequence below are historical, not work to repeat.
+
+The bundled driver library is described in [The library that ships](#the-library-that-ships).
+The opening no-bundled-data premise in the original proposal has been superseded.
 
 Multi-channel CAD Link runs combine their drive channels into one summed
 response. Today that combine is a fixed LR4 chain with automatic level match
@@ -235,8 +240,8 @@ warnings: [...]
 
 ## 4. Driver library
 
-Waveguide Generator ships no driver data. It reads CSV files from a
-per-user library folder and exposes a search API.
+Waveguide Generator indexes the bundled driver data described below alongside
+CSV files from a per-user library folder and exposes a search API.
 
 - Folder: the application-support directory (`HornLab/driver-databases`)
   resolved per platform the way the app's other data directories are.

@@ -1,6 +1,9 @@
-# Proposal: the `WG.Solve` `Engine` / `SolverMode` contract
+# The `WG.Solve` `Engine` / `SolverMode` contract
 
 **Status: enacted in full, 2026-09-05.** C1, C2b, C3 and C4 are all done.
+Planning classification reviewed 2026-10-16: this is an implemented decision
+record, not an open proposal. The problem statement and proposed text below
+are historical; the implementation differences are explicitly documented.
 `CFG-FORMAT.md` no longer advertises `Engine` in its canonical block and no
 longer claims the key is validated; the open report shows each migration's note
 instead of its internal identifier; and a stated `WG.Solve.Engine` or

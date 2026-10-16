@@ -2,7 +2,15 @@
 
 Status: implemented through F9, 2026-10-12. Declared FEM regions and the
 interior field view are visible by default in the Fusion CAD Link workflow,
-without an Experimental label. Live acoustic qualification remains pending.
+without an Experimental label. Qualification is tracked by slice and exact artifact below.
+
+Planning status reviewed 2026-10-16: this file combines an implemented contract
+with remaining validation and performance work. F10 driver support and F10a
+sealed rear loading are also implemented; F11 records scoped CPU float64
+reference validation. This does not close F12 live Fusion capture, reduced-domain
+and frame checks, or qualify GPU results. The F9 topology/pressure-storage
+follow-up remains optional future work. The original slice ordering is design
+history, not a request to repeat completed implementation.
 
 `WG2_FEM_REGIONS=0` is the operator kill switch; `false`, `no` and `off`
 (case-insensitive, with surrounding whitespace ignored) also disable the feature.

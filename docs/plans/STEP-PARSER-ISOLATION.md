@@ -1,6 +1,10 @@
 # STEP parser isolation decision
 
-Status: accepted design gate for issue #29, 2026-08-13.
+Status: accepted design gate for issue #29, 2026-08-13; implemented boundary
+with explicitly limited qualification in [Implementation status](#implementation-status-2026-08-20).
+Planning classification reviewed 2026-10-16. The dated OS evidence and
+filesystem/network enforcement limitations below remain as recorded; this
+index refresh does not claim new containment qualification.
 
 ## Decision
 
