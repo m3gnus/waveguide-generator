@@ -138,6 +138,42 @@ def test_the_windows_cleanup_command_is_bounded(monkeypatch: pytest.MonkeyPatch)
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("failure", ["child", "parent", "wait"])
+def test_owned_cleanup_attempts_every_child_and_parent_after_a_failure(monkeypatch, tmp_path, failure):
+    gate = _gate()
+    attempts = []
+
+    class Process:
+        pid = 100
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            attempts.append("parent")
+            if failure == "parent":
+                raise OSError("parent kill failed")
+
+        def wait(self, timeout):
+            assert timeout == 30
+            attempts.append("wait")
+            if failure == "wait":
+                raise subprocess.TimeoutExpired("parent wait", timeout)
+
+    def kill(pid):
+        attempts.append(pid)
+        if failure == "child" and pid == 101:
+            raise subprocess.TimeoutExpired("taskkill", gate.PROCESS_COMMAND_TIMEOUT_S)
+
+    monkeypatch.setattr(gate, "descendants", lambda pid: {101, 102})
+    monkeypatch.setattr(gate, "_kill", kill)
+    run = gate.Run(Process(), tmp_path / "stop", tmp_path / "output")
+    run.children = {103}
+    with pytest.raises(gate.QualificationError, match="owned process cleanup failed"):
+        run.kill_if_alive()
+    assert attempts == [101, 102, 103, "parent", "wait"]
+
+
 def test_the_servers_own_session_is_named_by_its_lock_not_the_launched_process(tmp_path: Path) -> None:
     """On Windows a virtual environment's ``python.exe`` runs the server as its
     child, so the process the gate starts is not the server, and the server's
@@ -666,6 +702,61 @@ def test_main_includes_cleanup_failure_note_in_the_report_error(fake_quit_gate, 
     assert "never started" in report["error"]
     assert report["error"].endswith("\nBEAT cleanup also failed: cleanup failed")
     assert report["beat_cleanup_error"] == "cleanup failed"
+
+
+@pytest.mark.parametrize("primary_failure", [False, True])
+def test_server_cleanup_timeout_preserves_logs_and_finishes_all_cleanup(
+    fake_quit_gate, monkeypatch, primary_failure,
+):
+    state = fake_quit_gate
+    gate = state.gate
+    original_start = gate.Run.start
+    attempts = []
+
+    def start(*args):
+        run = original_start(*args)
+
+        def cleanup():
+            attempts.append(run.pid)
+            run.stopped = True
+            if run is state.runs[0]:
+                raise subprocess.TimeoutExpired("taskkill", gate.PROCESS_COMMAND_TIMEOUT_S)
+
+        run.kill_if_alive = cleanup
+        return run
+
+    original_require = gate.require_detached_host
+    inspections = []
+
+    def require(*args):
+        inspections.append(None)
+        if primary_failure and len(inspections) == 2:
+            raise gate.QualificationError("primary restart failure")
+        return original_require(*args)
+
+    monkeypatch.setattr(gate.Run, "start", start)
+    monkeypatch.setattr(gate, "require_detached_host", require)
+    monkeypatch.setattr(gate, "resolve_payload", lambda payload: (REPO_ROOT, REPO_ROOT, Path(sys.executable)))
+    log = state.work / "data" / "logs" / "server.log"
+    log.parent.mkdir(parents=True)
+    log.write_bytes(b"retained server diagnostics")
+    output = state.work / "out"
+    assert gate.main(["--payload", str(REPO_ROOT), "--work", str(state.work),
+                      "--output", str(output), "--engine", "beat"]) == 1
+
+    assert len(state.runs) == 2
+    assert attempts == [run.pid for run in state.runs]
+    assert state.cleaned
+    for index, run in enumerate(state.runs, start=1):
+        assert (output / f"server-{index}.out").read_bytes() == run.output.read_bytes()
+    assert (output / "server.log").read_bytes() == b"retained server diagnostics"
+    report = json.loads((output / "quit-qualification.json").read_text())
+    assert report["qualified"] is False
+    assert "taskkill" in report["error"]
+    assert report["beat_registry_after_cleanup"]["records"] == []
+    assert len(report["cleanup_errors"]) == 1
+    if primary_failure:
+        assert report["error"].startswith("primary restart failure\n")
 
 
 @pytest.mark.parametrize(("answer", "code", "message"), [

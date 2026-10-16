@@ -570,15 +570,22 @@ class Run:
         except (QualificationError, OSError, subprocess.SubprocessError):
             # A failed listing must not prevent cleanup of the owned processes.
             children = set()
-        try:
-            for pid in children | self.children:
-                _kill(pid)
-        finally:
-            self.process.kill()
+        errors = []
+        for pid in sorted(children | self.children):
             try:
-                self.process.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                pass
+                _kill(pid)
+            except (OSError, subprocess.SubprocessError) as exc:
+                errors.append(f"child {pid}: {exc}")
+        try:
+            self.process.kill()
+        except OSError as exc:
+            errors.append(f"server {self.pid}: {exc}")
+        try:
+            self.process.wait(timeout=30)
+        except subprocess.TimeoutExpired as exc:
+            errors.append(f"waiting for server {self.pid}: {exc}")
+        if errors:
+            raise QualificationError("owned process cleanup failed: " + "; ".join(errors))
 
 
 def server_pid(data_dir: Path) -> int:
@@ -807,8 +814,13 @@ def run_gate(
             if unswept:
                 raise QualificationError(f"the sweep left temporary directories: {unswept}")
     finally:
-        for run in runs:
-            run.kill_if_alive()
+        failure = sys.exc_info()[1]
+        cleanup_errors = []
+        for index, run in enumerate(runs, start=1):
+            try:
+                run.kill_if_alive()
+            except Exception as exc:  # noqa: BLE001 - finish all owned cleanup
+                cleanup_errors.append(f"Server {index} cleanup also failed: {exc}")
         for index, run in enumerate(runs, start=1):
             try:
                 (output / f"server-{index}.out").write_bytes(run.output.read_bytes())
@@ -819,7 +831,6 @@ def run_gate(
         except OSError:
             pass
         if beat and runs:
-            failure = sys.exc_info()[1]
             try:
                 report["beat_host_cleanup"] = stop_our_workers(interpreter, base_environment, output)
                 report["beat_registry_after_cleanup"] = cleaned = inspect_beat_hosts(
@@ -835,9 +846,13 @@ def run_gate(
                     raise QualificationError("BEAT host/Julia processes survived authenticated cleanup")
             except Exception as exc:  # noqa: BLE001 - retain the primary gate failure
                 report["beat_cleanup_error"] = str(exc)
-                if failure is None:
-                    raise
-                failure.add_note(f"BEAT cleanup also failed: {exc}")
+                cleanup_errors.append(f"BEAT cleanup also failed: {exc}")
+        if cleanup_errors:
+            report["cleanup_errors"] = cleanup_errors
+            if failure is None:
+                raise QualificationError("\n".join(cleanup_errors))
+            for error in cleanup_errors:
+                failure.add_note(error)
 
 
 def build_parser() -> argparse.ArgumentParser:
