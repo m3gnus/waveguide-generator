@@ -201,7 +201,7 @@ records `rollback_incomplete` and preserves its recovery marker/backups.
 compatible with ordinary Inno logging and is not used by the updater.
 
 The Windows pre-runtime startup and recovery implementation is specified by
-[WINDOWS-INSTALLER-RECOVERY.md](../../WINDOWS-INSTALLER-RECOVERY.md). Its source is produced and reviewed independently of this POSIX handoff.
+[WINDOWS-INSTALLER-RECOVERY.md](WINDOWS-INSTALLER-RECOVERY.md). Its source is produced and reviewed independently of this POSIX handoff.
 
 The generated recovery hook and desktop bootstrap check the setup mutex before
 starting recovery or the application. They retry for up to 120 seconds, close

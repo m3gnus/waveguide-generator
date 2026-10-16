@@ -1,20 +1,43 @@
 # Solver release qualification
 
-Historical evidence: HBB routes and comparison commands recorded here were removed; these are not current run instructions.
+## Current qualification guidance
 
-Run these gates once for every release wave that changes solver pins, solver
-routing, symmetry, meshing, observation mapping, or cancellation. Hosted WG CI
-does not own real GPU/OpenCL devices, so passing unit tests is necessary but not
-sufficient. Archive the report under `docs/validation/YYYY-MM/` with the exact
-WG, mesher, Metal-BEM, and BEMPP-BEM SHAs plus hardware/OS details.
+Status reviewed 2026-10-16. The old HBB pin/API discussion and CircSym commands
+below are historical evidence, not current run instructions. Keep their original
+measurements tied to their recorded commits.
 
-CUDA/ROCm on the official default route (`beat-engine`) are
-**not hardware-qualified**. Mocked detection, provisioning and routing tests,
-plus existing CI, qualify their enablement; real-GPU tests are not a rollout
-gate for this change. This does not claim installed-app or numerical hardware
-qualification. CUDA/ROCm use the source driver, so their first solve warms slower.
+For a release wave that changes solver pins, routing, symmetry, meshing,
+observation mapping or cancellation, qualify the affected supported routes.
+Hosted unit tests do not establish numerical accuracy on real GPU/OpenCL devices
+or installed-app lifecycle behavior. Archive reports under `docs/validation/YYYY-MM/`
+with the exact WG commit, dependency SHAs from `pins.json`, installed distribution
+identities, hardware/OS details and commands/counts.
 
-## BEAT package contract
+Current BEAT routing uses the official `beat-engine` package through
+`server/solver/official_beat.py`, `beat_adapter` and `beat_runtime`; see the
+[current bridge architecture](../architecture/OFFICIAL-BEAT-BRIDGE.md).
+The old HBB package's readiness APIs, environment variables and precision limits
+in the historical section do not describe this route. Consult the
+[user guide](../USER-GUIDE.md) for supported engine/geometry combinations and the
+[release guide](../RELEASING.md) for artifact qualification.
+
+For each packaged candidate, check the installed distribution identities against
+that candidate's pins and exercise persisted startup, immediate solve,
+restart/adoption, cancel-then-solve and explicit non-BEAT engine selection in an
+isolated application data directory and worker registry. Source-suite or wheel-level
+lifecycle results do not close installed-app and physical-platform gates.
+
+CUDA/ROCm on the official route are **not hardware-qualified**. Mocked detection,
+provisioning and routing tests qualify enablement only; real-GPU tests were not
+a rollout gate for that change. This does not claim installed-app or numerical
+hardware qualification. CUDA/ROCm use the source driver, so their first solve
+warms slower.
+
+## Historical HBB package contract
+
+The rest of this section records the former `hornlab-beat-bem` integration and
+its pinned package behavior. Its API names, pin and precision claims are retained
+for provenance and must not be used to qualify the current official BEAT route.
 
 The BEAT pin `74da18cdbb12844729a154005a26110511864aa0` keeps everything the
 previous `42bbfcf` pin carried: startup cleanup, ownership-aware worker
@@ -228,7 +251,7 @@ remain mandatory. They are still not ABEC validation, and describing them that
 way is still wrong -- what changed is that the CircSym path now has a real
 external reference to cite instead.
 
-## Feeding an ABEC mesh to our solvers
+## Historical ABEC mesh-comparison procedure
 
 These steps were learned on the historical Axisymmetric comparison above and
 apply to any future ABEC comparison, including a full-3D one. Three preparation steps are mandatory, and every one of them fails quietly. A
@@ -277,9 +300,9 @@ every case the default stays 343.0, so a harness that leaves it alone runs
 0.093% slow against ABEC and should say so.
 `hornlab_bempp_bem` still hardcodes the value with no knob at all.
 
-## Report checklist
+## Current report checklist
 
-- Exact four repository SHAs and whether each worktree was clean.
+- Exact WG commit, dependency SHAs from `pins.json`, installed distribution identities and whether source worktrees were clean.
 - Machine, OS/build, CPU/GPU/OpenCL device, RAM, and package versions.
 - Passed/failed/skipped totals with reasons for every skip.
 - Stop/cancellation result, including observed maximum response latency.

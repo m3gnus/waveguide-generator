@@ -1,16 +1,19 @@
 # Update transaction contract (Phase 1)
 
-This is the implementation contract for the next round of updater work: what the
-records are, what cleanup may remove, what an old release's launcher hands the new
-helper, and how a restart is coordinated. It is Phase 1 ("reliability of the current
-updater") of the 2026-09-12 updater review. Channels and publication stay in
-[`UPDATE-CHANNELS.md`](UPDATE-CHANNELS.md), which this document does not change.
+This records the implemented transaction and retained receiving-bridge contract:
+what the records are, what cleanup may remove, what an old release's launcher
+hands the new helper, and how a restart is coordinated. It began as Phase 1
+("reliability of the current updater") of the 2026-09-12 updater review.
+Channels and publication stay in [`UPDATE-CHANNELS.md`](UPDATE-CHANNELS.md).
+The current full-installer route is described in
+[`INSTALLER-HANDOFF-CONTRACT.md`](INSTALLER-HANDOFF-CONTRACT.md); this document
+also preserves compatibility obligations for the older receiving route.
 
-Line numbers are at `main` `8bccff0c`. Tests:
-`server/tests/test_update_transaction_contract.py`. Each requirement below that the code
-does not meet yet has a strict expected-failure test, marked
-`xfail(strict=True, raises=AssertionError)`, so the suite stays green today and turns
-red if the behaviour is fixed but the marker is left in place. Section 7 maps them.
+Status reviewed 2026-10-16: `server/tests/test_update_transaction_contract.py`
+contains regression coverage, with no remaining expected-failure markers. Section 7
+maps those tests. That does not establish the platform/artifact evidence or close
+the explicit follow-ups below. Unless a later implementation note says otherwise,
+line numbers and the initial-state table refer to `main` `8bccff0c`.
 
 Where a requirement depends on a decision that has not been taken, section 5 says so,
 and the requirement is written so that either answer fits. Section 6 lists items for
@@ -18,7 +21,7 @@ the release owner that this contract records but does not design.
 
 ---
 
-## 1. What the code does today
+## 1. Original state and subsequent implementation
 
 | Behaviour | Where |
 | --- | --- |

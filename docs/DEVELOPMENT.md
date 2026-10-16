@@ -135,8 +135,9 @@ solver qualification; its only real solves are the two tiny ones below.
 `server/tests/test_real_pipeline.py` is the one default test with nothing faked: a tiny
 OSSE through `/api/solve` on the pinned mesher and BEMPP, and a committed `.wgreturn`
 through ingest, backend preparation and solve (on BEMPP-OpenCL or Metal), holding the
-results and the installed module commits to `pins.json`. Each solve must finish within
-60 seconds; the separate 300-second job timeout is a hang guard. Hosted Ubuntu's server
+results and the installed module commits to `pins.json`. The tests use a
+300-second job timeout as a hang guard; they do not impose a 60-second performance
+threshold on cold compilation or shared hosted CPUs. Hosted Ubuntu's server
 job installs pinned PoCL CPU OpenCL and requires the CAD path; other hosted jobs may skip
 it with the registry's reasons. Before any pin move, run this file on a capable local
 qualification host in an environment installed from the pins, explicitly requiring both
