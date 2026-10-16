@@ -84,7 +84,7 @@ from server.cadlink.joblane.preparation import (
     resumable_record,
 )
 from server.cadlink.joblane.project_setup import widen_polar_to_derivation
-from server.cadlink.joblane.setup import DEFAULTS_ORIGIN, solve_request_for
+from server.jobs.imported_setup import DEFAULTS_ORIGIN, solve_request_for
 from server.cadlink.interpretation.solver_frame import (
     AS_MODELLED,
     REASON as FRAME_CONFIRMATION_REQUIRED,

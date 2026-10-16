@@ -4,9 +4,9 @@ import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
-import { resetSolveOptionsStore } from './solveOptions';
+import { resetSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { editMeshImport, fileMeshSubmission, fileSolvePress, finishFileSolvePress, loadMeshFile,
-  prepareMeshFile, restoreMeshImport, restorePendingMeshPress, useMeshImportStore } from './meshImport';
+  prepareMeshFile, restoreMeshImport, restorePendingMeshPress, restoreSavedMeshSetup, saveMeshSetup, useMeshImportStore } from './meshImport';
 import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
 import type { JobItem } from '../api/jobsSocket';
 import { runSourceForJob } from '../jobs/exportNaming';
@@ -29,10 +29,53 @@ beforeEach(() => {
   workspaceModeStore.setMode('parametric');
   resetSolveOptionsStore();
   sessionStorage.clear();
+  localStorage.removeItem('wg-saved-mesh-setup');
 });
 afterEach(() => vi.restoreAllMocks());
 
 describe('standalone imported mesh', () => {
+  it('saves and restores a prepared setup before any Solve', async () => {
+    useMeshImportStore.setState({ registered: record, motions: { group_2: 'axial' }, startHz: 250, endHz: 8000, count: 17 });
+    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+    const expected = fileMeshSubmission();
+    const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_saved' }));
+    await saveMeshSetup(save);
+    const setup = JSON.parse(save.mock.calls[0][1]?.body as string);
+    expect(setup.geometry).not.toHaveProperty('ingest_id');
+    expect(setup.geometry).not.toHaveProperty('mesh');
+    useMeshImportStore.setState(initial, true);
+    importedMeshStore.clear();
+    expect(await restoreSavedMeshSetup(vi.fn(async url => response(String(url).endsWith('/setup') ? { setup } : record)))).toBe(true);
+    expect(fileMeshSubmission()).toEqual(expected);
+  });
+
+  it('does not mark settings edited during or after saving as saved', async () => {
+    useMeshImportStore.setState({ registered: record });
+    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+    const wait = deferred<Response>();
+    const saving = saveMeshSetup(vi.fn(() => wait.promise));
+    useMeshImportStore.setState({ count: 17 });
+    wait.resolve(response({ revision_id: 'wgs_old' }));
+    await saving;
+    expect(useMeshImportStore.getState().notice).toContain('current edits are not saved');
+    await saveMeshSetup(vi.fn(async () => response({ revision_id: 'wgs_new' })));
+    expect(useMeshImportStore.getState().notice).toContain('Mesh setup saved.');
+    useMeshImportStore.setState({ count: 19 });
+    expect(useMeshImportStore.getState().notice).toBeNull();
+  });
+  it('tracks borrowed engine and accuracy changes during and after Save', async () => {
+    useMeshImportStore.setState({ registered: record, engine: null, accuracy: null });
+    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+    const wait = deferred<Response>();
+    const saving = saveMeshSetup(vi.fn(() => wait.promise));
+    useSolveOptionsStore.getState().setEngine('bempp');
+    wait.resolve(response({ revision_id: 'wgs_old' }));
+    await saving;
+    expect(useMeshImportStore.getState().notice).toContain('current edits are not saved');
+    await saveMeshSetup(vi.fn(async () => response({ revision_id: 'wgs_new' })));
+    useSolveOptionsStore.setState({ accuracy: 'accurate' });
+    expect(useMeshImportStore.getState().notice).toBeNull();
+  });
   it('inspects original bytes on the backend, then prepares explicit units and groups', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => response(summary));
     await loadMeshFile('speaker.msh', MSH, fetcher);

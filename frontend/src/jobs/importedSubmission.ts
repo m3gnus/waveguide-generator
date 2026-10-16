@@ -1,5 +1,6 @@
 import { exteriorTransducerError } from '../stores/exteriorTransducer';
 import type { ImportedSolveSubmission } from './actions';
+import { bindImportedSetup, type ImportedSetup } from './importedSetup';
 import {
   blockingFindingWire,
   channelAcceptsDriver,
@@ -289,12 +290,10 @@ function submittedDriver(
   return channelAcceptsDriver(channel) ? channelDriverWire(state.channelDrivers[channel.id]) : undefined;
 }
 
-export function buildImportedSubmission(
+export function resolveCadImportedSetup(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
-): ImportedSolveSubmission {
-  const record = state.ingestRecord;
-  if (!record) throw new Error('Ingest a CAD return before solving.');
-  if (record.evidence_unverified) throw new Error('The retained return manifest cannot be verified; re-ingest this return before solving.');
+  solveStore: SolveOptionsSnapshot = useSolveOptionsStore.getState(),
+): ImportedSetup {
   // The readiness gate already refuses this, but the builder is the last thing
   // between the rail and the wire and an enabled-yet-incomplete form must never
   // become a silently pre-campaign submission.
@@ -304,7 +303,6 @@ export function buildImportedSubmission(
     if (cardioidBlocker) throw new Error(cardioidBlocker);
   }
   const passiveCardioid = cardioidPresent ? passiveCardioidWire(state.passiveCardioid) : null;
-  const solveStore = useSolveOptionsStore.getState();
   const nativeError = exteriorModeBlocker(state, solveStore);
   if (nativeError) throw new Error(nativeError);
   const options = solveStore.options() as ImportedSolveSubmission['options'];
@@ -317,15 +315,9 @@ export function buildImportedSubmission(
   // and the domain is the one the ingestion record describes.
   options.solver_mode = 'full_3d';
   options.symmetry = 'auto';
-  widenPolarToDerivation(options, record.polar_grid_derivation);
   const combine = combineWire(state);
   return {
     geometry: {
-      type: 'imported',
-      ingest_id: record.ingest_id,
-      manifest_sha256: record.manifest_sha256,
-      artifact_sha256: record.artifact_sha256,
-      ...(record.native_source ? { required_features: [...record.native_source.required_features] } : {}),
       drive_channels: state.driveChannels.map((channel) => {
         const driver = submittedDriver(state, channel);
         return { ...channel, source_ids: [...channel.source_ids], ...(driver ? { driver } : {}) };
@@ -346,7 +338,6 @@ export function buildImportedSubmission(
           Object.entries(state.sourceSizesMm).filter(([id]) => !state.skippedSourceIds.includes(id)),
         ),
       },
-      acknowledged_findings: blockingFindingWire(record),
       skipped_source_ids: [...state.skippedSourceIds],
       exterior_only: state.exteriorOnly,
       ...(combine ? { combine } : {}),
@@ -354,4 +345,17 @@ export function buildImportedSubmission(
     },
     options,
   };
+}
+
+/** CAD is an adapter: preparation contributes identity, the setup contributes physics. */
+export function buildImportedSubmission(
+  state: CadReturnSnapshot = useCadReturnStore.getState(),
+): ImportedSolveSubmission {
+  const record = state.ingestRecord;
+  if (!record) throw new Error('Ingest a CAD return before solving.');
+  if (record.evidence_unverified) throw new Error('The retained return manifest cannot be verified; re-ingest this return before solving.');
+  const setup = resolveCadImportedSetup(state);
+  if (record.native_source) setup.geometry.required_features = [...record.native_source.required_features];
+  widenPolarToDerivation(setup.options, record.polar_grid_derivation);
+  return bindImportedSetup(record, setup, blockingFindingWire(record));
 }

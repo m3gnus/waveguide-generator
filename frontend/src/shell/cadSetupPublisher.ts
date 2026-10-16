@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { CadLinkApiError } from '../api/cadlink';
 import { create } from 'zustand';
-import { exteriorModeBlocker } from '../jobs/importedSubmission';
+import { exteriorModeBlocker, resolveCadImportedSetup } from '../jobs/importedSubmission';
 import {
   putProjectSetup,
   putSolverSelection,
@@ -10,13 +10,9 @@ import {
 } from '../api/cadOperations';
 import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
-  channelAcceptsDriver,
-  channelDriverWire,
-  combineWire,
   hasPassiveCardioidSurface,
   incompleteDriverChannels,
   passiveCardioidBlocker,
-  passiveCardioidWire,
   useCadReturnStore,
 } from '../stores/cadReturn';
 import { useDocumentStore } from '../stores/document';
@@ -78,29 +74,12 @@ export function buildCadProjectSetup(
   const cardioidPresent = hasPassiveCardioidSurface(bundle.sources);
   if (cardioidPresent && passiveCardioidBlocker(state)) return null;
   if (polarValidationError(solveStore.polar)) return null;
-  let options: Record<string, unknown>;
-  try {
-    options = { ...solveStore.options() };
-  } catch {
-    // An unparseable frequency list: there is no sweep to record yet.
-    return null;
-  }
-  if (solveStore.frequencyMode === 'range') {
-    options.frequency_range = [state.frequencyStartHz, state.frequencyEndHz];
-    options.num_frequencies = state.frequencyCount;
-  }
-  options.engine = solveStore.engine;
-  options.symmetry = 'auto';
-  const drivers = new Map(state.driveChannels.map((channel) => [
-    channel.id,
-    channelAcceptsDriver(channel) ? channelDriverWire(state.channelDrivers[channel.id]) : undefined,
-  ]));
-  const driven = [...drivers.values()].some(Boolean) || state.driveChannels.some(channel => channel.exterior_transducer);
-  const combine = combineWire(state);
-  const passiveCardioid = cardioidPresent ? passiveCardioidWire(state.passiveCardioid) : null;
+  let resolved: ReturnType<typeof resolveCadImportedSetup>;
+  try { resolved = resolveCadImportedSetup(state, solveStore); }
+  catch { return null; }
   const driverReferences = Object.fromEntries(state.driveChannels.flatMap((channel) => {
     const preset = state.channelDrivers[channel.id]?.preset;
-    return drivers.get(channel.id) && preset
+    return resolved.geometry.drive_channels.find(item => item.id === channel.id)?.driver && preset
       ? [[channel.id, { driver_id: preset.id, source: preset.source }]]
       : [];
   }));
@@ -112,30 +91,10 @@ export function buildCadProjectSetup(
     setup: {
       schema_version: 1,
       geometry: {
-        drive_channels: state.driveChannels.map((channel) => {
-          const driver = drivers.get(channel.id);
-          return { ...channel, source_ids: [...channel.source_ids], ...(driver ? { driver } : {}) };
-        }),
-        ...(driven
-          ? {
-            drive_voltage_v: state.driveVoltageV,
-            ...(state.maxDriveVoltageV ? { max_drive_voltage_v: state.maxDriveVoltageV } : {}),
-          }
-          : {}),
-        mesh: {
-          rigid_size_mm: state.rigidSizeMm,
-          transition_mm: state.transitionMm,
-          source_size_mm: Object.fromEntries(
-            Object.entries(state.sourceSizesMm).filter(([id]) => !state.skippedSourceIds.includes(id)),
-          ),
-        },
-        skipped_source_ids: [...state.skippedSourceIds],
-        exterior_only: state.exteriorOnly,
-        ...(state.exteriorOnly ? { exterior_only_region_ids: state.exteriorOnlyRegionIds } : {}),
-        ...(combine ? { combine } : {}),
-        ...(passiveCardioid ?? {}),
+        ...resolved.geometry,
+        ...(state.exteriorOnly ? { exterior_only_region_ids: state.exteriorOnlyRegionIds ? [...state.exteriorOnlyRegionIds] : null } : {}),
       },
-      options,
+      options: { ...resolved.options },
       preparation: {
         area_drift_overrides: [...state.areaDriftOverrides],
         symmetry_mode: preparation.symmetryMode,

@@ -1,5 +1,5 @@
 import { nativeSymmetryLimitation } from '../design/nativeFamilies';
-import { fileMeshSubmission, fileSolvePress, finishFileSolvePress, restorePendingMeshPress, useMeshImportStore } from '../stores/meshImport';
+import { fileMeshSubmission, fileSolvePress, finishFileSolvePress, restorePendingMeshPress, restoreSavedMeshSetup, useMeshImportStore } from '../stores/meshImport';
 import type { ExportFormat } from '../prefs/preferences';
 import { ownedAutoExport } from '../jobs/autoExportOwner';
 import { exportRunAutomatically } from '../jobs/autoExportRun';
@@ -645,7 +645,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       || !importedMeshStore.isCurrentGeneration(recovery.generation)
       || importedMeshStore.getSnapshot().showing !== 'parametric') return;
     recovery.done = true;
-    void restorePendingMeshPress().catch(error => reportError(error instanceof Error ? error.message : String(error)));
+    const generation = importedMeshStore.captureGeneration();
+    void restorePendingMeshPress().then(restored => restored || (importedMeshStore.isCurrentGeneration(generation) && restoreSavedMeshSetup()))
+      .catch(error => reportError(error instanceof Error ? error.message : String(error)));
   }, [jobsLoaded, reportError, revision, workspaceMode]);
   // An empty `?job=` names no run; drop it at once.
   useEffect(() => {

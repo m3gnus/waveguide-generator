@@ -1338,7 +1338,7 @@ class CadLinkStore:
             "SELECT * FROM cad_setup_revisions WHERE revision_id = ?", (revision_id,)
         )
 
-    def record_project_setup(
+    def record_model_setup(
         self, lineage_id: str, inventory_sha256: str, revision_id: str
     ) -> dict[str, Any]:
         """Make a setup revision the one a project is prepared with, for these sources."""
@@ -1359,6 +1359,13 @@ class CadLinkStore:
                 (lineage_id, inventory_sha256),
             ).fetchone()
         return dict(row)
+
+    def record_project_setup(self, lineage_id: str, inventory_sha256: str, revision_id: str) -> dict[str, Any]:
+        """Compatibility adapter for CAD project callers of the shared setup store."""
+        return self.record_model_setup(lineage_id, inventory_sha256, revision_id)
+
+    def get_project_setup(self, lineage_id: str, inventory_sha256: str) -> dict[str, Any] | None:
+        return self.get_model_setup(lineage_id, inventory_sha256)
 
     def record_project_setup_if_absent(
         self, lineage_id: str, inventory_sha256: str, revision_id: str
@@ -1385,7 +1392,7 @@ class CadLinkStore:
             ).fetchone()
         return dict(row)
 
-    def get_project_setup(
+    def get_model_setup(
         self, lineage_id: str, inventory_sha256: str
     ) -> dict[str, Any] | None:
         self.initialize()

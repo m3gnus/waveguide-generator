@@ -7,6 +7,8 @@ import { workspaceModeStore } from './workspaceMode';
 import { DEFAULT_SWEEP } from './solveDefaults';
 import { useSolveOptionsStore } from './solveOptions';
 import type { ImportedSolveSubmission } from '../jobs/actions';
+import { bindImportedSetup } from '../jobs/importedSetup';
+import { readImportedSetup, saveImportedSetup } from '../api/importedModels';
 import type { JobItem } from '../api/jobsSocket';
 
 interface MeshImportState {
@@ -36,6 +38,21 @@ const initial: MeshImportState = {
 };
 let requestNumber = 0;
 export const useMeshImportStore = create<MeshImportState>(() => ({ ...initial }));
+
+function setupFingerprint(state: MeshImportState): string {
+  const shared = useSolveOptionsStore.getState();
+  return JSON.stringify([state.registered?.ingest_id, state.units, state.forward, state.up, state.selected,
+    state.motions, state.engine ?? shared.engine, state.accuracy ?? shared.accuracy, state.startHz, state.endHz, state.count]);
+}
+useMeshImportStore.subscribe((state, previous) => {
+  if (state.notice === previous.notice && state.notice?.startsWith('Mesh setup saved.')
+    && setupFingerprint(state) !== setupFingerprint(previous)) useMeshImportStore.setState({ notice: null });
+});
+useSolveOptionsStore.subscribe((state, previous) => {
+  const file = useMeshImportStore.getState();
+  if (file.notice?.startsWith('Mesh setup saved.') && ((file.engine === null && state.engine !== previous.engine)
+    || (file.accuracy === null && state.accuracy !== previous.accuracy))) useMeshImportStore.setState({ notice: null });
+});
 
 /** Invalidating registration leaves the preview visible but never solvable. */
 export function editMeshImport(patch: Partial<Pick<MeshImportState, 'units' | 'forward' | 'up' | 'selected'>>) {
@@ -100,16 +117,15 @@ export function fileMeshSubmission(): ImportedSolveSubmission {
   // These are this import workflow's stated controls, independent of any
   // parametric design left open behind the file view.
   const selected = useSolveOptionsStore.getState();
-  return {
-    geometry: { type: 'imported', ingest_id: record.ingest_id, manifest_sha256: record.manifest_sha256,
-      artifact_sha256: record.artifact_sha256, acknowledged_findings: [], skipped_source_ids: [],
+  return bindImportedSetup(record, {
+    geometry: { skipped_source_ids: [],
       drive_channels: Object.keys(record.source_tags).map(id => ({ id, source_ids: [id], motion: state.motions[id] ?? 'normal' })) },
     options: { engine: state.engine ?? selected.engine, accuracy: state.accuracy ?? selected.accuracy, symmetry: 'full', solver_mode: 'full_3d',
       mesh_validation_mode: 'strict', verbose: false, frequency_spacing: 'log',
       frequency_range: [state.startHz, state.endHz], num_frequencies: state.count,
       polar_config: { angle_range: [-180, 180, 73], angle_step: 5, enabled_axes: ['horizontal', 'vertical', 'diagonal'],
         distance: 2, norm_angle: 5, inclination: 45, observation_origin: 'mouth', spherical_sampling: false, field_plane: true } },
-  };
+  });
 }
 
 /** An unanswered transport replay keeps its ID and label across a page reload. */
@@ -144,8 +160,8 @@ interface FileOptions {
 }
 
 async function restoreRetainedFile(id: string, options: FileOptions,
-  channels: Array<{ id: string; motion?: 'normal' | 'axial' }>, fetcher: typeof fetch): Promise<boolean> {
-  const generation = importedMeshStore.beginIntent();
+  channels: Array<{ id: string; motion?: 'normal' | 'axial' }>, fetcher: typeof fetch,
+  generation = importedMeshStore.beginIntent()): Promise<boolean> {
   const record = await readMeshImport(id, fetcher);
   if (!importedMeshStore.isCurrentGeneration(generation)) return false;
   if (record.ingest_id !== id) throw new Error('The retained mesh response names a different import. Select the run again.');
@@ -161,6 +177,30 @@ async function restoreRetainedFile(id: string, options: FileOptions,
     count: frequencies?.length ?? options.num_frequencies ?? initial.count,
   });
   return true;
+}
+
+/** Explicitly save before Solve. CAD project edits use this same setup schema. */
+export async function saveMeshSetup(fetcher: typeof fetch = fetch): Promise<void> {
+  const submission = fileMeshSubmission();
+  const fingerprint = setupFingerprint(useMeshImportStore.getState());
+  const { type: _type, ingest_id, manifest_sha256: _manifest, artifact_sha256: _artifact,
+    acknowledged_findings: _findings, ...geometry } = submission.geometry;
+  await saveImportedSetup(ingest_id, { geometry, options: submission.options }, fetcher);
+  if (useMeshImportStore.getState().registered?.ingest_id === ingest_id) {
+    localStorage.setItem('wg-saved-mesh-setup', ingest_id);
+    useMeshImportStore.setState({ notice: fingerprint === setupFingerprint(useMeshImportStore.getState())
+      ? 'Mesh setup saved. It can be resumed after restart.'
+      : 'Earlier mesh settings were saved. Your current edits are not saved.' });
+  }
+}
+
+export async function restoreSavedMeshSetup(fetcher: typeof fetch = fetch): Promise<boolean> {
+  const id = localStorage.getItem('wg-saved-mesh-setup');
+  if (!id) return false;
+  const generation = importedMeshStore.beginIntent();
+  const { setup } = await readImportedSetup(id, fetcher);
+  if (!setup || !importedMeshStore.isCurrentGeneration(generation)) return false;
+  return restoreRetainedFile(id, setup.options, setup.geometry.drive_channels, fetcher, generation);
 }
 
 /** An unanswered request restores its SAME retained mesh and setup, so a new

@@ -2112,123 +2112,14 @@ class JobRuntime:
             imported=imported,
         )
 
-    async def plan_imported(self, request: SolveRequest) -> dict[str, Any]:
-        """Every engine's verdict on one ingested CAD return, without a job.
+    @staticmethod
+    def _validate_imported_model_setup(geometry: ImportedGeometrySource, record: Mapping[str, Any]) -> None:
+        """Validate saved physics without approving findings or a CAD frame.
 
-        Reads the ingestion record, its domain and its verified mesh -- what
-        engine choice depends on -- and none of what a submission writes: no
-        archive stem is claimed and no job is allocated. A submission still
-        validates the rest of the request (drive channels, findings, mesh
-        sizes) when it is made.
+        These checks are also authoritative at Solve. Readiness evidence is
+        deliberately checked only when the snapshot is actually submitted.
         """
-
-        _refuse_removed_solver(request)
-        geometry = request.geometry
-        if not isinstance(geometry, ImportedGeometrySource):
-            raise ValueError("the imported plan resolves imported geometry only")
-        if self.cadlink_store is None:
-            raise ImportedSolveRefusal(
-                "ingest_registry_unavailable",
-                "the CAD ingestion registry is unavailable to this job runtime",
-            )
-        record = await asyncio.to_thread(
-            get_ingestion_record, self.cadlink_store, geometry.ingest_id
-        )
-        if record is None:
-            raise ImportedSolveRefusal(
-                "ingest_not_found",
-                f"ingestion record {geometry.ingest_id!r} does not exist",
-                details={"ingest_id": geometry.ingest_id},
-            )
-        mismatches = {
-            field: {"request": getattr(geometry, field), "record": record.get(field)}
-            for field in ("manifest_sha256", "artifact_sha256")
-            if getattr(geometry, field) != record.get(field)
-        }
-        if mismatches:
-            raise ImportedSolveRefusal(
-                "ingest_sha_mismatch",
-                "request hashes do not match the immutable ingestion record",
-                details=mismatches,
-            )
-        from server.contracts.source_contour import validate_contour_request
-        try:
-            validate_contour_request(geometry, record)
-        except ValueError as exc:
-            raise ImportedSolveRefusal("native_source_contract", str(exc)) from exc
-        if record.get("native_source") is not None and request.options.engine != "metal":
-            raise ImportedSolveRefusal("native_source_engine", "native source contours currently require the Metal consumer")
-        symmetry_metadata = _imported_symmetry_metadata(
-            record, request.options.symmetry, _ground_plane_axis(request)
-        )
-        try:
-            msh_text = await asyncio.to_thread(read_verified_import_mesh, record)
-        except ImportedMeshArtifactError as exc:
-            raise ImportedSolveRefusal("ingest_mesh_unavailable", str(exc)) from exc
-        await asyncio.to_thread(_refuse_inverted_reduced_mesh, record, msh_text)
-        return await plan_imported_submission(
-            request,
-            self.engine_registry,
-            symmetry_metadata=symmetry_metadata,
-            imported_record=record,
-            imported_msh_text=msh_text,
-        )
-
-    async def _prepare_imported_submission(
-        self, request: SolveRequest
-    ) -> _ImportedSubmission:
-        geometry = request.geometry
-        assert isinstance(geometry, ImportedGeometrySource)
-        if self.cadlink_store is None:
-            raise ImportedSolveRefusal(
-                "ingest_registry_unavailable",
-                "the CAD ingestion registry is unavailable to this job runtime",
-            )
-        record = await asyncio.to_thread(
-            get_ingestion_record, self.cadlink_store, geometry.ingest_id
-        )
-        if record is None:
-            raise ImportedSolveRefusal(
-                "ingest_not_found",
-                f"ingestion record {geometry.ingest_id!r} does not exist",
-                details={"ingest_id": geometry.ingest_id},
-            )
-        mismatches = {
-            field: {"request": getattr(geometry, field), "record": record.get(field)}
-            for field in ("manifest_sha256", "artifact_sha256")
-            if getattr(geometry, field) != record.get(field)
-        }
-        if mismatches:
-            raise ImportedSolveRefusal(
-                "ingest_sha_mismatch",
-                "request hashes do not match the immutable ingestion record",
-                details=mismatches,
-            )
-        from server.contracts.source_contour import validate_contour_request
-        try:
-            validate_contour_request(geometry, record)
-        except ValueError as exc:
-            raise ImportedSolveRefusal("native_source_contract", str(exc)) from exc
-        if record.get("native_source") is not None and request.options.engine != "metal":
-            raise ImportedSolveRefusal("native_source_engine", "native source contours currently require the Metal consumer")
-        # An unlinked (CAD-authored) model solves only in the solver frame its
-        # project confirmed -- or, with nothing confirmed, in WG's own confident
-        # automatic axis -- exactly the one this record was meshed in. Every
-        # submission meets this -- a direct solve, a retry, a CAD operation's
-        # own -- so no path solves a frame that is neither confirmed nor
-        # confidently inferred (docs/architecture/CAD-OPERATIONS.md,
-        # "Unlinked solver frame").
         file_mesh = record.get("producer") == "mesh-file"
-        frame_refusal = None if file_mesh or record.get("native_source") is not None else await asyncio.to_thread(
-            record_frame_refusal, self.cadlink_store, record
-        )
-        if frame_refusal is not None:
-            raise ImportedSolveRefusal(
-                FRAME_CONFIRMATION_REQUIRED,
-                frame_refusal,
-                details={"ingest_id": geometry.ingest_id},
-            )
-
         sources = _imported_record_sources(record)
         source_by_id = {str(source.get("id")): source for source in sources}
         requested_skips = set(geometry.skipped_source_ids)
@@ -2304,6 +2195,106 @@ class JobRuntime:
                 "mesh_sizes_mismatch",
                 "request mesh sizes do not match the sizes used to create the ingestion artifact",
             )
+
+
+    async def _prepared_model_record(self, request: SolveRequest) -> dict[str, Any]:
+        """One identity/feature check for every prepared-mesh producer.
+
+        Read only: planning and admission share it without creating jobs,
+        claiming archive folders or interpreting a current CAD connection.
+        """
+        geometry = request.geometry
+        assert isinstance(geometry, ImportedGeometrySource)
+        if self.cadlink_store is None:
+            raise ImportedSolveRefusal(
+                "ingest_registry_unavailable",
+                "the prepared-mesh registry is unavailable to this job runtime",
+            )
+        record = await asyncio.to_thread(
+            get_ingestion_record, self.cadlink_store, geometry.ingest_id
+        )
+        if record is None:
+            raise ImportedSolveRefusal(
+                "ingest_not_found",
+                f"ingestion record {geometry.ingest_id!r} does not exist",
+                details={"ingest_id": geometry.ingest_id},
+            )
+        mismatches = {
+            field: {"request": getattr(geometry, field), "record": record.get(field)}
+            for field in ("manifest_sha256", "artifact_sha256")
+            if getattr(geometry, field) != record.get(field)
+        }
+        if mismatches:
+            raise ImportedSolveRefusal(
+                "ingest_sha_mismatch",
+                "request hashes do not match the immutable ingestion record",
+                details=mismatches,
+            )
+        from server.contracts.source_contour import validate_contour_request
+        try:
+            validate_contour_request(geometry, record)
+        except ValueError as exc:
+            raise ImportedSolveRefusal("native_source_contract", str(exc)) from exc
+        if record.get("native_source") is not None and request.options.engine != "metal":
+            raise ImportedSolveRefusal("native_source_engine", "native source contours currently require the Metal consumer")
+        return record
+
+    async def plan_imported(self, request: SolveRequest) -> dict[str, Any]:
+        """Every engine's verdict on one ingested CAD return, without a job.
+
+        Reads the ingestion record, its domain and its verified mesh -- what
+        engine choice depends on -- and none of what a submission writes: no
+        archive stem is claimed and no job is allocated. A submission still
+        validates the rest of the request (drive channels, findings, mesh
+        sizes) when it is made.
+        """
+
+        _refuse_removed_solver(request)
+        geometry = request.geometry
+        if not isinstance(geometry, ImportedGeometrySource):
+            raise ValueError("the imported plan resolves imported geometry only")
+        record = await self._prepared_model_record(request)
+        symmetry_metadata = _imported_symmetry_metadata(
+            record, request.options.symmetry, _ground_plane_axis(request)
+        )
+        try:
+            msh_text = await asyncio.to_thread(read_verified_import_mesh, record)
+        except ImportedMeshArtifactError as exc:
+            raise ImportedSolveRefusal("ingest_mesh_unavailable", str(exc)) from exc
+        await asyncio.to_thread(_refuse_inverted_reduced_mesh, record, msh_text)
+        return await plan_imported_submission(
+            request,
+            self.engine_registry,
+            symmetry_metadata=symmetry_metadata,
+            imported_record=record,
+            imported_msh_text=msh_text,
+        )
+
+    async def _prepare_imported_submission(
+        self, request: SolveRequest
+    ) -> _ImportedSubmission:
+        geometry = request.geometry
+        assert isinstance(geometry, ImportedGeometrySource)
+        record = await self._prepared_model_record(request)
+        # An unlinked (CAD-authored) model solves only in the solver frame its
+        # project confirmed -- or, with nothing confirmed, in WG's own confident
+        # automatic axis -- exactly the one this record was meshed in. Every
+        # submission meets this -- a direct solve, a retry, a CAD operation's
+        # own -- so no path solves a frame that is neither confirmed nor
+        # confidently inferred (docs/architecture/CAD-OPERATIONS.md,
+        # "Unlinked solver frame").
+        file_mesh = record.get("producer") == "mesh-file"
+        frame_refusal = None if file_mesh or record.get("native_source") is not None else await asyncio.to_thread(
+            record_frame_refusal, self.cadlink_store, record
+        )
+        if frame_refusal is not None:
+            raise ImportedSolveRefusal(
+                FRAME_CONFIRMATION_REQUIRED,
+                frame_refusal,
+                details={"ingest_id": geometry.ingest_id},
+            )
+
+        self._validate_imported_model_setup(geometry, record)
 
         report_sha = str(record.get("report_sha256") or "")
         acknowledged = set(geometry.acknowledged_findings)

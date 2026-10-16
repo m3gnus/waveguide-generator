@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { editMeshImport, prepareMeshFile, useMeshImportStore } from '../stores/meshImport';
+import { editMeshImport, prepareMeshFile, saveMeshSetup, useMeshImportStore } from '../stores/meshImport';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { useCapabilities } from '../jobs/useCapabilities';
@@ -14,6 +14,7 @@ export function MeshImportPanel() {
   const engine = state.engine ?? globalEngine;
   const capabilities = useCapabilities();
   const [preparing, setPreparing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const dimensions = state.registered?.summary.dimensions_mm;
   return <div className="param-panel panel-scroll" aria-label="Imported mesh setup">
     <h3>Imported mesh</h3>
@@ -66,6 +67,11 @@ export function MeshImportPanel() {
       </select></label>
       <p className="section-note">Logarithmic sweep. Full domain, 5° horizontal/vertical/diagonal polars at 2 m from the mesh origin. The origin is not moved automatically. Use Solve above; Runs keeps the exact mesh and settings.</p>
     </fieldset>
+    <button disabled={!state.registered || state.busy || saving} onClick={() => {
+      setSaving(true);
+      void saveMeshSetup().catch(error => useMeshImportStore.setState({ error: String(error) }))
+        .finally(() => setSaving(false));
+    }}>{saving ? 'Saving…' : 'Save setup'}</button>
     {state.error && <p className="field-error" role="alert">{state.error}</p>}
     {state.notice && <p role="status">{state.notice}</p>}
     <button onClick={() => importedMeshStore.showParametric()}>Return to parametric design</button>

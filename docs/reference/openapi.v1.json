@@ -1028,6 +1028,66 @@
         "title": "CadSolveRequest",
         "type": "object"
       },
+      "CadSolveSetup": {
+        "additionalProperties": false,
+        "description": "One setup revision's content.",
+        "properties": {
+          "driver_references": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DriverReference"
+            },
+            "title": "Driver References",
+            "type": "object"
+          },
+          "geometry": {
+            "additionalProperties": true,
+            "title": "Geometry",
+            "type": "object"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "options": {
+            "additionalProperties": true,
+            "title": "Options",
+            "type": "object"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "const": "wg_defaults",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
+          "preparation": {
+            "$ref": "#/components/schemas/PreparationOptions"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "geometry"
+        ],
+        "title": "CadSolveSetup",
+        "type": "object"
+      },
       "CadSource": {
         "additionalProperties": false,
         "description": "Where an imported run came from, kept for the run archive.\n\nA CAD run used to be traceable only through the ingestion record, which is\naddressed by content and says nothing about which document a person opened.",
@@ -3293,6 +3353,33 @@
           "total_drivers"
         ],
         "title": "DriverLibraryInfo",
+        "type": "object"
+      },
+      "DriverReference": {
+        "additionalProperties": false,
+        "description": "Where a channel's resolved driver numbers came from, for the record.",
+        "properties": {
+          "driver_id": {
+            "minLength": 1,
+            "title": "Driver Id",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "required": [
+          "driver_id"
+        ],
+        "title": "DriverReference",
         "type": "object"
       },
       "DriverSearchResponse": {
@@ -9708,6 +9795,42 @@
         "title": "PolarConfig",
         "type": "object"
       },
+      "PreparationOptions": {
+        "additionalProperties": false,
+        "description": "The ingest options a preparation meshes the snapshot with.",
+        "properties": {
+          "area_drift_overrides": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Area Drift Overrides",
+            "type": "array"
+          },
+          "surface_deviation_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surface Deviation Mm"
+          },
+          "symmetry_mode": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "full"
+            ],
+            "title": "Symmetry Mode",
+            "type": "string"
+          }
+        },
+        "title": "PreparationOptions",
+        "type": "object"
+      },
       "PrepareOperationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -14912,6 +15035,102 @@
         "summary": "Root Select",
         "tags": [
           "workspace"
+        ]
+      }
+    },
+    "/api/imported-models/{ingest_id}/setup": {
+      "get": {
+        "operationId": "read_setup_api_imported_models__ingest_id__setup_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ingest_id",
+            "required": true,
+            "schema": {
+              "title": "Ingest Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Read Setup Api Imported Models  Ingest Id  Setup Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Setup",
+        "tags": [
+          "Imported models"
+        ]
+      },
+      "put": {
+        "operationId": "save_setup_api_imported_models__ingest_id__setup_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ingest_id",
+            "required": true,
+            "schema": {
+              "title": "Ingest Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CadSolveSetup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Save Setup Api Imported Models  Ingest Id  Setup Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Setup",
+        "tags": [
+          "Imported models"
         ]
       }
     },

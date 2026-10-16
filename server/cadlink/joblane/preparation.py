@@ -83,7 +83,7 @@ from server.cadlink.joblane.project_setup import (
     widen_polar_to_derivation,
 )
 from server.cadlink.intake.readings import snapshot_project, solver_anchor
-from server.cadlink.joblane.setup import (
+from server.jobs.imported_setup import (
     DEFAULTS_ORIGIN,
     CadSolveSetup,
     setup_content,

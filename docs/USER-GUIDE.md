@@ -39,6 +39,10 @@ ASCII Gmsh 2.2 linear triangular surface meshes, up to 16 MiB.
 Choose the file's units, forward and up axes, and the physical surface groups
 to drive. Other groups are rigid. Press **Prepare mesh**, check its dimensions,
 then choose the frequency range, engine and source motion and press **Solve**.
+Use **Save setup** to keep these settings before solving; the last saved mesh
+setup resumes on startup unless a newer model choice or pending solve takes
+precedence. Later edits require another Save. Runs always retains its own
+resolved settings independently of this editable setup.
 The mesh must be a closed outward-facing surface, with physical groups on
 every triangle, and must pass topology/intersection checks. No automatic
 repair or remeshing occurs. Untagged meshes can still be inspected.

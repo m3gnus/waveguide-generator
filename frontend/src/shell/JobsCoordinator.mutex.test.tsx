@@ -311,6 +311,17 @@ describe('solve invocation mutex', () => {
     await act(async () => { workspaceModeStore.setMode('parametric'); });
     expect(restore).toHaveBeenCalledOnce();
   });
+  it('does not fall back to a saved file after pending recovery was superseded', async () => {
+    act(() => root.unmount());
+    const pending = deferred<boolean>();
+    vi.spyOn(meshImport, 'restorePendingMeshPress').mockReturnValue(pending.promise);
+    const saved = vi.spyOn(meshImport, 'restoreSavedMeshSetup').mockResolvedValue(false);
+    root = createRoot(host);
+    await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
+    act(() => importedMeshStore.showParametric());
+    await act(async () => { pending.resolve(false); await pending.promise; });
+    expect(saved).not.toHaveBeenCalled();
+  });
   const mountPlanning = async (mode: 'parametric' | 'cad') => {
     act(() => root.unmount());
     root = createRoot(host);

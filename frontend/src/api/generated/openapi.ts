@@ -1238,6 +1238,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/imported-models/{ingest_id}/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Setup */
+        get: operations["read_setup_api_imported_models__ingest_id__setup_get"];
+        /** Save Setup */
+        put: operations["save_setup_api_imported_models__ingest_id__setup_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integration/v1/design-schema": {
         parameters: {
             query?: never;
@@ -2741,6 +2759,35 @@ export interface components {
             submit?: boolean;
         };
         /**
+         * CadSolveSetup
+         * @description One setup revision's content.
+         */
+        CadSolveSetup: {
+            /** Driver References */
+            driver_references?: {
+                [key: string]: components["schemas"]["DriverReference"];
+            };
+            /** Geometry */
+            geometry: {
+                [key: string]: unknown;
+            };
+            /** Label */
+            label?: string | null;
+            /** Options */
+            options?: {
+                [key: string]: unknown;
+            };
+            /** Origin */
+            origin?: "wg_defaults" | null;
+            preparation?: components["schemas"]["PreparationOptions"];
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+        };
+        /**
          * CadSource
          * @description Where an imported run came from, kept for the run archive.
          *
@@ -3459,6 +3506,16 @@ export interface components {
             last_scan?: string | null;
             /** Total Drivers */
             total_drivers: number;
+        };
+        /**
+         * DriverReference
+         * @description Where a channel's resolved driver numbers came from, for the record.
+         */
+        DriverReference: {
+            /** Driver Id */
+            driver_id: string;
+            /** Source */
+            source?: string | null;
         };
         /** DriverSearchResponse */
         DriverSearchResponse: {
@@ -5353,6 +5410,22 @@ export interface components {
              * @default 37
              */
             spherical_theta_count?: number;
+        };
+        /**
+         * PreparationOptions
+         * @description The ingest options a preparation meshes the snapshot with.
+         */
+        PreparationOptions: {
+            /** Area Drift Overrides */
+            area_drift_overrides?: string[];
+            /** Surface Deviation Mm */
+            surface_deviation_mm?: number | null;
+            /**
+             * Symmetry Mode
+             * @default auto
+             * @enum {string}
+             */
+            symmetry_mode?: "auto" | "full";
         };
         /** PrepareOperationRequest */
         PrepareOperationRequest: {
@@ -8244,6 +8317,76 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": components["schemas"]["SelectWorkspaceRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_setup_api_imported_models__ingest_id__setup_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ingest_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_setup_api_imported_models__ingest_id__setup_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ingest_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CadSolveSetup"];
             };
         };
         responses: {

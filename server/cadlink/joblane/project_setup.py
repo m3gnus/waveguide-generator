@@ -24,7 +24,7 @@ from server.jobs.models import SolveRequest
 
 from server.cadlink.operations import canonical_json
 from server.cadlink.roles import canonical_source_role
-from server.cadlink.joblane.setup import CadSolveSetup, setup_content, setup_digest, validate_setup
+from server.jobs.imported_setup import CadSolveSetup, setup_content, setup_digest, validate_setup
 from server.cadlink.store import CadLinkStore
 
 

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from server.cadlink.roles import canonical_source_role
-from server.cadlink.joblane.setup import DEFAULTS_ORIGIN, CadSolveSetup, validate_setup
+from server.jobs.imported_setup import DEFAULTS_ORIGIN, CadSolveSetup, validate_setup
 
 
 # Beside the code in the same app layer, bundled or checked out, so

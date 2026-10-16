@@ -14,6 +14,7 @@ import { resetDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { buildCadProjectSetup, startCadSetupPublisher } from './cadSetupPublisher';
+import { buildImportedSubmission } from '../jobs/importedSubmission';
 
 const app = vi.hoisted(() => ({ coordinatorMounted: false }));
 vi.mock('./CadWorkspaceOwners', async (original) => {
@@ -97,6 +98,20 @@ describe('CAD setup publisher', () => {
     expect(setup?.setup.geometry.exterior_only_region_ids).toEqual(['air']);
     store.applyIngest({ ...record, evidence: { fem_regions: [{ region_id: 'second' }] } }, store.beginIngestIntent());
     expect(useCadReturnStore.getState().exteriorOnly).toBe(false);
+  });
+
+  it('saves the same resolved physics as manual Solve and freezes the bound request', () => {
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle, 'wgl_speaker');
+    store.applyIngest(ingested('wgl_speaker'), store.beginIngestIntent());
+    const saved = buildCadProjectSetup()!;
+    const submitted = buildImportedSubmission();
+    const { type: _type, ingest_id: _id, manifest_sha256: _manifest, artifact_sha256: _artifact,
+      acknowledged_findings: _findings, ...physics } = submitted.geometry;
+    expect(saved.setup.geometry).toEqual(physics);
+    expect(saved.setup.options).toEqual(submitted.options);
+    useCadReturnStore.getState().driveChannels[0].source_ids.push('later-edit');
+    expect(submitted.geometry.drive_channels[0].source_ids).toEqual(['source-hf']);
   });
 
   it('builds the setup a solve of this project needs, without the snapshot and without widening its polar grid', () => {
