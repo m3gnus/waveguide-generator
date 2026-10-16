@@ -8123,6 +8123,78 @@
         "title": "MeshRegistration",
         "type": "object"
       },
+      "MeshReplayPackage": {
+        "additionalProperties": false,
+        "properties": {
+          "axial_contract": {
+            "title": "Axial Contract",
+            "type": "string"
+          },
+          "content_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "kind": {
+            "const": "wg-file-mesh-replay",
+            "title": "Kind",
+            "type": "string"
+          },
+          "numerical_contract": {
+            "const": "imported-free-space-v1",
+            "title": "Numerical Contract",
+            "type": "string"
+          },
+          "original_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Original Sha256",
+            "type": "string"
+          },
+          "registration": {
+            "$ref": "#/components/schemas/MeshRegistration"
+          },
+          "request": {
+            "$ref": "#/components/schemas/SolveRequest"
+          },
+          "result_provenance": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Result Provenance",
+            "type": "object"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "solver_msh_text": {
+            "maxLength": 33554432,
+            "minLength": 1,
+            "title": "Solver Msh Text",
+            "type": "string"
+          },
+          "solver_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Solver Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "kind",
+          "numerical_contract",
+          "axial_contract",
+          "registration",
+          "original_sha256",
+          "solver_msh_text",
+          "solver_sha256",
+          "request",
+          "content_sha256"
+        ],
+        "title": "MeshReplayPackage",
+        "type": "object"
+      },
       "MetadataResponse": {
         "additionalProperties": false,
         "properties": {
@@ -15651,6 +15723,50 @@
         "summary": "Job Log"
       }
     },
+    "/api/jobs/{job_id}/mesh-replay": {
+      "get": {
+        "operationId": "export_package_api_jobs__job_id__mesh_replay_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Export Package Api Jobs  Job Id  Mesh Replay Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Package",
+        "tags": [
+          "Mesh replay"
+        ]
+      }
+    },
     "/api/jobs/{job_id}/metadata": {
       "patch": {
         "operationId": "patch_job_metadata_api_jobs__job_id__metadata_patch",
@@ -16014,6 +16130,49 @@
         "summary": "Read",
         "tags": [
           "Mesh import"
+        ]
+      }
+    },
+    "/api/mesh-replay": {
+      "post": {
+        "operationId": "open_package_api_mesh_replay_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeshReplayPackage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Open Package Api Mesh Replay Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open Package",
+        "tags": [
+          "Mesh replay"
         ]
       }
     },

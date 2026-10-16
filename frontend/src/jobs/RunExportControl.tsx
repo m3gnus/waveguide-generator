@@ -1,6 +1,8 @@
 import { nativeCadLimitation } from '../design/nativeFamilies';
 import type { JobItem } from '../api/jobsSocket';
 import { jobsSocket } from '../api/jobsSocket';
+import { fetchMeshReplay } from '../api/meshReplay';
+import { writeToOutputFolder } from '../api/workspace';
 import { fetchJobResults } from '../api/results';
 import { sendDesignToCad } from '../api/designIo';
 import { ActionMenu, type ActionMenuItem } from '../design/ActionMenu';
@@ -72,7 +74,7 @@ const CATALOG_BY_FORMAT = new Map(
 );
 
 export function canExportRun(job: JobItem): boolean {
-  return job.status === 'complete' && (job.has_results || canLoadJobDesign(job));
+  return job.status === 'complete' && (job.config_summary.import_origin === 'mesh-file' || job.has_results || canLoadJobDesign(job));
 }
 
 /** The parameter config is a native .mwg for LOOKUP, which has no ATH form. */
@@ -220,6 +222,17 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     });
   };
 
+  const exportReplay = () => execute(job.id, [], async (): Promise<RunExportOutcome> => {
+    const destination = await askForExportDestination({ title: 'Export mesh replay', detail: `Exact mesh and solve settings from run ${jobName(job)}.` });
+    if (!destination) return { notice: EXPORT_CANCELLED_MESSAGE };
+    const result = await declinable(async () => writeToOutputFolder(exportSubdirectoryForJob(job), [{
+      filename: `${exportStemForJob(job)}.wgreplay`, blob: await fetchMeshReplay(job.id),
+    }], fetch, 'confirm', destination.token, askToReplaceExports));
+    if (!result) return { notice: EXPORT_CANCELLED_MESSAGE };
+    await recordFiles(result.files);
+    return { notice: workspaceNotice('Mesh replay', result) };
+  });
+
   const sendRunToCad = () => execute(job.id, [], async (): Promise<RunExportOutcome> => {
     const design = hydrateJobDesign(job);
     if (!design) throw new Error(designAvailability.reason ?? 'This run has no recoverable design.');
@@ -239,6 +252,10 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   });
 
   const items: ActionMenuItem[] = [
+    ...(job.status === 'complete' && job.config_summary.import_origin === 'mesh-file' ? [{
+      id: 'mesh-replay', label: 'Mesh replay', trailing: '.wgreplay', group: 'Geometry & design',
+      disabled: operation.busy, onSelect: async () => { await exportReplay(); },
+    }] : []),
     {
       id: 'send-to-cad',
       label: 'Send to CAD',

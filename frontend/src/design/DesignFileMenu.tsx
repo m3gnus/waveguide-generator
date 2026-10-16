@@ -31,7 +31,8 @@ import { designNameSlug } from '../stores/designName';
 import { usePreferences } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
-import { loadMeshFile } from '../stores/meshImport';
+import { MAX_MESH_REPLAY_BYTES } from '../api/meshReplay';
+import { loadMeshFile, loadMeshReplay } from '../stores/meshImport';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { isOutboundSupersededError } from '../shell/cadlink/outbound';
@@ -148,6 +149,7 @@ export function DesignFileMenu() {
   const openInput = useRef<HTMLInputElement>(null);
   const reportInput = useRef<HTMLInputElement>(null);
   const meshInput = useRef<HTMLInputElement>(null);
+  const replayInput = useRef<HTMLInputElement>(null);
   const root = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -276,13 +278,25 @@ export function DesignFileMenu() {
   async function readMesh(input: HTMLInputElement) {
     const file = input.files?.[0];
     input.value = '';
-    if (!file || workspaceMode === 'cad') return;
+    if (!file || busyRef.current || workspaceMode === 'cad') return;
     await act(async () => {
       if (file.size > 16 * 1024 * 1024) throw new Error('Mesh exceeds the 16 MiB import limit.');
       const generation = importedMeshStore.beginIntent();
       await loadMeshFile(file.name, await file.text(), fetch, generation);
       if (!importedMeshStore.isCurrentGeneration(generation)) return;
       setMessage(`Imported ${file.name}. Choose units and driven groups in the parameter panel, then prepare the mesh.`);
+    });
+  }
+
+  async function readReplay(input: HTMLInputElement) {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file || busyRef.current || workspaceMode === 'cad') return;
+    await act(async () => {
+      if (file.size > MAX_MESH_REPLAY_BYTES) throw new Error('Mesh replay exceeds the 64 MiB import limit.');
+      const generation = importedMeshStore.beginIntent();
+      const restored = await loadMeshReplay(await file.text(), fetch, generation);
+      if (restored) setMessage(`Opened ${file.name}. Solve preserves the replay settings; editing starts a new setup.`);
     });
   }
 
@@ -403,6 +417,7 @@ export function DesignFileMenu() {
     <input ref={openInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, false)}/>
     <input ref={reportInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, true)}/>
     <input ref={meshInput} hidden tabIndex={-1} type="file" accept=".msh,text/plain" aria-label="Import Gmsh mesh file" onChange={(event) => void readMesh(event.currentTarget)}/>
+    <input ref={replayInput} hidden tabIndex={-1} type="file" accept=".wgreplay,application/json" aria-label="Open mesh replay file" onChange={(event) => void readReplay(event.currentTarget)}/>
     {open && <div role="menu" aria-label="Design file menu" className="design-menu-popover">
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void newDesign()}><span>New</span><kbd>cfg</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => openInput.current?.click()}><span>Open…</span><kbd>cfg</kbd></button>
@@ -424,6 +439,9 @@ export function DesignFileMenu() {
         title={workspaceMode === 'cad' ? 'Switch to Parametric mode to import a standalone mesh.' : 'Import an ASCII Gmsh 2.2 triangular surface mesh for inspection and solving'}
         onClick={() => meshInput.current?.click()}
       ><span>Import mesh…</span><kbd>msh</kbd></button>
+      <button role="menuitem" className="design-menu-item" disabled={busy || workspaceMode === 'cad'}
+        title={workspaceMode === 'cad' ? 'Switch to Parametric mode to open a standalone mesh replay.' : 'Open the retained mesh and exact solve settings from a replay package'}
+        onClick={() => replayInput.current?.click()}><span>Open mesh replay…</span><kbd>wgreplay</kbd></button>
       <button role="menuitem" aria-expanded={exportsOpen} className="design-menu-item" disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
       {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">
         {/* The .wglink bundle and its handoff are Fusion's transport; Onshape

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import hashlib
 import json
 import os
@@ -35,7 +36,10 @@ class MeshRegistration(MeshFile):
     source_tags: list[int] = Field(min_length=1, max_length=128)
 
 
-def register_mesh(store: Any, data_dir: Path, body: MeshRegistration) -> dict[str, Any]:
+def register_mesh(
+    store: Any, data_dir: Path, body: MeshRegistration, *,
+    validate_record: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     original = parse_file_mesh(body.msh_text)
     mesh, transform = prepare_file_mesh(original, body.units, body.forward, body.up)
     if len(set(body.source_tags)) != len(body.source_tags) or set(body.source_tags) - set(
@@ -75,16 +79,6 @@ def register_mesh(store: Any, data_dir: Path, body: MeshRegistration) -> dict[st
 
     def publish(ingest_id: str, created_at: str) -> str:
         destination = parent / ingest_id
-        stage = publish_staging_directory(parent, ".mesh-")
-        try:
-            for name, raw in (("original.msh", source_bytes), ("solve.msh", solver_text.encode())):
-                with (stage / name).open("wb") as handle:
-                    handle.write(raw)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-            os.replace(stage, destination)
-        finally:
-            shutil.rmtree(stage, ignore_errors=True)
         record = {
             "ingest_id": ingest_id,
             "created_at": created_at,
@@ -122,6 +116,20 @@ def register_mesh(store: Any, data_dir: Path, body: MeshRegistration) -> dict[st
                 "dimensions_mm": (np.ptp(mesh.points, axis=0) * 1000).tolist(),
             },
         }
+        # Replay can validate its setup against the authoritative reconstructed
+        # source metadata before any files or ingestion row are published.
+        if validate_record is not None:
+            validate_record(record)
+        stage = publish_staging_directory(parent, ".mesh-")
+        try:
+            for name, raw in (("original.msh", source_bytes), ("solve.msh", solver_text.encode())):
+                with (stage / name).open("wb") as handle:
+                    handle.write(raw)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            os.replace(stage, destination)
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
         return json.dumps(record, allow_nan=False)
 
     row = store.allocate_ingest(

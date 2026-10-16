@@ -429,7 +429,7 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
     if (frequencies === null) throw new Error(`Frequency list is not usable: ${error}`);
     return { ...base, frequencies_hz: frequencies };
   },
-}, SOLVE_OPTION_EDITS), {
+}, SOLVE_OPTION_EDITS, 'solveOptions'), {
   name: 'solveOptions',
   // Reads and writes stay synchronous against the durable cache, so the store
   // still initialises during module evaluation; the server's copy arrives

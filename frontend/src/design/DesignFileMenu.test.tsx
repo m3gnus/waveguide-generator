@@ -1385,3 +1385,27 @@ it.each(NATIVE_FAMILIES)('disables Send to CAD with the reason for %s', (family)
   expect(item.disabled).toBe(true);
   expect(item.title).toContain('Export STEP or STL');
 });
+
+
+it('guards the replay size before reading and captures its generation before file.text', async () => {
+  act(() => root.render(<DesignFileMenu/>));
+  const input = container.querySelector<HTMLInputElement>('[aria-label="Open mesh replay file"]')!;
+  const oversized = new File(['{}'], 'large.wgreplay');
+  Object.defineProperty(oversized, 'size', { value: 64 * 1024 * 1024 + 1 });
+  const readLarge = vi.spyOn(oversized, 'text');
+  Object.defineProperty(input, 'files', { configurable: true, value: [oversized] });
+  await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(readLarge).not.toHaveBeenCalled();
+  expect(container.textContent).toContain('64 MiB');
+  const file = new File(['{}'], 'late.wgreplay');
+  let finishRead!: (text: string) => void;
+  vi.spyOn(file, 'text').mockReturnValue(new Promise(resolve => { finishRead = resolve; }));
+  Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+  act(() => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+  const generation = importedMeshStore.beginIntent();
+  // A second input event while busy must not mint a new viewport intent.
+  act(() => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(importedMeshStore.isCurrentGeneration(generation)).toBe(true);
+  await act(async () => { finishRead('{}'); });
+  expect(vi.mocked(fetch).mock.calls.filter(([url]) => url === '/api/mesh-replay')).toHaveLength(0);
+});

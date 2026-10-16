@@ -6,7 +6,7 @@ import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
 import { resetSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { editMeshImport, fileMeshSubmission, fileSolvePress, finishFileSolvePress, loadMeshFile,
-  prepareMeshFile, restoreMeshImport, restorePendingMeshPress, restoreSavedMeshSetup, saveMeshSetup, useMeshImportStore } from './meshImport';
+  prepareMeshFile, loadMeshReplay, restoreMeshImport, restorePendingMeshPress, restoreSavedMeshSetup, saveMeshSetup, useMeshImportStore } from './meshImport';
 import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
 import type { JobItem } from '../api/jobsSocket';
 import { runSourceForJob } from '../jobs/exportNaming';
@@ -187,5 +187,90 @@ describe('standalone imported mesh', () => {
     expect(fileSolvePress(body, 'later label')).toMatchObject(first);
     finishFileSolvePress(first.id);
     expect(fileSolvePress(body, 'new label').id).not.toBe(first.id);
+  });
+});
+
+
+describe('portable mesh replay', () => {
+  function exactRequest() {
+    useMeshImportStore.setState({ registered: record });
+    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+    const request = fileMeshSubmission();
+    request.options.frequencies_hz = [137, 211, 3987];
+    request.options.polar_config = { ...request.options.polar_config, distance: 3.7, norm_angle: 17, enabled_axes: ['vertical'] };
+    request.geometry.drive_voltage_v = 4.2;
+    return request;
+  }
+
+  it('preserves the complete request through open, Save, reload and unanswered press recovery', async () => {
+    const request = exactRequest();
+    const opening = vi.fn(async () => response({ record, request }));
+    expect(await loadMeshReplay('{"version":1}', opening)).toBe(true);
+    expect(opening.mock.calls[0]).toEqual(['/api/mesh-replay', expect.objectContaining({ body: '{"version":1}' })]);
+    expect(fileMeshSubmission()).toEqual(request);
+    const mutated = fileMeshSubmission();
+    mutated.options.frequencies_hz![0] = 1;
+    expect(fileMeshSubmission()).toEqual(request);
+    const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'saved' }));
+    await saveMeshSetup(save);
+    const setup = JSON.parse(save.mock.calls[0][1]?.body as string);
+    useMeshImportStore.setState(initial, true);
+    importedMeshStore.clear();
+    await restoreSavedMeshSetup(vi.fn(async url => response(String(url).endsWith('/setup') ? { setup } : record)));
+    expect(fileMeshSubmission()).toEqual(request);
+    const press = fileSolvePress(fileMeshSubmission(), 'Replay');
+    useMeshImportStore.setState(initial, true);
+    importedMeshStore.clear();
+    await restorePendingMeshPress(vi.fn(async () => response(record)));
+    expect(fileMeshSubmission()).toEqual(request);
+    expect(fileSolvePress(fileMeshSubmission(), 'Other label')).toEqual(expect.objectContaining({ id: press.id, label: 'Replay' }));
+  });
+
+  it.each(['local', 'global'] as const)('ends exact replay on a %s setting edit', async kind => {
+    const request = exactRequest();
+    await loadMeshReplay('{}', vi.fn(async () => response({ record, request })));
+    if (kind === 'local') useMeshImportStore.setState({ count: 21 });
+    else useSolveOptionsStore.getState().updatePolar({ distance: 9 });
+    expect(useMeshImportStore.getState().exactSubmission).toBeNull();
+    expect(useMeshImportStore.getState().notice).toContain('starts a new setup');
+    expect(fileMeshSubmission().options.frequencies_hz).toBeUndefined();
+  });
+
+  it('keeps exact replay through late hydration and automatic solve-options transitions', async () => {
+    const request = exactRequest();
+    await loadMeshReplay('{}', vi.fn(async () => response({ record, request })));
+    useSolveOptionsStore.setState(state => ({ engine: 'bempp', accuracy: 'accurate', polar: { ...state.polar, distance: 9 } }));
+    await useSolveOptionsStore.persist.rehydrate();
+    expect(fileMeshSubmission()).toEqual(request);
+  });
+
+  it.each(['engine', 'accuracy'] as const)('honors a user %s choice after ending exact replay', async control => {
+    const request = exactRequest();
+    request.options.engine = 'metal';
+    request.options.accuracy = 'accurate';
+    await loadMeshReplay('{}', vi.fn(async () => response({ record, request })));
+    if (control === 'engine') useSolveOptionsStore.getState().setEngine('bempp');
+    else useSolveOptionsStore.getState().setAccuracy('fast');
+    const options = fileMeshSubmission().options;
+    expect(options.engine).toBe(control === 'engine' ? 'bempp' : 'auto');
+    expect(options.accuracy).toBe('fast');
+    expect(useMeshImportStore.getState().notice).toContain('starts a new setup');
+  });
+
+  it('does not let a delayed replay replace a newer viewport choice', async () => {
+    const request = exactRequest();
+    const wait = deferred<Response>();
+    const opening = loadMeshReplay('{}', vi.fn(() => wait.promise));
+    importedMeshStore.showParametric();
+    wait.resolve(response({ record, request }));
+    expect(await opening).toBe(false);
+    expect(importedMeshStore.getSnapshot().showing).toBe('parametric');
+    expect(useMeshImportStore.getState().busy).toBe(false);
+  });
+
+  it('rejects a response naming another retained mesh before changing the viewport', async () => {
+    const request = exactRequest();
+    await expect(loadMeshReplay('{}', vi.fn(async () => response({ record: { ...record, ingest_id: 'other' }, request })))).rejects.toThrow('does not match');
+    expect(importedMeshStore.getSnapshot().file?.ingestId).toBe(record.ingest_id);
   });
 });

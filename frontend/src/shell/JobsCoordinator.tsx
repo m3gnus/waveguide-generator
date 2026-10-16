@@ -466,7 +466,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // explicit engine that cannot, with the reason. The formulation is not
       // a choice here: imported geometry solves in full 3-D only, and the
       // domain is the one the ingestion record describes.
-      const options: SolveOptions = { ...submission.options, solver_mode: 'full_3d', symmetry: filePress ? 'full' : 'auto' };
+      const options: SolveOptions = filePress ? { ...submission.options }
+        : { ...submission.options, solver_mode: 'full_3d', symmetry: 'auto' };
       const effectiveSubmission = { ...submission, options };
       // The CAD document names its own runs; see jobs/runNameSource.
       const designName = filePress ? useMeshImportStore.getState().filename : currentRunNameSource().name;

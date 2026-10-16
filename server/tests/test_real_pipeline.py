@@ -488,6 +488,7 @@ def test_a_mesh_file_solves_without_cad_and_replays_after_restart(tmp_path: Path
             assert status["config_summary"]["import_origin"] == "mesh-file"
             assert status["config_summary"]["mesh_import"]["source_tags"] == {"group_2": 2}
             assert status["cad_source"]["identity"] is None
+            portable = await _call(app, "GET", f"/api/jobs/{job_id}/mesh-replay")
         finally:
             await _close(app)
 
@@ -500,6 +501,24 @@ def test_a_mesh_file_solves_without_cad_and_replays_after_restart(tmp_path: Path
             assert max(abs(a - b) for a, b in zip(first_spl, second_spl)) < 0.001
             restored = await _call(app, "GET", f"/api/mesh-import/{record['ingest_id']}")
             assert restored["msh_text"] == record["msh_text"]
+        finally:
+            await _close(app)
+
+        # A separate data directory has neither the old databases nor imports.
+        # The package must be sufficient on its own, through public routes.
+        app = create_app(data_dir=tmp_path / "fresh-data")
+        try:
+            await _settled_capabilities(app.state.engine_registry)
+            opened = await _call(app, "POST", "/api/mesh-replay", portable)
+            assert opened["record"]["ingest_id"] != record["ingest_id"]
+            assert opened["record"]["msh_text"] == record["msh_text"]
+            replay_body = opened["request"]
+            replay_body["client_request_id"] = "portable-real-pipeline"
+            portable_id = (await _call(app, "POST", "/api/solve", replay_body))["job_id"]
+            replayed = await _finish(app, portable_id)
+            portable_spl = _finite_series(replayed["channels"]["group_2"]["spl_on_axis"]["spl"], "portable mesh SPL", 2)
+            assert max(abs(a - b) for a, b in zip(first_spl, portable_spl)) < 0.001
+            assert replayed["metadata"]["solve_execution"]["engine"] == engine
         finally:
             await _close(app)
 

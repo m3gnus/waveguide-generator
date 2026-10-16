@@ -59,8 +59,21 @@ setup, or **Rerun** to replay its stored request. Changing or moving the origina
 file does not change retained runs. After an unanswered submission and page
 reload, WG restores that same import; pressing Solve recovers the original
 request before a later deliberate press starts a new run. Run archives include
-source mappings and transforms; portable replay after deleting the job database
-is a separate feature.
+source mappings and transforms.
+
+For a completed file-mesh run, choose **Export → Mesh replay** to write a
+`.wgreplay` package to your chosen folder. **Open mesh replay…** in the design
+file menu restores its retained mesh and exact solve settings, including explicit
+frequency lists and directivity settings, without the original job database or
+mesh file. Packages up to 64 MiB are accepted. Press **Solve** for a new run using
+those settings. The panel shows the actual frequencies, polars, engine and
+accuracy, with the complete resolved setup available under **Full resolved setup**.
+Automatic settings restoration does not change replay. Editing a mesh setup
+control or a global solve option ends exact replay and starts a new setup using the mesh controls; WG shows this change.
+Run archives also include the replay package when its inputs remain available.
+If an old run cannot supply those inputs, its archive record explains why replay
+is unavailable while keeping the result exports. CAD runs keep their existing
+workflows and do not use mesh replay packages. See the [replay format and limits](reference/MESH-REPLAY.md).
 
 ### Parameter tabs and size readout
 

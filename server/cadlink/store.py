@@ -2048,6 +2048,17 @@ class CadLinkStore:
             "SELECT * FROM ingests WHERE ingest_id = ?", (ingest_id,)
         )
 
+    def get_mesh_replay_ingest(self, content_sha256: str) -> dict[str, Any] | None:
+        """Find the import whose atomic publication recorded this replay.
+
+        Keeping the replay identity on the ingestion row avoids a second
+        mapping write that a crash could strand after publishing the mesh.
+        """
+        return self._read_one(
+            "SELECT * FROM ingests WHERE json_extract(record_json, '$.mesh_replay_sha256') = ? "
+            "ORDER BY created_at, ingest_id LIMIT 1", (content_sha256,),
+        )
+
     def allocate_ingest(
         self,
         *,

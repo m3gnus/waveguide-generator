@@ -1491,6 +1491,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/mesh-replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Package */
+        get: operations["export_package_api_jobs__job_id__mesh_replay_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/metadata": {
         parameters: {
             query?: never;
@@ -1624,6 +1641,23 @@ export interface paths {
         get: operations["read_api_mesh_import__ingest_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mesh-replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Open Package */
+        post: operations["open_package_api_mesh_replay_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4916,6 +4950,40 @@ export interface components {
              * @enum {string}
              */
             up: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+        };
+        /** MeshReplayPackage */
+        MeshReplayPackage: {
+            /** Axial Contract */
+            axial_contract: string;
+            /** Content Sha256 */
+            content_sha256: string;
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "wg-file-mesh-replay";
+            /**
+             * Numerical Contract
+             * @constant
+             */
+            numerical_contract: "imported-free-space-v1";
+            /** Original Sha256 */
+            original_sha256: string;
+            registration: components["schemas"]["MeshRegistration"];
+            request: components["schemas"]["SolveRequest"];
+            /** Result Provenance */
+            result_provenance?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Solver Msh Text */
+            solver_msh_text: string;
+            /** Solver Sha256 */
+            solver_sha256: string;
         };
         /** MetadataResponse */
         MetadataResponse: {
@@ -8816,6 +8884,39 @@ export interface operations {
             };
         };
     };
+    export_package_api_jobs__job_id__mesh_replay_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     patch_job_metadata_api_jobs__job_id__metadata_patch: {
         parameters: {
             query?: never;
@@ -9077,6 +9178,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    open_package_api_mesh_replay_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MeshReplayPackage"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

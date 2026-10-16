@@ -7,6 +7,8 @@ import { workspaceModeStore } from './workspaceMode';
 import { DEFAULT_SWEEP } from './solveDefaults';
 import { useSolveOptionsStore } from './solveOptions';
 import type { ImportedSolveSubmission } from '../jobs/actions';
+import { subscribeSolveSettingsEdits } from './solveSettingsEdits';
+import { openMeshReplay } from '../api/meshReplay';
 import { bindImportedSetup } from '../jobs/importedSetup';
 import { readImportedSetup, saveImportedSetup } from '../api/importedModels';
 import { namespaceStorage } from './durableSettings';
@@ -31,11 +33,12 @@ interface MeshImportState {
   error: string | null;
   notice: string | null;
   request: number;
+  exactSubmission: ImportedSolveSubmission | null;
 }
 const initial: MeshImportState = {
   filename: '', original: null, summary: null, units: '', forward: '+z', up: '+y', selected: [],
   registered: null, motions: {}, engine: null, accuracy: null, startHz: DEFAULT_SWEEP.startHz, endHz: DEFAULT_SWEEP.endHz,
-  count: DEFAULT_SWEEP.points, busy: false, error: null, notice: null, request: 0,
+  count: DEFAULT_SWEEP.points, busy: false, error: null, notice: null, request: 0, exactSubmission: null,
 };
 const savedSetupStorage = namespaceStorage('meshImport');
 let requestNumber = 0;
@@ -44,9 +47,15 @@ export const useMeshImportStore = create<MeshImportState>(() => ({ ...initial })
 function setupFingerprint(state: MeshImportState): string {
   const shared = useSolveOptionsStore.getState();
   return JSON.stringify([state.registered?.ingest_id, state.units, state.forward, state.up, state.selected,
-    state.motions, state.engine ?? shared.engine, state.accuracy ?? shared.accuracy, state.startHz, state.endHz, state.count]);
+    state.motions, state.engine ?? shared.engine, state.accuracy ?? shared.accuracy, state.startHz, state.endHz, state.count, state.exactSubmission]);
 }
+const EDITED_REPLAY_NOTICE = 'Replay settings changed. Solve now uses the mesh setup controls and starts a new setup.';
 useMeshImportStore.subscribe((state, previous) => {
+  if (state.exactSubmission && state.exactSubmission === previous.exactSubmission
+    && setupFingerprint(state) !== setupFingerprint(previous)) {
+    useMeshImportStore.setState({ exactSubmission: null, notice: EDITED_REPLAY_NOTICE });
+    return;
+  }
   if (state.notice === previous.notice && state.notice?.startsWith('Mesh setup saved.')
     && setupFingerprint(state) !== setupFingerprint(previous)) useMeshImportStore.setState({ notice: null });
 });
@@ -54,6 +63,15 @@ useSolveOptionsStore.subscribe((state, previous) => {
   const file = useMeshImportStore.getState();
   if (file.notice?.startsWith('Mesh setup saved.') && ((file.engine === null && state.engine !== previous.engine)
     || (file.accuracy === null && state.accuracy !== previous.accuracy))) useMeshImportStore.setState({ notice: null });
+});
+
+// Hydration and recalled designs use setState without an edit signal. They must
+// not replace a portable replay's exact settings. Only a person operating a
+// solve-options control ends replay; engine/accuracy are a coupled selection.
+subscribeSolveSettingsEdits(edit => {
+  if (edit?.source !== 'solveOptions' || !useMeshImportStore.getState().exactSubmission) return;
+  useMeshImportStore.setState({ exactSubmission: null, notice: EDITED_REPLAY_NOTICE,
+    ...(['setEngine', 'setAccuracy'].includes(edit.control ?? '') ? { engine: null, accuracy: null } : {}) });
 });
 
 /** Invalidating registration leaves the preview visible but never solvable. */
@@ -113,6 +131,7 @@ export function fileMeshSubmission(): ImportedSolveSubmission {
   if (!record || viewport.showing !== 'file' || viewport.file?.ingestId !== record.ingest_id) {
     throw new Error('Choose units and driven groups, then prepare this mesh before solving.');
   }
+  if (state.exactSubmission) return structuredClone(state.exactSubmission);
   if (!(state.startHz > 0) || !(state.endHz > state.startHz) || !Number.isInteger(state.count) || state.count < 2 || state.count > 401) {
     throw new Error('Enter an increasing frequency range and 2–401 frequencies.');
   }
@@ -163,10 +182,18 @@ interface FileOptions {
 
 async function restoreRetainedFile(id: string, options: FileOptions,
   channels: Array<{ id: string; motion?: 'normal' | 'axial' }>, fetcher: typeof fetch,
-  generation = importedMeshStore.beginIntent()): Promise<boolean> {
+  generation = importedMeshStore.beginIntent(),
+  exactSubmission?: (record: RegisteredMesh) => ImportedSolveSubmission): Promise<boolean> {
   const record = await readMeshImport(id, fetcher);
   if (!importedMeshStore.isCurrentGeneration(generation)) return false;
   if (record.ingest_id !== id) throw new Error('The retained mesh response names a different import. Select the run again.');
+  return restoreFile(record, options, channels, generation, exactSubmission?.(record));
+}
+
+function restoreFile(record: RegisteredMesh, options: FileOptions,
+  channels: Array<{ id: string; motion?: 'normal' | 'axial' }>, generation: number,
+  exactSubmission?: ImportedSolveSubmission): boolean {
+  if (!importedMeshStore.isCurrentGeneration(generation)) return false;
   if (!importedMeshStore.setFile(preparedFileScene(record), generation)) return false;
   workspaceModeStore.setMode('parametric');
   const frequencies = options.frequencies_hz;
@@ -177,8 +204,36 @@ async function restoreRetainedFile(id: string, options: FileOptions,
     startHz: frequencies?.[0] ?? options.frequency_range?.[0] ?? initial.startHz,
     endHz: frequencies?.at(-1) ?? options.frequency_range?.[1] ?? initial.endHz,
     count: frequencies?.length ?? options.num_frequencies ?? initial.count,
+    exactSubmission: exactSubmission ? structuredClone(exactSubmission) : null,
   });
   return true;
+}
+
+/** A replay's exact request remains authoritative until a setup control changes. */
+export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch,
+  generation = importedMeshStore.beginIntent()): Promise<boolean> {
+  if (!importedMeshStore.isCurrentGeneration(generation)) return false;
+  const requestNumberAtStart = ++requestNumber;
+  useMeshImportStore.setState({ busy: true, error: null, request: requestNumberAtStart });
+  try {
+    const opened = await openMeshReplay(text, fetcher);
+    if (!importedMeshStore.isCurrentGeneration(generation)) return false;
+    if (opened.record.producer !== 'mesh-file' || opened.request.geometry.type !== 'imported'
+      || opened.request.geometry.ingest_id !== opened.record.ingest_id
+      || opened.request.geometry.manifest_sha256 !== opened.record.manifest_sha256
+      || opened.request.geometry.artifact_sha256 !== opened.record.artifact_sha256) {
+      throw new Error('The mesh replay response does not match its retained mesh.');
+    }
+    const restored = restoreFile(opened.record, opened.request.options,
+      opened.request.geometry.drive_channels, generation, opened.request);
+    if (restored) useMeshImportStore.setState({ notice: 'Mesh replay opened. Solve preserves its exact settings. Editing a setup or global solve control starts a new setup.' });
+    return restored;
+  } catch (error) {
+    if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error) });
+    throw error;
+  } finally {
+    if (useMeshImportStore.getState().request === requestNumberAtStart) useMeshImportStore.setState({ busy: false });
+  }
 }
 
 /** Explicitly save before Solve. CAD project edits use this same setup schema. */
@@ -202,7 +257,7 @@ export async function restoreSavedMeshSetup(fetcher: typeof fetch = fetch): Prom
   const generation = importedMeshStore.beginIntent();
   const { setup } = await readImportedSetup(id, fetcher);
   if (!setup || !importedMeshStore.isCurrentGeneration(generation)) return false;
-  return restoreRetainedFile(id, setup.options, setup.geometry.drive_channels, fetcher, generation);
+  return restoreRetainedFile(id, setup.options, setup.geometry.drive_channels, fetcher, generation, record => bindImportedSetup(record, setup));
 }
 
 /** An unanswered request restores its SAME retained mesh and setup, so a new
@@ -214,7 +269,7 @@ export async function restorePendingMeshPress(fetcher: typeof fetch = fetch): Pr
   if (!saved?.id?.startsWith('mesh-') || !saved.body) return false;
   const body = JSON.parse(saved.body) as ImportedSolveSubmission;
   if (body.geometry?.type !== 'imported' || !body.geometry.ingest_id || !body.options) return false;
-  const restored = await restoreRetainedFile(body.geometry.ingest_id, body.options, body.geometry.drive_channels, fetcher);
+  const restored = await restoreRetainedFile(body.geometry.ingest_id, body.options, body.geometry.drive_channels, fetcher, importedMeshStore.beginIntent(), () => body);
   if (restored) useMeshImportStore.setState({ notice: 'An unanswered mesh solve was restored. Press Solve to recover that request before starting another run.' });
   return restored;
 }

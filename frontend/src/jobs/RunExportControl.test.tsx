@@ -636,4 +636,33 @@ describe('RunExportControl', () => {
     render(completeJob({ status }));
     expect(host.querySelector('.run-export-control')).toBeNull();
   });
+  it('exports a completed file mesh replay through the chosen output folder even without results', async () => {
+    const job = completeJob({ config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' },
+      script_snapshot: null, has_results: false });
+    const fetcher = vi.fn<typeof fetch>(async (url) => String(url).endsWith('/mesh-replay')
+      ? Object.assign(new Response(), { blob: async () => new Blob(['{"schema_version":1,"exact":"retained"}'], { type: 'application/json' }) })
+      : new Response(JSON.stringify({ directory: '/chosen', files: ['/chosen/1_stored_horn_v07.wgreplay'] })));
+    vi.stubGlobal('fetch', fetcher);
+    render(job);
+    openMenu();
+    const item = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent?.includes('Mesh replay'))!;
+    await act(async () => { item.click(); });
+    await vi.waitFor(() => expect(useRunExportStore.getState().jobs[job.id]?.busy).toBe(false));
+    expect(useRunExportStore.getState().jobs[job.id]?.lastError).toBeNull();
+    expect(fetcher.mock.calls[0][0]).toBe('/api/jobs/job-export-1/mesh-replay');
+    const write = fetcher.mock.calls.find(([url]) => url === '/api/workspace/write-export')!;
+    const body = write[1]?.body as FormData;
+    expect(body.get('destination')).toBe('destination-handle');
+    expect(body.get('existing')).toBe('confirm');
+    expect(body.get('relative_path')).toBe('1_stored_horn_v07.wgreplay');
+    expect(await (body.get('file') as File).text()).toBe('{"schema_version":1,"exact":"retained"}');
+    expect(patchMetadata).toHaveBeenCalledWith(job.id, { exported_files: ['earlier.csv', '/chosen/1_stored_horn_v07.wgreplay'] });
+  });
+
+  it('never offers file replay for a CAD imported job', () => {
+    render(completeJob({ config_summary: { geometry_type: 'imported' }, script_snapshot: null }));
+    openMenu();
+    expect(document.querySelector('[role="menu"]')?.textContent).not.toContain('Mesh replay');
+  });
+
 });

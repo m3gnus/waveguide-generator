@@ -1326,6 +1326,32 @@ describe('solve invocation mutex', () => {
     act(() => useMeshImportStore.setState({ registered: null }));
   });
 
+  it('submits portable replay options verbatim after automatic global settings restoration', async () => {
+    const replay = importedSubmission('wgi_replay');
+    delete replay.geometry.mesh;
+    replay.options = { ...replay.options, solver_mode: 'auto', symmetry: 'auto', accuracy: 'accurate',
+      frequencies_hz: [137, 211, 3987], frequency_spacing: 'linear',
+      polar_config: { ...replay.options.polar_config, enabled_axes: ['vertical'], distance: 3.7, norm_angle: 17 } };
+    const accepted = deferred<string>();
+    mocks.submitImported.mockReturnValueOnce(accepted.promise);
+    act(() => {
+      useMeshImportStore.setState({ busy: false, filename: 'replayed.msh', exactSubmission: structuredClone(replay),
+        registered: { ingest_id: 'wgi_replay', manifest_sha256: replay.geometry.manifest_sha256,
+          artifact_sha256: replay.geometry.artifact_sha256, source_tags: { source: 2 } } as unknown as RegisteredMesh });
+      importedMeshStore.setFile({ name: 'replayed.msh', source: 'file', ingestId: 'wgi_replay' } as ImportedMeshScene);
+      useSolveOptionsStore.setState({ engine: 'auto', accuracy: 'fast' });
+    });
+    await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));
+    const solve = host.querySelector<HTMLButtonElement>('button')!;
+    expect(solve.disabled).toBe(false);
+    await act(async () => { solve.click(); });
+    expect(mocks.submitImported.mock.calls[0][0]).toEqual(replay);
+    expect(mocks.submitImported.mock.calls[0][3]).toMatch(/^mesh-/);
+    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
+    await act(async () => { accepted.resolve('replayed-run'); await accepted.promise; });
+    act(() => useMeshImportStore.setState({ registered: null, exactSubmission: null }));
+  });
+
   // V2: Solve has one meaning. It solves the model and settings on screen;
   // Fusion reporting newer geometry never changes what it does or which
   // action is primary, and the button and the shortcut are the same command.

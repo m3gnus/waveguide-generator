@@ -1,3 +1,4 @@
+import { fetchMeshReplay, MeshReplayRefusal } from '../api/meshReplay';
 import { deadlineFetch } from '../api/deadlineFetch';
 import { samplingComments, samplingProvenance } from './sampling';
 import { downloadBlob, downloadText } from '../api/designIo';
@@ -1169,6 +1170,20 @@ export async function archiveRunToWorkspace(
   if (bundle.failures.length) {
     throw new Error(bundle.failures.map(({ format, reason }) => `${format} (${reason})`).join(', '));
   }
+  let replay: { filename: string | null; reason?: string } | undefined;
+  if (job.config_summary.import_origin === 'mesh-file') {
+    const filename = `${exportStemForJob(archiveJob)}.wgreplay`;
+    try {
+      const blob = await fetchMeshReplay(job.id, fetcher);
+      prepared.set(filename, { filename, blob });
+      replay = { filename };
+    } catch (error) {
+      // An unavailable old input must not discard the run's result archive.
+      // Transient failures retry the archive instead of becoming durable facts.
+      if (!(error instanceof MeshReplayRefusal) || ![404, 409, 410, 422].includes(error.status)) throw error;
+      replay = { filename: null, reason: error.message };
+    }
+  }
   const results = prepared.size
     ? await writeArchiveMembers(subdirectory, [...prepared.values()], fetcher)
     : { files: [], moved: new Map<string, string>() };
@@ -1186,7 +1201,7 @@ export async function archiveRunToWorkspace(
   ];
   const record = await writeArchiveMembers(
     subdirectory,
-    [textFile(buildRunRecord(archiveJob, (filename) => moved.get(filename) ?? filename, written))],
+    [textFile(buildRunRecord(archiveJob, (filename) => moved.get(filename) ?? filename, written, replay))],
     fetcher,
   );
   const pointer = await writeWorkspaceFiles(

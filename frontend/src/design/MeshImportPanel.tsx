@@ -16,6 +16,15 @@ export function MeshImportPanel() {
   const [preparing, setPreparing] = useState(false);
   const [saving, setSaving] = useState(false);
   const dimensions = state.registered?.summary.dimensions_mm;
+  const replay = state.exactSubmission;
+  const replayOptions = replay?.options;
+  const replayPolar = replayOptions?.polar_config;
+  const replayAngleStep = replayPolar?.angle_step ?? (replayPolar
+    ? (replayPolar.angle_range[1] - replayPolar.angle_range[0]) / (replayPolar.angle_range[2] - 1) : null);
+  const frequencies = replayOptions?.frequencies_hz;
+  const frequencySummary = frequencies?.length
+    ? `${frequencies.length} explicit frequencies: ${frequencies.slice(0, 8).join(', ')}${frequencies.length > 8 ? ', …' : ''} Hz`
+    : `${replayOptions?.frequency_spacing} sweep: ${replayOptions?.frequency_range?.join('–')} Hz, ${replayOptions?.num_frequencies} frequencies`;
   return <div className="param-panel panel-scroll" aria-label="Imported mesh setup">
     <h3>Imported mesh</h3>
     <p>{state.filename}</p>
@@ -44,9 +53,17 @@ export function MeshImportPanel() {
         }}>{state.busy ? 'Preparing…' : state.registered ? 'Prepare again' : 'Prepare mesh'}</button>
       </fieldset>}
     {dimensions && <p role="status">Ready · {state.registered?.summary.triangle_count.toLocaleString()} triangles · {dimensions.map(value => value.toPrecision(4)).join(' × ')} mm</p>}
+    {replay && replayOptions && <section aria-label="Exact mesh replay">
+      <h4>Exact replay settings</h4>
+      <p>{frequencySummary}</p>
+      <p>{replayOptions.polar_config.enabled_axes.join(', ')} polars · {replayAngleStep}° steps · {replayOptions.polar_config.distance} m</p>
+      <p>Engine: {replayOptions.engine} · Accuracy: {replayOptions.accuracy ?? 'fast'}</p>
+      <details><summary>Full resolved setup</summary><pre aria-label="Full resolved replay setup">{JSON.stringify({ geometry: replay.geometry, options: replayOptions }, null, 2)}</pre></details>
+      <p className="section-note">Solve uses these exact settings. Editing a control below or a global solve control starts a new setup with unit-acceleration sources, a logarithmic sweep and default 5° polars at 2 m.</p>
+    </section>}
     <fieldset disabled={state.busy}>
-      <legend>Simulation</legend>
-      <p className="section-note">Each selected group is a separate unit-acceleration source (1 m/s²). No electrical driver model or crossover is applied.</p>
+      <legend>{replay ? 'New setup controls' : 'Simulation'}</legend>
+      {!replay && <p className="section-note">Each selected group is a separate unit-acceleration source (1 m/s²). No electrical driver model or crossover is applied.</p>}
       {Object.keys(state.registered?.source_tags ?? {}).map(id => <label className="field-row" key={id}>{state.summary?.groups.find(group => group.tag === state.registered?.source_tags[id])?.name ?? id}
         <select aria-label={`Motion ${id}`} value={state.motions[id] ?? 'normal'} onChange={e => useMeshImportStore.setState({ motions: { ...state.motions, [id]: e.target.value as 'normal' | 'axial' } })}>
           <option value="normal">Normal to surface</option><option value="axial">Along source axis</option>
@@ -65,7 +82,7 @@ export function MeshImportPanel() {
       <label className="field-row">Accuracy<select aria-label="Mesh solve accuracy" value={state.accuracy ?? globalAccuracy} onChange={e => useMeshImportStore.setState({ accuracy: e.target.value as 'fast' | 'accurate' })}>
         <option value="fast">Fast</option><option value="accurate">Accurate</option>
       </select></label>
-      <p className="section-note">Logarithmic sweep. Full domain, 5° horizontal/vertical/diagonal polars at 2 m from the mesh origin. The origin is not moved automatically. Use Solve above; Runs keeps the exact mesh and settings.</p>
+      {!replay && <p className="section-note">Logarithmic sweep. Full domain, 5° horizontal/vertical/diagonal polars at 2 m from the mesh origin. The origin is not moved automatically. Use Solve above; Runs keeps the exact mesh and settings.</p>}
     </fieldset>
     <button disabled={!state.registered || state.busy || saving} onClick={() => {
       setSaving(true);

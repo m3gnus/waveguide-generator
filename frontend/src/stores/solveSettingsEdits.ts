@@ -7,12 +7,13 @@
  * choice from a transition. The setters a person drives say so here instead,
  * and only that is recorded as a project's setup (shell/cadSetupPublisher).
  */
-type Listener = () => void;
+export interface SolveSettingsEdit { source?: string; control?: string }
+type Listener = (edit?: SolveSettingsEdit) => void;
 
 const listeners = new Set<Listener>();
 
-export function noteSolveSettingsEdit(): void {
-  listeners.forEach((listener) => listener());
+export function noteSolveSettingsEdit(edit?: SolveSettingsEdit): void {
+  listeners.forEach((listener) => listener(edit));
 }
 
 export function subscribeSolveSettingsEdits(listener: Listener): () => void {
@@ -29,6 +30,7 @@ export function withEditSignals<S extends object>(
   get: () => S,
   state: S,
   setters: ReadonlyArray<keyof S>,
+  source?: string,
 ): S {
   const announced = { ...state };
   for (const name of setters) {
@@ -36,7 +38,7 @@ export function withEditSignals<S extends object>(
     announced[name] = ((...args: unknown[]) => {
       const before = get();
       const result = setter(...args);
-      if (get() !== before) noteSolveSettingsEdit();
+      if (get() !== before) noteSolveSettingsEdit({ source, control: String(name) });
       return result;
     }) as unknown as S[keyof S];
   }

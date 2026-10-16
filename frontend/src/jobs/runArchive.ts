@@ -58,6 +58,7 @@ export function buildRunRecord(
   job: JobItem,
   nameOf: (filename: string) => string = (filename) => filename,
   members: readonly string[] = [],
+  meshReplay?: { filename: string | null; reason?: string },
 ): WorkspaceTextFile {
   if (job.run_number === null) throw new Error('A run number is required to archive a solve');
   const cad = job.cad_source ?? null;
@@ -99,6 +100,7 @@ export function buildRunRecord(
       mesh: job.mesh_stats ?? null,
       artifacts: {
         ...(members.length ? { files: members.map(nameOf).sort() } : {}),
+        ...(meshReplay ? { meshReplay: { ...meshReplay, filename: meshReplay.filename ? nameOf(meshReplay.filename) : null } } : {}),
         mesh: job.has_mesh_artifact ? nameOf(`${exportStemForJob(job)}.msh`) : null,
         radiationImpedance: job.has_radiation_impedance_artifact ? {
           matrix: nameOf(`${exportStemForJob(job)}_radiation_impedance.npz`),

@@ -1137,6 +1137,50 @@ describe('result exporters', () => {
       .toBe('9_Mesh_Run.msh');
   });
 
+  it.each([200, 409, 503])('archives replay bytes or an explicit refusal, retrying transient failures (%s)', async status => {
+    const job = {
+      id: 'archive-replay', run_number: 9, parent_job_id: null, status: 'complete', progress: 1,
+      stage: null, stage_message: null, created_at: '2026-08-20T10:00:00Z', queued_at: '2026-08-20T10:00:00Z',
+      started_at: '2026-08-20T10:00:01Z', completed_at: '2026-08-20T10:02:00Z',
+      config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' },
+      solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: true,
+      label: 'Mesh Run', error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null,
+      design_revision: 1, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null,
+      auto_export_formats: {}, archived_at: null, raw_results_file: null, mesh_artifact_file: null, log_tail: [],
+    } satisfies JobItem;
+    const writes: ReturnType<typeof workspacePayload>[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).endsWith('/archive-snapshot')) return new Response(JSON.stringify({
+        schema_version: 1, results: finalResult, results_sha256: 'b'.repeat(64),
+        mesh_artifact: 'exact mesh bytes', pressure_bases: [], radiation_impedance: null,
+      }));
+      if (String(input).endsWith('/mesh-replay')) return new Response(status === 200
+        ? '{"exact":"retained package"}' : '{"detail":"Original mesh unavailable"}', { status });
+      const payload = workspacePayload(init);
+      writes.push(payload);
+      return new Response(JSON.stringify({ directory: `/workspace/${payload.subdirectory}`,
+        files: payload.members.map(({ relative_path }: { relative_path: string }) => `/workspace/${payload.subdirectory}/${relative_path}`) }));
+    });
+    if (status === 503) {
+      await expect(archiveRunToWorkspace(job, preferencesStore.getSnapshot(), fetcher)).rejects.toThrow('Original mesh unavailable');
+      expect(writes).toHaveLength(0);
+      return;
+    }
+    await archiveRunToWorkspace(job, preferencesStore.getSnapshot(), fetcher);
+    const members = writes.flatMap(write => write.members);
+    const record = JSON.parse(await members.find(member => member.relative_path === 'run.json')!.blob.text());
+    const replay = members.find(member => member.relative_path === '9_Mesh_Run.wgreplay');
+    if (status === 200) {
+      expect(await replay!.blob.text()).toBe('{"exact":"retained package"}');
+      expect(record.artifacts.files).toContain('9_Mesh_Run.wgreplay');
+      expect(record.artifacts.meshReplay).toEqual({ filename: '9_Mesh_Run.wgreplay' });
+    } else {
+      expect(replay).toBeUndefined();
+      expect(record.artifacts.meshReplay).toEqual({ filename: null, reason: 'Original mesh unavailable' });
+      expect(members.some(member => member.relative_path.endsWith('.msh'))).toBe(true);
+    }
+  });
+
   it('sends a 64 MiB workspace member as multipart binary without base64 inflation', async () => {
     const content = new Uint8Array(64 * 1024 * 1024);
     content[0] = 0x89;

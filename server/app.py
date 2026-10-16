@@ -930,6 +930,9 @@ def create_app(
     from server.jobs.imported_models import mount_imported_models
 
     mount_imported_models(application)
+    from server.jobs.mesh_replay import mount_mesh_replay
+
+    mount_mesh_replay(application)
     mount_integration(application)
     application.state.acl_repair_feedback = {"platform": "other", "roots": []}
 
