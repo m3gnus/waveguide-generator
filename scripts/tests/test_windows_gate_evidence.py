@@ -318,3 +318,26 @@ function git {
     else:
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'REPLAY_SETUP=' in (tmp_path / 'github-env.txt').read_text(encoding='utf-8-sig')
+
+
+@pytest.mark.parametrize("exit_code", [None, 1])
+def test_replay_uses_powershell_script_success_not_unset_native_exit(pwsh, tmp_path, exit_code):
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
+    source = workflow['jobs']['windows-installer-replay']['steps'][2]['run']
+    setup = tmp_path / 'installers/windows'
+    setup.mkdir(parents=True)
+    (setup / 'gates.ps1').write_text(
+        "param($Setup, $EvidenceDir)\n" + ("exit 1\n" if exit_code else "Write-Output 'summary: PASS=18 SKIP=5'\n")
+    )
+    script = tmp_path / 'invoke.ps1'
+    script.write_text("$ErrorActionPreference='Stop'\n$env:REPLAY_SETUP='fixture'\n$env:RUNNER_TEMP=$pwd\n" + source)
+    result = subprocess.run([pwsh, '-NoLogo', '-NoProfile', '-NonInteractive', '-File', str(script)],
+                            cwd=tmp_path, text=True, capture_output=True, timeout=25)
+    if exit_code:
+        assert result.returncode != 0
+        assert 'Installer gate replay failed' in result.stderr
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert 'summary: PASS=18' in result.stdout

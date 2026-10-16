@@ -458,7 +458,7 @@ jobs:
         shell: pwsh
         run: |
           & ./installers/windows/gates.ps1 -Setup $env:REPLAY_SETUP -EvidenceDir (Join-Path $env:RUNNER_TEMP "WG-inst-evidence-replay")
-          if ($LASTEXITCODE -ne 0) { throw "Installer gate replay failed: $LASTEXITCODE" }
+          if (-not $?) { throw "Installer gate replay failed" }
       - name: Retain replay diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
