@@ -6,7 +6,6 @@ import {
   revealProjectFolder,
   runsForProject,
   type CadProject,
-  type RunGroup,
   newestReturnForProject,
 } from '../api/cadProjects';
 import { listReturns } from '../api/cadlink';
@@ -28,7 +27,7 @@ import { Icon } from './icons';
 import { middleEllipsis } from './ResultsPanel';
 import { useWorkspaceFolder } from './WorkspaceFolderControls';
 
-export { groupRunsByModelState, newestReturnForProject } from '../api/cadProjects';
+export { newestReturnForProject } from '../api/cadProjects';
 
 /**
  * What a project is called: what CAD calls it, else the folder it owns, else
@@ -82,20 +81,6 @@ export function useCurrentCadProject(): { lineageId: string; name: string } | nu
     ? projectName(known)
     : returned?.document_name?.trim() || returned?.archive_stem?.trim() || 'Untitled project';
   return { lineageId, name };
-}
-
-/**
- * The one sentence a divider says about a stretch of runs.
- *
- * No ordinal. These groups are discovered from the runs that still exist, and
- * runs age out of the database, so "Version 3" would quietly become a different
- * geometry over time. A capture time cannot drift like that.
- */
-export function modelStateLabel(group: RunGroup): string {
-  const captured = group.document?.capturedAt;
-  if (captured) return `Model from ${relativeTime(captured)}`;
-  if (!group.returnStateHash) return 'Model state not recorded';
-  return 'Earlier model';
 }
 
 async function openCadOnlyProject(project: CadProject, ticket: DesignOpenTicket): Promise<string> {

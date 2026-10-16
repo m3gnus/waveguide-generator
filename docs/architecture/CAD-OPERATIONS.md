@@ -305,6 +305,27 @@ These rules bind every adapter that mutates a CAD document for WG.
 
 ## Setup revisions
 
+Prepared CAD and mesh-file models share `server/jobs/imported_setup.py` as the
+setup contract owner. The historical `CadSolveSetup` schema name, schema-1
+canonical bytes and revision table are retained; the CAD module re-exports
+the contract for existing adapters. File models use an opaque `mesh-file:`
+owner derived from the retained ingest, without a CAD project or document.
+CAD project setups retain their lineage/source-inventory ownership.
+
+The frontend resolves CAD physics once for both saved project settings and
+manual submission. Both producers bind resolved settings to immutable mesh
+identity with `bindImportedSetup`; the backend shares record identity and
+source/size validation. Saving settings approves no findings or frame. Actual
+submission still enforces CAD frame, domain, finding and FEM obligations.
+
+Runs is the sole history presentation owner. The CAD panel links to its
+project filter; shared run details offer native document attachments. The
+displaced CAD row, grouping, compare/delete and document-list state are retired.
+The CAD preparation lane, project publisher, operation-route adapters, legacy
+row migration and native document capture remain: they still own supported
+retention, meshing, confirmation and delivery behavior. No installed operation
+route or acoustic feature is removed by this convergence.
+
 A setup revision is everything a solve of one snapshot needs except the snapshot itself:
 the drive channels with resolved driver numbers, the voltages, mesh sizes, skipped
 sources, exterior-only, the combine and passive-cardioid settings, the preparation

@@ -10,7 +10,7 @@ import { applyOpenedDesign } from '../design/openCadProject';
 import { DesignFileMenu } from '../design/DesignFileMenu';
 import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { cadProjectReference } from '../api/cadProjects';
-import { CadProjectHeader, CadProjectHistory, modelStateLabel, newestReturnForProject, projectName } from './CadProjectPanel';
+import { CadProjectHeader, CadProjectHistory, newestReturnForProject, projectName } from './CadProjectPanel';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { JobsPanel } from './JobsPanel';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
@@ -144,13 +144,15 @@ describe('CAD project history', () => {
     setJobs([
       run({ id: 'b1', returnStateHash: 'sha256:bbb' }),
       run({ id: 'a1', returnStateHash: 'sha256:aaa' }),
+      run({ id: 'b2', returnStateHash: 'sha256:bbb' }),
     ]);
 
     await render(<CadProjectHistory/>);
 
     const downloads = [...host.querySelectorAll<HTMLAnchorElement>('.cad-model-download')];
-    expect(host.querySelectorAll('.cad-model-divider')).toHaveLength(2);
+    expect(host.querySelectorAll('.cad-model-divider')).toHaveLength(3);
     expect(downloads).toHaveLength(1);
+    expect(host.textContent).toContain('Model captured 2026-08-21');
     expect(downloads[0].getAttribute('href')).toBe(`/api/cadlink/projects/${LINEAGE}/documents/sha256%3Abbb`);
     await act(async () => { compareSelection.setPrimary('a1'); });
     expect(host.querySelector('.cad-model-download')?.getAttribute('href')).toBe(`/api/cadlink/projects/${LINEAGE}/documents/sha256%3Aaaa`);
@@ -756,15 +758,5 @@ describe('what the history calls things', () => {
       .toBe('ID …ABCDEF');
   });
 
-  it('dates a model rather than numbering it', () => {
-    // An ordinal would silently change meaning as old runs are pruned.
-    const label = modelStateLabel({
-      returnStateHash: 'sha256:a',
-      document: { returnStateHash: 'sha256:a', documentName: null, ingestId: null, returnId: null, capturedAt: new Date().toISOString(), filename: 'a.f3d', bytes: 1 },
-      runs: [],
-    });
-    expect(label).toBe('Model from just now');
-    expect(modelStateLabel({ returnStateHash: 'sha256:a', document: null, runs: [] })).toBe('Earlier model');
-    expect(modelStateLabel({ returnStateHash: null, document: null, runs: [] })).toBe('Model state not recorded');
-  });
+
 });

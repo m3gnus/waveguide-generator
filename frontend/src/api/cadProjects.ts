@@ -181,41 +181,6 @@ export function runsForProject(jobs: JobItem[], lineageId: string | null): JobIt
   return jobs.filter((job) => runProjectLineage(job) === lineageId);
 }
 
-export interface RunGroup {
-  returnStateHash: string | null;
-  document: CadProjectDocument | null;
-  runs: JobItem[];
-}
-
-/**
- * Split a project's runs where the CAD geometry changed.
- *
- * The list stays flat and chronological — one run per row, as the jobs rail
- * shows them — and a boundary appears only where consecutive runs came from
- * different model states. That boundary is the thing a person recognises
- * ("this is where I changed the flange"), and it is where the model for that
- * stretch of runs is offered for download. Nothing is numbered: these groups
- * are discovered from what still exists, so an ordinal would silently change
- * meaning as runs age out.
- */
-export function groupRunsByModelState(
-  runs: JobItem[],
-  documents: CadProjectDocument[],
-): RunGroup[] {
-  const byHash = new Map(documents.map((document) => [document.returnStateHash, document]));
-  const groups: RunGroup[] = [];
-  runs.forEach((run) => {
-    const hash = runReturnStateHash(run);
-    const last = groups.at(-1);
-    if (last && last.returnStateHash === hash) {
-      last.runs.push(run);
-      return;
-    }
-    groups.push({ returnStateHash: hash, document: hash ? byHash.get(hash) ?? null : null, runs: [run] });
-  });
-  return groups;
-}
-
 /** The outcome of asking for a run's CAD copy, including "never asked". */
 export interface RunCadDocumentOutcome extends RunCadDocumentPlacement {
   /** False for a run with no CAD model state: nothing was ever requested. */
