@@ -770,13 +770,31 @@ async def run_cad_preparation(port: CadJobPort, host: CadPreparationHost, job_id
 
     store = port.job_store
     row = await asyncio.to_thread(store.get_job_row, job_id)
-    intent = intent_of(row) if row is not None and row["status"] == "preparing" else None
-    if intent is None:
+    if row is None or row["status"] != "preparing":
         return "idle"
     if port.restart_refusal():
         # An approved restart: nothing is prepared and nothing is written. The
         # job stays as it is, and the lane takes it up when the latch is down.
         return "waiting"
+    try:
+        intent = intent_of(row)
+    except ValueError as exc:
+        # A damaged saved intent cannot be prepared. End it durably before
+        # claiming it, so startup never offers the same unreadable job again.
+        # Keep its original config and the validation diagnostic for inspection.
+        logger.warning("CAD job %s holds an invalid saved intent: %s", job_id, exc)
+        event = await asyncio.to_thread(
+            store.refuse_preparing_job,
+            job_id,
+            code="preparation_failed",
+            message=f"WG could not read this saved CAD request: {exc}. Send the CAD request again.",
+        )
+        if event is None:
+            return "fenced"
+        port.publish(event)
+        return "refused"
+    if intent is None:
+        return "idle"
     event = await asyncio.to_thread(
         store.claim_preparing_job,
         job_id,
