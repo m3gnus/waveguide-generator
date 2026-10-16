@@ -69,3 +69,7 @@ To review and advance the pin:
 For WGLink development, keep using the upstream symlink installer. The WG
 platform installer detects that registration and leaves it alone; alternatively
 pass `--skip-wglink`.
+
+The pinned source includes Fusion event receipt acknowledgement for builds that
+return false from `fireCustomEvent` after delivery. Undelivered startup work is
+cancelled within the existing startup envelope; the shared protocol is unchanged.
