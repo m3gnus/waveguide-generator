@@ -60,13 +60,28 @@ def managed_cpu(monkeypatch):
         manager.shutdown()
 
 
+CPU_FLOAT64 = ("beat-cpu", "cpu", "float64")
+
+
 def _pipeline(tmp_path, case, frequencies, *, engine_registry=None):
+    record, ((envelope, field, details, _),) = _pipeline_runs(
+        tmp_path, case, frequencies, engine_registry=engine_registry)
+    return record, envelope, field, details
+
+
+def _pipeline_runs(tmp_path, case, frequencies, runs=(("beat-cpu", CPU_FLOAT64),), *,
+                   engine_registry=None, inspect=None):
+    """One real intake, then one job per (requested engine, expected FEM execution).
+
+    Every job reuses the same ingested meshes, so runs compare node for node.
+    ``inspect(store, job_id, envelope, field)`` runs on a worker thread while
+    the runtime and its retained artifacts are still live.
+    """
     bundle, manifest = validation_bundle(tmp_path / "returns", case)
     record = ingest_validation_bundle(bundle, tmp_path, case)
     assert record["fem_regions"][0]["stats"]["tetrahedra"] > 0
     if case in {"open", "ported"}:
         assert record["coupled_exterior"]["stats"]["open_edges"] == 0
-    request = validation_request(record, manifest, frequencies)
 
     async def run():
         cad_store = CadLinkStore(tmp_path / "cadlink.db")
@@ -77,33 +92,39 @@ def _pipeline(tmp_path, case, frequencies, *, engine_registry=None):
             # WG can infer an axis. Confirm their known +z frame through the
             # production intake API, preserving the real admission gate.
             confirm_frame(cad_store, record, "+z")
-            started = time.monotonic()
-            job_id = await runtime.submit(request)
-            await runtime.wait_idle(timeout=120.)
-            elapsed = time.monotonic() - started
-            row = runtime.store.get_job_row(job_id)
-            assert row["status"] == "complete", row["error_message"]
-            assert row["task_metadata"]["has_fem_field_artifact"]
-            envelope = runtime.store.get_results(job_id)
-            RESULT_ENVELOPE_ADAPTER.validate_python(envelope)
-            assert envelope["channel_order"] == ["drive-lf"]
-            assert envelope["frequencies"] == list(frequencies)
-            fem = envelope["metadata"]["fem"]
-            assert (fem["engine"], fem["backend"], fem["precision"]) == ("beat-cpu", "cpu", "float64")
-            assert envelope["metadata"]["solve_path"] == (
-                "coupled-fem-bem" if case in {"open", "ported"} else "interior-fem")
-            with np.load(BytesIO(runtime.store.get_fem_field(job_id)), allow_pickle=False) as stored:
-                field = {name: stored[name].copy() for name in stored.files}
-            assert field["schema"].item() == "wg-fem-field-store-v2"
-            assert field["phasor_convention"].item() == "exp(-i omega t)"
-            assert field["drive_normalization"].tolist() == ["unit_acceleration"]
-            assert field["channel_ids"].tolist() == ["drive-lf"]
-            assert field["region_ids"].tolist() == ["rear-chamber"]
-            np.testing.assert_array_equal(field["frequencies_hz"], frequencies)
-            assert field["pressure"].dtype == np.complex128
-            assert field["pressure"].shape == (len(frequencies), 1, len(field["points_mm_0"]))
-            assert np.isfinite(field["pressure"]).all()
-            return record, envelope, field, {"job_id": job_id, "job_elapsed_s": elapsed}
+            results = []
+            for engine, expected in runs:
+                started = time.monotonic()
+                job_id = await runtime.submit(validation_request(record, manifest, frequencies, engine))
+                await runtime.wait_idle(timeout=120.)
+                elapsed = time.monotonic() - started
+                row = runtime.store.get_job_row(job_id)
+                assert row["status"] == "complete", row["error_message"]
+                assert row["task_metadata"]["has_fem_field_artifact"]
+                envelope = runtime.store.get_results(job_id)
+                RESULT_ENVELOPE_ADAPTER.validate_python(envelope)
+                assert envelope["channel_order"] == ["drive-lf"]
+                assert envelope["frequencies"] == list(frequencies)
+                fem = envelope["metadata"]["fem"]
+                assert (fem["engine"], fem["backend"], fem["precision"]) == expected
+                assert envelope["metadata"]["solve_path"] == (
+                    "coupled-fem-bem" if case in {"open", "ported"} else "interior-fem")
+                with np.load(BytesIO(runtime.store.get_fem_field(job_id)), allow_pickle=False) as stored:
+                    field = {name: stored[name].copy() for name in stored.files}
+                assert field["schema"].item() == "wg-fem-field-store-v2"
+                assert field["phasor_convention"].item() == "exp(-i omega t)"
+                assert field["drive_normalization"].tolist() == ["unit_acceleration"]
+                assert field["channel_ids"].tolist() == ["drive-lf"]
+                assert field["region_ids"].tolist() == ["rear-chamber"]
+                np.testing.assert_array_equal(field["frequencies_hz"], frequencies)
+                assert field["pressure"].dtype == np.complex128
+                assert field["pressure"].shape == (len(frequencies), 1, len(field["points_mm_0"]))
+                assert np.isfinite(field["pressure"]).all()
+                inspected = (await asyncio.to_thread(inspect, runtime.store, job_id, envelope, field)
+                             if inspect is not None else None)
+                results.append((envelope, field, {"job_id": job_id, "job_elapsed_s": elapsed,
+                                                  "requested_engine": engine}, inspected))
+            return record, results
         finally:
             await runtime.shutdown()
             await runtime.engine_registry.shutdown_prewarm()

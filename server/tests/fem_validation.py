@@ -310,9 +310,9 @@ def ingest_validation_bundle(bundle, root, case):
         store.close()
 
 
-def validation_request(record, manifest, frequencies):
+def validation_request(record, manifest, frequencies, engine="beat-cpu"):
     """Bind the actual ingested identity through the CAD joblane setup API."""
-    setup = default_setup(manifest, {"engine": "beat-cpu"})
+    setup = default_setup(manifest, {"engine": engine})
     setup.geometry["mesh"] = dict(record["mesh_sizes"])
     setup.options.pop("frequency_range", None)
     setup.options.pop("num_frequencies", None)
