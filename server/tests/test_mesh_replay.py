@@ -135,7 +135,7 @@ def test_corrupt_or_unsupported_packages_are_refused_before_registration(tmp_pat
             before = list((tmp_path / "imports" / "files").iterdir())
             await call(app, "POST", "/api/mesh-replay", package, expected=422)
             assert list((tmp_path / "imports" / "files").iterdir()) == before
-            assert store.get_mesh_replay_ingest(package["content_sha256"]) is None
+            assert len(store.list_model_ingests("mesh-file:" + original["original_sha256"])) == 1
             assert runtime.store.list_jobs()[1] == 1
         finally:
             await runtime.shutdown()

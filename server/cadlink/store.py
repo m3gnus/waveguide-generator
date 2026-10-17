@@ -53,6 +53,7 @@ from .operations import (
     validate_outcome,
 )
 from .ipc import legacy_ledger_path
+from .roles import inventory_sha256
 from . import receipts
 
 # How long ``make_durable`` waits for a reader that pins the log.
@@ -309,6 +310,22 @@ _SCHEMA = (
       recorded_at TEXT NOT NULL
     )
     """,
+    # One row per imported model: the project an import belongs to, whatever
+    # produced it. A file's id names the bytes of its original
+    # (``mesh-file:sha256:<artifact>``); a CAD model's is its lineage. Each
+    # prepared mesh names its model in ``ingests.model_id``. Additive: an
+    # older release never opens this table, and ignores that column.
+    """
+    CREATE TABLE IF NOT EXISTS imported_models (
+      model_id TEXT PRIMARY KEY,
+      producer TEXT NOT NULL CHECK (producer IN ('mesh-file', 'cad')),
+      display_name TEXT NOT NULL,
+      archive_stem TEXT,
+      latest_ingest_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+    """,
 )
 # Columns later stages added to cad_operations: nullable (or defaulted), so a
 # row written before them -- by an earlier build, or by an older release, which
@@ -430,6 +447,165 @@ def _allocate_archive_stem(
     if base.casefold() not in used:
         return base
     return _suffixed_archive_stem(base, lineage_id, used)
+
+
+#: A file model's id: this prefix and the original file's ``sha256:`` digest.
+FILE_MODEL_PREFIX = "mesh-file:"
+#: Before model records, a file setup's owner was this prefix and one ingest id.
+_LEGACY_FILE_OWNER_PREFIX = "mesh-file:wgi_"
+
+
+def file_model_id(artifact_sha256: str) -> str:
+    """The model a file belongs to: the exact bytes of its original."""
+
+    return FILE_MODEL_PREFIX + artifact_sha256
+
+
+def _text(value: object) -> str:
+    return str(value or "").strip() if isinstance(value, str) else ""
+
+
+def _record_model(conn: sqlite3.Connection, record: Mapping[str, Any]) -> tuple[str, str, str, str]:
+    """``(model_id, producer, display_name, archive_stem)`` of one ingestion record.
+
+    The one rule, for a new ingest and for the backfill alike. A file belongs
+    to its original's digest. A CAD snapshot belongs to the project its record
+    names, else its anchor design's lineage, else the lineage its Fusion
+    document claimed. Anything else is '' -- checked and unfiled -- and never
+    the project that happens to be open.
+    """
+
+    if record.get("producer") == "mesh-file":
+        artifact = _text(record.get("artifact_sha256"))
+        if not artifact.startswith("sha256:"):
+            return "", "mesh-file", "", ""
+        source = record.get("source_file")
+        filename = _text(source.get("filename")) if isinstance(source, Mapping) else ""
+        return file_model_id(artifact), "mesh-file", filename, _text(record.get("archive_stem"))
+    project = record.get("project") if isinstance(record.get("project"), Mapping) else {}
+    document = record.get("document") if isinstance(record.get("document"), Mapping) else {}
+    lineage = _text(project.get("lineage_id"))
+    if not lineage:
+        anchor = record.get("anchor") if isinstance(record.get("anchor"), Mapping) else {}
+        design_id = _text(anchor.get("design_id"))
+        row = conn.execute(
+            "SELECT lineage_id FROM designs WHERE design_id = ?", (design_id,)
+        ).fetchone() if design_id else None
+        lineage = _text(row["lineage_id"]) if row is not None else ""
+    if not lineage:
+        native_id = _text(document.get("native_id"))
+        row = conn.execute(
+            "SELECT lineage_id FROM lineage_cad_names WHERE document_native_id = ?", (native_id,)
+        ).fetchone() if native_id else None
+        lineage = _text(row["lineage_id"]) if row is not None else ""
+    if not lineage:
+        return "", "cad", "", ""
+    names = conn.execute(
+        "SELECT archive_stem, document_name FROM lineage_cad_names WHERE lineage_id = ?",
+        (lineage,),
+    ).fetchone()
+    name = (
+        _text(project.get("document_name"))
+        or _text(document.get("name"))
+        or (_text(names["document_name"]) if names is not None else "")
+    )
+    stem = _text(project.get("archive_stem")) or (
+        _text(names["archive_stem"]) if names is not None else ""
+    )
+    return lineage, "cad", name, stem
+
+
+def _file_ingest_under_model(
+    conn: sqlite3.Connection, ingest_id: str, record: Mapping[str, Any], created_at: str
+) -> str:
+    """Name one ingest's model on its row, and bring the model record up to date.
+
+    Only a row whose model is still NULL is touched, so this is idempotent and
+    a row filed once keeps its model. Rows are filed oldest first: the model
+    keeps the earliest archive folder and takes the newest name and ingest.
+    """
+
+    model_id, producer, name, stem = _record_model(conn, record)
+    conn.execute(
+        "UPDATE ingests SET model_id = ? WHERE ingest_id = ? AND model_id IS NULL",
+        (model_id, ingest_id),
+    )
+    if not model_id:
+        return model_id
+    conn.execute(
+        """
+        INSERT INTO imported_models (
+          model_id, producer, display_name, archive_stem, latest_ingest_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (model_id) DO UPDATE SET
+          display_name = CASE
+            WHEN excluded.updated_at >= imported_models.updated_at AND excluded.display_name != ''
+            THEN excluded.display_name ELSE imported_models.display_name END,
+          latest_ingest_id = CASE
+            WHEN excluded.updated_at >= imported_models.updated_at
+            THEN excluded.latest_ingest_id ELSE imported_models.latest_ingest_id END,
+          archive_stem = COALESCE(NULLIF(imported_models.archive_stem, ''), excluded.archive_stem),
+          created_at = MIN(imported_models.created_at, excluded.created_at),
+          updated_at = MAX(imported_models.updated_at, excluded.updated_at)
+        """,
+        (model_id, producer, name, stem or None, ingest_id, created_at, created_at),
+    )
+    return model_id
+
+
+def _file_unfiled_ingests(conn: sqlite3.Connection) -> None:
+    """Backfill ``ingests.model_id`` for every row that has none (an older build's)."""
+
+    rows = conn.execute(
+        "SELECT ingest_id, record_json, created_at FROM ingests WHERE model_id IS NULL "
+        "ORDER BY created_at, ingest_id"
+    ).fetchall()
+    for row in rows:
+        try:
+            record = json.loads(str(row["record_json"]))
+        except ValueError:
+            record = None
+        _file_ingest_under_model(
+            conn, str(row["ingest_id"]), record if isinstance(record, dict) else {},
+            str(row["created_at"]),
+        )
+
+
+def _migrate_legacy_file_setups(conn: sqlite3.Connection) -> None:
+    """Refile setups owned by one prepared file under its model and source inventory.
+
+    A setup saved for ``mesh-file:<ingest>`` is lost to every later preparation
+    of the same file. Each is copied to ``(model, inventory)``; when several
+    preparations of one model meet there, the newest saved setup wins. The old
+    rows stay, so a rolled-back build still finds its own. Rerunning changes
+    nothing: a row is replaced only by a strictly newer one.
+    """
+
+    rows = conn.execute(
+        "SELECT s.lineage_id, s.revision_id, s.updated_at, i.model_id, i.record_json "
+        "FROM cad_project_setups AS s JOIN ingests AS i "
+        "ON i.ingest_id = SUBSTR(s.lineage_id, ?) "
+        "WHERE s.lineage_id GLOB ? ORDER BY s.updated_at, s.lineage_id",
+        (len(FILE_MODEL_PREFIX) + 1, _LEGACY_FILE_OWNER_PREFIX + "*"),
+    ).fetchall()
+    for row in rows:
+        model_id = _text(row["model_id"])
+        if not model_id.startswith(FILE_MODEL_PREFIX):
+            continue
+        try:
+            record = json.loads(str(row["record_json"]))
+        except ValueError:
+            continue
+        sources = record.get("sources") if isinstance(record, dict) else None
+        inventory = inventory_sha256(sources if isinstance(sources, list) else [])
+        conn.execute(
+            "INSERT INTO cad_project_setups (lineage_id, inventory_sha256, revision_id, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT (lineage_id, inventory_sha256) DO UPDATE SET "
+            "revision_id = excluded.revision_id, updated_at = excluded.updated_at "
+            "WHERE excluded.updated_at > cad_project_setups.updated_at",
+            (model_id, inventory, row["revision_id"], row["updated_at"]),
+        )
+
 
 _EXPORT_BUILD_LOCKS_GUARD = threading.Lock()
 _EXPORT_BUILD_LOCKS: dict[tuple[str, str], threading.Lock] = {}
@@ -705,6 +881,18 @@ class CadLinkStore:
             for column, declaration in _OPERATION_COLUMNS:
                 if column not in operation_columns:
                     conn.execute(f"ALTER TABLE cad_operations ADD COLUMN {column} {declaration}")
+            # Model records: every prepared mesh names the imported model it
+            # belongs to ('' when it belongs to none). Additive, as above: the
+            # column is nullable, so an older release's insert, which names
+            # its columns, leaves it NULL -- and the next open files that row.
+            ingest_columns = {row["name"] for row in conn.execute("PRAGMA table_info(ingests)")}
+            if "model_id" not in ingest_columns:
+                conn.execute("ALTER TABLE ingests ADD COLUMN model_id TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS ingests_by_model ON ingests(model_id, created_at)"
+            )
+            _file_unfiled_ingests(conn)
+            _migrate_legacy_file_setups(conn)
             imported_ledger = _import_legacy_solve_ledger(conn, self.legacy_solve_ledger)
             receipt_feed_created = receipts.initialize(conn)
             self._receipt_feed_needs_sync = receipt_feed_created or getattr(self, "_receipt_feed_needs_sync", False)
@@ -1359,13 +1547,6 @@ class CadLinkStore:
                 (lineage_id, inventory_sha256),
             ).fetchone()
         return dict(row)
-
-    def record_project_setup(self, lineage_id: str, inventory_sha256: str, revision_id: str) -> dict[str, Any]:
-        """Compatibility adapter for CAD project callers of the shared setup store."""
-        return self.record_model_setup(lineage_id, inventory_sha256, revision_id)
-
-    def get_project_setup(self, lineage_id: str, inventory_sha256: str) -> dict[str, Any] | None:
-        return self.get_model_setup(lineage_id, inventory_sha256)
 
     def record_project_setup_if_absent(
         self, lineage_id: str, inventory_sha256: str, revision_id: str
@@ -2048,17 +2229,6 @@ class CadLinkStore:
             "SELECT * FROM ingests WHERE ingest_id = ?", (ingest_id,)
         )
 
-    def get_mesh_replay_ingest(self, content_sha256: str) -> dict[str, Any] | None:
-        """Find the import whose atomic publication recorded this replay.
-
-        Keeping the replay identity on the ingestion row avoids a second
-        mapping write that a crash could strand after publishing the mesh.
-        """
-        return self._read_one(
-            "SELECT * FROM ingests WHERE json_extract(record_json, '$.mesh_replay_sha256') = ? "
-            "ORDER BY created_at, ingest_id LIMIT 1", (content_sha256,),
-        )
-
     def allocate_ingest(
         self,
         *,
@@ -2096,10 +2266,76 @@ class CadLinkStore:
                     now,
                 ),
             )
+            _file_ingest_under_model(conn, ingest_id, json.loads(record_json), now)
             row = conn.execute(
                 "SELECT * FROM ingests WHERE ingest_id = ?", (ingest_id,)
             ).fetchone()
         return self._row(row) or {}
+
+    def find_file_ingests(self, model_id: str, manifest_sha256: str) -> list[dict[str, Any]]:
+        """The preparations of one file model with one spec digest, newest first."""
+
+        self.initialize()
+        with self._lock:
+            rows = self._connect().execute(
+                "SELECT * FROM ingests WHERE model_id = ? AND manifest_sha256 = ? "
+                "ORDER BY created_at DESC, ingest_id DESC",
+                (model_id, manifest_sha256),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_model_ingests(self, model_id: str) -> list[dict[str, Any]]:
+        """Every preparation filed under one model, newest first."""
+
+        self.initialize()
+        with self._lock:
+            rows = self._connect().execute(
+                "SELECT * FROM ingests WHERE model_id = ? ORDER BY created_at DESC, ingest_id DESC",
+                (model_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def insert_file_ingest(
+        self,
+        *,
+        ingest_id: str,
+        created_at: str,
+        manifest_sha256: str,
+        artifact_sha256: str,
+        record_json: str,
+        known_ingest_ids: Iterable[str] = (),
+    ) -> tuple[dict[str, Any], bool]:
+        """Record a file preparation whose files are already published.
+
+        A short transaction, with no file I/O in it. When another preparation
+        of the same file and spec committed meanwhile -- one the caller had not
+        already checked (``known_ingest_ids``) -- that one is returned and this
+        one is not recorded: ``(row, False)``. The caller removes its files.
+        """
+
+        self.initialize()
+        model_id = file_model_id(artifact_sha256)
+        known = set(known_ingest_ids)
+        with self._lock, self._transaction() as conn:
+            for row in conn.execute(
+                "SELECT * FROM ingests WHERE model_id = ? AND manifest_sha256 = ? "
+                "ORDER BY created_at DESC, ingest_id DESC",
+                (model_id, manifest_sha256),
+            ).fetchall():
+                if row["ingest_id"] not in known:
+                    return dict(row), False
+            conn.execute(
+                "INSERT INTO ingests (ingest_id, manifest_sha256, artifact_sha256, record_json, "
+                "created_at) VALUES (?, ?, ?, ?, ?)",
+                (ingest_id, manifest_sha256, artifact_sha256, record_json, created_at),
+            )
+            _file_ingest_under_model(conn, ingest_id, json.loads(record_json), created_at)
+            row = conn.execute("SELECT * FROM ingests WHERE ingest_id = ?", (ingest_id,)).fetchone()
+        return dict(row), True
+
+    def get_model(self, model_id: str) -> dict[str, Any] | None:
+        self.initialize()
+        return self._read_one("SELECT * FROM imported_models WHERE model_id = ?", (model_id,))
 
     def save(
         self,

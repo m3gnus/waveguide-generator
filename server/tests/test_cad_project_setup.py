@@ -85,6 +85,27 @@ def _project_return(
     return f"wgreturn/{name}.wgreturn", "sha256:" + hashlib.sha256(body).hexdigest()
 
 
+def _put_setup(
+    harness: Harness, lineage_id: str, setup: dict[str, Any], inventory: list[dict[str, Any]]
+) -> tuple[int, dict[str, Any]]:
+    """``PUT /api/models/{lineage}/setup`` for a return's sources, as WG's editor sends it."""
+
+    from fastapi import FastAPI
+
+    from server.jobs.models_api import mount_models_api
+    from test_jobs_api import _request
+
+    app = FastAPI()
+    app.state.cadlink_store = harness.store
+    app.state.data_dir = harness.data_dir
+    app.state.jobs_runtime = SimpleNamespace(_restart_pending=lambda: False)
+    mount_models_api(app)
+    status, raw = asyncio.run(_request(
+        app, "PUT", f"/api/models/{lineage_id}/setup", body={"inventory": inventory, "setup": setup},
+    ))
+    return status, json.loads(raw)
+
+
 def _record_setup(
     harness: Harness,
     lineage_id: str,
@@ -92,13 +113,13 @@ def _record_setup(
     *,
     inventory: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    from server.cadlink.api import ProjectSetupRequest, put_project_setup
-
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=harness.store)))
-    payload = ProjectSetupRequest(
-        lineageId=lineage_id, inventory=SOURCES if inventory is None else inventory, setup=setup
-    )
-    return asyncio.run(put_project_setup(payload, request))
+    status, body = _put_setup(harness, lineage_id, setup, SOURCES if inventory is None else inventory)
+    assert status == 200, body
+    return {
+        "lineageId": lineage_id,
+        "inventorySha256": body["inventory_sha256"],
+        "revisionId": body["revision_id"],
+    }
 
 
 def _identity_return(
@@ -160,9 +181,9 @@ def test_a_project_setup_is_recorded_for_its_project_and_sources(harness: Harnes
     changed = _record_setup(harness, lineage, _setup(rigid=12.0))
 
     assert first["revisionId"] == again["revisionId"] != changed["revisionId"]
-    row = harness.store.get_project_setup(lineage, inventory_sha256(SOURCES))
+    row = harness.store.get_model_setup(lineage, inventory_sha256(SOURCES))
     assert row["revision_id"] == changed["revisionId"]  # the latest is the project's
-    assert harness.store.get_project_setup(lineage, inventory_sha256([])) is None
+    assert harness.store.get_model_setup(lineage, inventory_sha256([])) is None
 
 
 def test_a_stable_source_identity_keeps_its_project_setup_across_exports(harness: Harness) -> None:
@@ -220,7 +241,7 @@ def test_a_reassigned_source_identity_does_not_inherit_the_project_setup(harness
     # Not the other source's settings: WG's defaults, for the new inventory.
     assert (summary["state"], summary["setupDefaults"]) == ("accepted", True)
     assert harness.submitted[-1].geometry.mesh.rigid_size_mm == 4.0
-    assert harness.store.get_project_setup(
+    assert harness.store.get_model_setup(
         lineage, inventory_sha256([{"id": "cad-source-17", "role": "HF", "required": True}])
     )["revision_id"] != summary["setupRevisionId"]
 
@@ -343,7 +364,7 @@ def test_a_model_with_no_recorded_setup_is_solved_with_wg_defaults_and_remembers
     assert revision["origin"] == "wg_defaults"
     # Recorded as the project's setup for these sources ...
     sources = read_wgreturn(harness.workspace / bundle_path).manifest["sources"]
-    recorded = harness.store.get_project_setup(b_lineage, inventory_sha256(sources))
+    recorded = harness.store.get_model_setup(b_lineage, inventory_sha256(sources))
     assert recorded["revision_id"] == first["setupRevisionId"]
 
     # ... so the next Solve reuses exactly it.
@@ -379,7 +400,7 @@ def test_settings_recorded_while_defaults_were_prepared_win_for_this_solve_too(
     assert (summary["state"], summary["setupDefaults"]) == ("accepted", False)
     assert harness.submitted[-1].geometry.mesh.rigid_size_mm == 9.0
     sources = read_wgreturn(harness.workspace / bundle_path).manifest["sources"]
-    recorded = harness.store.get_project_setup(b_lineage, inventory_sha256(sources))
+    recorded = harness.store.get_model_setup(b_lineage, inventory_sha256(sources))
     assert recorded["revision_id"] == summary["setupRevisionId"]
 
 
@@ -404,7 +425,7 @@ def test_a_user_setup_recorded_at_the_last_moment_is_never_overwritten(
     summary = harness.prepare("cmd-b")
 
     sources = read_wgreturn(harness.workspace / bundle_path).manifest["sources"]
-    recorded = harness.store.get_project_setup(b_lineage, inventory_sha256(sources))
+    recorded = harness.store.get_model_setup(b_lineage, inventory_sha256(sources))
     assert recorded["revision_id"] == raced[0]
     # And this solve used theirs, not WG's defaults.
     assert (summary["state"], summary["setupDefaults"]) == ("accepted", False)
@@ -641,22 +662,16 @@ def test_the_request_the_backend_composes_is_widened_before_it_is_bound(harness:
 
 @backend_free
 def test_the_routes_take_only_well_formed_settings(harness: Harness) -> None:
-    from fastapi import HTTPException
     from pydantic import ValidationError
 
-    from server.cadlink.api import ProjectSetupRequest, SolverSelectionRequest
+    from server.cadlink.api import SolverSelectionRequest
 
     for inventory in ([], [{"id": "source-hf", "role": "HF", "required": "false"}]):
-        with pytest.raises(ValidationError):
-            ProjectSetupRequest.model_validate(
-                {"lineageId": "wgl_1", "inventory": inventory, "setup": _setup()}
-            )
+        assert _put_setup(harness, "wgl_1", _setup(), inventory)[0] == 422
     with pytest.raises(ValidationError):
         SolverSelectionRequest.model_validate({"engine": "   "})
     assert SolverSelectionRequest.model_validate({"engine": " Metal "}).engine == "metal"
-    with pytest.raises(HTTPException) as refused:
-        _record_setup(harness, "wgl_1", {"geometry": {}})
-    assert refused.value.status_code == 422
+    assert _put_setup(harness, "wgl_1", {"geometry": {}}, SOURCES)[0] == 422
 
 
 @old_only("the operations delivery loop lifecycle", "test_job_cad_lane.py::test_a_job_accepted_while_a_restart_is_approved_waits_untouched")
@@ -1014,7 +1029,7 @@ def test_a_recorded_setup_that_cannot_be_used_still_waits_rather_than_using_defa
     sources = read_wgreturn(harness.workspace / bundle_path).manifest["sources"]
     # A setup this build cannot take, recorded for exactly these sources.
     unusable = harness.store.create_setup_revision('{"geometry": {}}', "sha256:" + "9" * 64)
-    harness.store.record_project_setup(
+    harness.store.record_model_setup(
         b_lineage, inventory_sha256(sources), str(unusable["revision_id"])
     )
     _accept(harness.store, "cmd-b", bundle_path, manifest)

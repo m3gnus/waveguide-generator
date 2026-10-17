@@ -1437,6 +1437,10 @@ class CadSource(JobModel):
     """
 
     ingest_id: str | None
+    #: The imported model this run belongs to (``server/jobs/models_api.py``):
+    #: ``mesh-file:sha256:<original>`` for a file, the lineage for CAD; None
+    #: when it belongs to none.
+    model_id: str | None = None
     design_id: str | None
     lineage_id: str | None
     #: The folder this design's runs are archived under -- the name its

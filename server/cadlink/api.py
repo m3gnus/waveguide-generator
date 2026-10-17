@@ -15,7 +15,7 @@ from typing import Any, Awaitable, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 from server.cadlink.identity import SaveIdentity, design_hash
@@ -100,7 +100,7 @@ from server.cadlink.joblane.preparation import (
     settle_received_snapshots,
 )
 from server.cadlink.joblane.job_shims import accept_operation_solve, operation_detail, run_delivery_pass, sweep_pending_solves
-from server.cadlink.joblane.project_setup import SOLVER_SELECTION, inventory_sha256
+from server.cadlink.joblane.project_setup import SOLVER_SELECTION
 from server.cadlink.joblane.setup import setup_content, setup_digest, validate_setup
 from server.cadlink.interpretation.solver_frame import AXES as SOLVER_FRAME_AXES, record_is_unlinked
 from server.cadlink.intake.readings import ensure_frame_suggestion
@@ -2123,25 +2123,6 @@ async def _cancel_cad_operation(operation_id: str, request: Request) -> dict[str
     return operation_summary(row)
 
 
-class SourceInventoryItem(BaseModel):
-    """One source of a return, as its manifest states it."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: str = Field(min_length=1)
-    role: str
-    required: StrictBool
-
-
-class ProjectSetupRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    lineage_id: str = Field(alias="lineageId", min_length=1)
-    #: The sources the setup is for, with canonical roles, as the returns listing states them.
-    inventory: list[SourceInventoryItem] = Field(min_length=1)
-    setup: dict[str, Any]
-
-
 class SolverSelectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2156,34 +2137,6 @@ class SolverSelectionRequest(BaseModel):
         if not normalized:
             raise ValueError("engine must not be empty")
         return normalized
-
-
-@router.put("/project-setups")
-async def put_project_setup(payload: ProjectSetupRequest, request: Request) -> dict[str, Any]:
-    """Record a project's solve settings for its sources (CAD-OPERATIONS.md, "Project setups").
-
-    A solve Fusion sends for that project is prepared from them, whatever
-    project the editor has open. The latest recording is the project's.
-    """
-
-    try:
-        setup = validate_setup(payload.setup)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    store: CadLinkStore = request.app.state.cadlink_store
-    inventory = inventory_sha256([item.model_dump() for item in payload.inventory])
-
-    def record() -> dict[str, Any]:
-        revision = store.create_setup_revision(setup_content(setup), setup_digest(setup))
-        store.record_project_setup(payload.lineage_id, inventory, str(revision["revision_id"]))
-        return revision
-
-    revision = await asyncio.to_thread(record)
-    return {
-        "lineageId": payload.lineage_id,
-        "inventorySha256": inventory,
-        "revisionId": revision["revision_id"],
-    }
 
 
 @router.put("/solver-selection")

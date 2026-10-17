@@ -14,7 +14,7 @@ import pytest
 
 from server.cadlink.store import CadLinkStore
 from server.jobs.api import create_jobs_router
-from server.jobs.mesh_import import MeshRegistration, mount_mesh_import, register_mesh
+from server.jobs.models_api import MeshRegistration, mount_models_api, register_mesh
 from server.jobs.models import SolveRequest
 from server.jobs.runtime import ImportedSolveRefusal, JobRuntime
 from server.jobs.store import JobStore
@@ -33,7 +33,8 @@ MESH = (Path(__file__).parent / "fixtures/mesh_import/tetra.msh").read_text()
 @asynccontextmanager
 async def api_client(app):
     async def call(method, path, body=None):
-        status, raw = await asgi_request(app, method, path, body=body)
+        path, _, query = path.partition("?")
+        status, raw = await asgi_request(app, method, path, body=body, query=query)
         return SimpleNamespace(status_code=status, text=raw.decode(), json=lambda: json.loads(raw))
 
     yield SimpleNamespace(
@@ -136,9 +137,17 @@ def test_registration_needs_valid_axes_sources_and_keeps_exact_original(tmp_path
         ).read_bytes() == MESH.encode()
         assert record["sources"][0]["observed"]["total_area_mm2"] == pytest.approx(5000)
         assert "identity" not in record and "return_id" not in record and "mesh_sizes" not in record
-        other = register_mesh(store, tmp_path, registration())
-        assert record["archive_stem"] != other["archive_stem"]
-        assert record["manifest_sha256"] == other["manifest_sha256"]
+        # The same file prepared the same way is the same retained mesh.
+        assert register_mesh(store, tmp_path, registration()) == record
+        # Prepared another way, it is another mesh of the same model, filed
+        # in the same folder.
+        other = register_mesh(store, tmp_path, registration(units="cm"))
+        assert other["ingest_id"] != record["ingest_id"]
+        assert other["manifest_sha256"] != record["manifest_sha256"]
+        assert other["archive_stem"] == record["archive_stem"]
+        model_id = "mesh-file:" + record["artifact_sha256"]
+        assert store.get_ingest(record["ingest_id"])["model_id"] == model_id
+        assert store.get_model(model_id)["latest_ingest_id"] == other["ingest_id"]
     finally:
         store.close()
 
@@ -215,18 +224,20 @@ def test_http_import_plan_solve_restart_and_faithful_retry_without_cad_routes(tm
             store,
             runtime,
         )
-        mount_mesh_import(app)
+        mount_models_api(app)
         app.include_router(create_jobs_router(runtime))
         try:
             async with api_client(app) as client:
                 assert (await client.get("/api/cadlink/returns")).status_code == 404
                 inspected = await client.post(
-                    "/api/mesh-import/inspect", json={"filename": "tetra.msh", "msh_text": MESH}
+                    "/api/models/files/inspect", json={"filename": "tetra.msh", "msh_text": MESH}
                 )
                 assert inspected.status_code == 200, inspected.text
-                response = await client.post("/api/mesh-import", json=registration().model_dump())
+                response = await client.post("/api/models/files", json=registration().model_dump())
                 assert response.status_code == 200, response.text
-                record = response.json()
+                record = response.json()["prepared"]
+                model_id = response.json()["model"]["model_id"]
+                assert record["model_id"] == model_id == "mesh-file:" + record["artifact_sha256"]
                 body = request(record).model_dump(mode="json")
                 plan = await client.post("/api/solve/imported-plan", json=body)
                 assert plan.status_code == 200 and plan.json()["engine"] == "metal", plan.text
@@ -242,9 +253,16 @@ def test_http_import_plan_solve_restart_and_faithful_retry_without_cad_routes(tm
                 assert job["cad_source"]["archive_stem"]
                 assert "CAD" not in job["design_availability"]["reason"]
                 assert engine.calls[0][1] == record["msh_text"]
-                assert (
-                    await client.get(f"/api/mesh-import/{record['ingest_id']}")
-                ).json() == record
+                assert job["cad_source"]["model_id"] == model_id
+                metadata = runtime.store.get_job_row(job_id)["task_metadata"]["imported_geometry"]
+                assert metadata["model_id"] == model_id
+                assert metadata["prepared_id"] == record["ingest_id"]
+                assert metadata["setup_revision_id"] is None
+                path = f"/api/models/{model_id}?prepared_id={record['ingest_id']}"
+                read = (await client.get(path)).json()
+                assert read["prepared"] == record
+                assert read["latest_prepared"]["ingest_id"] == record["ingest_id"]
+                assert read["original_available"] is True
             await runtime.shutdown()
             store.close()
             # Reopen the real databases and retained files, without any in-memory state.

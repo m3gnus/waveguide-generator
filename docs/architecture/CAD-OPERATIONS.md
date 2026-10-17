@@ -308,9 +308,15 @@ These rules bind every adapter that mutates a CAD document for WG.
 Prepared CAD and mesh-file models share `server/jobs/imported_setup.py` as the
 setup contract owner. The historical `CadSolveSetup` schema name, schema-1
 canonical bytes and revision table are retained; the CAD module re-exports
-the contract for existing adapters. File models use an opaque `mesh-file:`
-owner derived from the retained ingest, without a CAD project or document.
-CAD project setups retain their lineage/source-inventory ownership.
+the contract for existing adapters. Setups are owned by an imported model
+(`server/jobs/models_api.py`, `/api/models`) and its source inventory. A file's
+model is its original's digest (`mesh-file:sha256:<artifact>`), with no CAD
+project or document, so importing or preparing the same file again finds its
+setup; a CAD model is its lineage. Every prepared mesh names its model
+(`ingests.model_id`, '' when it belongs to none; `imported_models` holds the
+model's name, archive folder and latest preparation). Both are additive: the
+registry keeps the format an older release reads, and the next open files any
+ingest an older release wrote.
 
 The frontend resolves CAD physics once for both saved project settings and
 manual submission. Both producers bind resolved settings to immutable mesh
@@ -351,8 +357,8 @@ whatever project is open. Nothing on the backend reads the live UI:
 
 - **Recorded by the frontend.** As the user changes a project's solve settings, the
   frontend records them as that project's setup for its source inventory
-  (`PUT /api/cadlink/project-setups`, `{lineageId, inventory, setup}`); the latest
-  recording is the project's. The solver selection is recorded the same way
+  (`PUT /api/models/{lineage}/setup`, `{inventory, setup}`, or `{prepared_id, setup}`
+  once a snapshot is prepared); the latest recording is the project's. The solver selection is recorded the same way
   (`PUT /api/cadlink/solver-selection`, `{engine}`).
 - **The operation keeps its settings.** The revision an attempt selects is recorded on the
   operation before it meshes, so it survives a preparation that fails. A follow-up that

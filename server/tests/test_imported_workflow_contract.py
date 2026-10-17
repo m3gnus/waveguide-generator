@@ -132,10 +132,10 @@ def test_equivalent_cad_and_file_meshes_use_same_engine_and_agree(tmp_path: Path
         app = create_app(data_dir=tmp_path / "file-data")
         try:
             await _settled_capabilities(app.state.engine_registry)
-            record = await _call(app, "POST", "/api/mesh-import", {
+            record = (await _call(app, "POST", "/api/models/files", {
                 "filename": "same-prepared-surface.msh", "msh_text": text, "units": "m",
                 "forward": "+z", "up": "+y", "source_tags": [tag],
-            })
+            }))["prepared"]
             geometry = {"type": "imported", "ingest_id": record["ingest_id"],
                         "manifest_sha256": record["manifest_sha256"], "artifact_sha256": record["artifact_sha256"],
                         "drive_channels": [{"id": "acceptance", "source_ids": [f"group_{tag}"], "motion": "normal"}]}

@@ -1180,6 +1180,17 @@
             ],
             "title": "Manifest Sha256"
           },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
           "return_state_hash": {
             "anyOf": [
               {
@@ -4750,6 +4761,63 @@
         "title": "FieldPlaneValidationErrorResponse",
         "type": "object"
       },
+      "FilePreparation": {
+        "additionalProperties": false,
+        "description": "How a file is turned into a solver mesh: its units, frame and sources.",
+        "properties": {
+          "forward": {
+            "enum": [
+              "+x",
+              "-x",
+              "+y",
+              "-y",
+              "+z",
+              "-z"
+            ],
+            "title": "Forward",
+            "type": "string"
+          },
+          "source_tags": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "title": "Source Tags",
+            "type": "array"
+          },
+          "units": {
+            "enum": [
+              "mm",
+              "cm",
+              "m",
+              "in"
+            ],
+            "title": "Units",
+            "type": "string"
+          },
+          "up": {
+            "enum": [
+              "+x",
+              "-x",
+              "+y",
+              "-y",
+              "+z",
+              "-z"
+            ],
+            "title": "Up",
+            "type": "string"
+          }
+        },
+        "required": [
+          "units",
+          "forward",
+          "up",
+          "source_tags"
+        ],
+        "title": "FilePreparation",
+        "type": "object"
+      },
       "FilterSpec": {
         "additionalProperties": false,
         "description": "One high-pass or low-pass section of a drive channel.",
@@ -8076,12 +8144,12 @@
           }
         },
         "required": [
-          "filename",
-          "msh_text",
           "units",
           "forward",
           "up",
-          "source_tags"
+          "source_tags",
+          "filename",
+          "msh_text"
         ],
         "title": "MeshRegistration",
         "type": "object"
@@ -8171,6 +8239,47 @@
           "status"
         ],
         "title": "MetadataResponse",
+        "type": "object"
+      },
+      "ModelSetupWrite": {
+        "additionalProperties": false,
+        "description": "A setup for one model, for the sources of a prepared mesh.\n\n``prepared_id`` names the prepared mesh; the server reads its sources. A CAD\nproject's settings can also be recorded before anything is prepared, for\nthe sources its return lists (``inventory``). Neither: the model's latest\nprepared mesh.",
+        "properties": {
+          "inventory": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SourceInventoryItem"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inventory"
+          },
+          "prepared_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prepared Id"
+          },
+          "setup": {
+            "$ref": "#/components/schemas/CadSolveSetup"
+          }
+        },
+        "required": [
+          "setup"
+        ],
+        "title": "ModelSetupWrite",
         "type": "object"
       },
       "MorphConfig": {
@@ -9944,36 +10053,6 @@
           "document"
         ],
         "title": "PresetWrite",
-        "type": "object"
-      },
-      "ProjectSetupRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "inventory": {
-            "items": {
-              "$ref": "#/components/schemas/SourceInventoryItem"
-            },
-            "minItems": 1,
-            "title": "Inventory",
-            "type": "array"
-          },
-          "lineageId": {
-            "minLength": 1,
-            "title": "Lineageid",
-            "type": "string"
-          },
-          "setup": {
-            "additionalProperties": true,
-            "title": "Setup",
-            "type": "object"
-          }
-        },
-        "required": [
-          "lineageId",
-          "inventory",
-          "setup"
-        ],
-        "title": "ProjectSetupRequest",
         "type": "object"
       },
       "ROSSEConfig": {
@@ -11892,7 +11971,7 @@
       },
       "SourceInventoryItem": {
         "additionalProperties": false,
-        "description": "One source of a return, as its manifest states it.",
+        "description": "One source of a CAD return, as its manifest states it.",
         "properties": {
           "id": {
             "minLength": 1,
@@ -13388,50 +13467,6 @@
           }
         },
         "summary": "Post Reconcile Cad Operation",
-        "tags": [
-          "cadlink"
-        ]
-      }
-    },
-    "/api/cadlink/project-setups": {
-      "put": {
-        "description": "Record a project's solve settings for its sources (CAD-OPERATIONS.md, \"Project setups\").\n\nA solve Fusion sends for that project is prepared from them, whatever\nproject the editor has open. The latest recording is the project's.",
-        "operationId": "put_project_setup_api_cadlink_project_setups_put",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ProjectSetupRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Put Project Setup Api Cadlink Project Setups Put",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Put Project Setup",
         "tags": [
           "cadlink"
         ]
@@ -15073,102 +15108,6 @@
         ]
       }
     },
-    "/api/imported-models/{ingest_id}/setup": {
-      "get": {
-        "operationId": "read_setup_api_imported_models__ingest_id__setup_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "ingest_id",
-            "required": true,
-            "schema": {
-              "title": "Ingest Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Read Setup Api Imported Models  Ingest Id  Setup Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Read Setup",
-        "tags": [
-          "Imported models"
-        ]
-      },
-      "put": {
-        "operationId": "save_setup_api_imported_models__ingest_id__setup_put",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "ingest_id",
-            "required": true,
-            "schema": {
-              "title": "Ingest Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CadSolveSetup"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Save Setup Api Imported Models  Ingest Id  Setup Put",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Save Setup",
-        "tags": [
-          "Imported models"
-        ]
-      }
-    },
     "/api/integration/v1/design-schema": {
       "get": {
         "operationId": "design_schema_api_integration_v1_design_schema_get",
@@ -15966,136 +15905,6 @@
         "summary": "Mesh Artifact"
       }
     },
-    "/api/mesh-import": {
-      "post": {
-        "operationId": "register_api_mesh_import_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MeshRegistration"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Register Api Mesh Import Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Register",
-        "tags": [
-          "Mesh import"
-        ]
-      }
-    },
-    "/api/mesh-import/inspect": {
-      "post": {
-        "operationId": "inspect_api_mesh_import_inspect_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MeshFile"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Inspect Api Mesh Import Inspect Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Inspect",
-        "tags": [
-          "Mesh import"
-        ]
-      }
-    },
-    "/api/mesh-import/{ingest_id}": {
-      "get": {
-        "operationId": "read_api_mesh_import__ingest_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "ingest_id",
-            "required": true,
-            "schema": {
-              "title": "Ingest Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Read Api Mesh Import  Ingest Id  Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Read",
-        "tags": [
-          "Mesh import"
-        ]
-      }
-    },
     "/api/mesh-replay": {
       "post": {
         "operationId": "open_package_api_mesh_replay_post",
@@ -16136,6 +15945,412 @@
         "summary": "Open Package",
         "tags": [
           "Mesh replay"
+        ]
+      }
+    },
+    "/api/models/files": {
+      "post": {
+        "description": "Import a file as a model and prepare it; the same inputs find the same mesh.",
+        "operationId": "register_api_models_files_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeshRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Register Api Models Files Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown model or prepared mesh"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Restart pending, mismatched or unavailable mesh"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Mesh or setup refused"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "Imported models"
+        ]
+      }
+    },
+    "/api/models/files/inspect": {
+      "post": {
+        "description": "Read a file's groups and size, without retaining anything.",
+        "operationId": "inspect_api_models_files_inspect_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeshFile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Inspect Api Models Files Inspect Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Mesh or setup refused"
+          }
+        },
+        "summary": "Inspect",
+        "tags": [
+          "Imported models"
+        ]
+      }
+    },
+    "/api/models/{model_id}": {
+      "get": {
+        "description": "A model, its latest preparation, and one named preparation with its mesh.",
+        "operationId": "get_model_api_models__model_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "prepared_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Prepared Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Model Api Models  Model Id  Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown model or prepared mesh"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Restart pending, mismatched or unavailable mesh"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Mesh or setup refused"
+          }
+        },
+        "summary": "Get Model",
+        "tags": [
+          "Imported models"
+        ]
+      }
+    },
+    "/api/models/{model_id}/prepare": {
+      "post": {
+        "description": "Prepare a file model again from its retained original, however it is now set.",
+        "operationId": "prepare_api_models__model_id__prepare_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FilePreparation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Prepare Api Models  Model Id  Prepare Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown model or prepared mesh"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Restart pending, mismatched or unavailable mesh"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Mesh or setup refused"
+          }
+        },
+        "summary": "Prepare",
+        "tags": [
+          "Imported models"
+        ]
+      }
+    },
+    "/api/models/{model_id}/setup": {
+      "get": {
+        "description": "The setup saved for this model and the sources of a prepared mesh.",
+        "operationId": "get_setup_api_models__model_id__setup_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "prepared_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Prepared Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Setup Api Models  Model Id  Setup Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown model or prepared mesh"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Restart pending, mismatched or unavailable mesh"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Mesh or setup refused"
+          }
+        },
+        "summary": "Get Setup",
+        "tags": [
+          "Imported models"
+        ]
+      },
+      "put": {
+        "description": "Save a model's setup for the sources of a prepared mesh (or a CAD return).",
+        "operationId": "put_setup_api_models__model_id__setup_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelSetupWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Put Setup Api Models  Model Id  Setup Put"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown model or prepared mesh"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Restart pending, mismatched or unavailable mesh"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Mesh or setup refused"
+          }
+        },
+        "summary": "Put Setup",
+        "tags": [
+          "Imported models"
         ]
       }
     },

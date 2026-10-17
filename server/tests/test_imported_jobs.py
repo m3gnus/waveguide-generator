@@ -1117,6 +1117,8 @@ def test_legacy_imported_job_recovers_project_provenance_from_ingest(
 
             assert item["cad_source"] == {
                 "ingest_id": ingest["ingest_id"],
+                # Resolved from the ingest's model, as the record files it.
+                "model_id": identity.lineage_id,
                 "design_id": identity.design_id,
                 "lineage_id": identity.lineage_id,
                 "archive_stem": "Tritonia-V-project",

@@ -221,7 +221,7 @@ def _populate(store: CadLinkStore, design_id: str) -> None:
 
     lineage_id = store.get_design(design_id)["lineage_id"]
     revision = store.create_setup_revision('{"setup": 1}', "sha256:" + "6" * 64)["revision_id"]
-    store.record_project_setup(lineage_id, "sha256:" + "7" * 64, revision)
+    store.record_model_setup(lineage_id, "sha256:" + "7" * 64, revision)
     store.set_setting("solverSelection", {"engine": "metal"})
     store.record_frame_confirmation(
         "wgl_frame",
@@ -368,4 +368,99 @@ def test_a_release_reopens_a_registry_this_build_filled_and_nothing_is_lost(
         assert after[table] == before[table], f"rolling forward from {tag} changed {table}"
     assert after["designs"] == during["designs"]
     assert len(after["designs"]) == len(before["designs"]) + 1
+    assert _user_version(db_path) == 11
+
+
+#: The last release before model records (``imported_models``, ``ingests.model_id``).
+#: Not in ``_release_tags.RELEASE_TAGS``, which CI fetches; where it is
+#: unreachable the frozen reader below still holds the promise.
+PRE_MODEL_RECORDS_TAG = "v0.3.5"
+
+_RELEASED_INGEST_DRIVER = textwrap.dedent(
+    """
+    import json
+    import sys
+
+    sys.path.insert(0, sys.argv[1])
+    import server
+    from server.cadlink.store import CadLinkStore
+
+    store = CadLinkStore(sys.argv[2])
+    store.initialize()
+    record = {"producer": "mesh-file", "artifact_sha256": "sha256:" + "1" * 64,
+              "source_file": {"filename": "released.msh"}, "archive_stem": "released"}
+    row = store.allocate_ingest(
+        manifest_sha256="sha256:" + "2" * 64, artifact_sha256=record["artifact_sha256"],
+        record_builder=lambda ingest_id, created_at: json.dumps({**record, "ingest_id": ingest_id}),
+    )
+    read = store.get_ingest(row["ingest_id"])
+    store.close()
+    print(json.dumps({"server": server.__file__, "ingest_id": row["ingest_id"], "read": read}))
+    """
+)
+
+
+def _insert_like_v035(db_path: Path, ingest_id: str, record: dict[str, object]) -> dict[str, object]:
+    """v0.3.5's ``allocate_ingest`` and ``get_ingest``, frozen: named columns, ``dict(row)``."""
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "INSERT INTO ingests (ingest_id, manifest_sha256, artifact_sha256, record_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (ingest_id, "sha256:" + "2" * 64, record["artifact_sha256"], json.dumps(record),
+             "2026-10-10T10:00:00Z"),
+        )
+        conn.commit()
+        return dict(conn.execute("SELECT * FROM ingests WHERE ingest_id = ?", (ingest_id,)).fetchone())
+
+
+def test_an_older_release_inserts_an_ingest_and_the_next_open_files_it(tmp_path: Path) -> None:
+    db_path = tmp_path / "cadlink.db"
+    _open(db_path)
+    assert _user_version(db_path) == 11
+    record = {"producer": "mesh-file", "artifact_sha256": "sha256:" + "1" * 64,
+              "source_file": {"filename": "rolled-back.msh"}, "archive_stem": "rolled_back"}
+    read = _insert_like_v035(db_path, "wgi_rolled_back", record)
+    # The older reader sees the extra column as one more key, and NULL.
+    assert read["model_id"] is None and json.loads(str(read["record_json"])) == record
+
+    store = CadLinkStore(db_path)
+    try:
+        store.initialize()
+        model_id = "mesh-file:sha256:" + "1" * 64
+        assert store.get_ingest("wgi_rolled_back")["model_id"] == model_id  # type: ignore[index]
+        assert store.get_model(model_id)["display_name"] == "rolled-back.msh"  # type: ignore[index]
+    finally:
+        store.close()
+    assert _user_version(db_path) == 11
+
+
+def test_the_release_before_model_records_writes_and_reads_ingests_in_this_registry(tmp_path: Path) -> None:
+    archive = subprocess.run(  # noqa: S603 - fixed program and arguments
+        ["git", "-C", str(REPOSITORY_ROOT), "archive", "--format=tar", PRE_MODEL_RECORDS_TAG,  # noqa: S607
+         "server", "shared", "launchers", "scripts/fetch_spa.py"],
+        capture_output=True, check=False, timeout=60,
+    )
+    if archive.returncode != 0:
+        pytest.skip(f"{PRE_MODEL_RECORDS_TAG} is not reachable here; the frozen reader is tested")
+    tree = tmp_path / "released"
+    with tarfile.open(fileobj=BytesIO(archive.stdout)) as released:
+        released.extractall(tree, filter="data")
+    driver = tmp_path / "released_ingest_driver.py"
+    driver.write_text(_RELEASED_INGEST_DRIVER, encoding="utf-8")
+    db_path = tmp_path / "data" / "db" / "cadlink.db"
+    db_path.parent.mkdir(parents=True)
+    _open(db_path)
+
+    result = _run_released(tree, driver, str(db_path))
+
+    assert result["read"]["model_id"] is None  # type: ignore[index]
+    store = CadLinkStore(db_path)
+    try:
+        store.initialize()
+        row = store.get_ingest(str(result["ingest_id"]))
+        assert row is not None and row["model_id"] == "mesh-file:sha256:" + "1" * 64
+    finally:
+        store.close()
     assert _user_version(db_path) == 11

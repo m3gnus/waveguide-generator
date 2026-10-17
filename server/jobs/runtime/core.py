@@ -2078,8 +2078,22 @@ class JobRuntime:
             "persistence_warnings": [],
         }
         if imported is not None:
+            ingest_row = (
+                await asyncio.to_thread(self.cadlink_store.get_ingest, request.geometry.ingest_id)
+                if self.cadlink_store is not None
+                else None
+            )
+            setup = (cad_provenance or {}).get("setup")
             task_metadata["imported_geometry"] = {
                 "ingest_id": request.geometry.ingest_id,
+                # The imported model this run belongs to ('' and None: none),
+                # the prepared mesh it solved, and the setup revision it was
+                # bound to when it has one (server/jobs/models_api.py).
+                "model_id": (ingest_row or {}).get("model_id") or None,
+                "prepared_id": request.geometry.ingest_id,
+                "setup_revision_id": (
+                    setup.get("revision_id") if isinstance(setup, Mapping) else None
+                ),
                 "anchor_design_id": imported.anchor_design_id,
                 # A run stays attributable to the design and the CAD document it
                 # was solved from long after both have moved on.
@@ -5066,8 +5080,19 @@ class JobRuntime:
                         row.get("id"),
                         exc_info=True,
                     )
+            # Recorded on jobs from model records on; resolved for older ones
+            # from the ingest's model, else the project the run was filed under.
+            model_id = imported_metadata.get("model_id")
+            if "model_id" not in imported_metadata and cadlink_store is not None and ingest_id:
+                try:
+                    model_id = (cadlink_store.get_ingest(str(ingest_id)) or {}).get("model_id")
+                except Exception:
+                    logger.warning("Could not read the model of job %s", row.get("id"), exc_info=True)
+            if "model_id" not in imported_metadata:
+                model_id = model_id or lineage_id
             cad_source = {
                 "ingest_id": ingest_id,
+                "model_id": model_id or None,
                 "design_id": design_id,
                 "lineage_id": lineage_id,
                 "archive_stem": archive_stem,

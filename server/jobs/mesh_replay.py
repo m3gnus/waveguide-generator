@@ -18,7 +18,8 @@ from pydantic import Field, JsonValue
 
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
-from server.jobs.mesh_import import MeshRegistration, _public_record, register_mesh
+from server.jobs.models_api import MeshRegistration, public_record, register_mesh
+from server.cadlink.store import file_model_id
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.jobs.runtime import _solved_under_legacy_axial
 from server.mesh.artifact import read_verified_import_mesh
@@ -149,28 +150,19 @@ def restore_mesh_replay(
     if (_digest(package.solver_msh_text) != package.solver_sha256
             or reconstructed != package.solver_msh_text):
         raise ValueError("The solver mesh does not match the original mesh and declared transform.")
-    def validate_new_record(candidate: dict[str, Any]) -> None:
+
+    def validate_record(candidate: dict[str, Any]) -> None:
         runtime._validate_imported_model_setup(package.request.geometry, candidate)
         # The admitted hashes must describe the packaged original and transform.
         if (package.request.geometry.manifest_sha256 != candidate["manifest_sha256"]
                 or package.request.geometry.artifact_sha256 != candidate["artifact_sha256"]):
             raise ValueError("The request hashes do not match the packaged mesh and assignments.")
-        candidate["mesh_replay_sha256"] = package.content_sha256
 
-    # One backend owns this data directory. Serialize lookup/register/publish
-    # so a lost response or simultaneous open reuses the same retained mesh.
+    # The same original prepared the same way is one retained mesh, so a lost
+    # response or simultaneous open reuses it (models_api.register_mesh). One
+    # backend owns this data directory; the lock keeps the two opens in order.
     with lock:
-        row = store.get_mesh_replay_ingest(package.content_sha256)
-        record = get_prepared_mesh(store, row["ingest_id"]) if row else None
-        if record is not None:
-            if (record.get("producer") != "mesh-file"
-                    or read_verified_import_mesh(record) != reconstructed):
-                raise ValueError("The retained replay mesh changed. Import the original mesh again.")
-        else:
-            record = register_mesh(
-                store, data_dir, body,
-                validate_record=validate_new_record,
-            )
+        record = register_mesh(store, data_dir, body, validate_record=validate_record)
         request = package.request.model_copy(deep=True)
         request.geometry.ingest_id = record["ingest_id"]
         request.geometry.manifest_sha256 = record["manifest_sha256"]
@@ -179,7 +171,10 @@ def restore_mesh_replay(
         request.client_request_id = None
         runtime._validate_imported_model_setup(request.geometry, record)
         return {
-            "record": {**_public_record(record), "msh_text": reconstructed},
+            "record": {
+                **public_record(record, file_model_id(record["artifact_sha256"])),
+                "msh_text": reconstructed,
+            },
             "request": request.model_dump(mode="json"),
         }
 

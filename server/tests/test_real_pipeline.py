@@ -130,7 +130,10 @@ def _pins() -> dict[str, str]:
 async def _call(
     app: Any, method: str, path: str, body: Mapping[str, Any] | None = None, *, expect: int = 200
 ) -> Any:
-    status, raw = await _request(app, method, path, body=dict(body) if body is not None else None)
+    route, _, query = path.partition("?")
+    status, raw = await _request(
+        app, method, route, body=dict(body) if body is not None else None, query=query
+    )
     text = raw.decode("utf-8", "replace")
     assert status == expect, f"{method} {path} answered {status}, not {expect}: {text[:2000]}"
     return json.loads(text) if text else None
@@ -468,10 +471,10 @@ def test_a_mesh_file_solves_without_cad_and_replays_after_restart(tmp_path: Path
                 if _imported_engine_expected() is not None:
                     pytest.fail(reason)
                 pytest.skip(reason)
-            record = await _call(app, "POST", "/api/mesh-import", {
+            record = (await _call(app, "POST", "/api/models/files", {
                 "filename": "standalone.msh", "msh_text": mesh, "units": "mm",
                 "forward": "+z", "up": "+y", "source_tags": [2],
-            })
+            }))["prepared"]
             body = {"geometry": {"type": "imported", "ingest_id": record["ingest_id"],
                 "manifest_sha256": record["manifest_sha256"], "artifact_sha256": record["artifact_sha256"],
                 "drive_channels": [{"id": "group_2", "source_ids": ["group_2"], "motion": "normal"}]},
@@ -499,8 +502,8 @@ def test_a_mesh_file_solves_without_cad_and_replays_after_restart(tmp_path: Path
             replayed = await _finish(app, retry_id)
             second_spl = _finite_series(replayed["channels"]["group_2"]["spl_on_axis"]["spl"], "mesh replay SPL", 2)
             assert max(abs(a - b) for a, b in zip(first_spl, second_spl)) < 0.001
-            restored = await _call(app, "GET", f"/api/mesh-import/{record['ingest_id']}")
-            assert restored["msh_text"] == record["msh_text"]
+            restored = await _call(app, "GET", f"/api/models/{record['model_id']}?prepared_id={record['ingest_id']}")
+            assert restored["prepared"]["msh_text"] == record["msh_text"]
         finally:
             await _close(app)
 

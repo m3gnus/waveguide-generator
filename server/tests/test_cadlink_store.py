@@ -13,6 +13,7 @@ import sqlite3
 import pytest
 
 from server.cadlink.identity import SaveIdentity
+from server.cadlink.roles import inventory_sha256
 from server.cadlink.store import STORE_FORMAT_VERSION, CadLinkStore
 
 
@@ -601,3 +602,160 @@ def test_latest_lineage_export_reaches_across_designs(tmp_path: Path) -> None:
     assert latest is not None
     assert latest["design_id"] == fork["identity"].design_id  # type: ignore[union-attr]
     assert store.find_latest_export_for_lineage("wgl_absent") is None
+
+
+# -- model records: ingests.model_id and imported_models ------------------------------
+
+
+def _old_ingest(db_path: Path, ingest_id: str, record: object, created_at: str) -> None:
+    """An ingest as a release before model records writes it: model_id stays NULL."""
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO ingests (ingest_id, manifest_sha256, artifact_sha256, record_json, "
+            "created_at) VALUES (?, ?, ?, ?, ?)",
+            (
+                ingest_id, "sha256:" + "m" * 64, "sha256:" + "a" * 64,
+                record if isinstance(record, str) else json.dumps(record), created_at,
+            ),
+        )
+
+
+def _file_record(filename: str, stem: str, artifact: str = "1") -> dict[str, object]:
+    return {
+        "producer": "mesh-file",
+        "artifact_sha256": "sha256:" + artifact * 64,
+        "source_file": {"filename": filename},
+        "archive_stem": stem,
+        "sources": [{"id": "group_2", "role": "SOURCE", "required": True}],
+    }
+
+
+def _models(db_path: Path) -> tuple[dict[str, object], list[tuple[object, ...]]]:
+    with sqlite3.connect(db_path) as conn:
+        filed = dict(conn.execute("SELECT ingest_id, model_id FROM ingests").fetchall())
+        models = conn.execute("SELECT * FROM imported_models ORDER BY model_id").fetchall()
+    return filed, models
+
+
+def _reopen(store: CadLinkStore) -> None:
+    store.close()
+    store.initialize()
+
+
+def test_backfill_files_every_older_ingest_under_its_model(tmp_path: Path) -> None:
+    db_path = tmp_path / "cadlink.db"
+    store = CadLinkStore(db_path)
+    try:
+        saved = _save(store)
+        design_id = saved["identity"].design_id  # type: ignore[union-attr]
+        design_lineage = saved["identity"].lineage_id  # type: ignore[union-attr]
+        document_lineage = store.claim_cad_document_lineage("urn:fusion:doc", "Speaker")
+        # Another project exists (an open one, say); nothing may land in it by default.
+        _save(store, marker="open project", filename="open.cfg")
+        _old_ingest(db_path, "wgi_file_old", _file_record("first.msh", "first_aaaa"), "2026-10-01T10:00:00Z")
+        _old_ingest(db_path, "wgi_file_new", _file_record("renamed.msh", "renamed_bbbb"), "2026-10-02T10:00:00Z")
+        _old_ingest(db_path, "wgi_project", {"project": {
+            "lineage_id": "wgl_project", "document_name": "Box", "archive_stem": "box",
+        }}, "2026-10-01T11:00:00Z")
+        _old_ingest(db_path, "wgi_anchor", {"anchor": {"design_id": design_id}}, "2026-10-01T12:00:00Z")
+        _old_ingest(db_path, "wgi_document", {
+            "anchor": {"design_id": None}, "document": {"native_id": "urn:fusion:doc", "name": "Speaker"},
+        }, "2026-10-01T13:00:00Z")
+        _old_ingest(db_path, "wgi_unknown", {"anchor": {"design_id": "wgd_gone"}}, "2026-10-01T14:00:00Z")
+        _old_ingest(db_path, "wgi_native", {"producer": "native"}, "2026-10-01T15:00:00Z")
+        _old_ingest(db_path, "wgi_broken", "{not json", "2026-10-01T16:00:00Z")
+
+        _reopen(store)
+
+        filed, _rows = _models(db_path)
+        file_model = "mesh-file:sha256:" + "1" * 64
+        assert filed == {
+            "wgi_file_old": file_model,
+            "wgi_file_new": file_model,
+            "wgi_project": "wgl_project",
+            "wgi_anchor": design_lineage,
+            "wgi_document": document_lineage,
+            # Checked and unfiled: never the open project.
+            "wgi_unknown": "",
+            "wgi_native": "",
+            "wgi_broken": "",
+        }
+        model = store.get_model(file_model)
+        assert model is not None
+        assert (model["producer"], model["display_name"], model["archive_stem"], model["latest_ingest_id"]) == (
+            "mesh-file", "renamed.msh", "first_aaaa", "wgi_file_new",
+        )
+        assert (model["created_at"], model["updated_at"]) == ("2026-10-01T10:00:00Z", "2026-10-02T10:00:00Z")
+        project = store.get_model("wgl_project")
+        assert project is not None
+        assert (project["producer"], project["display_name"], project["archive_stem"]) == ("cad", "Box", "box")
+        assert store.get_model(document_lineage)["display_name"] == "Speaker"  # type: ignore[index]
+        assert store.get_model("") is None
+        assert [row["ingest_id"] for row in store.list_model_ingests(file_model)] == [
+            "wgi_file_new", "wgi_file_old",
+        ]
+    finally:
+        store.close()
+
+
+def test_backfill_is_idempotent_and_never_refiles_a_filed_row(tmp_path: Path) -> None:
+    db_path = tmp_path / "cadlink.db"
+    store = CadLinkStore(db_path)
+    try:
+        store.initialize()
+        _old_ingest(db_path, "wgi_one", _file_record("one.msh", "one"), "2026-10-01T10:00:00Z")
+        _old_ingest(db_path, "wgi_unfiled", {"anchor": {}}, "2026-10-01T11:00:00Z")
+        _reopen(store)
+        first = _models(db_path)
+        # A row filed once keeps its model, even one the rule would now file elsewhere.
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("UPDATE ingests SET model_id = 'wgl_kept' WHERE ingest_id = 'wgi_unfiled'")
+        _reopen(store)
+        _reopen(store)
+        filed, models = _models(db_path)
+        assert models == first[1]
+        assert filed == {**first[0], "wgi_unfiled": "wgl_kept"}
+        # A later build's own ingest is filed as it is recorded.
+        row = store.allocate_ingest(
+            manifest_sha256="sha256:" + "m" * 64, artifact_sha256="sha256:" + "1" * 64,
+            record_builder=lambda ingest_id, created_at: json.dumps(_file_record("two.msh", "two")),
+        )
+        assert row["model_id"] == "mesh-file:sha256:" + "1" * 64
+        assert store.get_model(row["model_id"])["latest_ingest_id"] == row["ingest_id"]  # type: ignore[index]
+    finally:
+        store.close()
+
+
+def test_file_setups_move_to_their_model_and_the_newest_wins(tmp_path: Path) -> None:
+    db_path = tmp_path / "cadlink.db"
+    store = CadLinkStore(db_path)
+    try:
+        store.initialize()
+        for ingest_id, created in (("wgi_a", "2026-10-01T10:00:00Z"), ("wgi_b", "2026-10-02T10:00:00Z")):
+            _old_ingest(db_path, ingest_id, _file_record(f"{ingest_id}.msh", ingest_id), created)
+        # A file whose ingest is gone keeps its old row and moves nowhere.
+        old_rows = [
+            ("mesh-file:wgi_b", "sha256:spec-b", "wgs_newer", "2026-10-05T10:00:00Z"),
+            ("mesh-file:wgi_a", "sha256:spec-a", "wgs_older", "2026-10-04T10:00:00Z"),
+            ("mesh-file:wgi_gone", "sha256:spec-c", "wgs_gone", "2026-10-06T10:00:00Z"),
+            ("wgl_cad", "sha256:inventory", "wgs_cad", "2026-10-03T10:00:00Z"),
+        ]
+        with sqlite3.connect(db_path) as conn:
+            conn.executemany("INSERT INTO cad_project_setups VALUES (?, ?, ?, ?)", old_rows)
+        _reopen(store)
+
+        model_id = "mesh-file:sha256:" + "1" * 64
+        inventory = inventory_sha256([{"id": "group_2", "role": "SOURCE", "required": True}])
+        assert store.get_model_setup(model_id, inventory)["revision_id"] == "wgs_newer"  # type: ignore[index]
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute("SELECT * FROM cad_project_setups ORDER BY lineage_id").fetchall()
+        assert set(old_rows) <= set(rows)
+        assert len(rows) == len(old_rows) + 1
+        # Once the user saves a setup of their own, reopening never puts the old one back.
+        store.record_model_setup(model_id, inventory, "wgs_mine")
+        _reopen(store)
+        _reopen(store)
+        assert store.get_model_setup(model_id, inventory)["revision_id"] == "wgs_mine"  # type: ignore[index]
+    finally:
+        store.close()

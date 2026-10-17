@@ -15,15 +15,13 @@ exact inputs it was prepared and solved with.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-import hashlib
 import json
 import math
 from typing import Any
 
 from server.jobs.models import SolveRequest
 
-from server.cadlink.operations import canonical_json
-from server.cadlink.roles import canonical_source_role
+from server.cadlink.roles import inventory_sha256
 from server.jobs.imported_setup import CadSolveSetup, setup_content, setup_digest, validate_setup
 from server.cadlink.store import CadLinkStore
 
@@ -32,32 +30,6 @@ SOLVER_SELECTION = "solver_selection"
 # As the frontend's importedSubmission.ts states them.
 _POLAR_AXIS_ORDER = ("horizontal", "vertical", "diagonal")
 _DEFAULT_DIAGONAL_INCLINATION_DEG = 45
-
-
-def inventory_sha256(sources: Sequence[Mapping[str, Any]]) -> str:
-    """A source inventory's identity: which sources, in which roles, required or not.
-
-    Roles are canonical (``canonical_source_role``), as the returns listing and
-    so the frontend state them, whatever spelling the manifest used.
-
-    The source ``id`` is part of the key. When a return requires
-    ``source-identity-v1`` that id is the CAD-authored identity of the logical
-    source, the same across exports, so a project's setup follows its sources
-    from one export to the next and a reassigned identity does not inherit it.
-    The byte shape is unchanged, so an inventory from a return without the
-    feature keeps its exact digest.
-    """
-
-    entries = sorted(
-        [
-            str(item.get("id") or ""),
-            canonical_source_role(str(item.get("role") or "")),
-            bool(item.get("required")),
-        ]
-        for item in sources
-        if isinstance(item, Mapping)
-    )
-    return "sha256:" + hashlib.sha256(canonical_json(entries).encode("utf-8")).hexdigest()
 
 
 def solver_selection(store: CadLinkStore) -> dict[str, str]:
@@ -82,7 +54,7 @@ def project_setup(
     model is then solved with WG's default settings (``default_setup``).
     """
 
-    row = store.get_project_setup(lineage_id, inventory_sha256(sources))
+    row = store.get_model_setup(lineage_id, inventory_sha256(sources))
     if row is None:
         return None
     revision = store.get_setup_revision(str(row["revision_id"]))
