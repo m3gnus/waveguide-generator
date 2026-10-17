@@ -88,3 +88,28 @@ def test_pinning_from_a_worker_thread_parks_a_daemon_initial_thread() -> None:
         """
     )
     assert (result.returncode, result.stdout.strip()) == (0, "ok"), result.stderr
+
+
+def test_pinning_from_the_main_thread_needs_no_parked_thread() -> None:
+    result = _run(
+        """
+        import threading
+        import gmsh
+        from server.platform.gmsh_openmp import PIN_THREAD_NAME, pin_gmsh_openmp_initial_thread
+
+        pin_gmsh_openmp_initial_thread()
+        assert PIN_THREAD_NAME not in [t.name for t in threading.enumerate()]
+
+        def session():
+            gmsh.initialize(interruptible=False)
+            gmsh.finalize()
+
+        for _ in range(2):
+            worker = threading.Thread(target=session)
+            worker.start()
+            worker.join()
+        session()
+        print("ok")
+        """
+    )
+    assert (result.returncode, result.stdout.strip()) == (0, "ok"), result.stderr
