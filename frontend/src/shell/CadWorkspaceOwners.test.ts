@@ -7,7 +7,8 @@ import { cadReceiptsStore, type CadReceipt } from '../stores/cadReceipts';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { rememberLastModel } from '../stores/lastModel';
+import { readLastModel, rememberLastModel } from '../stores/lastModel';
+import { resetImportedModelStore } from '../stores/importedModel';
 import { designForFamily, useDesignStore } from '../stores/design';
 import { resetCadDeliveryHealthStore, useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import { cadWorkspace } from '../stores/cadWorkspace';
@@ -183,10 +184,27 @@ it('a refused foreign receipt never reopens or prepares the last model (rows 22,
     cursor: 1, bundle_path: bundle.bundlePath, manifest_sha256: record.manifest_sha256, document_name: 'Speaker', retained_copy: true, refusal: null }];
   channels.forEach((channel) => channel.resync()); await flush();
   expect(cadWorkspace.getSnapshot().error).toContain('belongs to another CAD-linked project');
+  // The refusal moves the person into Imported mode: entering it is what the guard must hold off.
+  expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
   expect(calls('/api/cadlink/designs')).toHaveLength(0);
   expect(calls('/api/cadlink/ingest')).toHaveLength(0);
   expect(fetcher.mock.calls.some(([input]) => String(input).startsWith('/api/models/remembered'))).toBe(false);
   expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+});
+
+it('reopens the last model once at start when the persisted mode is Imported', async () => {
+  resetImportedModelStore(); workspaceModeStore.setImportedInput('cad');
+  rememberLastModel({ model_id: 'remembered', input: 'cad' });
+  workspaceModeStore.setMode('cad');
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation(async (input, init) => String(input).startsWith('/api/models/remembered')
+    ? json({ error: { code: 'model_not_found', message: 'gone' } }, 404) : base(input, init));
+  stop = mountCadWorkspaceOwners(); await flush(); await flush();
+  expect(calls('/api/models/remembered')).toHaveLength(1);
+  // Gone: cleared once, and the empty Imported view is left as it is.
+  expect(readLastModel('cad')).toBeNull();
+  expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+  expect(cadWorkspace.getSnapshot().error).toBeNull();
 });
 
 it('opening an ordinary design returns to Parametric mode and invalidates held CAD state (row 5)', async () => {

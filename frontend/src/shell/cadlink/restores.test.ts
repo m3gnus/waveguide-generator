@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore } from '../../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../../stores/cadReturn';
 import { readLastModel, rememberLastModel } from '../../stores/lastModel';
+import { DurableSettings } from '../../stores/durableSettings';
 import { resetDesignStore } from '../../stores/design';
 import { resetDocumentStore } from '../../stores/document';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../../stores/solveOptions';
@@ -166,7 +167,119 @@ describe('job and last-model restores without the coordinator', () => {
     expect(fetcher).not.toHaveBeenCalled();
     expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
     expect(useImportedModelStore.getState().phase).toBe('empty');
-    expect(readLastModel()).toEqual({ model_id: 'wgl_project', input: 'cad' });
+    expect(readLastModel('cad')).toEqual({ model_id: 'wgl_project', input: 'cad' });
+  });
+
+  const modelReads = (fetcher: ReturnType<typeof cadModelFetcher>) =>
+    fetcher.mock.calls.filter(([input]) => String(input) === '/api/models/wgl_project').length;
+
+  it('reopens the model when the person switches into Imported mode mid-session, never changing the mode itself', async () => {
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' });
+    const fetcher = cadModelFetcher();
+    const stop = observeLastModel({ fetcher });
+    try {
+      await Promise.resolve();
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+      workspaceModeStore.setMode('cad');
+      await vi.waitFor(() => expect(useImportedModelStore.getState()).toMatchObject({ phase: 'ready', modelId: 'wgl_project' }));
+      // At most once per pointer in a session, even when the view is emptied and entered again.
+      const reads = modelReads(fetcher);
+      workspaceModeStore.setMode('parametric'); resetImportedModelStore(); workspaceModeStore.setMode('cad');
+      await Promise.resolve(); await Promise.resolve();
+      expect(modelReads(fetcher)).toBe(reads);
+    } finally { stop(); }
+  });
+
+  it('does nothing on entry when a model is already open', async () => {
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' });
+    const fetcher = cadModelFetcher();
+    const stop = observeLastModel({ fetcher });
+    try {
+      await openImported({ kind: 'cad', record: { ...record, model_id: 'wgl_other' } as typeof record });
+      workspaceModeStore.setMode('cad');
+      await Promise.resolve(); await Promise.resolve();
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally { stop(); }
+  });
+
+  it.each([['a refused foreign return', { refusedForeignReturn: { current: true } }], ['a pending ?job= link', { jobLinkPending: () => true }]] as const)(
+    'stands down for %s', async (_name, guard) => {
+      rememberLastModel({ model_id: 'wgl_project', input: 'cad' }); workspaceModeStore.setMode('cad');
+      const fetcher = cadModelFetcher();
+      const stop = observeLastModel({ fetcher, ...guard });
+      await Promise.resolve(); await Promise.resolve();
+      stop();
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(readLastModel('cad')).not.toBeNull();
+    });
+
+  it('shows the newest return of a CAD model that was never solved, on defaults', async () => {
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' }); workspaceModeStore.setMode('cad');
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes('/setup')) return json({ setup: null });
+      if (path.startsWith('/api/models/')) return json({ model: { model_id: 'wgl_project', producer: 'cad', display_name: 'Speaker' },
+        latest_prepared: workspaceFor().prepared, original_available: false });
+      return json({ items: path.endsWith('/designs') ? [{ lineageId: 'wgl_project', documentName: 'Speaker' }] : [bundle], cadFolderConfigured: true });
+    }) as unknown as typeof fetch;
+    const status = vi.fn(); const stop = observeLastModel({ fetcher, reportStatus: status });
+    try {
+      await vi.waitFor(() => expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath));
+      expect(status).toHaveBeenCalledWith('Reopened Speaker.');
+      expect(readLastModel('cad')).not.toBeNull();
+    } finally { stop(); }
+  });
+
+  it('says why when a never-solved CAD project has no return to show', async () => {
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' }); workspaceModeStore.setMode('cad');
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes('/setup')) return json({ setup: null });
+      if (path.startsWith('/api/models/')) return json({ model: { model_id: 'wgl_project', producer: 'cad', display_name: 'Speaker' },
+        latest_prepared: workspaceFor().prepared, original_available: false });
+      return json({ items: path.endsWith('/designs') ? [{ lineageId: 'wgl_project', documentName: 'Speaker' }] : [], cadFolderConfigured: true });
+    }) as unknown as typeof fetch;
+    const status = vi.fn(); const stop = observeLastModel({ fetcher, reportStatus: status });
+    try { await vi.waitFor(() => expect(status).toHaveBeenCalledWith(expect.stringContaining('no return to show'))); } finally { stop(); }
+  });
+
+  const settingsEnvelope = (pointers: Record<string, string>) =>
+    json({ schemaVersion: 1, namespaces: { lastModel: JSON.stringify(pointers) } });
+
+  it('reattempts when the settings server delivers the pointer after start-up (a real durable-settings notification)', async () => {
+    workspaceModeStore.setMode('cad');
+    const fetcher = cadModelFetcher();
+    const settings = new DurableSettings({ storage: localStorage, fetcher: vi.fn(async () => settingsEnvelope({ cad: 'wgl_project' })) as unknown as typeof fetch });
+    const stop = observeLastModel({ fetcher, settings });
+    try {
+      await Promise.resolve();
+      expect(fetcher).not.toHaveBeenCalled();
+      await settings.hydrate();
+      await vi.waitFor(() => expect(useImportedModelStore.getState()).toMatchObject({ phase: 'ready', modelId: 'wgl_project' }));
+      // One open is two reads: the existence check, then the open itself.
+      expect(modelReads(fetcher)).toBe(2);
+    } finally { stop(); }
+  });
+
+  it('migrates locally when the settings wait times out, and the late server answer does not open it twice', async () => {
+    workspaceModeStore.setMode('cad');
+    localStorage.setItem('wg2.cad.project.v1', 'wgl_project');
+    const fetcher = cadModelFetcher();
+    const late = deferred<Response>();
+    const settings = new DurableSettings({ storage: localStorage, fetcher: vi.fn(() => late.promise) as unknown as typeof fetch });
+    const stop = observeLastModel({ fetcher, settings });
+    try {
+      await vi.waitFor(() => expect(useImportedModelStore.getState().phase).toBe('ready'));
+      expect(localStorage.getItem('wg2.cad.project.v1')).toBeNull();
+      // As if the migrated pointer's upload had been acknowledged: the server's answer may then replace it.
+      localStorage.removeItem('wg2.last.model.v1.local-newer');
+      await settings.hydrate({ timeoutMs: 5 });
+      late.resolve(settingsEnvelope({ cad: 'wgl_project', file: 'mesh-file:sha256:other' }));
+      await vi.waitFor(() => expect(readLastModel('file')).toEqual({ model_id: 'mesh-file:sha256:other', input: 'file' }));
+      await Promise.resolve(); await Promise.resolve();
+      expect(modelReads(fetcher)).toBe(2);
+    } finally { stop(); }
   });
 
   it('never forces Imported mode when the pointer is hydrated late', async () => {

@@ -250,14 +250,15 @@ describe('the last model', () => {
     prepared: mesh, latest_prepared: mesh, original_available: true });
   const fileFetcher = () => vi.fn<typeof fetch>(async (url) => String(url).includes('/setup')
     ? json({ setup, revision_id: 'wgs_saved' }) : json(modelRead()));
+  beforeEach(() => workspaceModeStore.setImportedInput('file'));
   const gone = () => vi.fn<typeof fetch>(async () => json({ error: { code: 'model_not_found', message: 'Imported model not found.' } }, 404));
 
   it('points at the model on screen once it is ready, and at no unfiled mesh', async () => {
     workspaceModeStore.setImportedInput('file');
     await openImported({ kind: 'file', prepared: { ...mesh, model_id: null } });
-    expect(readLastModel()).toBeNull();
+    expect(readLastModel('file')).toBeNull();
     await openImported({ kind: 'file', prepared: mesh });
-    expect(readLastModel()).toEqual({ model_id: mesh.model_id, input: 'file' });
+    expect(readLastModel('file')).toEqual({ model_id: mesh.model_id, input: 'file' });
   });
 
   it('reopens a file model in Imported mode through openImported', async () => {
@@ -276,7 +277,7 @@ describe('the last model', () => {
     expect(fetcher).not.toHaveBeenCalled();
     expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
     expect(useImportedModelStore.getState().phase).toBe('empty');
-    expect(readLastModel()).not.toBeNull();
+    expect(readLastModel('file')).not.toBeNull();
   });
 
   it('does not open over a model the person already opened', async () => {
@@ -295,7 +296,7 @@ describe('the last model', () => {
     const first = gone();
     expect(await reopenLastModel(first)).toBe(false);
     expect(first).toHaveBeenCalledTimes(1);
-    expect(readLastModel()).toBeNull();
+    expect(readLastModel('file')).toBeNull();
     expect(useImportedModelStore.getState()).toMatchObject({ phase: 'empty', error: null });
     expect(useMeshImportStore.getState().error).toBeNull();
     const second = gone();
@@ -307,59 +308,121 @@ describe('the last model', () => {
     rememberLastModel({ model_id: mesh.model_id, input: 'file' });
     workspaceModeStore.setMode('cad');
     await expect(reopenLastModel(vi.fn<typeof fetch>(async () => { throw new TypeError('offline'); }))).rejects.toThrow('offline');
-    expect(readLastModel()).not.toBeNull();
+    expect(readLastModel('file')).not.toBeNull();
     expect(await reopenLastModel(vi.fn<typeof fetch>(async () => json({ ...modelRead(), prepared: undefined, latest_prepared: null })))).toBe(false);
-    expect(readLastModel()).toBeNull();
+    expect(readLastModel('file')).toBeNull();
   });
 
   it('leaves a CAD model that was never solved alone: nothing to show, nothing to clear', async () => {
     rememberLastModel({ model_id: 'wgl_project', input: 'cad' });
     workspaceModeStore.setMode('cad');
+    workspaceModeStore.setImportedInput('cad');
     const fetcher = vi.fn<typeof fetch>(async (url) => String(url).includes('/setup')
       ? json({ setup: null }) : json({ model: { model_id: 'wgl_project', producer: 'cad', display_name: 'Speaker' }, latest_prepared: { ...mesh, producer: 'cad' }, original_available: false }));
     expect(await reopenLastModel(fetcher)).toBe(false);
     expect(useImportedModelStore.getState().phase).toBe('empty');
-    expect(readLastModel()).toEqual({ model_id: 'wgl_project', input: 'cad' });
+    expect(readLastModel('cad')).toEqual({ model_id: 'wgl_project', input: 'cad' });
+  });
+
+  it('clears a broken model after reporting it once, so the next start does not fail again', async () => {
+    rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+    workspaceModeStore.setMode('cad');
+    const broken = () => vi.fn<typeof fetch>(async () => json({ error: { code: 'internal', message: 'The mesh store is damaged.' } }, 500));
+    await expect(reopenLastModel(broken())).rejects.toThrow('damaged');
+    expect(readLastModel('file')).toBeNull();
+    const next = broken();
+    expect(await reopenLastModel(next)).toBe(false);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('clears a model whose preparation is unavailable, and one whose open fails on missing artifacts', async () => {
+    rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+    workspaceModeStore.setMode('cad');
+    expect(await reopenLastModel(vi.fn<typeof fetch>(async () =>
+      json({ error: { code: 'prepared_unavailable', message: 'gone' } }, 409)))).toBe(false);
+    expect(readLastModel('file')).toBeNull();
+    rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+    await expect(reopenLastModel(vi.fn<typeof fetch>(async (url) => String(url).includes('/setup')
+      ? json({ setup, revision_id: 'x' }) : json({ ...modelRead(), prepared: undefined, latest_prepared: { ...mesh, msh_text: undefined } })))).rejects.toThrow();
+    expect(readLastModel('file')).toBeNull();
+  });
+
+  it('reopens the pointer of the input the person last chose and never flips it', async () => {
+    rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' });
+    workspaceModeStore.setMode('cad');
+    workspaceModeStore.setImportedInput('file');
+    expect(await reopenLastModel(fileFetcher())).toBe(true);
+    expect(workspaceModeStore.getSnapshot().importedInput).toBe('file');
+    expect(readLastModel('cad')).toEqual({ model_id: 'wgl_project', input: 'cad' });
+  });
+
+  it('hands a never-solved CAD model to the unsolved opener, and reports nothing when none is given', async () => {
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' });
+    workspaceModeStore.setMode('cad');
+    workspaceModeStore.setImportedInput('cad');
+    const fetcher = vi.fn<typeof fetch>(async (url) => String(url).includes('/setup')
+      ? json({ setup: null }) : json({ model: { model_id: 'wgl_project', producer: 'cad', display_name: 'Speaker' }, latest_prepared: { ...mesh, producer: 'cad' }, original_available: false }));
+    const openUnsolved = vi.fn(async () => true);
+    expect(await reopenLastModel(fetcher, { openUnsolved })).toBe(true);
+    expect(openUnsolved).toHaveBeenCalledWith({ model_id: 'wgl_project', input: 'cad' }, expect.objectContaining({ ingest_id: mesh.ingest_id }));
+    expect(await reopenLastModel(fetcher)).toBe(false);
+    expect(readLastModel('cad')).not.toBeNull();
+  });
+
+  it('leaves the pointer to a guard that declines it', async () => {
+    rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+    workspaceModeStore.setMode('cad');
+    const fetcher = fileFetcher();
+    expect(await reopenLastModel(fetcher, { shouldTry: () => false })).toBe(false);
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   describe('migration', () => {
     it('moves the saved mesh setup pointer, then drops both old keys', async () => {
       localStorage.setItem('wg-saved-mesh-setup', JSON.stringify({ model_id: mesh.model_id, prepared_id: mesh.ingest_id }));
       localStorage.setItem('wg2.cad.project.v1', 'wgl_project');
-      expect(await migrateLastModel('file')).toEqual({ model_id: mesh.model_id, input: 'file' });
-      expect(readLastModel()).toEqual({ model_id: mesh.model_id, input: 'file' });
+      await migrateLastModel();
+      expect(readLastModel('file')).toEqual({ model_id: mesh.model_id, input: 'file' });
       expect(localStorage.getItem('wg-saved-mesh-setup')).toBeNull();
       expect(localStorage.getItem('wg2.cad.project.v1')).toBeNull();
     });
 
-    it('moves the remembered CAD project (a lineage is the CAD model id)', async () => {
+    it('moves the remembered CAD project (a lineage is the CAD model id), keeping both inputs', async () => {
+      localStorage.setItem('wg-saved-mesh-setup', JSON.stringify({ model_id: mesh.model_id, prepared_id: mesh.ingest_id }));
       localStorage.setItem('wg2.cad.project.v1', ' wgl_project ');
-      expect(await migrateLastModel('cad')).toEqual({ model_id: 'wgl_project', input: 'cad' });
-      expect(localStorage.getItem('wg2.cad.project.v1')).toBeNull();
+      await migrateLastModel();
+      expect(readLastModel('cad')).toEqual({ model_id: 'wgl_project', input: 'cad' });
+      expect(readLastModel('file')).toEqual({ model_id: mesh.model_id, input: 'file' });
     });
 
-    it('prefers the input on screen when both old keys exist', async () => {
-      localStorage.setItem('wg-saved-mesh-setup', JSON.stringify({ model_id: mesh.model_id, prepared_id: mesh.ingest_id }));
-      localStorage.setItem('wg2.cad.project.v1', 'wgl_project');
-      expect(await migrateLastModel('cad')).toEqual({ model_id: 'wgl_project', input: 'cad' });
+    it('reads the single pointer an earlier build wrote as that input\'s pointer', () => {
+      localStorage.setItem('wg2.last.model.v1', JSON.stringify({ model_id: 'wgl_project', input: 'cad' }));
+      expect(readLastModel('cad')).toEqual({ model_id: 'wgl_project', input: 'cad' });
+      expect(readLastModel('file')).toBeNull();
     });
 
     it('resolves the bare prepared id form once, keeps it through a transport failure, and drops it when unknown', async () => {
       localStorage.setItem('wg-saved-mesh-setup', mesh.ingest_id);
-      expect(await migrateLastModel('file', vi.fn<typeof fetch>(async () => { throw new TypeError('offline'); }))).toBeNull();
+      await migrateLastModel(vi.fn<typeof fetch>(async () => { throw new TypeError('offline'); }));
       expect(localStorage.getItem('wg-saved-mesh-setup')).toBe(mesh.ingest_id);
-      expect(await migrateLastModel('file', vi.fn<typeof fetch>(async () => json({ model_id: mesh.model_id, prepared_id: mesh.ingest_id }))))
-        .toEqual({ model_id: mesh.model_id, input: 'file' });
+      expect(readLastModel('file')).toBeNull();
+      await migrateLastModel(vi.fn<typeof fetch>(async () => json({ model_id: mesh.model_id, prepared_id: mesh.ingest_id })));
+      expect(readLastModel('file')).toEqual({ model_id: mesh.model_id, input: 'file' });
       expect(localStorage.getItem('wg-saved-mesh-setup')).toBeNull();
       localStorage.setItem('wg-saved-mesh-setup', 'wgi_unknown');
-      rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+      await migrateLastModel(vi.fn<typeof fetch>(async () => new Response('{}', { status: 404 })));
       expect(localStorage.getItem('wg-saved-mesh-setup')).toBeNull();
+      expect(readLastModel('file')).toEqual({ model_id: mesh.model_id, input: 'file' });
     });
 
-    it('an existing pointer wins over the old keys', async () => {
+    it('an existing pointer wins over the old key for the same input only', async () => {
       rememberLastModel({ model_id: mesh.model_id, input: 'file' });
       localStorage.setItem('wg2.cad.project.v1', 'wgl_project');
-      expect(await migrateLastModel('cad')).toEqual({ model_id: mesh.model_id, input: 'file' });
+      localStorage.setItem('wg-saved-mesh-setup', JSON.stringify({ model_id: 'mesh-file:sha256:older', prepared_id: 'x' }));
+      await migrateLastModel();
+      expect(readLastModel('file')?.model_id).toBe(mesh.model_id);
+      expect(readLastModel('cad')?.model_id).toBe('wgl_project');
       expect(localStorage.getItem('wg2.cad.project.v1')).toBeNull();
     });
   });

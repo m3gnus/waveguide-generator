@@ -311,7 +311,7 @@ describe('solve invocation mutex', () => {
     // The coordinator holds no recovery of its own: that is `observeLastModel` in the CAD workspace owners.
     expect(fetcher.mock.calls.filter(([url]) => String(url).startsWith('/api/models'))).toHaveLength(0);
     expect(workspaceModeStore.getSnapshot().mode).toBe(mode);
-    expect(readLastModel()).toEqual({ model_id: 'mesh-file:sha256:gone', input: 'file' });
+    expect(readLastModel('file')).toEqual({ model_id: 'mesh-file:sha256:gone', input: 'file' });
   });
   const mountPlanning = async (mode: 'parametric' | 'cad') => {
     act(() => root.unmount());

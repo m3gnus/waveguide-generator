@@ -27,6 +27,7 @@ import { observeCadProjectLoads, observeLastModel, refreshChannelDriverBases } f
 import { solvedCadModels } from './cadlink/solvedModel';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { solveAttention } from './solveAttention';
+import { jobIdFromLink } from '../jobs/jobDeepLink';
 import { useModalDialogFocus } from './dialogFocus';
 
 /** Mount independent readers/commands and project their feedback for the UI.
@@ -307,7 +308,7 @@ export function mountCadWorkspaceOwners(): () => void {
     observeCadProjectLoads({ enterCadWorkspace, manualSelectionAt, projectOpenPending, initialChoiceOwed, refusedForeignReturn,
       returnListRequest, seenReturnRevisions, refreshRef: { current: refreshReturns }, selectBundleRef: { current: selectBundle },
       setError: reportError, setStatus: reportStatus }),
-    observeLastModel({ reportStatus, reportError }),
+    observeLastModel({ reportStatus, reportError, refusedForeignReturn, jobLinkPending: () => jobIdFromLink(window.location.search) !== null }),
     jobsSocket.subscribe(followFusionSolve), () => fusionSolves.dispose(),
     jobsSocket.subscribe(settleModels), solvedCadModels.subscribe(settleModels),
     useDesignStore.subscribe(contextChanged), useDocumentStore.subscribe(contextChanged),

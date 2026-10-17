@@ -1,6 +1,18 @@
 import { formatApiDetail } from '../jobs/actions';
 import type { ImportedSetup } from '../jobs/importedSetup';
 
+/** A refused read, with the status and code the server gave so a caller can tell a gone model from a failed one. */
+export class ImportedModelApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code: string | null) {
+    super(message);
+    this.name = 'ImportedModelApiError';
+  }
+}
+
+/** The server no longer has this model, or none of its preparations. */
+export const isModelGone = (error: unknown): boolean =>
+  error instanceof ImportedModelApiError && (error.status === 404 || error.code === 'model_not_found' || error.code === 'prepared_unavailable');
+
 /** A model's setup, for the sources of one of its prepared meshes (the server reads them). */
 async function request(modelId: string, preparedId: string, setup?: ImportedSetup, fetcher: typeof fetch = fetch) {
   const path = `/api/models/${encodeURIComponent(modelId)}/setup`;
@@ -10,7 +22,8 @@ async function request(modelId: string, preparedId: string, setup?: ImportedSetu
   } : undefined);
   if (!response.ok) {
     const error = await response.json().catch(() => null);
-    throw new Error(formatApiDetail(error?.detail) ?? `Setup unavailable (${response.status}).`);
+    throw new ImportedModelApiError(error?.error?.message ?? formatApiDetail(error?.detail) ?? `Setup unavailable (${response.status}).`,
+      response.status, typeof error?.error?.code === 'string' ? error.error.code : null);
   }
   return response.json();
 }
@@ -51,18 +64,6 @@ export interface RunWorkspace {
   solve_options?: ImportedSetup['options'] | null;
   refusal?: { code: string; message: string } | null;
 }
-
-/** A refused read, with the status and code the server gave so a caller can tell a gone model from a failed one. */
-export class ImportedModelApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code: string | null) {
-    super(message);
-    this.name = 'ImportedModelApiError';
-  }
-}
-
-/** The server no longer has this model. */
-export const isModelGone = (error: unknown): boolean =>
-  error instanceof ImportedModelApiError && (error.status === 404 || error.code === 'model_not_found');
 
 async function read<T>(path: string, fetcher: typeof fetch, what: string): Promise<T> {
   const response = await fetcher(path);

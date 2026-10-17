@@ -17,18 +17,31 @@ const legacyMesh = namespaceStorage('meshImport');
 const legacyCad = namespaceStorage('cadProject');
 const KEY = 'lastModel';
 
-function parse(raw: string | null): LastModel | null {
-  if (!raw) return null;
+type Pointers = Partial<Record<LastModelInput, string>>;
+
+/** One pointer per input, so reopening never flips the input a person last chose.
+ * The single `{model_id, input}` form an earlier build wrote is read as one entry. */
+function parse(raw: string | null): Pointers {
+  if (!raw) return {};
   try {
-    const value = JSON.parse(raw) as Partial<LastModel> | null;
-    const id = typeof value?.model_id === 'string' ? value.model_id.trim() : '';
-    return id && (value?.input === 'file' || value?.input === 'cad') ? { model_id: id, input: value.input } : null;
-  } catch { return null; }
+    const value = JSON.parse(raw) as { model_id?: unknown; input?: unknown; file?: unknown; cad?: unknown } | null;
+    const out: Pointers = {};
+    const take = (input: LastModelInput, id: unknown) => { if (typeof id === 'string' && id.trim()) out[input] = id.trim(); };
+    take('file', value?.file); take('cad', value?.cad);
+    if (value?.input === 'file' || value?.input === 'cad') take(value.input, value.model_id);
+    return out;
+  } catch { return {}; }
 }
 
-/** The pointer as stored; the legacy pointers are not consulted (see `migrateLastModel`). */
-export function readLastModel(): LastModel | null {
-  return parse(storage.getItem(KEY));
+function write(pointers: Pointers): void {
+  if (!pointers.file && !pointers.cad) storage.removeItem(KEY);
+  else storage.setItem(KEY, JSON.stringify(pointers));
+}
+
+/** The pointer of one input as stored; the legacy pointers are not consulted (see `migrateLastModel`). */
+export function readLastModel(input: LastModelInput): LastModel | null {
+  const id = parse(storage.getItem(KEY))[input];
+  return id ? { model_id: id, input } : null;
 }
 
 function dropLegacy(): void {
@@ -38,53 +51,48 @@ function dropLegacy(): void {
 
 /** Point at the model on screen. Writing it also settles the legacy pointers: this one is newer. */
 export function rememberLastModel(model: LastModel): void {
-  const current = readLastModel();
-  if (!current || current.model_id !== model.model_id || current.input !== model.input) {
-    storage.setItem(KEY, JSON.stringify({ model_id: model.model_id, input: model.input }));
-  }
+  const pointers = parse(storage.getItem(KEY));
+  if (pointers[model.input] !== model.model_id) write({ ...pointers, [model.input]: model.model_id });
   dropLegacy();
 }
 
-/** Forget the pointer, unless a newer one has replaced the one that went stale. */
-export function clearLastModel(stale?: LastModel): void {
-  const current = readLastModel();
-  if (stale && current && (current.model_id !== stale.model_id || current.input !== stale.input)) return;
-  storage.removeItem(KEY);
+/** Forget one input's pointer, unless a newer one has replaced the one that went stale. */
+export function clearLastModel(stale: LastModel): void {
+  const pointers = parse(storage.getItem(KEY));
+  if (pointers[stale.input] !== stale.model_id) return;
+  delete pointers[stale.input];
+  write(pointers);
 }
 
 /**
- * The pointer, after moving an older one into it once.
+ * Move an older pointer in once, then drop the old keys.
  *
- * A pointer already here wins and the old keys are dropped. Of two old ones the
- * input already on screen wins. A bare prepared id is resolved to its model;
- * only a server that has none for it drops it, a transport failure keeps it for
- * the next start.
+ * A pointer already stored for an input wins; each old key fills only the input
+ * it named, so both survive. A bare prepared id is resolved to its model; only
+ * a server that has none for it drops it, a transport failure keeps it for the
+ * next start.
  */
-export async function migrateLastModel(preferred: LastModelInput, fetcher: typeof fetch = fetch): Promise<LastModel | null> {
-  const current = readLastModel();
+export async function migrateLastModel(fetcher: typeof fetch = fetch): Promise<void> {
   const meshRaw = legacyMesh.getItem(KEY);
   const cadRaw = legacyCad.getItem(KEY);
-  if (!meshRaw && !cadRaw) return current;
-  if (current) { dropLegacy(); return current; }
-  const candidates: LastModel[] = [];
+  if (!meshRaw && !cadRaw) return;
+  const found: Pointers = {};
   if (meshRaw) {
     let saved: unknown = meshRaw;
     try { saved = JSON.parse(meshRaw); } catch { /* a bare prepared id */ }
     if (saved && typeof saved === 'object') {
       const id = (saved as { model_id?: unknown }).model_id;
-      if (typeof id === 'string' && id.trim()) candidates.push({ model_id: id.trim(), input: 'file' });
+      if (typeof id === 'string' && id.trim()) found.file = id.trim();
     } else if (typeof saved === 'string' && saved) {
-      const found = await findPreparedModel(saved, fetcher).catch(() => undefined);
-      if (found === undefined) return null;
-      if (found?.model_id.startsWith('mesh-file:')) candidates.push({ model_id: found.model_id, input: 'file' });
+      const resolved = await findPreparedModel(saved, fetcher).catch(() => undefined);
+      if (resolved === undefined) return;
+      if (resolved?.model_id.startsWith('mesh-file:')) found.file = resolved.model_id;
     }
   }
-  if (cadRaw?.trim()) candidates.push({ model_id: cadRaw.trim(), input: 'cad' });
-  // Another start (or a model opened meanwhile) may have written the pointer while this waited.
-  const meanwhile = readLastModel();
-  if (meanwhile) { dropLegacy(); return meanwhile; }
-  const chosen = candidates.find((item) => item.input === preferred) ?? candidates[0] ?? null;
-  if (chosen) storage.setItem(KEY, JSON.stringify(chosen));
+  if (cadRaw?.trim()) found.cad = cadRaw.trim();
+  // Another start (or a model opened meanwhile) may have written pointers while this waited.
+  const meanwhile = parse(storage.getItem(KEY));
+  const merged: Pointers = { ...found, ...meanwhile };
+  if (merged.file !== meanwhile.file || merged.cad !== meanwhile.cad) write(merged);
   dropLegacy();
-  return chosen;
 }

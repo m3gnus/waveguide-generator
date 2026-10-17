@@ -14,7 +14,7 @@ import {
   seedImportedSolveOptionsFromParametric, useImportedSolveOptionsStore,
   type ImportedOptionsSnapshot, type SolveAccuracy,
 } from './solveOptions';
-import { clearLastModel, migrateLastModel, rememberLastModel } from './lastModel';
+import { clearLastModel, migrateLastModel, readLastModel, rememberLastModel, type LastModel } from './lastModel';
 import { workspaceModeStore } from './workspaceMode';
 
 /**
@@ -263,34 +263,46 @@ useImportedModelStore.subscribe((state) => {
   }
 });
 
+export interface ReopenOptions {
+  /** Asked once the pointer is known; false leaves it alone (a guard holds, or it was already tried). */
+  shouldTry?(pointer: LastModel): boolean;
+  /** Shows a CAD model that was never solved, so has no setup to open it by. Say why when it cannot be shown. */
+  openUnsolved?(pointer: LastModel, prepared: PreparedSummary): Promise<boolean>;
+}
+
 /**
- * Start-up in Imported mode: reopen the last model, through `openImported`.
+ * Reopen the last model of the input on screen, through `openImported`.
  *
- * It never changes the mode -- Parametric opens nothing -- and only fills an
- * Imported view nobody has opened into yet. A model the server no longer has
- * (or keeps no preparation of) clears the pointer once and leaves the empty
- * view, so the next start has nothing to retry. Any other failure keeps the
- * pointer and is thrown for the caller to show.
+ * It never changes the mode (Parametric opens nothing) nor the input the
+ * person last chose: each input has its own pointer. It only fills an Imported
+ * view nobody has opened into yet. A model the server no longer has (or keeps
+ * no preparation of) clears the pointer once and leaves the empty view. Any
+ * other failure clears it too and is thrown once for the caller to show -- a
+ * broken model must not fail again at every start. Only a failed request
+ * (offline) keeps the pointer.
  */
-export async function reopenLastModel(fetcher: typeof fetch = fetch): Promise<boolean> {
+export async function reopenLastModel(fetcher: typeof fetch = fetch, options: ReopenOptions = {}): Promise<boolean> {
   if (workspaceModeStore.getSnapshot().mode !== 'cad') return false;
-  const pointer = await migrateLastModel(workspaceModeStore.getSnapshot().importedInput, fetcher);
-  if (!pointer) return false;
   const generation = importedMeshStore.captureGeneration();
   const stillEmpty = () => workspaceModeStore.getSnapshot().mode === 'cad'
     && useImportedModelStore.getState().phase === 'empty' && importedMeshStore.isCurrentGeneration(generation);
-  if (!stillEmpty()) return false;
+  await migrateLastModel(fetcher);
+  const pointer = readLastModel(workspaceModeStore.getSnapshot().importedInput);
+  if (!pointer || !stillEmpty() || options.shouldTry?.(pointer) === false) return false;
   try {
     const read = await readImportedModel(pointer.model_id, null, fetcher);
     if (!read.latest_prepared) { clearLastModel(pointer); return false; }
-    // A CAD view shows a model by its stored setup; one never solved has none to show.
-    if (pointer.input === 'cad' && !(await readImportedSetup(pointer.model_id, read.latest_prepared.ingest_id, fetcher)).setup) return false;
+    // The CAD view shows a model by its stored setup; one never solved has none.
+    if (pointer.input === 'cad' && !(await readImportedSetup(pointer.model_id, read.latest_prepared.ingest_id, fetcher)).setup) {
+      return stillEmpty() && options.openUnsolved ? await options.openUnsolved(pointer, read.latest_prepared) : false;
+    }
+    if (!stillEmpty()) return false;
+    return await openImported({ kind: 'model', modelId: pointer.model_id }, fetcher);
   } catch (error) {
     if (isModelGone(error)) { clearLastModel(pointer); return false; }
+    if (!(error instanceof TypeError)) clearLastModel(pointer);
     throw error;
   }
-  if (!stillEmpty()) return false;
-  return openImported({ kind: 'model', modelId: pointer.model_id }, fetcher);
 }
 
 /** This open (by its generation) still owns the store and the viewport: no newer open of either input. */

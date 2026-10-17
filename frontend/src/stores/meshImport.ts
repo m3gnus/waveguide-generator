@@ -264,6 +264,6 @@ export async function saveMeshSetup(fetcher: typeof fetch = fetch): Promise<void
   let unchanged = false;
   try { unchanged = JSON.stringify(fileMeshSubmission()) === JSON.stringify(submission); } catch { unchanged = false; }
   useMeshImportStore.setState({ notice: unchanged
-    ? 'Mesh setup saved. It can be resumed after restart.'
+    ? 'Mesh setup saved with this model. Reopening the model, or importing the same file again, restores it.'
     : 'Earlier mesh settings were saved. Your current edits are not saved.' });
 }

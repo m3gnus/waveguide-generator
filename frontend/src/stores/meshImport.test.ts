@@ -80,7 +80,7 @@ describe('standalone imported mesh', () => {
     const fetcher = vi.fn<typeof fetch>(async url => String(url).includes('/setup?')
       ? response({ setup, revision_id: 'wgs_saved' }) : prepared(record));
     // Showing the prepared mesh pointed the last model at it; saving needs no pointer of its own.
-    expect(readLastModel()).toEqual({ model_id: record.model_id, input: 'file' });
+    expect(readLastModel('file')).toEqual({ model_id: record.model_id, input: 'file' });
     workspaceModeStore.setMode('cad');
     expect(await reopenLastModel(fetcher)).toBe(true);
     expect(fetcher.mock.calls.map(([url]) => String(url))).toContain(`/api/models/${encodeURIComponent(record.model_id)}`);
@@ -98,7 +98,7 @@ describe('standalone imported mesh', () => {
     await saving;
     expect(useMeshImportStore.getState().notice).toContain('current edits are not saved');
     await saveMeshSetup(vi.fn(async () => response({ revision_id: 'wgs_new' })));
-    expect(useMeshImportStore.getState().notice).toContain('Mesh setup saved.');
+    expect(useMeshImportStore.getState().notice).toContain('Mesh setup saved with this model.');
     useImportedSolveOptionsStore.getState().setSweep({ count: 19 });
     expect(useMeshImportStore.getState().notice).toBeNull();
   });
@@ -221,7 +221,7 @@ describe('standalone imported mesh', () => {
     expect(await reopenLastModel(fetcher as unknown as typeof fetch)).toBe(true);
     expect(fetcher.mock.calls[0][0]).toBe(`/api/models?prepared_id=${record.ingest_id}`);
     expect(localStorage.getItem('wg-saved-mesh-setup')).toBeNull();
-    expect(readLastModel()).toEqual({ model_id: record.model_id, input: 'file' });
+    expect(readLastModel('file')).toEqual({ model_id: record.model_id, input: 'file' });
     expect(registeredMesh()?.ingest_id).toBe(record.ingest_id);
   });
 
@@ -234,7 +234,7 @@ describe('standalone imported mesh', () => {
     expect(await reopenLastModel(gone as unknown as typeof fetch)).toBe(false);
     expect(gone).toHaveBeenCalledTimes(1);
     expect(localStorage.getItem('wg-saved-mesh-setup')).toBeNull();
-    expect(readLastModel()).toBeNull();
+    expect(readLastModel('file')).toBeNull();
   });
 
   it('opens a new file with a one-way copy of the parametric options', async () => {
