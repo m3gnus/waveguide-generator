@@ -274,7 +274,7 @@ def verify_region_symmetry(gmsh: Any, region: Mapping[str, Any], boundary: Seque
         if plane not in cut_planes:
             if stacked[:, axes[plane]].min() < -1e-5:
                 raise FemRegionMeshError(
-                    f"FEM region {region['region_id']!r} lies outside the positive author-cut domain on {plane}")
+                    f"FEM region {region.get('name', region['region_id'])!r} lies outside the positive author-cut domain on {plane}")
             continue
         verdict = evaluate_occ_plane_symmetry(
             plane, samples=samples, roles=roles, bboxes=bboxes,
@@ -282,7 +282,7 @@ def verify_region_symmetry(gmsh: Any, region: Mapping[str, Any], boundary: Seque
             span_tolerance=AUTO_CUT_SPAN_REL * diagonal)
         if not verdict.accepted:
             raise FemRegionMeshError(
-                f"FEM region {region['region_id']!r} does not mirror on {plane}: {verdict.reason}",
+                f"FEM region {region.get('name', region['region_id'])!r} does not mirror on {plane}: {verdict.reason}",
                 symmetry_plane=plane)
 
 
@@ -365,7 +365,7 @@ def build_fem_region_mesh(
     import gmsh
 
     for group in region.get("surface_groups", ()):
-        validate_group_options(group, f"FEM region {region['region_id']!r}, group {group['group_id']!r}")
+        validate_group_options(group, f"FEM region {region.get('name', region['region_id'])!r}, group {group['group_id']!r}")
     region_id = str(region["region_id"])
     region_size = float(region["mesh_size_mm"])
     gmsh.model.add(f"fem-region-{region_id}")
@@ -401,7 +401,7 @@ def build_fem_region_mesh(
                 [(3, tag) for tag in volumes], combined=False, oriented=False) if dim == 2})
         caps = symmetry_surfaces(gmsh, boundary, domain_planes)
         if any(caps.intersection(tags) for tags in assigned.values()):
-            raise FemRegionMeshError(f"FEM region {region_id!r} declares a boundary on a symmetry plane")
+            raise FemRegionMeshError(f"FEM region {region.get('name', region_id)!r} declares a boundary on a symmetry plane")
         names: dict[str, dict[str, Any]] = {}
         volume_name = physical_name(region_id)
         tag = gmsh.model.addPhysicalGroup(3, volumes)
@@ -413,7 +413,7 @@ def build_fem_region_mesh(
             group_id = str(group["group_id"])
             surfaces = assigned[group_id]
             if not surfaces:
-                raise FemRegionMeshError(f"FEM region {region_id!r}, group {group_id!r} disappeared under symmetry")
+                raise FemRegionMeshError(f"FEM region {region.get('name', region_id)!r}, group {group_id!r} disappeared under symmetry")
             claimed.update(surfaces)
             name = physical_name(region_id, group_id, str(group["kind"]))
             tag = gmsh.model.addPhysicalGroup(2, surfaces)

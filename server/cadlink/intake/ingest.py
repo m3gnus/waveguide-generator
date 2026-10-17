@@ -2232,11 +2232,8 @@ def _mesh_coupled_regions(
         )
     except Exception as exc:
         message = exc.detail if isinstance(exc, ChildRefusal) else str(exc)
-        # STEP staging knows member ids; present the declared region names
-        # without adding a second label around the child's existing refusal.
-        for region in regions:
-            message = message.replace(f"FEM region {region['region_id']!r}",
-                                      f"FEM region {region['name']!r}")
+        # Region refusals name the declared regions themselves; label only
+        # a refusal that names none.
         if "FEM region" not in message:
             message = f"{labels}: {message}"
         raise IngestRefusal("stage 7 meshing", message,

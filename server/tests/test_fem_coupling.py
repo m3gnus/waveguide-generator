@@ -1123,6 +1123,27 @@ def test_touching_regions_refuse_by_both_names_before_implicit_walls(tmp_path, i
     assert str(caught.value).count("Front chamber") == 1
 
 
+def test_refusal_names_each_region_once_when_a_name_is_another_regions_id(tmp_path, monkeypatch):
+    from server.cadlink.intake import ingest
+
+    bundle, manifest, first = _coupling_bundle(tmp_path / "returns", cavity_width=60)
+    # The first region is named after the second region's id: a refusal
+    # that already names both regions must keep each name.
+    manifest["scope"]["fem_regions"][0]["name"] = "front-chamber"
+    _add_region(bundle, manifest, origin=(0, 30, 0), interface=False)
+
+    def near_contact(assembly, regions, **kwargs):
+        from server.mesh.fem_coupling import _label
+        raise ValueError(f"{_label(regions[0])} and {_label(regions[1])} are in near-contact")
+
+    monkeypatch.setattr(ingest, "build_coupled_mesh_isolated", near_contact)
+    with pytest.raises(ingest.IngestRefusal, match="near-contact") as caught:
+        _ingest(bundle, tmp_path)
+    message = str(caught.value)
+    assert message.count("FEM region 'front-chamber'") == 1
+    assert message.count("FEM region 'Front chamber'") == 1
+
+
 @pytest.mark.parametrize('gap', [0., 1e-5, 1e-3, .1])
 @pytest.mark.parametrize('interface', [False, True])
 def test_near_contact_requires_both_moving_faces_before_interface_matching(tmp_path, gap, interface):

@@ -1096,6 +1096,10 @@ async def _imported_request_refusal_async(request, record=None, msh_text=None, *
         raise
 
 
+#: ``resolve_imported_submission`` checks the request itself unless told this.
+_REQUEST_UNCHECKED: Any = object()
+
+
 #: The geometry source an engine must declare to be offered imported geometry.
 async def resolve_imported_submission(
     request: SolveRequest,
@@ -1104,6 +1108,7 @@ async def resolve_imported_submission(
     symmetry_metadata: Mapping[str, Any] | None = None,
     imported_record: Mapping[str, Any] | None = None,
     imported_msh_text: str | None = None,
+    request_refusal: tuple[str, str] | None = _REQUEST_UNCHECKED,
 ) -> SubmissionResolution:
     """Choose the engine for an imported-geometry submission from capability data.
 
@@ -1146,6 +1151,11 @@ async def resolve_imported_submission(
     ``imported_msh_text`` are the record and verified mesh it read. Preparation
     reads the CAD store and the mesh artifact, so it stays in the runtime. This
     function never allocates or persists a job.
+
+    ``request_refusal`` is ``_imported_request_refusal``'s answer when the
+    caller already has it for this request and record (the planner does).
+    It reads only the geometry, the record and the ground plane, never the
+    engine, so an engine rerouted below does not change it.
     """
 
     if not isinstance(request.geometry, ImportedGeometrySource):
@@ -1173,10 +1183,11 @@ async def resolve_imported_submission(
     else:
         request, cpu_fallback = await _accuracy_engine(request, engine_registry)
     requested = request.options.engine
-    request_refusal = (
-        _imported_backend_refusal(request, imported_record)
-        or await _imported_request_refusal_async(request, imported_record, imported_msh_text)
-    )
+    backend_refusal = _imported_backend_refusal(request, imported_record)
+    if backend_refusal is not None:
+        request_refusal = backend_refusal
+    elif request_refusal is _REQUEST_UNCHECKED:
+        request_refusal = await _imported_request_refusal_async(request, imported_record, imported_msh_text)
     if request_refusal is not None:
         raise ImportedSolveRefusal(*request_refusal)
     if requested not in SELECTABLE_ENGINE_NAMES:
@@ -1460,6 +1471,7 @@ async def plan_imported_submission(
             symmetry_metadata=symmetry_metadata,
             imported_record=imported_record,
             imported_msh_text=imported_msh_text,
+            request_refusal=request_refusal,
         )
     except ImportedSolveRefusal as exc:
         code, reason = exc.reason_code, str(exc)
@@ -3683,11 +3695,12 @@ class JobRuntime:
                 await asyncio.to_thread(
                     _refuse_inverted_reduced_mesh, imported_record, job_msh_text
                 )
+                # An older record's open-shell check parses the mesh: off the loop.
                 open_half = (
                     _imported_decision_refusal(imported_record)
                     or _imported_job_decision_refusal(task_metadata, imported_record)
                     or _imported_side_identity_refusal(imported_record)
-                    or _imported_open_half_refusal(imported_record, job_msh_text)
+                    or await asyncio.to_thread(_imported_open_half_refusal, imported_record, job_msh_text)
                 )
                 if open_half is not None:
                     raise ImportedSolveRefusal(*open_half)

@@ -1349,3 +1349,46 @@ def test_unavailable_bem_retention_keeps_completed_coupled_solve(runtime, monkey
             assert ("256 MiB" if failure == "cap" else "Could not retain") in caplog.text
     finally:
         store.close()
+
+
+def test_fem_plan_checks_the_request_geometry_once(monkeypatch, tmp_path):
+    import asyncio
+    from server.jobs.runtime import core, plan_imported_submission
+    from server.engines.registry import EngineInfo
+    from server.tests.test_imported_jobs import _request, _record
+    from server.tests.test_imported_beat import MESH
+
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    path = tmp_path / "exterior.msh"
+    path.write_text(MESH)
+    record = _record(path)
+    record["fem_regions"] = [region_input(channel="left", interface=True).record]
+    record["symmetry"] = {"applied": {"cut_planes": [], "quadrants": 1234}}
+    infos = [EngineInfo(name="beat-cpu", version=None, available=True, reason="fixture",
+                        geometry_sources=("imported",), imported_features=("fem-regions",),
+                        symmetry_domains=("full",))]
+
+    class Registry:
+        async def capabilities(self):
+            return infos
+
+        async def get_engine(self, name):
+            return SimpleNamespace(name=name)
+
+    calls = []
+    original = core._imported_request_refusal
+
+    def counted(*args):
+        calls.append(args)
+        return original(*args)
+
+    monkeypatch.setattr(core, "_imported_request_refusal", counted)
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = "auto"
+    plan = asyncio.run(plan_imported_submission(
+        request, Registry(), imported_record=record, imported_msh_text=MESH,
+        symmetry_metadata={"resolved_quadrants": 1234}))
+    # The planner's answer is handed to the resolution, not recomputed there.
+    assert len(calls) == 1
+    assert plan["engine"] == "beat-cpu"
