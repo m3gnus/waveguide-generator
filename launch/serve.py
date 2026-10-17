@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from collections.abc import Callable, MutableMapping
 from contextlib import contextmanager
 import json
@@ -26,6 +27,7 @@ if str(_IMPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(_IMPORT_ROOT))
 
 import uvicorn  # noqa: E402 - the checkout root must be importable first
+from uvicorn.protocols.websockets.websockets_impl import WebSocketProtocol  # noqa: E402
 
 from launch.serve_options import (  # noqa: E402
     PROGRAM_NAME,
@@ -74,6 +76,22 @@ LINGERING_JOIN_SECONDS = 0.5
 REPO_ROOT = app_root()
 SPA_STAMP = REPO_ROOT / "frontend" / "dist" / ".wg2-spa.json"
 VERSION_MANIFEST = REPO_ROOT / "shared" / "version.json"
+
+
+class FlowControlledWebSocketProtocol(WebSocketProtocol):
+    """Serialize legacy flow-control waits shared by messages and keepalive."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._flow_control_lock = asyncio.Lock()
+
+    async def drain(self) -> None:
+        # websockets 17's legacy _drain_helper permits one paused waiter.
+        # Its independent keepalive ping may otherwise enter while an ASGI
+        # send is already waiting, asserting instead of awaiting the resume.
+        # Keep the legacy parser/limits and serialize just this shared wait.
+        async with self._flow_control_lock:
+            await super().drain()
 
 
 def _installer_hint() -> str:
@@ -851,6 +869,7 @@ def main(argv: list[str] | None = None) -> int:
             backstop.on_begin(jobs_runtime.mark_running_interrupted_by_quit)
         config = uvicorn.Config(
             tracker if tracker is not None else app,
+            ws=FlowControlledWebSocketProtocol,
             host=HOST,
             port=port,
             log_config=None,
