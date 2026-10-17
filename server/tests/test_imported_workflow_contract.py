@@ -15,6 +15,7 @@ from test_real_pipeline import (
     ROUND_RETURN, _call, _close, _finish, _finite_series,
     _imported_engine, _imported_engine_expected, _settled_capabilities,
 )
+from test_real_pipeline import real_pipeline_session as real_pipeline_session
 
 
 @pytest.mark.parametrize("queued", [False, True], ids=["running", "queued"])

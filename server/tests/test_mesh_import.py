@@ -21,6 +21,8 @@ from server.jobs.store import JobStore
 from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.file_import import mesh_text, parse_file_mesh, prepare_file_mesh
 from server.mesh.records import get_prepared_mesh
+from server.mesh.integrity import mesh_integrity_report
+from server.solver.bempp_imported import imported_bempp_preflight
 from server.solver.base import EngineRunResult
 from test_imported_jobs import _AlwaysRegistry
 from test_jobs_api import _request as asgi_request
@@ -137,6 +139,23 @@ def test_registration_needs_valid_axes_sources_and_keeps_exact_original(tmp_path
         other = register_mesh(store, tmp_path, registration())
         assert record["archive_stem"] != other["archive_stem"]
         assert record["manifest_sha256"] == other["manifest_sha256"]
+    finally:
+        store.close()
+
+
+def test_registration_retains_verified_integrity_for_bempp_admission(tmp_path):
+    store = CadLinkStore.for_data_dir(tmp_path)
+    try:
+        record = register_mesh(store, tmp_path, registration())
+        mesh = parse_file_mesh(read_verified_import_mesh(record))
+        integrity = record["mesh"]["integrity"]
+        assert integrity == mesh_integrity_report(mesh.points, mesh.triangles)
+        assert integrity["is_watertight"] is True
+        assert integrity["open_edge_count"] == integrity["off_plane_open_edge_count"] == 0
+        assert imported_bempp_preflight(record, []) is None
+        # The existing engine refusal must still reject a free rim.
+        integrity["off_plane_open_edge_count"] = 1
+        assert "1 open edge off" in imported_bempp_preflight(record, [])
     finally:
         store.close()
 

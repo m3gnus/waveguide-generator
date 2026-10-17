@@ -19,6 +19,7 @@ from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
 from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.file_import import MAX_MESH_BYTES, mesh_text, parse_file_mesh, prepare_file_mesh
+from server.mesh.integrity import mesh_integrity_report
 from server.mesh.records import get_prepared_mesh
 from server.platform.staging import publish_staging_directory
 from server.workspace.archive import archive_folder_slug
@@ -109,6 +110,7 @@ def register_mesh(
             "evidence": {"fem_regions": [], "fem_air_volumes": []},
             "mesh": {
                 "stats": {"triangle_count": len(mesh.triangles), "node_count": len(mesh.points)},
+                "integrity": mesh_integrity_report(mesh.points, mesh.triangles),
                 "metadata": {},
             },
             "summary": {
