@@ -32,19 +32,9 @@ prevent. WG still refuses either while it is too old, and says why.
 activation"). Changing Fusion's add-in is *activation*, and it follows the
 order an app update needs:
 
-- **Only after this start is confirmed.** A WG update is not final until a
-  healthy start commits its transaction. Before that the build can still roll
-  back, and an add-in it had changed would stay behind with the older WG. The
-  signal is the update journal (:func:`startup_confirmed`): while this
-  installation has an open one, nothing changes. A healthy start closes it
-  through ``commit_transaction``, which ``launchers/statusapp/healthy_start.py``
-  calls for the window, ``--browser`` and ``--no-gui`` launches alike, so the
-  signal is the same in every launch mode. The only other way a journal goes
-  is recovery removing one it cannot trust once it has rolled back or aborted
-  (``launchers/apply_update.py``); the build that then starts is the one
-  recovery kept. A launch that cannot confirm its build leaves the journal
-  open and the add-in alone, and says so. A source checkout is never replaced
-  by the updater and has no journal.
+- **Only after this start is confirmed** (:func:`startup_confirmed`). A WG
+  update is a whole-installer replacement that finishes before the new build
+  starts, so there is no transaction left open for this start to confirm.
 - **Never while Fusion is open, or while WG cannot tell.** A fresh WGLink
   heartbeat, a running process, and a process check that fails
   (:func:`fusion_process_state`) all count as open. The change is recorded as
@@ -322,19 +312,18 @@ def _declared_version(root: Path) -> str | None:
 
 
 def build_identity(root: Path) -> dict[str, str | None]:
-    """This build's ``(version, commit, runtimeId)``: the contract's interim key.
+    """This build's ``(version, commit, runtimeId)``.
 
-    ``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §2.3. Read from the app
-    layer's own ``APP-MANIFEST.json`` by the reader the updater uses. A source
-    checkout has no manifest, so its version comes from ``shared/version.json``
-    and the other two stay unknown.
+    Read from the app layer's own ``APP-MANIFEST.json``. A source checkout has
+    no manifest, so its version comes from ``shared/version.json`` and the
+    other two stay unknown.
     """
 
     identity: dict[str, str | None] = {key: None for key in _BUILD_KEYS}
     try:
-        from launchers.apply_update import read_build_identity
+        from shared.build_identity import app_manifest_identity
 
-        identity.update(read_build_identity(Path(root)))
+        identity.update(app_manifest_identity(Path(root)))
     except Exception:  # noqa: BLE001 - an identity of unknowns, never a crash
         pass
     if identity["version"] is None:
@@ -406,37 +395,12 @@ def startup_confirmed(
 ) -> tuple[bool, str]:
     """Whether this start is confirmed, and why. The signal activation waits for.
 
-    An installed bundle is confirmed once no update transaction is open for it.
-    A healthy start closes its journal through ``commit_transaction``, called
-    by the one healthy-start settlement every launch mode uses
-    (``launchers/statusapp/healthy_start.py``): the window once its native
-    loop runs, ``--browser`` on its first ready interface, ``--no-gui`` after
-    its self-probe of ``/health`` and the interface. So this is the same
-    evidence the rollback decision uses, in every mode, and a mode that cannot
-    confirm its build keeps the add-in unchanged rather than skipping the check.
-    Recovery also removes a journal it cannot trust
-    (``launchers/apply_update.py``), but only once it has rolled back or
-    aborted, so the build that then starts is the one recovery kept.
-
-    A source checkout, or a layout the updater cannot address, is never
-    replaced by the updater and has no transaction to wait for.
+    Kept as the activation gate's seam. Updates are whole-installer
+    replacements that finish before the new build starts, so no layer-update
+    transaction can be open for this start, in a bundle or a source checkout.
     """
 
-    env = os.environ if environ is None else environ
-    if env.get("WG2_BUNDLE") != "1":
-        return True, "a source checkout has no update transaction to confirm"
-    try:
-        from launchers.statusapp.healthy_start import open_transaction, resolve_bundle_paths
-
-        paths = resolve_bundle_paths(env, root, data_dir)
-        if paths is None:
-            return True, "the updater cannot address this layout, so no update transaction is open"
-        _bundle, resources, data = paths
-        transaction = open_transaction(data, resources)
-    except Exception as exc:  # noqa: BLE001 - unreadable means unconfirmed, never confirmed
-        return False, f"this start's update transaction could not be read: {exc}"
-    if transaction is not None:
-        return False, f"{transaction} has not been confirmed by a healthy start"
+    del root, data_dir, environ
     return True, "no update transaction is open for this installation"
 
 

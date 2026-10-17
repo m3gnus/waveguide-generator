@@ -12,8 +12,6 @@ import sys
 import threading
 
 from launchers.backend_start import backend_argv, backend_environment
-from launchers.apply_update import destination_staging_root
-from launchers.statusapp.healthy_start import resolve_bundle_paths
 from server.platform.backend_owner import (
     BackendDataDirMismatch,
     BackendOwnerError,
@@ -100,11 +98,7 @@ def main(argv: list[str] | None = None) -> int:
             # data. Discovery resolving a default is not an isolation override.
             data_dir = migrate_legacy_data_dir(options.data_dir, emit_log=False).new.resolve()
             root = app_root()
-            paths = resolve_bundle_paths(os.environ, root, data_dir)
-            environment = backend_environment(
-                os.environ, staging_root=destination_staging_root(paths[0]) if paths else None,
-                data_dir=options.data_dir,
-            )
+            environment = backend_environment(os.environ, data_dir=options.data_dir)
             handle = ensure_backend(
                 data_dir,
                 backend_argv(

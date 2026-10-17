@@ -31,7 +31,6 @@ from scripts.frontend_freshness import (
     refresh_hint,
 )
 from launch.serve_options import UPDATE_RELEASED_FILENAME
-from launchers.apply_update import append_update_log, destination_staging_root
 from launchers.backend_start import backend_argv, backend_environment
 from launchers.backend_retire_request import write_request
 from server.platform.backend_owner import BackendHandle, discover_backend
@@ -40,16 +39,13 @@ from server.platform.job_start import ContainedStartError, JobStart, windows_job
 from server.platform.paths import app_root, resolve_data_dir
 from server.platform.process_tree import cancel_blocked_reads
 from shared.build_identity import build_label
-from launchers.full_installer import FullInstallerRequest, consume_full_installer_request, launch_full_installer
-from .healthy_start import BundlePaths, HealthyStartSettlement, Report, resolve_bundle_paths
-from .updater import (
-    BundleUpdateRequest,
+from launchers.full_installer import (
+    FullInstallerRequest,
     UpdateHandoffError,
-    UpdateRequest,
-    consume_update_request,
-    launch_bundle_update_handoff,
-    launch_update_handoff,
+    consume_full_installer_request,
+    launch_full_installer,
 )
+from launchers.update_log import append_update_log
 
 
 HOST = "127.0.0.1"
@@ -122,12 +118,11 @@ def frontend_ready(snapshot: StatusSnapshot) -> bool:
     that as a yellow lamp beside its "Open in browser" button; it is still a
     served interface, and requiring OK instead left a perfectly good update
     holding its rollback material for good. The desktop window waits on exactly
-    this, and the controller settles an update transaction on it
-    (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.5).
+    this.
 
     A served interface is not enough when the controller's own server has
     named, in ``/health``, a build other than the installed app layer's
-    (``build_mismatch``, §4.6): that is not the build this start installed.
+    (``build_mismatch``): that is not the build this start installed.
     """
 
     return (
@@ -525,7 +520,6 @@ class StatusController:
         adopted_probe_interval: float = ADOPTED_PROBE_INTERVAL,
         adopted_retry_delay: float = ADOPTED_RETRY_DELAY,
         clock: Callable[[], float] = time.monotonic,
-        settle_on_ready: bool = True,
     ) -> None:
         self.environ = dict(os.environ if environ is None else environ)
         self.repo_root = Path(repo_root or app_root(environ=self.environ)).resolve()
@@ -556,19 +550,6 @@ class StatusController:
         self.adopted_probe_interval = adopted_probe_interval
         self.adopted_retry_delay = adopted_retry_delay
         self.clock = clock
-        #: Settle an update transaction on the first ready poll (contract
-        #: §4.5). Browser mode relies on it; the desktop window turns it off
-        #: and asks itself, once its native event loop is running.
-        self.settle_on_ready = settle_on_ready
-        # Asked at settle time, so the paths are the ones this controller has
-        # then, and so a caller can replace ``bundle_paths``.
-        self._healthy_start = HealthyStartSettlement(
-            lambda: self.bundle_paths(),
-            # The request this controller's own server writes: while it is
-            # present, the staging it names is in use (contract §2.5).
-            requests=lambda: [path for path in (self.update_request_path,) if path is not None],
-        )
-        self._settle_attempted = False
         #: The labels a server running the installed app layer may name, read
         #: once when first needed (``_build_mismatch``).
         self._installed_builds: tuple[str, ...] | None = None
@@ -633,58 +614,6 @@ class StatusController:
     @property
     def logs_dir(self) -> Path:
         return self._data_dir() / "logs"
-
-    def bundle_paths(self) -> BundlePaths | None:
-        """This installation's bundle, resources and data directory; ``None`` for a checkout."""
-
-        try:
-            data_dir = self._data_dir()
-        except (OSError, RuntimeError, TypeError, ValueError):
-            return None
-        return resolve_bundle_paths(self.environ, self.repo_root, data_dir)
-
-    def settle_update_transaction(
-        self, snapshot: StatusSnapshot, *, report: Report | None = None
-    ) -> bool:
-        """Settle this start's update transaction on ``snapshot``, once.
-
-        ``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.5, for the window
-        and browser modes: ``commit_transaction`` and the healthy-start cleanup
-        scoped to the committed transaction, on a snapshot of this controller's
-        own server that satisfies :func:`frontend_ready`. Anything else is
-        declined, and ``update.log`` says why and which transaction stays open.
-
-        An adopted server is declined however healthy it looks. Exit 2 means
-        another server holds the instance lock -- another installation on the
-        same data directory, one a crashed launcher left behind, or this
-        installation's first launch -- so the build this start launched never
-        served, and nothing it answers is evidence about this update.
-
-        ``report`` puts a failed macOS re-seal in front of the user; the
-        desktop window passes its own bundle reporter. Returns whether the
-        transaction is settled.
-        """
-
-        own = snapshot.running
-        if snapshot.exit_code == 2 and not own:
-            evidence = (
-                "the interface that answered belongs to another Waveguide Generator "
-                "server, which holds the instance lock, so the build this start "
-                "launched never served"
-            )
-        elif snapshot.build_mismatch is not None:
-            evidence = snapshot.build_mismatch
-        else:
-            evidence = (
-                f"backend {snapshot.backend.state.name}, frontend {snapshot.frontend.state.name}"
-            )
-            if snapshot.backend.state is ServiceState.ERROR:
-                evidence += f" ({snapshot.backend.reason})"
-        return self._healthy_start.settle(
-            ready=own and frontend_ready(snapshot),
-            evidence=evidence,
-            report=report,
-        )
 
     def open_logs_folder(self) -> Path:
         """Show the logs in the platform's file manager.
@@ -758,27 +687,10 @@ class StatusController:
             port=port, control_path=control_path,
         )
 
-    def update_staging_root(self) -> Path | None:
-        """The staging folder beside this installation's bundle; ``None`` outside a bundle."""
-
-        paths = self.bundle_paths()
-        return destination_staging_root(paths[0]) if paths is not None else None
-
     def _server_environment(self) -> dict[str, str]:
-        """The environment the owned server starts with.
+        """The environment the owned server starts with."""
 
-        In a bundle it names the one staging root this launcher accepts a
-        request naming (the updater review §2.7). The root travels here, not on
-        the command line, because the server this launcher starts is not
-        always its own build: the desktop window's in-process recovery can
-        restore an older release's layers and start that release's server,
-        whose parser refuses an option it does not know. An older server
-        ignores the variable and stages in the data directory, which this
-        launcher still accepts. A value inherited from this launcher's own
-        environment is never passed on.
-        """
-
-        return backend_environment(self.environ, staging_root=self.update_staging_root())
+        return backend_environment(self.environ)
 
     def _collect_output(self, stream: IO[str], output: deque[str]) -> None:
         try:
@@ -1298,19 +1210,6 @@ class StatusController:
                 ),
             )
             snapshot = self._snapshot
-            # The first snapshot that satisfies the frontend-ready predicate is
-            # the evidence of a healthy start (contract §4.5), in browser mode
-            # as in the window, which waits on the same predicate.
-            settle = (
-                self.settle_on_ready
-                and not self._settle_attempted
-                and frontend_ready(snapshot)
-            )
-            if settle:
-                self._settle_attempted = True
-        if settle:
-            # Outside the lock: settling is file work, and on macOS a re-seal.
-            self.settle_update_transaction(snapshot)
         return snapshot
 
     def _build_mismatch(self, named: object) -> str | None:
@@ -1516,7 +1415,7 @@ class StatusController:
         if temporary_directory is not None:
             temporary_directory.cleanup()
 
-    def take_update_request(self) -> UpdateRequest | FullInstallerRequest | None:
+    def take_update_request(self) -> FullInstallerRequest | None:
         """Return one delayed, validated UI request when it is ready to run."""
 
         with self._lock:
@@ -1524,14 +1423,10 @@ class StatusController:
         if path is None:
             return None
         try:
-            handled, full_request = consume_full_installer_request(
+            _handled, request = consume_full_installer_request(
                 path, repo_root=self.repo_root, data_dir=self._data_dir()
             )
-            if handled:
-                return full_request
-            return consume_update_request(
-                path, data_dir=self._data_dir(), staging_root=self.update_staging_root()
-            )
+            return request
         except UpdateHandoffError as exc:
             # Recorded against the child running now, and only that one: a
             # restarted child starts with its own buffer (see ``start()``).
@@ -1599,28 +1494,11 @@ class StatusController:
         except (OSError, RuntimeError, TypeError, ValueError):
             pass
 
-    def launch_update(self, request: UpdateRequest | FullInstallerRequest) -> None:
-        """Start the independent updater, including after the bundle owner's close()."""
+    def launch_update(self, request: FullInstallerRequest) -> None:
+        """Start the independent installer helper, including after the bundle owner's close()."""
 
-        if isinstance(request, FullInstallerRequest):
-            launch_full_installer(self.repo_root, request, os.getpid(),
-                data_dir=self._data_dir(), environ=self.environ)
-        elif isinstance(request, BundleUpdateRequest):
-            launch_bundle_update_handoff(
-                self.repo_root,
-                request,
-                os.getpid(),
-                environ=self.environ,
-                server_args=self.server_args,
-            )
-        else:
-            launch_update_handoff(
-                self.repo_root,
-                request,
-                os.getpid(),
-                environ=self.environ,
-                server_args=self.server_args,
-            )
+        launch_full_installer(self.repo_root, request, os.getpid(),
+            data_dir=self._data_dir(), environ=self.environ)
         if os.name != "nt":
             # The retire write is defensive: an adopted session's backend has
             # no installer handoff.
@@ -1659,7 +1537,6 @@ class StatusController:
     def stop(self) -> StatusSnapshot:
         """Request graceful shutdown, then guarantee the entire tree is gone."""
 
-        self._healthy_start.cancel()
         # Before anything else, and outside the branch below: the watcher is
         # parked in ``wait()`` on the very process this is about to end, and a
         # shutdown somebody asked for is not a backend loss to report.

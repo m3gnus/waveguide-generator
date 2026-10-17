@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import shlex
 import signal
-import shutil
 import subprocess
 import sys
 import time
@@ -107,39 +106,12 @@ def set_native_entry(payload, started):
     (app / "runtime/bin/python3.13").write_text(f'#!/bin/sh\ntouch {shlex.quote(str(started))}\n')
 
 
-def set_bridge_app_prefix(app, started, *, platform):
-    """Execute the actual B entry prefix, stopping before controller imports."""
-    launchers = app / "launchers"
-    launchers.mkdir(exist_ok=True)
-    (launchers / "__init__.py").write_text("")
-    shared = app / "shared"
-    shared.mkdir(exist_ok=True)
-    (shared / "__init__.py").write_text("")
-    shutil.copyfile(ROOT / "shared/release_assets.py", shared / "release_assets.py")
-    shutil.copyfile(ROOT / "launchers/full_installer.py", launchers / "full_installer.py")
-    # full_installer imports it for the plain-path helpers.
-    shutil.copyfile(ROOT / "launchers/update_lock.py", launchers / "update_lock.py")
-    desktop = (ROOT / "launchers/desktop.py").read_text()
-    prefix = desktop[:desktop.index("from launchers.statusapp.__main__ import (")]
-    (launchers / "desktop.py").write_text(prefix + f"\nPath({str(started)!r}).touch()\n")
-    code = f"import sys,runpy; sys.platform={platform!r}; runpy.run_module('launchers.desktop',run_name='__main__')"
-    runtime = app.parent / "runtime/bin/python3.13"
-    runtime.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -c {shlex.quote(code)}\n")
-
-
-
 @pytest.mark.parametrize("phase", ["copy", "committed"])
 def test_helper_only_sigkill_native_settles_and_next_start_records_decision(tmp_path, phase):
     env = sandbox(tmp_path)
     started = tmp_path / "started"
     old = native_layout(tmp_path, env, "old")
     set_native_entry(old, started)
-    if phase == "copy":
-        # The layer bridge retains this exact v0.3.2 root entry. Only the app
-        # bytes introduce the first full installer's recovery guard.
-        (old / "waveguide-generator/waveguide-generator").write_text(
-            (ROOT / "scripts/tests/fixtures/full-installer-bridge-entry/linux-v032.sh").read_text())
-        set_bridge_app_prefix(old / "waveguide-generator/app", started, platform="linux")
     assert run(old, env, "--no-launch").returncode == 0
     root = installed_dir(env)
     payload = native_layout(tmp_path, env, "new")

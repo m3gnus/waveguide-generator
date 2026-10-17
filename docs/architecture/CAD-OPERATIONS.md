@@ -1660,14 +1660,9 @@ ships.
   changes only when Fusion restarts.
 - **WGLink activation.** Changing Fusion's add-in follows the order an app update needs
   (`server/cadlink/fusion/addin_update.py`):
-  - **After this start is confirmed.** Nothing changes while this installation has an open
-    update journal. A healthy start closes it through `commit_transaction`, which the
-    healthy-start settlement calls in every launch mode: the window, `--browser` and
-    `--no-gui` (`launchers/statusapp/healthy_start.py`). The only other way a journal goes
-    is recovery removing one it cannot trust once it has rolled back or aborted
-    (`launchers/apply_update.py`); the build that then starts is the one recovery kept. So
-    a build that rolls back never leaves its add-in behind with the older WG. A source
-    checkout has no journal.
+  - **After this start is confirmed** (`startup_confirmed`). Updates are whole-installer
+    replacements that finish before the new build starts, so from 0.3.6 there is no
+    layer-update journal left open for a start to confirm.
   - **Never while Fusion is open, or while WG cannot tell.** A fresh WGLink heartbeat, a
     running Fusion process, and a process check that fails or times out
     (`fusion_process_state`) all count as open. The change is then recorded as pending in

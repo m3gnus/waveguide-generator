@@ -1,5 +1,18 @@
 # Update transaction contract (Phase 1)
 
+> **Status from 0.3.6: largely historical.** 0.3.6 removes the layer updater:
+> the app/runtime layer transaction, its journals and completion records, the
+> healthy-start settlement, the recovery route and the 0.3.2/0.3.3 receiving
+> bridge (`launchers/apply_update.py`, `bundle_recovery.py`, `update_lock.py`,
+> `statusapp/healthy_start.py`, `statusapp/updater.py`, `server/updates/service.py`
+> and the layer half of `server/updates/bundle.py`). Sections 1-3 and 5 describe
+> that removed code and are kept as a record. Section 4, the restart-approved
+> latch, still governs `server/updates/restart.py` and the routes and job
+> runtime that read it (tests: `server/tests/test_update_restart_latch.py`), and
+> the data-compatibility items of section 6 still apply. Updates are full
+> installers: [`INSTALLER-HANDOFF-CONTRACT.md`](INSTALLER-HANDOFF-CONTRACT.md).
+> 0.3.3-rc and earlier update by downloading the installer.
+
 This records the implemented transaction and retained receiving-bridge contract:
 what the records are, what cleanup may remove, what an old release's launcher
 hands the new helper, and how a restart is coordinated. It began as Phase 1

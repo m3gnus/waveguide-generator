@@ -11,7 +11,7 @@ import pytest
 
 from launch.backend_lifetime import ActivityTracker, InstallerRetireThread, RetirementWatcher
 from launchers.backend_start import backend_argv
-from launchers.update_lock import ordinary_path
+from launchers.install_paths import ordinary_path
 from server.app import QUIET_REQUEST_ROUTES, create_app
 from server.jobs.store import JobStore
 from server.platform import paths
@@ -588,7 +588,7 @@ def test_serve_creates_and_passes_early_signal(tmp_path, monkeypatch, retire_eve
     monkeypatch.setattr(backend_lifetime, "BackendLifetimeThread", LifetimeThread)
     monkeypatch.setattr(serve, "os", SimpleNamespace(name="nt", environ=environ, getpid=lambda: 123))
     monkeypatch.setattr(serve, "ensure_data_layout", lambda: SimpleNamespace(root=tmp_path, locks=tmp_path))
-    for name in ("setup_logging", "flush_logs", "_no_gui_healthy_start", "_start_beat_cpu_provisioning",
+    for name in ("setup_logging", "flush_logs", "_start_beat_cpu_provisioning",
                  "harden_console", "_publish_status_ready"):
         monkeypatch.setattr(serve, name, lambda *_args: None)
     monkeypatch.setattr(serve, "_release_interface_error", lambda: "interface" if failure == "interface" else None)

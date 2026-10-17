@@ -2,7 +2,7 @@
 
 `server.updates.installer_client.InstallerClient` checks releases and downloads a
 platform installer. Restart approval, helper launch, installation and exit belong to
-the handoff service. The legacy receiving files remain compatible with older clients.
+the handoff service. From 0.3.6 there is no layer-update receiving route.
 
 ## Status and actions
 

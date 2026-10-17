@@ -304,9 +304,9 @@ def test_changed_git_includes_branch_staged_unstaged_and_untracked(tmp_path, mon
     ("changed", "expected"),
     [
         # Direct consumers the review found missing (lander batch-5 review).
-        ("launchers/apply_update.py", "server/tests/test_apply_update.py"),
-        ("launchers/apply_update.py", "server/tests/test_bundle_recovery.py"),
-        ("launchers/apply_update.py", "scripts/tests/test_build_bundle.py"),
+        ("launchers/full_installer.py", "server/tests/test_installer_handoff.py"),
+        ("launchers/full_installer.py", "scripts/tests/test_frozen_installer_handoff.py"),
+        ("server/updates/release_urls.py", "server/tests/test_frozen_installer_compatibility.py"),
         ("launch/serve.py", "server/tests/test_update_restart_latch.py"),
         ("server/mesh/builder.py", "server/tests/test_real_pipeline.py"),
     ],

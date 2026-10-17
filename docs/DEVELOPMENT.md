@@ -349,8 +349,7 @@ until the executable-signing work.
 application folder `waveguide-generator/` — `app`, `runtime`, the `waveguide-generator`
 launcher, a `.desktop` template and a 512px icon — beside `install.sh`, `uninstall.sh`
 and `READ ME FIRST.txt` at the archive root. That layout is the Windows one, not the
-macOS one, so `apply_update.bundle_from_app_layer` resolves it with the rule it already
-has and the in-app updater needs no third case.
+macOS one, so one rule resolves the installation root on Windows and Linux.
 
 **What "Linux" means here is Ubuntu 24.04 LTS on x86-64**, and distributions close
 enough to it. That is a narrow claim on purpose. The release job runs on `ubuntu-24.04`
@@ -417,65 +416,31 @@ checksum sidecars are written, matching the filenames GitHub serves.
 
 ## Standalone application updates
 
-The server keeps release discovery read-only. In bundle mode (`WG2_BUNDLE=1`) it reads
-the installed version and runtime id from `Resources/app` and `Resources/runtime` on
-macOS, or the launcher's sibling `app` and `runtime` directories on Windows and Linux. A newer
-release is installable only
-after its separate app manifest has been size-limited, checksum-verified, and read; the
-app ZIP and its checksum must exist, and a different runtime id must resolve to a
-runtime ZIP/checksum pair. Current releases attach every platform's runtime ZIP/checksum
-pair even when their content-addressed ids are unchanged. The updater can also find a
-matching runtime in one of the 20 most recent older releases, preserving compatibility
-with releases created before that publication rule.
-
-`POST /api/updates/install` starts one background `BundleUpdateInstaller`. Archives
-download through retained `.part` files under `<data>/updates/<version>/`, are capped by
-their advertised size, verified against their `.sha256` assets, and extracted into
-complete staging directories. `/api/updates/status` reports `installState` (`idle`,
-`downloading`, `verifying`, `ready`, or `failed`), the active version, byte progress,
-and the last staging error. A repeated request for the same release is idempotent; a
-request for a different release is rejected until the active handoff is consumed or reset.
-
-After staging, the server atomically writes the status owner's temporary
-`update.json` request with this schema:
-
-```json
-{
-  "schemaVersion": 1,
-  "kind": "apply_bundle",
-  "version": "0.2.5",
-  "stagedAppDir": "<data>/updates/0.2.5/staged/app",
-  "stagedRuntimeDir": null
-}
-```
-
-`stagedRuntimeDir` is either `null` or the matching staged runtime directory. The
-desktop launcher resolves both paths and refuses a request unless they are existing
-directories inside the application data directory. It then stops the server and
-starts `launchers/apply_update.py` from the staged app layer, using the staged runtime's
-Python when present. This is required on Windows because loaded DLLs in the old runtime
-prevent NTFS from moving that directory. The updater waits for the desktop parent,
-renames live layers to
-`*.previous`, renames staged layers into place, removes quarantine attributes, ad-hoc
-signs and verifies the changed bundle, and relaunches it (`open -n <bundle> --args
-<original CLI arguments>` on macOS; `"<exe>" -m launchers.desktop <original CLI
-arguments...>` detached without a console on Windows, so `--port`/`--data-dir`
-survive the restart). Windows skips the macOS quarantine and codesign repairs. The
-launcher retains `*.previous` until the native window has initialized, then signs and
-verifies macOS cleanup before deleting rollback material and downloaded archives under
-`<data>/updates/`. A failed first application start restores the previous layers and
-launcher files and records the result in `<data>/logs/update.log`.
+Updates are signed full installers; there is no layer updater from 0.3.6.
+`server/updates/installer_client.py` checks releases (stable: `/releases/latest`;
+beta: the bounded release list) and accepts a release only when its three installers,
+`SHA256SUMS` and `SHA256SUMS.sig` are present and the manifest verifies against the
+compiled Ed25519 keys (`docs/reference/INSTALLER-CLIENT-CONTRACT.md`).
+`POST /api/updates/install` downloads this platform's installer under
+`<data>/update-install/<version>/` and re-verifies it; the server then approves a
+restart and publishes the launcher's `update.json` request. The launcher
+(`launchers/full_installer.py`) consumes it, closes, and starts the installer in update
+mode: Windows setup with `/VERYSILENT /WAITPID /OUTCOME /WGLOG /RELAUNCH /DIR`, macOS
+`Install Waveguide Generator.command --update`, Linux `install.sh --update --prefix`,
+the last two through `launchers/installer-helper.sh` copied outside the installation
+(`docs/reference/INSTALLER-HANDOFF-CONTRACT.md`). Any other request kind, such as a
+pre-0.3.6 layer or checkout request, is discarded and the restart latch released.
 
 `WG2_UPDATES_API_BASE` (default `https://api.github.com`) redirects the latest-release
 and release-list requests for an end-to-end rehearsal against a local fake. Production
 asset URLs must identify this repository's GitHub release assets, and each redirect hop
-is revalidated against the allowed GitHub release CDN. A rehearsal accepts plain
-`http://` only at the same literal loopback origin as the API base; redirects cannot
-escape it.
+is revalidated against the allowed GitHub release CDN
+(`server/updates/release_urls.py`). A rehearsal accepts plain `http://` only at the same
+literal loopback origin as the API base; redirects cannot escape it.
 
-The bundle stub's `PYTHONPYCACHEPREFIX` and `NUMBA_CACHE_DIR` remain inherited by the
-staged updater and restarted application. Runtime imports therefore continue to write
-only below the user cache directory, never into the signed bundle.
+Installed 0.3.4 and 0.3.5 clients discover and hand off to these installers with their
+own released code; `server/tests/test_frozen_installer_compatibility.py` and
+`scripts/tests/test_frozen_installer_handoff.py` run that code from the release tags.
 
 ## Documentation changes
 

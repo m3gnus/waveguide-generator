@@ -1,5 +1,11 @@
 # Update channels
 
+> **Status from 0.3.6:** the layer updater this page was written against
+> (`server/updates/service.py`) is removed. The channel choice and its storage
+> are unchanged; what each channel reads and offers is now specified by
+> [`INSTALLER-CLIENT-CONTRACT.md`](INSTALLER-CLIENT-CONTRACT.md). The
+> main-build discussion below still stands as open design.
+
 What each channel reads, where the choice lives, and what a "newest build of
 `main`" channel would additionally require. Written because the second question
 has a short answer that is easy to get wrong: the client is already able to
@@ -13,7 +19,7 @@ beside the verdict it decides; Settings keeps a pointer, because a setting that
 vanishes reads as one that was removed.
 
 The value is stored server-side, in the `updates` namespace of the settings
-store (`UPDATE_SETTINGS_NAMESPACE`, `server/updates/service.py`). A
+store (`server/updates/installer_client.py`). A
 browser-scoped copy would be back on stable the first time the update it asked
 for actually landed, which is the one moment the preference exists to survive.
 Switching discards the cached verdict, because it answered the other channel's

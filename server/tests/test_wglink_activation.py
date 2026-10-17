@@ -348,138 +348,14 @@ def _bundle_layout(tmp_path: Path) -> tuple[Path, Path]:
     return _populate(root), data.resolve()
 
 
-def _open_update_transaction(root: Path, data: Path) -> tuple[Path, Path, Path]:
-    """Record an update transaction the way the helper leaves it for the new build."""
+def test_no_layer_update_transaction_is_left_to_confirm(tmp_path: Path, monkeypatch) -> None:
+    """Whole-installer updates finish before the new build starts, in a bundle or a checkout."""
 
-    from launchers.apply_update import journal_path
-    from launchers.statusapp.healthy_start import resolve_bundle_paths
-
-    paths = resolve_bundle_paths({"WG2_BUNDLE": "1"}, root, data)
-    assert paths is not None
-    bundle, resources, data_dir = paths
-    journal_path(data_dir, resources).write_text(
-        json.dumps({
-            "schema": 1,
-            "operation": "update",
-            "state": "installed",
-            "transaction": "t-activation",
-            "resources": str(resources),
-            "bundle": str(bundle),
-            "layers": [],
-        }),
-        encoding="utf-8",
-    )
-    return paths
-
-
-def test_a_bundle_waits_for_its_healthy_start_settlement(tmp_path: Path, monkeypatch) -> None:
-    """The signal is the same settlement every launch mode uses.
-
-    ``HealthyStartSettlement`` is what the window, ``--browser`` and
-    ``--no-gui`` all call. Until it commits, the add-in is not touched; a
-    launch that cannot confirm its build declines and still touches nothing.
-    """
-
-    from launchers.statusapp.healthy_start import HealthyStartSettlement
-
+    checkout = _populate(tmp_path / "wg")
+    assert addin_update.startup_confirmed(checkout, tmp_path / "data", environ={})[0]
     monkeypatch.setenv("WG2_BUNDLE", "1")
     root, data = _bundle_layout(tmp_path)
-    paths = _open_update_transaction(root, data)
-    addins = tmp_path / "AddIns"
-    target = _installed(addins, commit=OLD, root=root)
-    calls: list[dict[str, object]] = []
-    _fake_installer(monkeypatch, calls)
-
-    ready, why = addin_update.startup_confirmed(root, data)
-    assert not ready and "t-activation" in why
-    first = addin_update.activate_wglink(
-        root=root, addins_dir=addins, data_dir=data, fusion_running=FUSION_CLOSED
-    )
-    assert first.verdict == "awaiting-startup"
-
-    settlement = HealthyStartSettlement(lambda: paths)
-    reports: list[str] = []
-    assert not settlement.settle(ready=False, evidence="the interface never answered", report=reports.append)
-    assert addin_update.activate_wglink(
-        root=root, addins_dir=addins, data_dir=data, fusion_running=FUSION_CLOSED
-    ).verdict == "awaiting-startup"
-    assert calls == []
-    assert addin_update.installed_commit(target) == OLD
-
-    assert settlement.settle(ready=True, evidence="a healthy interface", report=reports.append)
     assert addin_update.startup_confirmed(root, data)[0]
-    after = addin_update.activate_wglink(
-        root=root, addins_dir=addins, data_dir=data, fusion_running=FUSION_CLOSED
-    )
-    assert after.verdict == "updated"
-    assert [call["pin"] for call in calls] == [PIN_A]
-
-
-def test_a_no_gui_start_confirms_through_its_own_self_probe(tmp_path: Path, monkeypatch) -> None:
-    """``--no-gui`` has no controller; its self-probe settles, and that is the signal."""
-
-    from launch import serve
-
-    monkeypatch.setenv("WG2_BUNDLE", "1")
-    root, data = _bundle_layout(tmp_path)
-    paths = _open_update_transaction(root, data)
-    assert not addin_update.startup_confirmed(root, data)[0]
-
-    monkeypatch.setattr(serve, "_probe_healthy_start", lambda *_args: None)
-    check = serve._NoGuiHealthyStart(paths)
-    check._server = SimpleNamespace(started=True)
-    check._run()
-
-    assert addin_update.startup_confirmed(root, data)[0]
-
-
-def test_the_window_and_browser_modes_confirm_through_their_controller(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """``--browser`` settles on its controller's first ready snapshot, and the
-    desktop window asks the same ``settle_update_transaction`` once its native
-    loop runs. The signal flips there and nowhere earlier."""
-
-    from launchers.statusapp.controller import (
-        LampStatus,
-        ServiceState,
-        StatusController,
-        StatusSnapshot,
-    )
-
-    monkeypatch.setenv("WG2_BUNDLE", "1")
-    root, data = _bundle_layout(tmp_path)
-    paths = _open_update_transaction(root, data)
-    checkout = tmp_path / "checkout"
-    (checkout / "frontend" / "dist").mkdir(parents=True)
-    (checkout / "frontend" / "dist" / "index.html").write_text("<!doctype html>", encoding="utf-8")
-    controller = StatusController(
-        repo_root=checkout, server_command=(sys.executable, "-c", "pass"), settle_on_ready=True
-    )
-    controller.bundle_paths = lambda: paths  # type: ignore[method-assign]
-
-    def snapshot(frontend: ServiceState) -> StatusSnapshot:
-        return StatusSnapshot(
-            backend=LampStatus(ServiceState.OK, "ok"),
-            frontend=LampStatus(frontend, "interface"),
-            url="http://127.0.0.1:3199/",
-            pid=123,
-            exit_code=None,
-        )
-
-    assert not controller.settle_update_transaction(snapshot(ServiceState.ERROR), report=lambda _m: None)
-    assert not addin_update.startup_confirmed(root, data)[0]
-    assert controller.settle_update_transaction(snapshot(ServiceState.OK), report=lambda _m: None)
-    assert addin_update.startup_confirmed(root, data)[0]
-
-
-def test_a_source_checkout_has_no_update_to_confirm(tmp_path: Path) -> None:
-    root = _populate(tmp_path / "wg")
-
-    ready, why = addin_update.startup_confirmed(root, tmp_path / "data", environ={})
-
-    assert ready
-    assert "source checkout" in why
 
 
 def test_the_startup_pass_waits_for_a_confirmed_start_then_runs_once(

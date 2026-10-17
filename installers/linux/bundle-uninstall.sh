@@ -26,10 +26,10 @@ DESKTOP_OWNER_NAME=".waveguide-generator.owner"
 ICON_OWNER_NAME=".waveguide-generator.owner"
 #: server/platform/paths.py: the XDG data directory the application itself uses.
 DATA_DIRECTORY="WaveguideGenerator"
-#: launchers/apply_update.py STAGING_ROOT_SUFFIX / destination_staging_root():
-#: the folder beside the installed bundle where an in-app update is staged.
-#: Computed here the same way -- the bundle's own parent directory, plus
-#: "." + the bundle's own directory name + this suffix -- so an uninstall
+#: The folder beside the installed bundle where releases before 0.3.6 staged
+#: an in-app layer update. Computed the way they computed it -- the bundle's
+#: own parent directory, plus "." + the bundle's own directory name + this
+#: suffix -- so an uninstall
 #: removes exactly the one staging folder this installation could have
 #: created, never a wildcard, and never one belonging to another install.
 STAGING_ROOT_SUFFIX=".update-staging"

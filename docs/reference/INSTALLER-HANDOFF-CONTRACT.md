@@ -141,9 +141,9 @@ The launcher stages a private host-shell recovery entry and data configuration
 beside the exact destination before detachment. It captures the old root
 identity, helper data folder and integration paths. Native startup consults
 this entry before entering the app or runtime whenever its folder, native lock
-or ledger survives. The layer bridge retains earlier macOS C/Linux shell
-entries, so the updated app also checks at the earliest desktop entry before
-controller, server or UI imports. This compatibility guard uses the same
+or ledger survives. An older native entry may still be in place, so the
+updated app also checks at the earliest desktop entry before controller,
+server or UI imports. This compatibility guard uses the same
 external shell while the old root and interpreter are intact. A dead PID alone cannot authorize deletion: the entry
 checks bounded record structure, every permitted path family and every occupied
 old/new device/inode identity, and refuses foreign/missing objects, live owners,
@@ -210,3 +210,10 @@ not authorize launch into an installation still owned by setup.
 Python tests exercise sending approval, dispatch refusal, tar safety and real
 POSIX rollback/crash records. Windows setup compilation and live installation,
 mutex, timeout, rollback and relaunch remain Windows qualification gates.
+
+## Requests that are not full-installer requests
+
+`consume_full_installer_request` removes and refuses any other request kind,
+including a pre-0.3.6 layer (`apply_bundle`) or checkout request and malformed
+JSON. The launcher records the refusal and releases the server's restart latch,
+so a server never stays latched with no handoff pending.

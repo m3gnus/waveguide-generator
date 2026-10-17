@@ -7,9 +7,9 @@
 #
 # WHY THE INSTALL IS PER-USER.
 #
-# Waveguide Generator updates itself by replacing `app` and `runtime` inside
-# its own installation directory, and the updater runs as the user with no way
-# to elevate (launchers/apply_update.py). A root-owned copy under /opt or
+# Waveguide Generator updates itself by running this installer with --update
+# over its own installation directory, as the user with no way to elevate
+# (launchers/installer-helper.sh). A root-owned copy under /opt or
 # /usr/local would therefore install once and then refuse every update it was
 # offered, which is the failure the Windows installer avoids by writing to
 # %LOCALAPPDATA%\Programs rather than Program Files. Linux gets the same

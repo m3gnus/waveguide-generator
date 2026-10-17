@@ -1,4 +1,4 @@
-"""Full-installer receiving dispatch, separate from the B/B+1 layer bridge.
+"""Full-installer receiving dispatch: the handoff from the app to its installer.
 
 Preparation runs while the launcher still owns its Python. The detached
 helper uses only the host shell or Inno setup, waits for that launcher's PID,
@@ -23,7 +23,7 @@ import tempfile
 import time
 
 from shared.release_assets import LINUX_PLATFORM, MACOS_PLATFORM, WINDOWS_PLATFORM, VERSION_RE, UPDATES_TAG_SUFFIX, is_build_stamp, installer_name, windows_setup_name
-from launchers.update_lock import ordinary_path, resolved_path
+from launchers.install_paths import ordinary_path, resolved_path
 
 MAX_REQUEST = 16 * 1024
 MAX_ARCHIVE_MEMBERS = 250000
@@ -33,6 +33,10 @@ MAX_ARCHIVE_LINK_HOPS = 40
 MAX_ARCHIVE_VIRTUAL_NODES = MAX_ARCHIVE_MEMBERS
 MAX_ARCHIVE_VIRTUAL_COMPONENTS = MAX_ARCHIVE_MEMBERS * 16
 MAX_ARCHIVE_GRAPH_WORK = MAX_ARCHIVE_MEMBERS * 256
+
+
+class UpdateHandoffError(RuntimeError):
+    """An update request or installer handoff could not be trusted or started."""
 
 
 @dataclass(frozen=True)
@@ -154,10 +158,12 @@ def _unexpired(request: FullInstallerRequest) -> None:
 
 def consume_full_installer_request(path: Path, *, repo_root: Path, data_dir: Path,
                                    now: float | None = None) -> tuple[bool, FullInstallerRequest | None]:
-    """Return (handled, request); an unready new request never reaches the bridge."""
-    # statusapp's package exports its controller; import the receiving error
-    # lazily so that the additive controller dispatch does not form a cycle.
-    from launchers.statusapp.updater import UpdateHandoffError
+    """Return (handled, request); ``(False, None)`` only when no request is present.
+
+    A request that is not a full-installer request -- an older release's layer
+    or checkout kind, or malformed JSON -- is removed and refused, so the
+    launcher releases the server's restart latch instead of waiting on it.
+    """
     try:
         info = path.lstat()
     except FileNotFoundError:
@@ -179,17 +185,21 @@ def consume_full_installer_request(path: Path, *, repo_root: Path, data_dir: Pat
             raise ValueError("the request changed or exceeded its size limit")
     except (OSError, ValueError) as exc:
         raise UpdateHandoffError(f"The update request changed while reading: {exc}.") from exc
-    try:
-        value = json.loads(raw.decode("utf-8"))
-    except (UnicodeError, ValueError):
-        return False, None  # legacy reader owns malformed bridge requests
-    if not isinstance(value, dict) or value.get("kind") != "full_installer":
-        return False, None
     def remove() -> None:
         current = path.lstat()
         if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
             raise ValueError("the request was replaced while it was read")
         path.unlink()
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError):
+        value = None
+    if not isinstance(value, dict) or value.get("kind") != "full_installer":
+        try:
+            remove()
+        except (OSError, ValueError):
+            pass
+        raise UpdateHandoffError("Discarded an update request that is not a full-installer request.")
     try:
         if value.get("schemaVersion") != 2:
             raise ValueError("unsupported installer request schema")
@@ -400,7 +410,6 @@ def _sync_directory(path: Path) -> None:
 def launch_full_installer(repo_root: Path, request: FullInstallerRequest, parent_pid: int,
                           *, data_dir: Path, environ=None, platform_name: str | None = None) -> None:
     """Start an independent helper; raising leaves the launcher able to restart."""
-    from launchers.statusapp.updater import UpdateHandoffError
     try:
         install_root = Path(ordinary_path(str(request.install_root)))
         if install_root != _root(repo_root, request.platform):

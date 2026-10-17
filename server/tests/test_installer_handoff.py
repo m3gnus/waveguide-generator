@@ -13,8 +13,9 @@ import time
 
 import pytest
 
-from launchers.full_installer import _extract_linux, consume_full_installer_request, launch_full_installer
-from launchers.statusapp.updater import UpdateHandoffError
+from launchers.full_installer import (
+    UpdateHandoffError, _extract_linux, consume_full_installer_request, launch_full_installer,
+)
 from server.updates.installer_client import VerifiedInstaller
 from server.updates.installer_service import InstallerUpdateService
 from server.updates.restart import RestartApproval
@@ -99,10 +100,9 @@ def test_approval_precedes_reverification_and_atomic_publication(tmp_path):
     assert service.restart_approval.pending == "0.3.4"  # consumption cannot admit solves
 
 
-def test_installed_bridge_transaction_does_not_gate_windows_installer_handoff(tmp_path, monkeypatch):
+def test_windows_installer_handoff_starts_setup_with_its_update_switches(tmp_path, monkeypatch):
     from dataclasses import replace
 
-    from launchers import apply_update
     from shared.release_assets import WINDOWS_PLATFORM, windows_setup_name
 
     service, client, path, ready, app, data = facade(tmp_path)
@@ -110,14 +110,6 @@ def test_installed_bridge_transaction_does_not_gate_windows_installer_handoff(tm
     ready.path.rename(asset)
     ready = replace(ready, path=asset, platform=WINDOWS_PLATFORM)
     client.ready = ready
-    apply_update.begin_update_transaction(data_dir=data, bundle=app.parent,
-        resources=app.parent, layers=[], platform_name="win32")
-    apply_update.set_journal_state(data, app.parent, "installed")
-    for name in ("app.previous", "runtime.previous"):
-        (app.parent / name).mkdir()
-    before = apply_update.read_journal(data, app.parent)
-    marker = app.parent / ".update-transaction-open.json"
-    marker_before = marker.read_bytes()
 
     def download(callback):
         callback(ready)
@@ -135,9 +127,6 @@ def test_installed_bridge_transaction_does_not_gate_windows_installer_handoff(tm
     launch_full_installer(app, request, 12345, data_dir=data)
     assert len(launched) == 1
     assert "/WAITPID=12345" in launched[0] and "/RELAUNCH" in launched[0]
-    assert apply_update.read_journal(data, app.parent) == before
-    assert marker.read_bytes() == marker_before
-    assert (app.parent / "app.previous").is_dir()
 
 
 def test_reverification_failure_releases_exact_approval_without_a_request(tmp_path):
@@ -324,11 +313,26 @@ def test_reader_rejects_untrusted_destinations_and_proofs(tmp_path, mutation):
     assert not path.exists()
 
 
-def test_reader_keeps_delayed_new_requests_out_of_legacy_dispatch(tmp_path):
+def test_reader_keeps_a_delayed_request_for_its_ready_time(tmp_path):
     service, _, path, ready, app, data = facade(tmp_path)
     service._publish(ready)
     assert consume_full_installer_request(path, repo_root=app, data_dir=data, now=0) == (True, None)
     assert path.exists()
+
+
+@pytest.mark.parametrize("body", [b"{not json", b'{"kind": "bundle"}', b'{"tag": "v0.3.4"}', b"[]"])
+def test_reader_discards_any_request_that_is_not_a_full_installer_request(tmp_path, body):
+    """A pre-0.3.6 layer or checkout request has no receiver left: refused and removed."""
+    _, _, path, _, app, data = facade(tmp_path)
+    path.write_bytes(body)
+    with pytest.raises(UpdateHandoffError, match="not a full-installer request"):
+        consume_full_installer_request(path, repo_root=app, data_dir=data)
+    assert not path.exists()
+
+
+def test_reader_without_a_request_reports_nothing(tmp_path):
+    _, _, path, _, app, data = facade(tmp_path)
+    assert consume_full_installer_request(path, repo_root=app, data_dir=data) == (False, None)
 
 
 def test_launcher_rehashes_before_starting_any_helper(tmp_path, monkeypatch):

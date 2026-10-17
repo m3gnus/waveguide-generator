@@ -11,7 +11,7 @@ from server.platform import running_exclusion
 
 @pytest.fixture
 def startup(monkeypatch):
-    events, unconfirmed = [], []
+    events = []
     # Keep the real OS module intact for pytest and pathlib, and isolate all
     # startup inputs without creating a real server or named mutex.
     monkeypatch.setattr(serve, "os", SimpleNamespace(environ={}))
@@ -21,11 +21,6 @@ def startup(monkeypatch):
     monkeypatch.setattr(serve, "setup_logging", lambda _paths: None)
     monkeypatch.setattr(serve, "flush_logs", lambda: events.append("flush"))
 
-    def healthy_start(_root):
-        events.append("healthy start")
-        return SimpleNamespace(finish=unconfirmed.append)
-
-    monkeypatch.setattr(serve, "_no_gui_healthy_start", healthy_start)
     monkeypatch.setattr(serve, "requested_port", lambda _port: events.append("port") or 3100)
     monkeypatch.setattr(serve, "InstanceLock", lambda _path: SimpleNamespace(
         acquire=lambda _port: events.append("lock acquire"),
@@ -33,12 +28,12 @@ def startup(monkeypatch):
     ))
     # Stop after lock acquisition; none of the wiring assertions needs Uvicorn.
     monkeypatch.setattr(serve, "_release_interface_error", lambda: "test interface refusal")
-    return events, unconfirmed
+    return events
 
 
 @pytest.mark.parametrize("lifetime", ["headless", "contained", "attached"])
 def test_running_exclusion_precedes_instance_lock(startup, monkeypatch, lifetime):
-    events, _unconfirmed = startup
+    events = startup
     argv = ["--no-browser"]
     if lifetime == "headless":
         argv.append("--lifetime=headless")
@@ -53,15 +48,14 @@ def test_running_exclusion_precedes_instance_lock(startup, monkeypatch, lifetime
         assert "hold" not in events
     else:
         assert events.count("hold") == 1
-        assert events.index("healthy start") < events.index("hold")
         assert events.index("hold") < events.index("port") < events.index("lock acquire")
 
 
 @pytest.mark.parametrize("lifetime", ["headless", "contained"])
-def test_running_exclusion_refusal_reports_unconfirmed_start(
+def test_running_exclusion_refusal_stops_the_start(
     startup, monkeypatch, capsys, lifetime,
 ):
-    events, unconfirmed = startup
+    events = startup
     argv = ["--no-browser", "--lifetime=headless"]
     if lifetime == "contained":
         serve.os.environ["WG2_BACKEND_CONTAINED"] = "1"
@@ -75,10 +69,7 @@ def test_running_exclusion_refusal_reports_unconfirmed_start(
     error = capsys.readouterr().err
     assert "Waveguide Generator could not start:" in error
     assert "Win32 error 5" in error
-    assert events == ["healthy start", "hold", "flush"]
-    assert len(unconfirmed) == 1
-    assert "stopped before its server started" in unconfirmed[0]
-    assert "Win32 error 5" in unconfirmed[0]
+    assert events == ["hold", "flush"]
 
 
 @pytest.mark.parametrize("name", [

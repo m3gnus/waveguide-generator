@@ -289,11 +289,11 @@ falls back to starting a contained backend.
 
 Installed WG advertises its own absolute launcher argv and `ensureBackend: true`
 in `<data>/ipc/wglink/wg-capabilities.json`; clients can store that stable entry
-without knowing where the installation keeps Python. App/runtime updates keep
-the entry in place. On Windows, advertisement requires the full installer's
+without knowing where the installation keeps Python. Updates keep the entry in
+place. On Windows, advertisement requires the full installer's
 `Waveguide Generator.ensure-backend-v1` marker beside the exe and the matching
 `WG_NATIVE_ENSURE_BACKEND_V1` capability signature in the current native image.
-An app-layer update cannot publish this marker or upgrade an old native stub;
+Only the full installer publishes this marker and replaces the native stub;
 missing, unknown or stale evidence suppresses advertisement. Reinstall with a
 current full installer to enable it.
 

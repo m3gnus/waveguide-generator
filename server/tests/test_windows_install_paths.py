@@ -11,10 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from launchers import apply_update, full_installer, update_lock
-from launchers.statusapp.updater import (
-    BundleUpdateRequest, UpdateHandoffError, consume_update_request, launch_bundle_update_handoff,
-)
+from launchers import full_installer, install_paths
+from launchers.full_installer import UpdateHandoffError
 from server.tests.test_installer_install_kind_outcome import bundle, probe
 from shared.release_assets import WINDOWS_PLATFORM, windows_setup_name
 
@@ -41,8 +39,8 @@ def startup_hook_ordinary_path():
     (r"\\?\UNC\server", r"\\?\UNC\server"),
 ])
 def test_windows_ordinary_path_strips_only_drive_and_unc_forms(monkeypatch, value, expected):
-    monkeypatch.setattr(update_lock, "os", SimpleNamespace(name="nt"))
-    assert update_lock.ordinary_path(value) == expected
+    monkeypatch.setattr(install_paths, "os", SimpleNamespace(name="nt"))
+    assert install_paths.ordinary_path(value) == expected
     assert startup_hook_ordinary_path()(value) == expected
 
 
@@ -51,45 +49,20 @@ def test_windows_ordinary_path_strips_only_drive_and_unc_forms(monkeypatch, valu
     (r"\\server\share\Waveguide Generator", r"\\?\UNC\server\share\Waveguide Generator"),
     (r"\\server\share\Waveguide Generator", r"\\?\unc\server\share\Waveguide Generator"),
 ])
-def test_windows_path_strings_and_keys_agree_everywhere(monkeypatch, plain, extended):
+def test_windows_path_strings_agree_everywhere(monkeypatch, plain, extended):
     # Model only string normalization, without changing pathlib's host flavour.
-    windows_os = SimpleNamespace(name="nt", path=ntpath, fspath=os.fspath)
-    monkeypatch.setattr(update_lock, "os", windows_os)
-    monkeypatch.setattr(apply_update, "os", windows_os)
-    assert update_lock.ordinary_path(extended) == plain
-    assert update_lock.ordinary_path(plain) == plain
+    monkeypatch.setattr(install_paths, "os", SimpleNamespace(name="nt", path=ntpath, fspath=os.fspath))
+    assert install_paths.ordinary_path(extended) == plain
+    assert install_paths.ordinary_path(plain) == plain
     assert startup_hook_ordinary_path()(extended) == plain
-    assert apply_update.installation_key(Path(extended)) == apply_update.installation_key(Path(plain))
-    assert update_lock.installation_key(extended) == update_lock.installation_key(plain)
-    assert apply_update.journal_describes({"resources": plain}, Path(extended))
-    assert apply_update.journal_describes({"resources": extended}, Path(plain))
-    assert not apply_update.journal_describes({"resources": plain + "-other"}, Path(extended))
-
-
-def test_released_plain_windows_key_is_unchanged(monkeypatch):
-    # v0.3.2/v0.3.3 hashed normcase(normpath(root)), UTF-8/surrogatepass,
-    # taking the first 16 SHA-256 hex digits. This synthetic path is fixed.
-    monkeypatch.setattr(update_lock, "os", SimpleNamespace(name="nt", path=ntpath, fspath=os.fspath))
-    monkeypatch.setattr(apply_update, "os", SimpleNamespace(name="nt", path=ntpath, fspath=os.fspath))
-    plain = r"C:\Program Files\Waveguide Generator"
-    expected = hashlib.sha256(ntpath.normcase(ntpath.normpath(plain)).encode("utf-8", "surrogatepass")).hexdigest()[:16]
-    assert expected == "bcdda84f6c67b81f"
-    for root in (plain, "\\\\?\\" + plain):
-        assert apply_update.installation_key(Path(root)) == expected
 
 
 @pytest.mark.parametrize("value", ["/opt/waveguide-generator", r"\\?\C:\literal", r"\\?\UNC\literal"])
-def test_posix_path_and_key_bytes_are_unchanged(monkeypatch, value):
+def test_posix_path_bytes_are_unchanged(monkeypatch, value):
     import posixpath
 
-    monkeypatch.setattr(update_lock, "os", SimpleNamespace(name="posix", path=posixpath, fspath=os.fspath))
-    monkeypatch.setattr(apply_update, "os", SimpleNamespace(name="posix", path=posixpath, fspath=os.fspath))
-    assert update_lock.ordinary_path(value) == value
-    expected = hashlib.sha256(posixpath.normcase(posixpath.normpath(str(Path(value)))).encode("utf-8", "surrogatepass")).hexdigest()[:16]
-    assert apply_update.installation_key(Path(value)) == expected
-    physical = posixpath.realpath(value)
-    expected_lock = hashlib.sha256(posixpath.normcase(posixpath.normpath(physical)).encode("utf-8", "surrogatepass")).hexdigest()[:16]
-    assert update_lock.installation_key(value) == expected_lock
+    monkeypatch.setattr(install_paths, "os", SimpleNamespace(name="posix", path=posixpath, fspath=os.fspath))
+    assert install_paths.ordinary_path(value) == value
 
 
 windows_only = pytest.mark.skipif(os.name != "nt", reason="Windows filesystem path semantics")
@@ -125,22 +98,6 @@ def test_prefixed_probe_still_refuses_symlinked_app(tmp_path):
         pytest.skip("Creating symlinks requires Windows privileges")
     found = probe(extended(linked), WINDOWS_PLATFORM, registry_reader=lambda: str(linked.parent))
     assert found["kind"] == "unsupported" and not found["updateSupported"]
-
-
-@windows_only
-def test_plain_bridge_marker_and_journal_accept_prefixed_installation(tmp_path):
-    root, data = tmp_path / "installed", tmp_path / "data"
-    root.mkdir()
-    data.mkdir()
-    apply_update.write_transaction_open_marker(data, root, "existing-bridge")
-    marker = apply_update.read_transaction_open_marker(extended(root))
-    assert marker["installation"] == apply_update.installation_key(root)
-    assert marker["transaction"] == "existing-bridge" and "state" not in marker
-    assert apply_update._open_marker_mismatch(marker, extended(data), extended(root)) is None
-    marker["dataDir"] = ntpath.normcase(str(extended(data)))
-    assert apply_update._open_marker_mismatch(marker, data, root) is None
-    assert apply_update.journal_path(data, root) == apply_update.journal_path(data, extended(root))
-    assert update_lock.installation_key(root) == update_lock.installation_key(extended(root))
 
 
 @windows_only
@@ -183,46 +140,3 @@ def test_full_installer_prefix_aliases_compare_and_pass_plain_dir(tmp_path, monk
     with pytest.raises(UpdateHandoffError, match="different destination"):
         full_installer.consume_full_installer_request(request_path, repo_root=own_app, data_dir=data, now=1)
     assert not calls
-
-
-@windows_only
-def test_bundle_handoff_accepts_mixed_prefixes_without_allowing_escape(tmp_path, monkeypatch):
-    data = tmp_path / "data"
-    app = data / "updates" / "0.3.4" / "staged" / "app"
-    app.mkdir(parents=True)
-    request = tmp_path / "request.json"
-    payload = {"schemaVersion": 1, "kind": "apply_bundle", "version": "0.3.4",
-               "stagedAppDir": str(extended(app)), "stagedRuntimeDir": None}
-    request.write_text(json.dumps(payload))
-    assert consume_update_request(request, data_dir=data).staged_app_dir == app
-    payload["stagedAppDir"] = str(app)
-    request.write_text(json.dumps(payload))
-    assert consume_update_request(request, data_dir=extended(data)).staged_app_dir == app
-    own_app = tmp_path / "installed" / "app"
-    own_app.mkdir(parents=True)
-    (app / "launchers").mkdir()
-    (app / "launchers" / "apply_update.py").write_text("# staged helper")
-    calls = []
-    monkeypatch.setattr(full_installer.subprocess, "Popen", lambda command, **kwargs: calls.append(command))
-    launch_bundle_update_handoff(extended(own_app), BundleUpdateRequest("0.3.4", extended(app), None), 123,
-                                 environ={"WG2_DATA_DIR": str(extended(data))}, platform_name="win32")
-    assert not any("\\\\?\\" in argument for argument in calls.pop())
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    payload["stagedAppDir"] = str(extended(outside))
-    request.write_text(json.dumps(payload))
-    with pytest.raises(UpdateHandoffError):
-        consume_update_request(request, data_dir=data)
-
-
-@windows_only
-def test_staging_reclamation_compares_plain_and_prefixed_roots(tmp_path):
-    root, data = tmp_path / "installed", tmp_path / "data"
-    root.mkdir()
-    staged = data / "updates" / "0.3.4"
-    staged.mkdir(parents=True)
-    journal = {"transaction": "bridge", "operation": "update",
-               "layers": [{"staged": str(staged / "staged" / "app")}]}
-    assert apply_update.write_completion_record(data, root, journal, outcome="installed", detail="test")
-    assert apply_update.reclaim_committed_staging(extended(data), extended(root), bundle=extended(root)) == [staged]
-    assert not staged.exists()

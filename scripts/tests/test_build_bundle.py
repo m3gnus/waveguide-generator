@@ -19,7 +19,6 @@ import zipfile
 
 import pytest
 
-from launchers.apply_update import STAGING_ROOT_SUFFIX, destination_staging_root
 from launchers.macos import generate_icon
 from scripts import build_bundle, fetch_spa
 from shared import release_assets
@@ -85,6 +84,15 @@ from server.platform.instance import PORT_ENV
 from server.platform.paths import DATA_DIR_ENV, app_root
 from shared.runtime_id import compute_runtime_id, runtime_id_from_files
 from server.tests._symlinks import requires_symlinks
+
+
+#: Where releases before 0.3.6 staged an in-app layer update, beside the bundle.
+#: The uninstallers still remove that folder, so its spelling stays pinned here.
+STAGING_ROOT_SUFFIX = ".update-staging"
+
+
+def destination_staging_root(bundle: Path) -> Path:
+    return bundle.with_name(f".{bundle.name}{STAGING_ROOT_SUFFIX}")
 
 
 def _version_resource(version: tuple[int, int, int, int], resource_va: int) -> bytes:
@@ -1064,9 +1072,9 @@ def test_the_compile_command_carries_both_versions(
 
 
 def test_installer_script_pins_the_per_user_install_that_the_updater_needs() -> None:
-    """launchers/apply_update.py renames directories in place with no elevation
-    path, so a Program Files install breaks in-app updates for every non-admin
-    user -- and breaks them later, at update time, far from the installer.
+    """In-app updates run this setup as the user with no elevation path, so a
+    Program Files install breaks them for every non-admin user -- and breaks
+    them later, at update time, far from the installer.
 
     PrivilegesRequiredOverridesAllowed must stay empty too: without it /ALLUSERS
     or an elevated launch puts the tree back under Program Files.
@@ -1097,8 +1105,8 @@ def test_windows_uninstaller_removes_the_update_staging_folder_beside_the_app() 
     applied update survived an uninstall. Setup's own [UninstallDelete] entries
     cannot name it -- the folder name depends on {app}'s own directory name,
     which the wizard's directory page lets the user change -- so it has to be
-    computed in [Code], the same way launchers/apply_update.py's
-    destination_staging_root() computes it, and it must never be a wildcard.
+    computed in [Code], the same way the pre-0.3.6 layer updater's
+    destination_staging_root() computed it, and it must never be a wildcard.
     """
 
     script = (
@@ -1288,8 +1296,7 @@ def test_layer_only_builds_are_refused_as_unverified_publishable_assets(
 def test_windows_bootstrap_executes_only_for_real_no_script_launch(
     tmp_path: Path,
 ) -> None:
-    # ``recovery`` precedes ``app``: the site hook that starts everything has to
-    # be findable in the state where the app layer is the missing directory.
+    # ``recovery`` precedes ``app``: it holds the site hook that starts everything.
     expected = (
         "runtime\\Lib\nruntime\\DLLs\nruntime\\Lib\\site-packages\n"
         "recovery\napp\nimport site\n"
@@ -1821,18 +1828,6 @@ def test_windows_layout_writer_copies_launcher_dlls_layers_pth_and_icon(
     (runtime / "Lib" / "os.py").write_text("# stdlib\n", encoding="utf-8")
     (app / "APP-MANIFEST.json").write_text("{}\n", encoding="utf-8")
     _stage_backend_entry(app)
-    # The recovery layer is copied out of the checkout, so this stand-in repo
-    # root has to carry the two files it copies.
-    (tmp_path / "launchers").mkdir()
-    (tmp_path / "launchers" / "apply_update.py").write_text(
-        "# updater\n", encoding="utf-8"
-    )
-    (tmp_path / "launchers" / "bundle_recovery.py").write_text(
-        "# recovery entry\n", encoding="utf-8"
-    )
-    (tmp_path / "launchers" / "update_lock.py").write_text(
-        "# update claim\n", encoding="utf-8"
-    )
     builder = BundleBuilder(tmp_path)
 
     builder.assemble_windows_bundle(
@@ -1851,14 +1846,10 @@ def test_windows_layout_writer_copies_launcher_dlls_layers_pth_and_icon(
     assert (destination / "runtime" / "Lib" / "os.py").is_file()
     assert (destination / "app" / "APP-MANIFEST.json").is_file()
     _assert_backend_entry(destination / "app", destination / WINDOWS_LAUNCHER_NAME, "win32")
-    # Beside the two swappable layers, never inside one, with the site hook the
-    # renamed pythonw needs when ``app`` is the directory that is gone.
+    # Beside ``app``, the site hook the renamed pythonw imports, and nothing else.
     recovery = destination / "recovery"
-    assert (recovery / "apply_update.py").read_text(encoding="utf-8") == "# updater\n"
-    assert (recovery / "wg_bundle_recovery.py").read_text(encoding="utf-8") == "# recovery entry\n"
-    assert (recovery / "update_lock.py").read_text(encoding="utf-8") == "# update claim\n"
-    assert (recovery / "sitecustomize.py").is_file()
-    assert (recovery / "RECOVERY-MANIFEST.json").is_file()
+    assert sorted(path.name for path in recovery.iterdir()) == ["sitecustomize.py"]
+    assert (recovery / "sitecustomize.py").read_text(encoding="utf-8") == build_bundle.recovery_sitecustomize()
     for filename in ("python313.dll", "python3.dll", *MSVC_RUNTIME_DLLS):
         assert (destination / filename).read_bytes() == (runtime / filename).read_bytes()
 
@@ -2540,11 +2531,8 @@ def _desktop_exec_argv(entry: str) -> list[str]:
 def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """One root holding ``app``, ``runtime`` and the launcher, and nothing else.
 
-    That is the layout ``apply_update.bundle_from_app_layer`` already resolves
-    for every non-macOS platform, so the in-app updater's swap, rollback and
-    relaunch need no third rule. A nested macOS-style container here would have
-    been invisible until the first update tried to rename a directory that was
-    one level from where it looked.
+    The full installer's ``--update --prefix`` and the launcher's own root
+    resolution both rely on this one-level layout.
     """
 
     # The assembly fixture supplies native build output on every test host.
@@ -2575,9 +2563,6 @@ def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path,
         [
             "app",
             "runtime",
-            # Beside the two swappable layers, because it has to survive one of
-            # them being renamed aside mid-update.
-            "recovery",
             LINUX_LAUNCHER_NAME,
             LINUX_DESKTOP_ENTRY_NAME,
             LINUX_ICON_NAME,
@@ -2585,11 +2570,6 @@ def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path,
     )
     assert (bundle / "app" / "APP-MANIFEST.json").is_file()
     _assert_backend_entry(bundle / "app", bundle / LINUX_LAUNCHER_NAME, "linux")
-    assert (bundle / "recovery" / "wg_bundle_recovery.py").is_file()
-    assert (bundle / "recovery" / "installer-log").read_bytes() == b"fixture logger"
-    # Only Windows launches through an interpreter, so only Windows needs the
-    # site hook; a shell script and a Mach-O binary call the entry directly.
-    assert not (bundle / "recovery" / "sitecustomize.py").exists()
     assert written == [(bundle / LINUX_ICON_NAME, 512)]
     # The bit that decides whether a double-click runs the application or opens
     # it in a text editor, and the one a checkout cannot be trusted to carry.
@@ -3157,7 +3137,7 @@ def test_the_linux_uninstaller_does_not_follow_a_linked_staging_root(tmp_path: P
     """A staging root is where an update lands downloaded bytes; a symlink
     there could point anywhere the uninstalling user can reach, so it must be
     left alone rather than followed and deleted (mirrors the server's own
-    ``_is_link_or_junction`` refusal in ``server/updates/bundle.py``)."""
+    ``_is_link_or_junction`` refusal of the pre-0.3.6 layer updater)."""
 
     _linux_payload(tmp_path)
     home = tmp_path / "home"
@@ -3903,7 +3883,6 @@ def test_macos_bundle_contains_backend_entry_and_advertises_its_own_launcher(tmp
     app.mkdir()
     _stage_backend_entry(app)
     bundle = tmp_path / "WG.app"
-    monkeypatch.setattr(build_bundle, "write_recovery_layer", lambda *args, **kwargs: None)
     monkeypatch.setattr(build_bundle, "write_launcher_stub", lambda path, **kwargs: path.write_bytes(b"native entry"))
     builder.assemble_bundle(bundle, runtime_root=runtime, app_root=app, version="1.2.3")
     _assert_backend_entry(bundle / "Contents/Resources/app", bundle / "Contents/MacOS/Waveguide Generator", "darwin")

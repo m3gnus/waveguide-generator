@@ -1,8 +1,7 @@
 """The restart-approved latch (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.2).
 
-A restart is approved at the moment the handoff request is written (§4.1): by
-``BundleUpdateInstaller`` for a bundle, by ``UpdateService.request_install``
-for a checkout. From then until this process exits, nothing may start work the
+A restart is approved at the moment the handoff request is written (§4.1), by
+``InstallerUpdateService`` once the full installer is verified. From then until this process exits, nothing may start work the
 restart would end, so the routes that start installation-owned work refuse
 while the latch is set.
 
@@ -89,9 +88,8 @@ def revoke_request(path: Path) -> bool:
     """Rename a handoff request out of the launcher's reach. Returns whether it was still there.
 
     Atomic against the launcher, which reads a request and then deletes it: a
-    delete that finds the file gone hands off nothing (``consume_update_request``
-    in ``launchers/statusapp/updater.py``, and the v0.3.1 and v0.3.2 launchers
-    alike). ``False`` means the launcher already took it, so a handoff may be
+    delete that finds the file gone hands off nothing
+    (``consume_full_installer_request`` in ``launchers/full_installer.py``). ``False`` means the launcher already took it, so a handoff may be
     under way -- or, rarely, that it could not be renamed (Windows refuses
     while the launcher has it open), and then it may still be taken.
     """

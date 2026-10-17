@@ -34,7 +34,7 @@ The build refuses, correctly, on four things worth knowing before you blame it: 
 | # | Gate | Why it is here |
 |---|---|---|
 | 1 | ISCC compiles `bundle-setup.iss` with `MaxPayloadDepth` supplied by the build | A number written into the `.iss` rots the first time a dependency gets deeper. Check the compiler line shows a measured `/DMaxPayloadDepth=`. |
-| 2 | Install lands under `{localappdata}\Programs`, never Program Files | `launchers/apply_update.py` renames directories in place with no elevation path, so a Program Files install breaks in-app updates later, far from the installer. |
+| 2 | Install lands under `{localappdata}\Programs`, never Program Files | In-app updates run setup as the user with no elevation path, so a Program Files install breaks them later, far from the installer. |
 | 3 | A silent run exits with a code rather than sitting on a modal box | `/SUPPRESSMSGBOXES` does not cover script dialogs; `InitializeSetup` refuses an over-long `/DIR` without one. `/WAITPID` timeout writes a failed outcome and calls `Abort` at `ssInstall`; the interactive message is guarded by `not WizardSilent()`. A blocking `MessageBoxW` has stalled CI here before, invisibly and at 0%. |
 | 4 | An over-long install root is refused, not attempted | The failure this prevents is a half-extracted tree and a "corrupt download" support thread. |
 | 5 | The installed payload carries no mark of the web | This is the claim the installer exists to make. Test it properly: mark the setup executable `ZoneId=3` first, or the result is vacuous. |

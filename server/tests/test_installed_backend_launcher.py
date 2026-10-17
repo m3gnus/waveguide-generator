@@ -25,7 +25,6 @@ def test_launcher_keeps_contained_fallback_disabled(tmp_path, monkeypatch, capsy
         assert allow_contained is False
         return handle(root)
     monkeypatch.setattr(entry, "ensure_backend", ensure)
-    monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
     assert entry.main(["--data-dir", str(tmp_path)]) == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
 
@@ -33,7 +32,6 @@ def test_launcher_keeps_contained_fallback_disabled(tmp_path, monkeypatch, capsy
 @pytest.mark.parametrize("contained", [False, True])
 def test_launcher_reports_adopted_owner_lifetime_only_when_contained(tmp_path, monkeypatch, capsys, contained):
     found = replace(handle(tmp_path), lifetime="contained" if contained else "headless")
-    monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
     monkeypatch.setattr(backend_owner, "_discover", lambda root: found)
     monkeypatch.setattr(backend_owner, "_spawn", lambda *a, **kw: pytest.fail("must adopt owner"))
     assert entry.main(["--data-dir", str(tmp_path)]) == 0
@@ -52,7 +50,6 @@ def test_launcher_reports_adopted_owner_lifetime_only_when_contained(tmp_path, m
 def test_entry_finds_or_starts_same_owner(tmp_path, monkeypatch, capsys, running):
     data = tmp_path / "data folder"
     calls = []
-    monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
     monkeypatch.setenv("WG2_DATA_DIR", str(data))
     monkeypatch.setenv("WG2_PORT", "3199")
     found = handle(data)
@@ -99,7 +96,6 @@ def test_entry_errors_are_one_json_line(tmp_path, monkeypatch, capsys, error, co
         raise error("actionable reason")
 
     monkeypatch.setattr(entry, "ensure_backend", fail)
-    monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
     assert entry.main(["--data-dir", str(tmp_path)]) == code
     assert json.loads(capsys.readouterr().out) == {
         "ok": False,
@@ -121,7 +117,6 @@ def test_status_and_headless_share_start_argv_and_environment(tmp_path, monkeypa
         server_args=("--data-dir", str(tmp_path / "data")),
         environ=env,
     )
-    monkeypatch.setattr(controller, "update_staging_root", lambda: tmp_path / "staging")
     args = backend_start.backend_argv(
         repo_root=tmp_path, python_executable=python, server_args=controller.server_args, port=3199
     )
@@ -132,15 +127,10 @@ def test_status_and_headless_share_start_argv_and_environment(tmp_path, monkeypa
         str(os.getpid()),
     ]
     assert args[0] == str(python)  # Preserve the venv symlink.
-    assert controller._server_environment() == backend_start.backend_environment(
-        env, staging_root=tmp_path / "staging"
-    )
+    assert controller._server_environment() == backend_start.backend_environment(env)
     assert backend_start.backend_environment(env)["KEEP"] == "yes"
-    from launch.serve_options import UPDATE_STAGING_ROOT_ENV
-
-    assert UPDATE_STAGING_ROOT_ENV not in backend_start.backend_environment(
-        {UPDATE_STAGING_ROOT_ENV: "untrusted"}
-    )
+    # A pre-0.3.6 launcher's staging root never reaches the server.
+    assert "WG2_UPDATE_STAGING_ROOT" not in backend_start.backend_environment(env)
 
 
 @pytest.mark.parametrize("port", [None, 3199])
@@ -228,7 +218,6 @@ def test_cancellation_reuses_owner_cleanup(tmp_path, monkeypatch, capsys, signum
 
     monkeypatch.setattr(backend_owner, "_discover", discover)
     monkeypatch.setattr(backend_owner, "_spawn", lambda *args: (child, tmp_path / "start.log"))
-    monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
 
     def observe(root):
         signal.raise_signal(signum)
@@ -253,7 +242,6 @@ def test_cancellation_reuses_owner_cleanup(tmp_path, monkeypatch, capsys, signum
 
 @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
 def test_cancel_while_waiting_for_start_lock_never_spawns(tmp_path, monkeypatch, capsys, signum):
-    monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
     monkeypatch.setattr(backend_owner, "_discover", lambda root: None)
     monkeypatch.setattr(
         backend_owner,

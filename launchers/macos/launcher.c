@@ -52,11 +52,6 @@ static int is_directory(const char *path) {
     return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
 }
 
-static int is_regular_file(const char *path) {
-    struct stat info;
-    return stat(path, &info) == 0 && S_ISREG(info.st_mode);
-}
-
 static int recover_installer(const char *bundle, const char *directory, const char *entry) {
     struct stat info;
     if (lstat(directory, &info) != 0 || !S_ISDIR(info.st_mode)) return 4;
@@ -73,73 +68,6 @@ static int recover_installer(const char *bundle, const char *directory, const ch
     do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
     if (waited < 0 || !WIFEXITED(status)) return 4;
     return WEXITSTATUS(status);
-}
-
-/*
- * Reach recovery when a layer is the thing that is missing.
- *
- * The updater renames each layer aside and puts the staged copy in its place,
- * one layer at a time. Killed between those two renames it leaves either no
- * `app` or no `runtime` -- and everything this launcher used to be able to do
- * next lived in one of them: the application in `app`, and the interpreter that
- * runs it in `runtime`. So the recovery route is staged beside both, at
- * Resources/recovery, and this runs it with whichever of runtime/ and
- * runtime.previous/ survived. Nothing is taken from PATH or from the user's
- * data directory; every path below is built from the resolved bundle and from
- * nothing else.
- *
- * Run as a child rather than exec'd, because the launcher still has a job
- * afterwards: if recovery put the layers back, this start continues into them.
- * Returns the child's exit status, which is the verdict -- a directory back in
- * place is not a completed recovery, and the entry knows the difference.
- */
-static int attempt_recovery(const char *resources, int argc, char *argv[]) {
-    char entry[PATH_MAX];
-    snprintf(entry, sizeof(entry), "%s/recovery/wg_bundle_recovery.py", resources);
-    if (!is_regular_file(entry)) {
-        return 0;
-    }
-
-    char interpreter[PATH_MAX];
-    snprintf(interpreter, sizeof(interpreter), "%s/runtime/bin/python3.13", resources);
-    if (access(interpreter, X_OK) != 0) {
-        snprintf(interpreter, sizeof(interpreter),
-                 "%s/runtime.previous/bin/python3.13", resources);
-        if (access(interpreter, X_OK) != 0) {
-            return 0;
-        }
-    }
-
-    /* interpreter entry --resources <resources> -- [caller's arguments...] */
-    char **args = calloc((size_t)argc + 6, sizeof(char *));
-    if (args == NULL) {
-        return 0;
-    }
-    int next = 0;
-    args[next++] = interpreter;
-    args[next++] = entry;
-    args[next++] = "--resources";
-    args[next++] = (char *)resources;
-    args[next++] = "--";
-    for (int i = 1; i < argc; i++) {
-        args[next++] = argv[i];
-    }
-    args[next] = NULL;
-
-    pid_t child = fork();
-    if (child == 0) {
-        execv(interpreter, args);
-        _exit(127);
-    }
-    free(args);
-    if (child < 0) {
-        return 0;
-    }
-    int status = 0;
-    while (waitpid(child, &status, 0) < 0) {
-        /* Interrupted by a signal; the child is still the one to wait for. */
-    }
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -228,19 +156,13 @@ int main(int argc, char *argv[]) {
         setenv("NUMBA_CACHE_DIR", numba, 1);
     }
 
-    /* Either layer can be the missing one, because the updater takes them one
-     * at a time: killed inside the runtime's turn, `app` is the new generation
-     * and there is no interpreter to run it with. Checking only for `app` would
-     * walk straight into an exec of a file that is not there. */
+    /* Both layers must be present: checking only for `app` would walk
+     * straight into an exec of an interpreter that is not there. */
     if (!is_directory(app_root) || access(interpreter, X_OK) != 0) {
-        if (!attempt_recovery(resources, argc, argv)
-            || !is_directory(app_root)
-            || access(interpreter, X_OK) != 0) {
-            fail("this installation is incomplete and could not be recovered; "
-                 "reinstall this version over the top -- your designs and "
-                 "settings live outside the application and are not touched");
-            return EXIT_NO_EXEC;
-        }
+        fail("this installation is incomplete; reinstall this version over the "
+             "top -- your designs and settings live outside the application and "
+             "are not touched");
+        return EXIT_NO_EXEC;
     }
 
     if (chdir(app_root) != 0) {

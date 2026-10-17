@@ -173,7 +173,6 @@ def test_launcher_startup_preserves_data_override_intent(
     monkeypatch.setattr(serve, "setup_logging", lambda *_args: None)
     monkeypatch.setattr(serve, "flush_logs", lambda: None)
     monkeypatch.setattr(serve, "_release_interface_error", lambda: None)
-    monkeypatch.setattr(serve, "_no_gui_healthy_start", lambda *_args: None)
     monkeypatch.setattr(serve, "_start_temporary_session", lambda: None)
     monkeypatch.setattr(serve, "_start_beat_cpu_provisioning", lambda: None)
     monkeypatch.setattr(serve, "harden_console", lambda *_args: None)

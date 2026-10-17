@@ -39,7 +39,6 @@ def test_default_admission_migrates_before_lock_and_preserves_gui_arguments(tmp_
     legacy = root.with_name("WaveguideGenerator2")
     legacy.mkdir(parents=True)
     (legacy / "old-settings").write_text("retained")
-    monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
     controller = StatusController(environ=dict(os.environ))
     gui_args = controller._command(3100, tmp_path / "control")
 
@@ -68,7 +67,7 @@ def test_default_admission_runs_supported_app_with_gui_workspace_defaults(tmp_pa
     if legacy_exports:
         (exports / "old-run").mkdir(parents=True)
     monkeypatch.setattr(app_module, "LEGACY_WORKSPACE_DIR", exports)
-    for name in ("setup_logging", "flush_logs", "_release_interface_error", "_no_gui_healthy_start",
+    for name in ("setup_logging", "flush_logs", "_release_interface_error",
                  "_start_temporary_session", "_start_beat_cpu_provisioning", "harden_console"):
         monkeypatch.setattr(serve, name, lambda *args: None)
     monkeypatch.setattr(serve, "InstanceLock", lambda *args: SimpleNamespace(
@@ -96,7 +95,6 @@ def test_default_admission_runs_supported_app_with_gui_workspace_defaults(tmp_pa
     legacy_data = root.with_name("WaveguideGenerator2")
     root.rename(legacy_data)
     (legacy_data / "retained").write_text("old settings")
-    monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
     monkeypatch.setattr(backend_owner, "_discover", lambda *args: None)
     def start(data, argv, deadline, env):
         with monkeypatch.context() as patch:
@@ -143,7 +141,6 @@ def test_started_default_backend_health_workspace_and_migration_equal_gui(tmp_pa
 
     monkeypatch.setattr(backend_owner, "_spawn", spawn)
     monkeypatch.setattr(entry, "backend_argv", argv)
-    monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
     real_ensure = backend_owner.ensure_backend
     monkeypatch.setattr(entry, "ensure_backend", lambda *args, **kwargs: real_ensure(*args, timeout=25, **kwargs))
     control = tmp_path / "stop-gui"
@@ -203,7 +200,6 @@ def test_ensure_catches_all_start_exceptions_as_one_json_line(tmp_path, monkeypa
     def fail(*args, **kwargs):
         raise error
     monkeypatch.setattr(entry, "ensure_backend", fail)
-    monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
     assert entry.main(["--data-dir", str(tmp_path)]) == 5
     result = capsys.readouterr()
     assert result.err == ""
@@ -341,7 +337,6 @@ def _assert_breakaway_refusal(tmp_path, monkeypatch, capsys, *, launcher):
     monkeypatch.setattr(backend_owner, "_discover", lambda *args: None)
     if launcher:
         monkeypatch.setattr(entry, "backend_argv", lambda **kwargs: argv)
-        monkeypatch.setattr(entry, "resolve_bundle_paths", lambda *args: None)
         assert entry.main(["--data-dir", str(tmp_path)]) == 5
         result = capsys.readouterr()
         assert result.err == ""

@@ -7,8 +7,9 @@ import os
 from pathlib import Path
 import sys
 
-from launch.serve_options import UPDATE_STAGING_ROOT_ENV
 from server.platform.paths import app_root
+
+LEGACY_UPDATE_STAGING_ROOT_ENV = "WG2_UPDATE_STAGING_ROOT"
 
 
 def backend_argv(
@@ -51,18 +52,16 @@ def backend_argv(
 
 
 def backend_environment(
-    environ: Mapping[str, str], *, staging_root: Path | None = None,
-    data_dir: Path | None = None,
+    environ: Mapping[str, str], *, data_dir: Path | None = None,
 ) -> dict[str, str]:
     """Preserve inherited overrides, adding a data override only when supplied."""
     environment = dict(environ)
-    environment.pop(UPDATE_STAGING_ROOT_ENV, None)
+    # Releases before 0.3.6 told their server where to stage a layer update.
+    environment.pop(LEGACY_UPDATE_STAGING_ROOT_ENV, None)
     environment["WG2_NO_BROWSER"] = "1"
     environment["PYTHONUNBUFFERED"] = "1"
     if data_dir is not None:
         environment["WG2_DATA_DIR"] = str(data_dir)
-    if staging_root is not None:
-        environment[UPDATE_STAGING_ROOT_ENV] = str(staging_root)
     return environment
 
 

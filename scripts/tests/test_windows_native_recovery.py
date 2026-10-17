@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import importlib.util
 import os
 from pathlib import Path
 import queue
@@ -183,15 +182,6 @@ def test_fixture_sharing_gate_is_bounded_and_missing_files_fail(tmp_path, monkey
         _wait_for_fixture_files([target], timeout=0)
 
 
-def _old_receiver():
-    spec = importlib.util.spec_from_file_location("wg_v032_apply_update", ROOT / "scripts/tests/fixtures/windows_v032/apply_update.py")
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 def test_compiled_source_changes_shared_runtime_identity(tmp_path: Path) -> None:
     source = tmp_path / build_bundle.WINDOWS_NATIVE_SOURCE
     source.parent.mkdir(parents=True)
@@ -205,58 +195,6 @@ def test_compiled_source_changes_shared_runtime_identity(tmp_path: Path) -> None
     second = build_bundle.runtime_recipe(tmp_path)
     hook.write_bytes(b"changed hook")
     assert second != build_bundle.runtime_recipe(tmp_path)
-
-
-def test_manifest_bridge_refreshes_both_native_entry_and_worker_python(tmp_path: Path) -> None:
-    root = tmp_path / "WG"
-    runtime = root / "runtime"
-    runtime.mkdir(parents=True)
-    (root / "Waveguide Generator.exe").write_bytes(b"old pythonw")
-    entries = []
-    for source, destination in build_bundle.windows_launcher_files():
-        (runtime / source).write_bytes(source.encode())
-        entries.append({"source": source, "destination": destination})
-    (runtime / "RUNTIME-MANIFEST.json").write_text(json.dumps({"launcherFiles": entries}))
-    _old_receiver().refresh_launcher_files(root)
-    assert (root / "Waveguide Generator.exe").read_bytes() == b"wg-native.exe"
-    assert (root / "wg-python.exe").read_bytes() == b"pythonw.exe"
-    assert (root / "Waveguide Generator.exe.previous").read_bytes() == b"old pythonw"
-    assert all("/" not in e["destination"] and "\\" not in e["destination"] for e in entries)
-
-
-@pytest.mark.parametrize("stop_after", range(len(build_bundle.windows_launcher_files())))
-def test_exact_old_receiver_death_between_publications_never_exposes_native_without_dependencies(tmp_path: Path,
-                                                                                                  stop_after: int) -> None:
-    class ReceiverDeath(BaseException):
-        pass
-
-    root = tmp_path / "WG"
-    runtime = root / "runtime"
-    runtime.mkdir(parents=True)
-    public = root / "Waveguide Generator.exe"
-    public.write_bytes(b"previous pythonw")
-    entries = []
-    for source, destination in build_bundle.windows_launcher_files():
-        (runtime / source).write_bytes(source.encode())
-        entries.append({"source": source, "destination": destination})
-    (runtime / "RUNTIME-MANIFEST.json").write_text(json.dumps({"launcherFiles": entries}))
-    published = 0
-
-    def rename(source, target):
-        nonlocal published
-        source.rename(target)
-        if source.parent.name == ".launcher-update":
-            published += 1
-            if published == stop_after + 1:
-                raise ReceiverDeath  # bypass caught-error rollback like process death
-
-    with pytest.raises(ReceiverDeath):
-        _old_receiver().refresh_launcher_files(root, renamer=rename)
-    if public.read_bytes() == b"wg-native.exe":
-        for source, destination in build_bundle.windows_launcher_files()[:-1]:
-            assert (root / destination).read_bytes() == source.encode()
-    else:
-        assert public.read_bytes() == b"previous pythonw"
 
 
 # Only the disposable test helper gets tracing; shipped launcher bytes stay intact.
@@ -725,7 +663,7 @@ def test_malformed_journal_never_touches_installed_files(native: Path, tmp_path:
 
 
 def _host_python_old_hook(root: Path) -> None:
-    """Real host interpreter plus exact v0.3.2 hook bytes, not a release bundle."""
+    """Real host interpreter plus this build's site hook and bootstrap, not a release bundle."""
     base = Path(sys.base_prefix)
     python = base / "python.exe"
     assert python.is_file()
@@ -747,15 +685,11 @@ def _host_python_old_hook(root: Path) -> None:
     shutil.copytree(base / "Lib", root / "runtime/Lib", copy_function=link_or_copy,
                     ignore=shutil.ignore_patterns("__pycache__", "site-packages", "test", "ensurepip", "turtledemo"))
     shutil.copytree(base / "DLLs", root / "runtime/DLLs", copy_function=link_or_copy)
-    fixture = ROOT / "scripts/tests/fixtures/windows_v032"
-    for name in ("Waveguide Generator._pth",):
-        shutil.copy2(fixture / name, root / name)
+    (root / build_bundle.WINDOWS_PTH_NAME).write_text(build_bundle.windows_pth(), encoding="utf-8", newline="\n")
     (root / "wg-python._pth").unlink()
-    shutil.copy2(fixture / "wg_desktop_bootstrap.py", root / "app/wg_desktop_bootstrap.py")
-    shutil.copy2(fixture / "sitecustomize.py", root / "recovery/sitecustomize.py")
-    for source, target in (("bundle_recovery.py", "wg_bundle_recovery.py"),
-                           ("apply_update.py", "apply_update.py"), ("update_lock.py", "update_lock.py")):
-        shutil.copy2(ROOT / "launchers" / source, root / "recovery" / target)
+    (root / "app/wg_desktop_bootstrap.py").write_text(
+        build_bundle.windows_desktop_bootstrap(), encoding="utf-8", newline="\n")
+    build_bundle.write_windows_site_hook(root)
     (root / "app/launchers").mkdir()
     (root / "app/launchers/__init__.py").write_text("")
     (root / "app/launchers/desktop.py").write_text(
@@ -912,23 +846,6 @@ def test_changed_hook_rollback_then_next_setup_is_recognised(changed_natives, tm
     assert _entry(b2, root) == 0  # neither previous sidecar nor runtime matches B2
     _run_admitted(root)
     assert (root / ".native-start/sitecustomize.py").read_bytes() == b2_hook
-
-
-def test_exact_v032_bridge_can_swap_runtime_before_new_hook_admission(changed_natives, tmp_path: Path) -> None:
-    (b, b_hook), (b1, b1_hook), _ = changed_natives
-    root, _ = _old_root(tmp_path, b)
-    _host_python_old_hook(root)
-    assert _entry(b, root) == 0
-    (root / "runtime/wg-startup-hook.py").write_bytes(b_hook)
-    _run_admitted(root)
-    (root / "runtime/wg-startup-hook.py").write_bytes(b1_hook)
-    (root / "runtime/wg-native.exe").write_bytes(b1.read_bytes())
-    (root / "runtime/RUNTIME-MANIFEST.json").write_text(json.dumps({
-        "launcherFiles": [{"source": "wg-native.exe", "destination": "Waveguide Generator.exe"}]}))
-    _old_receiver().refresh_launcher_files(root)
-    assert (root / ".native-start/sitecustomize.py").read_bytes() == b_hook
-    _run_admitted(root)
-    assert (root / ".native-start/sitecustomize.py").read_bytes() == b1_hook
 
 
 def test_interrupted_entry_publication_old_image_accepts_recorded_new_hook(changed_natives, tmp_path: Path) -> None:

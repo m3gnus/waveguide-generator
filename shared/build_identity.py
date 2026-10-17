@@ -120,6 +120,19 @@ def _probed_identity(root: Path) -> tuple[str | None, bool, str] | None:
     return commit, bool(status), "git"
 
 
+def app_manifest_identity(layer: Path) -> dict[str, str | None]:
+    """The ``(version, commit, runtimeId)`` an app layer's ``APP-MANIFEST.json`` records.
+
+    A missing or unreadable manifest gives an identity of unknowns.
+    """
+
+    payload = _read_json(Path(layer) / APP_MANIFEST_NAME) or {}
+    return {
+        field: value if isinstance(value := payload.get(field), str) and value else None
+        for field in ("version", "commit", "runtimeId")
+    }
+
+
 def build_identity(root: Path | None = None) -> dict[str, Any]:
     """Resolve version, commit and provenance for the running build."""
 

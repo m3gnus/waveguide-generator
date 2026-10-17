@@ -48,30 +48,9 @@ from launchers.statusapp.controller import (
     StatusSnapshot,
     frontend_ready,
 )
-from launchers.statusapp.healthy_start import (
-    cleanup_holding_directory,
-    previous_generation_paths,
-    report_unconfirmed_start,
-    resolve_bundle_paths,
-)
 from launchers.macoswindow import install_custom_frame as install_macos_frame
 from launchers.windowframe import enable_non_client_regions, install_custom_frame
-from launchers.apply_update import (
-    ApplyUpdateError,
-    append_update_log,
-    begin_rollback_transaction,
-    layer_runtime_ids,
-    recover_transaction,
-    repair_bundle,
-    restore_previous_generation,
-    rollback_previous_layers,
-)
-from launchers.statusapp.updater import (
-    BundleUpdateRequest,
-    UpdateHandoffError,
-    launch_rollback_handoff,
-)
-from launchers.full_installer import FullInstallerRequest
+from launchers.full_installer import UpdateHandoffError
 
 
 WINDOW_TITLE = "Waveguide Generator"
@@ -93,15 +72,6 @@ BACKEND_LOST = (
     "{reason}\n\n"
     "The window is left open so you can copy out anything you still need. "
     "Close and reopen Waveguide Generator to carry on working."
-)
-ROLLBACK_HANDOFF_RESULT = (
-    "The previous version is being restored by a separate helper and will "
-    "reopen by itself. If it does not, review update.log in the application "
-    "data log directory before changing the installation."
-)
-ROLLBACK_FAILED_RESULT = (
-    "Automatic rollback failed. Review update.log in the application "
-    "data log directory before changing the bundle."
 )
 PYWEBVIEW_REPAIR = (
     "Install the desktop dependency with pip from server/requirements-runtime.txt "
@@ -619,54 +589,15 @@ class DesktopWindow:
         #: explain it.
         self._custom_frame: object | None = None
         self._hwnd: int | None = None
-        self._startup_snapshot: StatusSnapshot | None = None
         self._exit_code = 0
         self._backend_loss_reported = False
         #: Retained so a caller -- in practice a test -- can join the one-shot
         #: reporting thread instead of racing it.
         self._loss_report: threading.Thread | None = None
 
-    def _bundle_paths(self) -> tuple[Path, Path, Path] | None:
+    def _is_bundle(self) -> bool:
         environment = getattr(self.controller, "environ", os.environ)
-        if environment.get("WG2_BUNDLE") != "1":
-            return None
-        try:
-            app_layer = getattr(self.controller, "repo_root")
-            data_dir = getattr(self.controller, "data_dir")
-        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
-            return None
-        return resolve_bundle_paths(environment, app_layer, data_dir)
-
-    @staticmethod
-    def _previous_generation_paths(resources: Path) -> list[Path]:
-        """Return layer and launcher backups that belong to one pending update."""
-
-        return previous_generation_paths(resources)
-
-    def _finish_healthy_bundle_update(self, snapshot: StatusSnapshot) -> None:
-        """Settle this start's update transaction, through the controller.
-
-        ``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.5. The commit and
-        the scoped cleanup are the controller's (``healthy_start.py``), so the
-        window, browser mode and ``--no-gui`` write the same ``update.log``
-        lines; this only decides when to ask.
-
-        ``snapshot`` is the one that ended ``_wait_for_frontend``: the first
-        that satisfied the frontend-ready predicate, and deliberately nothing
-        stricter. An extra condition would be one that loop never promised to
-        satisfy, and both times that happened the cleanup was silently skipped
-        -- a gigabyte of rollback material and downloads that never came back.
-        The window asks only once pywebview's native event loop is running, or
-        once the browser fallback has opened, because HTTP readiness alone is
-        not enough to discard rollback material; ``main`` builds its controller
-        with ``settle_on_ready=False`` so the controller waits for this call.
-        """
-
-        self.controller.settle_update_transaction(snapshot, report=self._report_bundle_failure)
-
-    @staticmethod
-    def _cleanup_holding_directory(bundle: Path) -> Path:
-        return cleanup_holding_directory(bundle)
+        return environment.get("WG2_BUNDLE") == "1"
 
     @staticmethod
     def _report_bundle_failure(message: str, *, detail: str | None = None) -> None:
@@ -694,273 +625,15 @@ class DesktopWindow:
             _show_bundle_failure_dialog(message)
 
     def _report_desktop_failure(self, message: str, *, detail: str | None = None) -> None:
-        if self._bundle_paths() is None:
-            _report_startup_failure(message, detail=detail)
-        else:
+        if self._is_bundle():
             self._report_bundle_failure(message, detail=detail)
-
-    @staticmethod
-    def _layer_runtime_ids(resources: Path) -> tuple[str | None, str | None]:
-        """Return (the runtime the app requires, the runtime installed).
-
-        The updater asks the same question while it is writing the transaction
-        journal, from a process that has no application layer to import, so the
-        reader lives beside the swap itself and both callers use that one.
-        """
-
-        return layer_runtime_ids(resources)
-
-    @classmethod
-    def _layers_disagree(cls, resources: Path) -> bool:
-        """Report a live app and runtime that came from different generations.
-
-        Unreadable or absent manifests are not treated as disagreement: an older
-        bundle predates these fields, and refusing to start over a missing file
-        would be worse than the mismatch this is looking for.
-        """
-
-        required, installed = cls._layer_runtime_ids(resources)
-        return required is not None and installed is not None and required != installed
-
-    def _roll_back_mixed_generation(self, resources: Path, data_dir: Path) -> bool:
-        """Undo an update that was interrupted between its two layer renames."""
-
-        def log(message: str) -> None:
-            append_update_log(data_dir, message)
-
-        log("The installed app and runtime are from different updates; rolling back.")
-        if not self._previous_generation_paths(resources):
-            # Nothing to restore: report rather than start a combination the app
-            # never shipped, because the failure it produces would arrive later
-            # and look like something else entirely.
-            self._report_bundle_window_failure(
-                "Waveguide Generator cannot start: an interrupted update left the "
-                "application and its runtime from different versions, and there is "
-                "no previous version to restore. Reinstall to repair it."
-            )
-            return False
-        if rollback_previous_layers(resources, log=log):
-            # The path beside this one has always re-sealed the bundle after a
-            # restore; this one returned without doing so, which on macOS leaves
-            # an ad-hoc signature that no longer covers the contents it names.
-            paths = self._bundle_paths()
-            if paths is not None:
-                try:
-                    repair_bundle(paths[0], platform_name=sys.platform, log=log)
-                except ApplyUpdateError as exc:
-                    self._report_bundle_failure(
-                        "Waveguide Generator restored the previous version after an "
-                        f"interrupted update, but could not sign and verify it: {exc}"
-                    )
-                    return False
-            return True
-        self._report_bundle_window_failure(
-            "Waveguide Generator cannot start: an interrupted update left the "
-            "application and its runtime from different versions, and restoring "
-            "the previous version failed. Reinstall to repair it."
-        )
-        return False
-
-    def _recover_interrupted_bundle_update(self) -> bool:
-        """Decide any interrupted update before the server is allowed to start.
-
-        The journal decides it when there is one, because only the journal knows
-        that a transaction was in flight at all. The two manifest/directory
-        checks below stay as they were, and are not redundant: a bundle updated
-        by a release that predates the journal has none, and neither does one
-        whose data directory a user has moved or emptied.
-        """
-
-        paths = self._bundle_paths()
-        if paths is None:
-            return True
-        bundle, resources, data_dir = paths
-
-        def log(message: str) -> None:
-            append_update_log(data_dir, message)
-
-        outcome = recover_transaction(
-            data_dir=data_dir,
-            resources=resources,
-            bundle=bundle,
-            platform_name=sys.platform,
-            log=log,
-        )
-        if outcome.action == "failed":
-            self._report_bundle_failure(
-                "Waveguide Generator could not finish recovering an interrupted update: "
-                f"{outcome.detail} Review update.log before changing the installation."
-            )
-            return False
-        if outcome.action in {"completed", "rolled-back"}:
-            return True
-
-        missing = [
-            resources / name
-            for name in ("runtime", "app")
-            if not (resources / name).is_dir()
-        ]
-        if not missing:
-            # Both layers exist, which is not the same as both belonging to one
-            # generation. An update interrupted between its two renames leaves a
-            # complete new app on the complete old runtime; nothing is missing,
-            # and the app would then start against a runtime it never declared.
-            # The manifests say which generation each layer is, so ask them.
-            if self._layers_disagree(resources):
-                return self._roll_back_mixed_generation(resources, data_dir)
-            return True
-        unavailable = [
-            live
-            for live in missing
-            if not live.with_name(live.name + ".previous").is_dir()
-        ]
-        if unavailable:
-            self._report_bundle_failure(
-                "Waveguide Generator detected an interrupted update, but no previous layer is "
-                "available for: " + ", ".join(str(path) for path in unavailable)
-            )
-            return False
-        if not rollback_previous_layers(resources):
-            self._report_bundle_failure(
-                "Waveguide Generator detected an interrupted update, but could not restore every "
-                "required layer and launcher file. Review update.log before changing the bundle."
-            )
-            return False
-        try:
-            repair_bundle(bundle, platform_name=sys.platform)
-        except ApplyUpdateError as exc:
-            message = (
-                "Waveguide Generator restored files from an interrupted update, but could not "
-                f"sign and verify the recovered bundle: {exc}"
-            )
-            append_update_log(data_dir, message)
-            self._report_bundle_failure(message)
-            return False
-        append_update_log(
-            data_dir,
-            "Recovered missing live bundle layers from an interrupted update before startup.",
-        )
-        return True
-
-    def _report_bundle_window_failure(self, message: str) -> None:
-        """Rollback a failed bundle window start, then report the exact result."""
-
-        paths = self._bundle_paths()
-        if paths is None:
+        elif detail is None:
             _report_startup_failure(message)
-            return
-        bundle, resources, data_dir = paths
-        if not self._previous_generation_paths(resources):
-            self._report_bundle_failure(message)
-            return
-        self.controller.close()
-
-        def log(entry: str) -> None:
-            append_update_log(data_dir, entry)
-
-        if self._hand_off_rollback(bundle, data_dir, log):
-            # The helper waits for this process to exit before it touches
-            # anything, so the dialog below can keep the window open for as
-            # long as the user leaves it there.
-            self._report_bundle_failure(f"{message}\n\n{ROLLBACK_HANDOFF_RESULT}")
-            return
-
-        try:
-            begin_rollback_transaction(
-                data_dir=data_dir,
-                bundle=bundle,
-                resources=resources,
-                platform_name=sys.platform,
-                reason="the updated version could not open its window",
-                reseal=(
-                    (lambda: repair_bundle(bundle, platform_name=sys.platform, log=log))
-                    if sys.platform == "darwin"
-                    else None
-                ),
-            )
-        except ApplyUpdateError as exc:
-            log(f"The rollback could not be recorded, and was not started: {exc}")
-            self._report_bundle_failure(f"{message}\n\n{ROLLBACK_FAILED_RESULT}")
-            return
-        # Restore, re-seal, then record -- the ordering lives in
-        # restore_previous_generation so all three paths that start a rollback
-        # share it. This one published "rolled-back" before its reseal, so a
-        # failed reseal left a terminal record over an unsealed bundle and the
-        # next start read "already decided" instead of retrying.
-        restore = restore_previous_generation(
-            resources,
-            bundle,
-            platform_name=sys.platform,
-            log=log,
-            data_dir=data_dir,
-        )
-        if not restore.attempted:
-            result = (
-                "The rollback was not started because it could not be recorded, so "
-                "nothing was changed. Reopen Waveguide Generator: the next start "
-                "repairs the installation from the record the update already wrote."
-            )
-        elif not restore.restored:
-            result = ROLLBACK_FAILED_RESULT
-        elif restore.seal_error is not None:
-            result = (
-                "The previous files were restored, but the bundle could not be signed and "
-                f"verified: {restore.seal_error}. Automatic recovery is incomplete."
-            )
         else:
-            result = "The previous version was restored. Reopen Waveguide Generator."
-        self._report_bundle_failure(f"{message}\n\n{result}")
-
-    def _hand_off_rollback(
-        self,
-        bundle: Path,
-        data_dir: Path,
-        log: Callable[[str], None],
-    ) -> bool:
-        """Start the detached helper that restores the previous version.
-
-        Windows will happily rename a directory whose DLLs are mapped, but it
-        refuses to delete one, and this process has the failed ``runtime`` and
-        ``app`` mapped into it. Rolling back from here left the launcher files
-        beside the runtime unrestored -- a 0.2.5 runtime under a 0.2.6
-        ``vcruntime140.dll`` -- so the work moves to a process that outlives
-        this one and starts only once these mappings are gone.
-
-        macOS has no such rule and its in-process rollback is the tested path,
-        so the handoff is Windows-only; a handoff that cannot start falls back
-        to it as well, because a rollback that happens here is still far better
-        than none.
-        """
-
-        if sys.platform != "win32":
-            return False
-        try:
-            command = launch_rollback_handoff(
-                bundle,
-                data_dir,
-                os.getpid(),
-                environ=dict(getattr(self.controller, "environ", os.environ)),
-                server_args=tuple(getattr(self.controller, "server_args", ())),
-            )
-        except (UpdateHandoffError, OSError) as exc:
-            log(
-                f"Could not start the detached rollback helper: {exc} "
-                "Rolling back in this process instead."
-            )
-            return False
-        log(f"Started the detached rollback helper: {' '.join(command)}")
-        return True
+            _report_startup_failure(message, detail=detail)
 
     def _report_bundle_startup_failure(self, snapshot: StatusSnapshot, cause: str) -> None:
-        # This start cannot confirm the build. Say so in update.log with the
-        # line every mode writes (contract §4.5), before the rollback that
-        # follows decides the transaction another way.
-        report_unconfirmed_start(
-            self._bundle_paths(),
-            f"the desktop window's local interface {cause} "
-            f"(backend: {snapshot.backend.reason})",
-        )
-        self._report_bundle_window_failure(self._failure_message(snapshot, cause))
+        self._report_desktop_failure(self._failure_message(snapshot, cause))
 
     @staticmethod
     def _failure_message(snapshot: StatusSnapshot, cause: str) -> str:
@@ -973,10 +646,8 @@ class DesktopWindow:
 
     @staticmethod
     def _frontend_ready(snapshot: StatusSnapshot) -> bool:
-        # The controller's own predicate, so the window waits on exactly the
-        # evidence an update transaction is settled on. WARNING, a stale build
-        # being served, counts: the desktop window has no lamps, so it shows the
-        # interface.
+        # The controller's own predicate. WARNING, a stale build being served,
+        # counts: the desktop window has no lamps, so it shows the interface.
         return frontend_ready(snapshot)
 
     @staticmethod
@@ -988,8 +659,6 @@ class DesktopWindow:
         return snapshot.backend.state is ServiceState.ERROR and not snapshot.running
 
     def _wait_for_frontend(self) -> StatusSnapshot | None:
-        if not self._recover_interrupted_bundle_update():
-            return None
         snapshot = self.controller.start()
         deadline = time.monotonic() + self.startup_timeout
         while not self._frontend_ready(snapshot):
@@ -1087,18 +756,8 @@ class DesktopWindow:
                 "Waveguide Generator also could not open the browser fallback: "
                 f"{type(fallback_exc).__name__}: {fallback_exc}"
             )
-            if self._bundle_paths() is None:
-                _report_startup_failure(message, detail=traceback.format_exc())
-            else:
-                self._report_bundle_window_failure(message)
+            self._report_desktop_failure(message, detail=traceback.format_exc())
             return 1
-        # The browser is now showing the interface, so this launch succeeded as
-        # surely as one with a native window, and the update it may have just
-        # applied has to be committed here too. Without this a machine that
-        # always takes the fallback -- no WebView2 -- would keep every previous
-        # layer and every downloaded archive for ever, and eventually refuse the
-        # next update for having rollback material pending.
-        self._finish_healthy_bundle_update(snapshot)
         return 0
 
     def open_window(self, url: str) -> None:
@@ -1414,10 +1073,6 @@ class DesktopWindow:
         an index.html that had not changed.
         """
 
-        if self._startup_snapshot is not None:
-            # pywebview invokes this callback only after its native event loop
-            # has started. HTTP readiness alone is not enough to discard rollback.
-            self._finish_healthy_bundle_update(self._startup_snapshot)
         window = self._window
         closed = getattr(getattr(window, "events", None), "closed", None)
         wait = getattr(closed, "wait", None)
@@ -1430,22 +1085,6 @@ class DesktopWindow:
             self._watch_backend()
             if self._hand_off_update(window):
                 return
-
-    def _pending_bundle_update_paths(self) -> list[Path]:
-        paths = self._bundle_paths()
-        if paths is None:
-            return []
-        bundle, resources, _data_dir = paths
-        pending = self._previous_generation_paths(resources)
-        pending.extend(
-            path
-            for path in sorted(resources.glob("*.failed"))
-            if path.exists() or path.is_symlink()
-        )
-        holding = self._cleanup_holding_directory(bundle)
-        if holding.exists() or holding.is_symlink():
-            pending.append(holding)
-        return pending
 
     def _restart_after_failed_handoff(self) -> str | None:
         """Restart the server and wait until the existing window is usable again."""
@@ -1480,58 +1119,31 @@ class DesktopWindow:
         request = self.controller.take_update_request()
         if request is None:
             return False
-        label = request.version if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)) else request
-        if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)):
-            pending = self._pending_bundle_update_paths()
-            if pending:
-                self._report_bundle_failure(
-                    f"Waveguide Generator cannot start the {label} update because rollback "
-                    "material from an earlier update is still present:\n"
-                    + "\n".join(str(path) for path in pending)
-                    + "\n\nThe current version remains open. Review update.log before trying again."
-                )
-                # The request was consumed and will not be handed off, and the
-                # server that wrote it is still running, latched (contract §4.2).
-                self.controller.release_update_restart(
-                    "an earlier update's rollback material is still present"
-                )
-                return False
+        label = request.version
         try:
-            if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)):
-                # Leave one progress-poll window in which the SPA can render
-                # "ready" after the server publishes the request file.
-                time.sleep(self.update_ready_delay)
-                self.controller.close()
+            # Leave one progress-poll window in which the SPA can render
+            # "ready" after the server publishes the request file.
+            time.sleep(self.update_ready_delay)
+            self.controller.close()
             self.controller.launch_update(request)
         except UpdateHandoffError as exc:
-            if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)):
-                restart_error = self._restart_after_failed_handoff()
-                if restart_error is None:
-                    self._report_bundle_failure(
-                        f"Waveguide Generator could not start the {label} update: {exc}\n\n"
-                        "The current version was restarted and remains open."
-                    )
-                    return False
-                destroy = getattr(window, "destroy", None)
-                if callable(destroy):
-                    destroy()
-                self._exit_code = 1
+            restart_error = self._restart_after_failed_handoff()
+            if restart_error is None:
                 self._report_bundle_failure(
                     f"Waveguide Generator could not start the {label} update: {exc}\n\n"
-                    f"The current version also could not restart: {restart_error}. "
-                    "The unusable window was closed."
+                    "The current version was restarted and remains open."
                 )
-                return True
-            # The same server stays up, latched for a restart that is not
-            # coming. Tell it so (contract §4.2).
-            self.controller.release_update_restart(
-                f"the update installer could not be started: {exc}"
-            )
-            _report_startup_failure(
+                return False
+            destroy = getattr(window, "destroy", None)
+            if callable(destroy):
+                destroy()
+            self._exit_code = 1
+            self._report_bundle_failure(
                 f"Waveguide Generator could not start the {label} update: {exc}\n\n"
-                "The current version stays open."
+                f"The current version also could not restart: {restart_error}. "
+                "The unusable window was closed."
             )
-            return False
+            return True
         # Closing the window ends webview.start(), and run()'s finally stops
         # the server the way a user-initiated close does.
         destroy = getattr(window, "destroy", None)
@@ -1554,10 +1166,7 @@ class DesktopWindow:
                     "Waveguide Generator could not open a desktop window because "
                     f"pywebview is unavailable: {exc}\n\n{PYWEBVIEW_REPAIR}"
                 )
-                if self._bundle_paths() is None:
-                    _report_startup_failure(message, detail=traceback.format_exc())
-                else:
-                    self._report_bundle_window_failure(message)
+                self._report_desktop_failure(message, detail=traceback.format_exc())
                 return 1
             try:
                 self._prepare_windows_webview()
@@ -1566,7 +1175,6 @@ class DesktopWindow:
             self._webview = webview
             webview.settings["ALLOW_DOWNLOADS"] = True
             self._name_linux_application()
-            self._startup_snapshot = snapshot
             self._window = webview.create_window(
                 WINDOW_TITLE,
                 snapshot.url,
@@ -1593,10 +1201,7 @@ class DesktopWindow:
                 "Waveguide Generator could not open its desktop window: "
                 f"{type(exc).__name__}: {exc}"
             )
-            if snapshot is not None and self._bundle_paths() is not None:
-                self._report_bundle_window_failure(message)
-            else:
-                self._report_desktop_failure(message, detail=traceback.format_exc())
+            self._report_desktop_failure(message, detail=traceback.format_exc())
             return 1
         finally:
             self.controller.close()
@@ -1687,12 +1292,7 @@ def main(argv: list[str] | None = None) -> int:
         blocker = _linux_window_blocker()
         if blocker is not None:
             return _fall_back_to_status_window(blocker, server_arguments)
-    # The window settles an update transaction itself, once its native event
-    # loop is running (``DesktopWindow._finish_healthy_bundle_update``), so its
-    # controller must not settle on its first ready poll ahead of that.
-    return DesktopWindow(
-        StatusController(server_args=server_arguments, settle_on_ready=False)
-    ).run()
+    return DesktopWindow(StatusController(server_args=server_arguments)).run()
 
 
 if __name__ == "__main__":

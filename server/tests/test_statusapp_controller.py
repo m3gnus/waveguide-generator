@@ -34,7 +34,7 @@ def _retirement_controller(tmp_path, monkeypatch, *, lifetime="headless", adopte
 
     owner_pid, child_pid = 4242, 100
     calls = []
-    controller = _controller(tmp_path, settle_on_ready=False)
+    controller = _controller(tmp_path)
     data = tmp_path / "data"
     monkeypatch.setattr(controller, "_data_dir", lambda: data)
     record = BackendHandle("http://127.0.0.1:3199", owner_pid, 3199, data, "test", "abc", lifetime)
@@ -238,9 +238,8 @@ def test_new_start_clears_stopped_adoption_without_spawning(tmp_path, monkeypatc
 
 @pytest.mark.parametrize("os_name", ["posix", "nt"])
 @pytest.mark.parametrize("close_first", [True, False])
-@pytest.mark.parametrize("request_kind", ["bundle", "full"])
 @pytest.mark.parametrize("lifetime", ["headless", "contained"])
-def test_adopted_update_and_close_orders(tmp_path, monkeypatch, os_name, close_first, request_kind, lifetime):
+def test_adopted_update_and_close_orders(tmp_path, monkeypatch, os_name, close_first, lifetime):
     from launchers.backend_retire_request import REQUEST_FILENAME
     from launchers.statusapp import controller as module
 
@@ -265,15 +264,11 @@ def test_adopted_update_and_close_orders(tmp_path, monkeypatch, os_name, close_f
         real_write(*args, **kwargs)
 
     monkeypatch.setattr(module, "os", SimpleNamespace(name=os_name, getpid=os.getpid))
-    monkeypatch.setattr(module, "launch_bundle_update_handoff", launch)
     monkeypatch.setattr(module, "launch_full_installer", launch)
     monkeypatch.setattr(module, "write_request", write)
-    request = (
-        module.BundleUpdateRequest("1.2", tmp_path, None) if request_kind == "bundle"
-        else module.FullInstallerRequest("1.2", "1.1", tmp_path, tmp_path, "linux", "hash", 1, 100, 1)
-    )
+    request = module.FullInstallerRequest("1.2", "1.1", tmp_path, tmp_path, "linux", "hash", 1, 100, 1)
     if close_first:
-        # Exact bundle/full installer call sequence in desktop.py.
+        # Exact full installer call sequence in desktop.py.
         controller.close()
         controller.launch_update(request)
     else:
@@ -293,8 +288,7 @@ def test_adopted_update_and_close_orders(tmp_path, monkeypatch, os_name, close_f
 @pytest.mark.parametrize("os_name", ["posix", "nt"])
 @pytest.mark.parametrize("success", [True, False])
 @pytest.mark.parametrize("lifetime", ["headless", "contained", "attached"])
-@pytest.mark.parametrize("request_kind", ["legacy", "bundle", "full"])
-def test_update_retires_adopted_backend_only_after_success_off_windows(tmp_path, monkeypatch, os_name, success, lifetime, request_kind):
+def test_update_retires_adopted_backend_only_after_success_off_windows(tmp_path, monkeypatch, os_name, success, lifetime):
     from launchers.backend_retire_request import REQUEST_FILENAME
     from launchers.statusapp import controller as module
 
@@ -316,15 +310,9 @@ def test_update_retires_adopted_backend_only_after_success_off_windows(tmp_path,
         real_write(*args, **kwargs)
 
     monkeypatch.setattr(module, "os", SimpleNamespace(name=os_name, getpid=os.getpid))
-    monkeypatch.setattr(module, "launch_update_handoff", launch)
-    monkeypatch.setattr(module, "launch_bundle_update_handoff", launch)
     monkeypatch.setattr(module, "launch_full_installer", launch)
     monkeypatch.setattr(module, "write_request", write)
-    request = (
-        module.BundleUpdateRequest("1.2", tmp_path, None) if request_kind == "bundle"
-        else module.FullInstallerRequest("1.2", "1.1", tmp_path, tmp_path, "linux", "hash", 1, 100, 1)
-        if request_kind == "full" else "legacy"
-    )
+    request = module.FullInstallerRequest("1.2", "1.1", tmp_path, tmp_path, "linux", "hash", 1, 100, 1)
     if success:
         controller.launch_update(request)
     else:
@@ -546,8 +534,14 @@ def test_stale_source_checkout_is_still_advised_to_rebuild(tmp_path: Path) -> No
     assert "npm run build" in _amber_frontend_reason(controller)
 
 
-def test_status_owner_consumes_only_a_ready_valid_update_request(tmp_path: Path) -> None:
+def test_status_owner_discards_a_pre_full_installer_request_and_releases_the_latch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A checkout or layer request from an older server has no receiver any more."""
+
     controller = _controller(tmp_path)
+    released: list[str] = []
+    monkeypatch.setattr(controller, "release_update_restart", lambda reason: released.append(reason) or True)
     controller.start()
     try:
         request_path = controller.update_request_path
@@ -556,20 +550,12 @@ def test_status_owner_consumes_only_a_ready_valid_update_request(tmp_path: Path)
             "schemaVersion": 1,
             "kind": "install_release",
             "tag": "v2.0.1",
-            "readyAtEpoch": time.time() + 60,
+            "readyAtEpoch": 0,
         }), encoding="utf-8")
 
         assert controller.take_update_request() is None
-        assert request_path.is_file()
-
-        request_path.write_text(json.dumps({
-            "schemaVersion": 1,
-            "kind": "install_release",
-            "tag": "v2.0.1",
-            "readyAtEpoch": 0,
-        }), encoding="utf-8")
-        assert controller.take_update_request() == "v2.0.1"
         assert not request_path.exists()
+        assert len(released) == 1 and "not a full-installer request" in released[0]
     finally:
         controller.close()
 
@@ -1027,9 +1013,6 @@ def _headless_view(controller: _ViewController):
     view._settled = False
     view._frontend_ready_grace = view_module.FRONTEND_READY_GRACE
     view._backend_ok_since = None
-    view._started_at = time.monotonic()
-    view._startup_report_after = view_module.STARTUP_REPORT_AFTER
-    view._unconfirmed_reported = False
     view._poll_running = False
     view._next_poll_at = 0.0
     view._updates = queue.SimpleQueue()
@@ -1099,13 +1082,7 @@ def test_the_status_window_does_poll_until_the_backend_answers(tmp_path: Path) -
 
 
 def test_the_status_window_polls_on_until_the_interface_is_served(tmp_path: Path) -> None:
-    """Contract §4.5: the controller settles an update transaction on a served interface.
-
-    Ending startup polling on the backend alone could stop before the
-    controller ever saw one, and leave the transaction open for good. A backend
-    whose interface keeps failing gets a grace period and then one explicit
-    settle request, so ``update.log`` says which transaction stayed open.
-    """
+    """A backend whose interface keeps failing gets a grace period, then polling ends."""
 
     unserved = StatusSnapshot(
         backend=LampStatus(ServiceState.OK, "Healthy — vtest"),
@@ -1115,46 +1092,19 @@ def test_the_status_window_polls_on_until_the_interface_is_served(tmp_path: Path
         exit_code=None,
     )
     controller = _ViewController(unserved)
-    asked: list[StatusSnapshot] = []
-    controller.settle_update_transaction = (  # type: ignore[attr-defined]
-        lambda snapshot, **_kwargs: bool(asked.append(snapshot))
-    )
     view = _headless_view(controller)
     view._updates.put(("snapshot", unserved))
     view._tick()
 
     assert view._settled is False
     assert controller.watchers == []
-    assert asked == []
 
     view._backend_ok_since = time.monotonic() - view._frontend_ready_grace
     view._updates.put(("snapshot", unserved))
     view._tick()
 
     assert view._settled is True
-    assert asked == [unserved]
     assert len(controller.watchers) == 1
-
-
-def test_the_status_window_reports_a_start_that_cannot_confirm_the_update(
-    tmp_path: Path,
-) -> None:
-    """Contract §4.5: a browser-mode start that failed says so, once."""
-
-    failed = _view_snapshot(ServiceState.ERROR, "Server exited with code 1: solver import failed")
-    controller = _ViewController(failed)
-    asked: list[StatusSnapshot] = []
-    controller.settle_update_transaction = (  # type: ignore[attr-defined]
-        lambda snapshot, **_kwargs: bool(asked.append(snapshot))
-    )
-    view = _headless_view(controller)
-    view._updates.put(("snapshot", failed))
-    view._tick()
-    view._updates.put(("snapshot", failed))
-    view._tick()
-
-    assert asked == [failed]
-    assert view._settled is False, "a failed start is reported, not settled"
 
 
 def test_existing_instance_exit_two_keeps_its_real_url_healthy(tmp_path: Path) -> None:

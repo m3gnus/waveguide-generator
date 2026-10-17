@@ -1,16 +1,13 @@
 """Jobs schema 6 across the full-installer update path (0.3.4 and later).
 
-The layer bridge (``launchers/apply_update.py``) owns an automatic jobs restore
-for its own transaction; ``test_update_transaction.py`` covers it. A full
-installer sends no layer transaction and never touches ``db/``. Its two
-recovery cases differ:
+A full installer never touches ``db/``. Its two recovery cases differ:
 
 * the install fails before the new app starts: the native rollback keeps the
   previous root and the jobs database is exactly what the old app left;
 * the install committed and the new app migrated: there is no automatic
   rollback after commit, so an older app returns only by reinstallation. It
   refuses schema 6 clearly and changes nothing, and the snapshot restores by
-  the manual procedure. No surviving layer journal adopts that snapshot.
+  the manual procedure.
 """
 
 from __future__ import annotations
@@ -27,13 +24,6 @@ import textwrap
 
 import pytest
 
-from launchers import apply_update as apply_update_module
-from launchers.apply_update import (
-    begin_update_transaction,
-    read_journal,
-    set_journal_state,
-    swap_staged_layers,
-)
 from server.jobs import store as store_module
 from server.jobs.store import JobStore
 
@@ -126,51 +116,29 @@ def test_installer_failure_before_the_new_app_starts_leaves_the_jobs_database_un
     assert _snapshot(db) == before_rows
 
 
-def _installed_by_full_installer(tmp_path: Path, *, stale_layer_journal: bool) -> tuple[Path, Path]:
-    """An installation the full installer replaced, optionally with a surviving layer journal."""
+def _installed_by_full_installer(tmp_path: Path) -> tuple[Path, Path]:
+    """An installation the full installer replaced with 0.3.5 in place."""
 
     resources = tmp_path / "WaveguideGenerator"
     data_dir = tmp_path / "data"
-    staged = data_dir / "updates" / "0.3.4" / "staged"
-    for layer, version in (
-        (resources / "app", "0.3.2"),
-        (resources / "runtime", "0.3.2"),
-        (staged / "app", "0.3.4"),
-        (staged / "runtime", "0.3.4"),
-    ):
-        layer.mkdir(parents=True)
-        name = "APP-MANIFEST.json" if layer.name == "app" else "RUNTIME-MANIFEST.json"
-        (layer / name).write_text(json.dumps({"schemaVersion": 1, "version": version,
-                                              "commit": "c" + version, "runtimeId": "r" + version}))
-    (data_dir / "logs").mkdir(parents=True)
-    if stale_layer_journal:
-        # A bridge-path 0.3.2 -> 0.3.4 transaction whose record outlived it.
-        begin_update_transaction(data_dir=data_dir, bundle=resources, resources=resources,
-                                 layers=[(resources / "app", staged / "app"),
-                                         (resources / "runtime", staged / "runtime")],
-                                 platform_name="linux")
-        swap_staged_layers(resources, staged / "app", staged / "runtime")
-        set_journal_state(data_dir, resources, "installed")
-    # The full installer replaces the whole root with 0.3.5 in place.
     for layer in ("app", "runtime"):
         target = resources / layer
+        target.mkdir(parents=True)
         name = "APP-MANIFEST.json" if layer == "app" else "RUNTIME-MANIFEST.json"
         (target / name).write_text(json.dumps({"schemaVersion": 1, "version": "0.3.5",
                                                "commit": "c0.3.5", "runtimeId": "r0.3.5"}))
-        shutil.rmtree(resources / (layer + ".previous"), ignore_errors=True)
+    (data_dir / "logs").mkdir(parents=True)
     return resources, data_dir
 
 
-@pytest.mark.parametrize("stale_layer_journal", [False, True], ids=["no-journal", "stale-journal"])
 def test_after_the_new_app_migrated_an_older_app_refuses_and_the_snapshot_restores(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale_layer_journal: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    resources, data_dir = _installed_by_full_installer(tmp_path, stale_layer_journal=stale_layer_journal)
+    resources, data_dir = _installed_by_full_installer(tmp_path)
     db = data_dir / "db" / "simulations.db"
     _old_shaped_database(db)
     _fill_old_database(db)
     before_rows = _snapshot(db)
-    journal_before = read_journal(data_dir, resources)
     monkeypatch.setattr(store_module, "app_root", lambda: resources / "app")
 
     # The new app's first start migrates, snapshotting first, then accepts work.
@@ -182,10 +150,6 @@ def test_after_the_new_app_migrated_an_older_app_refuses_and_the_snapshot_restor
     store.close()
     assert _user_version(db) == 6
     assert _snapshot(snapshot) == before_rows
-    # No layer transaction installed this build, so none owns its snapshot.
-    assert read_journal(data_dir, resources) == journal_before
-    apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources)
-    assert _user_version(db) == 6
 
     # Reinstalling the older release is the only way back on this path. It
     # refuses clearly, naming the newer install, and writes nothing.
@@ -206,33 +170,13 @@ def test_after_the_new_app_migrated_an_older_app_refuses_and_the_snapshot_restor
     assert _snapshot(db) == before_rows
 
 
-def test_the_layer_journal_still_records_a_snapshot_for_the_build_it_installed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    resources, data_dir = _installed_by_full_installer(tmp_path, stale_layer_journal=True)
-    # The same journal, read by the build it did install, is the bridge case.
-    (resources / "app" / "APP-MANIFEST.json").write_text(json.dumps(
-        {"schemaVersion": 1, "version": "0.3.4", "commit": "c0.3.4", "runtimeId": "r0.3.4"}))
-    db = data_dir / "db" / "simulations.db"
-    _old_shaped_database(db)
-    _fill_old_database(db)
-    monkeypatch.setattr(store_module, "app_root", lambda: resources / "app")
-    store = JobStore(db)
-    store.initialize()
-    store.close()
-    journal = read_journal(data_dir, resources)
-    assert journal["jobsUpgradeSnapshot"]["transaction"] == journal["transaction"]
-
-
-def test_a_build_without_the_bridge_helper_still_snapshots_and_migrates(
+def test_the_upgrade_snapshots_and_migrates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db = tmp_path / "data" / "db" / "simulations.db"
     _old_shaped_database(db)
     _fill_old_database(db)
     before_rows = _snapshot(db)
-    # After B+2 the bridge files leave the app layer (UPDATER-PLAN.md section 5).
-    monkeypatch.setitem(sys.modules, "launchers.apply_update", None)
     store = JobStore(db)
     store.initialize()
     store.close()

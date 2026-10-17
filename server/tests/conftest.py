@@ -257,8 +257,7 @@ def _modal_dialogs_fail_instead_of_blocking():
         pytest.fail(
             "a test reached a blocking Win32 MessageBoxW, which would hang the "
             "run until the job is cancelled. Inject the seam the call site "
-            "offers -- failure_reporter= for apply_update, browser_fallback= "
-            "for DesktopWindow -- rather than letting the default dialog run.",
+            "offers -- browser_fallback= for DesktopWindow, for example -- rather than letting the default dialog run.",
             pytrace=False,
         )
 

@@ -615,29 +615,6 @@ class JobStore:
             if rebuild_needs_foreign_keys_off:
                 raw.execute("PRAGMA foreign_keys = ON")
 
-    #: Set when this process's own migration recorded its snapshot in the
-    #: installation's update journal; only that start records a baseline.
-    _recorded_upgrade_snapshot = False
-
-    def record_restore_baseline_after_startup(self) -> None:
-        """Record the post-startup jobs content for the update's automatic restore.
-
-        Called by the runtime after startup recovery and pruning, before any
-        request is served, and only by the start that migrated. A failure is
-        logged: without a baseline the restore uses the stricter
-        pre-migration rule, which only sends the user to manual recovery.
-        """
-
-        if not self._recorded_upgrade_snapshot:
-            return
-        self._recorded_upgrade_snapshot = False
-        try:
-            from launchers.apply_update import record_jobs_restore_baseline
-
-            record_jobs_restore_baseline(self.db_path.parent.parent, app_root().parent, self.db_path)
-        except Exception as exc:  # noqa: BLE001 - never fatal to startup
-            logger.warning("Could not record the jobs restore baseline: %s", exc)
-
     @property
     def rollback_snapshot_path(self) -> Path:
         return self.db_path.with_name(self.db_path.name + ".pre-schema-6.bak")
@@ -770,20 +747,7 @@ class JobStore:
                         "restore is off for this update; use the manual jobs recovery procedure "
                         "with %s.", target, previous, published, published)
             _flush_directory(self.db_path.parent)
-            # The installed helper records only a snapshot made by this build
-            # during its own update, before any schema write can commit.
-            # The full-installer path has no layer journal to record in, and
-            # a build without the bridge helper (after B+2) keeps the
-            # snapshot for the manual procedure only.
-            try:
-                from launchers.apply_update import record_jobs_upgrade_snapshot
-            except ModuleNotFoundError as exc:
-                if exc.name not in {"launchers", "launchers.apply_update"}:
-                    raise
-            else:
-                if published == target:
-                    self._recorded_upgrade_snapshot = bool(record_jobs_upgrade_snapshot(
-                        self.db_path.parent.parent, app_root().parent, target))
+            # Kept for the manual jobs recovery procedure only.
         finally:
             for suffix in ("", "-wal", "-shm", "-journal"):
                 _unlink_or_log(Path(str(temporary) + suffix))

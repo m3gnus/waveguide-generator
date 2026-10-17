@@ -694,8 +694,8 @@ Gate 6 "shortcut icon is the app's, not Python's" ($iconOk -and $icoPresent) `
     (($iconDetail -join "; ") + "; .ico staged: $icoPresent")
 
 # --- Gate 8: the update path needs no elevation -------------------------------
-# apply_update.py renames {app}\runtime and {app}\app in place. Prove those
-# renames succeed as this user, which is what a Program Files install breaks.
+# An update runs setup as this user and replaces {app}\runtime and {app}\app in
+# place. Prove those renames succeed, which is what a Program Files install breaks.
 $renameOk = $false; $renameDetail = ""
 if ($landed) {
     try {

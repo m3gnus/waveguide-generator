@@ -16,7 +16,7 @@ import time
 from typing import Callable
 import urllib.request
 
-from launchers.update_lock import ordinary_path, resolved_path
+from launchers.install_paths import ordinary_path, resolved_path
 
 from .release_urls import GITHUB_REPOSITORY, _validate_url, open_trusted_url, trusted_asset_url
 from .install_kind import current_platform, probe_install

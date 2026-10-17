@@ -13,7 +13,7 @@ import stat
 from typing import Callable, Mapping
 
 from shared import release_assets
-from launchers.update_lock import ordinary_path, resolved_path
+from launchers.install_paths import ordinary_path, resolved_path
 
 BUNDLE_ID = "is.hornlab.waveguide-generator-v2"
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{D8F99D24-D991-4FB0-91FE-E86D79128D2B}_is1"

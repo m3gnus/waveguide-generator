@@ -134,9 +134,8 @@ def test_uninstall_removes_the_bridges_exact_previous_layers_and_launchers() -> 
         assert rf'Type: filesandordirs; Name: "{{app}}\{directory}.previous"' in section
     for _source, target in build_bundle.windows_launcher_files():
         assert rf'Type: files; Name: "{{app}}\{target}.previous"' in section
-    from launchers.apply_update import TRANSACTION_OPEN_MARKER_NAME, TRANSACTION_OPEN_MARKER_TEMP_NAME
-
-    for name in (TRANSACTION_OPEN_MARKER_NAME, TRANSACTION_OPEN_MARKER_TEMP_NAME):
+    # The pre-0.3.6 layer updater's open-transaction marker and its temporary.
+    for name in (".update-transaction-open.json", ".update-transaction-open.json.new"):
         assert rf'Type: files; Name: "{{app}}\{name}"' in section
     # No recursive wildcard at the install root: user-added files stay there.
     entries = [line for line in section.splitlines() if line.startswith("Type:")]

@@ -123,8 +123,6 @@
     "server/tests/test_installer*.py",
     "server/tests/test_frozen_installer*.py",
     "scripts/tests/test_frozen_installer*.py",
-    "server/tests/test_apply_update.py",
-    "server/tests/test_bundle*.py",
     "scripts/tests/test_update*.py",
     "scripts/tests/test_build_bundle.py",
     "server/tests/test_cad_manual_solve.py",
@@ -143,6 +141,8 @@
 ]
 "launchers/" = [
     "server/tests/test_*launcher*.py",
+    "server/tests/test_installer*.py",
+    "scripts/tests/test_frozen_installer*.py",
     "server/tests/test_statusapp*.py",
     "server/tests/test_*window*.py",
     "server/tests/test_bounded*.py",
@@ -159,7 +159,6 @@
 "installers/" = [
     "server/tests/test_installer*.py",
     "scripts/tests/test_frozen_installer*.py",
-    "server/tests/test_bundle*.py",
     "scripts/tests/test_install*.py",
     "scripts/tests/test_build_bundle.py",
     "scripts/tests/test_validate_uninstall_target.py",

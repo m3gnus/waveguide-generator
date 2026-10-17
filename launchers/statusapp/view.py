@@ -11,7 +11,6 @@ import webbrowser
 
 from .controller import ServiceState, StatusController, StatusSnapshot, frontend_ready
 from .diagnostics import WindowUnavailable
-from .updater import BundleUpdateRequest, UpdateRequest
 from launchers.full_installer import FullInstallerRequest
 
 
@@ -34,15 +33,9 @@ TICK_MS = 250
 STARTUP_POLL_INTERVAL = 0.55
 #: How long startup polling goes on for the interface once the backend answers.
 #: One poll asks both, so they nearly always settle together. The exception is
-#: an interface request that timed out while the backend answered, and that is
-#: exactly the snapshot that must not end startup polling: the controller
-#: settles an update transaction only on a served interface
-#: (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.5).
+#: an interface request that timed out while the backend answered, which gets
+#: this long to start serving before polling ends anyway.
 FRONTEND_READY_GRACE = 30.0
-#: How long the status window waits for a start it can confirm before it says
-#: so in ``update.log`` (contract §4.5), unless the start has already failed.
-#: The desktop window gives its own start the same two minutes.
-STARTUP_REPORT_AFTER = 120.0
 
 
 class StatusView:
@@ -67,9 +60,6 @@ class StatusView:
         self._poll_running = False
         self._settled = False
         self._backend_ok_since: float | None = None
-        self._started_at = time.monotonic()
-        self._startup_report_after = STARTUP_REPORT_AFTER
-        self._unconfirmed_reported = False
         self._next_poll_at = 0.0
         self._updates: queue.SimpleQueue[tuple[str, StatusSnapshot]] = queue.SimpleQueue()
         self._update_errors: queue.SimpleQueue[str] = queue.SimpleQueue()
@@ -135,8 +125,6 @@ class StatusView:
             # polling until the replacement answers and settles this again.
             self._settled = False
             self._backend_ok_since = None
-            self._started_at = time.monotonic()
-            self._unconfirmed_reported = False
             self._next_poll_at = 0.0
             error = self._update_errors.get()
             self._backend_reason.set("Update could not start")
@@ -158,8 +146,6 @@ class StatusView:
                 self._render(snapshot)
                 if not self._settled and snapshot.backend.state is ServiceState.OK:
                     self._settle_when_served(snapshot)
-                elif not self._settled:
-                    self._report_if_unconfirmed(snapshot)
         if not self._closing:
             requested_update = self.controller.take_update_request()
             if requested_update is not None:
@@ -178,14 +164,8 @@ class StatusView:
     def _settle_when_served(self, snapshot: StatusSnapshot) -> None:
         """End startup polling on a served interface, or once waiting is pointless.
 
-        The controller settles an update transaction during the poll that first
-        sees a served interface (contract §4.5). Ending startup polling on the
-        backend alone could therefore stop one poll too early and leave that
-        transaction open for good, which blocks every later update. A backend
-        that answers while its interface keeps failing gets
-        ``frontend_ready_grace`` seconds; after that the controller is asked
-        with that snapshot, so ``update.log`` names the transaction that stayed
-        open and why, and polling ends as it always did.
+        A backend that answers while its interface keeps failing gets
+        ``frontend_ready_grace`` seconds; after that polling ends as it always did.
         """
 
         if frontend_ready(snapshot):
@@ -196,27 +176,7 @@ class StatusView:
             self._backend_ok_since = now
         if now - self._backend_ok_since < self._frontend_ready_grace:
             return
-        self.controller.settle_update_transaction(snapshot)
         self._settle()
-
-    def _report_if_unconfirmed(self, snapshot: StatusSnapshot) -> None:
-        """Say once in ``update.log`` that this start could not confirm the build.
-
-        Contract §4.5: browser mode must not leave an update transaction open
-        silently. The start has failed when the backend reports an error with no
-        live process behind it -- a refused start or an exited server -- and it
-        is overdue once ``STARTUP_REPORT_AFTER`` seconds pass without an answer.
-        The controller writes the line, and only when there is something to
-        settle; a healthy answer that comes later still settles as usual.
-        """
-
-        if self._unconfirmed_reported:
-            return
-        failed = snapshot.backend.state is ServiceState.ERROR and not snapshot.running
-        if not failed and time.monotonic() - self._started_at < self._startup_report_after:
-            return
-        self._unconfirmed_reported = True
-        self.controller.settle_update_transaction(snapshot)
 
     def _settle(self) -> None:
         """Stop asking the server questions, and arrange to be told instead.
@@ -241,8 +201,8 @@ class StatusView:
         # snapshot travels the same queue every other worker here uses.
         self._updates.put(("lost", snapshot))
 
-    def _start_update(self, request: UpdateRequest | FullInstallerRequest) -> None:
-        label = request.version if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)) else request
+    def _start_update(self, request: FullInstallerRequest) -> None:
+        label = request.version
         self._closing = True
         self._backend_reason.set(f"Preparing {label}…")
         self._frontend_reason.set("WG will close, install the update, and restart.")
@@ -254,22 +214,14 @@ class StatusView:
             daemon=True,
         ).start()
 
-    def _handoff_update(self, request: UpdateRequest | FullInstallerRequest) -> None:
+    def _handoff_update(self, request: FullInstallerRequest) -> None:
         try:
-            if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)):
-                self.controller.close()
+            self.controller.close()
             self.controller.launch_update(request)
         except Exception as exc:  # noqa: BLE001 - keep the current healthy app usable
             reason = str(exc) or type(exc).__name__
-            if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)):
-                # A fresh server, and a fresh process starts unlatched.
-                self.controller.start()
-            else:
-                # The same server stays up, latched for a restart that is not
-                # coming. Tell it so (contract §4.2).
-                self.controller.release_update_restart(
-                    f"the update installer could not be started: {reason}"
-                )
+            # A fresh server, and a fresh process starts unlatched.
+            self.controller.start()
             self._update_errors.put(reason)
             return
         self._updates.put(("closed", self.controller.close()))
