@@ -20,3 +20,9 @@ For current product behavior, start with the [documentation index](../README.md)
 [install guide](../INSTALL.md) and [release guide](../RELEASING.md).
 Future work should identify a concrete user need and acceptance check before
 becoming an implementation commitment.
+
+## Deferred engine work
+
+[BEMPP retirement](BEMPP-RETIREMENT.md) remains a parked proposal. BEMPP is
+still supported; removal needs capability parity, compatibility decisions and
+installed application qualification before a release can include it.
