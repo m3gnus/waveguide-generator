@@ -1,7 +1,10 @@
 """Spatially indexed closed-skin queries, shared by a plane and its stencil."""
 from __future__ import annotations
 
+from collections import OrderedDict
+import hashlib
 import heapq
+import threading
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -171,6 +174,74 @@ def skin_triangles(mesh, symmetry):
     return np.concatenate([mesh.points_m[mesh.faces] * sign for sign in signs])
 
 
+# One shared, deliberately irrational-looking ray direction for body parity.
+RAY_DIRECTION = (0.371, 0.529, 0.763)
+SKIN_INDEX_CACHE_SIZE = 4
+
+
+class SkinIndexes:
+    """A retained skin's triangles, with ray and distance indexes built on first use."""
+    def __init__(self, triangles):
+        self.triangles = triangles
+        self._ray = None
+        self._distance = None
+
+    def ray(self, check=lambda: None):
+        if self._ray is None:
+            self._ray = SkinRayIndex(self.triangles, RAY_DIRECTION, check)
+        return self._ray
+
+    def distance(self, check=lambda: None):
+        if self._distance is None:
+            self._distance = SkinDistanceIndex(self.triangles, check)
+        return self._distance
+
+
+_skin_indexes: OrderedDict[tuple[str, str, str], SkinIndexes] = OrderedDict()
+_skin_lock = threading.Lock()
+
+
+def skin_identity(mesh) -> str:
+    """SHA-256 of the retained trace mesh: its points and triangles."""
+    digest = hashlib.sha256()
+    for array in (np.ascontiguousarray(mesh.points_m), np.ascontiguousarray(mesh.faces)):
+        digest.update(f"{array.dtype.str}{array.shape}".encode("ascii"))
+        digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
+def skin_indexes(job_id: str, mesh, symmetry: str) -> SkinIndexes:
+    """Per-job skin indexes, reused across plane requests in a small LRU.
+
+    The key is the retained BEM-trace mesh's SHA-256 plus symmetry. A changed
+    artifact replaces the job's entries; ``forget_skin_indexes`` drops them
+    when the artifact is gone.
+    """
+    key = (str(job_id), skin_identity(mesh), str(symmetry))
+    with _skin_lock:
+        for stale in [k for k in _skin_indexes if k[0] == key[0] and k[1] != key[1]]:
+            del _skin_indexes[stale]
+        entry = _skin_indexes.get(key)
+        if entry is not None:
+            _skin_indexes.move_to_end(key)
+            return entry
+    triangles = skin_triangles(mesh, symmetry)
+    triangles.setflags(write=False)  # Shared by every request on this entry.
+    entry = SkinIndexes(triangles)
+    with _skin_lock:
+        entry = _skin_indexes.setdefault(key, entry)
+        _skin_indexes.move_to_end(key)
+        while len(_skin_indexes) > SKIN_INDEX_CACHE_SIZE:
+            _skin_indexes.popitem(last=False)
+    return entry
+
+
+def forget_skin_indexes(job_id: str) -> None:
+    with _skin_lock:
+        for key in [k for k in _skin_indexes if k[0] == str(job_id)]:
+            del _skin_indexes[key]
+
+
 class SkinRayIndex:
     """Adaptive projected AABB bins; exact triangle hits within each leaf.
 
@@ -221,9 +292,15 @@ class SkinRayIndex:
                 hit = usable & (s >= -1e-10) & (t >= -1e-10) & (s + t <= 1 + 1e-10)
                 distance = a[:, 2] + s * e[:, 2] + t * f[:, 2] - projected[selected, None, 2]
                 clearance[selected] = np.minimum(clearance[selected], np.min(np.where(hit, np.abs(distance), np.inf), axis=1))
+                # Parity uses exact edge-function signs, evaluated from each
+                # edge's canonical endpoint order: neighbours sharing an edge
+                # get exactly opposite values, so no point is counted twice
+                # or missed beside an edge, whatever the triangles' heights.
                 ray_hit = np.broadcast_to(usable, s.shape).copy()
-                for weight, inclusive in zip((s, t, 1 - s - t), edges):
-                    ray_hit &= (weight > 1e-10) | ((np.abs(weight) <= 1e-10) & inclusive)
+                point = projected[selected, None, :2]
+                for (start, end), inclusive in zip(((c, a), (a, b), (b, c)), edges):
+                    value = _edge_function(start[:, :2], end[:, :2], point)
+                    ray_hit &= (value > 0) | ((value == 0) & inclusive)
                 if (~usable).any():
                     # A face parallel to the ray has no projected area, but a
                     # point on that face must still avoid the singular potential.
@@ -243,6 +320,17 @@ class SkinRayIndex:
                 crossings = (ray_hit & (distance > 1e-9)).sum(axis=1)
                 inside[selected] ^= crossings % 2 == 1
         return inside | (clearance <= 1e-9), clearance
+
+
+def _edge_function(start, end, points):
+    """Twice the signed area of (start, end, point), canonical per edge."""
+    swap = (start[:, 0] > end[:, 0]) | ((start[:, 0] == end[:, 0]) & (start[:, 1] > end[:, 1]))
+    low = np.where(swap[:, None], end, start)
+    high = np.where(swap[:, None], start, end)
+    delta = high - low
+    value = (delta[:, 0] * (points[..., 1] - low[:, 1])
+             - delta[:, 1] * (points[..., 0] - low[:, 0]))
+    return np.where(swap, -value, value)
 
 
 def _supercover_segment(blocked, a, b):

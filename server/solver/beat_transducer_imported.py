@@ -64,7 +64,6 @@ def preflight(record: Mapping, msh_text: str, channels: Sequence, *, backend: st
         if planes:
             from server.mesh.surface_topology import orient_closed_surface
 
-            axes = tuple({"x0": 0, "y0": 1}[p] for p in planes)
             tolerance = max(1e-9, float(np.linalg.norm(np.ptp(mesh.points_m, axis=0))) * 1e-6)
             points = mesh.points_m.copy()
             for axis in axes:
@@ -291,6 +290,9 @@ def package_sweep(
                 "undriven_transducers": "shorted",
                 "surface_completion_factors": list(sweep.rows[0].radiation.metadata["surface_completion_factors"]),
                 "physical_driver_orbit_counts": list(sweep.rows[0].radiation.metadata["physical_driver_orbit_counts"]),
+                # Native currents, as on the coupled route; input impedance
+                # alone multiplies by the orbit count.
+                "current_definition": "per physical driver; orbit images excluded",
                 "velocity_rms_m_per_s": [
                     json_safe_native_value(row.velocity_rms_m_per_s[port_index])
                     for row in sweep.rows

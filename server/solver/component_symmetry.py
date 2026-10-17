@@ -63,8 +63,30 @@ def _content_key(meshes, axis, axes, tolerance, channel):
     return (tuple(sorted(partitions)), tuple(axis), tuple(axes), tolerance, channel)
 
 
+def _normalised(meshes, axes, tolerance):
+    """One coordinate form for the cache key and the inference alike.
+
+    Admission and compilation snap near-plane vertices with their own
+    tolerances, and image transforms turn -0 into +0. Snap again on the
+    active cut planes and drop the sign of zero, so equal geometry hashes equal.
+    """
+    result = {}
+    for mesh, groups in meshes.items():
+        normalised = []
+        for faces, triangles in groups:
+            triangles = np.array(triangles, dtype=float) + 0.  # -0 -> +0
+            for axis in axes:
+                if axis in (0, 1):
+                    plane = triangles[..., axis]
+                    plane[np.abs(plane) <= tolerance] = 0.
+            normalised.append((faces, triangles))
+        result[mesh] = normalised
+    return result
+
+
 def infer_component_symmetry(meshes_m, motion_axis, active_axes=(), *,
                              channel_id="unknown", tolerance_m=1e-9):
+    meshes_m = _normalised(meshes_m, active_axes, tolerance_m)
     key = _content_key(meshes_m, motion_axis, active_axes, tolerance_m, channel_id)
     check_geometry()
     with _cache_lock:
@@ -213,10 +235,22 @@ class _Footprint(NamedTuple):
     area: float
     coverage: np.ndarray
     origin: np.ndarray
-    cell: float
+    cell: np.ndarray
     shape: np.ndarray
     axial: np.ndarray | None = None
     heights: np.ndarray | None = None
+    centre: np.ndarray | None = None
+    frame: np.ndarray | None = None
+
+    def local(self, triangles):
+        """Express common-frame triangles in this footprint's raster frame."""
+        return triangles if self.frame is None else (triangles - self.centre) @ self.frame
+
+
+# Cells along each side of a footprint's raster frame. Cells are anisotropic,
+# so a thin strip's short side is resolved as finely as its long side; the
+# budget stays FOOTPRINT_CELLS**2 cells whatever the aspect ratio.
+FOOTPRINT_CELLS = 256
 
 
 def _footprint(triangles, axial=None):
@@ -228,18 +262,30 @@ def _footprint(triangles, axial=None):
         axial = np.asarray(axial, float)[area > 0]
     triangles = triangles[area > 0]
     if not len(triangles):
-        return _Footprint(triangles, 0., np.zeros(1, bool), np.zeros(2), 1., np.ones(2, int))
-    origin = triangles.min(axis=(0, 1))
-    extent = triangles.max(axis=(0, 1)) - origin
-    cell = extent.max() / 256
-    shape = np.maximum(1, np.ceil(extent / cell).astype(int))
+        return _Footprint(triangles, 0., np.zeros(1, bool), np.zeros(2), np.ones(2), np.ones(2, int))
+    centre = frame = None
+    local = triangles
+    extent = np.ptp(triangles.reshape(-1, 2), axis=0)
+    # A thin strip lying diagonally has a square bounding box; rasterise it in
+    # its principal frame when that frame's box is much tighter.
+    vertices = triangles.reshape(-1, 2)
+    middle = vertices.mean(axis=0)
+    _, basis = np.linalg.eigh((vertices - middle).T @ (vertices - middle))
+    rotated = (triangles - middle) @ basis
+    rotated_extent = np.ptp(rotated.reshape(-1, 2), axis=0)
+    if np.prod(rotated_extent) < .5 * np.prod(extent):
+        centre, frame, local, extent = middle, basis, rotated, rotated_extent
+    origin = local.min(axis=(0, 1))
+    cell = np.where(extent > 0, extent, extent.max()) / FOOTPRINT_CELLS
+    shape = np.maximum(1, np.ceil(extent / cell - 1e-9).astype(int))
     heights = None
     if axial is None:
-        coverage = _coverage(triangles, origin, cell, shape)
+        coverage = _coverage(local, origin, cell, shape)
     else:
-        heights = _coverage(triangles, origin, cell, shape, axial)
+        heights = _coverage(local, origin, cell, shape, axial)
         coverage = np.isfinite(heights)
-    return _Footprint(triangles, float(coverage.sum() * cell**2), coverage, origin, cell, shape, axial, heights)
+    return _Footprint(triangles, float(coverage.sum() * np.prod(cell)), coverage, origin, cell, shape,
+                      axial, heights, centre, frame)
 
 
 def _coverage(triangles, origin, cell, shape, axial=None):
@@ -303,7 +349,7 @@ def _footprints_overlap(first, second, *, max_gap=None):
     # Rasterise the larger footprint onto the smaller footprint's grid. Both
     # now use the same cell area; folded triangles never inflate union area.
     smaller, larger = (first, second) if first.area <= second.area else (second, first)
-    other = _coverage(larger.triangles, smaller.origin, smaller.cell, smaller.shape,
+    other = _coverage(smaller.local(larger.triangles), smaller.origin, smaller.cell, smaller.shape,
                       larger.axial if max_gap is not None else None)
     shared = smaller.coverage & (other if max_gap is None else np.isfinite(other))
     if np.count_nonzero(shared) < .5 * smaller.coverage.sum():

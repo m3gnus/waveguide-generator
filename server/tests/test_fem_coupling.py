@@ -1181,6 +1181,24 @@ def test_near_contact_moving_pair_requires_same_channel(tmp_path, gap, other_cha
         assert len(_ingest(bundle, tmp_path)['fem_regions']) == 2
 
 
+@pytest.mark.parametrize('gap', [1e-5, 1e-3])
+def test_near_touching_same_channel_moving_pair_with_ports_names_the_remedy(tmp_path, gap):
+    from server.tests.test_fem_regions import _face
+
+    bundle, manifest, first = _coupling_bundle(tmp_path / 'returns', cavity_width=80)
+    second = _add_region(bundle, manifest, origin=(0, 30 + gap, 0), interface=True)
+    for region, y, normal in ((first, 30., 1), (second, 30 + gap, -1)):
+        region['surface_groups'][0]['faces'] = [
+            _face(800, (20, y, 10), [0, normal, 0], (0, y, 0), (40, y, 20))]
+    (bundle / 'wgreturn.json').write_text(json.dumps(manifest))
+    with pytest.raises(FemRegionMeshError) as caught:
+        _coupled(bundle, manifest, first, extra_regions=[second])
+    message = str(caught.value)
+    assert 'did not survive' not in message
+    assert "Rear chamber" in message and "Front chamber" in message and "group 'Cone'" in message
+    assert "near-touching moving faces must be either exactly coincident or separated by more than 0.001 mm" in message
+
+
 def test_touching_moving_fields_are_restricted_but_port_grading_reaches_exterior(tmp_path, monkeypatch):
     import gmsh
     from server.mesh import fem_coupling
@@ -1348,3 +1366,151 @@ def test_covered_painted_source_is_a_named_blocking_ingest_finding(tmp_path, mov
     with pytest.raises(ingest.IngestRefusal, match=f"outer-cone.*Rear chamber.*{message}") as caught:
         _ingest(bundle, tmp_path)
     assert caught.value.stage == "stage 7 meshing"
+
+
+def _near_contact(boxes, *, prisms=None, **options):
+    """Run the near-contact gate on bare OCC solids, one region per solid."""
+    from server.mesh import fem_coupling
+
+    def build():
+        import gmsh
+
+        gmsh.clear()
+        gmsh.model.add("near-contact")
+        volumes = [gmsh.model.occ.addBox(*box) for box in boxes]
+        volumes.extend(prism(gmsh) for prism in prisms or ())
+        gmsh.model.occ.synchronize()
+        data = [({"region_id": f"r{i}", "name": f"Region {i}", "surface_groups": []},
+                 [volume], sorted(fem_coupling._boundary(gmsh, [volume])), {})
+                for i, volume in enumerate(volumes)]
+        calls = []
+
+        class Occ:
+            def __getattr__(self, name):
+                return getattr(gmsh.model.occ, name)
+
+            def getDistance(self, *args):
+                calls.append(args)
+                return gmsh.model.occ.getDistance(*args)
+
+        class Model:
+            occ = Occ()
+
+            def __getattr__(self, name):
+                return getattr(gmsh.model, name)
+
+        counting = type("CountingGmsh", (), {"model": Model()})()
+        try:
+            return fem_coupling._near_contact_problem(counting, data, **options), len(calls)
+        finally:
+            gmsh.clear()
+
+    return _run_in_gmsh_session(build)
+
+
+@pytest.mark.parametrize("offset", [0., 5e-4], ids=["exact", "diagonal-0.0005mm"])
+@pytest.mark.parametrize("contact", ["edge", "corner"])
+def test_regions_sharing_only_an_edge_or_corner_are_not_near_contact(offset, contact):
+    first = (0, 0, 0, 40, 30, 20)
+    if contact == "edge":
+        second = (0, 30 + offset, 20 + offset, 40, 30, 20)
+    else:
+        second = (40 + offset, 30 + offset, 20 + offset, 10, 10, 10)
+    problem, _calls = _near_contact([first, second])
+    assert problem is None
+
+
+@pytest.mark.parametrize("gap", [1e-5, 1e-4, 1e-3])
+@pytest.mark.parametrize("overlap", ["full", "corner"])
+def test_facing_faces_inside_the_tolerance_remain_near_contact(gap, overlap):
+    first = (0, 0, 0, 40, 30, 20)
+    second = ((0, 30 + gap, 0, 40, 30, 20) if overlap == "full"
+              else (35, 30 + gap, 15, 20, 20, 20))
+    problem, _calls = _near_contact([first, second])
+    assert problem and "near-contact" in problem and "tolerance 0.001 mm" in problem
+    assert _near_contact([first, (0, 30.1, 0, 40, 30, 20)])[0] is None
+
+
+def _faceted_prism(gmsh, facets, radius, height, hole=None):
+    occ = gmsh.model.occ
+
+    def polygon(r):
+        points = [occ.addPoint(r * np.cos(2 * np.pi * i / facets), r * np.sin(2 * np.pi * i / facets), 0)
+                  for i in range(facets)]
+        return occ.addCurveLoop([occ.addLine(points[i], points[(i + 1) % facets]) for i in range(facets)])
+
+    surface = occ.addPlaneSurface([polygon(radius)] + ([polygon(hole)] if hole else []))
+    return next(tag for dim, tag in occ.extrude([(2, surface)], 0, 0, height) if dim == 3)
+
+
+@pytest.mark.parametrize("gap", [0., .1, 1e-4])
+def test_nested_faceted_cylinder_and_tube_prune_before_occ_distance(gap):
+    facets = 300
+    problem, calls = _near_contact([], prisms=[
+        lambda gmsh: _faceted_prism(gmsh, facets, 10, 20),
+        lambda gmsh: _faceted_prism(gmsh, facets, 12, 20, hole=10 + gap)])
+    assert (problem is not None) == (gap == 1e-4)
+    # The unpruned pairwise check made 1,400-2,300 OCC distance calls (20-27 s).
+    # Coplanar facets, perpendicular caps and facets wholly beyond each
+    # other's planes never reach OCC; at most each facet's tilted neighbours do.
+    assert calls <= 2 * facets + 8
+
+
+def _region_in_cavity(tmp_path, grow, *, contacts_only):
+    """A sealed 40x30x20 mm cavity and a region box grown by ``grow`` mm per face."""
+    from server.mesh import fem_coupling
+    from server.mesh.imported import _geometry_fingerprint, _import_occ_root_bodies
+    from hornlab_mesher.step_import import gmsh_surface_geometries, gmsh_surface_tags
+
+    assembly, air = tmp_path / "shell.step", tmp_path / "air.step"
+
+    def build():
+        import gmsh
+
+        gmsh.clear()
+        gmsh.model.add("shell")
+        outer = gmsh.model.occ.addBox(-2, -2, -2, 44, 34, 24)
+        cavity = gmsh.model.occ.addBox(0, 0, 0, 40, 30, 20)
+        gmsh.model.occ.cut([(3, outer)], [(3, cavity)])
+        gmsh.model.occ.synchronize()
+        gmsh.write(str(assembly))
+        gmsh.clear()
+        gmsh.model.add("air")
+        gmsh.model.occ.addBox(-grow, -grow, -grow, 40 + 2 * grow, 30 + 2 * grow, 20 + 2 * grow)
+        gmsh.model.occ.synchronize()
+        gmsh.write(str(air))
+        gmsh.clear()
+        gmsh.model.add("reference")
+        _import_occ_root_bodies(gmsh, assembly)
+        reference = gmsh_surface_geometries(gmsh_surface_tags())
+        return fem_coupling.build_coupled_mesh(
+            assembly, [(air, _region(surface_groups=[]))],
+            recipe={"healing_options": [], "normalisation_matrix": np.eye(4).tolist(),
+                    "recentre_translation_mm": [0, 0, 0], "surface_order_reference": reference},
+            expected_geometry_hash=_geometry_fingerprint(reference),
+            normalisation_matrix=np.eye(4).tolist(), sizes=SIZES, exterior_names={},
+            contacts_only=contacts_only,
+        )
+
+    return _run_in_gmsh_session(build)
+
+
+@pytest.mark.parametrize("grow", [1e-6, 1e-4])
+def test_interior_region_a_few_nanometres_larger_than_its_cavity_is_accepted(tmp_path, grow):
+    assert _region_in_cavity(tmp_path, grow, contacts_only=True) == {"exterior": None, "regions": {}}
+
+
+def test_region_overlap_refusal_names_its_size(tmp_path):
+    with pytest.raises(FemRegionMeshError) as caught:
+        _region_in_cavity(tmp_path, .5, contacts_only=True)
+    message = str(caught.value)
+    assert "Rear chamber" in message and "overlaps assembly material by" in message
+    assert "mm³" in message and "% of its" in message and "tolerance" not in message
+
+
+def test_ported_region_sliver_overlap_names_size_and_tolerance(tmp_path):
+    with pytest.raises(FemRegionMeshError) as caught:
+        _region_in_cavity(tmp_path, 1e-6, contacts_only=False)
+    message = str(caught.value)
+    assert "overlaps assembly material by" in message and "mm³" in message
+    assert "within the 0.001 mm tolerance" in message and "meet the material exactly" in message

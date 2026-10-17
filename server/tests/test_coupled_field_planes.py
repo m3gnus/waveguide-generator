@@ -451,6 +451,57 @@ def test_spatial_ray_tangency_does_not_toggle_body_parity():
     assert SkinRayIndex(xyz[faces], [1, 0, 0]).query([[.5, 0, .5]])[0].tolist() == [True]
 
 
+def test_plane_requests_reuse_the_job_skin_index_until_its_artifact_changes(stored, monkeypatch):
+    from server.jobs import body_index
+    store, _, _, _, traces = stored
+    body_index._skin_indexes.clear()
+    builds = {"ray": 0, "distance": 0}
+    for name, cls in (("ray", body_index.SkinRayIndex), ("distance", body_index.SkinDistanceIndex)):
+        original = cls.__init__
+        def counted(self, *args, _name=name, _original=original, **kwargs):
+            builds[_name] += 1
+            _original(self, *args, **kwargs)
+        monkeypatch.setattr(cls, "__init__", counted)
+    def known(mesh, f, k, p, q, points, **kwargs):
+        return points[:, 0] + 0j
+    request = plane_request("exterior", quantity="velocity_normal", frequency=100.)
+    request.plane.origin_m = (.2, .3, .4)
+    evaluate_coupled_plane(store, "field", request, evaluator=known)
+    request.plane.origin_m = (.25, .3, .4)
+    evaluate_coupled_plane(store, "field", request, evaluator=known)
+    evaluate_coupled_plane(store, "field", plane_request(), evaluator=known)
+    assert builds == {"ray": 1, "distance": 1}
+    # A re-published artifact with a different skin rebuilds and replaces
+    # the job's entry.
+    changed = dict(traces, points_m=traces["points_m"] * 1.01)
+    store.store_bem_trace_arrays("field", changed)
+    evaluate_coupled_plane(store, "field", request, evaluator=known)
+    assert builds == {"ray": 2, "distance": 2}
+    assert len([key for key in body_index._skin_indexes if key[0] == "field"]) == 1
+    # A deleted artifact drops the job's entries.
+    from types import SimpleNamespace
+    from server.jobs.fem_field import FemFieldInvalidSelection
+    payload = store.load_fem_field("field", 100., "fem")
+    gone = SimpleNamespace(load_fem_field=lambda *a: payload, load_bem_traces=lambda *a: None)
+    with pytest.raises(FemFieldInvalidSelection):
+        evaluate_coupled_plane(gone, "field", request, evaluator=known)
+    assert not [key for key in body_index._skin_indexes if key[0] == "field"]
+
+
+@pytest.mark.parametrize("mirror", [1., -1.])
+@pytest.mark.parametrize("offset", [5e-8, 5e-9])
+def test_ray_parity_beside_an_edge_between_very_different_heights(mirror, offset):
+    from server.jobs.body_index import SkinRayIndex
+    # One sheet, split along y=0 into a tall and a sliver triangle. A ray just
+    # beside the shared edge crosses the sheet once, inside the sliver.
+    xyz = np.array([[0, 0, 1], [1, 0, 1], [.5, 1000, 1], [.5, -1e-3, 1]], float)
+    xyz[:, 1] *= mirror
+    faces = np.array([[0, 1, 2], [1, 0, 3]])
+    points = [[.5, -offset * mirror, 0], [.5, offset * mirror, 0]]
+    inside, _ = SkinRayIndex(xyz[faces], [0, 0, 1]).query(points)
+    assert inside.tolist() == [True, True]
+
+
 def test_interior_location_batches_tetrahedra_and_preserves_shared_face_priority(monkeypatch):
     xyz = np.array([[0, 0, 0], [.01, 0, 0], [0, .01, 0], [0, 0, .01]])
     tets = np.tile([0, 1, 2, 3], (1024, 1))

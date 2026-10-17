@@ -54,9 +54,9 @@ def sample_interior(xyz, tetrahedra, pressure, points, frequency, density, check
 
 def inside_bodies(mesh, points, symmetry, check=lambda: None):
     """Indexed ray parity, including the closed symmetry images."""
-    from server.jobs.body_index import SkinRayIndex, skin_triangles
+    from server.jobs.body_index import RAY_DIRECTION, SkinRayIndex, skin_triangles
 
-    index = SkinRayIndex(skin_triangles(mesh, symmetry), [0.371, 0.529, 0.763], check)
+    index = SkinRayIndex(skin_triangles(mesh, symmetry), RAY_DIRECTION, check)
     return index.query(points, check)[0]
 
 
@@ -85,16 +85,20 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
     # Wire codes: 0 valid, 1 solid/outside selected domain, 2 unreliable stencil.
     mask_reason = np.ones(len(points), dtype="u1")
     if request.scope != "interior":
+        from server.jobs.body_index import crossing_cells, forget_skin_indexes, skin_indexes
+
         retained = store.load_bem_traces(job_id, frequency, payload["channel_id"])
         if retained is None:
+            forget_skin_indexes(job_id)
             raise FemFieldInvalidSelection("No retained BEM traces; re-solve to enable exterior planes")
         mesh, p, q, speed, density, symmetry, rotation = retained
-        from server.jobs.body_index import SkinRayIndex, SkinDistanceIndex, skin_triangles, crossing_cells
-
-        triangles = skin_triangles(mesh, symmetry)
+        # Skin indexes depend only on the retained mesh and symmetry, not on
+        # the plane, frequency or channel: reuse them across plane requests.
+        indexes = skin_indexes(job_id, mesh, symmetry)
+        triangles = indexes.triangles
         image_points = points @ rotation.T
         # One base classification per request; velocity reuses it.
-        body = SkinRayIndex(triangles, [0.371, 0.529, 0.763], check).query(image_points, check)[0]
+        body = indexes.ray(check).query(image_points, check)[0]
         exterior = ~interior & ~body
         region_class[exterior] = 2
         crosses = crossing_cells(triangles, request.plane, rotation, check)
@@ -113,7 +117,7 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
             step = np.full(len(selected), min(speed / frequency / 50, 0.1))
             evaluation_points = selected
             if request.quantity == "velocity_normal":
-                distance = SkinDistanceIndex(triangles, check).query(selected, check)
+                distance = indexes.distance(check).query(selected, check)
                 step = np.minimum(step, distance * 0.05)
                 rounding = np.max(np.abs(np.spacing(selected.astype(np.float32))), axis=1).astype(float)
                 # Keep the conservative step bound for Float32 accelerator evaluations.

@@ -946,6 +946,31 @@ def test_compile_reuses_admission_geometry_verdict(monkeypatch):
                           frequencies_hz=[100.], transducers={'fem': driver()})
 
 
+def test_compile_reuses_admission_geometry_verdict_under_x_symmetry(monkeypatch):
+    from server.solver import component_symmetry as module
+    from server.solver.coupled_admission import driver_surface_problem
+    item = region_input()
+    points = item.domain.points_mm.copy()
+    # Retained meshes carry signed zeros and sub-tolerance plane offsets.
+    # Compilation's image transform and snapping normalise both; admission
+    # must hash the same geometry.
+    points[[0, 1, 2], 2] = -0.
+    points[2, 0] = 3e-9
+    item = replace(item, domain=replace(item.domain, points_mm=points))
+    record = {'fem_regions': [dict(item.record, mesh_store_path='first.msh')],
+              'symmetry': {'domain_planes': ['x0']}}
+    channel = DriveChannel(id='fem', source_ids=[], motion='axial', exterior_transducer=driver())
+    monkeypatch.setattr('server.mesh.artifact.read_verified_fem_region_mesh', lambda *a: 'verified')
+    monkeypatch.setattr('server.mesh.fem_regions.read_fem_region_domain', lambda *a: item.domain)
+    module._verdicts.clear()
+    assert driver_surface_problem(record, [channel]) is None
+    assert len(module._verdicts) == 1
+    monkeypatch.setattr(module, '_infer_component_symmetry', lambda *a, **kw: pytest.fail('compile repeated geometry verdict'))
+    request = build_coupled_request(None, [item], layout=compiled().layout, frame=FRAME, symmetry='yz',
+                                    frequencies_hz=[100.], transducers={'fem': driver()})
+    assert request.wire['compiled_system']['components'][0]['parameters']['surface_completion_factor'] == 2
+
+
 def test_cancelled_raster_work_stops_before_completion_and_is_not_cached():
     from server.solver import component_symmetry as module
     front = revolved_patch(.1, cone=True, rings=40, sectors=256)
@@ -971,3 +996,38 @@ def test_fem_normal_preparation_observes_admission_cancel_token():
         raise GeometryCheckCancelled()
     with geometry_cancellation(stop), pytest.raises(GeometryCheckCancelled):
         _fem_driver_triangles(region_input().domain)
+
+
+def _strip(aspect, *, angle=0., shift=0., z=0., reverse=False, length=.1):
+    width = length / aspect
+    corners = np.array([[0, shift], [length, shift], [length, shift + width], [0, shift + width]], float)
+    c, s = np.cos(angle), np.sin(angle)
+    xy = corners @ np.array([[c, s], [-s, c]])
+    points = np.column_stack([xy, np.full(4, z)])
+    faces = np.array([[0, 1, 2], [0, 2, 3]])
+    return skin(points, faces[:, ::-1] if reverse else faces)
+
+
+@pytest.mark.parametrize('angle', [0., np.radians(30)], ids=['aligned', 'diagonal'])
+@pytest.mark.parametrize('aspect', [500, 1000])
+def test_thin_strip_front_and_rear_faces_merge_with_true_area(aspect, angle):
+    from server.solver import component_symmetry as module
+    module._verdicts.clear()
+    front = _strip(aspect, angle=angle)
+    rear = _strip(aspect, angle=angle, z=-.001, reverse=True)
+    footprint = module._footprint(front[1][:, :, :2])
+    assert footprint.area == pytest.approx(.1 * .1 / aspect, rel=.02)
+    assert infer_component_symmetry({'front': [front], 'rear': [rear]}, [0, 0, 1])['physical_driver_orbit_count'] == 1
+
+
+@pytest.mark.parametrize('angle', [0., np.radians(30)], ids=['aligned', 'diagonal'])
+@pytest.mark.parametrize('aspect', [500, 1000])
+def test_thin_strip_beside_another_strip_does_not_merge(aspect, angle):
+    from server.solver import component_symmetry as module
+    module._verdicts.clear()
+    width = .1 / aspect
+    front = _strip(aspect, angle=angle)
+    neighbour = _strip(aspect, angle=angle, shift=.6 * width, z=-.001, reverse=True)
+    with pytest.raises(DriverSymmetryError) as caught:
+        infer_component_symmetry({'front': [front], 'rear': [neighbour]}, [0, 0, 1])
+    assert caught.value.code == 'driver_disconnected_patches'

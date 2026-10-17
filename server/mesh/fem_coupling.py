@@ -51,53 +51,256 @@ def _label(region: Mapping[str, Any], group: Mapping[str, Any] | None = None) ->
     return result
 
 
-def _near_contact_problem(gmsh: Any, region_data: Sequence[Any]) -> str | None:
+# Facing faces must overlap over more than a pinhole: probes sit on two rings
+# this far around the closest points. Edge or corner proximity is not contact.
+FACING_PROBE_RADIUS_MM = 10 * NEAR_CONTACT_TOLERANCE_MM
+FACING_PROBE_ANGLES = np.radians(np.arange(15, 360, 30))
+FACING_MIN_PROBES = 2
+# Planes this far from parallel cannot face each other across the tolerance
+# over the probe area; their closest points lie on an edge.
+FACING_MIN_NORMAL_DOT = .5
+
+
+class _Face:
+    """Per-face pruning data: inflated box, plane and conservative hull."""
+
+    def __init__(self, gmsh: Any, tag: int, owner: int, position: int, inflate: float):
+        self.tag, self.owner, self.position = tag, owner, position
+        box = np.asarray(gmsh.model.getBoundingBox(2, tag), dtype=float)
+        self.box = box
+        self.low, self.high = box[:3] - inflate, box[3:] + inflate
+        self.normal = self.offset = None
+        corners = np.array([[box[i], box[j], box[k]] for i in (0, 3) for j in (1, 4) for k in (2, 5)])
+        self.hull = corners
+        if gmsh.model.getType(2, tag) != "Plane":
+            return
+        lower, upper = (np.asarray(v, dtype=float) for v in gmsh.model.getParametrizationBounds(2, tag))
+        middle = ((lower + upper) / 2).tolist()
+        normal = np.asarray(gmsh.model.getNormal(tag, middle), dtype=float)
+        if not np.isfinite(normal).all() or np.linalg.norm(normal) == 0:
+            return
+        self.normal = normal / np.linalg.norm(normal)
+        self.offset = float(self.normal @ np.asarray(gmsh.model.getValue(2, tag, middle), dtype=float))
+        # A planar face lies in the convex hull of its boundary. Straight
+        # edges contribute their end points; any other curve its box corners.
+        points = []
+        for _dim, curve in gmsh.model.getBoundary([(2, tag)], combined=False, oriented=False):
+            curve = abs(int(curve))
+            if gmsh.model.getType(1, curve) == "Line":
+                points.extend(gmsh.model.getValue(0, abs(int(vertex)), [])
+                              for _d, vertex in gmsh.model.getBoundary([(1, curve)], oriented=False))
+            else:
+                b = gmsh.model.getBoundingBox(1, curve)
+                points.extend([b[i], b[j], b[k]] for i in (0, 3) for j in (1, 4) for k in (2, 5))
+        if points:
+            self.hull = np.asarray(points, dtype=float).reshape(-1, 3)
+
+
+def _beyond_plane(plane: _Face, other: _Face, gap: float) -> bool:
+    """True when ``other`` lies wholly more than ``gap`` from ``plane``'s plane."""
+    if plane.normal is None:
+        return False
+    signed = other.hull @ plane.normal - plane.offset
+    return bool(signed.min() > gap or signed.max() < -gap)
+
+
+def _cannot_face(a: _Face, b: _Face, gap: float) -> bool:
+    """Exact pre-filters before an OCC distance; each keeps every facing pair."""
+    if a.normal is not None and b.normal is not None:
+        dot = abs(float(a.normal @ b.normal))
+        if dot < FACING_MIN_NORMAL_DOT:
+            return True
+        if dot > 1 - 1e-12 and abs(a.offset - np.sign(a.normal @ b.normal) * b.offset) <= 1e-7:
+            # Coplanar: any separation is tangential to both faces.
+            return True
+    return _beyond_plane(a, b, gap) or _beyond_plane(b, a, gap)
+
+
+def _candidate_pairs(faces: Sequence[_Face]) -> list[tuple[_Face, _Face]]:
+    """Sort-and-sweep on inflated boxes; only pairs from different regions."""
+    if not faces:
+        return []
+    low = np.array([f.low for f in faces])
+    high = np.array([f.high for f in faces])
+    owner = np.array([f.owner for f in faces])
+    order = np.argsort(low[:, 0], kind="stable")
+    sorted_low = low[order, 0]
+    pairs = []
+    for rank, index in enumerate(order):
+        end = int(np.searchsorted(sorted_low, high[index, 0], side="right"))
+        others = order[rank + 1:end]
+        others = others[(owner[others] != owner[index])
+                        & np.all(low[others, 1:] <= high[index, 1:], axis=1)
+                        & np.all(high[others, 1:] >= low[index, 1:], axis=1)]
+        for other in others:
+            first, second = (faces[index], faces[other])
+            if (first.owner, first.position) > (second.owner, second.position):
+                first, second = second, first
+            pairs.append((first, second))
+    pairs.sort(key=lambda pair: (pair[0].owner, pair[0].position, pair[1].owner, pair[1].position))
+    return pairs
+
+
+def _facing_probes(gmsh: Any, a: int, b: int, p: np.ndarray, normal: np.ndarray, tolerance: float) -> int:
+    """Count probes around ``p`` on face ``a`` that face face ``b`` within the gap."""
+    helper = np.eye(3)[np.argmin(np.abs(normal))]
+    u = np.cross(normal, helper)
+    u /= np.linalg.norm(u)
+    v = np.cross(normal, u)
+    offsets = [radius * (np.cos(angle) * u + np.sin(angle) * v)
+               for radius in (FACING_PROBE_RADIUS_MM / 2, FACING_PROBE_RADIUS_MM)
+               for angle in FACING_PROBE_ANGLES]
+    on_a, parameters_a = gmsh.model.getClosestPoint(2, a, (p + np.asarray(offsets)).ravel().tolist())
+    on_a = np.asarray(on_a, dtype=float).reshape(-1, 3)
+    parameters_a = np.asarray(parameters_a, dtype=float).reshape(-1, 2)
+    kept = [i for i, uv in enumerate(parameters_a) if gmsh.model.isInside(2, a, uv.tolist(), True)]
+    if len(kept) < FACING_MIN_PROBES:
+        return 0
+    on_b, parameters_b = gmsh.model.getClosestPoint(2, b, on_a[kept].ravel().tolist())
+    on_b = np.asarray(on_b, dtype=float).reshape(-1, 3)
+    parameters_b = np.asarray(parameters_b, dtype=float).reshape(-1, 2)
+    count = 0
+    for start, end, uv_a, uv_b in zip(on_a[kept], on_b, parameters_a[kept], parameters_b):
+        gap = end - start
+        length = float(np.linalg.norm(gap))
+        if length > tolerance + 1e-7 or not gmsh.model.isInside(2, b, uv_b.tolist(), True):
+            continue
+        n_a = np.asarray(gmsh.model.getNormal(a, uv_a.tolist()), dtype=float)
+        n_b = np.asarray(gmsh.model.getNormal(b, uv_b.tolist()), dtype=float)
+        if abs(float(n_a @ n_b)) < FACING_MIN_NORMAL_DOT:
+            continue
+        if length > 1e-9 and abs(float(gap @ n_a)) < FACING_MIN_NORMAL_DOT * length:
+            continue
+        count += 1
+    return count
+
+
+def _faces_face_each_other(gmsh: Any, a: int, b: int, p: np.ndarray, q: np.ndarray,
+                           normals: Sequence[np.ndarray], tolerance: float) -> bool:
+    """Require an overlapping projected area, not just near edges or corners."""
+    count = _facing_probes(gmsh, a, b, p, normals[0], tolerance)
+    if count >= FACING_MIN_PROBES:
+        return True
+    return count + _facing_probes(gmsh, b, a, q, normals[1], tolerance) >= FACING_MIN_PROBES
+
+
+def _near_contact_problem(gmsh: Any, region_data: Sequence[Any], *,
+                          exact_moving_contacts: bool = False) -> str | None:
     """Check separated face contacts before Boolean operations remove parents.
 
-    Bounding boxes prune distant pairs. OCC provides exact trimmed-face
-    distances; the separation must be non-tangential to both faces so neighbouring
-    side walls across a diaphragm's rim do not count as another contact.
+    Only faces that face each other count: opposite-facing faces, separated
+    along both normals by at most the tolerance, over an overlapping area
+    larger than a pinhole. Two regions that only share an edge or a corner,
+    a hair apart, are not in contact. Inflated boxes in a sort-and-sweep, then
+    plane pre-filters, prune pairs before OCC's exact trimmed-face distance.
     Exact contacts are checked using shared topology after fragmentation.
+
+    ``exact_moving_contacts`` (coupled meshes with exterior ports) also
+    refuses a same-channel moving pair inside the tolerance: OCC does not
+    merge it into one shared face, and only an exact contact can be coupled.
     """
     tolerance = NEAR_CONTACT_TOLERANCE_MM
-    boxes = {tag: np.asarray(gmsh.model.getBoundingBox(2, tag))
-             for _region, _volumes, boundary, _assigned in region_data for tag in boundary}
-    for index, (first, _volumes, faces, assigned) in enumerate(region_data):
-        first_groups = {tag: group for group in first['surface_groups']
-                        for tag in assigned[group['group_id']]}
-        for second, _other_volumes, other_faces, other_assigned in region_data[index + 1:]:
-            second_groups = {tag: group for group in second['surface_groups']
-                             for tag in other_assigned[group['group_id']]}
-            for a in faces:
-                for b in other_faces:
-                    low = np.maximum(boxes[a][:3], boxes[b][:3])
-                    high = np.minimum(boxes[a][3:], boxes[b][3:])
-                    if np.linalg.norm(np.maximum(low - high, 0)) > tolerance + 1e-7:
-                        continue
-                    distance, *coordinates = gmsh.model.occ.getDistance(2, a, 2, b)
-                    if distance < 0:
-                        return f"{_label(first)} and {_label(second)}: could not check near-contact face distance."
-                    if not 1e-7 < distance <= tolerance + 1e-7:
-                        continue
-                    p, q = np.asarray(coordinates).reshape(2, 3)
-                    direction = (q - p) / distance
-                    normals = [gmsh.model.getNormal(tag, gmsh.model.getParametrization(2, tag, point))
-                               for tag, point in ((a, p), (b, q))]
-                    if any(abs(np.dot(direction, normal)) < 1e-6 for normal in normals):
-                        continue
-                    left, right = first_groups.get(a), second_groups.get(b)
-                    if (left and right and left['kind'] == right['kind'] == 'moving'
-                            and left.get('drive_channel_id')
-                            and left.get('drive_channel_id') == right.get('drive_channel_id')):
-                        continue
-                    def contact_label(region, group):
-                        return _label(region, group) if group else f"{_label(region)}, group '_walls' (implicit rigid)"
-                    return (
-                        f"{contact_label(first, left)} and {contact_label(second, right)} are in near-contact "
-                        f"({distance:.6g} mm; tolerance {tolerance:g} mm); shared FEM air boundaries "
-                        "require moving faces on both sides of the same electrodynamic channel."
-                    )
+    groups = []
+    faces = []
+    for owner, (region, _volumes, boundary, assigned) in enumerate(region_data):
+        groups.append({tag: group for group in region["surface_groups"]
+                       for tag in assigned[group["group_id"]]})
+        faces.extend(_Face(gmsh, tag, owner, position, (tolerance + 1e-7) / 2)
+                     for position, tag in enumerate(boundary))
+
+    def contact_label(region, group):
+        return _label(region, group) if group else f"{_label(region)}, group '_walls' (implicit rigid)"
+
+    for face_a, face_b in _candidate_pairs(faces):
+        a, b = face_a.tag, face_b.tag
+        low = np.maximum(face_a.box[:3], face_b.box[:3])
+        high = np.minimum(face_a.box[3:], face_b.box[3:])
+        if np.linalg.norm(np.maximum(low - high, 0)) > tolerance + 1e-7:
+            continue
+        if _cannot_face(face_a, face_b, tolerance + 1e-7):
+            continue
+        first, second = region_data[face_a.owner][0], region_data[face_b.owner][0]
+        distance, *coordinates = gmsh.model.occ.getDistance(2, a, 2, b)
+        if distance < 0:
+            return f"{_label(first)} and {_label(second)}: could not check near-contact face distance."
+        if not 1e-7 < distance <= tolerance + 1e-7:
+            continue
+        p, q = np.asarray(coordinates).reshape(2, 3)
+        direction = (q - p) / distance
+        normals = [np.asarray(gmsh.model.getNormal(tag, gmsh.model.getParametrization(2, tag, point)))
+                   for tag, point in ((a, p), (b, q))]
+        if any(abs(np.dot(direction, normal)) < 1e-6 for normal in normals):
+            continue
+        if not _faces_face_each_other(gmsh, a, b, p, q, normals, tolerance):
+            continue
+        left, right = groups[face_a.owner].get(a), groups[face_b.owner].get(b)
+        if (left and right and left['kind'] == right['kind'] == 'moving'
+                and left.get('drive_channel_id')
+                and left.get('drive_channel_id') == right.get('drive_channel_id')):
+            if not exact_moving_contacts:
+                continue
+            return (
+                f"{contact_label(first, left)} and {contact_label(second, right)} are near-touching "
+                f"moving faces of drive channel {left['drive_channel_id']!r} ({distance:.6g} mm apart; "
+                f"tolerance {tolerance:g} mm). With exterior ports, near-touching moving faces must be "
+                f"either exactly coincident or separated by more than {tolerance:g} mm."
+            )
+        return (
+            f"{contact_label(first, left)} and {contact_label(second, right)} are in near-contact "
+            f"({distance:.6g} mm; tolerance {tolerance:g} mm); shared FEM air boundaries "
+            "require moving faces on both sides of the same electrodynamic channel."
+        )
     return None
+
+
+def _solid_size(gmsh: Any, volumes: Sequence[int]) -> tuple[float, float]:
+    """Volume (mm^3) and boundary area (mm^2) of OCC solids."""
+    volume = sum(gmsh.model.occ.getMass(3, int(tag)) for tag in volumes)
+    area = sum(gmsh.model.occ.getMass(2, tag) for tag in _boundary(gmsh, volumes))
+    return float(volume), float(area)
+
+
+def _air_volumes(gmsh: Any, region: Mapping[str, Any], volumes: Sequence[int],
+                 material: set[int], size: tuple[float, float], *, contacts_only: bool) -> list[int]:
+    """Region air after fragmentation, refusing overlaps by their measured size.
+
+    A piece shared with assembly material whose thickness (2 V / S) is within
+    the near-contact tolerance is a CAD face a few nanometres off, not an
+    overlap. Interior-only regions mesh their own solid in an independent
+    child, so such slivers are left with the material. A coupled mesh would
+    have to mesh the sliver itself, so it still needs an exact fit.
+    """
+    tolerance = NEAR_CONTACT_TOLERANCE_MM
+    volume, area = size
+    shared = [tag for tag in volumes if tag in material]
+    air = [tag for tag in volumes if tag not in material]
+    if not volumes:
+        raise FemRegionMeshError(
+            f"{_label(region)} lost its volume: none of its {volume:.6g} mm³ survived fragmentation."
+        )
+    if not air:
+        raise FemRegionMeshError(
+            f"{_label(region)} overlaps assembly material by {volume:.6g} mm³ (100% of its volume); "
+            "no air remains."
+        )
+    if not shared:
+        return air
+    pieces = [_solid_size(gmsh, [tag]) for tag in shared]
+    overlap = sum(piece for piece, _area in pieces)
+    percent = 100 * overlap / volume if volume > 0 else 100.
+    thickness = max(2 * piece / max(surface, 1e-300) for piece, surface in pieces)
+    measured = (f"by {overlap:.3g} mm³ ({percent:.3g}% of its {volume:.6g} mm³ volume; "
+                f"overlap thickness up to {thickness:.3g} mm)")
+    sliver = thickness <= tolerance and overlap <= tolerance * area
+    if sliver and contacts_only:
+        return air
+    if sliver:
+        raise FemRegionMeshError(
+            f"{_label(region)} overlaps assembly material {measured}, a sliver within the "
+            f"{tolerance:g} mm tolerance; a region with exterior ports must meet the material "
+            "exactly: make its faces coincide with the cavity walls."
+        )
+    raise FemRegionMeshError(f"{_label(region)} overlaps assembly material {measured}.")
 
 
 def _boundary(gmsh: Any, volumes: Sequence[int]) -> set[int]:
@@ -363,6 +566,7 @@ def build_coupled_mesh(
             for name, spec in exterior_names.items()
         }
         region_data = []
+        region_sizes: dict[str, tuple[float, float]] = {}
         for path, region in regions:
             # Reset every healing bit: region STEP must remain one solid, as in F6.
             inventory = declared_step_bodies(path)
@@ -391,7 +595,9 @@ def build_coupled_mesh(
                 raise FemRegionMeshError(f"{_label(region)} normalisation mismatch.")
             verify_region_symmetry(gmsh, region, boundary, assigned, domain_planes, cut_planes)
             region_data.append((region, volumes, boundary, assigned))
-        near_contact_problem = _near_contact_problem(gmsh, region_data)
+            region_sizes[region["region_id"]] = _solid_size(gmsh, volumes)
+        near_contact_problem = _near_contact_problem(
+            gmsh, region_data, exact_moving_contacts=not contacts_only)
         # Copy painted assembly faces as explicit tools. Passing constituent
         # faces alongside their parent volume yields empty ancestry for some
         # unchanged outer faces in OCC; independent copies retain that map.
@@ -441,10 +647,8 @@ def build_coupled_mesh(
         region_volumes = []
         for region, original_volumes, _boundary_tags, assigned in region_data:
             volumes = sorted(set().union(*(descendants[(3, tag)] for tag in original_volumes)))
-            if not volumes or material_volumes.intersection(volumes):
-                raise FemRegionMeshError(
-                    f"{_label(region)} overlaps assembly material or lost its volume."
-                )
+            volumes = _air_volumes(gmsh, region, volumes, material_volumes,
+                                   region_sizes[region["region_id"]], contacts_only=contacts_only)
             for volume in volumes:
                 if volume in air_owners:
                     raise FemRegionMeshError(

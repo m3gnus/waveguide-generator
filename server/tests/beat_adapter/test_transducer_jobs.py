@@ -197,6 +197,8 @@ def test_job_route_keeps_rms_pressure_all_coupled_traces_and_matrix(solid, recor
     trace = channel["metadata"]["beat_transducer"]
     assert trace["transducer_ids"] == ["transducer:driver", "transducer:shorted"]
     assert len(trace["velocity_rms_m_per_s"][0]) == 2
+    # Same current definition as the coupled route's metadata block.
+    assert trace["current_definition"] == "per physical driver; orbit images excluded"
     assert result["metadata"]["radiation_impedance_matrix"]["values"][0][0][1]["imaginary"] == -1
     assert partial[0][1]["channels"]["driver"]["frequencies"] == [100.0]
     from server.jobs.runtime import _extend_provisional_results
