@@ -293,6 +293,8 @@ def build_coupled_mesh_isolated(
     if not fem_regions_enabled():
         raise ChildRefusal(MESH_STAGE, "declared FEM regions are disabled")
     allowed = () if contacts_only else ("coupled.msh", *(f"region-{region['region_id']}.msh" for region in regions))
+    # Staging refusals name the declared region, not the member id.
+    region_names = {region["region_id"]: region.get("name", region["region_id"]) for region in regions}
     try:
         with isolated_step_task(
             "coupled_mesh", {"regions": [dict(region) for region in regions],
@@ -302,7 +304,9 @@ def build_coupled_mesh_isolated(
                              "cut_planes": list(cut_planes), "contacts_only": contacts_only},
             step_path=assembly_path, budget=MESH_BUDGET, deadline=deadline, allowed_artifacts=allowed,
             stage=MESH_STAGE, expected_sha256=expected_sha256,
-            expected_size_bytes=expected_size_bytes, additional_steps=members,
+            expected_size_bytes=expected_size_bytes, additional_steps={
+                region_id: {**member, "label": f"FEM region {region_names.get(region_id, region_id)!r}"}
+                for region_id, member in members.items()},
         ) as outcome:
             built = outcome.result.get("built")
             if not isinstance(built, dict) or not isinstance(built.get("regions"), dict):

@@ -1232,7 +1232,8 @@ def build_coupled_mesh(
             volume_name = physical_name(region["region_id"])
             names[volume_name] = {"dimension": 3, "tag": len(blocks) + 1, "entities": volumes}
             text = _msh(points, blocks, tetrahedra, volume_name, scratch_dir=scratch_dir)
-            domain = read_fem_region_domain(text, region["region_id"], scratch_dir=scratch_dir)
+            domain = read_fem_region_domain(text, region["region_id"], scratch_dir=scratch_dir,
+                                            name=region.get("name"))
             built_regions[region["region_id"]] = {
                 "region_id": region["region_id"],
                 "msh_text": text,

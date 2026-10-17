@@ -318,7 +318,7 @@ def test_verified_extra_member_refuses_after_admission(tmp_path):
     bundle, manifest, region = _coupling_bundle(tmp_path / "returns")
     path = bundle / region["file"]
     path.write_bytes(path.read_bytes() + b" ")
-    with pytest.raises(ChildRefusal, match="rear-chamber.*changed after bundle verification"):
+    with pytest.raises(ChildRefusal, match="Rear chamber.*changed after bundle verification"):
         _coupled(bundle, manifest, region)
 
 
@@ -821,7 +821,7 @@ def test_coupled_parent_keeps_child_stats_and_forwards_deadline(tmp_path, monkey
     def task(task, payload, **kwargs):
         assert task == "coupled_mesh"
         assert kwargs["deadline"] == 123.0
-        assert kwargs["additional_steps"] == members
+        assert kwargs["additional_steps"] == {"con": {**members["con"], "label": f"FEM region {region['name']!r}"}}
         assert kwargs["allowed_artifacts"] == ("coupled.msh", "region-con.msh")
         yield SimpleNamespace(
             result={"built": {"exterior": {"stats": {}}, "regions": {"con": {"stats": stats}}}},
@@ -838,6 +838,22 @@ def test_coupled_parent_keeps_child_stats_and_forwards_deadline(tmp_path, monkey
     assert result["regions"]["con"]["stats"] == stats
     assert result["regions"]["con"]["msh_text"] == "verified mesh"
 
+
+
+def test_region_staging_and_mesh_refusals_name_the_declared_region(tmp_path):
+    from server.mesh.fem_regions import read_fem_region_domain
+
+    bundle, manifest, first = _coupling_bundle(tmp_path / "returns")
+    (bundle / first["file"]).unlink()
+    with pytest.raises(ChildRefusal) as caught:
+        _coupled(bundle, manifest, first)
+    assert f"FEM region {first['name']!r}: the STEP is missing" in caught.value.detail
+    assert repr(first["region_id"]) not in caught.value.detail
+    # A triangle tagged with no physical name, read for a named region.
+    text = ("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$Nodes\n3\n1 0 0 0\n2 1 0 0\n3 0 1 0\n$EndNodes\n"
+            "$Elements\n1\n1 2 2 7 7 1 2 3\n$EndElements\n")
+    with pytest.raises(FemRegionMeshError, match="FEM region 'Front chamber' boundary group tag 7"):
+        read_fem_region_domain(text, "front-chamber", scratch_dir=tmp_path, name="Front chamber")
 
 
 def test_coupled_mesh_writes_and_reads_only_inside_child_scratch(tmp_path, monkeypatch):

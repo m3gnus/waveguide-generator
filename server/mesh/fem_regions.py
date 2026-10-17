@@ -507,12 +507,17 @@ class FemRegionDomain:
 
 def read_fem_region_domain(
     msh_text: str, region_id: str, *, scratch_dir: str | Path | None = None,
+    name: str | None = None,
 ) -> FemRegionDomain:
-    """Parse a region mesh written by :func:`build_fem_region_mesh`."""
+    """Parse a region mesh written by :func:`build_fem_region_mesh`.
+
+    Refusals name the region by its declared ``name`` when given.
+    """
 
     import meshio
     import numpy as np
 
+    label = name or region_id
     with tempfile.TemporaryDirectory(prefix="wg-fem-read-", dir=scratch_dir or temporary_directory_root()) as folder:
         path = Path(folder) / "region.msh"
         path.write_text(msh_text, encoding="utf-8")
@@ -529,7 +534,7 @@ def read_fem_region_domain(
         elif block.type == "triangle":
             if index >= len(physical) or len(physical[index]) != len(block.data):
                 raise FemRegionMeshError(
-                    f"FEM region {region_id!r} has boundary triangles with no group tags."
+                    f"FEM region {label!r} has boundary triangles with no group tags."
                 )
             tags = physical[index]
             for tag in np.unique(tags):
@@ -537,13 +542,13 @@ def read_fem_region_domain(
                 fields = parse_physical_name(name) if name is not None else None
                 if fields is None or fields.get("region") != region_id or "group" not in fields:
                     raise FemRegionMeshError(
-                        f"FEM region {region_id!r} boundary group tag {int(tag)} has no valid physical name."
+                        f"FEM region {label!r} boundary group tag {int(tag)} has no valid physical name."
                     )
                 surfaces.setdefault(name, []).append(
                     np.asarray(block.data[np.asarray(tags) == tag], dtype=np.int64)
                 )
     if not tetrahedra:
-        raise FemRegionMeshError(f"FEM region {region_id!r} mesh holds no tetrahedra.")
+        raise FemRegionMeshError(f"FEM region {label!r} mesh holds no tetrahedra.")
     domain = FemRegionDomain(
         region_id=region_id,
         points_mm=np.asarray(mesh.points, dtype=np.float64),
@@ -551,11 +556,11 @@ def read_fem_region_domain(
         surfaces={name: np.concatenate(blocks) for name, blocks in surfaces.items()},
     )
 
-    _validate_boundary_coverage(domain)
+    _validate_boundary_coverage(domain, label)
     return domain
 
 
-def _validate_boundary_coverage(domain: FemRegionDomain) -> None:
+def _validate_boundary_coverage(domain: FemRegionDomain, label: str | None = None) -> None:
     """Require exactly one named triangle for every exterior tetrahedral facet."""
 
     import numpy as np
@@ -571,7 +576,7 @@ def _validate_boundary_coverage(domain: FemRegionDomain) -> None:
     if np.any(named_counts != 1) or not np.array_equal(named, boundary):
         groups = ", ".join(repr(fields["group"]) for fields in domain.groups().values()) or "<none>"
         raise FemRegionMeshError(
-            f"FEM region {domain.region_id!r}, surface groups {groups}: named surface "
+            f"FEM region {label or domain.region_id!r}, surface groups {groups}: named surface "
             "triangles do not cover the whole region boundary exactly once."
         )
 
@@ -585,7 +590,8 @@ def fem_region_mesh_stats(
 
     region_id = str(region["region_id"])
     try:
-        domain = read_fem_region_domain(built["msh_text"], region_id, scratch_dir=scratch_dir)
+        domain = read_fem_region_domain(built["msh_text"], region_id, scratch_dir=scratch_dir,
+                                        name=region.get("name"))
     except FemRegionMeshError as exc:
         labels = ", ".join(
             f"{group.get('name', group['group_id'])!r} ({group['group_id']!r})"

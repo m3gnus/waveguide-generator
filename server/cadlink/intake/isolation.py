@@ -614,11 +614,12 @@ def isolated_step_task(
         extra_sources = {}
         for index, (name, member) in enumerate((additional_steps or {}).items()):
             member_path = Path(member["path"])
+            label = member.get("label") or f"FEM region {name!r}"
             if not member_path.is_file() or member_path.is_symlink():
-                raise ChildRefusal(stage, f"FEM region {name!r}: the STEP is missing or is a symlink")
+                raise ChildRefusal(stage, f"{label}: the STEP is missing or is a symlink")
             destination = staged_input / f"region-{index}.step"
             digest, size = _stage_step_input(
-                member_path, destination, stage=f"{stage}: FEM region {name!r}",
+                member_path, destination, stage=f"{stage}: {label}",
                 expected_sha256=member.get("sha256"),
                 expected_size_bytes=member.get("size_bytes"),
             )
