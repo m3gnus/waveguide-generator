@@ -63,15 +63,17 @@ def managed_cpu(monkeypatch):
 CPU_FLOAT64 = ("beat-cpu", "cpu", "float64")
 
 
-def _pipeline(tmp_path, case, frequencies, *, engine_registry=None):
+def _pipeline(tmp_path, case, frequencies, *, engine_registry=None, transducer=None):
     record, ((envelope, field, details, _),) = _pipeline_runs(
-        tmp_path, case, frequencies, engine_registry=engine_registry)
+        tmp_path, case, frequencies, engine_registry=engine_registry, transducer=transducer)
     return record, envelope, field, details
 
 
 def _pipeline_runs(tmp_path, case, frequencies, runs=(("beat-cpu", CPU_FLOAT64),), *,
-                   engine_registry=None, inspect=None):
+                   engine_registry=None, inspect=None, transducer=None):
     """One real intake, then one job per (requested engine, expected FEM execution).
+
+    ``transducer`` makes ``drive-lf`` an electrodynamic voltage channel.
 
     Every job reuses the same ingested meshes, so runs compare node for node.
     ``inspect(store, job_id, envelope, field)`` runs on a worker thread while
@@ -95,7 +97,7 @@ def _pipeline_runs(tmp_path, case, frequencies, runs=(("beat-cpu", CPU_FLOAT64),
             results = []
             for engine, expected in runs:
                 started = time.monotonic()
-                job_id = await runtime.submit(validation_request(record, manifest, frequencies, engine))
+                job_id = await runtime.submit(validation_request(record, manifest, frequencies, engine, transducer))
                 await runtime.wait_idle(timeout=120.)
                 elapsed = time.monotonic() - started
                 row = runtime.store.get_job_row(job_id)
@@ -113,7 +115,8 @@ def _pipeline_runs(tmp_path, case, frequencies, runs=(("beat-cpu", CPU_FLOAT64),
                     field = {name: stored[name].copy() for name in stored.files}
                 assert field["schema"].item() == "wg-fem-field-store-v2"
                 assert field["phasor_convention"].item() == "exp(-i omega t)"
-                assert field["drive_normalization"].tolist() == ["unit_acceleration"]
+                assert field["drive_normalization"].tolist() == [
+                    "unit_acceleration" if transducer is None else "voltage_rms"]
                 assert field["channel_ids"].tolist() == ["drive-lf"]
                 assert field["region_ids"].tolist() == ["rear-chamber"]
                 np.testing.assert_array_equal(field["frequencies_hz"], frequencies)

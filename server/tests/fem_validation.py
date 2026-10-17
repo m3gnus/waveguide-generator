@@ -310,9 +310,16 @@ def ingest_validation_bundle(bundle, root, case):
         store.close()
 
 
-def validation_request(record, manifest, frequencies, engine="beat-cpu"):
-    """Bind the actual ingested identity through the CAD joblane setup API."""
+def validation_request(record, manifest, frequencies, engine="beat-cpu", transducer=None):
+    """Bind the actual ingested identity through the CAD joblane setup API.
+
+    ``transducer`` (an ``ExteriorTransducerSpec``) turns the FEM-only
+    ``drive-lf`` diaphragm into an electrodynamic voltage channel.
+    """
     setup = default_setup(manifest, {"engine": engine})
+    if transducer is not None:
+        setup.geometry["drive_channels"] = [{"id": "drive-lf", "source_ids": [], "motion": "axial",
+                                             "exterior_transducer": transducer.model_dump(mode="json")}]
     setup.geometry["mesh"] = dict(record["mesh_sizes"])
     setup.options.pop("frequency_range", None)
     setup.options.pop("num_frequencies", None)

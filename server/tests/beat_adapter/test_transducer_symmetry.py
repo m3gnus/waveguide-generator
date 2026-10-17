@@ -168,23 +168,41 @@ def test_exterior_disconnected_moving_tags_refused_at_compile_and_admission(make
     assert '2 separate drivers' in jobs.preflight(record, mesh, [channel], backend='cpu')
 
 
-@pytest.mark.live
-@pytest.mark.slow
-@pytest.mark.real_runtime
-@pytest.mark.skipif(os.environ.get('WG2_RUN_LIVE') != '1', reason='set WG2_RUN_LIVE=1')
-def test_live_exterior_only_full_half_zin_and_summed_spl_agree(make_mesh, layout, worker):
+def _live_full_vs_reduced(make_mesh, layout, worker, axes, mode, completion):
+    """Full octahedron against one reduced model: Zin, complex pressure and SPL within 1e-4."""
     from server.solver.official_beat import solve_transducer_compiled
 
     manager = SimpleNamespace(get_worker=lambda *a, **k: worker)
     spec = driver(tags=(2,), axis=[0, 0, 1])
-    requests = [t.build_transducer_request(octahedron(make_mesh, axes, scale=.01), drivers=[spec],
-        layout=layout, frame=FRAME, frequencies_hz=[100., 600.], symmetry=mode)
-        for axes, mode in (((), 'full'), ((0,), 'yz'))]
-    full, half = [solve_transducer_compiled(r, worker_manager=manager) for r in requests]
-    for complete, reduced in zip(full.rows, half.rows):
+    requests = [t.build_transducer_request(octahedron(make_mesh, cut, scale=.01), drivers=[spec],
+        layout=layout, frame=FRAME, frequencies_hz=[100., 600.], symmetry=symmetry)
+        for cut, symmetry in (((), 'full'), (axes, mode))]
+    params = requests[1].wire['compiled_system']['components'][0]['parameters']
+    # Centred on every active plane: a fraction of one driver, never an orbit.
+    assert params.get('surface_completion_factor', 1) == completion
+    assert params.get('physical_driver_orbit_count', 1) == 1
+    full, reduced_sweep = [solve_transducer_compiled(r, worker_manager=manager) for r in requests]
+    for complete, reduced in zip(full.rows, reduced_sweep.rows):
         np.testing.assert_allclose(reduced.input_impedance_ohm(spec.port_id),
                                    complete.input_impedance_ohm(spec.port_id), rtol=1e-4, atol=0)
         for plane, pressure in complete.pressure_rms_pa.items():
             np.testing.assert_allclose(reduced.pressure_rms_pa[plane], pressure, rtol=1e-4, atol=0)
             np.testing.assert_allclose(20 * np.log10(np.abs(reduced.pressure_rms_pa[plane]) / 20e-6),
                                        20 * np.log10(np.abs(pressure) / 20e-6), rtol=1e-4, atol=0)
+
+
+@pytest.mark.live
+@pytest.mark.slow
+@pytest.mark.real_runtime
+@pytest.mark.skipif(os.environ.get('WG2_RUN_LIVE') != '1', reason='set WG2_RUN_LIVE=1')
+def test_live_exterior_only_full_half_zin_and_summed_spl_agree(make_mesh, layout, worker):
+    _live_full_vs_reduced(make_mesh, layout, worker, (0,), 'yz', 2)
+
+
+@pytest.mark.live
+@pytest.mark.slow
+@pytest.mark.real_runtime
+@pytest.mark.skipif(os.environ.get('WG2_RUN_LIVE') != '1', reason='set WG2_RUN_LIVE=1')
+def test_live_exterior_only_full_quarter_zin_and_summed_spl_agree(make_mesh, layout, worker):
+    # x0 + y0 quarter: the centred driver is completed four times, orbit 1.
+    _live_full_vs_reduced(make_mesh, layout, worker, (0, 1), 'yz+xz', 4)
