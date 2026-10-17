@@ -1617,3 +1617,16 @@ def test_ported_region_sliver_overlap_names_size_and_tolerance(tmp_path):
     message = str(caught.value)
     assert "overlaps assembly material by" in message and "mm³" in message
     assert "within the 0.001 mm tolerance" in message and "meet the material exactly" in message
+
+
+def test_overlap_area_is_the_same_when_evaluated_in_blocks(monkeypatch):
+    from server.mesh import fem_coupling
+
+    def square(x, y, size):
+        corners = np.array([[x, y], [x + size, y], [x + size, y + size], [x, y + size]], dtype=float)
+        return np.stack([corners, np.roll(corners, -1, axis=0)], axis=1)
+
+    polygons = [square(-1, -1, 30), square(0, 0, 10), square(4, 3, 10)]
+    whole = fem_coupling._overlap_area(polygons, -1.)
+    monkeypatch.setattr(fem_coupling, "FACING_OVERLAP_BLOCK", 1)
+    assert whole == pytest.approx(42.) and fem_coupling._overlap_area(polygons, -1.) == pytest.approx(whole)

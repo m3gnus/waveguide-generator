@@ -66,6 +66,10 @@ FACING_MIN_NORMAL_DOT = .5
 # A shared edge or corner has no area; an overlap of more than this does.
 FACING_MIN_OVERLAP_MM2 = 1e-8
 FACING_CURVE_SEGMENTS = 128
+# Work is bounded: segment combinations are evaluated in blocks of this many,
+# and curved faces with more segment pairs than the cap take the sampled path.
+FACING_OVERLAP_BLOCK = 1 << 20
+FACING_CURVED_PAIR_CAP = 250_000_000
 # Otherwise dense samples decide: a cell-centred UV grid over the smaller
 # face, and points along both faces' boundary curves stepped this far into
 # their own face, so a shared edge or corner never projects onto the other
@@ -343,6 +347,17 @@ def _overlap_area(polygons: Sequence[np.ndarray], floor: float) -> float:
         weighted.append((low, high, slope, y0 - slope * x0, sign))
     if any(not len(terms[0]) for terms in weighted):
         return 0.
+    # The last polygon is taken in blocks, so memory stays bounded; the
+    # first should be the smallest (the band), so few combinations survive.
+    *leading, last = weighted
+    rows = int(np.prod([len(terms[0]) for terms in leading]))
+    step = max(1, FACING_OVERLAP_BLOCK // rows)
+    return sum(_overlap_terms(leading + [tuple(term[start:start + step] for term in last)], floor)
+               for start in range(0, len(last[0]), step))
+
+
+def _overlap_terms(weighted: Sequence[tuple[np.ndarray, ...]], floor: float) -> float:
+    """The signed integral over every combination of ``weighted`` segments."""
     # Every combination whose x ranges overlap, built one polygon at a time.
     index = [np.arange(len(weighted[0][0]))[:, None]]
     left, right = weighted[0][0], weighted[0][1]
@@ -389,6 +404,8 @@ def _planar_overlap(gmsh: Any, a: int, b: int, p: np.ndarray, n_a: np.ndarray,
     second, error_b = _planar_segments(gmsh, b, p, u, v)
     if not len(first) or not len(second):
         return None
+    if (error_a or error_b) and len(first) * len(second) > FACING_CURVED_PAIR_CAP:
+        return None
     low = np.maximum(first.reshape(-1, 2).min(axis=0), second.reshape(-1, 2).min(axis=0))
     high = np.minimum(first.reshape(-1, 2).max(axis=0), second.reshape(-1, 2).max(axis=0))
     if np.any(low >= high):
@@ -406,7 +423,7 @@ def _planar_overlap(gmsh: Any, a: int, b: int, p: np.ndarray, n_a: np.ndarray,
     if len(band) < 3:
         return False if error_a == error_b == 0 else None
     third = np.stack([band, np.roll(band, -1, axis=0)], axis=1)
-    area = _overlap_area([first, second, third], float(band[:, 1].min()))
+    area = _overlap_area([third, first, second], float(band[:, 1].min()))
     # Rounding scales with the band's extent; chords with the curves' error.
     rounding = 1e-12 * float(np.ptp(band, axis=0) @ np.ptp(band, axis=0))
     error = error_a + error_b
