@@ -1585,7 +1585,11 @@ def cad_provenance_record(
             "digest": revision["content_sha256"],
             "origin": "wg_defaults" if _is_default_setup(store, revision_id) else "user",
         }
-    ingest = store.get_ingest(str(getattr(solve_request.geometry, "ingest_id", "") or ""))
+    prepared_id = str(getattr(solve_request.geometry, "ingest_id", "") or "")
+    # Marked used before it is read: the job this provenance goes on names it.
+    if (touch := getattr(store, "touch_ingest", None)) is not None:
+        touch(prepared_id)
+    ingest = store.get_ingest(prepared_id)
     if ingest is not None:
         record = json.loads(ingest["record_json"])
         provenance["frame"] = frame_provenance(

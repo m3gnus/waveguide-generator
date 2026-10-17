@@ -45,6 +45,9 @@ def recover_manual_solve(
     and an update-restart latch apply only when accepting new work.
     """
 
+    # Marked used before it is read: the job this accepts names it.
+    if (touch := getattr(store, "touch_ingest", None)) is not None:
+        touch(ingest_id)
     ingest = store.get_ingest(ingest_id)
     if ingest is None:
         raise UnknownIngest(f"Unknown CAD ingest {ingest_id}")

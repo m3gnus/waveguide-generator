@@ -1968,6 +1968,12 @@ class JobRuntime:
 
         _refuse_removed_solver(request)
         await self.start()
+        ingest_id = getattr(request.geometry, "ingest_id", None)
+        touch = getattr(self.cadlink_store, "touch_ingest", None)
+        if ingest_id and touch is not None:
+            # Marked used before anything reads it, so a prepared-mesh
+            # collection deciding meanwhile keeps it (server/mesh/prepared_gc.py).
+            await asyncio.to_thread(touch, str(ingest_id))
         submission_key = request.client_request_id
         submission_request_sha256 = canonical_json_sha256(
             _submission_identity(request)

@@ -519,6 +519,27 @@ def _record_model(conn: sqlite3.Connection, record: Mapping[str, Any]) -> tuple[
     return lineage, "cad", name, stem
 
 
+def _mentioned(conn: sqlite3.Connection, wanted: set[str]) -> set[str]:
+    """Which of ``wanted`` appear in any text of any table, in one pass."""
+
+    found: set[str] = set()
+    tables = [
+        str(row[0]) for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )
+    ]
+    for table in tables:
+        for row in conn.execute(f'SELECT * FROM "{table}"'):
+            for value in tuple(row):
+                if value is None:
+                    continue
+                text = value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
+                found.update(token for token in wanted - found if token in text)
+            if found == wanted:
+                return found
+    return found
+
+
 def _file_ingest_under_model(
     conn: sqlite3.Connection, ingest_id: str, record: Mapping[str, Any], created_at: str
 ) -> str:
@@ -2380,13 +2401,26 @@ class CadLinkStore:
     # -- prepared-mesh collection (server/mesh/prepared_gc.py) ------------------
 
     def touch_ingest(self, ingest_id: str) -> None:
-        """Note that a prepared mesh is in use now: collection waits a grace period from here."""
+        """Note that a prepared mesh is in use now: collection waits a grace period from here.
 
+        Called on submit paths before the ingest is read. Inside a caller's
+        transaction on this thread the update joins it rather than nesting.
+        """
+
+        if not ingest_id:
+            return
         self.initialize()
-        with self._lock, self._transaction() as conn:
-            conn.execute(
-                "UPDATE ingests SET last_used_at = ? WHERE ingest_id = ?", (utc_now(), ingest_id)
-            )
+        with self._lock:
+            conn = self._connect()
+            if conn.in_transaction:
+                conn.execute(
+                    "UPDATE ingests SET last_used_at = ? WHERE ingest_id = ?", (utc_now(), ingest_id)
+                )
+                return
+            with self._transaction() as conn:
+                conn.execute(
+                    "UPDATE ingests SET last_used_at = ? WHERE ingest_id = ?", (utc_now(), ingest_id)
+                )
 
     def collection_inventory(self, terminal_states: Iterable[str]) -> dict[str, Any]:
         """One consistent read of everything that decides which prepared meshes are kept."""
@@ -2436,27 +2470,28 @@ class CadLinkStore:
         }
 
     def delete_unused_ingest(
-        self, ingest_id: str, *, used_before: str, terminal_states: Iterable[str]
+        self,
+        ingest_id: str,
+        *,
+        is_stale: Callable[[Mapping[str, Any]], bool],
+        terminal_states: Iterable[str],
     ) -> dict[str, Any] | None:
         """Delete one ingest row if, checked again inside the transaction, nothing new holds it.
 
-        Rechecked here: it was neither made nor used since ``used_before``, it
-        is no model's latest preparation, no unfinished operation prepared it
-        and no press binding names it. Only the row goes: its files are the
-        caller's to remove after this commits, so a crash in between leaves
-        at worst files no row names, never a row naming missing files.
+        Rechecked here: ``is_stale(row)`` (made and last used before the grace
+        period, both timestamps readable), it is no model's latest preparation,
+        no unfinished operation prepared it or names it in any column, and no
+        press binding names it. Only the row goes: its files are the caller's
+        to remove after this commits, so a crash in between leaves at worst
+        files no row names, never a row naming missing files.
         """
 
         self.initialize()
         terminal = sorted(set(terminal_states))
         marks = ", ".join("?" for _ in terminal) or "''"
         with self._lock, self._transaction() as conn:
-            row = conn.execute(
-                "SELECT * FROM ingests WHERE ingest_id = ? AND created_at < ? "
-                "AND (last_used_at IS NULL OR last_used_at < ?)",
-                (ingest_id, used_before, used_before),
-            ).fetchone()
-            if row is None:
+            row = conn.execute("SELECT * FROM ingests WHERE ingest_id = ?", (ingest_id,)).fetchone()
+            if row is None or not is_stale(dict(row)):
                 return None
             if conn.execute(
                 "SELECT 1 FROM imported_models WHERE latest_ingest_id = ?", (ingest_id,)
@@ -2469,15 +2504,18 @@ class CadLinkStore:
                 (ingest_id, *terminal),
             ).fetchone():
                 return None
+            columns = [
+                str(column["name"]) for column in conn.execute("PRAGMA table_info(cad_operations)")
+            ]
+            names = " OR ".join(f'instr(CAST("{name}" AS TEXT), ?) > 0' for name in columns)
             if conn.execute(
-                "SELECT 1 FROM cad_operations WHERE preparation_id = ? "
-                "AND state NOT IN (" + marks + ")",
-                (ingest_id, *terminal),
+                f"SELECT 1 FROM cad_operations WHERE state NOT IN ({marks}) AND ({names}) LIMIT 1",
+                (*terminal, *([ingest_id] * len(columns))),
             ).fetchone():
                 return None
             if conn.execute(
                 "SELECT 1 FROM cad_settings WHERE key LIKE 'model-solve-press:%' "
-                "AND json_extract(value_json, '$.prepared_id') = ?",
+                "AND instr(value_json, ?) > 0",
                 (ingest_id,),
             ).fetchone():
                 return None
@@ -2493,31 +2531,28 @@ class CadLinkStore:
                 str(row[0]) for row in self._connect().execute("SELECT record_json FROM ingests")
             ]
 
-    def mentions(self, token: str) -> bool:
-        """Whether any text in any table of this store contains ``token``."""
+    def mentioned(self, tokens: Iterable[str]) -> set[str]:
+        """Which of ``tokens`` any text in any table of this store contains.
 
+        A read-only scan on its own connection: SQLite's snapshot isolation
+        makes it consistent, so the store lock is never held for it. An
+        in-memory store has no second connection and is scanned under the lock.
+        """
+
+        wanted = {token for token in tokens if token}
+        if not wanted:
+            return set()
         self.initialize()
-        with self._lock:
-            conn = self._connect()
-            tables = [
-                str(row[0]) for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table' "
-                    "AND name NOT LIKE 'sqlite_%'"
-                )
-            ]
-            for table in tables:
-                columns = [
-                    str(column["name"])
-                    for column in conn.execute(f'PRAGMA table_info("{table}")')
-                ]
-                if not columns:
-                    continue
-                where = " OR ".join(f'instr(CAST("{name}" AS TEXT), ?) > 0' for name in columns)
-                if conn.execute(
-                    f'SELECT 1 FROM "{table}" WHERE {where} LIMIT 1', (token,) * len(columns)
-                ).fetchone():
-                    return True
-        return False
+        if str(self.db_path) == ":memory:":
+            with self._lock:
+                return _mentioned(self._connect(), wanted)
+        conn = sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN")
+            return _mentioned(conn, wanted)
+        finally:
+            conn.close()
 
     def delete_settings_if_unchanged(self, rows: Iterable[tuple[str, str]]) -> int:
         """Delete ``(key, updated_at)`` settings rows that were not written since they were read."""

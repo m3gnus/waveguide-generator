@@ -1003,6 +1003,21 @@ class JobStore:
             for row in rows
         ]
 
+    def names_prepared_mesh(self, ingest_id: str) -> bool:
+        """Whether any job, in any state, names this ingest id: the re-check before its row goes."""
+
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                """SELECT 1 FROM simulation_jobs
+                   WHERE instr(config_json, ?) > 0
+                      OR instr(COALESCE(config_summary_json, ''), ?) > 0
+                      OR instr(COALESCE(task_metadata_json, ''), ?) > 0
+                      OR instr(COALESCE(script_snapshot_json, ''), ?) > 0
+                   LIMIT 1""",
+                (ingest_id,) * 4,
+            ).fetchone()
+        return row is not None
+
     def job_for_model_solve(self, request_id: str) -> str | None:
         """The job a model Solve continuing a refused CAD solve made (``model_solve.py``).
 

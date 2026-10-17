@@ -689,7 +689,7 @@ nothing is ever filed under it, and no setup can be recorded for it.
   (`cad_settings` key `model-solve-press:<client id>`), including a press
   answered by a job already in flight. The same id for any other press (setup,
   frame axis, approvals, label) is `submission_key_conflict`. That answer is
-  forgotten once its job is deleted or after 30 days ("Retention"); a press
+  forgotten after 30 days, or once its job is deleted ("Retention"); a press
   that started its own job is still found by its submission key after that.
 - **Refusals** are error envelopes: `model_not_found` and `prepared_unavailable`
   (404), `model_mismatch`, `prepared_unavailable` (no retained copy),
@@ -1232,46 +1232,64 @@ unfinished runs still need.
 **Prepared meshes are collected** (decision D3), file and CAD alike, by
 `server/mesh/prepared_gc.py`. A pass runs about 30 seconds after startup and after
 runs are deleted (`DELETE /api/jobs/{id}`, clear failed, dismiss), in a worker
-thread, never on a request path. A prepared mesh -- an ingest row and the files its
-record names -- is **kept** while any of these refers to it:
+thread, never on a request path. A pass that could not start because a mesh was being
+prepared, or a restart was pending, tries again 5 minutes later. The data folder has
+one owning backend: collection, like every other writer, assumes no second WG process
+or CLI works in the same data folder at the same time. A prepared mesh -- an ingest row
+and the files its record names -- is **kept** while any of these refers to it:
 
 - a run in any state: queued, running, complete, failed, cancelled or archived (any
   ingest id in its request or metadata: the geometry, `imported_geometry`, a CAD
-  intent's `bundle_path: ingest/<id>`, a preparation);
+  intent's `bundle_path: ingest/<id>`, a preparation). The jobs database is read once
+  for the pass and again for each ingest just before its row is deleted;
 - a model's latest preparation (`imported_models.latest_ingest_id`);
 - a preparation of an unfinished CAD operation (`cad_preparations`, or any ingest id
-  the operation row names), or of an operation whose row is gone;
+  in any column of the operation row), or of an operation whose row is gone;
 - a setup revision naming it;
 - a remembered press (`model-solve-press:<client id>`, which names its `prepared_id`);
-- it was made, or last used, within 24 hours (`ingests.last_used_at`, set when a Solve
-  or an imported submission names it and when a dedupe answers with it);
+- it was made, or last used, within 24 hours (`ingests.last_used_at`). Every submit
+  marks the ingest it names used before reading it -- `JobRuntime.submit` (and so the
+  CLI's submit), a Solve of a model, the CAD lane's manual-solve acceptance and its
+  provenance step -- and so does a dedupe that answers with an existing preparation;
 - a replay, preparation or ingest in progress: a pass never runs beside one, and one
   that starts during a pass waits for it to end.
 
-A record this build cannot read, and a native-source preparation, are always kept.
-Everything else is removed: the row first, in its own transaction that checks the
-grace period, latest pointer, unfinished operations and press bindings again; then its
-files. A crash in between leaves at worst files no row names, never a row naming
-missing files.
+A record this build cannot read, a `created_at` or `last_used_at` it cannot parse,
+and a native-source preparation are always kept. Everything else is removed: the row
+first, in its own short transaction that checks the timestamps, the latest pointer,
+unfinished operations and press bindings again; then its files. A crash in between
+leaves at worst files no row names, never a row naming missing files.
 
 - **File meshes** lose their own folder, `<data>/imports/files/<ingest id>`
   (`original.msh`, `solve.msh`).
-- **CAD meshes** are shared through the mesh cache key, so a solve mesh, its sidecar,
-  its FEM region and display meshes (`imports/meshes`, `imports/viewports`) go only
-  when no surviving ingest names the same path. The retained snapshot
-  (`imports/bundles/<manifest>.wgreturn`) goes only when nothing in `cadlink.db`
-  (operations, receipts, readings, other ingests) and no run names its manifest
-  digest, so a snapshot any operation retained stays.
-- **Crash leftovers.** Folders under `imports/files` and snapshot folders under
-  `imports/bundles` that nothing names and that have not changed for 24 hours are
-  swept.
-- **Safety.** A pass is skipped while an update restart is pending, and stops if one
-  is approved meanwhile. It never follows a symbolic link or junction, refuses a path
-  outside `<data>/imports` or a link anywhere on the way to it, and logs each removal
-  with its byte count. The store lock is held only for the short reads and row
-  deletions, never while files are removed.
-- **Press answers** (`model-solve-press:<client id>`) are forgotten when their run is
-  gone or after 30 days.
+- **CAD meshes** are shared through the mesh cache key, so a solve, coupled-exterior,
+  FEM-region or display mesh and its `.json` sidecar (`imports/meshes`,
+  `imports/viewports`) go only when no surviving ingest names the same file. Paths are
+  compared relative to `<data>/imports`, as written and as resolved (and without
+  letter case on Windows), so two spellings of the data folder are one file. A deferred
+  display mesh is found through its `viewports/index` entry and goes the same way,
+  unless a surviving record's pending display names the same content. Index files are
+  left: a stale entry is a cache miss and the display mesh is built again.
+- **Retained snapshots** (`imports/bundles/<manifest>.wgreturn`) go only when nothing
+  in `cadlink.db` (operations, receipts, readings, other ingests) and no run names the
+  manifest digest, so a snapshot any operation retained stays.
+- **If any surviving record cannot be read**, no files are removed that pass: what it
+  names is unknown.
+- **Crash leftovers.** Folders under `imports/files`, snapshot folders under
+  `imports/bundles`, and mesh and display files under `imports/meshes` and
+  `imports/viewports` (index and dot-named staging entries excepted) that nothing
+  names and that have not changed for 24 hours are swept.
+- **Safety.** A pass is skipped while an update restart is pending, and checks again
+  -- and checks for shutdown -- before each row deletion and each file removal, so
+  quitting is not delayed. It never follows a symbolic link or junction: a path
+  outside `<data>/imports`, or with a link anywhere on the way to it, or a tree with a
+  link inside it, is refused, and on POSIX the removal itself opens every component
+  without following links, so a link swapped in after the checks is not followed.
+  Every removal is logged with its byte count. The store lock is held only for the
+  short reads and each row deletion, never while files are removed; the digest scan of
+  `cadlink.db` uses its own read-only connection and takes no store lock.
+- **Press answers** (`model-solve-press:<client id>`) are forgotten after 30 days, or
+  once their run is gone and they are older than 24 hours.
 
 ## Existing installations
 

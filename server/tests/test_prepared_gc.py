@@ -16,6 +16,7 @@ from server.cadlink.operations import TERMINAL_STATES
 from server.cadlink.store import CadLinkStore
 from server.jobs.model_solve import ModelSolveRequest, _bind_press, _bound_press
 from server.jobs.store import JobStore
+from server.mesh import prepared_gc
 from server.mesh.prepared_gc import (
     PreparedMeshCollector,
     collect_prepared_meshes,
@@ -97,7 +98,8 @@ def delete_job(jobs, job_id):
 HEX = "ab" * 32
 
 
-def cad_preparation(cad, tmp_path, *, key="c" * 64, hex_digest=HEX, mesh=None):
+def cad_preparation(cad, tmp_path, *, key="c" * 64, hex_digest=HEX, mesh=None, spelled=None,
+                    viewport_mesh=None):
     """A CAD ingest whose solve mesh, sidecar, display mesh and snapshot are on disk."""
 
     imports = tmp_path / "imports"
@@ -118,8 +120,9 @@ def cad_preparation(cad, tmp_path, *, key="c" * 64, hex_digest=HEX, mesh=None):
         return json.dumps({
             "ingest_id": ingest_id, "created_at": created_at,
             "manifest_sha256": f"sha256:{hex_digest}", "artifact_sha256": "sha256:" + "d" * 64,
-            "bundle_store_path": str(bundle), "mesh_store_path": str(mesh_path),
-            "viewport_mesh": {"available": True, "store_path": str(viewport)},
+            "bundle_store_path": str(bundle),
+            "mesh_store_path": spelled if spelled is not None else str(mesh_path),
+            "viewport_mesh": viewport_mesh or {"available": True, "store_path": str(viewport)},
         })
 
     row = cad.allocate_ingest(
@@ -463,7 +466,9 @@ def test_press_bindings_are_pruned_when_their_job_is_gone_or_past_the_bound(stor
     cad, jobs = stores
     add_job(jobs, "j-live")
     _press(cad, "recent", "j-live", NOW - timedelta(days=1))
-    _press(cad, "orphan", "j-gone", NOW - timedelta(days=1))
+    _press(cad, "orphan", "j-gone", NOW - timedelta(days=2))
+    # A binding younger than the grace period may name a job made after the jobs were read.
+    _press(cad, "young-orphan", "j-gone", NOW - timedelta(hours=1))
     _press(cad, "ancient", "j-live", NOW - timedelta(days=31))
     cad.set_setting("solver-selection", {"engine": "metal"})
 
@@ -472,6 +477,7 @@ def test_press_bindings_are_pruned_when_their_job_is_gone_or_past_the_bound(stor
     assert report.pruned_press_bindings == 2
     assert cad.get_setting("model-solve-press:recent") is not None
     assert cad.get_setting("model-solve-press:orphan") is None
+    assert cad.get_setting("model-solve-press:young-orphan") is not None
     assert cad.get_setting("model-solve-press:ancient") is None
     assert cad.get_setting("solver-selection") == {"engine": "metal"}
 
@@ -538,3 +544,231 @@ def test_deleting_a_run_schedules_collection(tmp_path):
 
     asyncio.run(scenario())
     assert requested == [1]
+
+
+# -- review fixes --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("column, value", [("created_at", "not a time"), ("last_used_at", "garbage"),
+                                           ("created_at", "")])
+def test_an_unreadable_timestamp_keeps_its_mesh(stores, tmp_path, column, value):
+    cad, _ = stores
+    old, _ = file_preparations(cad, tmp_path)
+    sql(cad, f"UPDATE ingests SET {column} = ? WHERE ingest_id = ?", (value, old["ingest_id"]))
+
+    report = collect(stores, tmp_path)
+
+    assert report.removed_ingests == [] and folder(old).is_dir()
+    assert "unreadable_timestamp" in report.kept[old["ingest_id"]]
+    # The transaction's own re-check refuses it too, whatever the scan said.
+    assert cad.delete_unused_ingest(
+        old["ingest_id"], is_stale=lambda row: prepared_gc.is_stale(row, NOW),
+        terminal_states=TERMINAL_STATES,
+    ) is None
+
+
+def test_a_job_made_after_the_scan_keeps_its_mesh(stores, tmp_path, monkeypatch):
+    cad, jobs = stores
+    old, _ = file_preparations(cad, tmp_path)
+    add_job(jobs, "late", config={"geometry": {"ingest_id": old["ingest_id"]}})
+    # The pass's scan predates the job; the per-row re-check sees it.
+    monkeypatch.setattr(jobs, "prepared_mesh_references", lambda: [])
+
+    report = collect(stores, tmp_path)
+
+    assert report.removed_ingests == [] and cad.get_ingest(old["ingest_id"]) is not None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symbolic links need privileges on Windows")
+def test_a_link_swapped_in_after_the_checks_is_never_followed(stores, tmp_path, monkeypatch):
+    cad, _ = stores
+    old, _ = file_preparations(cad, tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("precious")
+
+    def swap(path):
+        if path.name == old["ingest_id"]:
+            path.rename(tmp_path / "moved-away")
+            path.symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(prepared_gc, "_before_remove", swap)
+    collect(stores, tmp_path)
+
+    assert (outside / "keep.txt").read_text() == "precious"
+    assert folder(old).is_symlink()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symbolic links need privileges on Windows")
+def test_an_ancestor_swapped_for_a_link_after_the_checks_is_refused(stores, tmp_path, monkeypatch):
+    cad, _ = stores
+    old, _ = file_preparations(cad, tmp_path)
+    decoy = tmp_path / "decoy"
+    (decoy / old["ingest_id"]).mkdir(parents=True)
+    (decoy / old["ingest_id"] / "keep.txt").write_text("precious")
+    files = tmp_path / "imports" / "files"
+
+    def swap(path):
+        if path.name == old["ingest_id"]:
+            files.rename(tmp_path / "files-away")
+            files.symlink_to(decoy, target_is_directory=True)
+
+    monkeypatch.setattr(prepared_gc, "_before_remove", swap)
+    report = collect(stores, tmp_path)
+
+    assert (decoy / old["ingest_id"] / "keep.txt").read_text() == "precious"
+    assert report.refused
+
+
+def test_a_windows_reparse_point_is_a_link_without_isjunction(tmp_path, monkeypatch):
+    monkeypatch.delattr(os.path, "isjunction", raising=False)
+    monkeypatch.setattr(prepared_gc.os, "name", "nt")
+    # No reparse attribute to read: never assumed "not a junction".
+    assert prepared_gc._is_junction(tmp_path) is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symbolic links need privileges on Windows")
+def test_a_shared_mesh_named_under_another_spelling_of_the_data_folder_survives(stores, tmp_path):
+    cad, jobs = stores
+    first = cad_preparation(cad, tmp_path)
+    mesh = Path(first["mesh_store_path"])
+    alias = tmp_path.parent / f"{tmp_path.name}-alias"
+    alias.symlink_to(tmp_path, target_is_directory=True)
+    for spelled in (
+        str(alias / "imports" / "meshes" / mesh.name),
+        str(tmp_path / "imports" / "files" / ".." / "meshes" / mesh.name),
+    ):
+        survivor = cad_preparation(cad, tmp_path, spelled=spelled)
+        add_job(jobs, f"j-{len(spelled)}", config={"geometry": {"ingest_id": survivor["ingest_id"]}})
+
+    report = collect(stores, tmp_path)
+
+    assert report.removed_ingests == [first["ingest_id"]]
+    assert mesh.is_file() and mesh.with_suffix(".json").is_file()
+
+
+def test_a_deferred_display_mesh_goes_with_its_ingest_through_its_index(stores, tmp_path):
+    cad, _ = stores
+    lookup, content = "1" * 64, "2" * 64
+    viewports = tmp_path / "imports" / "viewports"
+    (viewports / "index").mkdir(parents=True)
+    (viewports / "index" / f"{lookup}.txt").write_text(content + "\n")
+    for suffix in (".msh", ".json"):
+        (viewports / f"{content}{suffix}").write_text("view")
+    record = cad_preparation(cad, tmp_path, viewport_mesh={
+        "available": False, "pending": True, "lookup_key": lookup,
+    })
+
+    assert collect(stores, tmp_path).removed_ingests == [record["ingest_id"]]
+    assert not (viewports / f"{content}.msh").exists() and not (viewports / f"{content}.json").exists()
+    # Index files are left: a stale entry is only a cache miss.
+    assert (viewports / "index" / f"{lookup}.txt").is_file()
+
+
+def test_unnamed_cad_mesh_files_older_than_the_grace_period_are_swept(stores, tmp_path):
+    cad, jobs = stores
+    kept = cad_preparation(cad, tmp_path, viewport_mesh={
+        "available": False, "pending": True, "lookup_key": "3" * 64,
+    })
+    add_job(jobs, "j", config={"geometry": {"ingest_id": kept["ingest_id"]}})
+    imports = tmp_path / "imports"
+    (imports / "viewports" / "index").mkdir(parents=True, exist_ok=True)
+    (imports / "viewports" / "index" / f"{'3' * 64}.txt").write_text("4" * 64)
+    old_mesh = imports / "meshes" / ("5" * 64) / "fem" / "region-a.msh"
+    old_mesh.parent.mkdir(parents=True)
+    old_mesh.write_text("old")
+    old_mesh.with_suffix(".json").write_text("{}")
+    fresh = imports / "meshes" / f"{'6' * 64}.msh"
+    fresh.write_text("fresh")
+    deferred = imports / "viewports" / f"{'4' * 64}.msh"
+    deferred.write_text("deferred display of a kept ingest")
+    staging = imports / "meshes" / ".wg2-import-mesh-x" / "a.msh"
+    staging.parent.mkdir()
+    staging.write_text("staging")
+    for path in (old_mesh, old_mesh.with_suffix(".json"), deferred, staging,
+                 Path(kept["mesh_store_path"]), Path(kept["mesh_store_path"]).with_suffix(".json"),
+                 imports / "viewports" / "index" / f"{'3' * 64}.txt"):
+        os.utime(path, (OLD.timestamp(), OLD.timestamp()))
+
+    report = collect(stores, tmp_path)
+
+    assert not old_mesh.exists() and not old_mesh.with_suffix(".json").exists()
+    assert not old_mesh.parent.exists()
+    assert fresh.is_file() and deferred.is_file() and staging.is_file()
+    assert Path(kept["mesh_store_path"]).is_file()
+    assert (imports / "viewports" / "index" / f"{'3' * 64}.txt").is_file()
+    assert str(old_mesh) in report.removed_paths
+
+
+def test_a_stop_between_removals_ends_the_pass(stores, tmp_path):
+    cad, _ = stores
+    first = register_mesh(cad, tmp_path, registration(units="mm"))
+    second = register_mesh(cad, tmp_path, registration(units="m"))
+    register_mesh(cad, tmp_path, registration(units="cm"))
+    age(cad, first["ingest_id"], second["ingest_id"])
+    stop = threading.Event()
+
+    def remove_files(row, active_pass):
+        active_pass.remove_files(row)
+        stop.set()
+
+    report = collect(stores, tmp_path, remove_files=remove_files, should_stop=stop.is_set)
+
+    assert report.skipped == "stopping"
+    # Both rows went; only the first one's files did before the stop.
+    assert len(report.removed_ingests) == 2
+    assert sum(folder(record).exists() for record in (first, second)) == 1
+
+
+def test_a_restart_approved_mid_pass_stops_file_removal(stores, tmp_path):
+    cad, _ = stores
+    old, _ = file_preparations(cad, tmp_path)
+    approved = []
+
+    def remove_files(row, active_pass):
+        approved.append(True)
+        active_pass.remove_files(row)
+
+    report = collect(stores, tmp_path, remove_files=remove_files,
+                     restart_pending=lambda: bool(approved))
+
+    # The row went before the latch; the pass stopped before removing its files.
+    assert report.skipped == "restart_pending"
+    assert cad.get_ingest(old["ingest_id"]) is None and folder(old).is_dir()
+
+
+def test_a_skipped_pass_tries_again_without_a_deletion(stores, tmp_path):
+    cad, jobs = stores
+    old, _ = file_preparations(cad, tmp_path)
+    collector = PreparedMeshCollector(
+        cad, jobs, tmp_path, terminal_states=TERMINAL_STATES, restart_pending=lambda: False,
+        startup_delay=0, retry_delay=0.05,
+    )
+    busy = prepared_mesh_use()
+    busy.__enter__()
+
+    async def scenario():
+        collector.request()
+        await asyncio.sleep(0.02)
+        assert cad.get_ingest(old["ingest_id"]) is not None
+        busy.__exit__(None, None, None)
+        await asyncio.wait_for(collector._task, 5)
+
+    asyncio.run(scenario())
+    assert cad.get_ingest(old["ingest_id"]) is None
+
+
+def test_shutdown_stops_the_collector(stores, tmp_path):
+    cad, jobs = stores
+    collector = PreparedMeshCollector(
+        cad, jobs, tmp_path, terminal_states=TERMINAL_STATES, restart_pending=lambda: False,
+        startup_delay=60,
+    )
+
+    async def scenario():
+        await collector.startup()
+        await collector.shutdown()
+        collector.request()
+        assert collector._task is None
+
+    asyncio.run(scenario())
