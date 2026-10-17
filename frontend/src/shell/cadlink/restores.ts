@@ -25,7 +25,7 @@ import { preferencesStore } from '../../prefs/preferences';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { cadProjectName, listCadProjects, newestReturnForProject } from '../../api/cadProjects';
-import { createCadArrivalActions, enterCadWorkspace, type RefreshOptions } from './arrivals';
+import { enterCadWorkspace, type RefreshOptions } from './arrivals';
 import { showIngestedMeshInViewport } from './artifactLoader';
 import { isCurrentOpen, registerImportedView, reopenLastModel, type ImportedView } from '../../stores/importedModel';
 import type { ImportedSetup } from '../../jobs/importedSetup';
@@ -332,12 +332,14 @@ export function observeCadProjectLoads(integration: UseCadRestoresOptions): () =
  * after the start-up wait) is tried when it arrives.
  */
 export function observeLastModel({
-  reportStatus = () => undefined, reportError = () => undefined, fetcher = fetch,
+  reportStatus = () => undefined, reportError = () => undefined, fetcher = fetch, selectBundle,
   refusedForeignReturn = { current: false }, jobLinkPending = () => false, settings = durableSettings,
 }: {
   reportStatus?(message: string): void;
   reportError?(message: string): void;
   fetcher?: typeof fetch;
+  /** The CAD workspace owners' selection, which ingests the return and shows its refusals. A fresh one would do neither. */
+  selectBundle?(bundle: CadReturnBundle, project: string): void;
   refusedForeignReturn?: { current: boolean };
   jobLinkPending?(): boolean;
   /** Where a late-hydrated pointer is announced; the shared instance unless a test brings its own. */
@@ -348,7 +350,7 @@ export function observeLastModel({
   const tried = new Set<string>();
   const blocked = () => !active || refusedForeignReturn.current || jobLinkPending();
   const openUnsolved = async (pointer: LastModel): Promise<boolean> => {
-    if (preferencesStore.getSnapshot().cadApplication === 'onshape') return false;
+    if (!selectBundle || preferencesStore.getSnapshot().cadApplication === 'onshape') return false;
     const selection = useCadReturnStore.getState().captureIngestIntent();
     const documentLoad = currentDocumentLoad();
     const empty = () => {
@@ -365,7 +367,9 @@ export function observeLastModel({
       return false;
     }
     // Never solved: no setup to restore, so the return opens on defaults like any new selection.
-    createCadArrivalActions({ refusedForeignReturn }, fetcher).selectBundleAs(bundle, project.lineageId, true);
+    selectBundle(bundle, project.lineageId);
+    // A foreign return is refused by the selection itself, which shows why.
+    if (refusedForeignReturn.current) return false;
     reportStatus(`Reopened ${cadProjectName(project)}.`);
     return true;
   };

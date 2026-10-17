@@ -139,8 +139,8 @@ export function mountCadWorkspaceOwners(): () => void {
     },
   });
   let preparation: ReturnType<typeof actions.ingestSelected> | null = null;
-  const selectBundle = (bundle: Parameters<typeof actions.selectBundleAs>[0], project?: string | null) => {
-    actions.selectBundleAs(bundle, project);
+  const selectBundle = (bundle: Parameters<typeof actions.selectBundleAs>[0], project?: string | null, automatic = false) => {
+    actions.selectBundleAs(bundle, project, automatic);
   };
   const observation = connectCadObservation({
     observeOperation: outbound.observeOperation,
@@ -308,7 +308,7 @@ export function mountCadWorkspaceOwners(): () => void {
     observeCadProjectLoads({ enterCadWorkspace, manualSelectionAt, projectOpenPending, initialChoiceOwed, refusedForeignReturn,
       returnListRequest, seenReturnRevisions, refreshRef: { current: refreshReturns }, selectBundleRef: { current: selectBundle },
       setError: reportError, setStatus: reportStatus }),
-    observeLastModel({ reportStatus, reportError, refusedForeignReturn, jobLinkPending: () => jobIdFromLink(window.location.search) !== null }),
+    observeLastModel({ reportStatus, reportError, refusedForeignReturn, selectBundle: (bundle, project) => selectBundle(bundle, project, true), jobLinkPending: () => jobIdFromLink(window.location.search) !== null }),
     jobsSocket.subscribe(followFusionSolve), () => fusionSolves.dispose(),
     jobsSocket.subscribe(settleModels), solvedCadModels.subscribe(settleModels),
     useDesignStore.subscribe(contextChanged), useDocumentStore.subscribe(contextChanged),

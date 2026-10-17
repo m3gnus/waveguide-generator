@@ -324,27 +324,59 @@ describe('the last model', () => {
     expect(readLastModel('cad')).toEqual({ model_id: 'wgl_project', input: 'cad' });
   });
 
-  it('clears a broken model after reporting it once, so the next start does not fail again', async () => {
+  const status = (code: number, error = 'internal') => vi.fn<typeof fetch>(async () => json({ error: { code: error, message: `refused ${code}` } }, code));
+
+  it('keeps the pointer through a transient failure, and clears it after two starts in a row that fail', async () => {
     rememberLastModel({ model_id: mesh.model_id, input: 'file' });
     workspaceModeStore.setMode('cad');
-    const broken = () => vi.fn<typeof fetch>(async () => json({ error: { code: 'internal', message: 'The mesh store is damaged.' } }, 500));
-    await expect(reopenLastModel(broken())).rejects.toThrow('damaged');
+    await expect(reopenLastModel(status(500))).rejects.toThrow('refused 500');
+    expect(readLastModel('file')).not.toBeNull();
+    await expect(reopenLastModel(status(500))).rejects.toThrow('refused 500');
     expect(readLastModel('file')).toBeNull();
-    const next = broken();
+    const next = status(500);
     expect(await reopenLastModel(next)).toBe(false);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('clears a model whose preparation is unavailable, and one whose open fails on missing artifacts', async () => {
-    rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+  it('keeps the pointer through 408, 429 and an open that fails on missing artifacts, once', async () => {
     workspaceModeStore.setMode('cad');
-    expect(await reopenLastModel(vi.fn<typeof fetch>(async () =>
-      json({ error: { code: 'prepared_unavailable', message: 'gone' } }, 409)))).toBe(false);
-    expect(readLastModel('file')).toBeNull();
+    for (const code of [408, 429]) {
+      rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+      await expect(reopenLastModel(status(code, 'busy'))).rejects.toThrow();
+      expect(readLastModel('file')).not.toBeNull();
+    }
+    localStorage.clear();
     rememberLastModel({ model_id: mesh.model_id, input: 'file' });
     await expect(reopenLastModel(vi.fn<typeof fetch>(async (url) => String(url).includes('/setup')
       ? json({ setup, revision_id: 'x' }) : json({ ...modelRead(), prepared: undefined, latest_prepared: { ...mesh, msh_text: undefined } })))).rejects.toThrow();
-    expect(readLastModel('file')).toBeNull();
+    expect(readLastModel('file')).not.toBeNull();
+  });
+
+  it('a success ends the run of failed starts', async () => {
+    rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+    workspaceModeStore.setMode('cad');
+    await expect(reopenLastModel(status(503))).rejects.toThrow();
+    expect(await reopenLastModel(fileFetcher())).toBe(true);
+    resetImportedModelStore();
+    await expect(reopenLastModel(status(503))).rejects.toThrow();
+    expect(readLastModel('file')).not.toBeNull();
+  });
+
+  it('does not count offline starts as failures', async () => {
+    rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+    workspaceModeStore.setMode('cad');
+    const offline = () => vi.fn<typeof fetch>(async () => { throw new TypeError('offline'); });
+    for (let start = 0; start < 3; start += 1) await expect(reopenLastModel(offline())).rejects.toThrow('offline');
+    expect(readLastModel('file')).not.toBeNull();
+  });
+
+  it('clears at once on a definitive refusal: 409, 422 or a gone preparation', async () => {
+    workspaceModeStore.setMode('cad');
+    for (const [code, name] of [[409, 'conflict'], [422, 'invalid'], [409, 'prepared_unavailable']] as const) {
+      rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+      expect(await reopenLastModel(status(code, name))).toBe(false);
+      expect(readLastModel('file')).toBeNull();
+    }
   });
 
   it('reopens the pointer of the input the person last chose and never flips it', async () => {

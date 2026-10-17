@@ -223,9 +223,11 @@ describe('job and last-model restores without the coordinator', () => {
         latest_prepared: workspaceFor().prepared, original_available: false });
       return json({ items: path.endsWith('/designs') ? [{ lineageId: 'wgl_project', documentName: 'Speaker' }] : [bundle], cadFolderConfigured: true });
     }) as unknown as typeof fetch;
-    const status = vi.fn(); const stop = observeLastModel({ fetcher, reportStatus: status });
+    const status = vi.fn(); const select = vi.fn();
+    const stop = observeLastModel({ fetcher, reportStatus: status, selectBundle: select });
     try {
-      await vi.waitFor(() => expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath));
+      // The owners' selection does the ingest and shows refusals: it is what must be called, not a fresh one.
+      await vi.waitFor(() => expect(select).toHaveBeenCalledWith(bundle, 'wgl_project'));
       expect(status).toHaveBeenCalledWith('Reopened Speaker.');
       expect(readLastModel('cad')).not.toBeNull();
     } finally { stop(); }
@@ -240,8 +242,9 @@ describe('job and last-model restores without the coordinator', () => {
         latest_prepared: workspaceFor().prepared, original_available: false });
       return json({ items: path.endsWith('/designs') ? [{ lineageId: 'wgl_project', documentName: 'Speaker' }] : [], cadFolderConfigured: true });
     }) as unknown as typeof fetch;
-    const status = vi.fn(); const stop = observeLastModel({ fetcher, reportStatus: status });
-    try { await vi.waitFor(() => expect(status).toHaveBeenCalledWith(expect.stringContaining('no return to show'))); } finally { stop(); }
+    const status = vi.fn(); const select = vi.fn(); const stop = observeLastModel({ fetcher, reportStatus: status, selectBundle: select });
+    try { await vi.waitFor(() => expect(status).toHaveBeenCalledWith(expect.stringContaining('no return to show')));
+      expect(select).not.toHaveBeenCalled(); } finally { stop(); }
   });
 
   const settingsEnvelope = (pointers: Record<string, string>) =>

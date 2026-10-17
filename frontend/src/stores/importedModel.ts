@@ -3,7 +3,7 @@ import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadSolveSetup } from '../api/cadOperations';
 import type { JobItem } from '../api/jobsSocket';
 import {
-  isModelGone, readImportedModel, readImportedSetup, readRunWorkspace,
+  ImportedModelApiError, isModelGone, readImportedModel, readImportedSetup, readRunWorkspace,
   type ImportedModelSummary, type PreparedSummary,
 } from '../api/importedModels';
 import type { ImportedSetup } from '../jobs/importedSetup';
@@ -14,7 +14,7 @@ import {
   seedImportedSolveOptionsFromParametric, useImportedSolveOptionsStore,
   type ImportedOptionsSnapshot, type SolveAccuracy,
 } from './solveOptions';
-import { clearLastModel, migrateLastModel, readLastModel, rememberLastModel, type LastModel } from './lastModel';
+import { clearLastModel, migrateLastModel, noteLastModelFailure, readLastModel, rememberLastModel, type LastModel } from './lastModel';
 import { workspaceModeStore } from './workspaceMode';
 
 /**
@@ -270,16 +270,29 @@ export interface ReopenOptions {
   openUnsolved?(pointer: LastModel, prepared: PreparedSummary): Promise<boolean>;
 }
 
+/** A request that got no response at all (offline, refused, aborted): the pointer says nothing about the model. */
+class NetworkFailure extends Error {
+  constructor(readonly original: unknown) {
+    super(original instanceof Error ? original.message : String(original));
+    this.name = 'NetworkFailure';
+  }
+}
+
+/** The server answered, and its answer will not change by trying again: the model is gone or its request is unusable. */
+const isDefinitiveRefusal = (error: unknown): boolean =>
+  isModelGone(error) || (error instanceof ImportedModelApiError && (error.status === 409 || error.status === 422));
+
 /**
  * Reopen the last model of the input on screen, through `openImported`.
  *
  * It never changes the mode (Parametric opens nothing) nor the input the
  * person last chose: each input has its own pointer. It only fills an Imported
  * view nobody has opened into yet. A model the server no longer has (or keeps
- * no preparation of) clears the pointer once and leaves the empty view. Any
- * other failure clears it too and is thrown once for the caller to show -- a
- * broken model must not fail again at every start. Only a failed request
- * (offline) keeps the pointer.
+ * no preparation of, or refuses with a 409/422) clears the pointer once and
+ * leaves the empty view. Any other failure is thrown for the caller to show and
+ * keeps the pointer, which may recover; after two starts in a row that fail it
+ * is cleared, so a broken model cannot fail at every launch. A request that got
+ * no response at all (offline) neither clears nor counts.
  */
 export async function reopenLastModel(fetcher: typeof fetch = fetch, options: ReopenOptions = {}): Promise<boolean> {
   if (workspaceModeStore.getSnapshot().mode !== 'cad') return false;
@@ -289,18 +302,25 @@ export async function reopenLastModel(fetcher: typeof fetch = fetch, options: Re
   await migrateLastModel(fetcher);
   const pointer = readLastModel(workspaceModeStore.getSnapshot().importedInput);
   if (!pointer || !stillEmpty() || options.shouldTry?.(pointer) === false) return false;
+  const reachable: typeof fetch = async (...args) => {
+    try { return await fetcher(...args); } catch (error) { throw new NetworkFailure(error); }
+  };
   try {
-    const read = await readImportedModel(pointer.model_id, null, fetcher);
+    const read = await readImportedModel(pointer.model_id, null, reachable);
     if (!read.latest_prepared) { clearLastModel(pointer); return false; }
     // The CAD view shows a model by its stored setup; one never solved has none.
-    if (pointer.input === 'cad' && !(await readImportedSetup(pointer.model_id, read.latest_prepared.ingest_id, fetcher)).setup) {
-      return stillEmpty() && options.openUnsolved ? await options.openUnsolved(pointer, read.latest_prepared) : false;
+    if (pointer.input === 'cad' && !(await readImportedSetup(pointer.model_id, read.latest_prepared.ingest_id, reachable)).setup) {
+      if (!stillEmpty() || !options.openUnsolved) return false;
+      const shown = await options.openUnsolved(pointer, read.latest_prepared);
+      if (shown) rememberLastModel(pointer);
+      return shown;
     }
     if (!stillEmpty()) return false;
-    return await openImported({ kind: 'model', modelId: pointer.model_id }, fetcher);
+    return await openImported({ kind: 'model', modelId: pointer.model_id }, reachable);
   } catch (error) {
-    if (isModelGone(error)) { clearLastModel(pointer); return false; }
-    if (!(error instanceof TypeError)) clearLastModel(pointer);
+    if (isDefinitiveRefusal(error)) { clearLastModel(pointer); return false; }
+    if (error instanceof NetworkFailure) throw error.original;
+    noteLastModelFailure(pointer);
     throw error;
   }
 }

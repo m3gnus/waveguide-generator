@@ -207,6 +207,43 @@ it('reopens the last model once at start when the persisted mode is Imported', a
   expect(cadWorkspace.getSnapshot().error).toBeNull();
 });
 
+/** A CAD project that was prepared but never solved: a model without a saved setup. */
+function unsolvedProject() {
+  resetImportedModelStore(); workspaceModeStore.setImportedInput('cad');
+  rememberLastModel({ model_id: 'remembered', input: 'cad' });
+  workspaceModeStore.setMode('cad');
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation(async (input, init) => {
+    const path = String(input);
+    if (path.startsWith('/api/models/remembered/setup')) return json({ setup: null });
+    if (path.startsWith('/api/models/remembered')) {
+      return json({ model: { model_id: 'remembered', producer: 'cad', display_name: 'Speaker' },
+        latest_prepared: workspaceFor().prepared, original_available: false });
+    }
+    if (path === '/api/cadlink/designs') return json({ items: [{ lineageId: 'remembered', documentName: 'Speaker' }] });
+    return base(input, init);
+  });
+}
+
+it('reopens a never-solved CAD model through the owners: the return is ingested and reaches the viewport', async () => {
+  unsolvedProject();
+  returns = [bundle];
+  stop = mountCadWorkspaceOwners(); await flush(); await flush(); await flush();
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
+  expect(calls('/api/cadlink/ingest').length).toBeGreaterThan(0);
+  await vi.waitFor(() => expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id));
+  expect(cadWorkspace.getSnapshot().status).toContain('Speaker');
+});
+
+it('shows the refusal when the never-solved model\'s newest return belongs to another project', async () => {
+  unsolvedProject();
+  returns = [{ ...bundle, designIds: ['another-design'] }];
+  stop = mountCadWorkspaceOwners(); await flush(); await flush(); await flush();
+  expect(cadWorkspace.getSnapshot().error).toContain('belongs to another CAD-linked project');
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  expect(cadWorkspace.getSnapshot().status ?? '').not.toContain('Reopened');
+});
+
 it('opening an ordinary design returns to Parametric mode and invalidates held CAD state (row 5)', async () => {
   stop = mountCadWorkspaceOwners(); await flush();
   cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
