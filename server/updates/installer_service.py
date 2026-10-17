@@ -1,8 +1,4 @@
-"""Restart coordination for the signed full-installer client.
-
-The old UpdateService remains an injectable receiving-bridge seam. New sends
-always use this facade and never select an app/runtime layer transaction.
-"""
+"""Restart coordination for the signed full-installer client."""
 
 from __future__ import annotations
 
@@ -17,14 +13,20 @@ import stat
 from .installer_client import InstallerClient, VerifiedInstaller
 from .installer_checker import InstallerClientError
 from .restart import RestartApproval, RestartRelease, revoke_request
-from .service import UpdateBuildNotHeldBack, UpdateChannelUnavailable, UpdateInstallUnavailable
+
+
+class UpdateInstallUnavailable(RuntimeError):
+    """The current process cannot safely hand a release to the installer."""
+
+
+class UpdateChannelUnavailable(RuntimeError):
+    """This process has nowhere durable to remember an update channel."""
 
 
 class InstallerUpdateService:
     def __init__(self, *, running_version: str, data_dir: Path, repo_root: Path,
                  update_request_path: Path | None = None, settings=None,
-                 restart_approval: RestartApproval | None = None, client=None,
-                 **_legacy_options) -> None:
+                 restart_approval: RestartApproval | None = None, client=None) -> None:
         self.running_version = running_version
         self.data_dir = Path(data_dir).resolve()
         self.update_request_path = Path(update_request_path) if update_request_path is not None else None
@@ -113,11 +115,6 @@ class InstallerUpdateService:
             return self.client.reset_download()
         except InstallerClientError as exc:
             raise UpdateInstallUnavailable(str(exc)) from exc
-
-    def lift_suppression(self, _build: dict) -> bool:
-        # Receiving-bridge retries exist only on explicitly injected legacy
-        # services. A new send cannot turn a held app/runtime layer into work.
-        raise UpdateBuildNotHeldBack("This installer client has no held layer transaction.")
 
     def _publish(self, downloaded: VerifiedInstaller) -> None:
         approval = self.restart_approval.approve(downloaded.version)

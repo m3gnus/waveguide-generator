@@ -19,7 +19,7 @@ from server.updates.restart import RestartApproval
 
 from cad_backends import JobsHarness
 from test_cad_manual_solve import _ingest, _request as manual_request
-from test_update_transaction_contract import SOLVE_BODY, _post
+from server.tests._asgi import SOLVE_BODY, _post
 
 
 def _machine(*, busy=False):

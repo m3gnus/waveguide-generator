@@ -283,7 +283,7 @@ def test_an_inadmissible_legacy_bind_migrates_to_a_refused_job_and_the_sweep_con
 def test_compatibility_reads_initialize_a_fresh_runtime_without_app_startup(tmp_path):
     import asyncio
     from server.app import create_app
-    from test_update_transaction_contract import _post
+    from server.tests._asgi import _post
     async def read():
         app = create_app(data_dir=tmp_path / "data")
         assert app.state.jobs_runtime._started is False

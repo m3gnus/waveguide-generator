@@ -375,24 +375,15 @@ is reported as such and is not treated as a fault.
 
 The version in the top-left corner checks GitHub's latest published full
 release after the interface opens. When a newer, complete release is available
-it turns amber and says **update available**. In the standalone application,
-click **Install update** to download the checksum-verified app layer and, when
-its content id changed, the matching runtime layer. WG stages them in its data
-directory, closes only after verification succeeds, swaps the complete layers,
-restores the ad-hoc bundle signature, and restarts. An asset that carries no
-published digest is refused before it is downloaded, and one whose bytes do not
-match it is refused before anything is extracted. That check establishes
-**integrity, not authenticity**: it proves the copy matches the release GitHub
-describes, over TLS to `api.github.com`. It is not a publisher signature — the
-application is ad-hoc signed and carries no signing identity. The previous layers
-remain
-available for automatic rollback until the updated native application starts successfully.
-An update interrupted part-way through is decided on the next start from a
-transaction journal in the data directory: it is finished or rolled back before the
-server starts, in whichever mode the application is opened. The one window that is
-not automatic is an interruption while the application layer itself is being
-replaced — the launcher needs that layer to run any of this — and the repair command
-for it is written to the update log.
+it turns amber and says **update available**. In an installed application,
+click **Install update** to download that release's full installer for this
+platform. WG verifies the release's `SHA256SUMS` against the Ed25519 signing key
+compiled into the application, checks the installer's SHA-256 against it, and
+only then closes, runs the installer in update mode into the same location, and
+restarts. Your saved data stays in place. Source checkouts, portable copies and
+other installations WG cannot update exactly in place are told about the
+release and update by hand. 0.3.3-rc and earlier cannot update in-app to this
+release: download and run its installer once.
 The same action is available from the command palette as **Application update**.
 
 The job-log dialog reads and renders at most the first 1.0 MB. For example, opening

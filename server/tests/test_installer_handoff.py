@@ -174,7 +174,7 @@ def test_default_app_full_installer_lifecycle_and_shared_restart_latch(tmp_path,
 
     from launch import serve
     from server.app import create_app
-    from server.tests.test_update_transaction_contract import _post
+    from server.tests._asgi import _post
     from server.updates.installer_checker import InstallerClientError
 
     _app, data, ready = installed(tmp_path)

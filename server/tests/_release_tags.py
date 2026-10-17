@@ -1,7 +1,8 @@
 """Single source of truth for the release tags the frozen-release tests need.
 
-``test_update_transaction_contract.py`` and ``test_cadlink_store_rollback.py``
-each run a *previously released* build's own code by extracting it from a
+``test_frozen_installer_compatibility.py``, ``test_cadlink_store_rollback.py``
+and ``scripts/tests/test_frozen_installer_handoff.py`` each run a
+*previously released* build's own code by extracting it from a
 tag with ``git archive``. That only works when the checkout the suite runs in
 can reach the tag; an ordinary developer clone can, but a CI checkout starts
 shallow and without any tags (``actions/checkout@v4`` defaults), so

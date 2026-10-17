@@ -307,7 +307,7 @@ def test_changed_git_includes_branch_staged_unstaged_and_untracked(tmp_path, mon
         ("launchers/apply_update.py", "server/tests/test_apply_update.py"),
         ("launchers/apply_update.py", "server/tests/test_bundle_recovery.py"),
         ("launchers/apply_update.py", "scripts/tests/test_build_bundle.py"),
-        ("launch/serve.py", "server/tests/test_update_transaction_contract.py"),
+        ("launch/serve.py", "server/tests/test_update_restart_latch.py"),
         ("server/mesh/builder.py", "server/tests/test_real_pipeline.py"),
     ],
 )

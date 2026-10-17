@@ -12,7 +12,7 @@ import urllib.request
 
 from shared import release_assets
 
-from .bundle import GITHUB_REPOSITORY, _validate_url, open_trusted_url, trusted_asset_url, updates_api_base
+from .release_urls import GITHUB_REPOSITORY, _validate_url, open_trusted_url, trusted_asset_url, updates_api_base
 from .manifest import ManifestError, verify_manifest
 
 MAX_API_BYTES = 2 * 1024 * 1024

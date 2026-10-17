@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from server.updates.service import (
-    STABLE_TAG_RE,
-    TAG_RE,
-    _is_update_layer_carrier,
-    _version,
+from server.updates.installer_checker import (
+    _TAG as TAG_RE,
+    InstallerClientError,
+    eligible_release,
+    version_precedence as _version,
 )
 
 
@@ -42,7 +42,7 @@ def test_supported_tags_parse(tag: str):
 )
 def test_unsupported_tags_are_refused(tag: str):
     assert TAG_RE.fullmatch(tag) is None
-    with pytest.raises(ValueError):
+    with pytest.raises(InstallerClientError):
         _version(tag)
 
 
@@ -50,13 +50,13 @@ def test_unsupported_tags_are_refused(tag: str):
 def test_a_companion_tag_is_refused_as_a_version(tag: str):
     """`updates` is a valid SemVer identifier, so the tag shape alone accepts it.
 
-    A companion carries another version's update layers; parsing it as a version
+    A companion carries another version's supporting assets; parsing it as a version
     would sort it immediately below the release it belongs to and let it stand in
     for that release.
     """
 
     assert TAG_RE.fullmatch(tag) is not None
-    with pytest.raises(ValueError):
+    with pytest.raises(InstallerClientError):
         _version(tag)
 
 
@@ -101,25 +101,13 @@ def test_core_numbers_still_decide_first():
     assert _version("v0.4.1") > _version("v0.4.0-rc.1")
 
 
-def test_the_strict_tag_shape_refuses_every_prerelease():
-    """The validators that must not admit a beta keep the narrow shape."""
+@pytest.mark.parametrize("tag", ["v0.4.0-beta.1", "v0.4.0-updates", "nightly"])
+def test_the_stable_channel_refuses_every_prerelease_tag(tag: str):
+    """Stable never offers a pre-release, even one arriving from ``/releases/latest``."""
 
-    assert STABLE_TAG_RE.fullmatch("v0.4.0") is not None
-    assert STABLE_TAG_RE.fullmatch("v0.4.0-beta.1") is None
-    assert STABLE_TAG_RE.fullmatch("v0.4.0-updates") is None
+    payload = {"tag_name": tag, "draft": False, "prerelease": False, "assets": []}
 
+    def opener(*_args, **_kwargs):
+        raise AssertionError("a refused tag must not fetch its manifest")
 
-@pytest.mark.parametrize(
-    ("tag", "carries"),
-    [
-        ("v0.4.0", True),  # today: the layers live on the release itself
-        ("v0.4.0-updates", True),  # #57: the companion pre-release
-        ("v0.4.0-beta.1-updates", True),  # #58: a beta's companion
-        ("v0.4.0-beta.1", False),  # a beta is not a companion
-        ("v0.4.0-rc.1", False),
-        ("nightly", False),
-        ("v0.4-updates", False),
-    ],
-)
-def test_only_releases_and_their_companions_carry_update_layers(tag: str, carries: bool):
-    assert _is_update_layer_carrier(tag) is carries
+    assert eligible_release(payload, channel="stable", platform_name=None, opener=opener) is None

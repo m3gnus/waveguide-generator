@@ -18,7 +18,7 @@ import urllib.request
 
 from launchers.update_lock import ordinary_path, resolved_path
 
-from .bundle import GITHUB_REPOSITORY, _validate_url, open_trusted_url, trusted_asset_url
+from .release_urls import GITHUB_REPOSITORY, _validate_url, open_trusted_url, trusted_asset_url
 from .install_kind import current_platform, probe_install
 from .installer_checker import (
     MAX_INSTALLER_BYTES, MAX_MANIFEST_BYTES, InstallerClientError, check_releases, fetch_release, version_precedence,

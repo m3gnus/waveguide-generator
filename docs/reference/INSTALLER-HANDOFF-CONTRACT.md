@@ -5,10 +5,8 @@ download proof, eligibility and status schema are specified by
 [INSTALLER-CLIENT-CONTRACT.md](INSTALLER-CLIENT-CONTRACT.md). Source, portable,
 unregistered, translocated and unsupported installations are notify-only.
 
-The receiving app/runtime bridge remains available through its original
-modules, classes, request kinds and health identities for the bridge release
-and its successor. This service never selects or sends a layer transaction.
-Tests can inject the original `UpdateService` to exercise that receiving seam.
+This service never selects or sends a layer transaction; layer-update
+archives are no longer published.
 
 ## Approval and publication
 

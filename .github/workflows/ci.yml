@@ -299,9 +299,10 @@ jobs:
             # Linux and Windows sit well inside this; macOS has its own 40m
             # cap above (measured 18m on main plus ~7m of installer tests).
             budget: 25
-    # `test_update_transaction_contract.py` and `test_cadlink_store_rollback.py`
-    # (server/tests) run a previously *released* build's own code, extracted
-    # from its tag with `git archive`, against the code under test. The bare
+    # `test_frozen_installer_compatibility.py`, `test_cadlink_store_rollback.py`
+    # (server/tests) and `test_frozen_installer_handoff.py` (scripts/tests) run
+    # a previously *released* build's own code, extracted from its tag with
+    # `git archive`, against the code under test. The bare
     # checkout above is shallow and fetches no tags, so without the step below
     # those tests silently skip -- WG_REQUIRE_RELEASE_TAGS turns that miss into
     # a failure instead, so a future checkout change cannot re-disable them
@@ -327,7 +328,6 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Fetch the release tags the frozen-release contract tests need
-        if: matrix.suite == 'server'
         # git-bash on windows-latest, not the default pwsh, so this one script
         # works identically on all three runners.
         shell: bash

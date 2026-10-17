@@ -218,10 +218,10 @@ VERSION_RE = re.compile(rf"^{_SEMVER}$")
 #: ``UPDATES_TAG_SUFFIX``, so a beta's companion is ``v0.4.0-beta.1-updates``.
 #:
 #: These live here, with the names, because three places have to agree on them
-#: and cannot all import each other: the updater parses tags to order versions,
-#: ``server/updates/bundle.py`` matches them to decide whether an asset URL is
-#: one of this repository's, and the same module matches versions to decide
-#: whether an install may start. They drifted once -- the URL and install checks
+#: and cannot all import each other: the update checker parses tags to order
+#: versions, ``server/updates/release_urls.py`` matches them to decide whether an
+#: asset URL is one of this repository's, and the release workflow matches
+#: versions. They drifted once -- the URL and install checks
 #: kept the narrow ``\d+\.\d+\.\d+`` shape after the beta channel widened the
 #: parser, so every asset of every beta was refused as untrusted and no beta
 #: could have been installed. One pattern is the fix that cannot drift again.
@@ -292,8 +292,8 @@ def is_release_tag(tag: str) -> bool:
     """Whether ``tag`` names a release of this project, or its companion.
 
     Shape only. Whether a tag may be *offered* to a given channel is a separate
-    question, and a stricter one -- see ``server/updates/service.py``, where a
-    companion is never a release and a pre-release reaches only the beta channel.
+    question, and a stricter one -- see ``server/updates/installer_checker.py``,
+    where a companion is never a release and a pre-release reaches only the beta channel.
     """
 
     return TAG_RE.fullmatch(tag.removesuffix(UPDATES_TAG_SUFFIX)) is not None
@@ -441,10 +441,9 @@ def prerelease_precedence(label: str | None) -> tuple[Any, ...]:
 def version_precedence(version_or_tag: str) -> tuple[Any, ...]:
     """Parse a tag or version into a tuple that sorts by release precedence.
 
-    One comparator, because three places have to agree on the order and cannot
-    all import each other: the updater, which decides what to offer a channel;
-    `server/updates/service.py`, which reads it from here; and `release.yml`,
-    whose guard refuses a version that does not move past the highest published
+    One comparator, because two places have to agree on the order:
+    `server/updates/installer_checker.py`, which decides what to offer a
+    channel, and `release.yml`, whose guard refuses a version that does not move past the highest published
     tag. That guard used to carry its own three-integer parser, and so refused
     every pre-release the rest of this module had already been widened to name.
     """

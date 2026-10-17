@@ -7,29 +7,11 @@ from pathlib import Path
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
-
 from server.integration.contracts import error_envelope
 from server.settings.store import SettingsStore
 
 from .restart import UPDATE_RESTART_PENDING, RestartApproval
-from .installer_service import InstallerUpdateService
-from .service import (
-    UpdateBuildNotHeldBack,
-    UpdateChannelUnavailable,
-    UpdateInstallUnavailable,
-    UpdateService,
-)
-
-
-class HeldBackBuild(BaseModel):
-    """A build the completion record holds back, by contract §2.3's interim identity."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    version: str
-    commit: str | None = None
-    runtimeId: str | None = None
+from .installer_service import InstallerUpdateService, UpdateChannelUnavailable, UpdateInstallUnavailable
 
 
 def mount_updates(
@@ -39,11 +21,10 @@ def mount_updates(
     data_dir: Path,
     repo_root: Path,
     update_request_path: Path | None = None,
-    update_staging_root: Path | None = None,
-    service: UpdateService | InstallerUpdateService | None = None,
+    service: InstallerUpdateService | None = None,
     settings: SettingsStore | None = None,
     restart_approval: RestartApproval | None = None,
-) -> UpdateService | InstallerUpdateService:
+) -> InstallerUpdateService:
     """Attach the update routes.
 
     ``restart_approval`` is the server's restart-approved latch (contract
@@ -60,22 +41,17 @@ def mount_updates(
         data_dir=data_dir,
         repo_root=repo_root,
         update_request_path=update_request_path,
-        update_staging_root=update_staging_root,
         settings=settings,
         restart_approval=restart_approval,
     )
     application.state.update_service = update_service
-    if isinstance(update_service, InstallerUpdateService):
-        application.router.add_event_handler("startup", update_service.start_checker)
-        application.router.add_event_handler("shutdown", update_service.close)
+    application.router.add_event_handler("startup", update_service.start_checker)
+    application.router.add_event_handler("shutdown", update_service.close)
 
     def installer_response(payload: dict[str, object]) -> dict[str, object]:
         # Status and progress can be copied even when the log request fails.
         # Keep the home folder private at the API boundary, not in install state.
-        # Legacy responses can contain executable commands with absolute paths.
-        if isinstance(update_service, InstallerUpdateService):
-            return scrub_value(payload, scrub_rules())
-        return payload
+        return scrub_value(payload, scrub_rules())
 
     @application.get("/api/updates/status")
     async def update_status(
@@ -155,38 +131,12 @@ def mount_updates(
                 detail=scrub_text(str(exc), scrub_rules()),
             ) from exc
 
-    @application.post("/api/updates/retry")
-    async def retry_held_back_build(
-        build: HeldBackBuild,
-        confirmation: str | None = Header(default=None, alias="X-WG-Update"),
-    ) -> dict[str, object]:
-        # The explicit retry of contract §2.3. It lifts the one suppression it
-        # names and installs nothing; the dialog then offers the build again.
-        # Guarded by a custom header for the same reason install is.
-        if confirmation != "retry":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="The update confirmation header is missing.",
-            )
-        try:
-            lifted = await asyncio.to_thread(update_service.lift_suppression, build.model_dump())
-        except UpdateBuildNotHeldBack as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=scrub_text(str(exc), scrub_rules())) from exc
-        except OSError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=scrub_text(f"Could not retry that build: {exc}", scrub_rules()),
-            ) from exc
-        return {"lifted": lifted}
-
     @application.post("/api/updates/reset")
     async def reset_installer_download(
         confirmation: str | None = Header(default=None, alias="X-WG-Update"),
     ) -> dict[str, object]:
         if confirmation != "reset":
             raise HTTPException(status_code=403, detail="The update confirmation header is missing.")
-        if not isinstance(update_service, InstallerUpdateService):
-            raise HTTPException(status_code=409, detail="This receiving client uses layer retries.")
         try:
             return installer_response(await asyncio.to_thread(update_service.reset_download))
         except UpdateInstallUnavailable as exc:
