@@ -401,6 +401,9 @@ export function observeCadProjectLoads(integration: UseCadRestoresOptions): () =
   } = integration;
   return subscribeRevision((event) => {
     if (event.reason !== 'load') return;
+    // A crash-recovery restore is the same document returning, not a new one:
+    // it must not pull the user out of CAD mode or stale their ingest.
+    if (event.loadSource === 'autosave-restore') return;
     if (event.loadSource === 'cad-project-switch') {
       projectOpenPending.current = true;
       if (integration.initialChoiceOwed) integration.initialChoiceOwed.current = true;

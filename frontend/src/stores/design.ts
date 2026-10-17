@@ -10,7 +10,7 @@ export { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
 export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM' | 'LOOKUP' | NativeFamily;
 export const isNativeFamily = (family: DesignFamily): family is NativeFamily => (NATIVE_FAMILIES as readonly string[]).includes(family);
 export type MutationReason = 'edit' | 'drag' | 'undo' | 'redo' | 'load' | 'family';
-export type DesignLoadSource = 'ordinary' | 'cad-project-switch';
+export type DesignLoadSource = 'ordinary' | 'cad-project-switch' | 'autosave-restore';
 export type DesignValue = number | string | boolean | null | { radius: number; segments: number } | number[] | [number, number][] | FreeformPoint[] | CrossSectionStation[];
 
 export interface ExprNumber {

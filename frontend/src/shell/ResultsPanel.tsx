@@ -2622,16 +2622,25 @@ export function ResultsPanel() {
     || Number(selectedJob?.solve_options.num_frequencies)
     || Number(selectedJob?.config_summary.num_frequencies)
     || 0;
-  const selectedJobCanRerun = useMemo(() => Boolean(selectedJob && hydrateJobDesign(selectedJob)), [selectedJob]);
+  const selectedJobCanRerun = useMemo(
+    // Imported runs are rerun through the model solve path, not here.
+    () => Boolean(selectedJob && !selectedJob.cad_source && !selectedJob.cad_setup && hydrateJobDesign(selectedJob)),
+    [selectedJob],
+  );
   const enableBalloonAndRerun = useCallback(() => {
     if (!selectedJob) return;
     // The new solve is a separate job. Follow the latest result so this card
     // replaces the old empty state as soon as that job completes, even when
     // the source result had been pinned for comparison.
-    compareSelection.followLatest(selectedJob.id);
     setBeamRerunSubmitting(true);
-    void rerunWithPatch(selectedJob.id, { options: { polar_config: { spherical_sampling: true } } })
+    const sourceId = selectedJob.id;
+    void coordinator.runExclusive(() => rerunWithPatch(sourceId, { options: { polar_config: { spherical_sampling: true } } }))
       .then(async (jobId) => {
+        if (jobId === null) {
+          coordinator.reportError('Another solve is being submitted. Try again in a moment.');
+          return;
+        }
+        compareSelection.followLatest(sourceId);
         compareSelection.awaitRun(jobId);
         solveAttention.bindRun(jobId);
         await jobsSocket.refresh();

@@ -194,4 +194,26 @@ describe('SolverMeshRefreshController', () => {
     vi.advanceTimersByTime(SOLVER_MESH_DEBOUNCE_MS * 4);
     expect(h.builds).toHaveLength(0);
   });
+
+  it('rebuilds after a document load that reuses the built revision number', async () => {
+    const h = harness();
+    h.controller.activate(2);
+    h.builds[0](ok());
+    await flush();
+    expect(h.controller.getState().stale).toBe(false);
+
+    // A restored document can come back under the very revision already built.
+    h.controller.documentLoaded();
+    h.controller.designChanged(2);
+    vi.advanceTimersByTime(SOLVER_MESH_DEBOUNCE_MS);
+    expect(h.builds).toHaveLength(2);
+
+    // And re-activating the view must not serve the old document's mesh.
+    h.builds[1](ok());
+    await flush();
+    h.controller.deactivate();
+    h.controller.documentLoaded();
+    h.controller.activate(2);
+    expect(h.builds).toHaveLength(3);
+  });
 });

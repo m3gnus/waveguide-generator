@@ -90,6 +90,9 @@ interface CoordinatorBridgeSnapshot {
    * nothing. */
   solveCurrentCadImport(): Promise<'submitted' | 'busy'>;
   retry(jobId: string): Promise<void>;
+  /** Run one submission under the same mutex as Solve. Resolves null, without
+   * calling `submit`, when another submission is in flight. */
+  runExclusive<T>(submit: () => Promise<T>): Promise<T | null>;
   reportError(message: string): void;
   actionError: string | null;
 }
@@ -100,6 +103,7 @@ let bridgeSnapshot: CoordinatorBridgeSnapshot = {
   runImported: unavailableRun,
   solveCurrentCadImport: unavailableRun,
   retry: unavailableRun,
+  runExclusive: unavailableRun,
   reportError: () => undefined,
   actionError: null,
 };
@@ -653,6 +657,19 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
   }, []);
 
+  const runExclusive = useCallback(async <T,>(submit: () => Promise<T>): Promise<T | null> => {
+    if (submissionInFlight.current) return null;
+    submissionInFlight.current = true;
+    try {
+      setSubmitting(true);
+      setActionError(null);
+      return await submit();
+    } finally {
+      submissionInFlight.current = false;
+      setSubmitting(false);
+    }
+  }, []);
+
   const reportError = useCallback((message: string) => setActionError(message), []);
   useEffect(() => {
     const recovery = fileRecovery.current;
@@ -685,16 +702,17 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     clearJobLink();
   }, [jobs, jobsLoaded, reportError]);
   useEffect(() => {
-    publishBridge({ run, runImported, solveCurrentCadImport, retry, reportError, actionError });
+    publishBridge({ run, runImported, solveCurrentCadImport, retry, runExclusive, reportError, actionError });
     return () => publishBridge({
       run: unavailableRun,
       runImported: unavailableRun,
       solveCurrentCadImport: unavailableRun,
       retry: unavailableRun,
+      runExclusive: unavailableRun,
       reportError: () => undefined,
       actionError: null,
     });
-  }, [actionError, reportError, retry, run, runImported, solveCurrentCadImport]);
+  }, [actionError, reportError, retry, run, runExclusive, runImported, solveCurrentCadImport]);
 
   useEffect(() => {
     const retryExport = (event: Event) => automation.retryExport((event as CustomEvent<string>).detail);

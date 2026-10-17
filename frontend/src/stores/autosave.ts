@@ -158,7 +158,10 @@ export function restoreAutosave(storage: DraftStorage | null = defaultStorage())
     });
     // Announced last, once the document state it pairs with is in place, so a
     // restore after mount reloads the preview and resets its revision floor.
-    useDesignStore.getState().replaceDocument(record.design, { revision: record.designRevision });
+    useDesignStore.getState().replaceDocument(record.design, {
+      revision: record.designRevision,
+      loadSource: 'autosave-restore',
+    });
     return true;
   } catch {
     try { storage.removeItem(AUTOSAVE_KEY); } catch { /* unavailable storage stays non-fatal */ }

@@ -3,6 +3,9 @@ import { AUTOSAVE_KEY, restoreAutosave, restoreAutosaveWithLateRetry, startAutos
 import { resetDesignStore, seedDesign, useDesignStore } from './design';
 import { DESIGN_CONTENT_KEY_VERSION } from './designContentKey';
 import { resetDocumentStore, useDocumentStore } from './document';
+import { workspaceModeStore } from './workspaceMode';
+import { useCadReturnStore } from './cadReturn';
+import { observeCadProjectLoads } from '../shell/cadlink/restores';
 
 describe('design autosave', () => {
   beforeEach(() => {
@@ -231,5 +234,37 @@ describe('design autosave', () => {
     expect(JSON.parse(localStorage.getItem(AUTOSAVE_KEY)!).design.R).toBe(180);
     visibility.mockRestore();
     controller.dispose();
+  });
+
+  it('leaves CAD mode and the CAD ingest alone when a draft is restored late', () => {
+    useDesignStore.getState().updateField('R', 177);
+    expect(writeAutosave()).toBe(true);
+    const draft = localStorage.getItem(AUTOSAVE_KEY)!;
+    resetDesignStore();
+    resetDocumentStore();
+    workspaceModeStore.setMode('cad');
+    const markStale = vi.spyOn(useCadReturnStore.getState(), 'markIngestStale');
+    const ref = <T,>(current: T) => ({ current });
+    const stop = observeCadProjectLoads({
+      enterCadWorkspace: vi.fn(), manualSelectionAt: ref(null), projectOpenPending: ref(false),
+      refreshRef: ref(vi.fn()), refusedForeignReturn: ref(false), returnListRequest: ref(0),
+      seenReturnRevisions: ref(null), setError: vi.fn(), setStatus: vi.fn(),
+    } as unknown as Parameters<typeof observeCadProjectLoads>[0]);
+
+    let notify: (() => void) | undefined;
+    const storage = { getItem: vi.fn(() => null as string | null), setItem: vi.fn(), removeItem: vi.fn() };
+    const unsubscribe = restoreAutosaveWithLateRetry({
+      subscribe: (_namespace, listener) => { notify = () => listener(draft); return () => undefined; },
+    }, storage);
+    storage.getItem.mockReturnValue(draft);
+    notify?.();
+
+    expect(useDesignStore.getState().design.R).toBe(177);
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(markStale).not.toHaveBeenCalled();
+    unsubscribe();
+    stop();
+    markStale.mockRestore();
+    workspaceModeStore.setMode('parametric');
   });
 });

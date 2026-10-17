@@ -1092,7 +1092,9 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
         vertices = np.asarray(parsed.points, dtype=float)
         if vertices.ndim != 2 or vertices.shape[1:] != (3,) or not np.isfinite(vertices).all():
             raise ValueError("parsed STL mesh contains invalid or non-finite coordinates")
-    horn_triangles = int((tags == 1).sum())
+    horn_triangles = int(
+        np.isin(tags, np.asarray(STL_SURFACE_TAGS_BY_FORMULA.get(design.formula, (1,)))).sum()
+    )
     if horn_triangles > STL_TRIANGLE_CEILING:
         warnings.append(
             f"This STL has {horn_triangles:,} triangles, above the "

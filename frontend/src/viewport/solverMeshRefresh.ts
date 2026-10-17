@@ -53,6 +53,9 @@ export class SolverMeshRefreshController {
   private pending = false;
   private latestRevision: number | null = null;
   private builtRevision: number | null = null;
+  /** Bumps on every document load; a build only counts as fresh within its epoch. */
+  private loadEpoch = 0;
+  private builtEpoch = -1;
   private lastOutcome: SolverMeshBuildOutcome | null = null;
   private state: SolverMeshRefreshState = FRESH;
 
@@ -74,7 +77,7 @@ export class SolverMeshRefreshController {
   activate(revision: number): void {
     this.active = true;
     this.latestRevision = revision;
-    if (this.builtRevision === revision && this.lastOutcome?.ok) {
+    if (this.builtRevision === revision && this.builtEpoch === this.loadEpoch && this.lastOutcome?.ok) {
       this.publish(FRESH);
       return;
     }
@@ -91,6 +94,15 @@ export class SolverMeshRefreshController {
     this.pending = false;
     this.inFlight?.abort();
     this.inFlight = null;
+  }
+
+  /** A document was loaded. Revision numbers restart or repeat across
+   * documents, so neither the built nor the latest revision seen can be
+   * trusted to identify a design any more. Call before `designChanged`. */
+  documentLoaded(): void {
+    this.loadEpoch += 1;
+    this.builtRevision = null;
+    this.latestRevision = null;
   }
 
   /** A design mutation landed. Debounce while auto-rebuild is allowed; raise
@@ -151,12 +163,16 @@ export class SolverMeshRefreshController {
     const controller = new AbortController();
     this.inFlight = controller;
     const revision = this.latestRevision;
+    const epoch = this.loadEpoch;
     this.publish({ building: true, stale: false, staleReason: null, error: this.state.error });
     void this.options.runBuild(controller.signal).then((outcome) => {
       if (this.inFlight !== controller) return; // deactivated or superseded
       this.inFlight = null;
       this.lastOutcome = outcome;
-      if (outcome.ok) this.builtRevision = revision;
+      if (outcome.ok && epoch === this.loadEpoch) {
+        this.builtRevision = revision;
+        this.builtEpoch = epoch;
+      }
       if (!this.active) return;
       const missedEdit = this.pending || this.latestRevision !== revision;
       this.pending = false;

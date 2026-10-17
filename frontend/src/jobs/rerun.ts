@@ -1,7 +1,3 @@
-import { preferencesStore } from '../prefs/preferences';
-import { useDocumentStore } from '../stores/document';
-import { advanceRunSequence, nextRunLabel } from './runNaming';
-
 /**
  * A change to apply to a finished run's own request before submitting it again.
  * Only the named keys change; nested objects (`polar_config`) merge one level.
@@ -10,7 +6,6 @@ export type RerunPatch = { options?: Record<string, unknown> };
 
 export interface RerunDeps {
   fetcher?: typeof fetch;
-  now?: () => Date;
   newId?: () => string;
 }
 
@@ -27,17 +22,22 @@ async function failure(response: Response): Promise<Error> {
 }
 
 /**
- * Submit a finished run again with one change.
+ * Submit a finished parametric run again with one change.
  *
- * The request is the run's `effective_request` (what the user asked for, before
- * execution-time adjustments), so engine, accuracy, frequencies and distance
- * stay the run's own. Nothing is read from the editor's solve options and
- * nothing is written to the persisted preferences store.
+ * The request is the run's `effective_request`: the server-resolved request, so
+ * an `auto` engine or a fallback the server chose is already frozen into it and
+ * the rerun repeats that choice. Accuracy, frequencies and distance stay the
+ * run's own. Nothing is read from the editor's solve options and nothing is
+ * written to the persisted preferences store. The new job names the source as
+ * its parent and takes the source's label plus a "(rerun)" suffix.
+ *
+ * Imported-geometry runs are refused: they go through the retry and model-solve
+ * guards, which this plain submission would bypass.
  */
 export async function rerunWithPatch(
   jobId: string,
   patch: RerunPatch,
-  { fetcher = fetch, now = () => new Date(), newId = () => crypto.randomUUID() }: RerunDeps = {},
+  { fetcher = fetch, newId = () => crypto.randomUUID() }: RerunDeps = {},
 ): Promise<string> {
   const stored = await fetcher(`/api/jobs/${encodeURIComponent(jobId)}/requests`, { cache: 'no-store' });
   if (!stored.ok) throw await failure(stored);
@@ -45,20 +45,24 @@ export async function rerunWithPatch(
   if (!isRecord(effective) || !isRecord(effective.options)) {
     throw new Error('This result has no readable request, so it cannot be rerun.');
   }
+  const geometry = effective.geometry;
+  if (!isRecord(geometry) || geometry.type !== 'parametric') {
+    throw new Error('Only parametric results can be rerun with a changed setting.');
+  }
   const options: Record<string, unknown> = { ...effective.options };
   for (const [key, value] of Object.entries(patch.options ?? {})) {
     const current = options[key];
     options[key] = isRecord(current) && isRecord(value) ? { ...current, ...value } : value;
   }
-  const designName = useDocumentStore.getState().designName;
-  const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
+  const sourceLabel = typeof effective.label === 'string' && effective.label ? effective.label : jobId;
+  const label = `${sourceLabel} (rerun)`;
   const response = await fetcher('/api/solve', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...effective, options, label, client_request_id: newId() }),
+    body: JSON.stringify({
+      ...effective, options, label, parent_job_id: jobId, client_request_id: newId(),
+    }),
   });
   if (!response.ok) throw await failure(response);
-  const submitted = ((await response.json()) as { job_id: string }).job_id;
-  preferencesStore.update(advanceRunSequence(preferencesStore.getSnapshot(), designName));
-  return submitted;
+  return ((await response.json()) as { job_id: string }).job_id;
 }

@@ -30,7 +30,7 @@ describe('rerunWithPatch', () => {
     const f = fetcher();
 
     const id = await rerunWithPatch('job-old', { options: { polar_config: { spherical_sampling: true } } }, {
-      fetcher: f as unknown as typeof fetch, newId: () => 'fresh-id', now: () => new Date('2026-10-17T12:00:00Z'),
+      fetcher: f as unknown as typeof fetch, newId: () => 'fresh-id',
     });
 
     expect(id).toBe('job-new');
@@ -43,7 +43,8 @@ describe('rerunWithPatch', () => {
     expect(body.options.polar_config).toEqual({ ...effective.options.polar_config, spherical_sampling: true });
     expect(body.geometry).toEqual(effective.geometry);
     expect(body.client_request_id).toBe('fresh-id');
-    expect(body.label).not.toBe('old');
+    expect(body.label).toBe('old (rerun)');
+    expect(body.parent_job_id).toBe('job-old');
     expect(JSON.stringify(useSolveOptionsStore.getState().options())).toBe(editorBefore);
     expect(useSolveOptionsStore.getState().polar.distance).toBe(9);
     unsubscribe();
@@ -53,5 +54,13 @@ describe('rerunWithPatch', () => {
   it('refuses a run whose request cannot be read', async () => {
     const f = vi.fn(async () => new Response(JSON.stringify({ detail: 'gone' }), { status: 409 }));
     await expect(rerunWithPatch('x', {}, { fetcher: f as unknown as typeof fetch })).rejects.toThrow('gone');
+  });
+
+  it('refuses imported geometry, which belongs to the retry and model-solve guards', async () => {
+    const f = vi.fn(async () => new Response(JSON.stringify({
+      effective_request: { ...effective, geometry: { type: 'imported', ingest_id: 'i1' } },
+    })));
+    await expect(rerunWithPatch('job-cad', {}, { fetcher: f as unknown as typeof fetch })).rejects.toThrow(/parametric/);
+    expect(f).toHaveBeenCalledTimes(1);
   });
 });

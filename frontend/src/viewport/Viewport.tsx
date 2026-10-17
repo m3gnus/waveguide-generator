@@ -841,7 +841,10 @@ export function Viewport() {
       // the replaced design's mesh into `importedMeshStore` for one frame
       // before the follow-up build `designChanged` triggers overwrites it.
       // Bumping the generation here makes that commit refuse itself instead.
-      if (event.reason === 'load') importedMeshStore.beginIntent();
+      if (event.reason === 'load') {
+        importedMeshStore.beginIntent();
+        solverRefresh.documentLoaded();
+      }
       solverRefresh.designChanged(event.revision);
     }),
     [solverRefresh],
