@@ -1457,12 +1457,50 @@ def test_acute_wedge_overlap_at_the_closest_point_is_near_contact(degrees, apex)
     (18, 30 + 1e-4, 8, 4e-3, 1, 4e-3),        # A 4 um square face, wholly facing.
     (0, 30 + 1e-4, 20 - 5e-4, 40, 10, 20),    # A 0.5 um wide, 40 mm long overlap.
     (40 - 4e-3, 30 + 1e-4, 20 - 4e-3, 10, 10, 10),  # A 4 um corner overlap.
-    # Too small to sample against the rings: refused even beside an edge only.
-    (20, 30 + 5e-4, 20 + 5e-4, 4e-3, 1, 4e-3),
-], ids=["4um-face", "0.5um-strip", "4um-corner", "4um-face-edge-only"])
+], ids=["4um-face", "0.5um-strip", "4um-corner"])
 def test_faces_or_overlaps_narrower_than_the_probe_rings_are_near_contact(second):
     problem, _calls = _near_contact([(0, 0, 0, 40, 30, 20), second])
     assert problem and "near-contact" in problem
+
+
+def test_planar_face_narrower_than_the_rings_beside_an_edge_only_is_not_near_contact():
+    # Planar faces are decided by their overlap area, so a 4 um face that
+    # only sits beside an edge is not refused for being narrow.
+    problem, _calls = _near_contact([(0, 0, 0, 40, 30, 20), (20, 30 + 5e-4, 20 + 5e-4, 4e-3, 1, 4e-3)])
+    assert problem is None
+
+
+@pytest.mark.parametrize("size", [50, 1000])
+@pytest.mark.parametrize("apex", ["inside", "beside"])
+def test_wedge_overlap_near_a_large_face_corner_is_decided_by_area(size, apex):
+    # Box A's top face spans x and z over 0..size at y=30. B's bottom face,
+    # 0.1 um above, is a 10 degree wedge opening in +x: with its apex 1% in
+    # from A's corner the overlap is a sliver triangle between any fixed
+    # samples (8.8 mm^2 at 1 m); with the apex 0.5 um beyond A's edge the
+    # faces only come close at a corner.
+    slope = np.tan(np.radians(10))
+    x0 = .99 * size if apex == "inside" else size + 5e-4
+    z0 = .99 * size
+    footprint = [(x0, z0, 0), (x0 + 3 * size, z0, 0), (x0 + 3 * size, z0 + 3 * size * slope, 0)]
+    problem, _calls = _near_contact([(0, 0, 0, size, 30, size)], prisms=[
+        lambda gmsh: _footprint_prism(gmsh, footprint, 30 + 1e-4, 10)])
+    assert (problem is not None) == (apex == "inside")
+
+
+@pytest.mark.parametrize("overhang", [None, 1e-2], ids=["inside-hole", "overlapping-rim"])
+def test_face_over_a_hole_is_near_contact_only_where_it_covers_material(overhang):
+    def plate(gmsh):
+        occ = gmsh.model.occ
+        outer = occ.addBox(0, 0, 0, 40, 30, 20)
+        hole = occ.addBox(10, -1, 5, 10, 32, 10)
+        return occ.cut([(3, outer)], [(3, hole)])[0][0][1]
+
+    # B's bottom face sits 0.1 um above the hole, 0.5 um in from its rim, or
+    # reaches 10 um over the rim's material on every side.
+    inset = -overhang if overhang else 5e-4
+    second = (10 + inset, 30 + 1e-4, 5 + inset, 10 - 2 * inset, 5, 10 - 2 * inset)
+    problem, _calls = _near_contact([second], prisms=[plate])
+    assert (problem is not None) == bool(overhang)
 
 
 def test_coplanar_filter_measures_tilted_planes_at_the_faces_not_the_origin():

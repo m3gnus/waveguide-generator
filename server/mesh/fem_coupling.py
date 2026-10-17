@@ -60,11 +60,16 @@ FACING_MIN_PROBES = 2
 # over the probe area; their closest points lie on an edge.
 FACING_MIN_NORMAL_DOT = .5
 # When the rings are inconclusive (an acute wedge whose apex is the closest
-# point, or an overlap narrower than the rings), the pair is decided by dense
-# samples: a cell-centred UV grid over the smaller face, and points along both
-# faces' boundary curves stepped this far into their own face. A shared edge
-# or corner then never projects onto the other face's boundary, while any
-# overlap wider than the inset is found.
+# point, or an overlap narrower than the rings), two planar faces are decided
+# by the area of their projected overlap inside the tolerance band: exact for
+# straight edges, and for curved edges trusted only beyond the chords' error.
+# A shared edge or corner has no area; an overlap of more than this does.
+FACING_MIN_OVERLAP_MM2 = 1e-8
+FACING_CURVE_SEGMENTS = 128
+# Otherwise dense samples decide: a cell-centred UV grid over the smaller
+# face, and points along both faces' boundary curves stepped this far into
+# their own face, so a shared edge or corner never projects onto the other
+# face's boundary. Sampled, not exact: a sliver between samples is missed.
 FACING_GRID = 32
 FACING_BOUNDARY_SAMPLES = 64
 FACING_BOUNDARY_INSET_MM = 1e-5
@@ -276,14 +281,150 @@ def _face_width(gmsh: Any, tag: int) -> float:
     return 2 * area / perimeter if perimeter > 0 else 0.
 
 
+def _planar_segments(gmsh: Any, tag: int, origin: np.ndarray, u: np.ndarray,
+                      v: np.ndarray) -> tuple[np.ndarray, float]:
+    """A planar face's boundary as counter-clockwise (u, v) segments.
+
+    Straight edges are exact; other curves become chords, and the second
+    value bounds the area between the chords and the curves.
+    """
+    segments, error = [], 0.
+    for _dim, curve in gmsh.model.getBoundary([(2, tag)], combined=False, oriented=True):
+        reverse, curve = curve < 0, abs(int(curve))
+        lower, upper = (float(np.ravel(bound)[0]) for bound in gmsh.model.getParametrizationBounds(1, curve))
+        straight = gmsh.model.getType(1, curve) == "Line"
+        parameters = np.linspace(lower, upper, 2 if straight else FACING_CURVE_SEGMENTS + 1)
+        points = np.asarray(gmsh.model.getValue(1, curve, parameters.tolist()), dtype=float).reshape(-1, 3)
+        if not straight:
+            middles = np.asarray(gmsh.model.getValue(1, curve, ((parameters[:-1] + parameters[1:]) / 2).tolist()),
+                                 dtype=float).reshape(-1, 3)
+            chords = np.linalg.norm(points[1:] - points[:-1], axis=1)
+            sagitta = np.linalg.norm(middles - (points[1:] + points[:-1]) / 2, axis=1)
+            # A chord's sagitta bounds the curve's offset from it for arcs and
+            # short smooth pieces; doubled for margin.
+            error += 2 * float(np.sum(chords * sagitta))
+        xy = np.column_stack([(points - origin) @ u, (points - origin) @ v])
+        if reverse:
+            xy = xy[::-1]
+        segments.append(np.stack([xy[:-1], xy[1:]], axis=1))
+    segments = np.concatenate(segments) if segments else np.empty((0, 2, 2))
+    signed = .5 * float(np.sum(segments[:, 0, 0] * segments[:, 1, 1] - segments[:, 1, 0] * segments[:, 0, 1]))
+    return (segments[:, ::-1] if signed < 0 else segments), error
+
+
+def _convex_clip(polygon: np.ndarray, normal: np.ndarray, limit: float) -> np.ndarray:
+    """Sutherland-Hodgman clip of a convex polygon to ``normal . x <= limit``."""
+    result = []
+    for start, end in zip(polygon, np.roll(polygon, -1, axis=0)):
+        a, b = float(start @ normal) - limit, float(end @ normal) - limit
+        if a <= 0:
+            result.append(start)
+        if (a < 0 < b) or (b < 0 < a):
+            result.append(start + a / (a - b) * (end - start))
+    return np.asarray(result).reshape(-1, 2)
+
+
+def _overlap_area(polygons: Sequence[np.ndarray], floor: float) -> float:
+    """Exact area common to counter-clockwise polygons given as segments.
+
+    A polygon's indicator above ``floor`` is the signed sum, over its
+    non-vertical segments, of "below this segment": +1 for leftward (upper)
+    segments, -1 for rightward. The product of the indicators integrates
+    term by term; each term is a piecewise-linear integral in x.
+    """
+    weighted = []
+    for segments in polygons:
+        x0, y0, x1, y1 = segments[:, 0, 0], segments[:, 0, 1], segments[:, 1, 0], segments[:, 1, 1]
+        keep = (x0 != x1) & (np.maximum(y0, y1) > floor)
+        x0, y0, x1, y1 = x0[keep], y0[keep], x1[keep], y1[keep]
+        sign = np.where(x1 < x0, 1., -1.)
+        low, high = np.minimum(x0, x1), np.maximum(x0, x1)
+        slope = (y1 - y0) / (x1 - x0)
+        weighted.append((low, high, slope, y0 - slope * x0, sign))
+    if any(not len(terms[0]) for terms in weighted):
+        return 0.
+    # Every combination whose x ranges overlap, built one polygon at a time.
+    index = [np.arange(len(weighted[0][0]))[:, None]]
+    left, right = weighted[0][0], weighted[0][1]
+    for terms in weighted[1:]:
+        overlap = (left[:, None] < terms[1][None, :]) & (terms[0][None, :] < right[:, None])
+        rows, columns = np.nonzero(overlap)
+        index = [np.column_stack([index[0][rows], columns])]
+        left, right = np.maximum(left[rows], terms[0][columns]), np.minimum(right[rows], terms[1][columns])
+    combination = index[0]
+    if not len(combination):
+        return 0.
+    slopes = np.column_stack([terms[2][combination[:, k]] for k, terms in enumerate(weighted)])
+    intercepts = np.column_stack([terms[3][combination[:, k]] for k, terms in enumerate(weighted)])
+    signs = np.prod(np.column_stack([terms[4][combination[:, k]] for k, terms in enumerate(weighted)]), axis=1)
+    # Breakpoints: the ends, every pairwise crossing and every floor crossing.
+    breaks = [left[:, None], right[:, None]]
+    count = slopes.shape[1]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for i in range(count):
+            breaks.append(((floor - intercepts[:, i]) / slopes[:, i])[:, None])
+            for j in range(i + 1, count):
+                breaks.append(((intercepts[:, j] - intercepts[:, i]) / (slopes[:, i] - slopes[:, j]))[:, None])
+    x = np.concatenate(breaks, axis=1)
+    x = np.where(np.isfinite(x), x, left[:, None])
+    x = np.sort(np.clip(x, left[:, None], right[:, None]), axis=1)
+    height = np.maximum((slopes[:, None, :] * x[:, :, None] + intercepts[:, None, :]).min(axis=2) - floor, 0)
+    area = np.sum(.5 * (height[:, 1:] + height[:, :-1]) * np.diff(x, axis=1), axis=1)
+    return float(np.sum(signs * area))
+
+
+def _planar_overlap(gmsh: Any, a: int, b: int, p: np.ndarray, n_a: np.ndarray,
+                    n_b: np.ndarray, tolerance: float) -> bool | None:
+    """Decide two planar faces by their projected overlap inside the gap.
+
+    Face ``b`` is projected along ``n_a`` onto ``a``'s plane, and the overlap
+    is cut to the band where the gap along ``n_a`` is within the tolerance.
+    True or False when decided; None when curved edges leave it uncertain.
+    """
+    helper = np.eye(3)[np.argmin(np.abs(n_a))]
+    u = np.cross(n_a, helper)
+    u /= np.linalg.norm(u)
+    v = np.cross(n_a, u)
+    first, error_a = _planar_segments(gmsh, a, p, u, v)
+    second, error_b = _planar_segments(gmsh, b, p, u, v)
+    if not len(first) or not len(second):
+        return None
+    low = np.maximum(first.reshape(-1, 2).min(axis=0), second.reshape(-1, 2).min(axis=0))
+    high = np.minimum(first.reshape(-1, 2).max(axis=0), second.reshape(-1, 2).max(axis=0))
+    if np.any(low >= high):
+        return False if error_a == error_b == 0 else None
+    band = np.array([low, [high[0], low[1]], high, [low[0], high[1]]])
+    # Gap along n_a from a's plane (through p) to b's plane, linear in (u, v).
+    b_point = np.asarray(gmsh.model.getValue(2, b, gmsh.model.getParametrization(2, b, p.tolist())), dtype=float)
+    along = float(n_b @ n_a)
+    gap0 = float(n_b @ (b_point - p)) / along
+    gradient = -np.array([n_b @ u, n_b @ v]) / along
+    limit = tolerance + 1e-7
+    band = _convex_clip(band, gradient, limit - gap0)
+    if len(band) >= 3:
+        band = _convex_clip(band, -gradient, limit + gap0)
+    if len(band) < 3:
+        return False if error_a == error_b == 0 else None
+    third = np.stack([band, np.roll(band, -1, axis=0)], axis=1)
+    area = _overlap_area([first, second, third], float(band[:, 1].min()))
+    # Rounding scales with the band's extent; chords with the curves' error.
+    rounding = 1e-12 * float(np.ptp(band, axis=0) @ np.ptp(band, axis=0))
+    error = error_a + error_b
+    if area > FACING_MIN_OVERLAP_MM2 + rounding + error:
+        return True
+    return False if error == 0 else None
+
+
 def _faces_face_each_other(gmsh: Any, a: int, b: int, p: np.ndarray, q: np.ndarray,
                            normals: Sequence[np.ndarray], tolerance: float) -> bool:
     """Require an overlapping projected area, not just near edges or corners.
 
     Conservative: a false refusal is cheaper than accepting a contact. Rings
-    around the closest points decide the common case; otherwise faces
-    narrower than the rings, or any dense sample over an overlap, refuse.
-    Only edge or corner proximity, with no overlapping sample, is accepted.
+    around the closest points decide the common case. Two planar faces are
+    then decided by their overlap area (exact for straight edges). Any other
+    pair refuses when either face is narrower than the rings or any dense
+    sample lies over an overlap; only then is edge or corner proximity
+    accepted, and a sliver between the samples can be missed.
     """
     count = _facing_probes(gmsh, a, b, p, normals[0], tolerance)
     if count >= FACING_MIN_PROBES:
@@ -291,6 +432,11 @@ def _faces_face_each_other(gmsh: Any, a: int, b: int, p: np.ndarray, q: np.ndarr
     if count + _facing_probes(gmsh, b, a, q, normals[1], tolerance) >= FACING_MIN_PROBES:
         return True
     n_a, n_b = (np.asarray(normal, dtype=float) / max(np.linalg.norm(normal), 1e-300) for normal in normals)
+    if abs(float(n_a @ n_b)) >= FACING_MIN_NORMAL_DOT and all(
+            gmsh.model.getType(2, tag) == "Plane" for tag in (a, b)):
+        decided = _planar_overlap(gmsh, a, b, p, n_a, n_b, tolerance)
+        if decided is not None:
+            return decided
     if (abs(float(n_a @ n_b)) >= FACING_MIN_NORMAL_DOT
             and min(_face_width(gmsh, a), _face_width(gmsh, b)) < FACING_PROBE_RADIUS_MM):
         return True
