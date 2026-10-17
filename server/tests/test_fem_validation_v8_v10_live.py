@@ -142,8 +142,9 @@ def test_v8_coupled_metal_float32_matches_cpu_float64(managed_cpu_metal, tmp_pat
     if case == "ported":
         tuning = helmholtz_frequency(C, np.pi * PORT_RADIUS_M**2, CHAMBER_VOLUME_M3,
                                      PORT_LENGTH_M, .85 * PORT_RADIUS_M, .61 * PORT_RADIUS_M)
-        # F11's bracket, 6% either side of tuning: the high-Q case for Float32.
-        frequencies = (tuning * np.array([.94, 1.06])).tolist()
+        # Sweep 6% either side of the lumped tuning in 1% steps, so the true
+        # resonance -- the high-Q worst case for Float32 -- is sampled within 1%.
+        frequencies = (tuning * np.linspace(.94, 1.06, 13)).tolist()
     else:
         frequencies = [100.]
     cpu_env, gpu_env = _v8(case, frequencies, tmp_path, (("beat-cpu", CPU_FLOAT64),
@@ -153,6 +154,7 @@ def test_v8_coupled_metal_float32_matches_cpu_float64(managed_cpu_metal, tmp_pat
     assert cpu_env["metadata"]["solver_engine"]["precision"] == "double"
     assert gpu_env["metadata"]["solver_engine"]["precision"] == "single"
     assert gpu_env["metadata"]["solver_engine"]["device"] == "metal"
+    assert cpu_env["metadata"]["solver_engine"]["device"] == "cpu"
 
 
 def test_v8_sealed_metal_request_reroutes_to_cpu_float64(managed_cpu, tmp_path):
@@ -164,6 +166,8 @@ def test_v8_sealed_metal_request_reroutes_to_cpu_float64(managed_cpu, tmp_path):
     assert reroute["requested_backend"] == "metal"
     assert (reroute["backend"], reroute["precision"]) == ("cpu", "float64")
     assert reroute["reason"] == "Interior-only FEM uses CPU float64"
+    # The second run is CPU against CPU, so its accuracy check proves only the reroute.
+    assert rerouted["metadata"]["solver_engine"]["device"] == "cpu"
 
 
 def _plane_request(origin, axis_u, axis_v, size_m, count, scope, frequency):
