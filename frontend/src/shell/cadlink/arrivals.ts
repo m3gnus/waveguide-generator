@@ -1,7 +1,6 @@
 import { currentDocumentLoad, isCurrentDocumentLoad } from '../../stores/design';
 import { returnOnshapeToWg } from '../../api/onshape';
 import { useCadPreparationStore } from '../../stores/cadPreparation';
-import { rememberCadProject } from '../../stores/cadProjectMemory';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { workspaceNavigation } from '../workspaceNavigation';
 import { showIngestedMeshInViewport } from './artifactLoader';
@@ -257,7 +256,6 @@ export interface CadArrivalActionsIntegration {
   mounted: Ref<boolean>;
   manualSelectionAt: Ref<number | null>;
   refusedForeignReturn: Ref<boolean>;
-  restoringCadProject: Ref<boolean>;
   setIngesting(value: boolean): void;
   setIngestError(value: string | null): void;
   setError(value: string | null): void;
@@ -283,7 +281,7 @@ export function createCadArrivalActions(
   const defaults: CadArrivalActionsIntegration = {
     ingestRequest: { current: 0 }, ingestAbortController: { current: null }, mounted: { current: true },
     manualSelectionAt: { current: null },
-    refusedForeignReturn: { current: false }, restoringCadProject: { current: false },
+    refusedForeignReturn: { current: false },
     setIngesting: noop, setIngestError: noop, setError: noop, setStatus: noop,
     setViewportNotice: noop, setBundles: noop, reportViewportNotice: noop,
     enterCadWorkspace, autoIngestSelected: noop, rereadDrivers: noop,
@@ -292,7 +290,7 @@ export function createCadArrivalActions(
   };
   const adapter = { ...defaults, ...integration };
   const { ingestRequest, ingestAbortController, mounted, manualSelectionAt,
-    refusedForeignReturn, restoringCadProject, setIngesting, setIngestError, setError, setStatus,
+    refusedForeignReturn, setIngesting, setIngestError, setError, setStatus,
     setViewportNotice, setBundles, reportViewportNotice, enterCadWorkspace: activateWorkspace,
     autoIngestSelected, rereadDrivers,
     fusionInstanceId, onshapeInstanceId, showIngestedMesh } = adapter;
@@ -349,7 +347,6 @@ export function createCadArrivalActions(
         throw new SupersededError(superseded);
       }
       if (request === ingestRequest.current && mounted.current) {
-        rememberCadProject(record.project?.lineage_id);
         const origin = current.selectedBundle.bundleOrigin === 'onshape' ? 'Onshape' : 'Fusion';
         setStatus(`Received ${current.selectedBundle.documentName || current.selectedBundle.name} from ${origin}.`);
         // Before the display, so the viewport adopts the CAD slot rather than
@@ -415,8 +412,8 @@ export function createCadArrivalActions(
     }
     // A selection the user made themselves is the acknowledgement a standing
     // refusal was waiting for, and newer intent than any return already sent;
-    // the restore's own selection is neither, and nor is displaying a Send.
-    if (!automatic && !restoringCadProject.current) {
+    // displaying a Send is neither.
+    if (!automatic) {
       refusedForeignReturn.current = false;
       manualSelectionAt.current = Date.now();
       workspaceModeStore.setImportedInput('cad');

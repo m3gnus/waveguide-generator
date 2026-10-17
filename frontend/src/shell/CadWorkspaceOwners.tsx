@@ -23,7 +23,7 @@ import { createCadOutboundController } from './cadlink/outbound';
 import { createCadReturnWaiter } from './cadlink/returnWaiter';
 import { createReceiptDisplay } from './cadlink/receiptDisplay';
 import { createFusionSolveDisplay } from './cadlink/fusionSolveDisplay';
-import { observeCadProjectLoads, observeRememberedCadProject, refreshChannelDriverBases } from './cadlink/restores';
+import { observeCadProjectLoads, observeLastModel, refreshChannelDriverBases } from './cadlink/restores';
 import { solvedCadModels } from './cadlink/solvedModel';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { solveAttention } from './solveAttention';
@@ -38,7 +38,6 @@ export function mountCadWorkspaceOwners(): () => void {
   const projectOpenPending = { current: false };
   const initialChoiceOwed = { current: !useCadReturnStore.getState().selectedBundle };
   const refusedForeignReturn = { current: false };
-  const restoringCadProject = { current: false };
   const returnListRequest = { current: 0 };
   const seenReturnRevisions = { current: null as Map<string, string> | null };
   const ingestRequest = { current: 0 };
@@ -114,7 +113,7 @@ export function mountCadWorkspaceOwners(): () => void {
       : { ...options, autoOpenNew: false, deferNewArrivals: true });
   };
   const actions = createCadArrivalActions({
-    mounted, ingestRequest, ingestAbortController, manualSelectionAt, refusedForeignReturn, restoringCadProject,
+    mounted, ingestRequest, ingestAbortController, manualSelectionAt, refusedForeignReturn,
     autoIngestSelected, enterCadWorkspace, rereadDrivers, fusionInstanceId: () => useCadConnectionStore.getState().fusionStatus?.link?.instanceId ?? null,
     onshapeInstanceId: () => onshapeInstance,
     setIngesting: (ingesting) => publish({ ingesting }), setIngestError: (ingestError) => publish({ ingestError }),
@@ -308,7 +307,7 @@ export function mountCadWorkspaceOwners(): () => void {
     observeCadProjectLoads({ enterCadWorkspace, manualSelectionAt, projectOpenPending, initialChoiceOwed, refusedForeignReturn,
       returnListRequest, seenReturnRevisions, refreshRef: { current: refreshReturns }, selectBundleRef: { current: selectBundle },
       setError: reportError, setStatus: reportStatus }),
-    observeRememberedCadProject({ restoringCadProject, refusedForeignReturn, selectBundle, reportStatus }),
+    observeLastModel({ reportStatus, reportError }),
     jobsSocket.subscribe(followFusionSolve), () => fusionSolves.dispose(),
     jobsSocket.subscribe(settleModels), solvedCadModels.subscribe(settleModels),
     useDesignStore.subscribe(contextChanged), useDocumentStore.subscribe(contextChanged),

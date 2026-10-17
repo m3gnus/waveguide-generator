@@ -52,12 +52,25 @@ export interface RunWorkspace {
   refusal?: { code: string; message: string } | null;
 }
 
+/** A refused read, with the status and code the server gave so a caller can tell a gone model from a failed one. */
+export class ImportedModelApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code: string | null) {
+    super(message);
+    this.name = 'ImportedModelApiError';
+  }
+}
+
+/** The server no longer has this model. */
+export const isModelGone = (error: unknown): boolean =>
+  error instanceof ImportedModelApiError && (error.status === 404 || error.code === 'model_not_found');
+
 async function read<T>(path: string, fetcher: typeof fetch, what: string): Promise<T> {
   const response = await fetcher(path);
   if (!response.ok) {
-    const body = await response.json().catch(() => null) as { error?: { message?: unknown }; detail?: unknown } | null;
+    const body = await response.json().catch(() => null) as { error?: { message?: unknown; code?: unknown }; detail?: unknown } | null;
     const message = typeof body?.error?.message === 'string' ? body.error.message : formatApiDetail(body?.detail);
-    throw new Error(message ?? `${what} unavailable (${response.status}).`);
+    throw new ImportedModelApiError(message ?? `${what} unavailable (${response.status}).`, response.status,
+      typeof body?.error?.code === 'string' ? body.error.code : null);
   }
   return response.json() as Promise<T>;
 }

@@ -1,8 +1,7 @@
 import { parseExteriorTransducer } from '../../stores/exteriorTransducer';
-import { useEffect, useRef, type MutableRefObject } from 'react';
-import { CadLinkApiError, getIngest, listReturns, type CadReturnBundle, type CadReturnIngestRecord } from '../../api/cadlink';
+import type { MutableRefObject } from 'react';
+import { CadLinkApiError, getIngest, type CadReturnBundle, type CadReturnIngestRecord } from '../../api/cadlink';
 import type { CadSetup } from '../../api/jobsSocket';
-import { cadProjectName, listCadProjects, newestReturnForProject } from '../../api/cadProjects';
 import { getDriver } from '../../api/drivers';
 import { fromResult, parseWire } from '../../results/crossoverSpec';
 import {
@@ -20,13 +19,13 @@ import {
 import { currentDocumentLoad, isCurrentDocumentLoad, subscribeRevision } from '../../stores/design';
 import { useDriverLibraryStore } from '../../stores/driverLibrary';
 import { applyWireOptionsToImportedSolveOptions } from '../../stores/solveOptions';
-import { rememberedCadProject } from '../../stores/cadProjectMemory';
-import { preferencesStore } from '../../prefs/preferences';
+import { durableSettings } from '../../stores/durableSettings';
+import { readLastModel } from '../../stores/lastModel';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
-import { createCadArrivalActions, enterCadWorkspace, type RefreshOptions } from './arrivals';
+import { enterCadWorkspace, type RefreshOptions } from './arrivals';
 import { showIngestedMeshInViewport } from './artifactLoader';
-import { isCurrentOpen, registerImportedView, type ImportedView } from '../../stores/importedModel';
+import { isCurrentOpen, registerImportedView, reopenLastModel, type ImportedView } from '../../stores/importedModel';
 import type { ImportedSetup } from '../../jobs/importedSetup';
 
 type CadHistorySetup = Pick<ReturnType<typeof useCadReturnStore.getState>,
@@ -286,78 +285,6 @@ export interface UseCadRestoresOptions {
   setStatus(value: string | null): void;
 }
 
-/** Own project-load reactions and remembered-project reopening. */
-export function useCadRestores({
-  enterCadWorkspace,
-  manualSelectionAt,
-  projectOpenPending,
-  initialChoiceOwed,
-  refreshRef,
-  refusedForeignReturn,
-  returnListRequest,
-  seenReturnRevisions,
-  selectBundleRef,
-  setError,
-  setStatus,
-}: UseCadRestoresOptions) {
-  const restoringCadProject = useRef(false);
-
-  useEffect(() => observeCadProjectLoads({
-    enterCadWorkspace, manualSelectionAt, projectOpenPending, initialChoiceOwed, refreshRef, refusedForeignReturn, returnListRequest, seenReturnRevisions, setError, setStatus, selectBundleRef,
-  }), [enterCadWorkspace, manualSelectionAt, projectOpenPending, initialChoiceOwed, refreshRef, refusedForeignReturn,
-    returnListRequest, seenReturnRevisions, setError, setStatus]);
-
-  useEffect(() => observeRememberedCadProject({
-    restoringCadProject, refusedForeignReturn,
-    selectBundle: (bundle, project) => selectBundleRef.current(bundle, project), reportStatus: setStatus,
-  }), [refusedForeignReturn, selectBundleRef, setStatus]);
-
-  return { restoringCadProject };
-}
-
-export interface RememberedCadProjectIntegration {
-  selectBundle(bundle: CadReturnBundle, project: string): void;
-  reportStatus(message: string): void;
-  isAllowed(): boolean;
-}
-
-/** Reopen only the empty CAD mode that initiated this read. Captured intent
- * also fences a pick followed by a clear while the listing is delayed. */
-export async function restoreRememberedCadProject(
-  overrides: Partial<RememberedCadProjectIntegration> = {},
-  fetcher: typeof fetch = fetch,
-): Promise<boolean> {
-  const integration: RememberedCadProjectIntegration = {
-    selectBundle: (bundle, project) => createCadArrivalActions({}, fetcher).selectBundleAs(bundle, project, true),
-    reportStatus: () => undefined, isAllowed: () => true, ...overrides,
-  };
-  const lineage = rememberedCadProject();
-  const selection = useCadReturnStore.getState().captureIngestIntent();
-  const documentLoad = currentDocumentLoad();
-  const empty = () => {
-    const current = useCadReturnStore.getState();
-    return !current.selectedBundle && !current.ingestRecord
-      && current.isCurrentIngestIntent(selection) && isCurrentDocumentLoad(documentLoad)
-      && workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad'
-      && preferencesStore.getSnapshot().cadApplication !== 'onshape' && integration.isAllowed();
-  };
-  if (!lineage || !empty()) return false;
-  try {
-    const [projects, returns] = await Promise.all([listCadProjects(fetcher), listReturns(fetcher)]);
-    if (!empty()) return false;
-    const project = projects.find((item) => item.lineageId === lineage);
-    if (!project) return false;
-    const bundle = newestReturnForProject(returns.items, project);
-    if (!bundle) return false;
-    integration.selectBundle(bundle, project.lineageId);
-    integration.reportStatus(`Reopened ${cadProjectName(project)}.`);
-    return true;
-  } catch {
-    // Remembered reopening is advisory; guidance for the empty mode remains.
-    return false;
-  }
-}
-
 export function observeCadProjectLoads(integration: UseCadRestoresOptions): () => void {
   const {
     enterCadWorkspace, manualSelectionAt, projectOpenPending, refreshRef, refusedForeignReturn,
@@ -393,31 +320,36 @@ export function observeCadProjectLoads(integration: UseCadRestoresOptions): () =
   });
 }
 
-export function observeRememberedCadProject({
-  restoringCadProject = { current: false }, refusedForeignReturn = { current: false },
-  selectBundle = (bundle, project) => createCadArrivalActions().selectBundleAs(bundle, project, true),
-  reportStatus = () => undefined,
-}: Partial<Pick<RememberedCadProjectIntegration, 'selectBundle' | 'reportStatus'>> & {
-  restoringCadProject?: { current: boolean };
-  refusedForeignReturn?: { current: boolean };
+/**
+ * Start-up in Imported mode reopens the last model (`reopenLastModel`). The
+ * persisted workspace mode is never changed here: in Parametric nothing is
+ * opened. A pointer that only reaches this browser after the first attempt
+ * (the settings server answered late) is tried once more, while the Imported
+ * view is still empty.
+ */
+export function observeLastModel({ reportStatus = () => undefined, reportError = () => undefined, fetcher = fetch }: {
+  reportStatus?(message: string): void;
+  reportError?(message: string): void;
+  fetcher?: typeof fetch;
 } = {}): () => void {
   let active = true;
-  const maybeRestore = () => {
-    if (workspaceModeStore.getSnapshot().mode !== 'cad' || workspaceModeStore.getSnapshot().importedInput !== 'cad') return;
-    if (preferencesStore.getSnapshot().cadApplication === 'onshape') return;
-    if (restoringCadProject.current || refusedForeignReturn.current) return;
-    const lineage = rememberedCadProject();
-    if (!lineage) return;
-    const current = useCadReturnStore.getState();
-    if (current.selectedBundle || current.ingestRecord) return;
-    restoringCadProject.current = true;
-    void restoreRememberedCadProject({
-      selectBundle: (bundle, project) => selectBundle(bundle, project),
-      reportStatus,
-      isAllowed: () => active && !refusedForeignReturn.current,
-    }).finally(() => { restoringCadProject.current = false; });
+  let running = false;
+  let done = false;
+  const attempt = () => {
+    if (!active || done || running || workspaceModeStore.getSnapshot().mode !== 'cad') return;
+    running = true;
+    void reopenLastModel(fetcher)
+      .then((opened) => {
+        done = opened || readLastModel() !== null;
+        if (opened && active) reportStatus('Reopened the last model.');
+      })
+      .catch((error: unknown) => {
+        done = true;
+        if (active) reportError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => { running = false; });
   };
-  maybeRestore();
-  const stop = workspaceModeStore.subscribe(maybeRestore);
-  return () => { active = false; stop(); };
+  attempt();
+  const stops = (['lastModel', 'meshImport', 'cadProject'] as const).map((namespace) => durableSettings.subscribe(namespace, attempt));
+  return () => { active = false; stops.forEach((stop) => stop()); };
 }

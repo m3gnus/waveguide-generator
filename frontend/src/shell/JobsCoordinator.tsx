@@ -1,7 +1,6 @@
 import { importedModelBlocker, unchangedSetup, useImportedModelStore } from '../stores/importedModel';
 import { nativeSymmetryLimitation } from '../design/nativeFamilies';
-import { durableSettings } from '../stores/durableSettings';
-import { fileMeshSubmission, registeredMesh, reopenSavedMeshModel, useMeshImportStore } from '../stores/meshImport';
+import { fileMeshSubmission, registeredMesh, useMeshImportStore } from '../stores/meshImport';
 import type { ExportFormat } from '../prefs/preferences';
 import { ownedAutoExport } from '../jobs/autoExportOwner';
 import { exportRunAutomatically } from '../jobs/autoExportRun';
@@ -277,7 +276,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   useLegacyBeatEngineMigration();
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
-  const fileRecovery = useRef({ done: false, inFlight: false, revision, generation: importedMeshStore.captureGeneration() });
   const designName = useDocumentStore((state) => state.designName);
   // Parametric mode reads the persisted store, Imported mode its own instance.
   const solveOptions = useScopedSolveOptions();
@@ -573,25 +571,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, []);
 
   const reportError = useCallback((message: string) => setActionError(message), []);
-  useEffect(() => {
-    const recovery = fileRecovery.current;
-    if (!jobsLoaded) return;
-    const recover = () => {
-      if (recovery.done || recovery.inFlight || (workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput !== 'file') || linkedJobId.current || revision !== recovery.revision
-        || !importedMeshStore.isCurrentGeneration(recovery.generation)
-        || importedMeshStore.getSnapshot().showing !== 'parametric') return;
-      recovery.inFlight = true;
-      const generation = importedMeshStore.captureGeneration();
-      void Promise.resolve(importedMeshStore.isCurrentGeneration(generation) && reopenSavedMeshModel())
-        .then(restored => { recovery.done = Boolean(restored); })
-        .catch(error => { recovery.done = true; reportError(error instanceof Error ? error.message : String(error)); })
-        .finally(() => { recovery.inFlight = false; });
-    };
-    recover();
-    // A new origin may mount before the settings request finishes. Its later
-    // saved pointer can resume only while the original empty view still owns intent.
-    return durableSettings.subscribe('meshImport', recover);
-  }, [jobsLoaded, reportError, revision, workspaceMode]);
   // An empty `?job=` names no run; drop it at once.
   useEffect(() => {
     if (linkedJobId.current === null) clearJobLink();

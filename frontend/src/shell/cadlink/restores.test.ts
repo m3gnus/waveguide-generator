@@ -5,13 +5,13 @@ import { cadSolveBlockerNow } from '../JobsCoordinator';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore } from '../../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../../stores/cadReturn';
-import { rememberCadProject } from '../../stores/cadProjectMemory';
+import { readLastModel, rememberLastModel } from '../../stores/lastModel';
 import { resetDesignStore } from '../../stores/design';
 import { resetDocumentStore } from '../../stores/document';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../../stores/solveOptions';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
-import { restoreRememberedCadProject, observeRememberedCadProject, refreshChannelDriverBases } from './restores';
+import { observeLastModel, refreshChannelDriverBases } from './restores';
 import { archivedRequest, bundle, deferred, job, json, mesh, record, workspaceFor } from './selection.fixtures';
 import { openImported, resetImportedModelStore, unchangedSetup, useImportedModelStore, type ImportedDisplay } from '../../stores/importedModel';
 
@@ -67,7 +67,7 @@ afterEach(() => { importedMeshStore.clear(); vi.restoreAllMocks(); vi.unstubAllG
 const archiveFetcher = (async (input: RequestInfo | URL) => String(input).endsWith('/viewport-mesh')
   ? new Response(mesh) : isWorkspace(input) ? json(workspaceFor()) : json(record)) as typeof fetch;
 
-describe('job and remembered-project restores without the coordinator', () => {
+describe('job and last-model restores without the coordinator', () => {
   it('restores a job ingest, saved setup, sweep and model through standalone defaults', async () => {
     workspaceModeStore.setImportedInput('file');
     expect(await restoreCadJobModel(job(), {}, archiveFetcher)).toBe(true);
@@ -134,49 +134,48 @@ describe('job and remembered-project restores without the coordinator', () => {
     expect(importedMeshStore.getSnapshot().cad).toBeNull();
   });
 
-  it('reopens the remembered project only while the initiating mode is empty', async () => {
-    rememberCadProject('wgl_project'); workspaceModeStore.setMode('cad');
-    const fetcher = (async (input: RequestInfo | URL) => json({ items: String(input).endsWith('/designs')
-      ? [{ lineageId: 'wgl_project', documentName: 'Speaker' }] : [bundle], cadFolderConfigured: true })) as typeof fetch;
-    expect(await restoreRememberedCadProject({}, fetcher)).toBe(true);
-    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
-    expect(useCadReturnStore.getState().projectLineageId).toBe('wgl_project');
-    const again = vi.fn();
-    expect(await restoreRememberedCadProject({}, again)).toBe(false); expect(again).not.toHaveBeenCalled();
-  });
-
-  it.each(['pick', 'pick then clear', 'leave CAD mode'] as const)('fences remembered reads after a %s', async (change) => {
-    rememberCadProject('wgl_project'); workspaceModeStore.setMode('cad');
-    const pending = deferred<Response>(); const status = vi.fn();
-    const fetcher = (async (input: RequestInfo | URL) => String(input).endsWith('/designs')
-      ? json({ items: [{ lineageId: 'wgl_project', documentName: 'Speaker' }] }) : pending.promise) as typeof fetch;
-    const first = restoreRememberedCadProject({ reportStatus: status }, fetcher);
-    if (change === 'leave CAD mode') workspaceModeStore.setMode('parametric');
-    else {
-      useCadReturnStore.getState().selectBundle({ ...bundle, bundlePath: 'manual.wgreturn' });
-      if (change === 'pick then clear') useCadReturnStore.getState().selectBundle(null);
+  const cadModelFetcher = (modelId = 'wgl_project') => vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.startsWith(`/api/models/${modelId}/setup`)) return json({ setup: workspaceFor().setup?.content, revision_id: 'wgs_saved' });
+    if (path.startsWith(`/api/models/${modelId}`)) {
+      return json({ model: { model_id: modelId, producer: 'cad', display_name: 'Speaker' }, latest_prepared: workspaceFor(record.ingest_id, undefined, { modelId }).prepared,
+        original_available: false });
     }
-    pending.resolve(json({ cadFolderConfigured: true, items: [bundle] }));
-    expect(await first).toBe(false);
-    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).not.toBe(bundle.bundlePath);
-    expect(status).not.toHaveBeenCalled();
+    if (path === `/api/cadlink/ingest/${record.ingest_id}`) return json(record);
+    if (path.endsWith('/viewport-mesh')) return new Response(mesh);
+    return json({ detail: 'unexpected' }, 404);
+  }) as unknown as ReturnType<typeof vi.fn<typeof fetch>>;
+
+  it('reopens the last CAD model at start in Imported mode, through openImported', async () => {
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' }); workspaceModeStore.setMode('cad');
+    const fetcher = cadModelFetcher(); const status = vi.fn();
+    const stop = observeLastModel({ reportStatus: status, fetcher });
+    try {
+      await vi.waitFor(() => expect(useImportedModelStore.getState()).toMatchObject({ phase: 'ready', input: 'cad', modelId: 'wgl_project' }));
+      expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
+      expect(status).toHaveBeenCalledWith('Reopened the last model.');
+    } finally { stop(); }
   });
 
-  it('observes entering empty CAD mode without mounting the coordinator', async () => {
-    rememberCadProject('wgl_project');
-    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => json({
-      items: String(input).endsWith('/designs') ? [{ lineageId: 'wgl_project', documentName: 'Speaker' }] : [bundle],
-      cadFolderConfigured: true,
-    })) as typeof fetch);
-    const status = vi.fn(); const stop = observeRememberedCadProject({ reportStatus: status });
-    try {
-      workspaceModeStore.setMode('cad');
-      // The mounted Viewport's empty-CAD effect runs after the mode notification.
-      importedMeshStore.beginIntent();
-      importedMeshStore.clear('cad');
-      await vi.waitFor(() => expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath));
-      expect(status).toHaveBeenCalledWith('Reopened Speaker.');
-    } finally { stop(); }
+  it('opens nothing and keeps Parametric when that was the persisted mode', async () => {
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' });
+    const fetcher = cadModelFetcher();
+    const stop = observeLastModel({ fetcher });
+    await Promise.resolve(); await Promise.resolve();
+    stop();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+    expect(useImportedModelStore.getState().phase).toBe('empty');
+    expect(readLastModel()).toEqual({ model_id: 'wgl_project', input: 'cad' });
+  });
+
+  it('never forces Imported mode when the pointer is hydrated late', async () => {
+    const fetcher = cadModelFetcher();
+    const stop = observeLastModel({ fetcher });
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' });
+    stop();
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });
 

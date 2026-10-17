@@ -3,7 +3,7 @@ import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadSolveSetup } from '../api/cadOperations';
 import type { JobItem } from '../api/jobsSocket';
 import {
-  readImportedModel, readImportedSetup, readRunWorkspace,
+  isModelGone, readImportedModel, readImportedSetup, readRunWorkspace,
   type ImportedModelSummary, type PreparedSummary,
 } from '../api/importedModels';
 import type { ImportedSetup } from '../jobs/importedSetup';
@@ -14,6 +14,7 @@ import {
   seedImportedSolveOptionsFromParametric, useImportedSolveOptionsStore,
   type ImportedOptionsSnapshot, type SolveAccuracy,
 } from './solveOptions';
+import { clearLastModel, migrateLastModel, rememberLastModel } from './lastModel';
 import { workspaceModeStore } from './workspaceMode';
 
 /**
@@ -252,6 +253,44 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
     rail.fail(message);
     throw error;
   }
+}
+
+// The model on screen is the one Imported mode reopens next start. A mesh filed
+// under none has no id to reopen, and a model still loading may yet fail.
+useImportedModelStore.subscribe((state) => {
+  if (state.phase === 'ready' && state.input && state.modelId && state.modelId !== 'unfiled') {
+    rememberLastModel({ model_id: state.modelId, input: state.input });
+  }
+});
+
+/**
+ * Start-up in Imported mode: reopen the last model, through `openImported`.
+ *
+ * It never changes the mode -- Parametric opens nothing -- and only fills an
+ * Imported view nobody has opened into yet. A model the server no longer has
+ * (or keeps no preparation of) clears the pointer once and leaves the empty
+ * view, so the next start has nothing to retry. Any other failure keeps the
+ * pointer and is thrown for the caller to show.
+ */
+export async function reopenLastModel(fetcher: typeof fetch = fetch): Promise<boolean> {
+  if (workspaceModeStore.getSnapshot().mode !== 'cad') return false;
+  const pointer = await migrateLastModel(workspaceModeStore.getSnapshot().importedInput, fetcher);
+  if (!pointer) return false;
+  const generation = importedMeshStore.captureGeneration();
+  const stillEmpty = () => workspaceModeStore.getSnapshot().mode === 'cad'
+    && useImportedModelStore.getState().phase === 'empty' && importedMeshStore.isCurrentGeneration(generation);
+  if (!stillEmpty()) return false;
+  try {
+    const read = await readImportedModel(pointer.model_id, null, fetcher);
+    if (!read.latest_prepared) { clearLastModel(pointer); return false; }
+    // A CAD view shows a model by its stored setup; one never solved has none to show.
+    if (pointer.input === 'cad' && !(await readImportedSetup(pointer.model_id, read.latest_prepared.ingest_id, fetcher)).setup) return false;
+  } catch (error) {
+    if (isModelGone(error)) { clearLastModel(pointer); return false; }
+    throw error;
+  }
+  if (!stillEmpty()) return false;
+  return openImported({ kind: 'model', modelId: pointer.model_id }, fetcher);
 }
 
 /** This open (by its generation) still owns the store and the viewport: no newer open of either input. */

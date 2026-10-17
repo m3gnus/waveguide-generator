@@ -40,6 +40,9 @@ export const SETTINGS_NAMESPACES = {
   dockviewMode: 'wg2.dockview.mode.v4',
   workspaceMode: 'wg2.workspace.mode.v1',
   importedInput: 'wg2.imported.input.v1',
+  /** The one model Imported mode reopens at start: `{model_id, input}` (stores/lastModel.ts). */
+  lastModel: 'wg2.last.model.v1',
+  /** Legacy pointers, read once by `stores/lastModel.ts` to migrate and then dropped. */
   cadProject: 'wg2.cad.project.v1',
   meshImport: 'wg-saved-mesh-setup',
   crossoverView: 'wg2.crossover.view.v1',

@@ -26,8 +26,7 @@ import { solveOptionsStoreForMode, useScopedSolveOptions } from '../stores/solve
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { useMeshImportStore } from '../stores/meshImport';
-import * as meshImport from '../stores/meshImport';
-import { durableSettings } from '../stores/durableSettings';
+import { readLastModel, rememberLastModel } from '../stores/lastModel';
 import type { RegisteredMesh } from '../api/meshImport';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
 import { cadWorkspace } from '../stores/cadWorkspace';
@@ -299,32 +298,20 @@ describe('solve invocation mutex', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
   };
-  it('keeps saved file recovery eligible while startup is in CAD mode', async () => {
+  it.each(['parametric', 'cad'] as const)('never reopens a saved model or changes the mode at startup in %s mode', async (mode) => {
     act(() => root.unmount());
-    workspaceModeStore.setMode('cad');
-    const restore = vi.spyOn(meshImport, 'reopenSavedMeshModel').mockResolvedValue(false);
+    rememberLastModel({ model_id: 'mesh-file:sha256:gone', input: 'file' });
+    localStorage.setItem('wg-saved-mesh-setup', JSON.stringify({ model_id: 'mesh-file:sha256:old', prepared_id: 'wgi_old' }));
+    workspaceModeStore.setMode(mode);
+    const fetcher = vi.fn<typeof fetch>(async () => new Response('{}', { status: 404 }));
+    vi.stubGlobal('fetch', fetcher);
     root = createRoot(host);
     await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
-    expect(restore).not.toHaveBeenCalled();
-    await act(async () => { workspaceModeStore.setMode('parametric'); });
-    expect(restore).toHaveBeenCalledOnce();
-  });
-  it('recovers a saved pointer hydrated after startup, only while the empty view still owns intent', async () => {
-    act(() => root.unmount());
-    let hydrated: (() => void) | undefined;
-    vi.spyOn(durableSettings, 'subscribe').mockImplementation((namespace, listener) => {
-      if (namespace === 'meshImport') hydrated = () => listener('wgi_remote');
-      return () => undefined;
-    });
-    const saved = vi.spyOn(meshImport, 'reopenSavedMeshModel').mockResolvedValue(false);
-    root = createRoot(host);
-    await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
-    expect(saved).toHaveBeenCalledOnce();
-    await act(async () => { hydrated?.(); });
-    expect(saved).toHaveBeenCalledTimes(2);
-    act(() => importedMeshStore.showParametric());
-    await act(async () => { hydrated?.(); });
-    expect(saved).toHaveBeenCalledTimes(2);
+    await act(async () => { workspaceModeStore.setMode('parametric'); workspaceModeStore.setMode(mode); });
+    // The coordinator holds no recovery of its own: that is `observeLastModel` in the CAD workspace owners.
+    expect(fetcher.mock.calls.filter(([url]) => String(url).startsWith('/api/models'))).toHaveLength(0);
+    expect(workspaceModeStore.getSnapshot().mode).toBe(mode);
+    expect(readLastModel()).toEqual({ model_id: 'mesh-file:sha256:gone', input: 'file' });
   });
   const mountPlanning = async (mode: 'parametric' | 'cad') => {
     act(() => root.unmount());

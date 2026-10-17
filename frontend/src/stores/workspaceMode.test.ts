@@ -49,3 +49,15 @@ it('preserves the selected imported input across a mode round-trip and module re
   expect(reloaded.workspaceModeStore.getSnapshot()).toMatchObject({ mode: 'cad', importedInput: 'file' });
   workspaceModeStore.setImportedInput('cad');
 });
+
+it.each(['parametric', 'cad'] as const)('keeps the persisted %s mode however a last model is remembered', async (mode) => {
+  // Start-up never forces a mode: the saved model only matters once Imported mode is already showing.
+  workspaceModeStore.setMode(mode);
+  localStorage.setItem('wg2.last.model.v1', JSON.stringify({ model_id: 'mesh-file:sha256:a', input: 'file' }));
+  localStorage.setItem('wg-saved-mesh-setup', JSON.stringify({ model_id: 'mesh-file:sha256:a', prepared_id: 'wgi_a' }));
+  localStorage.setItem('wg2.cad.project.v1', 'wgl_project');
+  vi.resetModules();
+  const reloaded = await import('./workspaceMode');
+  expect(reloaded.workspaceModeStore.getSnapshot().mode).toBe(mode);
+  workspaceModeStore.setMode('parametric');
+});

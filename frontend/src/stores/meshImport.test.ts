@@ -6,8 +6,9 @@ import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { editMeshImport, fileMeshSubmission, loadMeshFile, prepareMeshFile, loadMeshReplay, registeredMesh,
-  reopenSavedMeshModel, saveMeshSetup, setMeshMotion, useMeshImportStore } from './meshImport';
-import { openImported, resetImportedModelStore, unchangedSetup, useImportedModelStore } from './importedModel';
+  saveMeshSetup, setMeshMotion, useMeshImportStore } from './meshImport';
+import { openImported, reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore } from './importedModel';
+import { readLastModel } from './lastModel';
 import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
 import type { ImportedSetup } from '../jobs/importedSetup';
 import type { JobItem } from '../api/jobsSocket';
@@ -56,7 +57,7 @@ beforeEach(() => {
   resetSolveOptionsStore();
   resetImportedModelStore();
   sessionStorage.clear();
-  localStorage.removeItem('wg-saved-mesh-setup');
+  localStorage.clear();
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -78,8 +79,11 @@ describe('standalone imported mesh', () => {
     importedMeshStore.clear();
     const fetcher = vi.fn<typeof fetch>(async url => String(url).includes('/setup?')
       ? response({ setup, revision_id: 'wgs_saved' }) : prepared(record));
-    expect(await reopenSavedMeshModel(fetcher)).toBe(true);
-    expect(fetcher.mock.calls[0][0]).toBe(`/api/models/${encodeURIComponent(record.model_id)}?prepared_id=${record.ingest_id}`);
+    // Showing the prepared mesh pointed the last model at it; saving needs no pointer of its own.
+    expect(readLastModel()).toEqual({ model_id: record.model_id, input: 'file' });
+    workspaceModeStore.setMode('cad');
+    expect(await reopenLastModel(fetcher)).toBe(true);
+    expect(fetcher.mock.calls.map(([url]) => String(url))).toContain(`/api/models/${encodeURIComponent(record.model_id)}`);
     expect(fileMeshSubmission()).toEqual(expected);
     // Reopened unedited, a Solve names the saved revision.
     expect(unchangedSetup('file', record.ingest_id)).toEqual({ setup_revision_id: 'wgs_saved' });
@@ -180,9 +184,12 @@ describe('standalone imported mesh', () => {
     resetImportedModelStore();
     importedMeshStore.clear();
     resetSolveOptionsStore();
+    localStorage.removeItem('wg2.last.model.v1');
     localStorage.setItem('wg-saved-mesh-setup', JSON.stringify({ model_id: record.model_id, prepared_id: record.ingest_id }));
     const fetcher = vi.fn(async (url: RequestInfo | URL) => String(url).includes('/setup?') ? response({ setup: { geometry, options } }) : prepared(record));
-    expect(await reopenSavedMeshModel(fetcher as unknown as typeof fetch)).toBe(true);
+    workspaceModeStore.setMode('cad');
+    expect(await reopenLastModel(fetcher as unknown as typeof fetch)).toBe(true);
+    expect(localStorage.getItem('wg-saved-mesh-setup')).toBeNull();
     expect(useImportedSolveOptionsStore.getState()).toMatchObject({ sweepStartHz: 210, sweepEndHz: 6300, sweepCount: 23, frequencyMode: 'range' });
     expect(fileMeshSubmission().options).toMatchObject({ frequency_range: [210, 6300], num_frequencies: 23 });
   });
@@ -205,24 +212,29 @@ describe('standalone imported mesh', () => {
     useMeshImportStore.setState(initial, true);
     resetImportedModelStore();
     importedMeshStore.clear();
+    localStorage.removeItem('wg2.last.model.v1');
     localStorage.setItem('wg-saved-mesh-setup', record.ingest_id);
     const fetcher = vi.fn(async (url: RequestInfo | URL) => String(url).startsWith('/api/models?')
       ? response({ model_id: record.model_id, prepared_id: record.ingest_id })
       : String(url).includes('/setup?') ? response({ setup: { geometry, options } }) : prepared(record));
-    expect(await reopenSavedMeshModel(fetcher as unknown as typeof fetch)).toBe(true);
+    workspaceModeStore.setMode('cad');
+    expect(await reopenLastModel(fetcher as unknown as typeof fetch)).toBe(true);
     expect(fetcher.mock.calls[0][0]).toBe(`/api/models?prepared_id=${record.ingest_id}`);
-    expect(JSON.parse(localStorage.getItem('wg-saved-mesh-setup')!)).toEqual({ model_id: record.model_id, prepared_id: record.ingest_id });
+    expect(localStorage.getItem('wg-saved-mesh-setup')).toBeNull();
+    expect(readLastModel()).toEqual({ model_id: record.model_id, input: 'file' });
     expect(registeredMesh()?.ingest_id).toBe(record.ingest_id);
   });
 
   it('drops an old pointer only when the server has no model for it', async () => {
     localStorage.setItem('wg-saved-mesh-setup', 'wgi_offline');
-    expect(await reopenSavedMeshModel(vi.fn(async () => { throw new TypeError('offline'); }) as unknown as typeof fetch)).toBe(false);
+    workspaceModeStore.setMode('cad');
+    expect(await reopenLastModel(vi.fn(async () => { throw new TypeError('offline'); }) as unknown as typeof fetch)).toBe(false);
     expect(localStorage.getItem('wg-saved-mesh-setup')).toBe('wgi_offline');
     const gone = vi.fn(async () => new Response('{}', { status: 404 }));
-    expect(await reopenSavedMeshModel(gone as unknown as typeof fetch)).toBe(false);
+    expect(await reopenLastModel(gone as unknown as typeof fetch)).toBe(false);
     expect(gone).toHaveBeenCalledTimes(1);
     expect(localStorage.getItem('wg-saved-mesh-setup')).toBeNull();
+    expect(readLastModel()).toBeNull();
   });
 
   it('opens a new file with a one-way copy of the parametric options', async () => {

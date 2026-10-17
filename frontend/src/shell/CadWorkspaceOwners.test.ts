@@ -7,7 +7,7 @@ import { cadReceiptsStore, type CadReceipt } from '../stores/cadReceipts';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { rememberCadProject } from '../stores/cadProjectMemory';
+import { rememberLastModel } from '../stores/lastModel';
 import { designForFamily, useDesignStore } from '../stores/design';
 import { resetCadDeliveryHealthStore, useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import { cadWorkspace } from '../stores/cadWorkspace';
@@ -174,9 +174,9 @@ it('learns a missing coordination gate as off from the listing and stays idle wi
 });
 
 
-it('a refused foreign receipt never reopens or prepares the remembered project (rows 22, 23)', async () => {
+it('a refused foreign receipt never reopens or prepares the last model (rows 22, 23)', async () => {
   stop = mountCadWorkspaceOwners(); await flush();
-  rememberCadProject('remembered');
+  rememberLastModel({ model_id: 'remembered', input: 'cad' });
   returns = [{ ...bundle, designIds: ['another-design'] }];
   receipts = [{ receipt_id: 'foreign', send_id: 'foreign', send_sequence: 1, project_id: null, design_ids: [], ingest_id: null,
     outcome: 'accepted', reason: null, message: null, created_at: new Date().toISOString(), sent_at: new Date().toISOString(),
@@ -185,6 +185,7 @@ it('a refused foreign receipt never reopens or prepares the remembered project (
   expect(cadWorkspace.getSnapshot().error).toContain('belongs to another CAD-linked project');
   expect(calls('/api/cadlink/designs')).toHaveLength(0);
   expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  expect(fetcher.mock.calls.some(([input]) => String(input).startsWith('/api/models/remembered'))).toBe(false);
   expect(useCadReturnStore.getState().selectedBundle).toBeNull();
 });
 

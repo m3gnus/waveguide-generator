@@ -75,6 +75,9 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   dockviewMode: 'inert',
   workspaceMode: 'inert',
   importedInput: 'inert',
+  // Which model Imported mode reopens at start; the two legacy pointers it
+  // replaces stay classified until every install has migrated them away.
+  lastModel: 'inert',
   cadProject: 'inert',
   meshImport: 'inert',
   // Which face of the crossover section is shown; the spec itself lives in
