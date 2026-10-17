@@ -357,7 +357,7 @@ def changed_natives(native: Path, tmp_path_factory: pytest.TempPathFactory):
         repo = tmp_path_factory.mktemp("native-" + version)
         source = repo / build_bundle.WINDOWS_NATIVE_SOURCE
         source.parent.mkdir(parents=True)
-        shutil.copy2(ROOT / build_bundle.WINDOWS_NATIVE_SOURCE, source)
+        source.write_text(_native_failure_trace((ROOT / build_bundle.WINDOWS_NATIVE_SOURCE).read_text()))
         hook = (ROOT / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).read_bytes() + f"\n# packaged hook {version}\n".encode()
         (repo / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).write_bytes(hook)
         target = repo / "helper.exe"
@@ -482,8 +482,11 @@ def _owner_failure_detail(pid: int, returncode: int | None, diagnostic: Path, ou
         entries = sorted(os.listdir(command[2])) if os.path.isdir(command[2]) else None
     except (OSError, IndexError):
         entries = None
-    return _owner_failure_message(pid, returncode, _read_if_present(diagnostic) or "",
-                                  _read_if_present(outcome), entries)
+    transcript = _read_if_present(diagnostic) or ""
+    message = _owner_failure_message(pid, returncode, transcript, _read_if_present(outcome), entries)
+    if len(command) > 2:
+        message += "\n" + _native_transaction_detail(Path(command[2]), outcome, transcript)
+    return message
 
 
 def _native_transaction_detail(root: Path, outcome: Path, transcript: str) -> str:
@@ -604,6 +607,7 @@ def test_prepare_owner_failure_message_carries_the_native_transcript(tmp_path: P
     assert "native refused: sharing violation" in text
     assert "prepare exited 3" in text
     assert "rollback_incomplete" in text and ".wg-install-old" in text
+    assert "native transcript:" in text and "entries .wg-install-old:" in text
 
 
 def _prepare(native: Path, root: Path, outcome: Path, *, dead_owner: bool) -> subprocess.Popen[str] | None:
