@@ -262,7 +262,11 @@ it('combined rendering joins the exact tetrahedron cut to the exterior plane', (
   const combined = buildFemFieldGeometries(domain, values, { ...options, planeField: exterior, includeInterior: true });
   const count = interior.slice!.getAttribute('position').count;
   expect(combined.slice!.getAttribute('position').count).toBe(count + 3);
-  expect(Array.from(combined.slice!.getAttribute('position').array).slice(0, count * 3))
+  // The exterior grid draws first, so the exact interior cut wins where an
+  // aperture cell overlaps it.
+  expect(Array.from(combined.slice!.getAttribute('position').array).slice(0, 9))
+    .toEqual(Array.from(exterior.positions));
+  expect(Array.from(combined.slice!.getAttribute('position').array).slice(9))
     .toEqual(Array.from(interior.slice!.getAttribute('position').array));
   expect(combined.fieldMaxSplDb).toBe(interior.fieldMaxSplDb);
 });

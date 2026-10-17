@@ -82,10 +82,12 @@ export function buildFemFieldGeometries(
     const joined = new Float32Array(a.length + b.length); joined.set(a); joined.set(b, a.length); return joined;
   };
   const exterior = options.planeField;
+  // The exterior grid comes first: its cells across an aperture overlap the
+  // exact interior cut by at most a cell, and the later interior cut wins.
   const cut = exterior ? {
-    positions: options.includeInterior ? join(interior.positions, exterior.positions) : exterior.positions,
-    real: options.includeInterior ? join(interiorShown.real, exterior.real) : exterior.real,
-    imag: options.includeInterior ? join(interiorShown.imag, exterior.imag) : exterior.imag,
+    positions: options.includeInterior ? join(exterior.positions, interior.positions) : exterior.positions,
+    real: options.includeInterior ? join(exterior.real, interiorShown.real) : exterior.real,
+    imag: options.includeInterior ? join(exterior.imag, interiorShown.imag) : exterior.imag,
     tetrahedron: new Uint32Array(0),
   } : interior;
   const shown = exterior ? cut : interiorShown;
