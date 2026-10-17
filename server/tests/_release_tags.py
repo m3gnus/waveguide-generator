@@ -21,7 +21,7 @@ import os
 #: Every release tag a test in this suite extracts via ``git archive``,
 #: oldest first. ``v0.3.3-rc.1`` is a published pre-release: a beta-channel
 #: user can roll back to it, so it is a rollback target like any release.
-RELEASE_TAGS: tuple[str, ...] = ("v0.3.1", "v0.3.2", "v0.3.3-rc.1", "v0.3.4")
+RELEASE_TAGS: tuple[str, ...] = ("v0.3.1", "v0.3.2", "v0.3.3-rc.1", "v0.3.4", "v0.3.5")
 
 #: The most recent stable release -- what a rollback/upgrade test compares
 #: "the build under test" against. A pre-release is never this.

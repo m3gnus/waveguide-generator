@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Validate complete candidate outputs and stage the release signing subjects.
 
-Inputs are the unmodified macos/windows/linux/spa artifact directories. The SPA
-is verified but is not a signing subject, matching the release manifest contract.
+Inputs are the unmodified macos/windows/linux/spa artifact directories. The SPA,
+the canonical app archive and the runtime archives are verified but are not
+signing subjects, matching the release manifest contract: only the three
+installers and the portable Windows ZIP are signed.
 This helper holds no signing key and performs no network or publishing operation.
 """
 
@@ -127,9 +129,11 @@ def stage(version: str, root: Path, out: Path, expected_sha: str) -> None:
 
     # Never merge a new candidate into stale output from another run.
     out.mkdir(parents=True, exist_ok=False)
+    subjects = set(release_assets.user_download_names(version))
+    subjects.add(release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version))
     signed = []
     for directory, name in sorted(assets):
-        if directory == "spa":
+        if name not in subjects:
             continue
         destination = out / name
         shutil.copyfile(inventory[(directory, name)], destination)

@@ -133,10 +133,11 @@ review. The attestation signature covers the manifest subject.
 
 ## Verify a published release
 
-The user-facing release carries the three installers. The update-app ZIP and
-manifest, the three runtime ZIPs, the SPA archive and the portable Windows ZIP
-are on its `-updates` companion release. Every one of them is verified the same
-way, with `release.yml` as the signer workflow and the release commit — the
+The user-facing release carries the three installers, `SHA256SUMS` and
+`SHA256SUMS.sig`. The SPA archive and the portable Windows ZIP are on its
+`-updates` companion release. The canonical app archive, its manifest and the
+runtime ZIPs remain attested build artifacts but are not published. Every
+published asset is verified the same way, with `release.yml` as the signer workflow and the release commit — the
 commit the annotated tag points at — as the source digest:
 
 ```bash

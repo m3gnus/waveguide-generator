@@ -40,24 +40,20 @@ commit is not reachable from `origin/main`, or `ci.yml`, which the workflow
 runs on that exact commit before building anything, fails** — a build that
 misreports itself is worse than a failed release.
 
-Its SPA job attaches `update-spa-<version>.tar.gz`; the macOS job
-builds the canonical platform-neutral app ZIP and manifest, the macOS runtime ZIP,
-and `Waveguide.Generator-<version>-macos-arm64.dmg`; the Windows job checks its
-independently built app ZIP against the canonical one by content digest and builds
-the Windows runtime ZIP, `Waveguide.Generator-<version>-windows-x86_64-setup.exe`,
-and the portable `Waveguide.Generator-<version>-windows-x86_64.zip`.
+The SPA job builds `update-spa-<version>.tar.gz`. Each platform builds its
+full installer; Windows also builds the portable ZIP. The canonical app archive
+and manifest remain internal build artifacts for cross-platform identity checks.
 
-A final publisher job validates the exact inventory and every checksum, then
-splits it across **two releases**. The user-facing `v<version>` carries exactly
-two files, the macOS disk image and the Windows installer, so the page a person
-lands on is one row per platform. Everything else — the update layers, the SPA
-archive, and the portable Windows ZIP — goes to a companion release tagged
-`v<version>-updates`, flagged as a pre-release so it is never "Latest" and the
-stable update channel never sees it. It is a separate *release* rather than a
-separate repository deliberately: the assets stay in this repository, so the
-updater's `trusted_asset_url` keeps rejecting anything served from elsewhere.
-The in-app updater reads the companion and falls back to the release's own
-assets, so where a layer sits is not something an installed client depends on.
+The publisher validates the exact inventory and every checksum, then splits it
+across **two releases**. The user-facing `v<version>` carries the three full
+installers plus `SHA256SUMS` and `SHA256SUMS.sig`. The companion
+`v<version>-updates` holds only the SPA archive, its checksum sidecar, and the
+portable Windows ZIP. It is always a pre-release and never Latest. The signed
+manifest covers the three installers and the portable Windows ZIP.
+Layer update archives are no longer published.
+
+**0.3.3-rc and earlier: download the installer.** Installed 0.3.4 and 0.3.5
+clients continue to discover and verify signed full-installer updates.
 
 Checksums are computed and verified for every asset; only the SPA archive's
 `.sha256` is published, because GitHub serves a per-asset digest the updater
@@ -126,8 +122,8 @@ enforce that. `release.yml` derives GitHub's pre-release flag from the declared
 version (`shared/release_assets.is_prerelease`) and sets it on the release, and
 GitHub defines `/releases/latest` as the newest release *without* that flag —
 which is the only endpoint the stable channel reads. Independently,
-`server/updates/service.py` refuses any tag but a plain triple on the stable
-channel (`_is_offerable_release_tag(..., allow_prerelease=False)`), so a
+`server/updates/installer_checker.py` refuses any tag but a plain triple on the stable
+channel (`eligible_release(..., channel="stable")`), so a
 pre-release arriving there anyway is still not offered. See
 [`docs/reference/UPDATE-CHANNELS.md`](reference/UPDATE-CHANNELS.md).
 
@@ -169,8 +165,9 @@ identity manifest, three runtime archives, SPA, and checksum sidecars.
 
 The optional signing job uses the existing protected `update-signing`
 Environment and its reviewer gate. It validates the complete inventory, source
-identity, runtime closure and checksums before signing nine unchanged subjects.
-The SPA is checked separately, as in the release pipeline. The signature is
+identity, runtime closure and checksums before signing four unchanged subjects:
+the three installers and the Windows portable archive, as in the release
+pipeline. The SPA, app and runtime archives are checked but not signed. The signature is
 verified against the active compiled key before `rc-signed-candidate` is uploaded. The compact `rc-signed-manifest`
 artifact also provides the signature, manifest and exact installer sizes/digests,
 so a platform rehearsal can download only its own installer.
@@ -182,7 +179,7 @@ For a private 0.3.5-to-candidate rehearsal, start the installed client with
 `WG2_UPDATES_API_BASE=http://127.0.0.1:<port>`. Serve GitHub-shaped release metadata
 and exact artifact bytes at that literal loopback origin. The primary release
 metadata must expose exactly three installers plus `SHA256SUMS` and
-`SHA256SUMS.sig`; layer machinery belongs in separate companion metadata.
+`SHA256SUMS.sig`; the SPA archive and portable ZIP belong in separate companion metadata.
 Actions artifact URLs are not accepted installer URLs. Keep signature, version,
 checksum and same-origin verification enabled. This exercises a private update,
 not production channel discovery. Publication remains a separate owner decision.

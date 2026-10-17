@@ -328,7 +328,7 @@ jobs:
 
       - name: Attest the exact macOS installer, update and runtime subjects before transfer
         # This job's local outputs, in one attestation, so the installer is
-        # bound to the update archive and manifest built beside it. The SPA was
+        # bound to the canonical app archive and manifest built beside it. The SPA was
         # attested by the SPA job and is deliberately not re-attested after
         # download. Payloads only: the .sha256 sidecars are not subjects.
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
@@ -356,12 +356,6 @@ jobs:
           path: |
             build/bundle/Waveguide.Generator-*-macos-arm64.dmg
             build/bundle/Waveguide.Generator-*-macos-arm64.dmg.sha256
-            build/bundle/update-app-*.zip
-            build/bundle/update-app-*.zip.sha256
-            build/bundle/update-app-*.manifest.json
-            build/bundle/update-app-*.manifest.json.sha256
-            build/bundle/update-runtime-macos-arm64-*.zip
-            build/bundle/update-runtime-macos-arm64-*.zip.sha256
           if-no-files-found: error
 
   windows-bundle:
@@ -490,8 +484,6 @@ jobs:
             build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe.sha256
             build/bundle/Waveguide.Generator-*-windows-x86_64.zip
             build/bundle/Waveguide.Generator-*-windows-x86_64.zip.sha256
-            build/bundle/update-runtime-windows-x86_64-*.zip
-            build/bundle/update-runtime-windows-x86_64-*.zip.sha256
           if-no-files-found: error
 
   linux-bundle:
@@ -555,8 +547,8 @@ jobs:
 
       - name: Assert this platform built the same app layer
         # The digest, not the archive: same rule as the Windows job, and the
-        # third platform has to meet it or the update layer a Linux install
-        # downloads is not the one the other two verified.
+        # third platform has to meet it, so all three installers ship the same
+        # application tree.
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -591,8 +583,6 @@ jobs:
           path: |
             build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz
             build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz.sha256
-            build/bundle/update-runtime-linux-x86_64-*.zip
-            build/bundle/update-runtime-linux-x86_64-*.zip.sha256
           if-no-files-found: error
 
   sign:
@@ -663,10 +653,9 @@ jobs:
           staged.mkdir()
           files = []
           names = set(release_assets.user_download_names(version))
-          names.update(path.name for path in root.rglob("*") if path.is_file()
-                       and (path.name.startswith("update-")
-                            or path.name == release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version))
-                       and not path.name.endswith(".sha256"))
+          # The portable Windows ZIP is the only signed asset beyond the three
+          # installers. The SPA archive has its own sidecar and is not a subject.
+          names.add(release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version))
           for name in sorted(names):
               found = [path for path in root.rglob(name) if path.is_file()]
               if len(found) != 1:
@@ -774,14 +763,9 @@ jobs:
           specs = (
               ("spa", re.escape(release_assets.spa_archive_name(version))),
               ("macos", re.escape(release_assets.installer_name(release_assets.MACOS_PLATFORM, version))),
-              ("macos", re.escape(release_assets.app_layer_name(version))),
-              ("macos", re.escape(release_assets.app_manifest_name(version))),
-              ("macos", rf"{re.escape(release_assets.UPDATE_PREFIX)}-runtime-macos-arm64-[0-9a-f]{{12}}\.zip"),
               ("windows", re.escape(release_assets.windows_setup_name(version))),
               ("windows", re.escape(release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version))),
-              ("windows", rf"{re.escape(release_assets.UPDATE_PREFIX)}-runtime-windows-x86_64-[0-9a-f]{{12}}\.zip"),
               ("linux", re.escape(release_assets.installer_name(release_assets.LINUX_PLATFORM, version))),
-              ("linux", rf"{re.escape(release_assets.UPDATE_PREFIX)}-runtime-linux-x86_64-[0-9a-f]{{12}}\.zip"),
           )
           expected_paths: set[Path] = set()
           public_keys: set[str] = set()
@@ -811,8 +795,8 @@ jobs:
                   raise SystemExit(f"Invalid checksum sidecar for {asset.name}")
               expected_paths.update((asset, sidecar))
               # Two destinations: the release page a person lands on holds
-              # exactly one file per platform, and everything else -- the update
-              # layers, the SPA archive, and the portable Windows .zip -- goes to
+              # exactly one file per platform; the SPA archive and portable
+              # Windows .zip go to
               # the companion pre-release. Splitting here rather than at upload
               # time keeps one inventory check over both sets.
               target = (
@@ -916,9 +900,9 @@ jobs:
             fi
           fi
 
-      - name: Publish the update layers as a companion pre-release
-        # Published BEFORE the user-facing release, so the layers already exist
-        # by the time anything can look for them. Flagged as a pre-release so it
+      - name: Publish supporting assets as a companion pre-release
+        # Published BEFORE the user-facing release, so the SPA archive the
+        # signed manifest names exists by the time anything can look. Flagged as a pre-release so it
         # is never "Latest" and is demoted in the releases list; the assets stay
         # in this repository, so trusted_asset_url keeps rejecting anything served
         # from elsewhere.
@@ -931,18 +915,14 @@ jobs:
           overwrite_files: true
           files: build/update-assets/*
           fail_on_unmatched_files: true
-          name: "Update layers for ${{ env.RELEASE_TAG }}"
+          name: "Supporting assets for ${{ env.RELEASE_TAG }}"
           body: |
-            Machinery for the in-app updater. **This is not where you install from.**
+            Prebuilt frontend and portable Windows archive for
+            [${{ env.RELEASE_TAG }}](https://github.com/m3gnus/waveguide-generator/releases/tag/${{ env.RELEASE_TAG }}).
+            Download the installer from that release for normal installation.
 
-            Install Waveguide Generator from
-            [${{ env.RELEASE_TAG }}](https://github.com/m3gnus/waveguide-generator/releases/tag/${{ env.RELEASE_TAG }})
-            instead — one file per platform, and nothing else to choose between.
-
-            The `update-` files exist so an update fetches only the layer that
-            changed — usually about 4 MB rather than the whole application. The
-            runtime layer is addressed by content, so releases that do not change
-            the interpreter share one.
+            `update-spa-*.tar.gz` and its checksum sidecar provide the prebuilt
+            frontend for source installations.
 
             One file here is a real download, kept off the install page because it
             is the harder path and not the one to offer first:
@@ -1055,31 +1035,15 @@ jobs:
             installer, verifies its signed manifest and checksum, then closes WG,
             installs the update and restarts. Your saved data stays in place.
 
-            **Updating from 0.3.1 or 0.3.2 with the application and its data on
-            different drives stays blocked in-app**, as it was: those releases stage an
-            update in the data folder, and the swap has to stay on one drive. Install
-            this release once with the full installer. The new full-installer update
-            path removes that older same-drive restriction.
+            **0.3.3-rc and earlier: download the installer.** Installed 0.3.4 and
+            0.3.5 clients can use **Install and restart** with the signed full installer.
 
-            <details><summary>Where the in-app updater's files went</summary>
+            <details><summary>Supporting assets</summary>
 
-            This page holds one file per platform and nothing else. Everything
-            named `update-…` is machinery, and it is published to
-            [${{ env.UPDATES_TAG }}](https://github.com/m3gnus/waveguide-generator/releases/tag/${{ env.UPDATES_TAG }}),
-            a pre-release you do not need to visit. These compatibility assets let
-            older installed clients receive the bridge release; this version's new
-            updater uses the full installers and signed manifest on this page.
-            `update-app-*.zip` and its
-            manifest are the platform-neutral application layer;
-            `update-runtime-*-<id>.zip` are the three runtime layers, addressed by
-            content so releases that do not change the interpreter share one and
-            the updater downloads only what moved; `update-spa-*.tar.gz` is the
-            prebuilt frontend, so a source install needs no Node runtime.
-
-            Two `.tar.gz` files exist and they are not interchangeable:
-            `Waveguide.Generator-…-linux-x86_64.tar.gz` on the page above is the Linux
-            application, and `update-spa-…tar.gz` here is the frontend. The `update-`
-            prefix is the difference, which is what it is for.
+            The [companion release](https://github.com/m3gnus/waveguide-generator/releases/tag/${{ env.UPDATES_TAG }})
+            holds only the prebuilt frontend archive, its checksum sidecar, and
+            the portable Windows ZIP. Full-installer updates use the installers
+            and signed manifest on this page.
 
             </details>
 

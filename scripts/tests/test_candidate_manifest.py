@@ -73,14 +73,15 @@ def test_bare_runner_cli_stages_exact_release_subjects_without_altering_bytes(in
         cwd=tmp_path, capture_output=True, text=True, timeout=10,
     )
     assert result.returncode == 0, result.stderr
-    expected = {name for directory, name in ASSETS if directory != "spa"}
-    assert len(expected) == 9
+    expected = {name for directory, name in ASSETS
+                if directory != "spa" and not name.startswith(("update-app-", "update-runtime-"))}
+    assert len(expected) == 4
     assert {path.name for path in out.iterdir()} == expected | {"SHA256SUMS"}
     manifest = _load()
     tag, entries = manifest.parse_manifest((out / "SHA256SUMS").read_bytes())
     assert tag == "v0.3.6" and set(entries) == expected
     for directory, name in ASSETS:
-        if directory != "spa":
+        if name in expected:
             assert (out / name).read_bytes() == (inputs / directory / name).read_bytes()
             manifest.verify_file(entries, name, out / name)
 

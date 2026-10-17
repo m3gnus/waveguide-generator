@@ -133,7 +133,7 @@ def test_the_update_layers_are_published_before_the_release_that_needs_them() ->
     release advertises a version whose layers do not exist.
     """
 
-    companion = WORKFLOW.index("Publish the update layers as a companion pre-release")
+    companion = WORKFLOW.index("Publish supporting assets as a companion pre-release")
     upload = WORKFLOW.index("Upload the validated inventory to a draft release")
     publish = WORKFLOW.index("Publish only after every upload succeeded")
     assert companion < upload < publish
@@ -202,24 +202,13 @@ def _publish_inputs(
         "spa": [release_assets.spa_archive_name(version)],
         "macos": [
             release_assets.installer_name(release_assets.MACOS_PLATFORM, version),
-            release_assets.app_layer_name(version),
-            release_assets.app_manifest_name(version),
-            release_assets.runtime_layer_name(
-                release_assets.MACOS_PLATFORM, runtime_id
-            ),
         ],
         "windows": [
             release_assets.windows_setup_name(version),
             release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version),
-            release_assets.runtime_layer_name(
-                release_assets.WINDOWS_PLATFORM, runtime_id
-            ),
         ],
         "linux": [
             release_assets.installer_name(release_assets.LINUX_PLATFORM, version),
-            release_assets.runtime_layer_name(
-                release_assets.LINUX_PLATFORM, runtime_id
-            ),
         ],
     }
     for job, names in layout.items():
@@ -247,8 +236,8 @@ def test_the_publish_step_stages_one_download_per_platform_and_the_rest_apart(
     Every asset the four build jobs produce goes in; what comes out has to be
     two disjoint sets, and the user-facing one has to be exactly one file per
     supported platform: the macOS disk image, the Windows setup .exe and the
-    Linux tarball. Everything else goes to the companion -- the update layers,
-    the SPA archive, and the portable Windows .zip, which is a real download
+    Linux tarball. Everything else goes to the companion -- the SPA archive
+    and the portable Windows .zip, which is a real download
     and still not the one to put in front of someone who came here to install
     the application.
 
@@ -275,6 +264,8 @@ def test_the_publish_step_stages_one_download_per_platform_and_the_rest_apart(
         + [release_assets.checksum_name(release_assets.spa_archive_name(VERSION))]
     )
     assert layers == expected_layers
+    assert len(layers) == 3
+    assert not any(name.startswith(("update-app-", "update-runtime-")) for name in layers)
     # Named rather than only derived, so the expectation is legible and a change
     # to what a person is offered has to be made deliberately here too.
     assert downloads == sorted(
@@ -334,16 +325,15 @@ def test_no_version_puts_an_extra_file_on_the_user_facing_release(
     )
     # Nothing is on both sides any more -- the split is a partition again.
     assert not set(downloads) & set(layers)
-    for name in (
-        release_assets.app_layer_name(version),
-        release_assets.app_manifest_name(version),
-        release_assets.spa_archive_name(version),
-        release_assets.runtime_layer_name(release_assets.MACOS_PLATFORM, RUNTIME_ID),
-        release_assets.runtime_layer_name(release_assets.WINDOWS_PLATFORM, RUNTIME_ID),
-        release_assets.runtime_layer_name(release_assets.LINUX_PLATFORM, RUNTIME_ID),
-    ):
-        assert name in layers
-        assert name not in downloads
+    # The companion holds the SPA archive, its sidecar and the portable
+    # Windows ZIP; no layer-update archive is published at any version.
+    assert layers == sorted(
+        [
+            release_assets.spa_archive_name(version),
+            release_assets.checksum_name(release_assets.spa_archive_name(version)),
+            release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version),
+        ]
+    )
 
 
 def test_the_update_bridge_constants_are_gone() -> None:
@@ -795,7 +785,7 @@ def test_the_public_release_is_classified_from_the_declared_version() -> None:
     and offered to every stable install as `/releases/latest`.
     """
 
-    companion = WORKFLOW.index("Publish the update layers as a companion pre-release")
+    companion = WORKFLOW.index("Publish supporting assets as a companion pre-release")
     draft = WORKFLOW.index("Upload the validated inventory to a draft release")
     tail = WORKFLOW.index("Create the annotated tag now that every asset exists")
 
@@ -1027,13 +1017,14 @@ def test_signing_inventory_covers_layers_and_identity_from_each_builder(tmp_path
     (tmp_path / "shared").mkdir()
     (tmp_path / "shared" / "version.json").write_text(json.dumps({"version": VERSION}))
     names = set(release_assets.user_download_names(VERSION)) | {
-        release_assets.app_layer_name(VERSION), release_assets.app_manifest_name(VERSION),
         release_assets.installer_name(release_assets.WINDOWS_PLATFORM, VERSION),
-        *(release_assets.runtime_layer_name(platform, RUNTIME_ID) for platform in (
-            release_assets.MACOS_PLATFORM, release_assets.WINDOWS_PLATFORM, release_assets.LINUX_PLATFORM)),
     }
     for name in names:
         _write(tmp_path / "build/sign-inputs/assets", name, name.encode())
+    # Built and handed to the signer, never signing subjects.
+    for name in (release_assets.spa_archive_name(VERSION), release_assets.app_layer_name(VERSION),
+                 release_assets.runtime_layer_name(release_assets.LINUX_PLATFORM, RUNTIME_ID)):
+        _write(tmp_path / "build/sign-inputs/other", name, name.encode())
 
     def write_manifest(command, **kwargs):
         assert kwargs == {"check": True}
