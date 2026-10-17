@@ -117,7 +117,7 @@ from server.cadlink.intake.solve_command import (
     SolveOutcomeConflict,
     record_outcome,
 )
-from server.cadlink.store import BindingConflict, CadLinkStore, StaleAttempt
+from server.cadlink.store import UNFILED_MODEL_ID, BindingConflict, CadLinkStore, StaleAttempt
 from server.cadlink.wgreturn import WgReturnError
 
 
@@ -1400,7 +1400,9 @@ def _remember_default_setup(
     lineage_id = snapshot_project(store, manifest) or (
         str(project.get("lineage_id") or "").strip() if isinstance(project, Mapping) else ""
     )
-    if not lineage_id:
+    if not lineage_id or lineage_id == UNFILED_MODEL_ID:
+        # No project, or a return claiming the reserved id for "none": the
+        # defaults stay this solve's own and are recorded for no model.
         return None
     sources = [source for source in manifest.get("sources") or [] if isinstance(source, Mapping)]
     inventory = inventory_sha256(sources)

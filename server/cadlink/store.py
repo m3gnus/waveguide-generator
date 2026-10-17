@@ -1584,6 +1584,8 @@ class CadLinkStore:
 
         if not lineage_id or not inventory_sha256 or not revision_id:
             raise ValueError("a project setup names a lineage, an inventory and a revision")
+        if lineage_id == UNFILED_MODEL_ID:
+            raise ValueError(f"{UNFILED_MODEL_ID!r} is reserved and names no model")
         self.initialize()
         with self._lock, self._transaction() as conn:
             conn.execute(

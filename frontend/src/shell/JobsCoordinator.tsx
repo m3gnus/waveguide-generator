@@ -220,9 +220,13 @@ function reviewedFindings(record: CadReturnIngestRecord): ModelSolvePress['appro
   return findingIds.length ? { preparation_id: preparation.preparation_id, finding_ids: findingIds } : undefined;
 }
 
-/** Refusals of a restored run's own saved inputs: the run cannot be solved again as it was. */
-const RESTORED_INPUT_CODES: ReadonlySet<string> = new Set(['setup_required', 'prepared_unavailable', 'model_mismatch']);
-const RESTORED_INPUT_HINT = 'This run’s saved setup is no longer available; review the settings and press Solve.';
+/** Refusals of a restored run's own saved inputs: the run cannot be solved again as it was.
+ * An unedited restored run resends the same inputs, so Solve alone would only repeat the refusal. */
+const RESTORED_INPUT_HINTS: Readonly<Record<string, string>> = {
+  setup_required: 'This run’s saved setup is no longer available. Change a setting, or open the model again, then press Solve.',
+  prepared_unavailable: 'This run’s prepared mesh is no longer available. Import or prepare the model again, then press Solve.',
+  model_mismatch: 'This run belongs to another model. Open that model, or import this one again, then press Solve.',
+};
 
 /** A refused Solve, in the words the user acts on; "no engine here" stays its own kind.
  * The envelope's code stays on the error (`code`), never at the front of its words. */
@@ -231,8 +235,8 @@ function importedSolveError(error: unknown, restored = false): unknown {
     const prefix = `${error.code}: `;
     const words = error.message.startsWith(prefix) ? error.message.slice(prefix.length) : error.message;
     if (IMPORTED_CAPABILITY_CODES.has(error.code)) return new SolveEngineUnavailableError(words);
-    if (restored && RESTORED_INPUT_CODES.has(error.code)) {
-      return new SolveSubmissionRefused(RESTORED_INPUT_HINT, error.status, error.code);
+    if (restored && RESTORED_INPUT_HINTS[error.code]) {
+      return new SolveSubmissionRefused(RESTORED_INPUT_HINTS[error.code], error.status, error.code);
     }
     const explained = explainImportedRefusal(`${prefix}${words}`);
     return new SolveSubmissionRefused(explained === `${prefix}${words}` ? words : explained, error.status, error.code);

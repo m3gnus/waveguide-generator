@@ -614,6 +614,20 @@ def test_unfiled_is_reserved(tmp_path) -> None:
     assert store.get_model("unfiled") is None
     with pytest.raises(ValueError, match="reserved"):
         store.record_model_setup("unfiled", "sha256:inventory", "wgs_1")
+    with pytest.raises(ValueError, match="reserved"):
+        store.record_project_setup_if_absent("unfiled", "sha256:inventory", "wgs_1")
+    store.close()
+
+
+def test_the_lane_never_remembers_defaults_under_the_reserved_unfiled_id(tmp_path) -> None:
+    from server.cadlink.joblane.preparation import _remember_default_setup
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    manifest = {"sources": [{"id": "source-hf", "role": "HF", "required": True}]}
+    # A return whose record claims the reserved id: nothing is recorded, and the
+    # solve goes on with its defaults.
+    assert _remember_default_setup(store, manifest, {"project": {"lineage_id": "unfiled"}}, "wgs_defaults") is None
+    assert store.get_model_setup("unfiled", inventory_sha256(manifest["sources"])) is None
     store.close()
 
 

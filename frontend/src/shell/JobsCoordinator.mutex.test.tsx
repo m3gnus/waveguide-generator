@@ -1210,16 +1210,20 @@ describe('solve invocation mutex', () => {
     expect(compareSelection.getSnapshot().awaiting).toBe('retained-cad-run');
   });
 
-  it('says how to recover when a restored run\'s saved setup is gone', async () => {
+  it.each([
+    ['setup_required', 'This run’s saved setup is no longer available. Change a setting, or open the model again, then press Solve.'],
+    ['prepared_unavailable', 'This run’s prepared mesh is no longer available. Import or prepare the model again, then press Solve.'],
+    ['model_mismatch', 'This run belongs to another model. Open that model, or import this one again, then press Solve.'],
+  ])('says how to recover when a restored run is refused with %s', async (code, hint) => {
     const recorded = { ...archivedJob(), cad_source: { ...archivedJob().cad_source!, setup_revision_id: 'wgs_gone' } } as JobItem;
     await act(async () => { await restoreCadJobModel(recorded, {}, (async input => String(input).endsWith('/requests')
       ? json({ effective_request: archivedRequest() }) : String(input).endsWith('/viewport-mesh')
         ? new Response(archivedMesh) : json(archivedRecord)) as typeof fetch); });
-    mocks.solveModel.mockRejectedValueOnce(new SolveSubmissionRefused('setup_required: The settings this solve names are no longer retained.', 409, 'setup_required'));
+    mocks.solveModel.mockRejectedValueOnce(new SolveSubmissionRefused(`${code}: refused`, 409, code));
     let caught: unknown;
     await act(async () => { caught = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport().catch((error: unknown) => error); });
-    expect((caught as Error).message).toBe('This run’s saved setup is no longer available; review the settings and press Solve.');
-    expect((caught as SolveSubmissionRefused).code).toBe('setup_required');
+    expect((caught as Error).message).toBe(hint);
+    expect((caught as SolveSubmissionRefused).code).toBe(code);
   });
 
   it('solves a restored CAD run that recorded no revision with its exact setup', async () => {
