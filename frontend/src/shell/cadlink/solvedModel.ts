@@ -2,6 +2,7 @@ import { CadLinkApiError, getIngest, type CadReturnIngestRecord } from '../../ap
 import type { JobItem } from '../../api/jobsSocket';
 import { useCadReturnStore } from '../../stores/cadReturn';
 import { useCadSolverFrameStore } from '../../stores/cadSolverFrame';
+import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 
 /**
@@ -103,6 +104,8 @@ export async function adoptSolvedCadModel(
   display: SolvedModelDisplay,
   fetcher: typeof fetch = fetch,
 ): Promise<SolvedModelOutcome> {
+  const input = workspaceModeStore.getSnapshot();
+  if (input.importedInput !== 'cad') return 'declined';
   const preparedId = job.cad_source?.ingest_id;
   if (job.config_summary?.geometry_type !== 'imported' || !preparedId) return 'declined';
   if (job.cad_source?.manifest_sha256 && job.cad_source.manifest_sha256 !== claim.manifestSha256) return 'declined';
@@ -112,7 +115,9 @@ export async function adoptSolvedCadModel(
   // Read without taking the intent: an ingest the user starts meanwhile wins.
   const prepared = await getIngest(preparedId, fetcher);
   const state = useCadReturnStore.getState();
-  if (state.ingestRecord !== shown || shownReturn(job, claim, preparedId) !== shown) return 'declined';
+  if (workspaceModeStore.getSnapshot().importedInput !== 'cad'
+    || workspaceModeStore.getSnapshot().inputRevision !== input.inputRevision
+    || state.ingestRecord !== shown || shownReturn(job, claim, preparedId) !== shown) return 'declined';
   if (prepared.ingest_id !== preparedId || prepared.manifest_sha256 !== shown.manifest_sha256) return 'declined';
   const viewportGeneration = importedMeshStore.beginIntent();
   if (!state.applyIngest(prepared, state.beginIngestIntent())) return 'declined';

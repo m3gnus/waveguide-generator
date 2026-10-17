@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { editMeshImport, prepareMeshFile, saveMeshSetup, useMeshImportStore } from '../stores/meshImport';
-import { importedMeshStore } from '../viewport/importedMeshStore';
+import { workspaceModeStore } from '../stores/workspaceMode';
+import { restoreParametricWorkingDesign } from '../jobs/showJobModel';
+import { noteExplicitNavigation } from '../shell/workspaceNavigation';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { useCapabilities } from '../jobs/useCapabilities';
 
@@ -25,10 +27,10 @@ export function MeshImportPanel() {
   const frequencySummary = frequencies?.length
     ? `${frequencies.length} explicit frequencies: ${frequencies.slice(0, 8).join(', ')}${frequencies.length > 8 ? ', …' : ''} Hz`
     : `${replayOptions?.frequency_spacing} sweep: ${replayOptions?.frequency_range?.join('–')} Hz, ${replayOptions?.num_frequencies} frequencies`;
-  return <div className="param-panel panel-scroll" aria-label="Imported mesh setup">
+  return <div className="param-panel mesh-import-panel panel-scroll" aria-label="Imported mesh setup">
     <h3>Imported mesh</h3>
     <p>{state.filename}</p>
-    <p className="section-note">Full closed surface · free space. Select driven surface groups; all others are rigid.</p>
+    <p className="section-note">Full closed surface · free space. Choose radiating surfaces below; all other labels are rigid.</p>
     {state.summary?.groups.some(group => group.tag === 0) && <p className="section-note">Unassigned triangles are available for inspection only. Assign physical surface groups in the authoring tool and import again to solve.</p>}
     {!state.original && state.registered
       ? <p className="section-note">This retained mesh uses {state.units}, forward {state.forward}, up {state.up}. Import the original file again to change geometry or groups.</p>
@@ -43,11 +45,19 @@ export function MeshImportPanel() {
           </select>
         </label>)}
         <p className="section-note">Forward becomes +Z and up becomes +Y. Axes must be perpendicular.</p>
-        {state.summary?.groups.map(group => <label className="field-row" key={group.tag}>
-          <input type="checkbox" disabled={group.tag === 0} aria-label={`Drive ${group.name} (${group.tag})`} checked={state.selected.includes(group.tag)}
+      </fieldset>}
+    <fieldset disabled={state.busy || preparing || (!state.original && !!state.registered)}>
+      <legend>Radiating surfaces</legend>
+      <p className="section-note">Check the mesh labels that act as sound sources. Each checked label is a separate source; unchecked labels are rigid.</p>
+      {!state.selected.length && <p role="status">No radiating surfaces selected. Select at least one label to prepare and solve.</p>}
+      {state.summary?.groups.map(group => <label className="field-row" key={group.tag}>
+          <input type="checkbox" disabled={group.tag === 0} aria-label={`Use ${group.name} (${group.tag}) as a source`} checked={state.selected.includes(group.tag)}
             onChange={e => editMeshImport({ selected: e.target.checked ? [...state.selected, group.tag] : state.selected.filter(tag => tag !== group.tag) })}/>
           {group.name} ({group.tag}) · {group.triangle_count} triangles
         </label>)}
+      {!state.original && state.registered && <p className="section-note">These are the retained source assignments. Import the original mesh to change them.</p>}
+    </fieldset>
+    {state.original && <fieldset disabled={state.busy || preparing}>
         <button className="primary" disabled={!state.units || !state.selected.length} onClick={() => {
           setPreparing(true); void prepareMeshFile().finally(() => setPreparing(false));
         }}>{state.busy ? 'Preparing…' : state.registered ? 'Prepare again' : 'Prepare mesh'}</button>
@@ -91,6 +101,8 @@ export function MeshImportPanel() {
     }}>{saving ? 'Saving…' : 'Save setup'}</button>
     {state.error && <p className="field-error" role="alert">{state.error}</p>}
     {state.notice && <p role="status">{state.notice}</p>}
-    <button onClick={() => importedMeshStore.showParametric()}>Return to parametric design</button>
+    <button onClick={() => {
+      noteExplicitNavigation(); restoreParametricWorkingDesign(); workspaceModeStore.setMode('parametric');
+    }}>Return to parametric design</button>
   </div>;
 }

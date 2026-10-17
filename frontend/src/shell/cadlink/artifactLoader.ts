@@ -148,7 +148,7 @@ function upgradeToDisplayMesh(
           importedMeshStore.replaceCadArtifact(
             ingestId,
             cadDisplayScene(record, name, result.text),
-            workspaceModeStore.getSnapshot().mode === 'cad'
+            workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad'
               && importedMeshStore.getSnapshot().showing === 'cad',
           );
         } catch {
@@ -189,7 +189,7 @@ export async function showIngestedMeshInViewport(
   const ingestId = record.ingest_id;
   const available = importedMeshStore.getSnapshot().cad;
   if (available?.ingestId === ingestId) {
-    if (workspaceModeStore.getSnapshot().mode === 'cad') importedMeshStore.showCad(generation);
+    if (workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad') importedMeshStore.showCad(generation);
     return;
   }
   let displayPending = false;
@@ -202,7 +202,7 @@ export async function showIngestedMeshInViewport(
       importedMeshStore.setCad(
         cadDisplayScene(record, name, result.text),
         generation,
-        workspaceModeStore.getSnapshot().mode === 'cad',
+        workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad',
       );
       return;
     } else if (result.status === 409) {
@@ -229,7 +229,7 @@ export async function showIngestedMeshInViewport(
           solvedTriangleCount: record.mesh?.stats.triangle_count,
           artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
         },
-      ), generation, workspaceModeStore.getSnapshot().mode === 'cad');
+      ), generation, workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad');
       if (displayPending) upgradeToDisplayMesh(record, name, fetcher);
       return;
     }
@@ -270,7 +270,7 @@ export async function showIngestedSolverMeshInViewport(
   const ingestId = record.ingest_id;
   const available = importedMeshStore.getSnapshot().cadSolver;
   if (available?.ingestId === ingestId) {
-    if (workspaceModeStore.getSnapshot().mode === 'cad') importedMeshStore.showCadSolver(generation);
+    if (workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad') importedMeshStore.showCadSolver(generation);
     return null;
   }
   let response: Response;

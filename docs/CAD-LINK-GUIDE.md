@@ -534,7 +534,8 @@ export error's full traceback, use **View → Show Text Commands** in Fusion.
 There is **no standalone STEP import-and-solve command in WG's current UI**.
 **Open…** reads WG/ATH design files. **Import mesh…** independently imports
 ASCII Gmsh 2.2 triangular surface meshes for inspection and full-domain solving;
-choose units and driven physical groups in its setup panel. See the
+select **Imported mesh**, then choose units and source labels under **Geometry →
+Radiating surfaces**. **CAD Link** remains another input in the same workspace. See the
 [mesh workflow](USER-GUIDE.md#import-and-solve-a-mesh) for its first-slice limits.
 This is not standalone STEP import. The CAD solve route still accepts a
 validated return bundle containing geometry and source information.

@@ -185,3 +185,12 @@ describe('run coherence', () => {
     });
   });
 });
+
+it('matches file runs in Imported mesh even when an unrelated CAD return is retained', () => {
+  const context = { ...contextFor(designForFamily('OSSE')), mode: 'cad' as const, ingestId: 'wgi_cad', displayedIngestId: 'wgi_cad', fileIngestId: 'wgi_file' };
+  const file = { ...cad('wgi_file'), config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' } } as JobItem;
+  expect(runMatchesContext(file, context)).toBe('current');
+  expect(runDisplayVerdict(file, context)).toBe('current');
+  expect(runDisplayVerdict(cad('wgi_cad'), context)).toBe('other-model');
+  expect(runDisplayVerdict(file, { ...context, fileIngestId: null })).toBe('other-model');
+});

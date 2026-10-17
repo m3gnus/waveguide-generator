@@ -10,7 +10,7 @@ import {
 } from 'dockview';
 import { ParamPanel } from '../design/ParamPanel';
 import { AppQueryProvider } from '../queryClient';
-import { CadLinkPanel } from './CadLinkPanel';
+import { ImportedWorkspacePanel } from './ImportedWorkspacePanel';
 import { JobsPanel } from './JobsPanel';
 import { ResultsPanel } from './ResultsPanel';
 import { ViewportPanel } from './ViewportPanel';
@@ -33,7 +33,7 @@ const components = {
   viewport: ViewportPanel,
   results: ResultsPanel,
   jobs: JobsPanel,
-  cadlink: CadLinkPanel,
+  cadlink: ImportedWorkspacePanel,
 };
 
 type ComponentName = keyof typeof components;
@@ -131,7 +131,7 @@ export function createDefaultLayout(width: number, height: number, mode: Workspa
     viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
     results: { id: 'results', contentComponent: 'results', title: 'Results' },
     jobs: { id: 'jobs', contentComponent: 'jobs', title: 'Jobs' },
-    ...(mode === 'cad' ? { cadlink: { id: 'cadlink', contentComponent: 'cadlink', title: 'CAD Link' } } : {}),
+    ...(mode === 'cad' ? { cadlink: { id: 'cadlink', contentComponent: 'cadlink', title: 'Imported mesh' } } : {}),
   };
 
   if (layoutWidth < COMPACT_BREAKPOINT) {
@@ -273,12 +273,15 @@ export function syncCadLinkPanel(api: DockviewApi, mode: WorkspaceMode): void {
     if (existing) api.removePanel(existing);
     return;
   }
-  if (existing) return;
+  if (existing) {
+    existing.api.setTitle('Imported mesh');
+    return;
+  }
   const reference = api.getPanel('jobs') ?? api.getPanel('results') ?? api.activePanel;
   api.addPanel({
     id: 'cadlink',
     component: 'cadlink',
-    title: 'CAD Link',
+    title: 'Imported mesh',
     inactive: true,
     ...(reference ? { position: { referencePanel: reference, direction: 'within' as const } } : {}),
   });

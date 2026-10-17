@@ -91,6 +91,14 @@ describe('Workspace', () => {
     expect(api.removePanel).toHaveBeenCalledWith(cadlink);
   });
 
+  it('renames a retained CAD dock without changing its saved identity', () => {
+    const panel = { id: 'cadlink', api: { setTitle: vi.fn() } };
+    const api = { getPanel: vi.fn(() => panel), addPanel: vi.fn() };
+    syncCadLinkPanel(api as never, 'cad');
+    expect(panel.api.setTitle).toHaveBeenCalledWith('Imported mesh');
+    expect(api.addPanel).not.toHaveBeenCalled();
+  });
+
   it('ignores a stored old-key parameter layout and falls back to the new default', async () => {
     localStorage.setItem(LEGACY_LAYOUT_KEY, JSON.stringify({ panels: { parameters: { id: 'parameters', contentComponent: 'parameters', title: 'Parameters' } } }));
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);

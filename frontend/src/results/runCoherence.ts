@@ -112,7 +112,7 @@ export function displayedCadIngestId(selectedIngestId: string | null): string | 
 export function runContext(): RunContext {
   const design = useDesignStore.getState();
   return {
-    fileIngestId: importedMeshStore.getSnapshot().showing === 'file' ? importedMeshStore.getSnapshot().file?.ingestId ?? null : undefined,
+    fileIngestId: workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file' ? importedMeshStore.getSnapshot().file?.ingestId ?? null : undefined,
     mode: workspaceModeStore.getSnapshot().mode,
     designRevision: design.designRevision,
     designFingerprint: designFingerprint(design.design),
@@ -137,7 +137,7 @@ export function useRunContext(): RunContext {
   const designId = useDocumentStore((state) => state.identity?.designId ?? null);
   const viewport = useSyncExternalStore(importedMeshStore.subscribe, importedMeshStore.getSnapshot, importedMeshStore.getSnapshot);
   return { mode, designRevision, designFingerprint: useMemo(() => designFingerprint(design), [design]), ingestId, displayedIngestId: displayedCadIngestId(ingestId), displayedSolveModelSha256, designId,
-    fileIngestId: viewport.showing === 'file' ? viewport.file?.ingestId ?? null : undefined };
+    fileIngestId: mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file' ? viewport.file?.ingestId ?? null : undefined };
 }
 
 /**
@@ -151,7 +151,7 @@ export function useRunContext(): RunContext {
  * read back is not the design on screen as far as anything here can tell.
  */
 export function runMatchesContext(job: JobItem, context: RunContext): RunContextVerdict {
-  if (context.mode === 'parametric' && context.fileIngestId !== undefined) {
+  if (context.mode === 'cad' && context.fileIngestId !== undefined) {
     return job.config_summary.import_origin === 'mesh-file' && context.fileIngestId !== null
       && job.cad_source?.ingest_id === context.fileIngestId ? 'current' : 'other-model';
   }
@@ -168,7 +168,7 @@ export function runMatchesContext(job: JobItem, context: RunContext): RunContext
 
 /** Display verdict; selection identity remains separate for solve and edits. */
 export function runDisplayVerdict(job: JobItem, context: RunContext): RunContextVerdict {
-  if (job.config_summary?.geometry_type !== 'imported' || context.mode !== 'cad') return runMatchesContext(job, context);
+  if (context.fileIngestId !== undefined || job.config_summary?.geometry_type !== 'imported' || context.mode !== 'cad') return runMatchesContext(job, context);
   const runIngestId = job.cad_source?.ingest_id;
   if (context.displayedIngestId && (
     (runIngestId && runIngestId === context.displayedIngestId)

@@ -360,19 +360,14 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   } = useSolvePlan(
     design,
     currentOptions,
-    workspaceMode === 'parametric' && viewportGeometry.showing !== 'file',
+    workspaceMode === 'parametric',
   );
-  const visibleImported = viewportGeometry.showing === 'cad'
-    ? viewportGeometry.cad
-    : viewportGeometry.showing === 'file'
-      ? viewportGeometry.file
-      : null;
   // Mode owns solve intent. The viewport CAD slot is evidence for the mismatch
   // guard only; an empty slot must still route to the imported blocker so CAD
   // mode can truthfully say that an ingest is required.
-  const cadGeometryActive = workspaceMode === 'cad';
+  const fileGeometryActive = workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file';
+  const cadGeometryActive = workspaceMode === 'cad' && !fileGeometryActive;
   const crossoverDraftError = useCrossoverDraftError();
-  const fileGeometryActive = !cadGeometryActive && visibleImported?.source === 'file';
   useMeshImportStore();
   let fileSubmission: ImportedSolveSubmission | null = null;
   let fileBlocker: string | null = null;
@@ -411,7 +406,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     ? importedPlan.plan?.engines.find((verdict) => verdict.name === importedEngine)?.label || importedEngine
     : null;
   const importedUnavailable = importedPlan.isPending
-    ? 'Checking which engines can solve this CAD model…'
+    ? 'Checking which engines can solve this imported mesh…'
     : importedPlan.plan?.reason ?? importedPlan.error;
 
   const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision) => {
@@ -644,7 +639,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     const recovery = fileRecovery.current;
     if (!jobsLoaded) return;
     const recover = () => {
-      if (recovery.done || recovery.inFlight || workspaceMode !== 'parametric' || linkedJobId.current || revision !== recovery.revision
+      if (recovery.done || recovery.inFlight || (workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput !== 'file') || linkedJobId.current || revision !== recovery.revision
         || !importedMeshStore.isCurrentGeneration(recovery.generation)
         || importedMeshStore.getSnapshot().showing !== 'parametric') return;
       recovery.inFlight = true;
@@ -768,7 +763,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [cadGeometryActive, fileGeometryActive, now, planPending, reportError, run, runImported, solveCurrentCadImport, solveEnabled]);
   useEffect(() => {
     if (pendingSolve === null) return;
-    if ((pendingSolve === 'file' ? !fileGeometryActive : pendingSolve !== workspaceMode) || !solveEnabled) {
+    if ((pendingSolve === 'file' ? !fileGeometryActive : pendingSolve === 'cad' ? !cadGeometryActive : pendingSolve !== workspaceMode) || !solveEnabled) {
       setPendingSolve(null);
       if (planError) reportError(planError);
       return;
@@ -777,7 +772,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     // Clear before invoking: settlement and further presses cannot replay it.
     setPendingSolve(null);
     solve();
-  }, [fileGeometryActive, pendingSolve, planError, planPending, reportError, solve, solveEnabled, workspaceMode]);
+  }, [cadGeometryActive, fileGeometryActive, pendingSolve, planError, planPending, reportError, solve, solveEnabled, workspaceMode]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && solveEnabled) {

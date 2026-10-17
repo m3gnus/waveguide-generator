@@ -32,12 +32,16 @@ cannot alter an existing run.
 
 ### Import and solve a mesh
 
-In Parametric mode, choose **Import mesh…** from the design file menu. No CAD
+Select **Imported mesh**, then press **Import mesh…** in the top bar. The design
+file menu also offers import and replay. No CAD
 application, add-in or CAD Link folder is needed. The first importer accepts
 ASCII Gmsh 2.2 linear triangular surface meshes, up to 16 MiB.
 
-Choose the file's units, forward and up axes, and the physical surface groups
-to drive. Other groups are rigid. Press **Prepare mesh**, check its dimensions,
+In **Geometry**, choose the file's units and forward/up axes. Under **Radiating
+surfaces**, check each mesh label to use as a source; names, tags and triangle
+counts identify the groups. Unchecked labels are rigid. At least one source is
+required, and untagged triangles cannot be selected. Changing a source selection
+requires preparation again. Press **Prepare mesh**, check its dimensions,
 then choose the frequency range, engine and source motion and press **Solve**.
 Use **Save setup** to keep these settings before solving; the last saved mesh
 setup resumes on startup unless a newer model choice or pending solve takes
@@ -52,7 +56,9 @@ source (1 m/s²) per selected group. It uses a logarithmic sweep and full 5°
 horizontal, vertical and diagonal polars at 2 m from the mesh origin; the origin
 is not moved automatically. Electrical driver models, crossover controls,
 reduced domains, STL/OBJ/binary meshes and volume-mesh import are outside this
-first slice. Existing CAD simulation capabilities remain available separately.
+first slice. Choose **CAD Link** in the Imported mesh input selector to use the existing CAD
+simulation capabilities. **File mesh** returns to the mesh-file setup; **Parametric**
+keeps the generated design separate.
 
 Runs retains the exact mesh and resolved settings. Select a run to restore its
 setup, or **Rerun** to replay its stored request. Changing or moving the original

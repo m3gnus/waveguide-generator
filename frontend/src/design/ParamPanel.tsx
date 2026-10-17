@@ -83,7 +83,6 @@ import {
 } from './parametricControlRegistry';
 import './paramPanel.css';
 import { MeshImportPanel } from './MeshImportPanel';
-import { importedMeshStore } from '../viewport/importedMeshStore';
 
 interface SectionProps {
   title: string;
@@ -1216,7 +1215,6 @@ function CadSimulationEmpty() {
 }
 
 export function ParamPanel({ tab }: { tab: ParameterTab }) {
-  const showing = useSyncExternalStore(importedMeshStore.subscribe, importedMeshStore.getSnapshot, importedMeshStore.getSnapshot).showing;
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
   const updateValues = useDesignStore((state) => state.updateValues);
@@ -1433,7 +1431,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     </div>}
   </Section>;
 
-  if (workspaceMode === 'parametric' && showing === 'file') return <MeshImportPanel/>;
+  if (workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file') return <MeshImportPanel/>;
 
   return (
     <div ref={registerParameterPanel} className="param-panel panel-scroll" data-param-tab={tab}>

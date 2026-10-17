@@ -9,6 +9,7 @@ import {
 import { accuracyEngine, useCapabilities } from '../jobs/useCapabilities';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { usePreferences, type Preferences } from '../prefs/preferences';
+import { useMeshImportStore } from '../stores/meshImport';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -94,6 +95,8 @@ export function StatusBar() {
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   const design = useDesignStore((state) => state.design);
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
+  const file = useMeshImportStore();
+  const fileActive = mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file';
   const cadReturn = useCadReturnStore();
   const filename = useDocumentStore((state) => state.filename);
   const selectedEngine = useSolveOptionsStore((state) => state.engine);
@@ -109,15 +112,18 @@ export function StatusBar() {
   const engineLabel = mode !== 'cad'
     ? engineStatusLabel(engines, engineSelection, accuracyEngine(selectedEngine, accuracy, engines), isLoading)
     : cadPlan && cadPlan.engine === null
-      ? `${selectedEngine.toUpperCase()} · NO CAD SOLVE`
+      ? `${selectedEngine.toUpperCase()} · NO IMPORTED SOLVE`
       : engineStatusLabel(engines, engineSelection, cadPlan?.engine ?? selectedEngine, isLoading);
   const previewError = preview.error ? previewErrorMessage(preview.error) : null;
   const meshMetrics = previewMeshMetrics(preview.frame);
   const cadTriangles = cadReturn.ingestRecord?.mesh?.stats.triangle_count;
-  const summary = mode === 'cad'
+  const replayFrequencies = file.exactSubmission?.options.frequencies_hz;
+  const summary = fileActive
+    ? `next mesh solve ${compactFrequency(replayFrequencies?.[0] ?? file.startHz)} – ${compactFrequency(replayFrequencies?.at(-1) ?? file.endHz)} · ${replayFrequencies?.length ?? file.count} f`
+    : mode === 'cad'
     ? cadSolveSummary({ start: cadReturn.frequencyStartHz, end: cadReturn.frequencyEndHz, count: cadReturn.frequencyCount }, { frequencyMode, frequencyListText, smoothing: preferences.smoothing })
     : solveSummary(design, { frequencyMode, frequencyListText, smoothing: preferences.smoothing });
-  const document = mode === 'cad'
+  const document = fileActive ? file.filename || 'no mesh file' : mode === 'cad'
     ? cadReturn.selectedBundle?.documentName ?? cadReturn.selectedBundle?.name ?? 'no CAD return'
     : documentLabel(filename, design.formula);
   return <footer className="statusbar">
@@ -130,13 +136,13 @@ export function StatusBar() {
         The mesh metrics are recovered here from the decoded frame; the λ/6
         limit slot is gone until something computes it, because a readout that
         can only ever say "not calculated" is worse than no readout. */}
-    <div className="status-item status-drop-2">{mode === 'cad'
+    <div className="status-item status-drop-2">{fileActive ? <>Mesh <b>{file.summary?.triangle_count.toLocaleString() ?? 'not imported'}</b> tri</> : mode === 'cad'
       ? <>CAD mesh {cadTriangles === undefined ? <b>not ingested</b> : <><b>{cadTriangles.toLocaleString()}</b> solved tri</>}</>
       : <>preview {meshMetrics ? <><b>{meshMetrics.triangles.toLocaleString()}</b> tri · <b>{meshMetrics.vertices.toLocaleString()}</b> vert</> : <b>no frame</b>}</>}</div>
     {mode === 'parametric' && previewError && <div className="status-item preview-error-status" title={previewError}>{previewError}</div>}
     <span className="spacer"/>
     <div className="status-item right">{summary}</div>
     <div className="status-item right status-drop-1"><Icon name="folder"/>{document}</div>
-    <div className="status-item right"><i className={`connection-dot ${mode === 'cad' ? cadReturn.ingestRecord ? 'connected' : 'disconnected' : preview.connection}`}/>{mode === 'cad' ? cadReturn.ingestRecord ? 'CAD return · ingested' : 'CAD return · empty' : preview.connection === 'connected' ? 'local · connected' : `local · ${preview.connection}`}</div>
+    <div className="status-item right">{fileActive ? (file.registered ? 'Mesh · ready' : 'Mesh · not prepared') : <><i className={`connection-dot ${mode === 'cad' ? cadReturn.ingestRecord ? 'connected' : 'disconnected' : preview.connection}`}/>{mode === 'cad' ? cadReturn.ingestRecord ? 'CAD return · ingested' : 'CAD return · empty' : preview.connection === 'connected' ? 'local · connected' : `local · ${preview.connection}`}</>}</div>
   </footer>;
 }

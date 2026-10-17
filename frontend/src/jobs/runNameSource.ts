@@ -20,7 +20,7 @@ import { useCadReturnStore } from '../stores/cadReturn';
 import { normalizeDesignName } from '../stores/designName';
 import { useDocumentStore } from '../stores/document';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
-import { importedMeshStore } from '../viewport/importedMeshStore';
+import { useMeshImportStore } from '../stores/meshImport';
 
 /** Where the name on the next run comes from, and whether WG can edit it. */
 export interface RunNameSource {
@@ -52,8 +52,8 @@ export function runNameSourceFor(
 
 /** Read at submission time, so the label matches the geometry being solved. */
 export function currentRunNameSource(): RunNameSource {
-  const viewport = importedMeshStore.getSnapshot();
-  if (workspaceModeStore.getSnapshot().mode === 'parametric' && viewport.showing === 'file' && viewport.file) return { name: viewport.file.name, origin: 'mesh' };
+  const file = useMeshImportStore.getState();
+  if (workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file') return { name: file.filename, origin: 'mesh' };
   return runNameSourceFor(
     workspaceModeStore.getSnapshot().mode,
     useCadReturnStore.getState().selectedBundle,
@@ -62,7 +62,7 @@ export function currentRunNameSource(): RunNameSource {
 }
 
 export function useRunNameSource(): RunNameSource {
-  const viewport = useSyncExternalStore(importedMeshStore.subscribe, importedMeshStore.getSnapshot, importedMeshStore.getSnapshot);
+  const file = useMeshImportStore();
   const mode = useSyncExternalStore(
     workspaceModeStore.subscribe,
     workspaceModeStore.getSnapshot,
@@ -70,6 +70,6 @@ export function useRunNameSource(): RunNameSource {
   ).mode;
   const bundle = useCadReturnStore((state) => state.selectedBundle);
   const designName = useDocumentStore((state) => state.designName);
-  if (mode === 'parametric' && viewport.showing === 'file' && viewport.file) return { name: viewport.file.name, origin: 'mesh' };
+  if (mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file') return { name: file.filename, origin: 'mesh' };
   return runNameSourceFor(mode, bundle, designName);
 }

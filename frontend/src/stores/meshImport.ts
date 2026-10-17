@@ -74,6 +74,15 @@ subscribeSolveSettingsEdits(edit => {
     ...(['setEngine', 'setAccuracy'].includes(edit.control ?? '') ? { engine: null, accuracy: null } : {}) });
 });
 
+/** Establish file ownership before reading bytes, including failed replacements. */
+export function beginMeshFileImport(filename: string): number {
+  const request = ++requestNumber;
+  useMeshImportStore.setState({ ...initial, filename, busy: true, request });
+  workspaceModeStore.setImportedInput('file');
+  workspaceModeStore.setMode('cad');
+  return request;
+}
+
 /** Invalidating registration leaves the preview visible but never solvable. */
 export function editMeshImport(patch: Partial<Pick<MeshImportState, 'units' | 'forward' | 'up' | 'selected'>>) {
   useMeshImportStore.setState({ ...patch, registered: null, error: null });
@@ -81,6 +90,7 @@ export function editMeshImport(patch: Partial<Pick<MeshImportState, 'units' | 'f
 
 export async function loadMeshFile(filename: string, text: string, fetcher: typeof fetch = fetch, generation = importedMeshStore.beginIntent()): Promise<void> {
   if (!importedMeshStore.isCurrentGeneration(generation)) return;
+  beginMeshFileImport(filename);
   const request = ++requestNumber;
   useMeshImportStore.setState({ ...initial, filename, original: text, busy: true, request });
   try {
@@ -184,6 +194,7 @@ async function restoreRetainedFile(id: string, options: FileOptions,
   channels: Array<{ id: string; motion?: 'normal' | 'axial' }>, fetcher: typeof fetch,
   generation = importedMeshStore.beginIntent(),
   exactSubmission?: (record: RegisteredMesh) => ImportedSolveSubmission): Promise<boolean> {
+  if (!importedMeshStore.isCurrentGeneration(generation)) return false;
   const record = await readMeshImport(id, fetcher);
   if (!importedMeshStore.isCurrentGeneration(generation)) return false;
   if (record.ingest_id !== id) throw new Error('The retained mesh response names a different import. Select the run again.');
@@ -207,7 +218,8 @@ function restoreFile(record: RegisteredMesh, options: FileOptions,
   exactSubmission?: ImportedSolveSubmission): boolean {
   if (!importedMeshStore.isCurrentGeneration(generation)) return false;
   if (!importedMeshStore.setFile(preparedFileScene(record), generation)) return false;
-  workspaceModeStore.setMode('parametric');
+  workspaceModeStore.setImportedInput('file');
+  workspaceModeStore.setMode('cad');
   const frequencies = options.frequencies_hz;
   useMeshImportStore.setState({ ...initial, filename: record.source_file.filename,
     summary: record.summary, registered: record, ...record.source_file.transform, selected: record.source_file.source_tags,
@@ -225,6 +237,7 @@ function restoreFile(record: RegisteredMesh, options: FileOptions,
 export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch,
   generation = importedMeshStore.beginIntent()): Promise<boolean> {
   if (!importedMeshStore.isCurrentGeneration(generation)) return false;
+  beginMeshFileImport('Opening mesh replay…');
   const requestNumberAtStart = ++requestNumber;
   useMeshImportStore.setState({ busy: true, error: null, request: requestNumberAtStart });
   try {
@@ -262,9 +275,16 @@ export async function restoreSavedMeshSetup(fetcher: typeof fetch = fetch): Prom
   const id = savedSetupStorage.getItem('wg-saved-mesh-setup');
   if (!id) return false;
   const generation = importedMeshStore.beginIntent();
-  const { setup } = await readImportedSetup(id, fetcher);
-  if (!setup || !importedMeshStore.isCurrentGeneration(generation)) return false;
-  return restoreRetainedFile(id, setup.options, setup.geometry.drive_channels, fetcher, generation, record => bindImportedSetup(record, setup));
+  beginMeshFileImport('Restoring mesh…');
+  const request = ++requestNumber;
+  useMeshImportStore.setState({ request });
+  try {
+    const { setup } = await readImportedSetup(id, fetcher);
+    if (!setup || !importedMeshStore.isCurrentGeneration(generation)) return false;
+    return await restoreRetainedFile(id, setup.options, setup.geometry.drive_channels, fetcher, generation, record => bindImportedSetup(record, setup));
+  } finally {
+    if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
+  }
 }
 
 /** An unanswered request restores its SAME retained mesh and setup, so a new
@@ -276,16 +296,25 @@ export async function restorePendingMeshPress(fetcher: typeof fetch = fetch): Pr
   if (!saved?.id?.startsWith('mesh-') || !saved.body) return false;
   const body = JSON.parse(saved.body) as ImportedSolveSubmission;
   if (body.geometry?.type !== 'imported' || !body.geometry.ingest_id || !body.options) return false;
-  const restored = await restoreRetainedFile(body.geometry.ingest_id, body.options, body.geometry.drive_channels, fetcher, importedMeshStore.beginIntent(), () => body);
-  if (restored) useMeshImportStore.setState({ notice: 'An unanswered mesh solve was restored. Press Solve to recover that request before starting another run.' });
-  return restored;
+  const generation = importedMeshStore.beginIntent();
+  beginMeshFileImport('Restoring mesh…');
+  const request = ++requestNumber;
+  useMeshImportStore.setState({ request });
+  try {
+    const restored = await restoreRetainedFile(body.geometry.ingest_id, body.options, body.geometry.drive_channels, fetcher, generation, () => body);
+    if (restored) useMeshImportStore.setState({ notice: 'An unanswered mesh solve was restored. Press Solve to recover that request before starting another run.' });
+    return restored;
+  } finally {
+    if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
+  }
 }
 
-/** Restore one retained file mesh, never route it through the CAD workspace. */
+/** Restore one retained file mesh with File selected in Imported mesh. */
 export async function restoreMeshImport(job: JobItem, fetcher: typeof fetch = fetch): Promise<boolean> {
   const id = job.cad_source?.ingest_id;
   if (!id) throw new Error('This run has no retained mesh identity. Import the mesh again.');
   const generation = importedMeshStore.beginIntent();
+  beginMeshFileImport('Restoring mesh…');
   const request = ++requestNumber;
   // Until both retained inputs arrive, Solve must not use the previously open model.
   useMeshImportStore.setState({ busy: true, registered: null, exactSubmission: null, error: null, request });

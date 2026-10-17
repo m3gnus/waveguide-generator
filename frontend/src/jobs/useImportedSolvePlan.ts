@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   importedSolvePlanRequestBody,
@@ -16,6 +16,9 @@ import {
   SOLVE_PLAN_GC_MS,
   SOLVE_PLAN_RECOVERY_MS,
 } from './planQueryPolicy';
+import { importedMeshStore } from '../viewport/importedMeshStore';
+import { workspaceModeStore } from '../stores/workspaceMode';
+import { fileMeshSubmission, useMeshImportStore } from '../stores/meshImport';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 
@@ -46,12 +49,18 @@ function isFault(error: unknown): boolean {
  * the answer without anything the user did.
  */
 export function useImportedSolvePlan(enabled: boolean, preparedSubmission?: ImportedSolveSubmission | null): ImportedSolvePlanSnapshot {
+  const workspace = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot);
+  const file = useMeshImportStore();
+  const viewport = useSyncExternalStore(importedMeshStore.subscribe, importedMeshStore.getSnapshot);
   const cadReturn = useCadReturnStore();
   const solveOptions = useSolveOptionsStore();
   const { engines } = useCapabilities();
   const currentBody = useMemo(() => {
     if (!enabled) return null;
     if (preparedSubmission !== undefined) return preparedSubmission === null ? null : importedSolvePlanRequestBody(preparedSubmission);
+    if (workspace.importedInput === 'file') {
+      try { return importedSolvePlanRequestBody(fileMeshSubmission()); } catch { return null; }
+    }
     if (!cadReturn.ingestRecord) return null;
     try {
       return importedSolvePlanRequestBody(buildImportedSubmission(cadReturn));
@@ -62,7 +71,7 @@ export function useImportedSolvePlan(enabled: boolean, preparedSubmission?: Impo
     }
     // `solveOptions` is read inside buildImportedSubmission, from the store.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, cadReturn, solveOptions, preparedSubmission]);
+  }, [enabled, cadReturn, solveOptions, preparedSubmission, workspace.importedInput, file, viewport]);
   const capabilityKey = capabilityFingerprint(engines);
   const [settledBody, setSettledBody] = useState<string | null>(currentBody);
 

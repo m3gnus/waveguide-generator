@@ -171,6 +171,8 @@ export async function refreshCadReturnArrivals(
           )
         )) ?? null
       : null;
+    // Background CAD discovery cannot take a file import's viewport intent.
+    if (workspaceModeStore.getSnapshot().importedInput === 'file') return;
     const opened = arrived ?? initial;
     const projectMismatch = Boolean(
       opened && returnBelongsToAnotherProject(opened, currentDesignId),
@@ -417,6 +419,7 @@ export function createCadArrivalActions(
     if (!automatic && !restoringCadProject.current) {
       refusedForeignReturn.current = false;
       manualSelectionAt.current = Date.now();
+      workspaceModeStore.setImportedInput('cad');
     }
     useCadReturnStore.getState().selectBundle(bundle, projectLineageId, automatic);
     rereadDrivers();
@@ -426,6 +429,7 @@ export function createCadArrivalActions(
   };
 
   const returnFromOnshape = async () => {
+    workspaceModeStore.setImportedInput('cad');
     const identity = useDocumentStore.getState().identity;
     if (!identity?.designId) throw new Error('Send this design to Onshape before returning it.');
     useCadReturnStore.getState().beginSelectionIntent();

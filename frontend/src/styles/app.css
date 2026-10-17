@@ -117,7 +117,8 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .workspace-mode-toggle button.on { background: rgba(var(--acc-rgb), .2); box-shadow: none; color: var(--acc); opacity: 1; }
 .workspace-mode-toggle button:disabled { opacity: .32; }
 .revision-chip { color: var(--fg4); font: var(--text-micro) var(--mono); }
-.design-file-menu { position: relative; flex: none; }
+.design-file-menu { position: relative; flex: none; display: flex; gap: 8px; }
+.import-mesh-action { border-color: var(--acc); }
 .design-menu-popover {
   position: absolute;
   top: 38px;
@@ -1447,3 +1448,19 @@ textarea:disabled { opacity: .48; }
 .job-compare { padding: 2px 5px; font-size: var(--text-micro); }
 .job-compare.on { color: var(--acc); border-color: var(--acc); }
 .job-card .cad-model-missing { white-space: normal; margin-left: 0; }
+
+/* Imported file setup keeps source assignment visible and separate from geometry. */
+.param-panel.mesh-import-panel { padding: 12px; }
+.mesh-import-panel h3 { font-weight: 600; margin-bottom: 8px; }
+.mesh-import-panel fieldset { min-width: 0; margin: 14px 0; padding: 10px; border: 1px solid var(--hair); border-radius: var(--r2); }
+.mesh-import-panel legend { padding: 0 5px; font-weight: 600; color: var(--fg); }
+.mesh-import-panel .field-row { justify-content: space-between; margin-block: 6px; }
+.mesh-import-panel .field-row:has(input[type="checkbox"]) { justify-content: flex-start; }
+.mesh-import-panel select, .mesh-import-panel input[type="number"] { padding: 4px 6px; border: 1px solid var(--hair); border-radius: var(--r2); background: var(--surface-raised); max-width: 55%; }
+.mesh-import-panel input[type="checkbox"] { flex: none; }
+.mesh-import-panel button { padding: 5px 8px; border: 1px solid var(--hair); border-radius: var(--r2); }
+.mesh-import-panel button:disabled { opacity: .5; }
+.imported-workspace { padding: 8px; }
+.imported-workspace h3, .imported-workspace h4 { margin-bottom: 8px; font-weight: 600; }
+.imported-workspace .imported-input-toggle { width: fit-content; }
+.imported-input-toggle button { width: auto; padding-inline: 10px; white-space: nowrap; }

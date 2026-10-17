@@ -39,6 +39,7 @@ export const SETTINGS_NAMESPACES = {
   dockviewLayout: 'wg2.dockview.layout.v4',
   dockviewMode: 'wg2.dockview.mode.v4',
   workspaceMode: 'wg2.workspace.mode.v1',
+  importedInput: 'wg2.imported.input.v1',
   cadProject: 'wg2.cad.project.v1',
   meshImport: 'wg-saved-mesh-setup',
   crossoverView: 'wg2.crossover.view.v1',

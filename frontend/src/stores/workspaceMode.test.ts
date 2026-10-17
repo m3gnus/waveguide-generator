@@ -5,7 +5,7 @@ describe('workspace mode store', () => {
   beforeEach(() => workspaceModeStore.setMode('parametric'));
 
   it('defaults to parametric', () => {
-    expect(workspaceModeStore.getSnapshot()).toEqual({ mode: 'parametric' });
+    expect(workspaceModeStore.getSnapshot()).toMatchObject({ mode: 'parametric' });
   });
 
   it('changes mode through its single writer', () => {
@@ -29,7 +29,7 @@ describe('workspace mode store', () => {
     workspaceModeStore.setMode('cad');
     vi.resetModules();
     const reloaded = await import('./workspaceMode');
-    expect(reloaded.workspaceModeStore.getSnapshot()).toEqual({ mode: 'cad' });
+    expect(reloaded.workspaceModeStore.getSnapshot()).toMatchObject({ mode: 'cad' });
   });
 
   it('remembers the mode for the next load', () => {
@@ -38,4 +38,14 @@ describe('workspace mode store', () => {
     workspaceModeStore.setMode('parametric');
     expect(localStorage.getItem('wg2.workspace.mode.v1')).toBe('parametric');
   });
+});
+
+it('preserves the selected imported input across a mode round-trip and module reload', async () => {
+  workspaceModeStore.setImportedInput('file');
+  workspaceModeStore.setMode('cad'); workspaceModeStore.setMode('parametric'); workspaceModeStore.setMode('cad');
+  expect(workspaceModeStore.getSnapshot().importedInput).toBe('file');
+  vi.resetModules();
+  const reloaded = await import('./workspaceMode');
+  expect(reloaded.workspaceModeStore.getSnapshot()).toMatchObject({ mode: 'cad', importedInput: 'file' });
+  workspaceModeStore.setImportedInput('cad');
 });

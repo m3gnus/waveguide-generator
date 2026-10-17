@@ -424,3 +424,19 @@ it('retries its own receipt with no acceptance sequence after a transient listin
   expect(await action(receipt(1, { send_sequence: null }))).toBe(true);
   expect(display.showIngestedMesh).toHaveBeenCalledOnce();
 });
+
+it('does not let a delayed CAD listing replace a newer file selection', async () => {
+  const store = createCadReceiptsStore(null, () => NOW);
+  const display = renderer();
+  let resolve!: (response: Response) => void;
+  const wait = new Promise<Response>(done => { resolve = done; });
+  const fetcher = vi.fn<typeof fetch>(async () => wait);
+  workspaceModeStore.setImportedInput('cad');
+  const opening = createReceiptDisplay(display, store, fetcher)(receipt());
+  workspaceModeStore.setImportedInput('file');
+  resolve(new Response(JSON.stringify({ items: [bundle], cadFolderConfigured: true })));
+  await opening;
+  expect(display.showIngestedMesh).not.toHaveBeenCalled();
+  expect(store.getState().feedback['send:1'].outcome).toBe('superseded');
+  workspaceModeStore.setImportedInput('cad');
+});

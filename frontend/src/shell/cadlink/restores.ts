@@ -244,6 +244,7 @@ export async function restoreCadJobModel(
   if (job.run_number === null) return false;
   const ingestId = job.cad_source?.ingest_id;
   const displayName = job.cad_source?.document_name || job.label || `run #${job.run_number}`;
+  workspaceModeStore.setImportedInput('cad');
   integration.enterCadWorkspace();
   integration.reportViewportNotice(null);
   if (!ingestId) {
@@ -379,7 +380,7 @@ export async function restoreRememberedCadProject(
     const current = useCadReturnStore.getState();
     return !current.selectedBundle && !current.ingestRecord
       && current.isCurrentIngestIntent(selection) && isCurrentDocumentLoad(documentLoad)
-      && workspaceModeStore.getSnapshot().mode === 'cad'
+      && workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad'
       && preferencesStore.getSnapshot().cadApplication !== 'onshape' && integration.isAllowed();
   };
   if (!lineage || !empty()) return false;
@@ -418,6 +419,7 @@ export function observeCadProjectLoads(integration: UseCadRestoresOptions): () =
       importedMeshStore.clear('cad');
       setError(null);
       setStatus('Project design loaded. Looking for its latest CAD return…');
+      workspaceModeStore.setImportedInput('cad');
       enterCadWorkspace();
       queueMicrotask(() => { void refreshRef.current(); });
       return;
@@ -440,7 +442,7 @@ export function observeRememberedCadProject({
 } = {}): () => void {
   let active = true;
   const maybeRestore = () => {
-    if (workspaceModeStore.getSnapshot().mode !== 'cad') return;
+    if (workspaceModeStore.getSnapshot().mode !== 'cad' || workspaceModeStore.getSnapshot().importedInput !== 'cad') return;
     if (preferencesStore.getSnapshot().cadApplication === 'onshape') return;
     if (restoringCadProject.current || refusedForeignReturn.current) return;
     const lineage = rememberedCadProject();

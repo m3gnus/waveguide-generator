@@ -32,7 +32,7 @@ import { usePreferences } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { MAX_MESH_REPLAY_BYTES } from '../api/meshReplay';
-import { loadMeshFile, loadMeshReplay } from '../stores/meshImport';
+import { beginMeshFileImport, loadMeshFile, loadMeshReplay, useMeshImportStore } from '../stores/meshImport';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { isOutboundSupersededError } from '../shell/cadlink/outbound';
@@ -278,24 +278,39 @@ export function DesignFileMenu() {
   async function readMesh(input: HTMLInputElement) {
     const file = input.files?.[0];
     input.value = '';
-    if (!file || busyRef.current || workspaceMode === 'cad') return;
+    if (!file || busyRef.current) return;
     await act(async () => {
       if (file.size > 16 * 1024 * 1024) throw new Error('Mesh exceeds the 16 MiB import limit.');
       const generation = importedMeshStore.beginIntent();
-      await loadMeshFile(file.name, await file.text(), fetch, generation);
+      const readRequest = beginMeshFileImport(file.name);
+      try { await loadMeshFile(file.name, await file.text(), fetch, generation); }
+      catch (error) {
+        if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ busy: false, error: String(error) });
+        throw error;
+      } finally {
+        if (useMeshImportStore.getState().request === readRequest) useMeshImportStore.setState({ busy: false });
+      }
       if (!importedMeshStore.isCurrentGeneration(generation)) return;
-      setMessage(`Imported ${file.name}. Choose units and driven groups in the parameter panel, then prepare the mesh.`);
+      setMessage(`Imported ${file.name}. Choose units and Radiating surfaces in Geometry, then prepare the mesh.`);
     });
   }
 
   async function readReplay(input: HTMLInputElement) {
     const file = input.files?.[0];
     input.value = '';
-    if (!file || busyRef.current || workspaceMode === 'cad') return;
+    if (!file || busyRef.current) return;
     await act(async () => {
       if (file.size > MAX_MESH_REPLAY_BYTES) throw new Error('Mesh replay exceeds the 64 MiB import limit.');
       const generation = importedMeshStore.beginIntent();
-      const restored = await loadMeshReplay(await file.text(), fetch, generation);
+      const readRequest = beginMeshFileImport(file.name);
+      let restored = false;
+      try { restored = await loadMeshReplay(await file.text(), fetch, generation); }
+      catch (error) {
+        if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ busy: false, error: String(error) });
+        throw error;
+      } finally {
+        if (useMeshImportStore.getState().request === readRequest) useMeshImportStore.setState({ busy: false });
+      }
       if (restored) setMessage(`Opened ${file.name}. Solve preserves the replay settings; editing starts a new setup.`);
     });
   }
@@ -414,6 +429,10 @@ export function DesignFileMenu() {
       >{CLASSIFICATION_DISPLAY[classification].label}</small>}
       <span className="chev">⌄</span>
     </button>
+    {workspaceMode === 'cad' && <button type="button" className="file-chip import-mesh-action" disabled={busy}
+      title="Import an ASCII Gmsh 2.2 surface mesh" onClick={() => meshInput.current?.click()}>
+      <Icon name="folder"/>Import mesh…
+    </button>}
     <input ref={openInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, false)}/>
     <input ref={reportInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, true)}/>
     <input ref={meshInput} hidden tabIndex={-1} type="file" accept=".msh,text/plain" aria-label="Import Gmsh mesh file" onChange={(event) => void readMesh(event.currentTarget)}/>
@@ -435,12 +454,12 @@ export function DesignFileMenu() {
       <button
         role="menuitem"
         className="design-menu-item"
-        disabled={busy || workspaceMode === 'cad'}
-        title={workspaceMode === 'cad' ? 'Switch to Parametric mode to import a standalone mesh.' : 'Import an ASCII Gmsh 2.2 triangular surface mesh for inspection and solving'}
+        disabled={busy}
+        title="Import an ASCII Gmsh 2.2 triangular surface mesh into Imported mesh"
         onClick={() => meshInput.current?.click()}
       ><span>Import mesh…</span><kbd>msh</kbd></button>
-      <button role="menuitem" className="design-menu-item" disabled={busy || workspaceMode === 'cad'}
-        title={workspaceMode === 'cad' ? 'Switch to Parametric mode to open a standalone mesh replay.' : 'Open the retained mesh and exact solve settings from a replay package'}
+      <button role="menuitem" className="design-menu-item" disabled={busy}
+        title="Open the retained mesh and exact solve settings in Imported mesh"
         onClick={() => replayInput.current?.click()}><span>Open mesh replay…</span><kbd>wgreplay</kbd></button>
       <button role="menuitem" aria-expanded={exportsOpen} className="design-menu-item" disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
       {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">

@@ -250,6 +250,7 @@ describe('solve invocation mutex', () => {
     resetSolveOptionsStore();
     sessionStorage.clear();
     importedMeshStore.clear();
+    workspaceModeStore.setImportedInput('cad');
     workspaceModeStore.setMode('parametric');
     mocks.capabilities.engines = [
       { name: 'metal', available: true, reason: null, version: null, fast_paths: [], formulations: ['full-3d'] },
@@ -293,6 +294,7 @@ describe('solve invocation mutex', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    workspaceModeStore.setImportedInput('cad');
     workspaceModeStore.setMode('parametric');
     vi.clearAllTimers();
     vi.useRealTimers();
@@ -371,6 +373,24 @@ describe('solve invocation mutex', () => {
     else window.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'Enter', metaKey: press === 'Cmd+Enter', ctrlKey: press === 'Ctrl+Enter', bubbles: true, cancelable: true,
     }));
+  });
+
+  it('cancels a queued CAD Solve when File is selected within Imported mesh', async () => {
+    const { client } = await mountPlanning('cad');
+    const plan = deferred<typeof mocks.importedPlan.plan>();
+    mocks.postImportedSolvePlan.mockReturnValueOnce(plan.promise);
+    changeEngine();
+    pressSolve('click');
+    act(() => { importedMeshStore.beginIntent(); workspaceModeStore.setImportedInput('file'); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS);
+      plan.resolve({ ...mocks.importedPlan.plan, requested: 'bempp', engine: 'bempp' });
+    });
+    await flushPlan();
+    expect(mocks.createSetupRevision).not.toHaveBeenCalled();
+    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
+    expect(mocks.submitImported).not.toHaveBeenCalled();
+    client.clear();
   });
 
   describe.each(['parametric', 'cad'] as const)('%s planning gap', (mode) => {
@@ -1291,6 +1311,7 @@ describe('solve invocation mutex', () => {
   });
 
   it('requires explicit setup before solving a standalone msh import', async () => {
+    workspaceModeStore.setImportedInput('file'); workspaceModeStore.setMode('cad');
     act(() => importedMeshStore.setFile({ name: 'inspection.msh', source: 'file' } as ImportedMeshScene));
     await act(async () => { root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>); });
     const solve = host.querySelector<HTMLButtonElement>('button')!;
@@ -1301,6 +1322,8 @@ describe('solve invocation mutex', () => {
   });
 
   it('solves the prepared file from the main command, with one durable press and no CAD job', async () => {
+    readyCad('wgi_retained_cad');
+    workspaceModeStore.setImportedInput('file'); workspaceModeStore.setMode('cad');
     const accepted = deferred<string>();
     mocks.submitImported.mockReturnValueOnce(accepted.promise);
     act(() => {
@@ -1327,6 +1350,7 @@ describe('solve invocation mutex', () => {
   });
 
   it('submits portable replay options verbatim after automatic global settings restoration', async () => {
+    workspaceModeStore.setImportedInput('file'); workspaceModeStore.setMode('cad');
     const replay = importedSubmission('wgi_replay');
     delete replay.geometry.mesh;
     replay.options = { ...replay.options, solver_mode: 'auto', symmetry: 'auto', accuracy: 'accurate',

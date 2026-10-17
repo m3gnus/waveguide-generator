@@ -233,7 +233,7 @@ describe('design file export menu', () => {
     expect(importedMeshStore.getSnapshot().file?.name).toBe('reference.msh');
     expect(importedMeshStore.getSnapshot().showing).toBe('file');
     expect(inspect).toHaveBeenCalledWith('/api/mesh-import/inspect', expect.objectContaining({ method: 'POST' }));
-    expect(container.querySelector('[role="status"]')?.textContent).toContain('Choose units and driven groups');
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('Choose units and Radiating surfaces');
   });
 
   it('offers both STEP bodies', () => {
@@ -1408,4 +1408,34 @@ it('guards the replay size before reading and captures its generation before fil
   expect(importedMeshStore.isCurrentGeneration(generation)).toBe(true);
   await act(async () => { finishRead('{}'); });
   expect(vi.mocked(fetch).mock.calls.filter(([url]) => url === '/api/mesh-replay')).toHaveLength(0);
+});
+
+
+it('exposes Import mesh without opening the file menu in Imported mesh mode', () => {
+  workspaceModeStore.setMode('cad');
+  const host = document.createElement('div'); const root = createRoot(host);
+  act(() => root.render(<DesignFileMenu/>));
+  expect(host.querySelector('button.import-mesh-action')?.textContent).toContain('Import mesh');
+  expect(host.querySelector('[role="menu"]')).toBeNull();
+  act(() => root.unmount());
+  workspaceModeStore.setMode('parametric');
+});
+
+
+it('clears a superseded file-read busy state without taking the newer viewport', async () => {
+  workspaceModeStore.setMode('cad');
+  const host = document.createElement('div'); const root = createRoot(host);
+  act(() => root.render(<DesignFileMenu/>));
+  let finish!: (text: string) => void;
+  const reading = new Promise<string>(resolve => { finish = resolve; });
+  const input = host.querySelector<HTMLInputElement>('[aria-label="Import Gmsh mesh file"]')!;
+  Object.defineProperty(input, 'files', { value: [{ name: 'late.msh', size: 100, text: () => reading }] });
+  act(() => input.dispatchEvent(new Event('change', { bubbles: true })));
+  act(() => { importedMeshStore.showParametric(); workspaceModeStore.setMode('parametric'); });
+  await act(async () => { finish(meshFixture); await reading; });
+  expect(importedMeshStore.getSnapshot().showing).toBe('parametric');
+  expect(host.querySelector<HTMLButtonElement>('.file-chip')?.disabled).toBe(false);
+  const { useMeshImportStore } = await import('../stores/meshImport');
+  expect(useMeshImportStore.getState().busy).toBe(false);
+  act(() => root.unmount());
 });

@@ -141,7 +141,8 @@ describe('standalone imported mesh', () => {
       config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' },
       solve_options: { frequencies_hz: [100, 200] } } as unknown as JobItem;
     expect(await restoreMeshImport(job, retainedJobFetcher(job))).toBe(true);
-    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(workspaceModeStore.getSnapshot().importedInput).toBe('file');
     expect(useMeshImportStore.getState().original).toBeNull();
     expect(fileMeshSubmission().options.frequencies_hz).toEqual([100, 200]);
     expect(runSourceForJob(job)).toBe('mesh-file');

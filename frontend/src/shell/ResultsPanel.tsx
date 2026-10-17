@@ -2291,7 +2291,7 @@ export function ResultsPanel() {
   ), [provisional]);
   const latest = useMemo(() => jobs.find((job) => (
     runDisplayVerdict(job, coherenceContext) === 'current' && displayable(job)
-  )) ?? null, [coherenceContext.designFingerprint, coherenceContext.designId, coherenceContext.ingestId, coherenceContext.displayedIngestId, coherenceContext.displayedSolveModelSha256, coherenceContext.mode, displayable, jobs]);
+  )) ?? null, [coherenceContext.fileIngestId, coherenceContext.designFingerprint, coherenceContext.designId, coherenceContext.ingestId, coherenceContext.displayedIngestId, coherenceContext.displayedSolveModelSha256, coherenceContext.mode, displayable, jobs]);
   // The newest run that can be drawn at all, whatever model it belongs to.
   // Only the opening selection falls back to this; see the effect below.
   const newestDrawable = useMemo(
@@ -2382,7 +2382,7 @@ export function ResultsPanel() {
     }
     if (selection.primary !== null) compareSelection.followLatest(null);
   }, [
-    coherenceContext.designFingerprint, coherenceContext.ingestId, coherenceContext.displayedIngestId, coherenceContext.displayedSolveModelSha256, coherenceContext.mode,
+    coherenceContext.fileIngestId, coherenceContext.designFingerprint, coherenceContext.ingestId, coherenceContext.displayedIngestId, coherenceContext.displayedSolveModelSha256, coherenceContext.mode,
     jobs, latest, newestDrawable, provisional, selection.awaiting, selection.following, selection.primary,
   ]);
 

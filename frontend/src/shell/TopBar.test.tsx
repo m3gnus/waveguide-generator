@@ -51,7 +51,7 @@ describe('workspace mode switch', () => {
     const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
     const group = host.querySelector('[role="radiogroup"]')!;
     const radios = group.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    expect([...radios].map((button) => button.textContent)).toEqual(['Parametric', 'CAD Link']);
+    expect([...radios].map((button) => button.textContent)).toEqual(['Parametric', 'Imported mesh']);
     expect(radios[0].getAttribute('aria-checked')).toBe('true');
     expect(radios[1].disabled).toBe(false);
 
@@ -79,7 +79,7 @@ describe('workspace mode switch', () => {
     act(() => workspaceModeStore.setMode('cad'));
     act(() => preferencesStore.update({ cadApplication: 'onshape' }));
     const radios = host.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    expect([...radios].map((button) => button.textContent)).toEqual(['Parametric', 'CAD Link']);
+    expect([...radios].map((button) => button.textContent)).toEqual(['Parametric', 'Imported mesh']);
     expect(radios[1].disabled).toBe(false);
     // A preferences change must not eject the user from the mode they chose.
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
@@ -129,7 +129,7 @@ describe('workspace mode switch', () => {
   it('registers both palette commands', () => {
     const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
     const entries = workspaceModePaletteEntries();
-    expect(entries.map((entry) => entry.label)).toEqual(['Mode: Parametric', 'Mode: CAD Link']);
+    expect(entries.map((entry) => entry.label)).toEqual(['Mode: Parametric', 'Mode: Imported mesh']);
     act(() => entries[1].run());
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     expect(activate).toHaveBeenCalledWith('cadlink');

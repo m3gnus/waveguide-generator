@@ -1,3 +1,4 @@
+import { importedMeshStore } from '../viewport/importedMeshStore';
 import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
@@ -76,7 +77,7 @@ export interface ParameterPaletteContext {
   waveguideLinked?: boolean;
 }
 
-/** Enter a workspace mode and route first-time CAD users to the workflow that
+/** Enter a workspace mode and route first-time import users to the workflow that
  * can make that mode usable. A prepared return stays in place because its CAD
  * controls and viewport are already available. Returning to Parametric first
  * restores the parametric working design if a CAD flow replaced it, so the
@@ -84,6 +85,7 @@ export interface ParameterPaletteContext {
 export function activateWorkspaceMode(mode: WorkspaceMode): void {
   // The user's own switch: whatever was waiting to follow them no longer may.
   noteExplicitNavigation();
+  importedMeshStore.beginIntent();
   if (mode === 'parametric') restoreParametricWorkingDesign();
   workspaceModeStore.setMode(mode);
   if (mode === 'cad' && !useCadReturnStore.getState().ingestRecord) {
@@ -336,14 +338,14 @@ export function WorkspaceModeSwitch() {
 
   return <div className="theme-toggle workspace-mode-toggle" role="radiogroup" aria-label="Workspace mode">
     {option('parametric', 'Parametric')}
-    {option('cad', 'CAD Link')}
+    {option('cad', 'Imported mesh')}
   </div>;
 }
 
 export function workspaceModePaletteEntries(): PaletteEntry[] {
   return [
     { id: 'mode-parametric', kind: 'Commands', label: 'Mode: Parametric', run: () => activateWorkspaceMode('parametric') },
-    { id: 'mode-cad-link', kind: 'Commands', label: 'Mode: CAD Link', run: () => activateWorkspaceMode('cad') },
+    { id: 'mode-cad-link', kind: 'Commands', label: 'Mode: Imported mesh', run: () => activateWorkspaceMode('cad') },
   ];
 }
 

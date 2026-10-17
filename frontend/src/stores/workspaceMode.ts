@@ -6,10 +6,13 @@ type Listener = () => void;
 
 export interface WorkspaceModeState {
   mode: WorkspaceMode;
+  importedInput: 'cad' | 'file';
+  inputRevision: number;
 }
 
 const storage = namespaceStorage('workspaceMode');
 const STORAGE_KEY = 'mode';
+const inputStorage = namespaceStorage('importedInput');
 
 function storedMode(): WorkspaceMode {
   return storage.getItem(STORAGE_KEY) === 'cad' ? 'cad' : 'parametric';
@@ -21,7 +24,7 @@ function storedMode(): WorkspaceMode {
  * load and a CAD-only project can be reopened from its archive, so starting
  * over was the dishonest option. */
 class WorkspaceModeStore {
-  private value: WorkspaceModeState = { mode: storedMode() };
+  private value: WorkspaceModeState = { mode: storedMode(), importedInput: inputStorage.getItem('input') === 'file' ? 'file' : 'cad', inputRevision: 0 };
   private listeners = new Set<Listener>();
 
   subscribe = (listener: Listener): (() => void) => {
@@ -31,9 +34,16 @@ class WorkspaceModeStore {
 
   getSnapshot = (): WorkspaceModeState => this.value;
 
+  /** Explicit input intent survives pending/failed loads and workspace switches. */
+  setImportedInput = (importedInput: 'cad' | 'file'): void => {
+    this.value = { ...this.value, importedInput, inputRevision: this.value.inputRevision + 1 };
+    inputStorage.setItem('input', importedInput);
+    this.listeners.forEach(listener => listener());
+  };
+
   setMode = (mode: WorkspaceMode): void => {
     if (mode === this.value.mode) return;
-    this.value = { mode };
+    this.value = { ...this.value, mode };
     storage.setItem(STORAGE_KEY, mode);
     this.listeners.forEach((listener) => listener());
   };

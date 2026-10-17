@@ -49,6 +49,7 @@ export async function prepareNativeAssembly(
   importedMeshStore.setCad(scene, viewportGeneration);
   importedMeshStore.setCadSolver(scene, viewportGeneration, false);
   useSolveOptionsStore.getState().setEngine('metal');
+  workspaceModeStore.setImportedInput('cad');
   workspaceModeStore.setMode('cad');
   return record;
 }

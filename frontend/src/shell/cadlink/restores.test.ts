@@ -50,6 +50,7 @@ it('restores the coupled BEAT model without legacy driver conversion', async () 
 beforeEach(() => {
   localStorage.clear(); resetDesignStore(); resetDocumentStore(); resetCadReturnStore();
   resetSolveOptionsStore(); preferencesStore.resetForTests(); importedMeshStore.clear();
+  workspaceModeStore.setImportedInput('cad');
   workspaceModeStore.setMode('parametric');
 });
 afterEach(() => { importedMeshStore.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -59,7 +60,9 @@ const archiveFetcher = (async (input: RequestInfo | URL) => String(input).endsWi
 
 describe('job and remembered-project restores without the coordinator', () => {
   it('restores a job ingest, saved setup, sweep and model through standalone defaults', async () => {
+    workspaceModeStore.setImportedInput('file');
     expect(await restoreCadJobModel(job(), {}, archiveFetcher)).toBe(true);
+    expect(workspaceModeStore.getSnapshot().importedInput).toBe('cad');
     expect(useCadReturnStore.getState()).toMatchObject({
       ingestRecord: record, driveVoltageV: 8, maxDriveVoltageV: 20, exteriorOnly: true,
       frequencyStartHz: 100, frequencyEndHz: 1000, frequencyCount: 3,

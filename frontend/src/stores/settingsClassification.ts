@@ -74,6 +74,7 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   dockviewLayout: 'inert',
   dockviewMode: 'inert',
   workspaceMode: 'inert',
+  importedInput: 'inert',
   cadProject: 'inert',
   meshImport: 'inert',
   // Which face of the crossover section is shown; the spec itself lives in

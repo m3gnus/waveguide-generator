@@ -413,11 +413,11 @@ export function Viewport() {
   const coherenceContext = useRunContext();
   const availableFieldJob = useMemo(
     () => fieldPlaneJob(jobs, resultSelection.primary, coherenceContext),
-    [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.mode, jobs, resultSelection.primary],
+    [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.fileIngestId, coherenceContext.mode, jobs, resultSelection.primary],
   );
   const availableFemJob = useMemo(
     () => femFieldJob(jobs, resultSelection.primary, coherenceContext),
-    [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.mode, jobs, resultSelection.primary],
+    [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.fileIngestId, coherenceContext.mode, jobs, resultSelection.primary],
   );
   const availablePlaneJob = availableFemJob ?? availableFieldJob;
   const observationVisible = useObservationStore((state) => state.visible);
@@ -522,24 +522,22 @@ export function Viewport() {
     : null;
   const solverViewSelected = workspaceMode === 'parametric' && importedMeshState.showing === 'solver';
   const cadSolverViewSelected = workspaceMode === 'cad' && importedMeshState.showing === 'cadSolver';
-  const importedMesh = workspaceMode === 'cad'
+  const fileInputActive = workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file';
+  const importedMesh = fileInputActive ? importedMeshState.file : workspaceMode === 'cad'
     // While the solve artifact is still being fetched the tessellated display
     // mesh stays on screen rather than blanking the viewport, exactly as the
     // parametric view keeps its smooth preview until the build lands.
     ? (cadSolverViewSelected ? cadSolverMesh ?? cadMesh : cadMesh)
-    : importedMeshState.showing === 'file'
-      ? importedMeshState.file
-      : solverViewSelected
+    : solverViewSelected
         ? importedMeshState.solver
         : null;
-  const availableFileMesh = importedMeshState.file;
   const [cadSolverLoading, setCadSolverLoading] = useState(false);
   const [cadSolverError, setCadSolverError] = useState<string | null>(null);
   const [cadSolverRetry, setCadSolverRetry] = useState(0);
   // Without an independently tessellated display artifact the CAD geometry on
   // screen already *is* the solve mesh, so there is nothing to switch between.
   const cadHasSeparateViewportMesh = cadRecord?.viewport_mesh?.available === true;
-  const cadIngestId = cadRecord?.ingest_id ?? null;
+  const cadIngestId = fileInputActive ? null : cadRecord?.ingest_id ?? null;
   const cadFrame = useCadSolverFrameStore((state) => cadIngestId ? state.frames[cadIngestId] : undefined);
   const cadFrameOption = cadFrame && !cadFrame.linked && cadFrame.axis
     ? cadFrame.frame?.axes.find((option) => option.axis === cadFrame.axis) : undefined;
@@ -555,7 +553,7 @@ export function Viewport() {
       }
       return;
     }
-    if (!importedMesh) return;
+    if (!importedMesh || fileInputActive) return;
     if (cadFrame?.linked) {
       setCameraRequest((previous) => ({ preset: 'front', nonce: previous.nonce + 1 }));
       return;
@@ -563,7 +561,7 @@ export function Viewport() {
     if (!cadFrameMatrix) return;
     const axes = cadCameraAxes({ previewFromRecord: cadFrameMatrix });
     setCameraRequest((previous) => ({ ...axes, nonce: previous.nonce + 1 }));
-  }, [workspaceMode, importedMesh?.ingestId, cadFrame?.linked, cadFrameKey]);
+  }, [workspaceMode, importedMesh?.ingestId, cadFrame?.linked, cadFrameKey, fileInputActive]);
   const [solverMeshState, setSolverMeshState] = useState<SolverMeshRefreshState>({
     building: false, stale: false, staleReason: null, error: null,
   });
@@ -733,18 +731,16 @@ export function Viewport() {
   };
 
   /** Which artifact the viewport is drawing, as the source switch sees it. */
-  const activeMeshSource: ImportedMeshShowing = workspaceMode === 'cad'
+  const activeMeshSource: ImportedMeshShowing = fileInputActive ? 'file' : workspaceMode === 'cad'
     ? cadSolverViewSelected ? 'cadSolver' : 'cad'
-    : importedMeshState.showing === 'file'
-      ? 'file'
-      : solverViewSelected ? 'solver' : 'parametric';
+    : solverViewSelected ? 'solver' : 'parametric';
 
   /** The switch between the smooth display model and the real solve triangles.
    * Both workspaces offer it; only the artifacts behind it differ. CAD Link
    * omits it when the return carries no independent display artifact, because
    * the geometry already on screen is then the solve mesh itself. */
   const meshSources: { key: ImportedMeshShowing; label: string; title: string; select: () => void }[] =
-    workspaceMode === 'cad'
+    fileInputActive ? [] : workspaceMode === 'cad'
       ? cadRecord && cadHasSeparateViewportMesh
         ? [
           { key: 'cad', label: 'Geometry', title: 'Show the tessellated CAD display model', select: () => importedMeshStore.showCad() },
@@ -754,9 +750,6 @@ export function Viewport() {
       : [
         { key: 'parametric', label: 'Geometry', title: 'Show the smooth parametric preview model', select: showParametric },
         { key: 'solver', label: 'Mesh', title: 'Show the real solver mesh triangles instead of the smooth preview', select: () => importedMeshStore.showSolver() },
-        ...(availableFileMesh
-          ? [{ key: 'file' as const, label: 'Imported', title: `Show the imported mesh ${availableFileMesh.name}`, select: () => importedMeshStore.showFile() }]
-          : []),
       ];
 
   // A lost context is recoverable: mounting a fresh Canvas asks for a new one.
@@ -770,15 +763,18 @@ export function Viewport() {
   const previousWorkspaceMode = useRef(workspaceMode);
   useEffect(() => {
     if (workspaceMode === 'parametric') {
-      // Leaving CAD deliberately returns to the live parametric scene. A file
-      // import remains cached and can still be reselected by its own badge.
-      // Do not reset on unrelated CAD-store updates while already parametric:
-      // that would make a standalone file overlay disappear under the cursor.
+      // Leaving Imported mesh returns to the live parametric scene. Both imported
+      // inputs remain cached for the next visit. Ignore unrelated CAD updates
+      // while already parametric.
       if (previousWorkspaceMode.current === 'cad') importedMeshStore.showParametric();
       previousWorkspaceMode.current = workspaceMode;
       return;
     }
     previousWorkspaceMode.current = workspaceMode;
+    if (fileInputActive) {
+      if (importedMeshStore.getSnapshot().showing !== 'file') importedMeshStore.showFile(importedMeshStore.captureGeneration());
+      return;
+    }
     if (!cadRecord) {
       importedMeshStore.beginIntent();
       importedMeshStore.clear('cad');
@@ -807,7 +803,7 @@ export function Viewport() {
       fetch,
       generation,
     );
-  }, [cadName, cadRecord, workspaceMode]);
+  }, [cadName, cadRecord, workspaceMode, fileInputActive]);
 
   // The mesh may be set from outside this component (CAD Link after an
   // ingest), so the camera refit follows the store rather than the setters.
@@ -1038,10 +1034,10 @@ export function Viewport() {
       <div className="viewport-title">
         <b>{importedMesh?.source === 'solver'
           ? designName || 'Untitled design'
-          : importedMesh?.name ?? (workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
+          : importedMesh?.name ?? (fileInputActive ? 'Imported mesh' : workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
         <span>{importedMesh
           ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
-          : workspaceMode === 'cad' ? (cadWorkspaceView.ingesting && cadBundleReadable ? `Preparing ${cadName}…` : cadWorkspaceView.ingestError && cadBundleReadable ? 'CAD preparation failed' : 'No ingested CAD viewport mesh') : viewportSubtitle(design, nativeOpening)}</span>
+          : fileInputActive ? 'Mesh file · configure in Geometry' : workspaceMode === 'cad' ? (cadWorkspaceView.ingesting && cadBundleReadable ? `Preparing ${cadName}…` : cadWorkspaceView.ingestError && cadBundleReadable ? 'CAD preparation failed' : 'No ingested CAD viewport mesh') : viewportSubtitle(design, nativeOpening)}</span>
       </div>
       <div className="viewport-live">
         {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
@@ -1065,15 +1061,15 @@ export function Viewport() {
             ? <span>{cadSolverLoading
               ? 'loading solve mesh…'
               : cadSolverMesh ? 'ingested solve mesh' : 'solve mesh unavailable'}</span>
-            : <span>CAD Link workspace</span>}
+            : <span>{fileInputActive ? 'Mesh file' : 'CAD Link'} workspace</span>}
         {workspaceMode === 'parametric' && <LiveDimensions />}
       </div>
     </div>
 
     {!activeScene && <div className="viewport-empty" role="status" aria-live="polite">
       <i className="viewport-empty-mark"><i /></i>
-      <b>{workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</b>
-      <span>{workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences, or import an ASCII Gmsh 2.2 mesh from the design file menu.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
+      <b>{fileInputActive ? 'Import a mesh file' : workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</b>
+      <span>{fileInputActive ? 'Use Import mesh above, then choose Radiating surfaces in Geometry.' : workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
     </div>}
     {showPreviewError && <div className="viewport-error-banner" role="alert">
       <span>{previewError}</span>

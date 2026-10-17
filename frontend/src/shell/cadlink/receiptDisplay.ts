@@ -2,6 +2,7 @@ import { CadLinkApiError, ingestReturn, listReturns } from '../../api/cadlink';
 import { useCadReturnStore } from '../../stores/cadReturn';
 import { useCadPreparationStore } from '../../stores/cadPreparation';
 import { cadReceiptsStore, type CadReceipt, type CadReceiptsStore, type ReceiptFeedback } from '../../stores/cadReceipts';
+import { workspaceModeStore } from '../../stores/workspaceMode';
 import { useDocumentStore } from '../../stores/document';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { returnBelongsToAnotherProject } from './arrivals';
@@ -67,6 +68,11 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
     newestSentAt = Math.max(newestSentAt, sentAt);
     newestCursor = receipt.cursor;
     newestReceiptId = receipt.receipt_id;
+    if (workspaceModeStore.getSnapshot().importedInput === 'file') {
+      report(receipt, 'superseded', `Received ${name}; your mesh file stays selected. Select CAD Link to use a CAD return.`);
+      return true;
+    }
+    const inputRevision = workspaceModeStore.getSnapshot().inputRevision;
     const document = useDocumentStore.getState();
     const choice = useCadReturnStore.getState().captureModelChoice();
     let phase: 'listing' | 'ingest' | 'display' = 'listing';
@@ -74,6 +80,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
     let baselineViewport = importedMeshStore.beginIntent();
     const current = () => display.isActive?.() !== false && store.getState().feedId === receiptFeed && receipt.cursor === newestCursor
       && (display.automaticSelectionAt?.() ?? 0) <= sentAt
+      && workspaceModeStore.getSnapshot().inputRevision === inputRevision
       && useDocumentStore.getState().identity === document.identity
       && useCadReturnStore.getState().isCurrentModelChoice(choice)
       && (phase === 'listing' || (useCadReturnStore.getState().isCurrentIngestIntent(generation)

@@ -52,3 +52,36 @@ it('shows actual replay frequencies and physics, with full resolved settings ins
   expect(host.textContent).toContain('Logarithmic sweep.');
   expect(host.textContent).toContain('starts a new setup');
 });
+
+
+it('offers arbitrary labels as independent radiating surfaces and invalidates prepared assignments', () => {
+  useMeshImportStore.setState({ filename: 'labels.msh', original: 'mesh', units: 'mm', selected: [17],
+    registered: { summary: {}, source_tags: { group_17: 17 } } as unknown as RegisteredMesh,
+    summary: { node_count: 6, triangle_count: 9, dimensions: [1, 1, 1], groups: [
+      { tag: 17, name: 'Cone patch', triangle_count: 3 }, { tag: 42, name: 'Rear diaphragm', triangle_count: 4 },
+      { tag: 0, name: 'Unassigned', triangle_count: 2 }] } });
+  act(() => root.render(<MeshImportPanel/>));
+  const section = [...host.querySelectorAll('fieldset')].find(field => field.querySelector('legend')?.textContent === 'Radiating surfaces')!;
+  expect(section.textContent).toContain('unchecked labels are rigid');
+  const boxes = section.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+  expect(boxes[0].checked).toBe(true);
+  expect(boxes[2].disabled).toBe(true);
+  act(() => boxes[1].click());
+  expect(useMeshImportStore.getState().selected).toEqual([17, 42]);
+  expect(useMeshImportStore.getState().registered).toBeNull();
+  act(() => { boxes[0].click(); boxes[1].click(); });
+  expect(section.textContent).toContain('No radiating surfaces selected');
+  expect([...host.querySelectorAll('button')].find(button => button.textContent === 'Prepare mesh')?.disabled).toBe(true);
+});
+
+it('shows retained radiating assignments with a clear reimport requirement', () => {
+  useMeshImportStore.setState({ filename: 'retained.msh', selected: [42],
+    registered: { source_tags: { group_42: 42 }, summary: {} } as unknown as RegisteredMesh,
+    summary: { node_count: 6, triangle_count: 4, dimensions: [1, 1, 1], groups: [
+      { tag: 42, name: 'Rear diaphragm', triangle_count: 4 }] } });
+  act(() => root.render(<MeshImportPanel/>));
+  const section = [...host.querySelectorAll('fieldset')].find(field => field.querySelector('legend')?.textContent === 'Radiating surfaces')!;
+  expect(section.disabled).toBe(true);
+  expect(section.querySelector<HTMLInputElement>('input')?.checked).toBe(true);
+  expect(section.textContent).toContain('Import the original mesh to change them');
+});
