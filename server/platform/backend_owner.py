@@ -423,10 +423,18 @@ def _start_and_wait(
             return _spawn(argv, root, env, allow_contained=True)
         return _spawn(argv, root) if env is None else _spawn(argv, root, env)
 
+    # update_port rewrites the locked metadata in place. A temporarily empty
+    # read does not mean its already observed live owner has released the lock.
+    known_owner = _owner_info(root)
     process, log_path = spawn()
     try:
         while True:
             info, health = _observe(root)
+            if info is not None:
+                known_owner = (
+                    None if health is not None and health.get("pid") == info.pid
+                    and health.get("retiring") is True else info
+                )
             found = _validate(root, info, health)
             if found is not None:
                 return found
@@ -458,7 +466,8 @@ def _start_and_wait(
                     f"{_owner_description(root)} See {log_path}.{cleanup}"
                 )
             if code == EXIT_ALREADY_RUNNING and (
-                info is None or not pid_is_running(info.pid)
+                (info is None and (known_owner is None or not pid_is_running(known_owner.pid)))
+                or (info is not None and not pid_is_running(info.pid))
                 or (health is not None and health.get("pid") == info.pid
                     and health.get("retiring") is True)
             ):

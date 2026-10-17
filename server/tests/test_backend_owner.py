@@ -349,6 +349,62 @@ def test_spawn_failure_reports_exit_code_and_log_tail(data_dir: Path, fake) -> N
         ensure_backend(data_dir, [str(data_dir / "no-such-binary")], timeout=10)
 
 
+@pytest.mark.parametrize("missing_on_first_poll", [False, True])
+def test_exit_2_waits_for_known_live_owner_during_metadata_rewrite(
+    data_dir, monkeypatch, missing_on_first_poll
+):
+    """Port publication truncates metadata without releasing the instance lock."""
+    clock = [0.0]
+    spawns = []
+    owner = SimpleNamespace(pid=123, port=1)
+    ready = SimpleNamespace(pid=123, port=3100)
+    observations = iter([
+        *(([(owner, None)]) if not missing_on_first_poll else []),
+        (None, None),
+        (None, None),
+        (ready, {"pid": 123, "data_dir": str(data_dir)}),
+    ])
+
+    def spawn(*args):
+        spawns.append(args)
+        return SimpleNamespace(pid=321, poll=lambda: 2, wait=lambda: None), data_dir / "start.log"
+
+    monkeypatch.setattr(backend_owner, "_owner_info", lambda _: owner if missing_on_first_poll else None)
+    monkeypatch.setattr(backend_owner, "_spawn", spawn)
+    monkeypatch.setattr(backend_owner, "_observe", lambda _: next(observations))
+    monkeypatch.setattr(backend_owner, "pid_is_running", lambda pid: pid == owner.pid)
+    monkeypatch.setattr(backend_owner.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(backend_owner.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    handle = backend_owner._start_and_wait(data_dir, ["backend"], 5.0)
+    assert handle.pid == owner.pid
+    assert len(spawns) == 1
+
+
+def test_exit_2_retries_if_cached_owner_dies_during_missing_metadata(data_dir, monkeypatch):
+    clock = [0.0]
+    spawns = []
+    owner = SimpleNamespace(pid=123, port=1)
+    replacement = SimpleNamespace(pid=456, port=3100)
+    observations = iter([
+        (owner, None),
+        (None, None),
+        (replacement, {"pid": 456, "data_dir": str(data_dir)}),
+    ])
+
+    def spawn(*args):
+        spawns.append(args)
+        return SimpleNamespace(pid=321, poll=lambda: 2, wait=lambda: None), data_dir / "start.log"
+
+    monkeypatch.setattr(backend_owner, "_owner_info", lambda _: owner)
+    monkeypatch.setattr(backend_owner, "_spawn", spawn)
+    monkeypatch.setattr(backend_owner, "_observe", lambda _: next(observations))
+    monkeypatch.setattr(backend_owner, "pid_is_running", lambda pid: pid != owner.pid or clock[0] == 0)
+    monkeypatch.setattr(backend_owner.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(backend_owner.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    assert backend_owner._start_and_wait(data_dir, ["backend"], 5.0).pid == replacement.pid
+    assert len(spawns) == 2
+
+
 def test_spawn_exiting_2_adopts_delayed_owner(data_dir: Path, fake) -> None:
     require_backend_breakaway()
     # Delay is injectable in the fake; exceed the removed five-second grace.
