@@ -251,11 +251,13 @@ def test_a_cad_project_setup_is_recorded_for_its_return_inventory(tmp_path):
             "options": {"engine": "metal", "frequencies_hz": [100, 200]},
         }
         inventory = [{"id": "source-hf", "role": "hf", "required": True}]
+        # A CAD-authored document's project, known before anything is prepared.
+        project = store.claim_cad_document_lineage("urn:fusion:box", "Box")
         try:
-            saved = await call(app, "PUT", "/api/models/wgl_project/setup", {"inventory": inventory, "setup": setup})
+            saved = await call(app, "PUT", f"/api/models/{project}/setup", {"inventory": inventory, "setup": setup})
             # Roles are canonical, as the returns listing states them.
             assert saved["inventory_sha256"] == inventory_sha256([{**inventory[0], "role": "HF"}])
-            row = store.get_model_setup("wgl_project", saved["inventory_sha256"])
+            row = store.get_model_setup(project, saved["inventory_sha256"])
             assert row["revision_id"] == saved["revision_id"]
             assert store.get_setup_revision(saved["revision_id"])["setup_json"] == setup_content(
                 validate_setup(setup)
@@ -263,8 +265,19 @@ def test_a_cad_project_setup_is_recorded_for_its_return_inventory(tmp_path):
             # A file always names its prepared mesh; both at once is refused.
             await call(app, "PUT", "/api/models/mesh-file:sha256:x/setup",
                        {"inventory": inventory, "setup": setup}, expected=422)
-            await call(app, "PUT", "/api/models/wgl_project/setup",
+            await call(app, "PUT", f"/api/models/{project}/setup",
                        {"inventory": inventory, "prepared_id": "wgi_x", "setup": setup}, expected=422)
+            # An id no model, design or document carries gets no setup row.
+            unknown = await call(app, "PUT", "/api/models/wgl_nobody/setup",
+                                 {"inventory": inventory, "setup": setup}, expected=404)
+            assert unknown["error"]["code"] == "model_not_found"
+            assert store.get_model_setup("wgl_nobody", saved["inventory_sha256"]) is None
+            # A saved WG design's lineage is a project too.
+            design = store.save(
+                requested=None, design_hash="sha256:" + "3" * 64, filename="horn.cfg",
+                snapshot_builder=lambda identity: f"DesignId={identity.design_id}",
+            )["identity"]
+            await call(app, "PUT", f"/api/models/{design.lineage_id}/setup", {"inventory": inventory, "setup": setup})
             # The CAD route this replaces is gone.
             assert (await _request(app, "PUT", "/api/cadlink/project-setups", body={}))[0] == 404
         finally:
@@ -292,3 +305,56 @@ def test_shared_setup_keeps_legacy_schema_bytes_and_imports():
         setup_digest(setup)
         == "sha256:" + __import__("hashlib").sha256(content.encode()).hexdigest()
     )
+
+
+def test_a_pending_restart_refuses_preparation_but_never_a_setup_save(tmp_path):
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            first = await call(app, "POST", "/api/models/files", registration().model_dump())
+            prepared = first["prepared"]
+            model_id = prepared["model_id"]
+            project = store.claim_cad_document_lineage("urn:fusion:box", "Box")
+            runtime._restart_pending = lambda: True
+            refused = await call(app, "POST", "/api/models/files",
+                                 registration(units="cm").model_dump(), expected=409)
+            assert refused["error"]["code"] == "update_restart_pending"
+            change = {"units": "cm", "forward": "+z", "up": "+y", "source_tags": [2]}
+            await call(app, "POST", f"/api/models/{model_id}/prepare", change, expected=409)
+            # The editor's last edits, file and CAD alike, still land.
+            saved = await call(app, "PUT", f"/api/models/{model_id}/setup",
+                               {"prepared_id": prepared["ingest_id"], "setup": setup_for(prepared)})
+            assert store.get_model_setup(model_id, saved["inventory_sha256"])["revision_id"] == saved["revision_id"]
+            cad_setup = {"geometry": {"drive_channels": [{"id": "hf", "source_ids": ["hf"]}]},
+                         "options": {"frequencies_hz": [100]}}
+            await call(app, "PUT", f"/api/models/{project}/setup",
+                       {"inventory": [{"id": "hf", "role": "HF", "required": True}], "setup": cad_setup})
+        finally:
+            await runtime.shutdown()
+            store.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_prepared_mesh_names_its_model_and_a_damaged_record_is_not_a_refused_mesh(tmp_path):
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            prepared = (await call(app, "POST", "/api/models/files", registration().model_dump()))["prepared"]
+            found = await call(app, "GET", f"/api/models?prepared_id={prepared['ingest_id']}")
+            assert found == {"model_id": prepared["model_id"], "prepared_id": prepared["ingest_id"]}
+            await call(app, "GET", "/api/models?prepared_id=wgi_gone", expected=404)
+            with store._lock, store._transaction() as conn:
+                conn.execute("UPDATE ingests SET record_json = '{damaged' WHERE ingest_id = ?",
+                             (prepared["ingest_id"],))
+            for path in (f"/api/models/{prepared['model_id']}",
+                         f"/api/models/{prepared['model_id']}/setup"):
+                damaged = await call(app, "GET", path, expected=500)
+                assert damaged["error"]["code"] == "record_unreadable"
+        finally:
+            await runtime.shutdown()
+            store.close()
+
+    asyncio.run(scenario())

@@ -15948,6 +15948,80 @@
         ]
       }
     },
+    "/api/models": {
+      "get": {
+        "description": "The model a prepared mesh is filed under: ``{model_id, prepared_id}``.",
+        "operationId": "find_model_api_models_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "prepared_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Prepared Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Find Model Api Models Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown model or prepared mesh"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Restart pending, mismatched or unavailable mesh"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A retained record is unreadable"
+          }
+        },
+        "summary": "Find Model",
+        "tags": [
+          "Imported models"
+        ]
+      }
+    },
     "/api/models/files": {
       "post": {
         "description": "Import a file as a model and prepare it; the same inputs find the same mesh.",
@@ -16118,11 +16192,21 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Mesh or setup refused"
+            "description": "A retained record is unreadable"
           }
         },
         "summary": "Get Model",
@@ -16270,11 +16354,21 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Mesh or setup refused"
+            "description": "A retained record is unreadable"
           }
         },
         "summary": "Get Setup",

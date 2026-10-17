@@ -759,3 +759,24 @@ def test_file_setups_move_to_their_model_and_the_newest_wins(tmp_path: Path) -> 
         assert store.get_model_setup(model_id, inventory)["revision_id"] == "wgs_mine"  # type: ignore[index]
     finally:
         store.close()
+
+
+def test_a_pathological_record_is_unfiled_and_never_stops_the_registry_opening(tmp_path: Path) -> None:
+    db_path = tmp_path / "cadlink.db"
+    store = CadLinkStore(db_path)
+    try:
+        store.initialize()
+        # Nested past the JSON decoder's recursion limit, a record that is not
+        # an object, fields of the wrong types, and a good row after them all.
+        _old_ingest(db_path, "wgi_deep", "[" * 200_000 + "]" * 200_000, "2026-10-01T10:00:00Z")
+        _old_ingest(db_path, "wgi_list", [1, 2, 3], "2026-10-01T11:00:00Z")
+        _old_ingest(db_path, "wgi_types", {"producer": ["mesh-file"], "project": "wgl_x",
+                                           "anchor": 7, "document": None}, "2026-10-01T12:00:00Z")
+        _old_ingest(db_path, "wgi_good", _file_record("good.msh", "good"), "2026-10-01T13:00:00Z")
+        _reopen(store)
+        filed, _models_rows = _models(db_path)
+        assert filed == {"wgi_deep": "", "wgi_list": "", "wgi_types": "",
+                         "wgi_good": "mesh-file:sha256:" + "1" * 64}
+        assert store.get_model("mesh-file:sha256:" + "1" * 64) is not None
+    finally:
+        store.close()

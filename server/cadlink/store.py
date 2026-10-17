@@ -525,6 +525,8 @@ def _file_ingest_under_model(
     keeps the earliest archive folder and takes the newest name and ingest.
     """
 
+    # Computed before anything is written, so a record it cannot read leaves
+    # the row untouched for the caller to file.
     model_id, producer, name, stem = _record_model(conn, record)
     conn.execute(
         "UPDATE ingests SET model_id = ? WHERE ingest_id = ? AND model_id IS NULL",
@@ -554,21 +556,38 @@ def _file_ingest_under_model(
 
 
 def _file_unfiled_ingests(conn: sqlite3.Connection) -> None:
-    """Backfill ``ingests.model_id`` for every row that has none (an older build's)."""
+    """Backfill ``ingests.model_id`` for every row that has none (an older build's).
 
-    rows = conn.execute(
-        "SELECT ingest_id, record_json, created_at FROM ingests WHERE model_id IS NULL "
+    It runs inside the opening transaction, so it reads one record at a time
+    and a record it cannot read is filed '' (unfiled): no single row may keep
+    the registry from opening.
+    """
+
+    pending = conn.execute(
+        "SELECT ingest_id, created_at FROM ingests WHERE model_id IS NULL "
         "ORDER BY created_at, ingest_id"
     ).fetchall()
-    for row in rows:
+    for ingest_id, created_at in ((str(row["ingest_id"]), str(row["created_at"])) for row in pending):
+        # One savepoint per row: a row that fails leaves no half-filed model.
+        conn.execute("SAVEPOINT file_ingest")
         try:
-            record = json.loads(str(row["record_json"]))
-        except ValueError:
-            record = None
-        _file_ingest_under_model(
-            conn, str(row["ingest_id"]), record if isinstance(record, dict) else {},
-            str(row["created_at"]),
-        )
+            raw = conn.execute(
+                "SELECT record_json FROM ingests WHERE ingest_id = ?", (ingest_id,)
+            ).fetchone()["record_json"]
+            record = json.loads(str(raw))
+            _file_ingest_under_model(
+                conn, ingest_id, record if isinstance(record, dict) else {}, created_at
+            )
+            conn.execute("RELEASE file_ingest")
+        except Exception:  # noqa: BLE001 - a damaged record is unfiled, never fatal
+            conn.execute("ROLLBACK TO file_ingest")
+            conn.execute("RELEASE file_ingest")
+            logger.warning("Ingest %s has an unreadable record; it belongs to no model", ingest_id,
+                           exc_info=True)
+            conn.execute(
+                "UPDATE ingests SET model_id = '' WHERE ingest_id = ? AND model_id IS NULL",
+                (ingest_id,),
+            )
 
 
 def _migrate_legacy_file_setups(conn: sqlite3.Connection) -> None:
@@ -594,10 +613,10 @@ def _migrate_legacy_file_setups(conn: sqlite3.Connection) -> None:
             continue
         try:
             record = json.loads(str(row["record_json"]))
-        except ValueError:
+            sources = record.get("sources") if isinstance(record, dict) else None
+            inventory = inventory_sha256(sources if isinstance(sources, list) else [])
+        except Exception:  # noqa: BLE001 - a damaged record's setup stays where it was
             continue
-        sources = record.get("sources") if isinstance(record, dict) else None
-        inventory = inventory_sha256(sources if isinstance(sources, list) else [])
         conn.execute(
             "INSERT INTO cad_project_setups (lineage_id, inventory_sha256, revision_id, updated_at) "
             "VALUES (?, ?, ?, ?) ON CONFLICT (lineage_id, inventory_sha256) DO UPDATE SET "
@@ -2332,6 +2351,14 @@ class CadLinkStore:
             _file_ingest_under_model(conn, ingest_id, json.loads(record_json), created_at)
             row = conn.execute("SELECT * FROM ingests WHERE ingest_id = ?", (ingest_id,)).fetchone()
         return dict(row), True
+
+    def lineage_known(self, lineage_id: str) -> bool:
+        """Whether a saved design or a claimed CAD document carries this lineage."""
+
+        return bool(lineage_id) and (
+            self._read_one("SELECT 1 FROM designs WHERE lineage_id = ? LIMIT 1", (lineage_id,))
+            or self._read_one("SELECT 1 FROM lineage_cad_names WHERE lineage_id = ?", (lineage_id,))
+        ) is not None
 
     def get_model(self, model_id: str) -> dict[str, Any] | None:
         self.initialize()

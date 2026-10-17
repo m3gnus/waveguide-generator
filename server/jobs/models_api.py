@@ -368,6 +368,17 @@ def read_model(store: Any, model_id: str, prepared_id: str | None) -> dict[str, 
     return response
 
 
+def model_of_prepared(store: Any, prepared_id: str) -> dict[str, Any]:
+    """Which model one prepared mesh is filed under (for a pointer that named only the mesh)."""
+
+    row = store.get_ingest(prepared_id)
+    if row is None or not row.get("model_id"):
+        raise ModelRefusal(
+            404, "prepared_unavailable", "This prepared mesh is not retained under any model."
+        )
+    return {"model_id": row["model_id"], "prepared_id": prepared_id}
+
+
 def _setup_inventory(store: Any, model_id: str, prepared_id: str | None) -> tuple[str, dict[str, Any]]:
     """The inventory a model's setup is keyed by, from one of its prepared meshes."""
 
@@ -399,7 +410,16 @@ def mount_models_api(application: FastAPI) -> None:
         409: {"model": ErrorEnvelope, "description": "Restart pending, mismatched or unavailable mesh"},
         422: {"model": ErrorEnvelope, "description": "Mesh or setup refused"},
     }
+    readable = {
+        **{status: refused[status] for status in (404, 409)},
+        500: {"model": ErrorEnvelope, "description": "A retained record is unreadable"},
+    }
 
+    # Preparing a file is in-flight work the restart would cut, exactly as a
+    # CAD ingest is (UPDATE-TRANSACTION-CONTRACT.md §4.2, which refuses
+    # POST /api/cadlink/ingest): it is refused while the restart is approved.
+    # Saving a setup starts nothing and writes one short transaction, so it is
+    # never refused for a restart: the editor's last edit must still land.
     def restart_pending() -> JSONResponse | None:
         if application.state.jobs_runtime._restart_pending():
             return _refusal(
@@ -409,12 +429,24 @@ def mount_models_api(application: FastAPI) -> None:
         return None
 
     async def answer(call: Any, *args: Any) -> Any:
+        """Run a preparation: a ValueError is the mesh or its choices being refused."""
+
         try:
             return await asyncio.to_thread(call, *args)
         except ModelRefusal as exc:
             return _refusal(exc.status, exc.code, str(exc))
         except ValueError as exc:
             return _refusal(422, "mesh_refused", str(exc))
+
+    async def read(call: Any, *args: Any) -> Any:
+        """Run a read: it takes no input to refuse, so a failure is a damaged record."""
+
+        try:
+            return await asyncio.to_thread(call, *args)
+        except ModelRefusal as exc:
+            return _refusal(exc.status, exc.code, str(exc))
+        except (KeyError, OSError, TypeError, ValueError) as exc:
+            return _refusal(500, "record_unreadable", f"A retained model record is unreadable: {exc}")
 
     @router.post("/files/inspect", responses={422: refused[422]})
     async def inspect(body: MeshFile) -> Any:
@@ -455,24 +487,28 @@ def mount_models_api(application: FastAPI) -> None:
 
         return await answer(run)
 
-    @router.get("/{model_id}", responses=refused)
+    @router.get("", responses=readable)
+    async def find_model(prepared_id: str = Query(min_length=1)) -> Any:
+        """The model a prepared mesh is filed under: ``{model_id, prepared_id}``."""
+
+        return await read(model_of_prepared, store, prepared_id)
+
+    @router.get("/{model_id}", responses=readable)
     async def get_model(model_id: str, prepared_id: str | None = Query(default=None)) -> Any:
         """A model, its latest preparation, and one named preparation with its mesh."""
 
-        return await answer(read_model, store, model_id, prepared_id)
+        return await read(read_model, store, model_id, prepared_id)
 
-    @router.get("/{model_id}/setup", responses=refused)
+    @router.get("/{model_id}/setup", responses=readable)
     async def get_setup(model_id: str, prepared_id: str | None = Query(default=None)) -> Any:
         """The setup saved for this model and the sources of a prepared mesh."""
 
-        return await answer(read_setup, store, model_id, prepared_id)
+        return await read(read_setup, store, model_id, prepared_id)
 
     @router.put("/{model_id}/setup", responses=refused)
     async def put_setup(model_id: str, body: ModelSetupWrite) -> Any:
         """Save a model's setup for the sources of a prepared mesh (or a CAD return)."""
 
-        if (blocked := restart_pending()) is not None:
-            return blocked
         runtime = application.state.jobs_runtime
         try:
             setup = validate_setup(body.setup.model_dump(mode="json"))
@@ -481,6 +517,14 @@ def mount_models_api(application: FastAPI) -> None:
         if body.inventory is not None:
             if model_id.startswith(FILE_MODEL_PREFIX):
                 return _refusal(422, "setup_refused", "A file setup names its prepared mesh.")
+            # Before anything is prepared, the project is a lineage this
+            # workspace knows (a saved design's, or a CAD document's): a setup
+            # is never filed under an id nothing else names.
+            known = await asyncio.to_thread(store.get_model, model_id) is not None or (
+                await asyncio.to_thread(store.lineage_known, model_id)
+            )
+            if not known:
+                return _refusal(404, "model_not_found", "No model or project has this id here.")
             inventory = inventory_sha256([item.model_dump() for item in body.inventory])
         else:
             try:
@@ -531,6 +575,7 @@ __all__ = [
     "MeshFile",
     "MeshRegistration",
     "ModelSetupWrite",
+    "model_of_prepared",
     "mount_models_api",
     "prepare_model",
     "public_record",
