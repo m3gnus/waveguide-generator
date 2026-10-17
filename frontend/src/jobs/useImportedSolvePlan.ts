@@ -1,3 +1,4 @@
+import { useImportedRunRestoration } from './importedRunRestoration';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -49,6 +50,7 @@ function isFault(error: unknown): boolean {
  * the answer without anything the user did.
  */
 export function useImportedSolvePlan(enabled: boolean, preparedSubmission?: ImportedSolveSubmission | null): ImportedSolvePlanSnapshot {
+  const restoration = useImportedRunRestoration();
   const workspace = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot);
   const file = useMeshImportStore();
   const viewport = useSyncExternalStore(importedMeshStore.subscribe, importedMeshStore.getSnapshot);
@@ -71,7 +73,7 @@ export function useImportedSolvePlan(enabled: boolean, preparedSubmission?: Impo
     }
     // `solveOptions` is read inside buildImportedSubmission, from the store.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, cadReturn, solveOptions, preparedSubmission, workspace.importedInput, file, viewport]);
+  }, [enabled, cadReturn, solveOptions, preparedSubmission, workspace.importedInput, file, viewport, restoration]);
   const capabilityKey = capabilityFingerprint(engines);
   const [settledBody, setSettledBody] = useState<string | null>(currentBody);
 

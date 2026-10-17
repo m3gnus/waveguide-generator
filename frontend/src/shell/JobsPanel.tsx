@@ -7,7 +7,7 @@ import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { useWorkspaceFolder } from './WorkspaceFolderControls';
 import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
-import { canLoadJobDesign } from '../jobs/jobDesign';
+import { canOpenJobModel, canLoadJobDesign } from '../jobs/jobDesign';
 import { selectJob } from '../jobs/selectJob';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
 import { nextRunLabel } from '../jobs/runNaming';
@@ -200,7 +200,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
   // diagnostic; only finished runs collapse down to their name.
   const expanded = selected || running || failed || cancelled || editing;
   const cleanedUp = job.status === 'complete' && !job.has_results;
-  const selectable = !running && (job.has_results || cleanedUp || canLoadDesign(job));
+  const selectable = !running && (job.has_results || cleanedUp || canOpenJobModel(job));
   const statusWord = running ? 'Running' : failed ? 'Failed' : cancelled ? 'Cancelled' : 'Completed';
   // Only the mode, never the design revision: this card is one of a rail full
   // of them, and a marker that moved with every keystroke would repaint the

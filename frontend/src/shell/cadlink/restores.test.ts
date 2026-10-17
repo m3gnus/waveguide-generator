@@ -1,3 +1,6 @@
+import { importedSubmissionBlocker, buildImportedSubmission } from '../../jobs/importedSubmission';
+import { buildCadProjectSetup } from '../cadSetupPublisher';
+import { cadSolveBlockerNow } from '../JobsCoordinator';
 // These actions deliberately run with no coordinator or React effects mounted.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore } from '../../prefs/preferences';
@@ -9,7 +12,7 @@ import { resetSolveOptionsStore, useSolveOptionsStore } from '../../stores/solve
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { restoreRememberedCadProject, observeRememberedCadProject, restoreCadJobModel, refreshChannelDriverBases } from './restores';
-import { bundle, deferred, job, json, mesh, record } from './selection.fixtures';
+import { archivedRequest, bundle, deferred, job, json, mesh, record } from './selection.fixtures';
 
 import type { JobItem } from '../../api/jobsSocket';
 import { createCadArrivalActions, createCadReturnArrivalReader } from './arrivals';
@@ -56,7 +59,7 @@ beforeEach(() => {
 afterEach(() => { importedMeshStore.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 const archiveFetcher = (async (input: RequestInfo | URL) => String(input).endsWith('/viewport-mesh')
-  ? new Response(mesh) : json(record)) as typeof fetch;
+  ? new Response(mesh) : String(input).endsWith('/requests') ? json({ effective_request: archivedRequest() }) : json(record)) as typeof fetch;
 
 describe('job and remembered-project restores without the coordinator', () => {
   it('restores a job ingest, saved setup, sweep and model through standalone defaults', async () => {
@@ -94,7 +97,8 @@ describe('job and remembered-project restores without the coordinator', () => {
     const first = restoreCadJobModel(job(), {}, (() => pending.promise) as typeof fetch);
     const nextRecord = { ...record, ingest_id: 'wgi_next' };
     expect(await restoreCadJobModel(job('wgi_next'), {}, (async (input: RequestInfo | URL) =>
-      String(input).endsWith('/viewport-mesh') ? new Response(mesh) : json(nextRecord)) as typeof fetch)).toBe(true);
+      String(input).endsWith('/viewport-mesh') ? new Response(mesh) : String(input).endsWith('/requests')
+        ? json({ effective_request: archivedRequest('wgi_next') }) : json(nextRecord)) as typeof fetch)).toBe(true);
     pending.resolve(json(record)); expect(await first).toBe(false);
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_next');
     expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_next');
@@ -104,7 +108,7 @@ describe('job and remembered-project restores without the coordinator', () => {
     const pending = deferred<Response>(); const requested = deferred<void>(); const status = vi.fn();
     const first = restoreCadJobModel(job(), { reportStatus: status }, (async (input: RequestInfo | URL) => {
       if (String(input).endsWith('/viewport-mesh')) { requested.resolve(); return pending.promise; }
-      return json(record);
+      return String(input).endsWith('/requests') ? json({ effective_request: archivedRequest() }) : json(record);
     }) as typeof fetch);
     await requested.promise;
     useCadReturnStore.getState().selectBundle(bundle);
@@ -119,7 +123,7 @@ describe('job and remembered-project restores without the coordinator', () => {
     const status = vi.fn();
     expect(await restoreCadJobModel(job(), { reportStatus: status },
       (async () => json({ detail: 'missing' }, 404)) as typeof fetch)).toBe(false);
-    expect(status.mock.calls.at(-1)?.[0]).toContain('no longer available');
+    expect(status.mock.calls.at(-1)?.[0]).toContain('missing');
     expect(importedMeshStore.getSnapshot().cad).toBeNull();
   });
 
@@ -243,4 +247,93 @@ it('does not refresh drivers into a newer project with the same preset', async (
   pending.resolve(json({ spec: { re_ohm: 7 }, xo_min_hz: 1200 }));
   expect(await refresh).toEqual([]);
   expect(useCadReturnStore.getState()).toBe(state);
+});
+
+
+describe('shared historical restoration transaction', () => {
+  it.each(['request', 'record', 'viewport'] as const)('blocks a ready A while B is pending at %s and after failure', async stage => {
+    expect(await restoreCadJobModel(job(), {}, archiveFetcher)).toBe(true);
+    expect(buildImportedSubmission().geometry.ingest_id).toBe(record.ingest_id);
+    const pending = deferred<Response>();
+    const reached = deferred<void>();
+    const status = vi.fn();
+    const restoring = restoreCadJobModel(job('wgi_missing'), { reportStatus: status }, (async input => {
+      const path = String(input);
+      if ((stage === 'request' && path.endsWith('/requests'))
+        || (stage === 'viewport' && path.endsWith('/viewport-mesh'))
+        || (stage === 'record' && !path.endsWith('/requests'))) {
+        reached.resolve(); return pending.promise;
+      }
+      return path.endsWith('/requests') ? json({ effective_request: archivedRequest('wgi_missing') })
+        : json({ ...record, ingest_id: 'wgi_missing' });
+    }) as typeof fetch);
+    await reached.promise;
+    expect(cadSolveBlockerNow()).toContain('loading');
+    expect(importedSubmissionBlocker()).toContain('loading');
+    expect(() => buildImportedSubmission()).toThrow('loading');
+    pending.resolve(json({ detail: 'retained target missing' }, 404));
+    expect(await restoring).toBe(false);
+    expect(cadSolveBlockerNow()).not.toBeNull();
+    expect(() => buildImportedSubmission()).toThrow();
+    expect(useCadReturnStore.getState().ingestRecord).toBeNull();
+    expect(status.mock.calls.at(-1)?.[0]).toContain('Cannot show');
+  });
+
+  it('restores frozen CAD inputs without reading current project drivers or silently replacing options', async () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_project');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', {
+      id: 'today', label: 'Today', source: 'database', kind: 'cd', z_ohm: 8, xo_min_hz: null, base: { re_ohm: 99 },
+    });
+    useSolveOptionsStore.setState({ engine: 'bempp', accuracy: 'fast', adaptiveFrequencySampling: false });
+    const frozen = archivedRequest();
+    frozen.geometry.drive_channels![0].driver = { re_ohm: 6, sd_cm2: 50, bl_t_m: 7, mms_g: 10, cms_m_per_n: .001 };
+    const request = { ...frozen, options: { ...frozen.options, adaptive_frequency_sampling: true,
+      ground_plane: { enabled: true, axis: 'y', height_m: 1.2 } } };
+    const fetcher = vi.fn<typeof fetch>(async input => String(input).endsWith('/requests')
+      ? json({ effective_request: request }) : archiveFetcher(input));
+    expect(await restoreCadJobModel(job(), {}, fetcher)).toBe(true);
+    expect(fetcher.mock.calls.some(([input]) => String(input).includes('/drivers/'))).toBe(false);
+    expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-cpu', accuracy: 'accurate',
+      adaptiveFrequencySampling: true, groundPlane: { enabled: true, height_m: 1.2 } });
+    expect(useCadReturnStore.getState().channelDrivers['archive-hf'].fields.re_ohm).toBe(6);
+    expect(buildImportedSubmission()).toEqual(request);
+    const setup = buildCadProjectSetup(undefined, undefined, undefined, 'manual');
+    expect(setup?.setup.options).toEqual(request.options);
+    expect(setup?.setup.geometry).toMatchObject({ drive_channels: [{ driver: { re_ohm: 6 } }] });
+    // Background global hydration is not an explicit edit to historical inputs.
+    useSolveOptionsStore.setState({ engine: 'bempp' });
+    expect(buildImportedSubmission()).toEqual(request);
+    workspaceModeStore.setMode('parametric');
+    resetDesignStore();
+    workspaceModeStore.setMode('cad');
+    expect(buildImportedSubmission()).toEqual(request);
+    // A deliberate edit starts from the restored setup and becomes submittable.
+    useSolveOptionsStore.getState().setEngine('beat-cpu');
+    useCadReturnStore.getState().setDriveVoltage(4);
+    expect(buildCadProjectSetup(undefined, undefined, undefined, 'manual')?.setup.geometry.drive_voltage_v).toBe(4);
+  });
+
+  it('rejects mismatched CAD retained hashes before publishing its setup', async () => {
+    expect(await restoreCadJobModel(job(), {}, archiveFetcher)).toBe(true);
+    const status = vi.fn();
+    expect(await restoreCadJobModel(job('wgi_bad'), { reportStatus: status }, (async input => String(input).endsWith('/requests')
+      ? json({ effective_request: archivedRequest('wgi_bad') }) : json({ ...record, ingest_id: 'wgi_bad', artifact_sha256: 'wrong' })) as typeof fetch)).toBe(false);
+    expect(status.mock.calls.at(-1)?.[0]).toContain('does not match');
+    expect(() => buildImportedSubmission()).toThrow();
+  });
+});
+
+it('does not hide an edit made while the retained viewport mesh is still loading', async () => {
+  const pending = deferred<Response>(); const reached = deferred<void>();
+  const restoring = restoreCadJobModel(job(), {}, (async input => {
+    if (String(input).endsWith('/viewport-mesh')) { reached.resolve(); return pending.promise; }
+    return archiveFetcher(input);
+  }) as typeof fetch);
+  await reached.promise;
+  useCadReturnStore.getState().setDriveVoltage(3);
+  pending.resolve(new Response(mesh));
+  expect(await restoring).toBe(false);
+  expect(useCadReturnStore.getState().driveVoltageV).toBe(3);
+  expect(importedSubmissionBlocker()).toContain('Settings changed');
+  expect(() => buildImportedSubmission()).toThrow('Select the run again');
 });

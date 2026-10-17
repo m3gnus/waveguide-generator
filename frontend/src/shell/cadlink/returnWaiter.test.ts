@@ -6,6 +6,7 @@ import { resetDocumentStore, useDocumentStore } from '../../stores/document';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { createCadArrivalActions, SupersededError } from './arrivals';
 import { createCadReturnWaiter, FUSION_RETURN_TIMEOUT_MS } from './returnWaiter';
+import { archivedRequest } from './selection.fixtures';
 import { restoreCadJobModel } from './restores';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { bundle, deferred, job, json, mesh, record } from './selection.fixtures';
@@ -252,11 +253,12 @@ it.each(['status', 'listing'] as const)('a delayed archive restore supersedes a 
   if (stage === 'status') read.mockImplementationOnce(() => statusRead.promise);
   else fetcher.mockImplementation(async (input, init) => String(input).endsWith('/returns') ? listing.promise : original(input, init));
   const first = waiter.pullFromFusion().catch((error) => error); await flush();
-  // beginSelectionIntent emits no store update while the ingest read is pending.
+  // Restoration immediately invalidates the previous solvable setup.
   const state = useCadReturnStore.getState();
   const restored = restoreCadJobModel(job(), { enterCadWorkspace: () => undefined },
-    (async (input) => String(input).endsWith('/viewport-mesh') ? new Response(mesh) : archive.promise) as typeof fetch);
-  expect(useCadReturnStore.getState()).toBe(state);
+    (async (input) => String(input).endsWith('/viewport-mesh') ? new Response(mesh) : String(input).endsWith('/requests') ? json({ effective_request: archivedRequest() }) : archive.promise) as typeof fetch);
+  expect(useCadReturnStore.getState()).not.toBe(state);
+  expect(useCadReturnStore.getState().ingestRecord).toBeNull();
   const viewportIntent = importedMeshStore.captureGeneration();
   if (stage === 'status') statusRead.resolve(status());
   else listing.resolve(json({ items: [returned] }));

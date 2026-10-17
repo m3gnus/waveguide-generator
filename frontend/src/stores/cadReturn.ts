@@ -823,25 +823,6 @@ function saveSolveProfile(state: CadReturnState): void {
   selectedSolveProfileKey = key;
 }
 
-/**
- * The drivers this project has picked, for a return with this inventory.
- *
- * Recalling an archived run reads them instead of the numbers that run was
- * submitted with. A run stores what it solved -- the values, not which library
- * row they came from -- so replaying it would re-solve with whatever the
- * library held on the day, and a driver whose T/S have been filled in since
- * could never be picked up. The project's own choice is the newer statement of
- * "this channel is this driver", which is what a re-solve should use.
- */
-export function projectChannelDrivers(
-  bundle: CadReturnBundle,
-  projectLineageId: string | null,
-): Record<string, ChannelDriverForm> | null {
-  const key = currentSolveProfileKey(bundle, projectLineageId);
-  if (!key) return null;
-  const profile = readStoredSolveProfiles().find((item) => item.key === key);
-  return profile ? profile.settings.channelDrivers : null;
-}
 
 function restoreSolveProfile(bundle: CadReturnBundle, projectLineageId: string | null): PersistedSolveSettings | null {
   const key = currentSolveProfileKey(bundle, projectLineageId);

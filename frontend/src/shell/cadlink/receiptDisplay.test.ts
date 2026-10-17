@@ -8,7 +8,7 @@ import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { resetDesignStore, useDesignStore } from '../../stores/design';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { restoreCadJobModel } from './restores';
-import { deferred, job, record as archivedRecord } from './selection.fixtures';
+import { archivedRequest, deferred, job, record as archivedRecord } from './selection.fixtures';
 import { createReceiptDisplay, type ReceiptDisplay } from './receiptDisplay';
 
 const NOW = Date.parse('2026-10-11T12:00:00Z');
@@ -381,7 +381,8 @@ it('a delayed receipt yields to an archived run as soon as its restore begins (r
   const store = createCadReceiptsStore(null, () => NOW);
   const display = renderer();
   const sending = createReceiptDisplay(display, store, () => folder.promise)(receipt());
-  const restoring = restoreCadJobModel(job(), renderer(), () => archive.promise);
+  const restoring = restoreCadJobModel(job(), renderer(), async input => String(input).endsWith('/requests')
+    ? new Response(JSON.stringify({ effective_request: archivedRequest() })) : archive.promise);
   folder.resolve(new Response(JSON.stringify({ items: [bundle], cadFolderConfigured: true })));
   await sending;
   expect(display.showIngestedMesh).not.toHaveBeenCalled();

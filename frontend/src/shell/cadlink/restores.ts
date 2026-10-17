@@ -10,8 +10,6 @@ import {
   bundleIdentity,
   PASSIVE_CARDIOID_DEFAULTS,
   driverBaseFromSpec,
-  driversForChannels,
-  projectChannelDrivers,
   useCadReturnStore,
   type CadDriveChannel,
   type ChannelDriverForm,
@@ -28,6 +26,8 @@ import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { createCadArrivalActions, enterCadWorkspace, type RefreshOptions } from './arrivals';
 import { showIngestedMeshInViewport } from './artifactLoader';
+import type { ImportedSolveSubmission } from '../../jobs/actions';
+import { restoreImportedRun, assertRestoredIdentity } from '../../jobs/importedRunRestoration';
 
 type CadHistorySetup = Pick<ReturnType<typeof useCadReturnStore.getState>,
   'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds'
@@ -162,13 +162,17 @@ export function cadHistorySetup(job: JobItem, record: CadReturnIngestRecord): Ca
   };
 }
 
-function restoreCadJobSolveOptions(job: JobItem): void {
-  const options = job.solve_options;
+function restoreCadJobSolveOptions(options: ImportedSolveSubmission['options']): void {
   const explicit = Array.isArray(options.frequencies_hz) && options.frequencies_hz.length > 0
     ? options.frequencies_hz
     : null;
   const polar = polarUiFromConfig(options.polar_config);
   useSolveOptionsStore.setState((state) => ({
+    engine: options.engine,
+    accuracy: options.accuracy ?? 'fast',
+    adaptiveFrequencySampling: options.adaptive_frequency_sampling === true,
+    solverMode: options.solver_mode === 'auto' ? 'auto' : 'full_3d',
+    groundPlane: options.ground_plane ?? { enabled: false, axis: 'y', height_m: 0 },
     symmetry: ['auto', 'full', 'half_xz', 'half_yz', 'quarter'].includes(options.symmetry)
       ? options.symmetry as SymmetryMode
       : state.symmetry,
@@ -242,74 +246,64 @@ export async function restoreCadJobModel(
   };
   if (job.config_summary.geometry_type !== 'imported') return false;
   if (job.run_number === null) return false;
-  const ingestId = job.cad_source?.ingest_id;
   const displayName = job.cad_source?.document_name || job.label || `run #${job.run_number}`;
-  workspaceModeStore.setImportedInput('cad');
-  integration.enterCadWorkspace();
-  integration.reportViewportNotice(null);
-  if (!ingestId) {
-    integration.reportStatus(`Cannot show ${displayName}: this CAD run has no ingestion identity.`);
-    return false;
-  }
-  integration.reportStatus(`Loading ${displayName} from run #${job.run_number}…`);
-  useCadReturnStore.getState().beginSelectionIntent();
-  const selection = useCadReturnStore.getState().beginIngestIntent();
-  const viewportGeneration = importedMeshStore.beginIntent();
-  const documentLoad = currentDocumentLoad();
-  const superseded = () => !useCadReturnStore.getState().isCurrentIngestIntent(selection)
-    || !importedMeshStore.isCurrentGeneration(viewportGeneration)
-    || !isCurrentDocumentLoad(documentLoad) || integration.isCurrent?.() === false;
+  let selection = 0;
+  let documentLoad = currentDocumentLoad();
+  const current = () => useCadReturnStore.getState().isCurrentIngestIntent(selection)
+    && isCurrentDocumentLoad(documentLoad) && integration.isCurrent?.() !== false;
   try {
-    const record = await getIngest(ingestId, fetcher);
-    if (superseded()) return false;
-    const bundle: CadReturnBundle = {
-      name: `${displayName}.wgreturn`, bundlePath: '', modifiedAt: record.created_at,
-      readable: true, documentName: displayName, requestId: null,
-      sourceCount: record.sources.length, instanceCount: null,
-      sources: record.sources.map((source) => ({
-        id: source.id, role: source.role, required: source.required,
-        suggestedResolutionMm: source.suggested_resolution_mm,
-        defaultDriveChannelId: source.default_drive_channel_id,
-      })),
-    };
-    const savedSetup = cadHistorySetup(job, record);
-    const project = record.project?.lineage_id
-      ?? useCadReturnStore.getState().projectLineageId
-      ?? rememberedCadProject();
-    const projectDrivers = projectChannelDrivers(bundle, project);
-    useCadReturnStore.getState().restoreIngest(record, selection, {
-      selectedBundle: { ...bundle, readable: false, reason: 'Recalled from an archived run; the original return bundle is not active.' },
-      ingestRecord: record,
-      projectLineageId: project,
-      ...savedSetup,
-      ...(projectDrivers ? { channelDrivers: driversForChannels(projectDrivers, savedSetup.driveChannels) } : {}),
-      areaDriftOverrides: [],
-      areaDriftSourceIds: [...new Set((record.role_findings ?? [])
-        .filter((finding) => String(finding.kind).includes('area-drift'))
-        .map((finding) => String(finding.source_id)))],
-      needsIngest: false,
-      ingestedBundleIdentity: null,
-      ingestStaleReason: null,
-    });
-    restoreCadJobSolveOptions(job);
-    const rereadDrivers = await refreshChannelDriverBases(fetcher);
-    if (superseded()) return false;
-    await integration.showIngestedMesh(record, displayName, integration.reportViewportNotice, fetcher, viewportGeneration);
-    if (superseded()) return false;
-    if (importedMeshStore.getSnapshot().cad?.ingestId !== ingestId) {
-      integration.reportStatus(`Cannot show ${displayName}: the archived CAD mesh artifacts are no longer available.`);
-      return false;
-    }
-    integration.reportStatus(`Showing ${displayName} from run #${job.run_number}.${
-      rereadDrivers.length ? ` Re-read ${rereadDrivers.length} driver${rereadDrivers.length === 1 ? '' : 's'} from the library.` : ''
-    }`);
-    return true;
+    return await restoreImportedRun(job, {
+      input: 'cad',
+      invalidate: () => {
+        workspaceModeStore.setImportedInput('cad');
+        integration.enterCadWorkspace();
+        integration.reportViewportNotice(null);
+        useCadReturnStore.getState().beginSelectionIntent();
+        selection = useCadReturnStore.getState().beginIngestIntent();
+        documentLoad = currentDocumentLoad();
+        // A new target owns Solve before any request can fail or stall.
+        useCadReturnStore.setState({ ingestRecord: null, needsIngest: true,
+          ingestStaleReason: 'Loading the selected run’s retained setup.' });
+        integration.reportStatus(`Loading ${displayName} from run #${job.run_number}…`);
+      },
+      isCurrent: current,
+      ownsSetup: () => useCadReturnStore.getState().isCurrentIngestIntent(selection),
+      restore: async (submission, generation, isCurrent) => {
+        const record = await getIngest(submission.geometry.ingest_id, fetcher);
+        if (!isCurrent()) return false;
+        assertRestoredIdentity(record, submission);
+        const bundle: CadReturnBundle = {
+          name: `${displayName}.wgreturn`, bundlePath: '', modifiedAt: record.created_at,
+          readable: false, reason: 'Recalled from an archived run; the original return bundle is not active.',
+          documentName: displayName, requestId: null, sourceCount: record.sources.length, instanceCount: null,
+          sources: record.sources.map(source => ({ id: source.id, role: source.role, required: source.required,
+            suggestedResolutionMm: source.suggested_resolution_mm, defaultDriveChannelId: source.default_drive_channel_id })),
+        };
+        const historical = { ...job, cad_setup: submission.geometry, solve_options: submission.options } as unknown as JobItem;
+        const savedSetup = cadHistorySetup(historical, record);
+        const project = record.project?.lineage_id ?? useCadReturnStore.getState().projectLineageId ?? rememberedCadProject();
+        useCadReturnStore.getState().restoreIngest(record, selection, {
+          selectedBundle: bundle, ingestRecord: record, projectLineageId: project, ...savedSetup,
+          areaDriftOverrides: [],
+          areaDriftSourceIds: [...new Set((record.role_findings ?? [])
+            .filter(finding => String(finding.kind).includes('area-drift')).map(finding => String(finding.source_id)))],
+          needsIngest: false, ingestedBundleIdentity: null, ingestStaleReason: null,
+        });
+        restoreCadJobSolveOptions(submission.options);
+        await integration.showIngestedMesh(record, displayName, integration.reportViewportNotice, fetcher, generation);
+        if (!isCurrent()) return false;
+        if (importedMeshStore.getSnapshot().cad?.ingestId !== record.ingest_id) return false;
+        integration.reportStatus(`Showing ${displayName} from run #${job.run_number}. Stored solve settings restored.`);
+        return true;
+      },
+    }, fetcher);
   } catch (reason) {
-    if (superseded()) return false;
-    const missing = reason instanceof CadLinkApiError && reason.status === 404;
-    integration.reportStatus(missing
-      ? `Cannot show ${displayName}: the archived CAD ingestion and mesh artifacts are no longer available.`
-      : `Could not show ${displayName}: ${reason instanceof Error ? reason.message : String(reason)}`);
+    if (!current()) return false;
+    const message = reason instanceof CadLinkApiError && reason.status === 404
+      ? 'The archived CAD ingestion and mesh artifacts are no longer available.'
+      : reason instanceof Error ? reason.message : String(reason);
+    useCadReturnStore.setState({ ingestRecord: null, needsIngest: true, ingestStaleReason: message });
+    integration.reportStatus(`Cannot show ${displayName}: ${message}`);
     return false;
   }
 }

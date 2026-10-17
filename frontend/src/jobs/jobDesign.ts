@@ -103,3 +103,8 @@ export function jobRerunState(job: JobDesignFields): { enabled: boolean; reason:
 export function canLoadJobDesign(job: JobDesignFields): boolean {
   return jobDesignAvailability(job).reopenable && hydrateJobDesign(job) !== null;
 }
+
+/** Imported history opens retained solver inputs, not a parametric document. */
+export function canOpenJobModel(job: JobDesignFields & { config_summary?: { geometry_type?: string } }): boolean {
+  return job.config_summary?.geometry_type === 'imported' || canLoadJobDesign(job);
+}

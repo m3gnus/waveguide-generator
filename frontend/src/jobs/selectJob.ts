@@ -1,6 +1,6 @@
 import type { JobItem } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
-import { canLoadJobDesign } from './jobDesign';
+import { canOpenJobModel } from './jobDesign';
 import { showJobModel } from './showJobModel';
 
 /**
@@ -19,8 +19,8 @@ export function selectJob(job: JobItem, onError?: (message: string) => void): vo
   // dock says so instead of leaving the previous run's charts under its card.
   if (job.has_results || job.status === 'complete') compareSelection.setPrimary(job.id);
   // Nothing readable to show for a cleaned-up run: select it, and stop there.
-  if (job.status === 'complete' && !job.has_results && !canLoadJobDesign(job)) return;
+  if (job.status === 'complete' && !job.has_results && !canOpenJobModel(job)) return;
   // Undoable: browsing runs must not be able to discard the working design.
-  if (job.config_summary.geometry_type !== 'imported' && !canLoadJobDesign(job)) return;
+  if (job.config_summary.geometry_type !== 'imported' && !canOpenJobModel(job)) return;
   void showJobModel(job, onError);
 }

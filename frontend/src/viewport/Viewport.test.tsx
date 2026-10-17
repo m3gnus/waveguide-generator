@@ -1,3 +1,5 @@
+import { restoreCadJobModel } from '../shell/cadlink/restores';
+import { archivedRequest, deferred, job as archivedJob, json, mesh as archivedMesh, record as archivedRecord } from '../shell/cadlink/selection.fixtures';
 import { readFileSync } from 'node:fs';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -703,6 +705,37 @@ describe('Viewport preview errors', () => {
     expect(legend()).toBeNull();
 
     act(() => workspaceModeStore.setMode('parametric'));
+  });
+
+  it.each(['request', 'record', 'viewport'] as const)('lets shared CAD restoration own a mounted viewport during the %s read', async stage => {
+    const pending = deferred<Response>();
+    const reached = deferred<void>();
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      const path = String(input);
+      if ((stage === 'request' && path.endsWith('/requests'))
+        || (stage === 'record' && path.endsWith(`/ingest/${archivedRecord.ingest_id}`))
+        || (stage === 'viewport' && path.endsWith('/viewport-mesh'))) {
+        reached.resolve(); return pending.promise;
+      }
+      if (path.endsWith('/requests')) return json({ effective_request: archivedRequest() });
+      if (path.endsWith('/viewport-mesh')) return new Response(archivedMesh);
+      return json(archivedRecord);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    let restoring!: Promise<boolean>;
+    await act(async () => { restoring = restoreCadJobModel(archivedJob(), {}, fetcher); await reached.promise; });
+    const intent = importedMeshStore.captureGeneration();
+    // Both no-record and new-record effects run while the adapter awaits input.
+    expect(importedMeshStore.isCurrentGeneration(intent)).toBe(true);
+    await act(async () => {
+      pending.resolve(stage === 'request' ? json({ effective_request: archivedRequest() })
+        : stage === 'record' ? json(archivedRecord) : new Response(archivedMesh));
+      expect(await restoring).toBe(true);
+    });
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(archivedRecord.ingest_id);
+    expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith('/viewport-mesh'))).toHaveLength(1);
+    expect(host.querySelector('.viewport-title b')?.textContent).toBe('Archived speaker');
+    vi.unstubAllGlobals();
   });
 
   it('switches between the parametric scene and matching CAD slot', () => {

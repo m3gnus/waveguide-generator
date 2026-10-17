@@ -1,3 +1,5 @@
+import { restoreCadJobModel } from './cadlink/restores';
+import { archivedRequest, job as archivedJob, json, mesh as archivedMesh, record as archivedRecord } from './cadlink/selection.fixtures';
 import { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
@@ -1308,6 +1310,42 @@ describe('solve invocation mutex', () => {
     act(() => workspaceModeStore.setMode('cad'));
     await act(async () => { host.querySelector<HTMLButtonElement>('button')!.click(); });
     expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('refused with 409');
+  });
+
+  it('submits a restored CAD run through the same retained-input path as files without current CAD preparation', async () => {
+    const request = { ...archivedRequest(), options: { ...archivedRequest().options, symmetry: 'half_xz',
+      ground_plane: { enabled: true, axis: 'y', height_m: 1.2 } } };
+    const fetcher = vi.fn<typeof fetch>(async input => String(input).endsWith('/requests')
+      ? json({ effective_request: request }) : String(input).endsWith('/viewport-mesh')
+        ? new Response(archivedMesh) : json(archivedRecord));
+    await act(async () => { expect(await restoreCadJobModel(archivedJob(), {}, fetcher)).toBe(true); });
+    // No current project frame/preparation is available or required.
+    await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));
+    const accepted = deferred<string>();
+    mocks.submitImported.mockReturnValueOnce(accepted.promise);
+    const solve = host.querySelector<HTMLButtonElement>('button')!;
+    expect(solve.disabled).toBe(false);
+    await act(async () => { solve.click(); solve.click(); });
+    expect(mocks.submitImported).toHaveBeenCalledOnce();
+    expect(mocks.submitImported.mock.calls[0][0]).toEqual(request);
+    expect(mocks.submitImported.mock.calls[0][3]).toMatch(/^cad-retained-/);
+    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
+    expect(mocks.createSetupRevision).not.toHaveBeenCalled();
+    expect(mocks.putProjectSetup).not.toHaveBeenCalled();
+    await act(async () => { accepted.resolve('retained-cad-run'); await accepted.promise; });
+    expect(compareSelection.getSnapshot().awaiting).toBe('retained-cad-run');
+  });
+
+  it('reuses an unanswered restored-CAD press without duplicating the CAD preparation pipeline', async () => {
+    await act(async () => { await restoreCadJobModel(archivedJob(), {}, (async input => String(input).endsWith('/requests')
+      ? json({ effective_request: archivedRequest() }) : String(input).endsWith('/viewport-mesh')
+        ? new Response(archivedMesh) : json(archivedRecord)) as typeof fetch); });
+    mocks.submitImported.mockRejectedValueOnce(new Error('connection closed'));
+    await act(async () => { await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('connection closed'); });
+    const first = mocks.submitImported.mock.calls[0];
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    expect(mocks.submitImported.mock.calls[1]).toEqual(first);
+    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
   });
 
   it('requires explicit setup before solving a standalone msh import', async () => {

@@ -242,7 +242,8 @@ export async function showIngestedMeshInViewport(
   if (current()
     && importedMeshStore.getSnapshot().cad !== null
     && importedMeshStore.getSnapshot().cad?.ingestId !== ingestId) {
-    importedMeshStore.clear('cad');
+    // Failure cleanup belongs to this load; it must not supersede its owner.
+    importedMeshStore.clear('cad', generation);
   }
 }
 

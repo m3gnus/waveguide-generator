@@ -267,7 +267,7 @@ describe('selecting a run whose results were cleaned up', () => {
     expect(text).not.toMatch(/Not solved yet/);
   });
 
-  it('selects cleaned runs whose design cannot be read, without loading anything', async () => {
+  it('keeps cleanup feedback while imported retained inputs are unavailable', async () => {
     const designA = designForFamily('OSSE'); designA.L = 111;
     useDesignStore.setState({ design: designA });
     const legacy = job('legacy', 2, null, { has_results: false, results_discarded_at: '2026-09-01T00:00:00Z' });

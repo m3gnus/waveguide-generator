@@ -20,7 +20,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { mountCadWorkspaceOwners } from './CadWorkspaceOwners';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { identity, status, exported } from './cadlink/outbound.fixtures';
-import { bundle, deferred, json, mesh, record, job } from './cadlink/selection.fixtures';
+import { archivedRequest, bundle, deferred, json, mesh, record, job } from './cadlink/selection.fixtures';
 
 let stop: (() => void) | undefined;
 let returns: typeof bundle[];
@@ -46,6 +46,7 @@ beforeEach(() => {
   vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
   fetcher = vi.fn(async (input, init) => {
     const path = String(input);
+    if (path.endsWith('/requests')) return json({ effective_request: archivedRequest() });
     if (path === '/api/cadlink/returns') return json({ items: returns, cadFolderConfigured: true, coordination: 'on' });
     if (path === '/api/cadlink/fusion-status') return json(status());
     if (path.includes('/receipts?')) return json({ feed_id: 'cutover', receipts, cursor: receipts.at(-1)?.cursor ?? 0, has_more: false });

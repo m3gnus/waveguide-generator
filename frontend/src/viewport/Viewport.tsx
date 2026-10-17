@@ -1,3 +1,4 @@
+import { importedRunRestoreBlocker, useImportedRunRestoration } from '../jobs/importedRunRestoration';
 import { LiveDimensions } from '../design/LiveDimensions';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DecodedFrame } from '../api/frame';
@@ -760,6 +761,7 @@ export function Viewport() {
     setRenderFailure(null);
   };
 
+  const restoration = useImportedRunRestoration(state => state.restoration);
   const previousWorkspaceMode = useRef(workspaceMode);
   useEffect(() => {
     if (workspaceMode === 'parametric') {
@@ -775,6 +777,9 @@ export function Viewport() {
       if (importedMeshStore.getSnapshot().showing !== 'file') importedMeshStore.showFile(importedMeshStore.captureGeneration());
       return;
     }
+    // The restoration transaction owns both the target and its artifact load.
+    // A passive mode/record effect must not advance its generation mid-restore.
+    if (restoration?.input === 'cad' && restoration.phase !== 'ready' && importedRunRestoreBlocker('cad')) return;
     if (!cadRecord) {
       importedMeshStore.beginIntent();
       importedMeshStore.clear('cad');
@@ -803,7 +808,7 @@ export function Viewport() {
       fetch,
       generation,
     );
-  }, [cadName, cadRecord, workspaceMode, fileInputActive]);
+  }, [cadName, cadRecord, workspaceMode, fileInputActive, restoration]);
 
   // The mesh may be set from outside this component (CAD Link after an
   // ingest), so the camera refit follows the store rather than the setters.

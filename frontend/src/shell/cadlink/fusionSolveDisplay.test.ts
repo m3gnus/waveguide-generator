@@ -11,7 +11,7 @@ import { workspaceModeStore } from '../../stores/workspaceMode';
 import { noteExplicitNavigation, resetWorkspaceNavigationForTests } from '../workspaceNavigation';
 import { resetSolveAttentionForTests } from '../solveAttention';
 import { createFusionSolveDisplay } from './fusionSolveDisplay';
-import { bundle, deferred, job, json, record } from './selection.fixtures';
+import { archivedRequest, bundle, deferred, job, json, record } from './selection.fixtures';
 
 const NOW = Date.parse('2026-10-15T18:00:00Z');
 function external(id = 'fusion', created = NOW - 120_000) {
@@ -22,7 +22,8 @@ function external(id = 'fusion', created = NOW - 120_000) {
 }
 const disposers: Array<() => void> = [];
 afterEach(() => { disposers.splice(0).forEach((dispose) => dispose()); });
-function fixture(fetcher: typeof fetch = vi.fn(async () => json(record))) {
+function fixture(fetcher: typeof fetch = vi.fn(async input => json(String(input).endsWith('/requests')
+  ? { effective_request: archivedRequest() } : record))) {
   let sendAt = 0;
   const display = { isActive: () => true, newestSendAt: () => sendAt, onIntent: vi.fn(),
     enterCadWorkspace: () => workspaceModeStore.setMode('cad'), reportStatus: vi.fn(), reportViewportNotice: vi.fn(),
@@ -124,7 +125,7 @@ it('reports an unavailable prepared record without solving again or inventing a 
   const f = fixture(vi.fn(async () => json({ detail: 'missing' }, 404)));
   await f.observe([external()]);
   expect(f.display.showIngestedMesh).not.toHaveBeenCalled();
-  expect(f.display.reportStatus).toHaveBeenLastCalledWith(expect.stringContaining('no longer available'));
+  expect(f.display.reportStatus).toHaveBeenLastCalledWith(expect.stringContaining('missing'));
 });
 
 it.each([true, false])('leaves a WG continuation alone when its parent row is present: %s', async (present) => {

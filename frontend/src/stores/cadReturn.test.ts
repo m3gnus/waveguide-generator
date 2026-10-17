@@ -14,8 +14,6 @@ import {
   driverMissingGroups,
   driverShortfallText,
   driverValues,
-  driversForChannels,
-  projectChannelDrivers,
   DRIVER_REQUIRED_KEYS,
   resetCadReturnStore,
   useCadReturnStore,
@@ -1021,17 +1019,6 @@ describe('the CAD project owns its solve settings', () => {
       .toMatchObject({ label: 'Faital Pro 12RS430' });
   });
 
-  it('offers the project\'s drivers for a recalled run, fitted to its channels', () => {
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
-    useCadReturnStore.getState().setChannelDriverPreset('drive-mf', PRESET_12RS430);
-
-    const drivers = projectChannelDrivers(bundle, 'wgl_party')!;
-    expect(drivers['drive-mf'].preset).toMatchObject({ id: 'Faital Pro::12RS430::8' });
-    // A channel the recalled run does not have keeps nothing.
-    expect(driversForChannels(drivers, [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }]))
-      .toEqual({});
-    expect(projectChannelDrivers(bundle, 'wgl_other')).toBeNull();
-  });
 
   /** Reload, or any first selection: nothing knows which CAD project the open
    * design belongs to until the ingestion states it, so the selection files the

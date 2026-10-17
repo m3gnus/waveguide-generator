@@ -2881,7 +2881,7 @@ export function ResultsPanel() {
     {/* Three different empty docks, said apart: a failed fetch, a fetch still
         in flight, and nothing selected at all. The last used to claim it was
         loading, which is how a dock with no selection looked like a hang. */}
-    {coherenceContext.mode === 'cad' && !cadResultMatchesViewport
+    {coherenceContext.mode === 'cad' && !cadResultMatchesViewport && !cleanedUpRun
       ? <div className="empty-state" role="status"><b>Not solved yet</b><span>The model in the viewport has no selected solved result.</span><button type="button" className="solve-button" onClick={solveCurrentDesign}>Solve</button></div>
       : charts ?? (cleanedUpRun ? <div className="empty-state" role="status">
         <b>Results cleaned up</b>

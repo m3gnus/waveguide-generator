@@ -103,8 +103,8 @@ class ImportedMeshStore {
     this.show('solver', generation);
   }
 
-  clear(slot: ImportedMeshSlot | 'all' = 'all'): void {
-    this.beginIntent();
+  clear(slot: ImportedMeshSlot | 'all' = 'all', generation = this.beginIntent()): void {
+    if (!this.isCurrentGeneration(generation)) return;
     // Clearing 'cad' drops 'cadSolver' with it: both are artifacts of one
     // ingestion record, so a superseded return must not leave its solve mesh
     // behind claiming to describe the geometry on screen.

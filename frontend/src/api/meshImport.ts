@@ -1,4 +1,4 @@
-import { formatApiDetail, type ImportedSolveSubmission } from '../jobs/actions';
+import { formatApiDetail } from '../jobs/actions';
 
 export interface MeshSummary {
   node_count: number;
@@ -35,7 +35,3 @@ export const registerMesh = (body: unknown, fetcher?: typeof fetch) =>
   request<RegisteredMesh>('/api/mesh-import', body, fetcher);
 export const readMeshImport = (id: string, fetcher?: typeof fetch) =>
   request<RegisteredMesh>(`/api/mesh-import/${encodeURIComponent(id)}`, undefined, fetcher);
-
-/** Restore the admitted request, not the execution request's transformed inputs. */
-export const readMeshJobRequest = (jobId: string, fetcher?: typeof fetch) =>
-  request<{ effective_request: ImportedSolveSubmission }>(`/api/jobs/${encodeURIComponent(jobId)}/requests`, undefined, fetcher);

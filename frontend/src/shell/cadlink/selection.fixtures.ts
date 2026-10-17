@@ -50,3 +50,17 @@ export function job(ingestId = record.ingest_id): JobItem {
       mesh_validation_mode: 'strict', verbose: false },
   } as unknown as JobItem;
 }
+
+/** An admitted historical request, including fields omitted by the job summary. */
+export function archivedRequest(ingestId = record.ingest_id) {
+  const archived = job(ingestId);
+  return { geometry: { ingest_id: ingestId,
+    manifest_sha256: record.manifest_sha256, artifact_sha256: record.artifact_sha256,
+    ...archived.cad_setup!, type: 'imported' as const, skipped_source_ids: [], mesh: record.mesh_sizes },
+  options: { engine: 'beat-cpu', accuracy: 'accurate', solver_mode: 'full_3d', symmetry: 'auto',
+    mesh_validation_mode: 'strict', verbose: false, frequency_spacing: 'log',
+    frequencies_hz: [100, 500, 1000],
+    polar_config: { angle_range: [-180, 180, 73], angle_step: 5, distance: 2, norm_angle: 5,
+      inclination: 45, enabled_axes: ['horizontal', 'vertical', 'diagonal'],
+      observation_origin: 'mouth', spherical_sampling: false, field_plane: true } } };
+}

@@ -340,7 +340,9 @@ reproduces, because the driver library has no revisions.
 - **The engine is the user's.** A setup carries the engine selected in WG's solver
   selector, never one CAD Link chose. If that engine cannot take the record, the
   operation waits (`engine_cannot_solve_return`, or `engine_unavailable` when the engine is not on this host) with the capable engines named, and nothing
-  switches engines silently. Recalling a run does not change the selector.
+  switches engines silently. Opening a historical run restores its recorded engine and
+  accuracy along with the complete effective request; it does not read today's driver
+  library or project profile. Changing a setup control explicitly starts a new draft.
 
 ## Project setups
 
@@ -963,7 +965,18 @@ load, so starting auto-ingest does not discard fresh library values. Artifact lo
 belong to the held ingest record, document load and viewport choice; edits that
 leave that immutable record held do not prevent its model or solver slot loading.
 Entering empty CAD mode may clear the viewport slot without cancelling remembered
-project reopening. Archived restore preserves the saved setup and project profile
+project reopening. File and CAD run restoration share `jobs/importedRunRestoration.ts`:
+select target, invalidate the previous solvable setup, load the effective request,
+verify retained identity/hashes, publish through the producer's scene/control adapter,
+and mark ready. An unedited restored CAD run uses the same direct imported
+submission path as a file run, retaining its mesh/frame/domain rather than re-entering
+CAD preparation. Explicit edits return to CAD preparation when needed. Pending or
+failed restoration blocks Solve; newer intent supersedes
+all remaining awaits. Unrepresented CAD settings stay in the frozen request until an
+explicit settings edit. Failed, cancelled and result-pruned imported runs can open
+retained inputs independently of parametric-design or result availability; missing
+inputs report a refusal. Existing retry, admission, runtime and archive owners remain shared.
+Archived restore preserves the saved setup and project profile
 without marking the record as settled by current preparation, keeping recalled
 runs ineligible for automatic solved-model adoption. Manual picks fence an older
 ingest result without adding an abort; a later ingest still aborts its predecessor.

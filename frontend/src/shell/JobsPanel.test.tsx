@@ -1,3 +1,4 @@
+import { archivedRequest } from './cadlink/selection.fixtures';
 import { useRunFilters } from '../jobs/runFilters';
 import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { act } from 'react';
@@ -21,6 +22,7 @@ import { resetSolveStageClocksForTests } from './solveProgress';
 const designMocks = vi.hoisted(() => ({ replaceWithJobDesign: vi.fn() }));
 vi.mock('../jobs/jobDesign', () => ({
   canLoadJobDesign: () => true,
+  canOpenJobModel: (job: JobItem) => job.config_summary.geometry_type === 'imported' || job.script_snapshot !== null,
   hydrateJobDesign: () => ({ formula: 'OSSE' }),
   jobDesignAvailability: () => ({ reopenable: true, source: 'v2-snapshot', reason_code: 'ok', reason: null, note: null }),
   jobRerunState: () => ({ enabled: true, reason: null }),
@@ -411,7 +413,9 @@ describe('jobs panel run list', () => {
     const mesh = ['$MeshFormat', '2.2 0 8', '$EndMeshFormat', '$Nodes', '3', '1 0 0 0', '2 1 0 0', '3 0 1 0', '$EndNodes', '$Elements', '1', '1 2 2 1 1 1 2 3', '$EndElements', ''].join('\n');
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/viewport-mesh')
       ? new Response(mesh, { status: 200 })
-      : new Response(JSON.stringify(record), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+      : new Response(JSON.stringify(String(input).endsWith('/requests') ? { effective_request: { ...archivedRequest(record.ingest_id), geometry: {
+        ...archivedRequest(record.ingest_id).geometry, manifest_sha256: record.manifest_sha256, artifact_sha256: record.artifact_sha256 } } } : record),
+        { status: 200, headers: { 'Content-Type': 'application/json' } })));
     publishJobs([imported]);
     await act(async () => root.render(<JobsPanel/>));
 
@@ -424,6 +428,24 @@ describe('jobs panel run list', () => {
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_archived');
     expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_archived');
     expect(importedMeshStore.getSnapshot().cad?.name).toBe('Returned speaker');
+  });
+
+  it.each(['failed', 'cancelled', 'complete'] as const)('opens retained imported setup from a %s run without results or a parametric design', async status => {
+    const imported = { ...job(19, 'Retained setup'), status, has_results: false, script_snapshot: null,
+      config_summary: { geometry_type: 'imported' }, cad_source: { ingest_id: 'wgi_unavailable' } } as unknown as JobItem;
+    const reportStatus = vi.spyOn(cadWorkspace.getSnapshot(), 'reportStatus');
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ detail: 'Specific retained input unavailable' }),
+      { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetcher);
+    publishJobs([imported]);
+    await act(async () => root.render(<JobsPanel/>));
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[aria-label="Select #19 · Retained setup"]')!.click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    expect(fetcher).toHaveBeenCalledWith(`/api/jobs/${imported.id}/requests`, undefined);
+    expect(reportStatus.mock.calls.at(-1)?.[0]).toContain('Specific retained input unavailable');
+    expect(useCadReturnStore.getState().ingestRecord).toBeNull();
   });
 
   it('reports when a selected CAD run no longer has archived ingestion artifacts', async () => {
@@ -447,7 +469,7 @@ describe('jobs panel run list', () => {
     });
 
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
-    expect(reportStatus).toHaveBeenLastCalledWith(expect.stringContaining('archived CAD ingestion and mesh artifacts are no longer available'));
+    expect(reportStatus).toHaveBeenLastCalledWith(expect.stringContaining('Unknown ingestion record wgi_missing'));
   });
 
   // Setting .value in a test replaces the whole string no matter where the

@@ -1,6 +1,8 @@
+import { importedSolvePress, finishImportedSolvePress } from '../jobs/importedSolvePress';
+import { importedRunRestoreBlocker, restoredCadSubmission, useImportedRunRestoration } from '../jobs/importedRunRestoration';
 import { nativeSymmetryLimitation } from '../design/nativeFamilies';
 import { durableSettings } from '../stores/durableSettings';
-import { fileMeshSubmission, fileSolvePress, finishFileSolvePress, restorePendingMeshPress, restoreSavedMeshSetup, useMeshImportStore } from '../stores/meshImport';
+import { fileMeshSubmission, fileSolvePress, restorePendingMeshPress, restoreSavedMeshSetup, useMeshImportStore } from '../stores/meshImport';
 import type { ExportFormat } from '../prefs/preferences';
 import { ownedAutoExport } from '../jobs/autoExportOwner';
 import { exportRunAutomatically } from '../jobs/autoExportRun';
@@ -211,12 +213,15 @@ const CAD_VIEWPORT_MISMATCH =
  * gate. The viewport check is evidence about what the user is looking at; the
  * rest is the shared imported-submission blocker. */
 export function cadSolveBlockerNow(): string | null {
-  return cadInputBlockerNow() ?? frameSolveBlocker(useCadReturnStore.getState().ingestRecord?.ingest_id);
+  return cadInputBlockerNow() ?? (restoredCadSubmission(useCadReturnStore.getState().ingestRecord?.ingest_id) ? null
+    : frameSolveBlocker(useCadReturnStore.getState().ingestRecord?.ingest_id));
 }
 
 /** The same rule without the frame, which a Solve judges once the frame read
  * the card has under way has answered. */
 function cadInputBlockerNow(): string | null {
+  const restoring = importedRunRestoreBlocker('cad');
+  if (restoring) return restoring;
   const cadReturn = useCadReturnStore.getState();
   const cad = importedMeshStore.getSnapshot().cad;
   if (cadReturn.ingestRecord !== null && cad !== null
@@ -280,6 +285,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const designName = useDocumentStore((state) => state.designName);
   const solveOptions = useSolveOptionsStore();
   const selectedEngine = solveOptions.engine;
+  useImportedRunRestoration();
   const cadReturn = useCadReturnStore();
   const viewportGeometry = useSyncExternalStore(
     importedMeshStore.subscribe,
@@ -380,13 +386,14 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     !cadViewportGeometry.ingestId
     || cadViewportGeometry.ingestId !== cadReturn.ingestRecord?.ingest_id
   );
-  const inFlight = cadGeometryActive && !pendingCadSolve(cadReturn.ingestRecord?.ingest_id ?? '')?.press
+  const frozenCad = restoredCadSubmission(cadReturn.ingestRecord?.ingest_id);
+  const inFlight = !frozenCad && cadGeometryActive && !pendingCadSolve(cadReturn.ingestRecord?.ingest_id ?? '')?.press
     ? onScreenRequestInFlight(cadJobSummaries(jobs), cadReturn.ingestRecord) : null;
   const cadSolveBlocker = cadGeometryMismatch
     ? CAD_VIEWPORT_MISMATCH
     : cadGeometryActive
       ? (inFlight ? inFlightWords(inFlight) : null)
-        ?? importedSubmissionBlocker(cadReturn, solveOptions) ?? frameSolveBlocker(cadReturn.ingestRecord?.ingest_id)
+        ?? importedSubmissionBlocker(cadReturn, solveOptions) ?? (frozenCad ? null : frameSolveBlocker(cadReturn.ingestRecord?.ingest_id))
       : null;
   const directivityError = polarValidationError(solveOptions.polar);
   const solveBlocker = fileGeometryActive ? fileBlocker : (cadGeometryActive ? crossoverDraftError : null) ?? cadSolveBlocker ?? directivityError;
@@ -449,7 +456,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
   }, [designName, now, preferences]);
 
-  const runImported = useCallback(async (submission: ImportedSolveSubmission, filePress?: { id: string; label: string }) => {
+  const runImported = useCallback(async (submission: ImportedSolveSubmission, press?: { id: string; label: string; designName?: string }) => {
     if (submissionInFlight.current) return null;
     submissionInFlight.current = true;
     try {
@@ -461,16 +468,16 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // explicit engine that cannot, with the reason. The formulation is not
       // a choice here: imported geometry solves in full 3-D only, and the
       // domain is the one the ingestion record describes.
-      const options: SolveOptions = filePress ? { ...submission.options }
+      const options: SolveOptions = press ? { ...submission.options }
         : { ...submission.options, solver_mode: 'full_3d', symmetry: 'auto' };
       const effectiveSubmission = { ...submission, options };
       // The CAD document names its own runs; see jobs/runNameSource.
-      const designName = filePress ? useMeshImportStore.getState().filename : currentRunNameSource().name;
-      const label = filePress?.label ?? nextRunLabel(designName, preferencesStore.getSnapshot(), now());
+      const designName = press?.designName ?? (press ? useMeshImportStore.getState().filename : currentRunNameSource().name);
+      const label = press?.label ?? nextRunLabel(designName, preferencesStore.getSnapshot(), now());
       // A typed refusal is the server naming a condition; the user needs the
       // remedy. Translating here covers every imported entry point at once.
-      const submitted = filePress
-        ? submitImported(effectiveSubmission, fetch, label, filePress.id)
+      const submitted = press
+        ? submitImported(effectiveSubmission, fetch, label, press.id)
         : submitImported(effectiveSubmission, fetch, label);
       const jobId = await submitted.catch((error) => {
         // No engine here can solve imported geometry: a capability this
@@ -489,7 +496,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // Fusion's "Solve in WG" commands are the backend's to prepare and submit
       // (under cad-solve:<id>), so a solve from here never carries a command key.
       acceptSubmittedLabel(designName);
-      if (filePress) finishFileSolvePress(filePress.id);
+      if (press) finishImportedSolvePress(press.id);
       compareSelection.awaitRun(jobId);
       solveAttention.bindRun(jobId);
       await jobsSocket.refresh();
@@ -508,6 +515,18 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     const cad = clicked?.cad ?? useCadReturnStore.getState();
     const ingestId = cad.ingestRecord?.ingest_id;
     if (!ingestId) throw new Error('Ingest a CAD return before solving.');
+    const frozen = restoredCadSubmission(ingestId);
+    if (frozen) {
+      const blocker = cadInputBlockerNow();
+      if (blocker) throw new Error(blocker);
+      // Historical inputs are already prepared. Re-entering the CAD adapter
+      // would reinterpret the frame/domain and remesh under current defaults.
+      if (clicked) await clicked.checkPlan();
+      const designName = currentRunNameSource().name;
+      const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
+      await runImported(frozen, { ...importedSolvePress(frozen, label, 'cad'), designName });
+      return 'submitted' as const;
+    }
     const frameAtPress = useCadSolverFrameStore.getState().frames[ingestId];
     const project = cad.ingestRecord?.project?.lineage_id ?? cad.projectLineageId ?? null;
     const built = buildCadProjectSetup(cad, undefined, undefined, project ?? 'manual-solve');
@@ -561,7 +580,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         }
         const setup = {
           ...built!.setup, label: identity.label,
-          options: { ...built!.setup.options, solver_mode: 'full_3d', symmetry: 'auto' },
+          options: { ...built!.setup.options },
         };
         let waiting = selectWaiting();
         const bound = waiting?.setupRevisionId;
@@ -618,7 +637,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [completeCadSolve, now]);
+  }, [completeCadSolve, now, runImported]);
 
   const retry = useCallback(async (jobId: string) => {
     if (submissionInFlight.current) return;

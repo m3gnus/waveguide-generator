@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { inspectMesh, registerMesh, readMeshImport, readMeshJobRequest, type MeshSummary, type RegisteredMesh } from '../api/meshImport';
+import { inspectMesh, registerMesh, readMeshImport, type MeshSummary, type RegisteredMesh } from '../api/meshImport';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
@@ -13,6 +13,7 @@ import { bindImportedSetup } from '../jobs/importedSetup';
 import { readImportedSetup, saveImportedSetup } from '../api/importedModels';
 import { namespaceStorage } from './durableSettings';
 import type { JobItem } from '../api/jobsSocket';
+import { restoreImportedRun, assertRestoredIdentity, importedRunRestoreBlocker } from '../jobs/importedRunRestoration';
 
 interface MeshImportState {
   filename: string;
@@ -137,6 +138,8 @@ export function fileMeshSubmission(): ImportedSolveSubmission {
   const state = useMeshImportStore.getState();
   const record = state.registered;
   const viewport = importedMeshStore.getSnapshot();
+  const restoring = importedRunRestoreBlocker('file');
+  if (restoring) throw new Error(restoring);
   if (state.busy) throw new Error('Wait for mesh preparation to finish.');
   if (!record || viewport.showing !== 'file' || viewport.file?.ingestId !== record.ingest_id) {
     throw new Error('Choose units and driven groups, then prepare this mesh before solving.');
@@ -159,23 +162,8 @@ export function fileMeshSubmission(): ImportedSolveSubmission {
   });
 }
 
-/** An unanswered transport replay keeps its ID and label across a page reload. */
-export function fileSolvePress(submission: ImportedSolveSubmission, label: string): { id: string; label: string } {
-  const body = JSON.stringify(submission);
-  try {
-    const saved = JSON.parse(sessionStorage.getItem('wg-mesh-solve-press') ?? 'null');
-    if (saved?.body === body && typeof saved.id === 'string' && typeof saved.label === 'string') return saved;
-  } catch { /* A missing/corrupt cache cannot claim an earlier submission. */ }
-  const press = { id: `mesh-${crypto.randomUUID()}`, label, body };
-  sessionStorage.setItem('wg-mesh-solve-press', JSON.stringify(press));
-  return press;
-}
-
-export function finishFileSolvePress(id: string): void {
-  try {
-    if (JSON.parse(sessionStorage.getItem('wg-mesh-solve-press') ?? 'null')?.id === id) sessionStorage.removeItem('wg-mesh-solve-press');
-  } catch { /* Best-effort cache cleanup after durable backend acceptance. */ }
-}
+// Preserve existing file callers and recovery storage while sharing press identity.
+export { importedSolvePress as fileSolvePress, finishImportedSolvePress as finishFileSolvePress } from '../jobs/importedSolvePress';
 
 function preparedFileScene(record: RegisteredMesh) {
   return createImportedMeshScene(record.source_file.filename, parseMSH(record.msh_text), 'file', record.ingest_id,
@@ -193,10 +181,11 @@ interface FileOptions {
 async function restoreRetainedFile(id: string, options: FileOptions,
   channels: Array<{ id: string; motion?: 'normal' | 'axial' }>, fetcher: typeof fetch,
   generation = importedMeshStore.beginIntent(),
-  exactSubmission?: (record: RegisteredMesh) => ImportedSolveSubmission): Promise<boolean> {
+  exactSubmission?: (record: RegisteredMesh) => ImportedSolveSubmission,
+  current: () => boolean = () => true): Promise<boolean> {
   if (!importedMeshStore.isCurrentGeneration(generation)) return false;
   const record = await readMeshImport(id, fetcher);
-  if (!importedMeshStore.isCurrentGeneration(generation)) return false;
+  if (!importedMeshStore.isCurrentGeneration(generation) || !current()) return false;
   if (record.ingest_id !== id) throw new Error('The retained mesh response names a different import. Select the run again.');
   const submission = exactSubmission?.(record);
   if (submission) assertFileRequest(record, submission);
@@ -204,10 +193,8 @@ async function restoreRetainedFile(id: string, options: FileOptions,
 }
 
 function assertFileRequest(record: RegisteredMesh, submission: ImportedSolveSubmission): void {
+  assertRestoredIdentity(record, submission);
   if (record.producer !== 'mesh-file' || submission?.geometry?.type !== 'imported'
-    || submission.geometry.ingest_id !== record.ingest_id
-    || submission.geometry.manifest_sha256 !== record.manifest_sha256
-    || submission.geometry.artifact_sha256 !== record.artifact_sha256
     || !submission.options || !Array.isArray(submission.geometry.drive_channels)) {
     throw new Error('The mesh replay response does not match its retained mesh.');
   }
@@ -311,26 +298,19 @@ export async function restorePendingMeshPress(fetcher: typeof fetch = fetch): Pr
 
 /** Restore one retained file mesh with File selected in Imported mesh. */
 export async function restoreMeshImport(job: JobItem, fetcher: typeof fetch = fetch): Promise<boolean> {
-  const id = job.cad_source?.ingest_id;
-  if (!id) throw new Error('This run has no retained mesh identity. Import the mesh again.');
-  const generation = importedMeshStore.beginIntent();
-  beginMeshFileImport('Restoring mesh…');
-  const request = ++requestNumber;
-  // Until both retained inputs arrive, Solve must not use the previously open model.
-  useMeshImportStore.setState({ busy: true, registered: null, exactSubmission: null, error: null, request });
+  let request = 0;
   try {
-    const { effective_request: effective } = await readMeshJobRequest(job.id, fetcher);
-    // Job ancestry and spent request IDs are not part of a new Solve.
-    const submission = { geometry: effective?.geometry, options: effective?.options };
-    if (!importedMeshStore.isCurrentGeneration(generation)) return false;
-    if (submission?.geometry?.type !== 'imported' || submission.geometry.ingest_id !== id || !submission.options
-      || !Array.isArray(submission.geometry.drive_channels)) {
-      throw new Error('This run’s saved request does not match its retained mesh. Select the run again.');
-    }
-    return await restoreRetainedFile(id, submission.options, submission.geometry.drive_channels,
-      fetcher, generation, () => submission);
+    return await restoreImportedRun(job, {
+      input: 'file',
+      invalidate: () => {
+        beginMeshFileImport('Restoring mesh…');
+        request = useMeshImportStore.getState().request;
+      },
+      restore: async (submission, generation, current) => restoreRetainedFile(submission.geometry.ingest_id,
+        submission.options, submission.geometry.drive_channels, fetcher, generation, () => submission, current),
+    }, fetcher);
   } catch (error) {
-    if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({
+    if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({
       error: `Could not restore this run’s mesh setup: ${error instanceof Error ? error.message : String(error)}`,
     });
     throw error;

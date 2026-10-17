@@ -268,7 +268,7 @@ describe('portable mesh replay', () => {
     const job = { id: 'saved-run', cad_source: { ingest_id: record.ingest_id } } as JobItem;
     await expect(restoreMeshImport(job, vi.fn(async url => response(String(url).endsWith('/requests')
       ? { effective_request: request } : record)))).rejects.toThrow(/does not match/);
-    expect(() => fileMeshSubmission()).toThrow('Choose units');
+    expect(() => fileMeshSubmission()).toThrow('does not match');
   });
 
   it('refuses unavailable run settings without borrowing the open model', async () => {
@@ -276,7 +276,7 @@ describe('portable mesh replay', () => {
     const job = { id: 'missing-run', cad_source: { ingest_id: record.ingest_id } } as JobItem;
     await expect(restoreMeshImport(job, vi.fn(async () => new Response('{}', { status: 404 })))).rejects.toThrow('404');
     expect(useMeshImportStore.getState().busy).toBe(false);
-    expect(() => fileMeshSubmission()).toThrow('Choose units');
+    expect(() => fileMeshSubmission()).toThrow('404');
   });
 
   it.each(['request', 'mesh'])('ignores a selected run whose %s response arrives after navigation', async stage => {

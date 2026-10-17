@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import {
   canLoadJobDesign,
+  canOpenJobModel,
   hydrateJobDesign,
   jobDesignAvailability,
   jobRerunState,
@@ -112,4 +113,9 @@ describe('what a job says about its own design', () => {
     expect(canLoadJobDesign(imported)).toBe(false);
     expect(jobRerunState(imported)).toEqual({ enabled: true, reason: null });
   });
+});
+
+it('opens retained imported inputs independently of parametric design readability', () => {
+  expect(canOpenJobModel({ script_snapshot: null, config_summary: { geometry_type: 'imported' } })).toBe(true);
+  expect(canOpenJobModel({ script_snapshot: null, config_summary: {} })).toBe(false);
 });
