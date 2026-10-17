@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from io import StringIO
 import json
 import signal
+from types import SimpleNamespace
 
 import pytest
 
@@ -104,12 +105,28 @@ def test_stream_failure_cannot_override_available_terminal_http_result(tmp_path,
     asyncio.run(scenario())
 
 
-def test_missing_terminal_event_has_bounded_http_completion(tmp_path, monkeypatch):
+@pytest.mark.parametrize("result_delay", [0, 2.1])
+def test_missing_terminal_event_has_bounded_http_completion(tmp_path, monkeypatch, result_delay):
     data_dir = tmp_path / "data"
 
     async def scenario():
         async with _transports(data_dir, monkeypatch):
             original_connect = backend_client.connect
+            original_get_job = backend_client.BackendClient.get_job
+            original_results = backend_client.BackendClient.get_results_text
+            terminal_http_jobs = []
+
+            async def observe_http_completion(self, job_id):
+                job = await original_get_job(self, job_id)
+                if job["status"] == "complete":
+                    terminal_http_jobs.append(job_id)
+                return job
+
+            async def delayed_results(self, job_id):
+                # Valid result retrieval may outlast the old total 2s ceiling;
+                # it must not be mistaken for an unbounded terminal-event wait.
+                await asyncio.sleep(result_delay)
+                return await original_results(self, job_id)
 
             @asynccontextmanager
             async def drop_terminal(*args, **kwargs):
@@ -126,11 +143,56 @@ def test_missing_terminal_event_has_bounded_http_completion(tmp_path, monkeypatc
                     yield bridge
 
             monkeypatch.setattr(backend_client, "connect", drop_terminal)
-            async with asyncio.timeout(2):
-                code, messages, stderr = await _solve(_args(_design(tmp_path), data_dir))
+            monkeypatch.setattr(backend_client.BackendClient, "get_job", observe_http_completion)
+            monkeypatch.setattr(backend_client.BackendClient, "get_results_text", delayed_results)
+            # _solve retains its deadlock ceiling. Geometry/admission, SQLite,
+            # HTTP and results work are not the missing-event grace period.
+            code, messages, stderr = await _solve(_args(_design(tmp_path), data_dir))
             assert code == 0, stderr
             assert not any(message.get("type") == "completed" for message in messages)
             assert messages[-1]["status"] == "complete"
+            assert messages[-1]["job_id"] in terminal_http_jobs
+
+    asyncio.run(scenario())
+
+
+def test_missing_terminal_drain_keeps_its_half_second_bound_and_settles_waiter(monkeypatch):
+    async def scenario():
+        transport = cli.NdjsonTransport(stdout=StringIO(), stderr=StringIO())
+        protocol = asyncio.create_task(asyncio.Event().wait())
+        waiters, waits = [], []
+
+        def create_task(coroutine):
+            task = asyncio.create_task(coroutine)
+            waiters.append(task)
+            return task
+
+        async def timeout_without_clock_delay(tasks, *, timeout, return_when):
+            assert timeout == 0.5
+            assert return_when is asyncio.FIRST_COMPLETED
+            assert tasks == {protocol, waiters[0]}
+            await asyncio.sleep(0)
+            assert all(not task.done() for task in tasks)
+            waits.append(tasks)
+            return set(), tasks
+
+        # Patch only the CLI's module binding; the event loop and other tasks
+        # retain real asyncio. Simulate the wait's timeout, not a terminal event.
+        facade = SimpleNamespace(create_task=create_task, wait=timeout_without_clock_delay,
+                                 FIRST_COMPLETED=asyncio.FIRST_COMPLETED, gather=asyncio.gather)
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(cli, "asyncio", facade)
+                async with asyncio.timeout(2):
+                    await cli._drain_terminal_events(transport, protocol)
+            assert len(waits) == len(waiters) == 1
+            assert waiters[0].done() and waiters[0].cancelled()
+            assert not protocol.done()
+            assert not transport._terminal.is_set()
+        finally:
+            for task in [protocol, *waiters]:
+                task.cancel()
+            await asyncio.gather(protocol, *waiters, return_exceptions=True)
 
     asyncio.run(scenario())
 
