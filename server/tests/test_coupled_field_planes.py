@@ -488,6 +488,76 @@ def test_plane_requests_reuse_the_job_skin_index_until_its_artifact_changes(stor
     assert not [key for key in body_index._skin_indexes if key[0] == "field"]
 
 
+def _skin(scale=1.):
+    triangles = _grid_cube(2) * scale
+    points, faces = np.unique(triangles.reshape(-1, 3), axis=0, return_inverse=True)
+    return SurfaceMesh(points, faces.reshape(-1, 3), np.ones(len(triangles), dtype=int), (), ())
+
+
+@pytest.fixture
+def skin_cache():
+    from server.jobs import body_index
+    body_index._skin_indexes.clear()
+    yield body_index
+    body_index._skin_indexes.clear()
+
+
+def test_skin_cache_holds_at_most_two_entries_within_a_byte_budget(skin_cache, monkeypatch):
+    body_index = skin_cache
+    meshes = [_skin(scale) for scale in (1., 2., 3.)]
+    for i, mesh in enumerate(meshes):
+        body_index.skin_indexes(f"job{i}", mesh, "off")
+    assert [key[0] for key in body_index._skin_indexes] == ["job1", "job2"]
+    size = body_index.skin_index_bytes(body_index.skin_triangles(meshes[0], "off"))
+    # A budget for one entry evicts the least recently used to fit.
+    monkeypatch.setattr(body_index, "SKIN_INDEX_CACHE_BYTES", size + size // 2)
+    body_index.skin_indexes("job1", meshes[1], "off")
+    body_index.skin_indexes("job0", meshes[0], "off")
+    assert [key[0] for key in body_index._skin_indexes] == ["job0"]
+    # An entry over the whole budget is built for its request, never cached.
+    monkeypatch.setattr(body_index, "SKIN_INDEX_CACHE_BYTES", size - 1)
+    entry = body_index.skin_indexes("job3", meshes[2], "off")
+    assert entry.ray().query([[1., 1., 1.]])[0].tolist() == [True]
+    assert [key[0] for key in body_index._skin_indexes] == ["job0"]
+    assert body_index.skin_indexes("job3", meshes[2], "off") is not entry
+
+
+def test_concurrent_first_requests_build_each_skin_index_once(skin_cache, monkeypatch):
+    import threading
+    import time
+    body_index = skin_cache
+    builds = {"ray": 0, "distance": 0}
+    for name, cls in (("ray", body_index.SkinRayIndex), ("distance", body_index.SkinDistanceIndex)):
+        original = cls.__init__
+        def slow(self, *args, _name=name, _original=original, **kwargs):
+            builds[_name] += 1
+            time.sleep(.2)
+            _original(self, *args, **kwargs)
+        monkeypatch.setattr(cls, "__init__", slow)
+    entry = body_index.skin_indexes("job", _skin(), "off")
+    start = threading.Barrier(2)
+    results = []
+    def request():
+        start.wait()
+        results.append((entry.ray(), entry.distance()))
+    threads = [threading.Thread(target=request) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert builds == {"ray": 1, "distance": 1}
+    assert results[0][0] is results[1][0] and results[0][1] is results[1][1]
+
+
+def test_deleting_the_trace_sidecar_forgets_the_job_skin_index(stored, skin_cache):
+    store, _, _, _, _ = stored
+    body_index = skin_cache
+    body_index.skin_indexes("field", _skin(), "off")
+    body_index.skin_indexes("other", _skin(2.), "off")
+    store.delete_fem_field("field")
+    assert [key[0] for key in body_index._skin_indexes] == ["other"]
+
+
 @pytest.mark.parametrize("mirror", [1., -1.])
 @pytest.mark.parametrize("offset", [5e-8, 5e-9])
 def test_ray_parity_beside_an_edge_between_very_different_heights(mirror, offset):
@@ -500,6 +570,63 @@ def test_ray_parity_beside_an_edge_between_very_different_heights(mirror, offset
     points = [[.5, -offset * mirror, 0], [.5, offset * mirror, 0]]
     inside, _ = SkinRayIndex(xyz[faces], [0, 0, 1]).query(points)
     assert inside.tolist() == [True, True]
+
+
+def _grid_cube(n=4):
+    """Outward triangles of [0, n]^3, each face n x n quads split alternately."""
+    vertices = {}
+    def vertex(point):
+        return vertices.setdefault(tuple(point), len(vertices))
+    faces = []
+    for axis in range(3):
+        for side in (0, n):
+            for i in range(n):
+                for j in range(n):
+                    def corner(a, b):
+                        point = [0, 0, 0]
+                        point[axis], point[(axis + 1) % 3], point[(axis + 2) % 3] = side, a, b
+                        return vertex(point)
+                    q = [corner(i, j), corner(i + 1, j), corner(i + 1, j + 1), corner(i, j + 1)]
+                    pair = ([[q[0], q[1], q[2]], [q[0], q[2], q[3]]] if (i + j) % 2
+                            else [[q[0], q[1], q[3]], [q[1], q[2], q[3]]])
+                    faces.extend(pair)
+    xyz = np.array(sorted(vertices, key=vertices.get), float)
+    triangles = xyz[np.array(faces)]
+    normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    outward = np.einsum("ij,ij->i", normals, triangles.mean(axis=1) - n / 2) > 0
+    triangles[~outward] = triangles[~outward][:, ::-1]
+    return triangles
+
+
+def test_ray_parity_is_exact_on_a_shared_diagonal_of_a_grid_cube():
+    from server.jobs.body_index import SkinRayIndex
+    # The (1,1,1) ray from (2, 1, 2.5) leaves through the shared diagonal of
+    # two top-face triangles. A row-dependent matmul rounded the shared
+    # vertices, and the query point, differently by row, so neither triangle
+    # counted the crossing. The point is queried at an even and an odd row.
+    inside, _ = SkinRayIndex(_grid_cube(), (1, 1, 1)).query([[2, 1, 2.5], [2, 2, 2], [2, 1, 2.5]])
+    assert inside.tolist() == [True, True, True]
+
+
+@pytest.mark.parametrize("direction", [(1, 1, 1), (1, 1, 0), (1, 0, 0), (0, 0, 1), (.371, .529, .763),
+                                       (-1, 2, 3), (1, -1, 1)])
+def test_ray_parity_on_a_grid_cube_through_vertices_edges_and_random_points(direction):
+    from server.jobs.body_index import SkinRayIndex
+    import itertools
+    n = 4
+    rng = np.random.default_rng(abs(hash(direction)) % 2 ** 32)
+    lattice = np.arange(-1, n + 2, .5)
+    # Lattice points send rays through shared vertices and along edges.
+    points = np.vstack([np.array(list(itertools.product(lattice, lattice, lattice))),
+                        rng.uniform(-1, n + 1, (3000, 3)),
+                        rng.integers(-1, n + 2, (500, 3)) + rng.uniform(-1e-12, 1e-12, (500, 3))])
+    # Points within 1e-9 of the skin count as on it, hence inside.
+    truth = np.all((points >= -1e-9) & (points <= n + 1e-9), axis=1)
+    triangles = _grid_cube(n)
+    for order in (np.arange(len(triangles)), rng.permutation(len(triangles))):
+        inside, _ = SkinRayIndex(triangles[order], direction).query(points)
+        wrong = np.flatnonzero(inside != truth)
+        assert not len(wrong), points[wrong[:5]].tolist()
 
 
 def test_interior_location_batches_tetrahedra_and_preserves_shared_face_priority(monkeypatch):

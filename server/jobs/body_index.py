@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from fractions import Fraction
 import hashlib
 import heapq
 import threading
@@ -176,24 +177,43 @@ def skin_triangles(mesh, symmetry):
 
 # One shared, deliberately irrational-looking ray direction for body parity.
 RAY_DIRECTION = (0.371, 0.529, 0.763)
-SKIN_INDEX_CACHE_SIZE = 4
+# Retained skins can be large: at most two entries, within a byte budget.
+SKIN_INDEX_CACHE_SIZE = 2
+SKIN_INDEX_CACHE_BYTES = 512 * 1024 * 1024
+
+
+def skin_index_bytes(triangles) -> int:
+    """Conservative bytes of an entry once both of its indexes are built.
+
+    The triangles, the ray index's projected copy and bins, and the distance
+    index's centroid tree and oriented leaf bounds measure about 6.5 times
+    the triangle array; eight leaves a margin.
+    """
+    return 8 * int(np.asarray(triangles).nbytes)
 
 
 class SkinIndexes:
     """A retained skin's triangles, with ray and distance indexes built on first use."""
     def __init__(self, triangles):
         self.triangles = triangles
+        self.nbytes = skin_index_bytes(triangles)
         self._ray = None
         self._distance = None
+        # Concurrent first requests on one entry build each index once.
+        self._lock = threading.Lock()
 
     def ray(self, check=lambda: None):
         if self._ray is None:
-            self._ray = SkinRayIndex(self.triangles, RAY_DIRECTION, check)
+            with self._lock:
+                if self._ray is None:
+                    self._ray = SkinRayIndex(self.triangles, RAY_DIRECTION, check)
         return self._ray
 
     def distance(self, check=lambda: None):
         if self._distance is None:
-            self._distance = SkinDistanceIndex(self.triangles, check)
+            with self._lock:
+                if self._distance is None:
+                    self._distance = SkinDistanceIndex(self.triangles, check)
         return self._distance
 
 
@@ -213,9 +233,12 @@ def skin_identity(mesh) -> str:
 def skin_indexes(job_id: str, mesh, symmetry: str) -> SkinIndexes:
     """Per-job skin indexes, reused across plane requests in a small LRU.
 
-    The key is the retained BEM-trace mesh's SHA-256 plus symmetry. A changed
-    artifact replaces the job's entries; ``forget_skin_indexes`` drops them
-    when the artifact is gone.
+    The key is the retained BEM-trace mesh's SHA-256 plus symmetry. Every
+    channel of a job shares one retained mesh, so channels share one entry;
+    a changed artifact replaces the job's entries, and ``forget_skin_indexes``
+    drops them when the artifact is deleted. Least recently used entries are
+    evicted to fit the entry and byte budgets; an entry larger than the whole
+    budget is built for its request and never cached.
     """
     key = (str(job_id), skin_identity(mesh), str(symmetry))
     with _skin_lock:
@@ -228,10 +251,14 @@ def skin_indexes(job_id: str, mesh, symmetry: str) -> SkinIndexes:
     triangles = skin_triangles(mesh, symmetry)
     triangles.setflags(write=False)  # Shared by every request on this entry.
     entry = SkinIndexes(triangles)
+    if entry.nbytes > SKIN_INDEX_CACHE_BYTES:
+        return entry
     with _skin_lock:
         entry = _skin_indexes.setdefault(key, entry)
         _skin_indexes.move_to_end(key)
-        while len(_skin_indexes) > SKIN_INDEX_CACHE_SIZE:
+        while len(_skin_indexes) > 1 and (
+                len(_skin_indexes) > SKIN_INDEX_CACHE_SIZE
+                or sum(e.nbytes for e in _skin_indexes.values()) > SKIN_INDEX_CACHE_BYTES):
             _skin_indexes.popitem(last=False)
     return entry
 
@@ -256,13 +283,19 @@ class SkinRayIndex:
         u = np.cross(helper, n)
         u /= np.linalg.norm(u)
         self.basis = np.array([u, np.cross(n, u), n]).T
-        self.triangles = triangles @ self.basis
+        # Each shared vertex is projected once, by one elementwise expression,
+        # so neighbouring triangles see bit-identical coordinates and the
+        # edge signs below are exactly antisymmetric. A matmul may round the
+        # same vertex differently depending on its row.
+        triangles = np.asarray(triangles, dtype=float)
+        vertices, inverse = np.unique(triangles.reshape(-1, 3), axis=0, return_inverse=True)
+        self.triangles = _project(vertices, self.basis)[inverse.ravel()].reshape(triangles.shape)
         self.bins = TriangleBins(self.triangles, 2, check)
         self.pair_count = 0  # Deterministic scaling regression instrumentation.
         self.peak_pairs = 0
 
     def query(self, points, check=lambda: None):
-        projected = np.asarray(points, float) @ self.basis
+        projected = _project(np.asarray(points, float).reshape(-1, 3), self.basis)
         inside = np.zeros(len(points), bool)
         clearance = np.full(len(points), np.inf)
         for indices, candidates in self.bins.leaves(projected, check):
@@ -322,14 +355,40 @@ class SkinRayIndex:
         return inside | (clearance <= 1e-9), clearance
 
 
+# ccwerrboundA = (3 + 16 eps) eps, doubled for margin.
+ORIENT_ERROR_BOUND = 2 * (3 + 16 * 2.0 ** -53) * 2.0 ** -53
+
+
+def _project(points, basis):
+    """Deterministic per-point projection: the same point always rounds alike."""
+    x, y, z = points[:, 0:1], points[:, 1:2], points[:, 2:3]
+    return x * basis[0] + y * basis[1] + z * basis[2]
+
+
 def _edge_function(start, end, points):
     """Twice the signed area of (start, end, point), canonical per edge."""
     swap = (start[:, 0] > end[:, 0]) | ((start[:, 0] == end[:, 0]) & (start[:, 1] > end[:, 1]))
     low = np.where(swap[:, None], end, start)
     high = np.where(swap[:, None], start, end)
     delta = high - low
-    value = (delta[:, 0] * (points[..., 1] - low[:, 1])
-             - delta[:, 1] * (points[..., 0] - low[:, 0]))
+    left = delta[:, 0] * (points[..., 1] - low[:, 1])
+    right = delta[:, 1] * (points[..., 0] - low[:, 0])
+    value = left - right
+    # Shewchuk's orient2d bound: beyond it the rounded sign is exact. Within
+    # it (a ray through a shared vertex or along an edge), the sign is taken
+    # exactly from the stored float coordinates, so the edges around a vertex
+    # stay mutually consistent and the ray enters exactly one triangle there.
+    uncertain = np.abs(value) <= ORIENT_ERROR_BOUND * (np.abs(left) + np.abs(right))
+    if uncertain.any():
+        value = value.copy()
+        points = np.broadcast_to(points, value.shape + (2,))
+        for index in zip(*np.nonzero(uncertain)):
+            edge = index[-1]
+            px, py = (Fraction(float(c)) for c in points[index])
+            lx, ly = (Fraction(float(c)) for c in low[edge])
+            hx, hy = (Fraction(float(c)) for c in high[edge])
+            exact = (hx - lx) * (py - ly) - (hy - ly) * (px - lx)
+            value[index] = (exact > 0) - (exact < 0)
     return np.where(swap, -value, value)
 
 

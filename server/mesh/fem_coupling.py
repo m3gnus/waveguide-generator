@@ -59,6 +59,19 @@ FACING_MIN_PROBES = 2
 # Planes this far from parallel cannot face each other across the tolerance
 # over the probe area; their closest points lie on an edge.
 FACING_MIN_NORMAL_DOT = .5
+# When the rings are inconclusive (an acute wedge whose apex is the closest
+# point, or an overlap narrower than the rings), the pair is decided by dense
+# samples: a cell-centred UV grid over the smaller face, and points along both
+# faces' boundary curves stepped this far into their own face. A shared edge
+# or corner then never projects onto the other face's boundary, while any
+# overlap wider than the inset is found.
+FACING_GRID = 32
+FACING_BOUNDARY_SAMPLES = 64
+FACING_BOUNDARY_INSET_MM = 1e-5
+# Planes with normals this close are coplanar only if each face's own
+# vertices lie this close to the other's plane.
+COPLANAR_NORMAL_DOT = 1 - 1e-12
+COPLANAR_DISTANCE_MM = 1e-7
 
 
 class _Face:
@@ -104,14 +117,22 @@ def _beyond_plane(plane: _Face, other: _Face, gap: float) -> bool:
     return bool(signed.min() > gap or signed.max() < -gap)
 
 
+def _on_plane(plane: _Face, other: _Face) -> bool:
+    """True when every hull point of ``other`` lies on ``plane``'s plane."""
+    signed = other.hull @ plane.normal - plane.offset
+    return bool(np.abs(signed).max() <= COPLANAR_DISTANCE_MM)
+
+
 def _cannot_face(a: _Face, b: _Face, gap: float) -> bool:
     """Exact pre-filters before an OCC distance; each keeps every facing pair."""
     if a.normal is not None and b.normal is not None:
         dot = abs(float(a.normal @ b.normal))
         if dot < FACING_MIN_NORMAL_DOT:
             return True
-        if dot > 1 - 1e-12 and abs(a.offset - np.sign(a.normal @ b.normal) * b.offset) <= 1e-7:
-            # Coplanar: any separation is tangential to both faces.
+        if dot > COPLANAR_NORMAL_DOT and _on_plane(a, b) and _on_plane(b, a):
+            # Coplanar: any separation is tangential to both faces. Measured
+            # at the faces' own vertices, not by offsets from the origin:
+            # nearly parallel planes diverge with distance from their crossing.
             return True
     return _beyond_plane(a, b, gap) or _beyond_plane(b, a, gap)
 
@@ -175,13 +196,108 @@ def _facing_probes(gmsh: Any, a: int, b: int, p: np.ndarray, normal: np.ndarray,
     return count
 
 
+def _normals(gmsh: Any, tag: int, parameters: np.ndarray) -> np.ndarray:
+    normals = np.asarray(gmsh.model.getNormal(tag, parameters.ravel().tolist()), dtype=float).reshape(-1, 3)
+    return normals / np.maximum(np.linalg.norm(normals, axis=1), 1e-300)[:, None]
+
+
+def _inside(gmsh: Any, tag: int, parameters: np.ndarray) -> np.ndarray:
+    return np.array([bool(gmsh.model.isInside(2, tag, uv.tolist(), True)) for uv in parameters], dtype=bool)
+
+
+def _facing_samples(gmsh: Any, a: int, b: int, points: np.ndarray, tolerance: float) -> bool:
+    """True when any point on face ``a`` faces face ``b`` within the gap."""
+    if not len(points):
+        return False
+    on_a, uv_a = gmsh.model.getClosestPoint(2, a, points.ravel().tolist())
+    on_a = np.asarray(on_a, dtype=float).reshape(-1, 3)
+    uv_a = np.asarray(uv_a, dtype=float).reshape(-1, 2)
+    keep = _inside(gmsh, a, uv_a)
+    if not keep.any():
+        return False
+    on_a, uv_a = on_a[keep], uv_a[keep]
+    on_b, uv_b = gmsh.model.getClosestPoint(2, b, on_a.ravel().tolist())
+    on_b = np.asarray(on_b, dtype=float).reshape(-1, 3)
+    uv_b = np.asarray(uv_b, dtype=float).reshape(-1, 2)
+    gap = on_b - on_a
+    length = np.linalg.norm(gap, axis=1)
+    close = length <= tolerance + 1e-7
+    if not close.any():
+        return False
+    n_a = _normals(gmsh, a, uv_a[close])
+    n_b = _normals(gmsh, b, uv_b[close])
+    gap, length = gap[close], length[close]
+    facing = ((np.abs(np.einsum("ij,ij->i", n_a, n_b)) >= FACING_MIN_NORMAL_DOT)
+              & ((length <= 1e-9)
+                 | (np.abs(np.einsum("ij,ij->i", gap, n_a)) >= FACING_MIN_NORMAL_DOT * length)))
+    if not facing.any():
+        return False
+    return bool(_inside(gmsh, b, uv_b[close][facing]).any())
+
+
+def _grid_samples(gmsh: Any, tag: int) -> np.ndarray:
+    """Cell-centred points over a face's parameter domain (trimmed later)."""
+    lower, upper = (np.asarray(v, dtype=float) for v in gmsh.model.getParametrizationBounds(2, tag))
+    fractions = (np.arange(FACING_GRID) + .5) / FACING_GRID
+    u, v = np.meshgrid(lower[0] + fractions * (upper[0] - lower[0]),
+                       lower[1] + fractions * (upper[1] - lower[1]), indexing="ij")
+    parameters = np.column_stack([u.ravel(), v.ravel()])
+    return np.asarray(gmsh.model.getValue(2, tag, parameters.ravel().tolist()), dtype=float).reshape(-1, 3)
+
+
+def _boundary_samples(gmsh: Any, tag: int) -> np.ndarray:
+    """Points along a face's boundary curves, stepped into the face on both sides.
+
+    Curve end points are not used: at a corner a step along one edge lands on
+    the other edge, and a shared edge must not count as an overlap.
+    """
+    samples = []
+    for _dim, curve in gmsh.model.getBoundary([(2, tag)], combined=False, oriented=False):
+        curve = abs(int(curve))
+        lower, upper = (float(np.ravel(v)[0]) for v in gmsh.model.getParametrizationBounds(1, curve))
+        parameters = lower + (np.arange(FACING_BOUNDARY_SAMPLES) + .5) / FACING_BOUNDARY_SAMPLES * (upper - lower)
+        points = np.asarray(gmsh.model.getValue(1, curve, parameters.tolist()), dtype=float).reshape(-1, 3)
+        tangents = np.asarray(gmsh.model.getDerivative(1, curve, parameters.tolist()), dtype=float).reshape(-1, 3)
+        uv = np.asarray(gmsh.model.getParametrization(2, tag, points.ravel().tolist()), dtype=float).reshape(-1, 2)
+        across = np.cross(_normals(gmsh, tag, uv), tangents)
+        lengths = np.linalg.norm(across, axis=1)
+        valid = lengths > 0
+        across = across[valid] / lengths[valid, None]
+        points = points[valid]
+        samples.extend([points + FACING_BOUNDARY_INSET_MM * across, points - FACING_BOUNDARY_INSET_MM * across])
+    return np.concatenate(samples) if samples else np.empty((0, 3))
+
+
+def _face_width(gmsh: Any, tag: int) -> float:
+    """A face's characteristic width, twice its area over its perimeter."""
+    area = float(gmsh.model.occ.getMass(2, tag))
+    perimeter = sum(float(gmsh.model.occ.getMass(1, abs(int(curve))))
+                    for _dim, curve in gmsh.model.getBoundary([(2, tag)], combined=False, oriented=False))
+    return 2 * area / perimeter if perimeter > 0 else 0.
+
+
 def _faces_face_each_other(gmsh: Any, a: int, b: int, p: np.ndarray, q: np.ndarray,
                            normals: Sequence[np.ndarray], tolerance: float) -> bool:
-    """Require an overlapping projected area, not just near edges or corners."""
+    """Require an overlapping projected area, not just near edges or corners.
+
+    Conservative: a false refusal is cheaper than accepting a contact. Rings
+    around the closest points decide the common case; otherwise faces
+    narrower than the rings, or any dense sample over an overlap, refuse.
+    Only edge or corner proximity, with no overlapping sample, is accepted.
+    """
     count = _facing_probes(gmsh, a, b, p, normals[0], tolerance)
     if count >= FACING_MIN_PROBES:
         return True
-    return count + _facing_probes(gmsh, b, a, q, normals[1], tolerance) >= FACING_MIN_PROBES
+    if count + _facing_probes(gmsh, b, a, q, normals[1], tolerance) >= FACING_MIN_PROBES:
+        return True
+    n_a, n_b = (np.asarray(normal, dtype=float) / max(np.linalg.norm(normal), 1e-300) for normal in normals)
+    if (abs(float(n_a @ n_b)) >= FACING_MIN_NORMAL_DOT
+            and min(_face_width(gmsh, a), _face_width(gmsh, b)) < FACING_PROBE_RADIUS_MM):
+        return True
+    small, large = (a, b) if gmsh.model.occ.getMass(2, a) <= gmsh.model.occ.getMass(2, b) else (b, a)
+    return (_facing_samples(gmsh, small, large, _grid_samples(gmsh, small), tolerance)
+            or _facing_samples(gmsh, a, b, _boundary_samples(gmsh, a), tolerance)
+            or _facing_samples(gmsh, b, a, _boundary_samples(gmsh, b), tolerance))
 
 
 def _near_contact_problem(gmsh: Any, region_data: Sequence[Any], *,

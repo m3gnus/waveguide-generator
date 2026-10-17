@@ -1431,6 +1431,71 @@ def test_facing_faces_inside_the_tolerance_remain_near_contact(gap, overlap):
     assert _near_contact([first, (0, 30.1, 0, 40, 30, 20)])[0] is None
 
 
+def _footprint_prism(gmsh, footprint, y, height):
+    """A prism over an (x, z) footprint, its bottom face in the plane at ``y``."""
+    occ = gmsh.model.occ
+    points = [occ.addPoint(x, y + slope_y, z) for x, z, slope_y in footprint]
+    loop = occ.addCurveLoop([occ.addLine(points[i], points[(i + 1) % len(points)]) for i in range(len(points))])
+    surface = occ.addPlaneSurface([loop])
+    return next(tag for dim, tag in occ.extrude([(2, surface)], 0, height, 0) if dim == 3)
+
+
+@pytest.mark.parametrize("degrees", [1, 2, 5, 10, 20])
+@pytest.mark.parametrize("apex", ["corner", "mid-edge"])
+def test_acute_wedge_overlap_at_the_closest_point_is_near_contact(degrees, apex):
+    # Box A's top face spans x 0..40, z 0..20 at y=30. Region B's bottom
+    # face, 0.1 um above, covers z >= 20 - (x - x0) tan(angle): a wedge whose
+    # apex is OCC's closest point, so the probe rings barely enter it.
+    slope, x0 = np.tan(np.radians(degrees)), 0 if apex == "corner" else 20
+    footprint = [(x0, 20, 0), (x0 + 100, 20 - 100 * slope, 0), (x0 + 100, 100, 0), (-100, 100, 0), (-100, 20, 0)]
+    problem, _calls = _near_contact([(0, 0, 0, 40, 30, 20)], prisms=[
+        lambda gmsh: _footprint_prism(gmsh, footprint, 30 + 1e-4, 10)])
+    assert problem and "near-contact" in problem
+
+
+@pytest.mark.parametrize("second", [
+    (18, 30 + 1e-4, 8, 4e-3, 1, 4e-3),        # A 4 um square face, wholly facing.
+    (0, 30 + 1e-4, 20 - 5e-4, 40, 10, 20),    # A 0.5 um wide, 40 mm long overlap.
+    (40 - 4e-3, 30 + 1e-4, 20 - 4e-3, 10, 10, 10),  # A 4 um corner overlap.
+    # Too small to sample against the rings: refused even beside an edge only.
+    (20, 30 + 5e-4, 20 + 5e-4, 4e-3, 1, 4e-3),
+], ids=["4um-face", "0.5um-strip", "4um-corner", "4um-face-edge-only"])
+def test_faces_or_overlaps_narrower_than_the_probe_rings_are_near_contact(second):
+    problem, _calls = _near_contact([(0, 0, 0, 40, 30, 20), second])
+    assert problem and "near-contact" in problem
+
+
+def test_coplanar_filter_measures_tilted_planes_at_the_faces_not_the_origin():
+    # B's bottom plane passes through y=30 at the origin with a 1e-6 rad tilt:
+    # its normal is within 1e-12 of A's and its origin offset matches, but
+    # 700 mm away it sits 0.69-0.71 um above A's top face, over 400 mm^2.
+    tilt = 1e-6
+    footprint = [(690, 0, 690 * tilt), (710, 0, 710 * tilt), (710, 20, 710 * tilt), (690, 20, 690 * tilt)]
+    problem, _calls = _near_contact([(690, 0, 0, 20, 30, 20)], prisms=[
+        lambda gmsh: _footprint_prism(gmsh, footprint, 30, 10)])
+    assert problem and "near-contact" in problem
+
+
+@pytest.mark.parametrize("gap", [1e-4, .1])
+def test_curved_faces_facing_inside_the_tolerance_are_near_contact(gap):
+    def tube(gmsh):
+        occ = gmsh.model.occ
+        outer = occ.addCylinder(0, 0, 0, 0, 0, 20, 12)
+        hole = occ.addCylinder(0, 0, -1, 0, 0, 22, 10 + gap)
+        return occ.cut([(3, outer)], [(3, hole)])[0][0][1]
+
+    problem, _calls = _near_contact([], prisms=[
+        lambda gmsh: gmsh.model.occ.addCylinder(0, 0, 0, 0, 0, 20, 10), tube])
+    assert (problem is not None) == (gap < 1e-3)
+
+
+@pytest.mark.parametrize("gap", [1e-4, .1])
+def test_sphere_resting_on_a_plane_inside_the_tolerance_is_near_contact(gap):
+    problem, _calls = _near_contact([(0, 0, 0, 40, 30, 20)], prisms=[
+        lambda gmsh: gmsh.model.occ.addSphere(20, 30 + 10 + gap, 10, 10)])
+    assert (problem is not None) == (gap < 1e-3)
+
+
 def _faceted_prism(gmsh, facets, radius, height, hole=None):
     occ = gmsh.model.occ
 

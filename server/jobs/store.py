@@ -341,6 +341,15 @@ def _copy_previous_snapshot(source: Path, rotated: Path, deadline: float) -> boo
             _unlink_or_log(Path(str(temporary) + suffix))
 
 
+def _forget_skin_indexes(job_id: str) -> None:
+    """Drop plane requests' cached skin indexes for a removed trace sidecar."""
+    import sys
+
+    body_index = sys.modules.get("server.jobs.body_index")
+    if body_index is not None:  # Never loaded: nothing is cached.
+        body_index.forget_skin_indexes(job_id)
+
+
 def _unlink_or_log(path: Path) -> None:
     """Remove a leftover snapshot file; one held open stays for the next start."""
 
@@ -2467,6 +2476,7 @@ class JobStore:
             conn.execute("""UPDATE simulation_jobs SET task_metadata_json = json_remove(
                 task_metadata_json, '$.has_bem_traces_artifact', '$.bem_traces_artifact_bytes')
                 WHERE id = ?""", (job_id,))
+        _forget_skin_indexes(job_id)
         return existed
 
     def store_radiation_impedance(self, job_id: str, matrix_npz: bytes) -> None:
@@ -2963,6 +2973,7 @@ class JobStore:
         for job_id in running_ids:
             _unlink_or_log(self._fem_field_path(job_id))
             _unlink_or_log(self._bem_traces_path(job_id))
+            _forget_skin_indexes(job_id)
         # Staging files have no metadata and cannot survive a process restart.
         for directory in self.field_traces_dir.iterdir() if self.field_traces_dir.exists() else ():
             if not directory.is_dir() or directory.is_symlink():
@@ -3354,6 +3365,7 @@ class JobStore:
         for job_id in fem_ids:
             _unlink_or_log(self._fem_field_path(job_id))
             _unlink_or_log(self._bem_traces_path(job_id))
+            _forget_skin_indexes(job_id)
         if deleted_results != len(removed_ids):  # pragma: no cover - SQLite rowcount invariant
             logger.warning(
                 "Retention selected %d result ids but SQLite reported %d deletions",
