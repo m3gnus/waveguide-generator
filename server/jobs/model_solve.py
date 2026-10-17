@@ -471,6 +471,8 @@ def _bind_press(store: Any, model_id: str, body: ModelSolveRequest, job_id: str)
 
     store.set_setting(_PRESS_KEY + body.client_request_id, {
         "job_id": job_id, "press_sha256": press_digest(body), "model_id": model_id,
+        # Prepared-mesh collection keeps the mesh a remembered press names.
+        "prepared_id": body.prepared_id,
     })
     return job_id
 
@@ -750,6 +752,8 @@ async def solve_model(state: Any, model_id: str, body: ModelSolveRequest) -> str
     bound = await asyncio.to_thread(_bound_press, runtime, store, model_id, body)
     if bound is not None:
         return bound
+    # Marked used before it is read: a collection deciding meanwhile keeps it.
+    await asyncio.to_thread(store.touch_ingest, body.prepared_id)
     model, record = await asyncio.to_thread(_model_and_record, store, model_id, body.prepared_id)
     if model.get("producer") == FILE_PRODUCER:
         job_id = await _solve_file(runtime, store, model_id, body, record)
@@ -779,6 +783,9 @@ async def submit_imported_request(
     assert isinstance(geometry, ImportedGeometrySource)
     await runtime.start()
     store = runtime.cadlink_store
+    if store is not None:
+        # Marked used before it is read, as a Solve of the model does.
+        await asyncio.to_thread(store.touch_ingest, geometry.ingest_id)
     row = await asyncio.to_thread(store.get_ingest, geometry.ingest_id) if store is not None else None
     if row is None:
         return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=setup_revision_id)

@@ -911,6 +911,11 @@ class CadLinkStore:
             ingest_columns = {row["name"] for row in conn.execute("PRAGMA table_info(ingests)")}
             if "model_id" not in ingest_columns:
                 conn.execute("ALTER TABLE ingests ADD COLUMN model_id TEXT")
+            # When a prepared mesh was last used (a Solve of it, or a dedupe
+            # that answered with it), so collection gives it its grace period
+            # from then (server/mesh/prepared_gc.py). Nullable and additive.
+            if "last_used_at" not in ingest_columns:
+                conn.execute("ALTER TABLE ingests ADD COLUMN last_used_at TEXT")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS ingests_by_model ON ingests(model_id, created_at)"
             )
@@ -2371,6 +2376,160 @@ class CadLinkStore:
     def get_model(self, model_id: str) -> dict[str, Any] | None:
         self.initialize()
         return self._read_one("SELECT * FROM imported_models WHERE model_id = ?", (model_id,))
+
+    # -- prepared-mesh collection (server/mesh/prepared_gc.py) ------------------
+
+    def touch_ingest(self, ingest_id: str) -> None:
+        """Note that a prepared mesh is in use now: collection waits a grace period from here."""
+
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            conn.execute(
+                "UPDATE ingests SET last_used_at = ? WHERE ingest_id = ?", (utc_now(), ingest_id)
+            )
+
+    def collection_inventory(self, terminal_states: Iterable[str]) -> dict[str, Any]:
+        """One consistent read of everything that decides which prepared meshes are kept."""
+
+        self.initialize()
+        terminal = sorted(set(terminal_states))
+        marks = ", ".join("?" for _ in terminal) or "''"
+        with self._lock:
+            conn = self._connect()
+            conn.execute("BEGIN")
+            try:
+                ingests = [dict(row) for row in conn.execute(
+                    "SELECT ingest_id, manifest_sha256, record_json, created_at, last_used_at, "
+                    "model_id FROM ingests ORDER BY created_at, ingest_id"
+                )]
+                latest = {
+                    str(row[0]) for row in conn.execute(
+                        "SELECT latest_ingest_id FROM imported_models "
+                        "WHERE latest_ingest_id IS NOT NULL"
+                    )
+                }
+                # A preparation whose operation is unfinished, or whose
+                # operation row is gone, is the operation's to keep.
+                preparations = [dict(row) for row in conn.execute(
+                    "SELECT p.preparation_id, p.operation_id, p.ingest_id, o.state "
+                    "FROM cad_preparations p LEFT JOIN cad_operations o "
+                    "ON o.operation_id = p.operation_id"
+                )]
+                unfinished = [dict(row) for row in conn.execute(
+                    "SELECT * FROM cad_operations WHERE state NOT IN (" + marks + ")", terminal
+                )]
+                revisions = [str(row[0]) for row in conn.execute(
+                    "SELECT setup_json FROM cad_setup_revisions"
+                )]
+                settings = [dict(row) for row in conn.execute(
+                    "SELECT key, value_json, updated_at FROM cad_settings"
+                )]
+            finally:
+                conn.commit()
+        return {
+            "ingests": ingests,
+            "latest": latest,
+            "preparations": preparations,
+            "unfinished_operations": unfinished,
+            "revisions": revisions,
+            "settings": settings,
+        }
+
+    def delete_unused_ingest(
+        self, ingest_id: str, *, used_before: str, terminal_states: Iterable[str]
+    ) -> dict[str, Any] | None:
+        """Delete one ingest row if, checked again inside the transaction, nothing new holds it.
+
+        Rechecked here: it was neither made nor used since ``used_before``, it
+        is no model's latest preparation, no unfinished operation prepared it
+        and no press binding names it. Only the row goes: its files are the
+        caller's to remove after this commits, so a crash in between leaves
+        at worst files no row names, never a row naming missing files.
+        """
+
+        self.initialize()
+        terminal = sorted(set(terminal_states))
+        marks = ", ".join("?" for _ in terminal) or "''"
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM ingests WHERE ingest_id = ? AND created_at < ? "
+                "AND (last_used_at IS NULL OR last_used_at < ?)",
+                (ingest_id, used_before, used_before),
+            ).fetchone()
+            if row is None:
+                return None
+            if conn.execute(
+                "SELECT 1 FROM imported_models WHERE latest_ingest_id = ?", (ingest_id,)
+            ).fetchone():
+                return None
+            if conn.execute(
+                "SELECT 1 FROM cad_preparations p LEFT JOIN cad_operations o "
+                "ON o.operation_id = p.operation_id WHERE p.ingest_id = ? "
+                "AND (o.state IS NULL OR o.state NOT IN (" + marks + "))",
+                (ingest_id, *terminal),
+            ).fetchone():
+                return None
+            if conn.execute(
+                "SELECT 1 FROM cad_operations WHERE preparation_id = ? "
+                "AND state NOT IN (" + marks + ")",
+                (ingest_id, *terminal),
+            ).fetchone():
+                return None
+            if conn.execute(
+                "SELECT 1 FROM cad_settings WHERE key LIKE 'model-solve-press:%' "
+                "AND json_extract(value_json, '$.prepared_id') = ?",
+                (ingest_id,),
+            ).fetchone():
+                return None
+            conn.execute("DELETE FROM ingests WHERE ingest_id = ?", (ingest_id,))
+        return dict(row)
+
+    def ingest_records(self) -> list[str]:
+        """Every surviving ingest's record, as stored text."""
+
+        self.initialize()
+        with self._lock:
+            return [
+                str(row[0]) for row in self._connect().execute("SELECT record_json FROM ingests")
+            ]
+
+    def mentions(self, token: str) -> bool:
+        """Whether any text in any table of this store contains ``token``."""
+
+        self.initialize()
+        with self._lock:
+            conn = self._connect()
+            tables = [
+                str(row[0]) for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' "
+                    "AND name NOT LIKE 'sqlite_%'"
+                )
+            ]
+            for table in tables:
+                columns = [
+                    str(column["name"])
+                    for column in conn.execute(f'PRAGMA table_info("{table}")')
+                ]
+                if not columns:
+                    continue
+                where = " OR ".join(f'instr(CAST("{name}" AS TEXT), ?) > 0' for name in columns)
+                if conn.execute(
+                    f'SELECT 1 FROM "{table}" WHERE {where} LIMIT 1', (token,) * len(columns)
+                ).fetchone():
+                    return True
+        return False
+
+    def delete_settings_if_unchanged(self, rows: Iterable[tuple[str, str]]) -> int:
+        """Delete ``(key, updated_at)`` settings rows that were not written since they were read."""
+
+        self.initialize()
+        removed = 0
+        with self._lock, self._transaction() as conn:
+            for key, updated_at in rows:
+                removed += conn.execute(
+                    "DELETE FROM cad_settings WHERE key = ? AND updated_at = ?", (key, updated_at)
+                ).rowcount
+        return removed
 
     def save(
         self,

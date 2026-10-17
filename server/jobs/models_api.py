@@ -43,6 +43,7 @@ from server.jobs.runtime import ImportedSolveRefusal
 from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.file_import import MAX_MESH_BYTES, mesh_text, parse_file_mesh, prepare_file_mesh
 from server.mesh.integrity import mesh_integrity_report
+from server.mesh.prepared_gc import prepared_mesh_use
 from server.platform.staging import publish_staging_directory
 from server.workspace.archive import archive_folder_slug
 
@@ -144,9 +145,22 @@ def register_mesh(
     The files are published before the short insert transaction, never inside
     it, so no store lock or write transaction waits on a 32 MB fsync.
     ``validate_record`` checks the record before anything is published (a
-    replay holds the setup it carries to the reconstructed sources).
+    replay holds the setup it carries to the reconstructed sources). No
+    prepared-mesh collection runs meanwhile, and a preparation this answers
+    with is marked used, so collection gives it its grace period again.
     """
 
+    with prepared_mesh_use():
+        return _register_mesh(store, data_dir, body, validate_record=validate_record)
+
+
+def _register_mesh(
+    store: Any,
+    data_dir: Path,
+    body: MeshRegistration,
+    *,
+    validate_record: Any = None,
+) -> dict[str, Any]:
     original = parse_file_mesh(body.msh_text)
     mesh, transform = prepare_file_mesh(original, body.units, body.forward, body.up)
     if len(set(body.source_tags)) != len(body.source_tags) or set(body.source_tags) - set(
@@ -174,6 +188,7 @@ def register_mesh(
         if _intact(existing, source_bytes, solver_text):
             if validate_record is not None:
                 validate_record(dict(existing))
+            store.touch_ingest(str(existing["ingest_id"]))
             return existing
 
     parent = data_dir / "imports" / "files"

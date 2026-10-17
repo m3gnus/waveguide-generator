@@ -37,6 +37,7 @@ from server.mesh.imported import (
     verify_artifact_reduced_orientation,
 )
 from server.mesh.artifact import mesh_text_sha256, read_verified_import_mesh
+from server.mesh.prepared_gc import prepared_mesh_use
 from server.integration.mesher_identity import mesher_identity
 from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
@@ -1261,7 +1262,18 @@ def _mesher_denial(message: str) -> str:
     return text.rstrip(".") or "the meshed boundary denies the cut"
 
 
-def ingest_bundle(
+def ingest_bundle(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """:func:`_ingest_bundle`, with prepared-mesh collection held off meanwhile.
+
+    A cache hit adopts a mesh file another record already names; no
+    collection may decide that file is unused while this runs.
+    """
+
+    with prepared_mesh_use():
+        return _ingest_bundle(*args, **kwargs)
+
+
+def _ingest_bundle(
     bundle_path: str | Path,
     mesh: Mapping[str, Any],
     skipped_source_ids: list[str],
@@ -2506,6 +2518,15 @@ def resolve_deferred_viewport(
 
 
 def build_deferred_viewport(
+    record: Mapping[str, Any], data_dir: str | Path
+) -> dict[str, Any] | None:
+    """:func:`_build_deferred_viewport`, with prepared-mesh collection held off meanwhile."""
+
+    with prepared_mesh_use():
+        return _build_deferred_viewport(record, data_dir)
+
+
+def _build_deferred_viewport(
     record: Mapping[str, Any], data_dir: str | Path
 ) -> dict[str, Any] | None:
     """Tessellate the display mesh for an already-published record.

@@ -976,6 +976,33 @@ class JobStore:
             ).fetchone()
         return None if row is None else str(row["job_id"])
 
+    def prepared_mesh_references(self) -> list[dict[str, str]]:
+        """Every job's request and metadata text, in any state (``server/mesh/prepared_gc.py``).
+
+        Collection keeps every prepared mesh any of these names, so it reads
+        them all: queued, running, complete, failed, cancelled and archived.
+        """
+
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                """SELECT id, config_json, config_summary_json, task_metadata_json,
+                          script_snapshot_json
+                   FROM simulation_jobs"""
+            ).fetchall()
+        return [
+            {
+                "id": str(row["id"]),
+                "text": "\n".join(
+                    str(row[name] or "")
+                    for name in (
+                        "config_json", "config_summary_json", "task_metadata_json",
+                        "script_snapshot_json",
+                    )
+                ),
+            }
+            for row in rows
+        ]
+
     def job_for_model_solve(self, request_id: str) -> str | None:
         """The job a model Solve continuing a refused CAD solve made (``model_solve.py``).
 

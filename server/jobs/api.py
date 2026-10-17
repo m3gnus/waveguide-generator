@@ -71,6 +71,8 @@ from server.jobs.runtime import (
     resolve_submission,
 )
 from server.jobs.store import JobStore, SubmissionConflictError
+from server.cadlink.operations import TERMINAL_STATES
+from server.mesh.prepared_gc import PreparedMeshCollector
 from server.engines.registry import EngineRegistry
 from server.platform.origin import websocket_request_allowed
 from server.updates.restart import UPDATE_RESTART_PENDING, RestartApproval
@@ -403,8 +405,12 @@ def create_jobs_router(
     *,
     extra_ws_origins: Collection[str] = (),
     restart_approval: RestartApproval | None = None,
+    after_delete: Callable[[], None] | None = None,
 ) -> APIRouter:
     """Build bound routes with v1 error mappings and response shapes.
+
+    ``after_delete`` is told when jobs were deleted (it schedules prepared-mesh
+    collection; it never waits for it).
 
     Route coverage follows v1 ``server/api/routes_simulation.py:69-297``.
 
@@ -689,6 +695,8 @@ def create_jobs_router(
             raise HTTPException(status_code=404, detail="Job not found") from exc
         except JobConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if after_delete is not None:
+            after_delete()
         return DeleteResponse(deleted=True, job_id=job_id)
 
     @router.post("/api/stop/{job_id}", response_model=StopResponse)
@@ -1141,6 +1149,8 @@ def create_jobs_router(
     @router.delete("/api/jobs/clear-failed", response_model=ClearFailedResponse)
     async def clear_failed() -> ClearFailedResponse:
         deleted_ids = await runtime.clear_failed()
+        if deleted_ids and after_delete is not None:
+            after_delete()
         return ClearFailedResponse(
             deleted=bool(deleted_ids),
             deleted_count=len(deleted_ids),
@@ -1155,6 +1165,8 @@ def create_jobs_router(
             raise HTTPException(status_code=404, detail="Job not found") from exc
         except JobConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if after_delete is not None:
+            after_delete()
         return DeleteResponse(deleted=True, job_id=job_id)
 
     @router.websocket("/ws/jobs")
@@ -1217,11 +1229,24 @@ def mount_jobs(
     application.add_middleware(AutoExportMiddleware, owner=export_owner)
     application.include_router(router_for(export_owner))
     application.state.jobs_runtime = runtime
+    # Prepared meshes nothing uses are collected off the request path: once
+    # after startup and after jobs are deleted (CAD-OPERATIONS.md, "Retention").
+    collector = PreparedMeshCollector(
+        application.state.cadlink_store,
+        runtime.store,
+        data_dir,
+        terminal_states=TERMINAL_STATES,
+        restart_pending=runtime._restart_pending,
+    )
+    application.state.prepared_mesh_collector = collector
+    application.router.add_event_handler("startup", collector.startup)
+    application.router.add_event_handler("shutdown", collector.shutdown)
     application.include_router(
         create_jobs_router(
             runtime,
             extra_ws_origins=extra_ws_origins,
             restart_approval=restart_approval,
+            after_delete=collector.request,
         )
     )
     return runtime

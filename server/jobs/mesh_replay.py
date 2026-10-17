@@ -24,6 +24,7 @@ from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.jobs.runtime import _solved_under_legacy_axial
 from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.file_import import MAX_MESH_BYTES, mesh_text, parse_file_mesh, prepare_file_mesh
+from server.mesh.prepared_gc import prepared_mesh_use
 from server.mesh.records import get_prepared_mesh
 from server.solver.imported import AXIAL_CONTRACT_VERSION
 
@@ -161,7 +162,8 @@ def restore_mesh_replay(
     # The same original prepared the same way is one retained mesh, so a lost
     # response or simultaneous open reuses it (models_api.register_mesh). One
     # backend owns this data directory; the lock keeps the two opens in order.
-    with lock:
+    # A replay in progress holds off prepared-mesh collection until it answers.
+    with lock, prepared_mesh_use():
         record = register_mesh(store, data_dir, body, validate_record=validate_record)
         request = package.request.model_copy(deep=True)
         request.geometry.ingest_id = record["ingest_id"]

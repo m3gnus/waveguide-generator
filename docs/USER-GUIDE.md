@@ -61,7 +61,11 @@ simulation capabilities. **File mesh** returns to the mesh-file setup; **Paramet
 keeps the generated design separate.
 
 Runs retains the exact mesh and resolved settings. Select a run to restore its
-setup, or **Rerun** to replay its stored request. Changing or moving the original
+setup, or **Rerun** to replay its stored request. A prepared mesh that no run,
+model or pending solve uses is removed once it has gone unused for 24 hours, for
+imported files and CAD models alike; the mesh behind any run is always kept, and
+the latest preparation of each model stays, so preparing again is only needed for
+an older preparation you had left on screen. Changing or moving the original
 file does not change retained runs. After an unanswered submission and page
 reload, WG restores that same import; pressing Solve recovers the original
 request before a later deliberate press starts a new run. Run archives include

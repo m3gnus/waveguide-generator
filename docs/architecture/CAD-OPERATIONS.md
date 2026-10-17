@@ -688,7 +688,9 @@ nothing is ever filed under it, and no setup can be recorded for it.
   retained copy is gone: the answer is kept per press id
   (`cad_settings` key `model-solve-press:<client id>`), including a press
   answered by a job already in flight. The same id for any other press (setup,
-  frame axis, approvals, label) is `submission_key_conflict`.
+  frame axis, approvals, label) is `submission_key_conflict`. That answer is
+  forgotten once its job is deleted or after 30 days ("Retention"); a press
+  that started its own job is still found by its submission key after that.
 - **Refusals** are error envelopes: `model_not_found` and `prepared_unavailable`
   (404), `model_mismatch`, `prepared_unavailable` (no retained copy),
   `setup_required` (a named revision is gone), `frame_confirmation_required`,
@@ -778,7 +780,8 @@ that decides it. The key also names WG's own meshing semantics -- the sizing con
 under. So no existing mesh is re-made, and a later change of those constants, with every
 keyed input unchanged, is a new preparation. The fingerprint rounds those constants to 12
 decimal places, so a last-bit difference between platforms' maths libraries is not a new
-identity. A retained run keeps the mesh its own record names; nothing deletes it.
+identity. A run keeps the mesh its own record names: collection never removes a mesh any run
+names (see "Retention").
 
 ## Job provenance
 
@@ -896,7 +899,7 @@ under `frontend/src/` unless they start with `server/`.
 | 21 | A compatible arrival keeps the project's solve settings; a changed inventory resets them | none | `stores/cadReturn.ts` project/inventory profiles via `shell/cadlink/arrivals.ts` and `shell/cadlink/receiptDisplay.ts` | `arrivals.test.ts :: keeps settings for a compatible arrival and resets a changed inventory`; `receiptDisplay.test.ts` shared continuity tests; `cadReturn.test.ts` |
 | 22 | A return for another project never replaces the parametric design or its undo history | none | `shell/cadlink/arrivals.ts`, `shell/cadlink/restores.ts`, `shell/cadlink/receiptDisplay.ts` design-identity fences | `arrivals.test.ts :: refuses a foreign arrival without replacing design or undo history`; `receiptDisplay.test.ts` foreign project and undo tests |
 | 23 | Imported mode reopens the last model of the input in use (`lastModel`: one durable pointer per input, migrated once from the saved mesh setup and remembered CAD project keys) through `openImported({kind:'model'})`, at start and when the person switches into an empty Imported view; once per pointer per session, never forcing the mode or the input, and standing down for a refused foreign return or a pending `?job=` link; a gone model (404, `model_not_found`, `prepared_unavailable`, 409, 422) clears its pointer at once, any other failure is shown once and clears it only after two starts in a row fail (offline starts do not count); a CAD model never solved shows its newest return on defaults, selected and ingested by the workspace owners | none | `stores/importedModel.ts` `reopenLastModel`, `stores/lastModel.ts`, `shell/cadlink/restores.ts` `observeLastModel` | `importedModel.test.ts` last model, `restores.test.ts` last-model reopen, `CadWorkspaceOwners.test.ts`, `meshImport.test.ts` pointer migration, `workspaceMode.test.ts` |
-| 24 | Opening an archived CAD run restores its ingest and setup; a late restore never overtakes a newer pick | `GET /api/runs/{id}/workspace` (model, prepared mesh, setup revision) | `stores/importedModel.ts` `openImported`, `shell/cadlink/restores.ts` CAD rail view, `stores/cadReturn.ts` archive fencing | `restores.test.ts` standalone archived ingest/setup/sweep restore and newer-selection fences; `importedModel.test.ts`; `test_runs_workspace.py` |
+| 24 | Opening an archived CAD run restores its ingest and setup; a late restore never overtakes a newer pick; prepared-mesh collection never removes the mesh a run names | `GET /api/runs/{id}/workspace` (model, prepared mesh, setup revision) | `stores/importedModel.ts` `openImported`, `shell/cadlink/restores.ts` CAD rail view, `stores/cadReturn.ts` archive fencing, `server/mesh/prepared_gc.py` | `restores.test.ts` standalone archived ingest/setup/sweep restore and newer-selection fences; `importedModel.test.ts`; `test_runs_workspace.py`; `test_prepared_gc.py :: test_each_keep_reason_keeps_its_mesh` |
 | 25 | "Bring in geometry" joins repeated pulls, waits for the correlated return, reports refusal or timeout; late returns after timeout remain discoverable | none (a correlation id, not a job) | `shell/cadlink/returnWaiter.ts`, exact file outcome reader/router `server/cadlink/fusion/fusion_return.py`; the waiter alone selects a pending correlated pull; Bring in and solve reports preparation/submission and clears stale status on failure | `returnWaiter.test.ts` correlation, joining, refusal, deadline, stalled batches and command cancellation; `CadWorkspaceOwners.test.ts` plain-pull and pull-and-solve ingestion, phase/error feedback and late-after-timeout discovery; `test_fusion_return.py :: test_production_cadlink_mount_exposes_exact_file_return_outcome` |
 | 26 | Onshape returns stay ingestible with their own origin, without Fusion-folder polling | none | `shell/cadlink/arrivals.ts` origin-aware Onshape actions/readers, UI capability gate; `shell/CadWorkspaceOwners.tsx` gates Fusion receipt display and fences every deferred boundary | `arrivals.test.ts` Onshape origin/identity/instance fences; `CadWorkspaceOwners.test.ts` Onshape mount and deferred display isolation; `CadLinkPanel.test.tsx` Onshape choices and return display |
 | 27 | Retries and reloads keep one solve identity; a waiting solve for the snapshot is continued, not duplicated | *job* | `jobs/cadSolve.ts`, `shell/JobsCoordinator.tsx` client request id and `/solve-again` | `M1bSolveCard.test.tsx`; `JobsCoordinator.mutex.test.tsx` continuation and press-mutex tests |
@@ -1222,10 +1225,53 @@ A link by Fusion operation id (`cadOperation=`) is not supported yet.
 
 ## Retention
 
-Cleanup never removes what a pending operation references. Retained snapshots and meshes
-under `<data>/imports` are never pruned, and the captured CAD documents a pending
-operation's preparation was made from are kept alongside those unfinished runs still
-need.
+Cleanup never removes what a pending operation references, and the captured CAD
+documents a pending operation's preparation was made from are kept alongside those
+unfinished runs still need.
+
+**Prepared meshes are collected** (decision D3), file and CAD alike, by
+`server/mesh/prepared_gc.py`. A pass runs about 30 seconds after startup and after
+runs are deleted (`DELETE /api/jobs/{id}`, clear failed, dismiss), in a worker
+thread, never on a request path. A prepared mesh -- an ingest row and the files its
+record names -- is **kept** while any of these refers to it:
+
+- a run in any state: queued, running, complete, failed, cancelled or archived (any
+  ingest id in its request or metadata: the geometry, `imported_geometry`, a CAD
+  intent's `bundle_path: ingest/<id>`, a preparation);
+- a model's latest preparation (`imported_models.latest_ingest_id`);
+- a preparation of an unfinished CAD operation (`cad_preparations`, or any ingest id
+  the operation row names), or of an operation whose row is gone;
+- a setup revision naming it;
+- a remembered press (`model-solve-press:<client id>`, which names its `prepared_id`);
+- it was made, or last used, within 24 hours (`ingests.last_used_at`, set when a Solve
+  or an imported submission names it and when a dedupe answers with it);
+- a replay, preparation or ingest in progress: a pass never runs beside one, and one
+  that starts during a pass waits for it to end.
+
+A record this build cannot read, and a native-source preparation, are always kept.
+Everything else is removed: the row first, in its own transaction that checks the
+grace period, latest pointer, unfinished operations and press bindings again; then its
+files. A crash in between leaves at worst files no row names, never a row naming
+missing files.
+
+- **File meshes** lose their own folder, `<data>/imports/files/<ingest id>`
+  (`original.msh`, `solve.msh`).
+- **CAD meshes** are shared through the mesh cache key, so a solve mesh, its sidecar,
+  its FEM region and display meshes (`imports/meshes`, `imports/viewports`) go only
+  when no surviving ingest names the same path. The retained snapshot
+  (`imports/bundles/<manifest>.wgreturn`) goes only when nothing in `cadlink.db`
+  (operations, receipts, readings, other ingests) and no run names its manifest
+  digest, so a snapshot any operation retained stays.
+- **Crash leftovers.** Folders under `imports/files` and snapshot folders under
+  `imports/bundles` that nothing names and that have not changed for 24 hours are
+  swept.
+- **Safety.** A pass is skipped while an update restart is pending, and stops if one
+  is approved meanwhile. It never follows a symbolic link or junction, refuses a path
+  outside `<data>/imports` or a link anywhere on the way to it, and logs each removal
+  with its byte count. The store lock is held only for the short reads and row
+  deletions, never while files are removed.
+- **Press answers** (`model-solve-press:<client id>`) are forgotten when their run is
+  gone or after 30 days.
 
 ## Existing installations
 
