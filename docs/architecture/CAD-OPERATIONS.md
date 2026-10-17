@@ -1182,12 +1182,20 @@ imported run is reopened from. It answers `{model, prepared, original_available,
 - **The setup** is the revision the run recorded. A run from before setup revisions
   (or one whose revision is gone) has its setup derived from its effective request,
   without the fields the prepared mesh contributes, and stored as the content-addressed
-  revision it is (`derived: true`). The same run always derives the same revision, the
-  one a retry of it records too; the job row is not rewritten.
+  revision it is (`derived: true`). The same run always derives the same revision; the
+  job row is not rewritten. An exterior-only FEM run's exclusion
+  (`exterior_only_region_ids`, which a request does not carry) is recovered from its
+  prepared mesh's FEM regions. When the derived setup may solve differently from the
+  run -- its recorded revision is gone (the request lacks a CAD setup's preparation
+  options and driver references), or the exclusion cannot be recovered -- it says so
+  (`exact: false` and a `note`): the SPA fills the rail from it but does not send it as
+  the run's exact replay.
 - **Refusals.** A run that cannot be reopened answers 200 with `refusal` beside what
   could be read: `prepared_unavailable` (the prepared mesh is no longer retained),
   `model_not_found`, `no_request` (a CAD solve that ended before it had a request),
-  `setup_unavailable`. An unknown run is 404. A parametric run answers
+  `setup_unavailable` (a recorded revision that is gone, with no request to rebuild it
+  from), `setup_unreadable` (a stored request that cannot be read as a setup). An
+  unknown run is 404. A parametric run answers
   `parametric_run`: it reopens its design from the run itself (its design snapshot
   travels with the run list, `replaceWithJobDesign`), so there is one way to reopen a
   design and one way to reopen an imported model.

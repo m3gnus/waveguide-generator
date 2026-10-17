@@ -12,11 +12,18 @@ revision.
   ``setup.revision_id``). A run from before revisions existed has none; its
   setup is its effective request without what the prepared mesh contributes,
   stored once as the content-addressed revision it is. The same run always
-  derives the same revision, and nothing the request held is dropped.
+  derives the same revision, and nothing the request held is dropped; an
+  exterior-only run's FEM exclusion is recovered from its prepared mesh. A
+  setup that may solve differently from the run (its recorded revision is
+  gone, or the exclusion cannot be recovered) says so: ``exact`` false and a
+  ``note``, and the frontend does not present it as the run's exact settings.
 - **Refusals.** A run that cannot be reopened answers with ``refusal`` (code
   and words) beside whatever could be read, never with a server error: a
   prepared mesh that is no longer retained, a model this workspace has no
-  record of, a CAD solve that ended before it had a request.
+  record of (``prepared_unavailable``, ``model_not_found``), a CAD solve that
+  ended before it had a request (``no_request``), a revision that is gone with
+  no request to rebuild it from (``setup_unavailable``), or a request that
+  cannot be read as a setup (``setup_unreadable``).
 - **A parametric run** reopens its design from the run itself (its design
   snapshot travels with the run list), so this answers it with the
   ``parametric_run`` refusal rather than a second way to reopen a design.
@@ -59,8 +66,14 @@ class WorkspaceSetup(BaseModel):
 
     revision_id: str
     content: dict[str, Any]
-    #: True when the run recorded no revision and it was derived from its request.
+    #: True when the run recorded no revision, or its revision is gone, and this was derived from its request.
     derived: bool = False
+    #: False when this setup may solve differently from the run (a recorded
+    #: revision that is gone, or an exclusion that cannot be recovered): an
+    #: unedited Solve must not present it as the run's exact settings.
+    exact: bool = True
+    #: Why ``exact`` is false, in words for the user.
+    note: str | None = None
 
 
 class RunWorkspace(BaseModel):
@@ -116,16 +129,40 @@ def _prepared_id(row: Mapping[str, Any], request: Mapping[str, Any] | None) -> s
     return str(preparation["ingest_id"]) if preparation.get("ingest_id") else None
 
 
-def derived_setup(request: Mapping[str, Any]) -> dict[str, Any]:
-    """The setup an exact imported request is: everything but the prepared mesh."""
+def _fem_region_ids(record: Mapping[str, Any]) -> list[str]:
+    evidence = _mapping(record.get("evidence"))
+    regions = evidence.get("fem_regions") or record.get("fem_regions") or []
+    return sorted(
+        str(region["region_id"]) for region in regions
+        if isinstance(region, Mapping) and isinstance(region.get("region_id"), str)
+    )
+
+
+def derived_setup(request: Mapping[str, Any], record: Mapping[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
+    """The setup an exact imported request is: everything but the prepared mesh.
+
+    Also says whether it is exact. A request names no FEM exclusion
+    (``exterior_only_region_ids`` is a setup field): an admitted exterior-only
+    request excluded exactly its snapshot's FEM regions, which the prepared
+    record states, so they are recovered from it. Without the record they
+    cannot be, and a re-solve would include the FEM air again.
+    """
 
     geometry = dict(_mapping(request.get("geometry")))
     for field in _SNAPSHOT_FIELDS:
         geometry.pop(field, None)
-    return {"geometry": geometry, "options": dict(_mapping(request.get("options")))}
+    exact = True
+    if geometry.get("exterior_only") is True and "exterior_only_region_ids" not in geometry:
+        if record is None:
+            exact = False
+        elif regions := _fem_region_ids(record):
+            geometry["exterior_only_region_ids"] = regions
+    return {"geometry": geometry, "options": dict(_mapping(request.get("options")))}, exact
 
 
-def _setup(store: Any, row: Mapping[str, Any], request: Mapping[str, Any] | None) -> WorkspaceSetup:
+def _setup(
+    store: Any, row: Mapping[str, Any], request: Mapping[str, Any] | None, record: Mapping[str, Any] | None,
+) -> WorkspaceSetup:
     revision_id = recorded_setup_revision(row)
     if revision_id is None and not request:
         intent = _mapping(row.get("config_json"))
@@ -140,13 +177,22 @@ def _setup(store: Any, row: Mapping[str, Any], request: Mapping[str, Any] | None
         raise _Refused(
             "no_request", "This solve ended before it had a solve request. Solve it again from CAD Link.",
         )
+    content, exact = derived_setup(request, record)
     try:
-        setup = validate_setup(derived_setup(request))
+        setup = validate_setup(content)
     except ValueError as exc:
         raise _Refused("setup_unreadable", f"This run's settings cannot be read as a setup: {exc}") from exc
     stored = store.create_setup_revision(setup_content(setup), setup_digest(setup))
+    note = None
+    if revision_id is not None:
+        # Recorded, but gone: what the request states is not the whole of it
+        # (a CAD setup's preparation options and driver references).
+        exact = False
+        note = "The settings this run recorded are no longer retained; these are rebuilt from its request."
+    elif not exact:
+        note = "This run's FEM exclusion cannot be recovered without its prepared mesh."
     return WorkspaceSetup(revision_id=str(stored["revision_id"]), content=json.loads(stored["setup_json"]),
-                          derived=True)
+                          derived=True, exact=exact, note=note)
 
 
 def _model_summary(model: Mapping[str, Any]) -> dict[str, Any]:
@@ -198,7 +244,7 @@ def read_run_workspace(row: Mapping[str, Any], store: Any) -> RunWorkspace:
         answer.model = _model_summary(model)
         answer.original_available = _original_available(store, str(model_id), record)
     try:
-        answer.setup = _setup(store, row, request)
+        answer.setup = _setup(store, row, request, record)
     except _Refused as exc:
         answer.refusal = WorkspaceRefusal(code=exc.code, message=str(exc))
         return answer

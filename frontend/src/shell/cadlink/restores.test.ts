@@ -241,6 +241,29 @@ it('an archive restore leaves the project profile intact', async () => {
   expect(useCadReturnStore.getState().driveVoltageV).toBe(5);
 });
 
+it('brings a parked CAD run back with its own engine, not the project profile over it', async () => {
+  const state = useCadReturnStore.getState(); state.selectBundle(bundle, 'wgl_project');
+  workspaceModeStore.setMode('cad');
+  // The project's profile remembers another engine.
+  useImportedSolveOptionsStore.getState().setEngine('bempp');
+  expect(await restoreCadJobModel(job(), {}, archiveFetcher)).toBe(true);
+  expect(useImportedSolveOptionsStore.getState().engine).toBe('beat-cpu');
+  // The same return becomes readable on screen again, so its profile could apply.
+  useCadReturnStore.setState({ selectedBundle: bundle });
+  workspaceModeStore.setImportedInput('file');
+  workspaceModeStore.setImportedInput('cad');
+  expect(useImportedSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-cpu', accuracy: 'accurate' });
+  expect(unchangedSetup('cad', record.ingest_id)).toEqual({ setup_revision_id: 'wgs_archived' });
+});
+
+it('ends the opened setup when a new selection replaces the options', async () => {
+  workspaceModeStore.setMode('cad');
+  expect(await restoreCadJobModel(job(), {}, archiveFetcher)).toBe(true);
+  expect(unchangedSetup('cad', record.ingest_id)).not.toBeNull();
+  useCadReturnStore.getState().selectBundle(bundle, 'wgl_project');
+  expect(useImportedModelStore.getState()).toMatchObject({ setup: null, restoredRevisionId: null });
+});
+
 it('does not refresh drivers into a newer project with the same preset', async () => {
   const preset = { id: 'driver-fixture', label: 'Fixture', source: 'database' as const,
     kind: 'cd' as const, z_ohm: 8, xo_min_hz: null, base: { re_ohm: 5 } };

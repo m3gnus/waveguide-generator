@@ -74,6 +74,10 @@ export interface OpenedModel {
   originalAvailable: boolean;
   setup: ImportedSetup | null;
   revisionId: string | null;
+  /** False when the setup may solve differently from the run: the rail shows it, Solve does not replay it. */
+  exact: boolean;
+  /** Why it is not exact, for the rail to say. */
+  note: string | null;
   /** The run being reopened, for the rail's words. */
   job?: JobItem;
 }
@@ -134,6 +138,11 @@ function openKnown(source: Extract<ImportedSource, { kind: 'file' | 'cad' }>): v
   const prepared = source.kind === 'file' ? source.prepared : source.record;
   const modelId = prepared ? (prepared.model_id || 'unfiled') : null;
   const filename = source.kind === 'file' ? source.prepared?.source_file?.filename : source.record.project?.document_name ?? undefined;
+  const held = workspaceModeStore.getSnapshot().importedInput === input ? useImportedModelStore.getState() : parked[input]?.state;
+  // The same CAD snapshot arriving again (a refresh of the record on screen)
+  // is the model already open: an unedited opened setup stays.
+  const same = source.kind === 'cad' && held?.input === 'cad' && held.phase === 'ready'
+    && held.prepared?.ingest_id === source.record.ingest_id;
   const next: Omit<ImportedModelState, 'generation'> = {
     ...emptyState(input),
     model: modelId && modelId !== 'unfiled'
@@ -141,7 +150,9 @@ function openKnown(source: Extract<ImportedSource, { kind: 'file' | 'cad' }>): v
     modelId,
     prepared,
     originalAvailable: source.kind === 'file' && prepared !== null,
-    setup: source.kind === 'file' ? source.setup ?? null : null,
+    setup: source.kind === 'file' ? source.setup ?? null : same ? held!.setup : null,
+    restoredRevisionId: same ? held!.restoredRevisionId : null,
+    ...(same ? { model: held!.model, modelId: held!.modelId, originalAvailable: held!.originalAvailable } : {}),
     fileDraft: source.kind === 'file' && source.prepared ? fileDraftOf(source.prepared)
       : source.kind === 'file' ? { ...EMPTY_FILE_DRAFT, selected: [] } : useImportedModelStore.getState().fileDraft,
     phase: prepared ? 'ready' : 'empty',
@@ -167,6 +178,7 @@ async function readOpened(source: Extract<ImportedSource, { kind: 'run' | 'model
       // The revision's whole content: its preparation and driver references too.
       setup: workspace.setup ? structuredClone(workspace.setup.content) as ImportedSetup : null,
       revisionId: workspace.setup?.revision_id ?? null, job: source.job,
+      exact: workspace.setup?.exact !== false, note: workspace.setup?.note ?? null,
     };
   }
   const read = await readImportedModel(source.modelId, source.preparedId ?? null, fetcher);
@@ -177,7 +189,7 @@ async function readOpened(source: Extract<ImportedSource, { kind: 'run' | 'model
   const saved = await readImportedSetup(source.modelId, prepared.ingest_id, fetcher);
   return {
     input, model: read.model, modelId: read.model.model_id, prepared, originalAvailable: read.original_available,
-    setup: saved.setup ?? null, revisionId: saved.setup ? saved.revision_id ?? null : null,
+    setup: saved.setup ?? null, revisionId: saved.setup ? saved.revision_id ?? null : null, exact: true, note: null,
   };
 }
 
@@ -226,8 +238,9 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
     if (!prepared) throw new Error('This run’s retained mesh artifacts are no longer available. Import the geometry again.');
     useImportedModelStore.setState({
       input, model: opened.model, modelId: opened.modelId, prepared, originalAvailable: opened.originalAvailable,
-      setup: opened.setup ? structuredClone(opened.setup) : null,
-      restoredRevisionId: opened.setup ? opened.revisionId : null,
+      // A setup that may not be the run's exactly fills the rail, but is not replayed.
+      setup: opened.setup && opened.exact ? structuredClone(opened.setup) : null,
+      restoredRevisionId: opened.setup && opened.exact ? opened.revisionId : null,
       fileDraft: input === 'file' ? fileDraftOf(opened.prepared) : useImportedModelStore.getState().fileDraft,
       phase: 'ready', error: null,
     });
@@ -239,6 +252,11 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
     rail.fail(message);
     throw error;
   }
+}
+
+/** This open (by its generation) still owns the store and the viewport: no newer open of either input. */
+export function isCurrentOpen(generation: number): boolean {
+  return useImportedModelStore.getState().generation === generation && importedMeshStore.isCurrentGeneration(generation);
 }
 
 /** Change how a file is prepared: its prepared mesh no longer matches, and the opened setup ends. */
@@ -274,10 +292,24 @@ export function unchangedSetup(input: ImportedInput, preparedId: string | undefi
 // A person's edit of an imported setting ends the opened setup. Parametric
 // edits are not this model's; an edit while it loads makes the open fail, so
 // the edit is not silently replaced by what arrives.
+/** Which input's setup an edit changed: the file rail's, the CAD rail's, or the options on screen. */
+function editedInput(source: string | undefined): ImportedInput {
+  if (source === 'meshImport') return 'file';
+  if (source === 'importedSolveOptions') return workspaceModeStore.getSnapshot().importedInput;
+  // cadReturn and cadPreparation announce their setters without a source.
+  return 'cad';
+}
+
 subscribeSolveSettingsEdits((edit) => {
   if (edit?.source === 'solveOptions') return;
+  const input = editedInput(edit?.source);
+  if (input !== workspaceModeStore.getSnapshot().importedInput) {
+    // An edit of the input that is not on screen ends its parked setup.
+    const held = parked[input]?.state;
+    if (held && (held.setup || held.restoredRevisionId)) parked[input] = { ...parked[input]!, state: { ...held, setup: null, restoredRevisionId: null } };
+    return;
+  }
   const state = useImportedModelStore.getState();
-  if (state.input !== workspaceModeStore.getSnapshot().importedInput) return;
   if (state.phase === 'loading') {
     useImportedModelStore.setState({ phase: 'failed',
       error: 'Settings changed while this run was loading. Select the run again before solving.' });
@@ -340,18 +372,30 @@ export function applyCadSolveSelection(selection: { accuracy?: SolveAccuracy; en
 }
 
 /**
- * Another CAD project was selected while a file is on screen: CAD's parked
- * options belong to the previous project, so they go. Switching back then
- * seeds a fresh copy and the new project's profile applies on top.
+ * Another CAD selection was made while a file is on screen: CAD's parked model
+ * and options belong to the previous one, so they go. Switching back then
+ * seeds a fresh copy, the new project's profile applies on top, and an
+ * arrival of the new selection fills the CAD model again.
  */
-export function discardParkedCadOptions(): void {
-  if (workspaceModeStore.getSnapshot().importedInput !== 'cad' && parked.cad) parked.cad = { ...parked.cad, options: null };
+export function discardParkedCadModel(): void {
+  if (workspaceModeStore.getSnapshot().importedInput !== 'cad') delete parked.cad;
 }
 
 /** The imported options were reset: neither input keeps parked options. */
 export function resetParkedImportedOptions(): void {
   for (const input of ['cad', 'file'] as const) if (parked[input]) parked[input] = { ...parked[input]!, options: null };
   activeInput = workspaceModeStore.getSnapshot().importedInput;
+}
+
+/** Something other than an edit replaced this input's options (a new selection's profile): the opened setup ends. */
+export function endOpenedSetup(input: ImportedInput): void {
+  if (workspaceModeStore.getSnapshot().importedInput === input) {
+    const state = useImportedModelStore.getState();
+    if (state.setup || state.restoredRevisionId) useImportedModelStore.setState({ setup: null, restoredRevisionId: null });
+    return;
+  }
+  const held = parked[input]?.state;
+  if (held) parked[input] = { ...parked[input]!, state: { ...held, setup: null, restoredRevisionId: null } };
 }
 
 /** Tests and a full reset: nothing open, nothing parked. */

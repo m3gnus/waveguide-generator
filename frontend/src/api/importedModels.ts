@@ -46,7 +46,8 @@ export interface RunWorkspace {
   model?: ImportedModelSummary | null;
   prepared?: PreparedSummary | null;
   original_available: boolean;
-  setup?: { revision_id: string; content: { geometry: ImportedSetup['geometry']; options: ImportedSetup['options'] }; derived?: boolean } | null;
+  setup?: { revision_id: string; content: { geometry: ImportedSetup['geometry']; options: ImportedSetup['options'] };
+    derived?: boolean; exact?: boolean; note?: string | null } | null;
   solve_options?: ImportedSetup['options'] | null;
   refusal?: { code: string; message: string } | null;
 }

@@ -17,7 +17,7 @@ import {
 import { useDocumentStore } from './document';
 import { namespaceStorage } from './durableSettings';
 import { seedImportedSolveOptionsFromParametric, type SolveAccuracy } from './solveOptions';
-import { applyCadSolveSelection, cadSolveSelection, discardParkedCadOptions, openImported } from './importedModel';
+import { applyCadSolveSelection, cadSolveSelection, discardParkedCadModel, endOpenedSetup, openImported, useImportedModelStore } from './importedModel';
 import { workspaceModeStore } from './workspaceMode';
 import {
   DEFAULT_CROSSOVER,
@@ -847,7 +847,10 @@ function restoreSolveProfile(bundle: CadReturnBundle, projectLineageId: string |
   const cadActive = workspaceModeStore.getSnapshot().importedInput === 'cad';
   // Selecting a project with a file on screen: the saved CAD options are the
   // previous project's, so none of them may carry over.
-  if (how === 'select' && !cadActive) discardParkedCadOptions();
+  if (how === 'select' && !cadActive) discardParkedCadModel();
+  // A selection, or a profile adopted for a newly known owner, replaces the
+  // options on screen: the setup a model was opened with no longer is them.
+  if (how !== 'resume' && cadActive) endOpenedSetup('cad');
   if (!profile || !compatibleSourceInventory({ readable: true, sources: profile.inventory }, bundle)) {
     // No saved setup for this project: open with a one-way copy of the
     // parametric options, made once here and never written back.
@@ -1987,6 +1990,10 @@ workspaceModeStore.subscribe(() => {
   if (next === lastImportedInput) return;
   lastImportedInput = next;
   const { selectedBundle, projectLineageId } = useCadReturnStore.getState();
+  // A model that came back with the setup it was opened with keeps that
+  // setup's engine and accuracy: the profile is not applied over it.
+  const opened = useImportedModelStore.getState();
+  if (opened.input === 'cad' && opened.setup) return;
   if (next === 'cad' && selectedBundle) restoreSolveProfile(selectedBundle, projectLineageId, 'resume');
 });
 

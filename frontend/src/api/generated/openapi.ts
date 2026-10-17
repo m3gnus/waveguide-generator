@@ -6246,6 +6246,13 @@ export interface components {
              * @default false
              */
             derived?: boolean;
+            /**
+             * Exact
+             * @default true
+             */
+            exact?: boolean;
+            /** Note */
+            note?: string | null;
             /** Revision Id */
             revision_id: string;
         };

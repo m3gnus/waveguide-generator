@@ -34,9 +34,14 @@ export function bindImportedSetup(
   });
 }
 
-/** The setup a bound submission was made of: everything but the prepared mesh's identity. */
-export function setupOfSubmission(submission: ImportedSolveSubmission): CadSolveSetup {
+/** A bound submission without the prepared mesh's identity: the setup it was made of. */
+export function importedSetupOf(submission: ImportedSolveSubmission): ImportedSetup {
   const { type: _type, ingest_id: _ingest, manifest_sha256: _manifest, artifact_sha256: _artifact,
     acknowledged_findings: _findings, ...geometry } = submission.geometry;
-  return structuredClone({ schema_version: 1, geometry, options: submission.options }) as unknown as CadSolveSetup;
+  return structuredClone({ geometry, options: submission.options });
+}
+
+/** The setup a bound submission was made of, as a Solve or a setup save sends it. */
+export function setupOfSubmission(submission: ImportedSolveSubmission): CadSolveSetup {
+  return { schema_version: 1, ...importedSetupOf(submission) } as unknown as CadSolveSetup;
 }

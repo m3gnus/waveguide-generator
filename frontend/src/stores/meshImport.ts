@@ -13,11 +13,11 @@ import {
 import type { ImportedSolveSubmission } from '../jobs/actions';
 import { noteSolveSettingsEdit, subscribeSolveSettingsEdits } from './solveSettingsEdits';
 import { openMeshReplay } from '../api/meshReplay';
-import { bindImportedSetup, type ImportedSetup } from '../jobs/importedSetup';
+import { bindImportedSetup, importedSetupOf, type ImportedSetup } from '../jobs/importedSetup';
 import { saveImportedSetup } from '../api/importedModels';
 import { namespaceStorage } from './durableSettings';
 import {
-  editFileDraft, importedModelBlocker, openImported, registerImportedView, useImportedModelStore,
+  editFileDraft, importedModelBlocker, isCurrentOpen, openImported, registerImportedView, useImportedModelStore,
   type ImportedView,
 } from './importedModel';
 
@@ -205,22 +205,24 @@ function fillFileRail(record: RegisteredMesh, setup: ImportedSetup | null, gener
 
 /** The file rail as the view a reopened file model (a run, or the saved setup) is shown in. */
 export const fileImportedView: ImportedView = {
-  begin() {
+  begin({ generation }) {
     const request = ++requestNumber;
     useMeshImportStore.setState({ ...initial, filename: 'Restoring mesh…', busy: true, request });
     workspaceModeStore.setMode('cad');
     seedImportedSolveOptionsForFile();
-    const current = () => useMeshImportStore.getState().request === request;
+    const current = () => isCurrentOpen(generation) && useMeshImportStore.getState().request === request;
     return {
       current,
       async fill(opened) {
         const record = opened.prepared as unknown as RegisteredMesh;
         assertFileRecord(record, opened.setup, opened.prepared.ingest_id);
-        const generation = useImportedModelStore.getState().generation;
-        return fillFileRail(record, opened.setup, generation) ? record : null;
+        if (!current()) return null;
+        if (!fillFileRail(record, opened.setup, generation)) return null;
+        if (opened.note) useMeshImportStore.setState({ notice: opened.note });
+        return record;
       },
       fail(message) {
-        if (current()) useMeshImportStore.setState({ busy: false, error: `Could not restore this mesh setup: ${message}` });
+        if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false, error: `Could not restore this mesh setup: ${message}` });
       },
     };
   },
@@ -237,9 +239,7 @@ export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch
   try {
     const opened = await openMeshReplay(text, fetcher);
     if (!importedMeshStore.isCurrentGeneration(generation)) return false;
-    const { type: _type, ingest_id: _id, manifest_sha256: _manifest, artifact_sha256: _artifact,
-      acknowledged_findings: _findings, ...geometry } = opened.request.geometry;
-    const setup: ImportedSetup = { geometry, options: opened.request.options };
+    const setup = importedSetupOf(opened.request);
     assertFileRecord(opened.record, setup, opened.request.geometry.ingest_id);
     if (opened.request.geometry.manifest_sha256 !== opened.record.manifest_sha256
       || opened.request.geometry.artifact_sha256 !== opened.record.artifact_sha256) {
@@ -260,10 +260,9 @@ export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch
 /** Explicitly save before Solve. CAD project edits use this same setup schema. */
 export async function saveMeshSetup(fetcher: typeof fetch = fetch): Promise<void> {
   const submission = fileMeshSubmission();
-  const { type: _type, ingest_id, manifest_sha256: _manifest, artifact_sha256: _artifact,
-    acknowledged_findings: _findings, ...geometry } = submission.geometry;
+  const ingest_id = submission.geometry.ingest_id;
   const modelId = registeredMesh()!.model_id;
-  await saveImportedSetup(modelId, ingest_id, { geometry, options: submission.options }, fetcher);
+  await saveImportedSetup(modelId, ingest_id, importedSetupOf(submission), fetcher);
   if (registeredMesh()?.ingest_id !== ingest_id) return;
   savedSetupStorage.setItem(SAVED_SETUP_KEY, JSON.stringify({ model_id: modelId, prepared_id: ingest_id }));
   let unchanged = false;

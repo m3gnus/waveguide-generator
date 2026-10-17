@@ -79,8 +79,12 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
       // from which JobsCoordinator could have remembered this external press.
       rememberCadSolve(job.id, '');
       acknowledgeCadSolve(job, 'completion');
+      // A refused open says why, as any reopened run does; it is never silent.
       const shown = await openImported({ kind: 'run', job, display: { ...display, isCurrent: current } }, fetcher)
-        .catch(() => false);
+        .catch((error: unknown) => {
+          if (current()) display.reportStatus?.(`Cannot show the Fusion solve: ${error instanceof Error ? error.message : String(error)}`);
+          return false;
+        });
       if (!shown || !current()) return;
       compareSelection.awaitRun(job.id);
       if (job.client_request_id) solveAttention.followJob(job.client_request_id, job.id);

@@ -5,10 +5,13 @@ import type { RegisteredMesh } from '../api/meshImport';
 import { record as cadRecord } from '../shell/cadlink/selection.fixtures';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import {
-  applyCadSolveSelection, cadSolveSelection, discardParkedCadOptions, importedModelBlocker, openImported,
+  applyCadSolveSelection, cadSolveSelection, discardParkedCadModel, importedModelBlocker, openImported,
   resetImportedModelStore, unchangedSetup, useImportedModelStore,
 } from './importedModel';
 import { useMeshImportStore } from './meshImport';
+import { useCadReturnStore } from './cadReturn';
+import { noteSolveSettingsEdit } from './solveSettingsEdits';
+import '../shell/cadlink/restores';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { workspaceModeStore } from './workspaceMode';
 
@@ -125,6 +128,51 @@ describe('openImported', () => {
     expect(useImportedModelStore.getState()).toMatchObject({ input: 'file', originalAvailable: false, restoredRevisionId: 'wgs_saved' });
   });
 
+  it('keeps an opened CAD setup when the same snapshot arrives again, not when another does', async () => {
+    useImportedModelStore.setState({ input: 'cad', phase: 'ready', modelId: 'wgl_speaker', prepared: cadRecord,
+      setup: setup as never, restoredRevisionId: 'wgs_cad' });
+    await openImported({ kind: 'cad', record: { ...cadRecord, model_id: 'wgl_speaker' } });
+    expect(unchangedSetup('cad', cadRecord.ingest_id)).toEqual({ setup_revision_id: 'wgs_cad' });
+    await openImported({ kind: 'cad', record: { ...cadRecord, ingest_id: 'wgi_newer', model_id: 'wgl_speaker' } });
+    expect(useImportedModelStore.getState()).toMatchObject({ restoredRevisionId: null, setup: null });
+  });
+
+  it('fences a CAD open by the open, so a file opened meanwhile keeps its own state', async () => {
+    const ingest = deferred<Response>();
+    const cadRun = { id: 'cad-run', run_number: 3, config_summary: { geometry_type: 'imported' },
+      cad_source: { ingest_id: cadRecord.ingest_id } } as unknown as JobItem;
+    const showIngestedMesh = vi.fn(async () => undefined);
+    const cadFetcher = vi.fn<typeof fetch>(async (url) => String(url).endsWith('/workspace') ? json({
+      job_id: 'cad-run', model: { model_id: 'wgl_a', producer: 'cad', display_name: 'A' },
+      prepared: { ingest_id: cadRecord.ingest_id, model_id: 'wgl_a', producer: 'cad',
+        manifest_sha256: cadRecord.manifest_sha256, artifact_sha256: cadRecord.artifact_sha256 },
+      original_available: false, setup: { revision_id: 'wgs_a', content: { schema_version: 1,
+        geometry: { drive_channels: [{ id: 'drive-hf', source_ids: ['source-hf'] }], skipped_source_ids: [] },
+        options: { engine: 'beat-cpu', frequencies_hz: [111, 222] } } },
+    }) : ingest.promise);
+    const cadOpen = openImported({ kind: 'run', job: cadRun, display: { showIngestedMesh } }, cadFetcher);
+    await vi.waitFor(() => expect(cadFetcher).toHaveBeenCalledTimes(2));
+    expect(await openImported({ kind: 'run', job: run() }, vi.fn<typeof fetch>(async () => json(workspace())))).toBe(true);
+    const fileOptions = JSON.stringify(useImportedSolveOptionsStore.getState().options());
+    const cadBefore = useCadReturnStore.getState();
+    ingest.resolve(json(cadRecord));
+    expect(await cadOpen).toBe(false);
+    expect(JSON.stringify(useImportedSolveOptionsStore.getState().options())).toBe(fileOptions);
+    expect(useImportedSolveOptionsStore.getState().frequencyListText).toBe('100\n200\n400');
+    expect(useCadReturnStore.getState()).toBe(cadBefore);
+    expect(showIngestedMesh).not.toHaveBeenCalled();
+    expect(useImportedModelStore.getState()).toMatchObject({ input: 'file', restoredRevisionId: 'wgs_run' });
+  });
+
+  it('fills the rail from a setup that is not the run\'s exactly, but does not replay it', async () => {
+    const lossy = vi.fn<typeof fetch>(async () => json(workspace({ setup: { revision_id: 'wgs_rebuilt', content: setup,
+      derived: true, exact: false, note: 'The settings this run recorded are no longer retained.' } })));
+    expect(await openImported({ kind: 'run', job: run() }, lossy)).toBe(true);
+    expect(useImportedSolveOptionsStore.getState().frequencySpacing).toBe('linear');
+    expect(unchangedSetup('file', mesh.ingest_id)).toBeNull();
+    expect(useMeshImportStore.getState().notice).toContain('no longer retained');
+  });
+
   it('fills the store from a registration and from a CAD arrival, which restore no setup', async () => {
     workspaceModeStore.setImportedInput('file');
     await openImported({ kind: 'file', prepared: mesh });
@@ -167,15 +215,31 @@ describe('each input keeps its open model', () => {
     expect(useImportedModelStore.getState()).toMatchObject({ input: 'cad', modelId: 'wgl_arrived' });
   });
 
-  it('drops CAD\'s parked options when another project is selected while a file is on screen', async () => {
+  it('drops CAD\'s parked model and options when another selection is made while a file is on screen', async () => {
+    await openImported({ kind: 'cad', record: { ...cadRecord, model_id: 'wgl_old' } });
     useImportedSolveOptionsStore.setState({ engine: 'beat-cpu' });
     workspaceModeStore.setImportedInput('file');
     expect(cadSolveSelection()).toMatchObject({ engine: 'beat-cpu' });
-    discardParkedCadOptions();
+    discardParkedCadModel();
     expect(cadSolveSelection()).toBeNull();
     useSolveOptionsStore.setState({ engine: 'bempp' });
     workspaceModeStore.setImportedInput('cad');
-    // Seeded afresh from the parametric options.
+    // Seeded afresh from the parametric options, and the old model is gone.
     expect(useImportedSolveOptionsStore.getState().engine).toBe('bempp');
+    expect(useImportedModelStore.getState()).toMatchObject({ input: 'cad', modelId: null, phase: 'empty' });
+  });
+
+  it('ends a parked setup when its own input is edited, never the one on screen', async () => {
+    await openImported({ kind: 'run', job: run() }, vi.fn<typeof fetch>(async () => json(workspace())));
+    workspaceModeStore.setImportedInput('cad');
+    // A CAD-rail edit while CAD is on screen is CAD's: the parked file setup stays.
+    noteSolveSettingsEdit({ control: 'setDriveVoltage' });
+    workspaceModeStore.setImportedInput('file');
+    expect(unchangedSetup('file', mesh.ingest_id)).toEqual({ setup_revision_id: 'wgs_run' });
+    // A file-rail edit made while CAD is on screen ends the parked file setup.
+    workspaceModeStore.setImportedInput('cad');
+    noteSolveSettingsEdit({ source: 'meshImport', control: 'motion' });
+    workspaceModeStore.setImportedInput('file');
+    expect(unchangedSetup('file', mesh.ingest_id)).toBeNull();
   });
 });

@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from server.cadlink.store import CadLinkStore
-from server.jobs.imported_setup import setup_digest, validate_setup
+from server.jobs.imported_setup import setup_digest, solve_request_for, validate_setup
 from server.jobs.model_solve import _request_revision
 from server.jobs.models import SolveRequest
 from server.jobs.run_workspace import derived_setup, mount_run_workspace
@@ -77,7 +77,7 @@ def test_a_file_run_opens_with_its_recorded_revision_mesh_and_original(tmp_path)
         assert opened["original_available"] is True
         assert opened["setup"] == {
             "revision_id": recorded, "content": json.loads(store.get_setup_revision(recorded)["setup_json"]),
-            "derived": False,
+            "derived": False, "exact": True,
         }
         assert opened["solve_options"]["engine"] == "metal"
 
@@ -110,7 +110,9 @@ def test_a_file_run_from_before_setup_revisions_derives_one_deterministically(tm
         assert first["setup"]["derived"] is True
         assert first["setup"] == again["setup"]
         # Content-addressed: it is the request without the prepared mesh, stored once.
-        expected = validate_setup(derived_setup(SolveRequest.model_validate(exact).model_dump(mode="json")))
+        content, exact_setup = derived_setup(SolveRequest.model_validate(exact).model_dump(mode="json"))
+        assert exact_setup is True and first["setup"]["exact"] is True and "note" not in first["setup"]
+        expected = validate_setup(content)
         stored = store.get_setup_revision(first["setup"]["revision_id"])
         assert stored["content_sha256"] == setup_digest(expected)
         assert {row["revision_id"] for row in _revisions(store)} - before == {first["setup"]["revision_id"]}
@@ -164,6 +166,71 @@ def test_a_missing_ingest_unknown_run_and_parametric_run_are_refusals_not_errors
         _job(runtime.store, "parametric", {"design": {"formula": "osse"}, "options": {}})
         parametric = await _workspace(app, "parametric")
         assert parametric["refusal"]["code"] == "parametric_run"
+
+    _file_scenario(tmp_path, scenario)
+
+
+def test_a_recorded_revision_that_is_gone_is_rebuilt_but_not_claimed_exact(tmp_path) -> None:
+    async def scenario(store, app, runtime):
+        record = register_mesh(store, tmp_path, registration())
+        _job(runtime.store, "lost", file_request(record).model_dump(mode="json"), {"imported_geometry": {
+            "ingest_id": record["ingest_id"], "setup_revision_id": "wgs_" + "0" * 26,
+        }})
+        opened = await _workspace(app, "lost")
+        assert "refusal" not in opened
+        assert opened["setup"]["derived"] is True and opened["setup"]["exact"] is False
+        assert "no longer retained" in opened["setup"]["note"]
+        assert opened["setup"]["revision_id"] != "wgs_" + "0" * 26
+
+    _file_scenario(tmp_path, scenario)
+
+
+def test_a_request_that_is_not_a_setup_is_refused_as_unreadable(tmp_path) -> None:
+    async def scenario(store, app, runtime):
+        record = register_mesh(store, tmp_path, registration())
+        broken = file_request(record).model_dump(mode="json")
+        broken["geometry"]["drive_channels"] = "not channels"
+        _job(runtime.store, "broken", broken)
+        opened = await _workspace(app, "broken")
+        assert opened["refusal"]["code"] == "setup_unreadable"
+        assert "setup" not in opened
+
+    _file_scenario(tmp_path, scenario)
+
+
+def test_an_exterior_only_fem_run_keeps_its_exclusion(tmp_path) -> None:
+    async def scenario(store, app, runtime):
+        original = register_mesh(store, tmp_path, registration())
+        row = store.allocate_ingest(
+            manifest_sha256=original["manifest_sha256"], artifact_sha256=original["artifact_sha256"],
+            record_builder=lambda ingest_id, created_at: json.dumps({
+                **original, "ingest_id": ingest_id, "created_at": created_at,
+                "evidence": {"fem_regions": [{"region_id": "fem-b"}, {"region_id": "fem-a"}], "fem_air_volumes": []},
+            }),
+        )
+        record = json.loads(row["record_json"])
+        request = file_request(record, exterior_only=True).model_dump(mode="json")
+        assert "exterior_only_region_ids" not in request["geometry"]
+        _job(runtime.store, "fem", request)
+        opened = await _workspace(app, "fem")
+        geometry = opened["setup"]["content"]["geometry"]
+        assert geometry["exterior_only"] is True
+        assert geometry["exterior_only_region_ids"] == ["fem-a", "fem-b"]
+        assert opened["setup"]["exact"] is True
+        # A re-solve of that setup keeps the FEM air out.
+        resolved = solve_request_for(
+            validate_setup(opened["setup"]["content"]), ingest_id=record["ingest_id"],
+            manifest_sha256=record["manifest_sha256"], artifact_sha256=record["artifact_sha256"],
+            acknowledged_findings=[], fem_region_ids=["fem-a", "fem-b"],
+        )
+        assert resolved.geometry.exterior_only is True
+
+        # Without its prepared mesh the exclusion cannot be known: not exact.
+        gone = {**request, "geometry": {**request["geometry"], "ingest_id": "wgi_" + "7" * 26}}
+        _job(runtime.store, "fem-gone", gone)
+        lost = await _workspace(app, "fem-gone")
+        assert lost["setup"]["exact"] is False and "FEM exclusion" in lost["setup"]["note"]
+        assert lost["refusal"]["code"] == "prepared_unavailable"
 
     _file_scenario(tmp_path, scenario)
 

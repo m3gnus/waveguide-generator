@@ -26,7 +26,7 @@ import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { createCadArrivalActions, enterCadWorkspace, type RefreshOptions } from './arrivals';
 import { showIngestedMeshInViewport } from './artifactLoader';
-import { registerImportedView, type ImportedView } from '../../stores/importedModel';
+import { isCurrentOpen, registerImportedView, type ImportedView } from '../../stores/importedModel';
 import type { ImportedSetup } from '../../jobs/importedSetup';
 
 type CadHistorySetup = Pick<ReturnType<typeof useCadReturnStore.getState>,
@@ -219,7 +219,10 @@ export const cadImportedView: ImportedView = {
     useCadReturnStore.setState({ ingestRecord: null, needsIngest: true,
       ingestStaleReason: 'Loading the selected run’s retained setup.' });
     reportStatus(`Loading ${displayName}${from}…`);
-    const current = () => useCadReturnStore.getState().isCurrentIngestIntent(selection) && isCurrentDocumentLoad(documentLoad);
+    // The open's own generation fences this too: an open of the other input
+    // (a file) never touches CAD's ingest intent, and must still win.
+    const current = () => isCurrentOpen(generation)
+      && useCadReturnStore.getState().isCurrentIngestIntent(selection) && isCurrentDocumentLoad(documentLoad);
     return {
       current,
       async fill(opened) {
@@ -256,7 +259,7 @@ export const cadImportedView: ImportedView = {
         await showIngestedMesh(record, name, reportViewportNotice, fetcher, generation);
         if (!current()) return null;
         if (importedMeshStore.getSnapshot().cad?.ingestId !== record.ingest_id) return null;
-        reportStatus(`Showing ${name}${from}. Stored solve settings restored.`);
+        reportStatus(`Showing ${name}${from}. ${opened.note ?? 'Stored solve settings restored.'}`);
         return record;
       },
       fail(message) {
