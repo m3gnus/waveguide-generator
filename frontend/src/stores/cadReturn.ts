@@ -16,7 +16,7 @@ import {
 } from '../results/crossoverSpec';
 import { useDocumentStore } from './document';
 import { namespaceStorage } from './durableSettings';
-import { applyCadSolveSelection, cadSolveSelection, seedImportedSolveOptionsFromParametric, type SolveAccuracy } from './solveOptions';
+import { applyCadSolveSelection, cadSolveSelection, discardCadSolveOptionsSnapshot, seedImportedSolveOptionsFromParametric, type SolveAccuracy } from './solveOptions';
 import { workspaceModeStore } from './workspaceMode';
 import {
   DEFAULT_CROSSOVER,
@@ -844,6 +844,9 @@ function restoreSolveProfile(bundle: CadReturnBundle, projectLineageId: string |
   // Options are only ever written while CAD input is on screen; a file mesh's
   // are its own.
   const cadActive = workspaceModeStore.getSnapshot().importedInput === 'cad';
+  // Selecting a project with a file on screen: the saved CAD options are the
+  // previous project's, so none of them may carry over.
+  if (how === 'select' && !cadActive) discardCadSolveOptionsSnapshot();
   if (!profile || !compatibleSourceInventory({ readable: true, sources: profile.inventory }, bundle)) {
     // No saved setup for this project: open with a one-way copy of the
     // parametric options, made once here and never written back.

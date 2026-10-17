@@ -105,6 +105,22 @@ describe('CAD return store', () => {
       accuracy: 'accurate', polar: { distance: useSolveOptionsStore.getState().polar.distance } });
   });
 
+  it('drops the previous project\'s CAD options when another project is selected with a file on screen', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    useImportedSolveOptionsStore.getState().updatePolar({ distance: 9 });
+    useImportedSolveOptionsStore.getState().setFrequencyMode('list');
+    useImportedSolveOptionsStore.getState().setMeshValidationMode('off');
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
+    workspaceModeStore.setImportedInput('file');
+    // An automatic selection of project B arrives in the background.
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_b', true);
+    workspaceModeStore.setImportedInput('cad');
+    expect(useImportedSolveOptionsStore.getState()).toMatchObject({
+      frequencyMode: 'range', meshValidationMode: useSolveOptionsStore.getState().meshValidationMode,
+      accuracy: 'fast', polar: { distance: useSolveOptionsStore.getState().polar.distance } });
+  });
+
   it('leaves the options alone when the owner is adopted and no profile exists', () => {
     useDocumentStore.getState().setCadLink({ designId: 'wgd_new', lineageId: 'wgl_new', baseEditVersion: 1 }, 'current');
     useCadReturnStore.getState().selectBundle(bundle);

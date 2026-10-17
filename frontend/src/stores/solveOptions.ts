@@ -562,6 +562,15 @@ export function applyCadSolveSelection(selection: { accuracy?: SolveAccuracy; en
   }
 }
 
+/**
+ * A different CAD project was selected while a file is on screen: the saved CAD
+ * options belong to the previous project, so drop them. Switching back then
+ * seeds a fresh copy and the new project's profile applies on top.
+ */
+export function discardCadSolveOptionsSnapshot(): void {
+  if (workspaceModeStore.getSnapshot().importedInput !== 'cad') delete importedSnapshots.cad;
+}
+
 export function resetImportedInputSnapshots(): void {
   delete importedSnapshots.cad;
   delete importedSnapshots.file;
