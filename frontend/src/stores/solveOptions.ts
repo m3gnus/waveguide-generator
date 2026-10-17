@@ -3,6 +3,7 @@ import { withEditSignals } from './solveSettingsEdits';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { DEFAULT_ATH_POLAR_UI, MIN_POLAR_DISTANCE_M, athPolarObservationOrigin, athPolarOverrides } from './athPolars';
 import { durableSettings } from './durableSettings';
+import { workspaceModeStore } from './workspaceMode';
 import { DEFAULT_GROUND_PLANE, DEFAULT_SOLVER, DEFAULT_SWEEP } from './solveDefaults';
 import { MAX_FREQUENCY_POINTS, parseFrequencyList, type FrequencyListParse } from './frequencyList';
 import {
@@ -502,6 +503,82 @@ export function seedImportedSolveOptions(options: Partial<PersistedSolveOptions 
   useImportedSolveOptionsStore.setState({ ...defaultSolveOptions(), ...defaultImportedSweep(), ...structuredClone(options) });
 }
 
+/** A file mesh never has a rigid ground plane: its rail cannot show one. */
+function withoutGroundPlane<T extends { groundPlane?: GroundPlaneConfig }>(options: T): T {
+  return { ...options, groundPlane: { ...DEFAULT_SOLVE_OPTIONS.groundPlane, enabled: false } };
+}
+
+/**
+ * Open the imported instance for a new file mesh: a one-way copy of the
+ * parametric options, with the ground plane off (file meshes cannot have one)
+ * and the strict mesh validation file solves have always used.
+ */
+export function seedImportedSolveOptionsForFile(): void {
+  seedImportedSolveOptions({
+    ...withoutGroundPlane(normalizePersistedSolveOptions(useSolveOptionsStore.getState())),
+    meshValidationMode: 'strict',
+  });
+}
+
+/**
+ * File and CAD input share one imported instance, so each keeps its own copy
+ * while the other is on screen. Switching input saves the leaving side's
+ * options and restores the arriving side's, seeding it if it has none. Per-model
+ * setups replace this.
+ */
+type ImportedInput = 'cad' | 'file';
+type ImportedSnapshot = PersistedSolveOptions & ImportedSweep;
+const importedSnapshots: Partial<Record<ImportedInput, ImportedSnapshot>> = {};
+let activeImportedInput: ImportedInput = workspaceModeStore.getSnapshot().importedInput;
+
+function importedSnapshot(): ImportedSnapshot {
+  const state = useImportedSolveOptionsStore.getState();
+  return structuredClone({
+    ...normalizePersistedSolveOptions(state),
+    sweepStartHz: state.sweepStartHz, sweepEndHz: state.sweepEndHz, sweepCount: state.sweepCount,
+  });
+}
+
+/**
+ * The engine and accuracy the CAD input has chosen, wherever its options are
+ * held right now: live while CAD is the active input, else its saved copy.
+ * Null when CAD has none, so a file mesh's choice is never filed as CAD's.
+ */
+export function cadSolveSelection(): { accuracy: SolveAccuracy; engine: string } | null {
+  if (workspaceModeStore.getSnapshot().importedInput === 'cad') {
+    const { accuracy, engine } = useImportedSolveOptionsStore.getState();
+    return { accuracy, engine };
+  }
+  const saved = importedSnapshots.cad;
+  return saved ? { accuracy: saved.accuracy, engine: saved.engine } : null;
+}
+
+/** Write a CAD selection to the imported instance, or to CAD's saved copy while a file is on screen. */
+export function applyCadSolveSelection(selection: { accuracy?: SolveAccuracy; engine?: string }): void {
+  if (workspaceModeStore.getSnapshot().importedInput === 'cad') {
+    useImportedSolveOptionsStore.setState({ accuracy: 'fast', ...selection });
+  } else if (importedSnapshots.cad) {
+    importedSnapshots.cad = { ...importedSnapshots.cad, accuracy: 'fast', ...selection } as ImportedSnapshot;
+  }
+}
+
+export function resetImportedInputSnapshots(): void {
+  delete importedSnapshots.cad;
+  delete importedSnapshots.file;
+  activeImportedInput = workspaceModeStore.getSnapshot().importedInput;
+}
+
+workspaceModeStore.subscribe(() => {
+  const next = workspaceModeStore.getSnapshot().importedInput;
+  if (next === activeImportedInput) return;
+  importedSnapshots[activeImportedInput] = importedSnapshot();
+  activeImportedInput = next;
+  const saved = importedSnapshots[next];
+  if (saved) seedImportedSolveOptions(saved);
+  else if (next === 'file') seedImportedSolveOptionsForFile();
+  else seedImportedSolveOptionsFromParametric();
+});
+
 /**
  * Put a recorded solve's options (the wire shape) into the imported instance.
  * Fields the record does not state keep the instance's current value.
@@ -551,6 +628,7 @@ export function seedImportedSolveOptionsFromParametric(): void {
 export function resetSolveOptionsStore(): void {
   useSolveOptionsStore.setState(defaultSolveOptions());
   useImportedSolveOptionsStore.setState({ ...defaultSolveOptions(), ...defaultImportedSweep() });
+  resetImportedInputSnapshots();
 }
 
 // The server's copy is authoritative, so re-read once it has replaced the cache.

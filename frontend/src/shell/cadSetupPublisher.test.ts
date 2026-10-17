@@ -257,6 +257,27 @@ describe('CAD setup publisher', () => {
     stop();
   });
 
+  it('publishes nothing for CAD when a file mesh\'s options are edited', async () => {
+    vi.useFakeTimers();
+    const { fetcher, to } = recorder();
+    const stop = startCadSetupPublisher({ fetcher, debounceMs: 500 });
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await vi.advanceTimersByTimeAsync(600);
+    const setups = to('/project-setups').length;
+    const solvers = to('/solver-selection').length;
+    workspaceModeStore.setMode('cad');
+    workspaceModeStore.setImportedInput('file');
+    await vi.advanceTimersByTimeAsync(2_000);
+    useImportedSolveOptionsStore.getState().setFrequencySpacing('linear');
+    useImportedSolveOptionsStore.getState().setEngine('bempp');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(to('/project-setups')).toHaveLength(setups);
+    expect(to('/solver-selection')).toHaveLength(solvers);
+    stop();
+    workspaceModeStore.setImportedInput('cad');
+  });
+
   it('records both accuracy and engine at start and whenever either changes', async () => {
     vi.useFakeTimers();
     const { fetcher, to } = recorder();

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { durableSettings } from './durableSettings';
+import { workspaceModeStore } from './workspaceMode';
+import { solveOptionsStoreForJob } from './solveOptionsContext';
 import {
   MAX_FREQUENCY_POINTS,
   defaultPolarUi,
@@ -417,5 +419,32 @@ describe('the imported solve-options instance', () => {
       frequencyListText: '100\n200', polar: { distance: 3 },
     });
     expect(JSON.stringify(useSolveOptionsStore.getState())).toBe(parametric);
+  });
+});
+
+describe('file and CAD input keep their own imported options', () => {
+  beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); workspaceModeStore.setImportedInput('cad'); });
+
+  it('restores each side\'s own options when the input is switched', () => {
+    const imported = useImportedSolveOptionsStore.getState;
+    imported().updatePolar({ distance: 5 });
+    imported().setFrequencyMode('list');
+    imported().setFrequencyListText('100 200 300');
+    workspaceModeStore.setImportedInput('file');
+    // The file side starts from a copy of the parametric options, not CAD's edits.
+    expect(imported()).toMatchObject({ frequencyMode: 'range', polar: { distance: useSolveOptionsStore.getState().polar.distance } });
+    expect(imported().groundPlane.enabled).toBe(false);
+    imported().setFrequencySpacing('linear');
+    imported().setSweep({ count: 11 });
+    workspaceModeStore.setImportedInput('cad');
+    expect(imported()).toMatchObject({ frequencyMode: 'list', frequencyListText: '100 200 300', polar: { distance: 5 }, frequencySpacing: 'log' });
+    workspaceModeStore.setImportedInput('file');
+    expect(imported()).toMatchObject({ frequencySpacing: 'linear', sweepCount: 11, frequencyMode: 'range' });
+    workspaceModeStore.setImportedInput('cad');
+  });
+
+  it('chooses the options of an exported run by its geometry, not the workspace mode', () => {
+    expect(solveOptionsStoreForJob({ config_summary: { geometry_type: 'imported' } })).toBe(useImportedSolveOptionsStore);
+    expect(solveOptionsStoreForJob({ config_summary: { geometry_type: 'parametric' } })).toBe(useSolveOptionsStore);
   });
 });

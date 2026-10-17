@@ -5,7 +5,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
 import {
-  applyWireOptionsToImportedSolveOptions, seedImportedSolveOptionsFromParametric,
+  applyWireOptionsToImportedSolveOptions, seedImportedSolveOptionsForFile,
   useImportedSolveOptionsStore, type SolveOptions,
 } from './solveOptions';
 import type { ImportedSolveSubmission } from '../jobs/actions';
@@ -83,13 +83,13 @@ subscribeSolveSettingsEdits(edit => {
 export function beginMeshFileImport(filename: string): number {
   const request = ++requestNumber;
   useMeshImportStore.setState({ ...initial, filename, busy: true, request });
-  // A new file has no saved setup: open with a one-way copy of the parametric
-  // options. A restore overwrites this with the saved setup's own options.
-  seedImportedSolveOptionsFromParametric();
-  // File meshes have always refused a mesh that is not watertight; that stays
-  // the starting policy here, now as a visible, editable control.
-  useImportedSolveOptionsStore.setState({ meshValidationMode: 'strict' });
+  // Switch to file input first: leaving CAD saves its options before the file's
+  // are seeded over the shared instance.
   workspaceModeStore.setImportedInput('file');
+  // A new file has no saved setup: open with a one-way copy of the parametric
+  // options (ground plane off, strict validation). A restore overwrites this
+  // with the saved setup's own options.
+  seedImportedSolveOptionsForFile();
   workspaceModeStore.setMode('cad');
   return request;
 }
@@ -167,6 +167,8 @@ export function fileMeshSubmission(): ImportedSolveSubmission {
     options.frequency_range = [selected.sweepStartHz, selected.sweepEndHz];
     options.num_frequencies = selected.sweepCount;
   }
+  // The file rail has no ground plane control, so none is ever sent.
+  delete options.ground_plane;
   options.symmetry = 'full';
   options.solver_mode = 'full_3d';
   return bindImportedSetup(record, {
@@ -221,8 +223,9 @@ function restoreFile(record: RegisteredMesh, options: FileOptions,
   workspaceModeStore.setMode('cad');
   // The saved setup's own options seed the imported instance, over a copy of
   // the parametric options for whatever the record does not state.
-  seedImportedSolveOptionsFromParametric();
+  seedImportedSolveOptionsForFile();
   applyWireOptionsToImportedSolveOptions(options as Partial<SolveOptions>);
+  useImportedSolveOptionsStore.setState({ groundPlane: { enabled: false, axis: 'y', height_m: 0 } });
   useMeshImportStore.setState({ ...initial, filename: record.source_file.filename,
     summary: record.summary, registered: record, ...record.source_file.transform, selected: record.source_file.source_tags,
     motions: Object.fromEntries(channels.map(channel => [channel.id, channel.motion ?? 'normal'])),

@@ -45,8 +45,7 @@ import { ResultsHeader } from './ResultsHeader';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { useVisibleRedraw } from './panelVisibility';
 import { trapDialogFocus } from './dialogFocus';
-import { solveOptionsStoreForMode, useScopedSolveOptions } from '../stores/solveOptionsContext';
-import { workspaceModeStore } from '../stores/workspaceMode';
+import { solveOptionsStoreForJob, useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { useObservationStore } from '../viewport/observationStore';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
 import { useDesignStore } from '../stores/design';
@@ -2749,7 +2748,7 @@ export function ResultsPanel() {
         // Exports follow the maps: the normalization angle is a display
         // reference now, and the angle the run was solved at is no longer shown
         // anywhere, so it is not a candidate.
-        normalizationAngle: solveOptionsStoreForMode(workspaceModeStore.getSnapshot().mode).getState().polar.normAngle,
+        normalizationAngle: solveOptionsStoreForJob(job).getState().polar.normAngle,
         preferences,
         destinationToken: destination.token,
         confirmReplacements: askToReplaceExports,

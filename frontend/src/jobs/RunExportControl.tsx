@@ -23,8 +23,7 @@ import {
   EXPORT_CANCELLED_MESSAGE,
 } from '../shell/exportDestinationPrompt';
 import { EMPTY_RUN_EXPORT_STATE, useRunExportStore, type RunExportOutcome } from '../stores/runExports';
-import { solveOptionsStoreForMode } from '../stores/solveOptionsContext';
-import { workspaceModeStore } from '../stores/workspaceMode';
+import { solveOptionsStoreForJob } from '../stores/solveOptionsContext';
 import { canLoadJobDesign, hydrateJobDesign, jobDesignAvailability, jobRerunState } from './jobDesign';
 import { exportStemForJob, exportSubdirectoryForJob } from './exportNaming';
 import { designFileExtension } from '../stores/designName';
@@ -163,7 +162,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
     workspaceSubdirectory: exportSubdirectoryForJob(job),
     designName: job.label ?? undefined,
-    normalizationAngle: solveOptionsStoreForMode(workspaceModeStore.getSnapshot().mode).getState().polar.normAngle,
+    normalizationAngle: solveOptionsStoreForJob(job).getState().polar.normAngle,
     preferences,
   });
 

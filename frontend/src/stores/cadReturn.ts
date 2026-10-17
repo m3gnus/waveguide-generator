@@ -16,7 +16,8 @@ import {
 } from '../results/crossoverSpec';
 import { useDocumentStore } from './document';
 import { namespaceStorage } from './durableSettings';
-import { seedImportedSolveOptionsFromParametric, useImportedSolveOptionsStore, type SolveAccuracy } from './solveOptions';
+import { applyCadSolveSelection, cadSolveSelection, seedImportedSolveOptionsFromParametric, type SolveAccuracy } from './solveOptions';
+import { workspaceModeStore } from './workspaceMode';
 import {
   DEFAULT_CROSSOVER,
   DEFAULT_DRIVE_VOLTAGE_V,
@@ -807,6 +808,9 @@ function saveSolveProfile(state: CadReturnState): void {
   // bundle that could not be read states no sources, and filing that would
   // overwrite the project's settings with an empty model.
   if (!bundle || !owner || !bundle.sources.length) return;
+  // A file mesh's engine and accuracy are not this CAD project's choice.
+  const solveSelection = cadSolveSelection();
+  if (!solveSelection) return;
   const inventory = bundle.sources.map(({ id, role, required }) => ({ id, role, required }));
   const key = solveProfileKey(owner, bundle);
   const profile: StoredSolveProfile = {
@@ -814,28 +818,42 @@ function saveSolveProfile(state: CadReturnState): void {
     owner,
     inventory,
     settings: persistedSolveSettings(state),
-    solveSelection: {
-      accuracy: useImportedSolveOptionsStore.getState().accuracy,
-      engine: useImportedSolveOptionsStore.getState().engine,
-    },
+    solveSelection,
   };
   writeStoredSolveProfiles([profile, ...readStoredSolveProfiles().filter((item) => item.key !== key)]);
   selectedSolveProfileKey = key;
 }
 
 
-function restoreSolveProfile(bundle: CadReturnBundle, projectLineageId: string | null): PersistedSolveSettings | null {
+/**
+ * How a profile restore treats the imported options:
+ * - `select`: a project is being opened. Start from a one-way copy of the
+ *   parametric options, then apply the profile's selection if it has one, so
+ *   nothing left over from a file or another project survives.
+ * - `adopt`: the owner became known late. A profile replaces the options as in
+ *   `select`; with none, what is on screen is left alone.
+ * - `resume`: CAD input came back on screen. Its own options were restored;
+ *   only the profile's selection is applied.
+ */
+function restoreSolveProfile(bundle: CadReturnBundle, projectLineageId: string | null,
+  how: 'select' | 'adopt' | 'resume' = 'select'): PersistedSolveSettings | null {
   const key = currentSolveProfileKey(bundle, projectLineageId);
   const profiles = key ? readStoredSolveProfiles() : [];
   const index = profiles.findIndex((profile) => profile.key === key);
   const profile = index < 0 ? undefined : profiles[index];
+  // Options are only ever written while CAD input is on screen; a file mesh's
+  // are its own.
+  const cadActive = workspaceModeStore.getSnapshot().importedInput === 'cad';
   if (!profile || !compatibleSourceInventory({ readable: true, sources: profile.inventory }, bundle)) {
     // No saved setup for this project: open with a one-way copy of the
-    // parametric options. The copy is made here, once, and never written back.
-    seedImportedSolveOptionsFromParametric();
+    // parametric options, made once here and never written back.
+    if (how === 'select' && cadActive) seedImportedSolveOptionsFromParametric();
     return null;
   }
-  useImportedSolveOptionsStore.setState({ accuracy: 'fast', ...profile.solveSelection });
+  if (cadActive) {
+    if (how !== 'resume') seedImportedSolveOptionsFromParametric();
+    applyCadSolveSelection(profile.solveSelection ?? {});
+  }
   if (index > 0) writeStoredSolveProfiles([profile, ...profiles.filter((_, itemIndex) => itemIndex !== index)]);
   return profile.settings;
 }
@@ -1167,7 +1185,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
     // sizes and the skipped sources -- overrides it.
     const adopted = solveProfileOwner(project) !== solveProfileOwner(current.projectLineageId)
       && current.selectedBundle
-      ? restoreSolveProfile(current.selectedBundle, project)
+      ? restoreSolveProfile(current.selectedBundle, project, 'adopt')
       : null;
     const channels = (adopted?.driveChannels ?? current.driveChannels).flatMap((channel) => {
       const source_ids = channel.source_ids.filter((id) => !skipped.has(id));
@@ -1949,7 +1967,22 @@ export function blockingFindingWire(record: CadReturnIngestRecord): string[] {
 // The shared accuracy/backend controls live outside the CAD return store.
 // Save a project's choice when a person edits either control, rather than
 // waiting for an unrelated mesh or driver edit to persist its profile.
-subscribeSolveSettingsEdits(() => saveSolveProfile(useCadReturnStore.getState()));
+subscribeSolveSettingsEdits((edit) => {
+  // Parametric edits and file-mesh edits are not this CAD project's settings.
+  if (edit?.source === 'solveOptions' || workspaceModeStore.getSnapshot().importedInput !== 'cad') return;
+  saveSolveProfile(useCadReturnStore.getState());
+});
+
+// CAD input came back on screen: its options were restored with it, and the
+// selected project's saved engine and accuracy apply on top.
+let lastImportedInput = workspaceModeStore.getSnapshot().importedInput;
+workspaceModeStore.subscribe(() => {
+  const next = workspaceModeStore.getSnapshot().importedInput;
+  if (next === lastImportedInput) return;
+  lastImportedInput = next;
+  const { selectedBundle, projectLineageId } = useCadReturnStore.getState();
+  if (next === 'cad' && selectedBundle) restoreSolveProfile(selectedBundle, projectLineageId, 'resume');
+});
 
 export function resetCadReturnStore(): void {
   supersedeSelectionIntent();

@@ -7,7 +7,7 @@ import { ToggleRow } from './SolveOptionsSections';
 import { latestCombine } from '../results/latestCombine';
 import { recombineJobResults } from '../api/results';
 import { useDesignStore } from '../stores/design';
-import { useSolveOptionsStore } from '../stores/solveOptions';
+import { useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { jobsCoordinatorBridge } from '../shell/JobsCoordinator';
 import {
   driverXoMinNote,
@@ -288,7 +288,7 @@ function LiveNote({ shown, live, busy, error, members, outside }: {
       <button type="button" className="crossover-recall" onClick={() => {
         const cad = useCadReturnStore.getState();
         cad.setSweep(outside < start ? { frequencyStartHz: outside } : { frequencyEndHz: outside });
-        useSolveOptionsStore.getState().setFrequencyMode('range');
+        useImportedSolveOptionsStore.getState().setFrequencyMode('range');
         const design = useDesignStore.getState();
         void jobsCoordinatorBridge.getSnapshot().run(design.design, design.designRevision);
       }}>Re-solve with sweep {outside < start ? 'from' : 'to'} {outside} Hz</button>

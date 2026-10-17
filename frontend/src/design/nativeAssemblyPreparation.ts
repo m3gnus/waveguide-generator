@@ -48,8 +48,9 @@ export async function prepareNativeAssembly(
   useCadReturnStore.getState().applyIngest(record, generation);
   importedMeshStore.setCad(scene, viewportGeneration);
   importedMeshStore.setCadSolver(scene, viewportGeneration, false);
-  useImportedSolveOptionsStore.getState().setEngine('metal');
+  // Switch input first so a file mesh's options are saved before CAD's are set.
   workspaceModeStore.setImportedInput('cad');
+  useImportedSolveOptionsStore.getState().setEngine('metal');
   workspaceModeStore.setMode('cad');
   return record;
 }

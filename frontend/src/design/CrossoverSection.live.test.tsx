@@ -11,6 +11,7 @@ import { resetDocumentStore } from '../stores/document';
 import { SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { CadCrossover } from './CrossoverSection';
 import { jobsCoordinatorBridge } from '../shell/JobsCoordinator';
+import { useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 
 const recombineMocks = vi.hoisted(() => ({ recombine: vi.fn() }));
 vi.mock('../api/results', async (importOriginal) => ({
@@ -133,6 +134,21 @@ describe('live recombine from the rail', () => {
     act(() => offer.click());
     expect(useCadReturnStore.getState().frequencyStartHz).toBe(100);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('switches the imported options, not the parametric ones, back to a generated grid for the re-solve', async () => {
+    recombineMocks.recombine.mockResolvedValue({ channels: {} } as JobResults);
+    (jobsCoordinatorBridge.getSnapshot() as unknown as { run: unknown }).run = vi.fn().mockResolvedValue(undefined);
+    useImportedSolveOptionsStore.getState().setFrequencyMode('list');
+    useSolveOptionsStore.getState().setFrequencyMode('list');
+    render();
+    publishShown({ solvedBandHz: [200, 20_000] });
+    act(() => useCadReturnStore.getState().setCombineSpec(expandLegacy(['drive-mf', 'drive-hf'], [100])));
+    await act(async () => { vi.advanceTimersByTime(450); await Promise.resolve(); });
+    act(() => [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Re-solve with sweep from 100 Hz')!.click());
+    expect(useImportedSolveOptionsStore.getState().frequencyMode).toBe('range');
+    expect(useSolveOptionsStore.getState().frequencyMode).toBe('list');
+    useSolveOptionsStore.getState().setFrequencyMode('range');
   });
 
   it('restores a crossover reverted while its own request is still outstanding', async () => {

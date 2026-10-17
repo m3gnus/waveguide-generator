@@ -212,7 +212,10 @@ export function AdaptiveFrequencyControls({ mode = 'parametric' }: { mode?: Work
   const store = useScopedSolveOptions();
   const controlBackend = useSolveControlBackend(mode);
   const simulation = useDesignStore((state) => state.design.simulation);
-  const importedCount = useCadReturnStore((state) => state.frequencyCount);
+  const cadCount = useCadReturnStore((state) => state.frequencyCount);
+  // A file mesh's sweep lives in the imported options; a CAD return's in its own store.
+  const importedCount = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot).importedInput === 'file'
+    ? store.sweepCount : cadCount;
   const count = store.frequencyMode === 'list'
     ? parseFrequencyList(store.frequencyListText).frequencies?.length ?? 0
     : mode === 'cad' ? importedCount : simulation.num_frequencies;
@@ -301,7 +304,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
           imported submission sends it as it is. The formulation and domain are
           not choices here, so they stay facts. An engine that cannot solve
           imported geometry is listed, disabled, with that reason. */}
-      <HelpTipRow className="select-row" text="Advanced engine override shared with parametric mode. AUTO follows Fast or Accurate; an explicit engine takes precedence."><label htmlFor="cad-solve-engine">Advanced backend</label><select id="cad-solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
+      <HelpTipRow className="select-row" text="Advanced engine override for this imported model. AUTO follows Fast or Accurate; an explicit engine takes precedence."><label htmlFor="cad-solve-engine">Advanced backend</label><select id="cad-solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">Automatic — follow accuracy</option>
         {backendEngines.map((engine) => {
           const verdict = verdicts.get(engine.name.toLowerCase());

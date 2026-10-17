@@ -13,7 +13,7 @@ import {
 } from '../design/backendSupport';
 import { capabilityFingerprint } from './capabilityFingerprint';
 import { preferencesStore } from '../prefs/preferences';
-import { useSolveOptionsStore } from '../stores/solveOptions';
+import { useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { useScopedSolveOptions } from '../stores/solveOptionsContext';
 
 /**
@@ -210,11 +210,18 @@ export function usePlannedBackendCapabilities(): readonly EngineCapability[] {
 export function useLegacyBeatEngineMigration(): void {
   const engine = useSolveOptionsStore((state) => state.engine);
   const setEngine = useSolveOptionsStore((state) => state.setEngine);
+  const importedEngine = useImportedSolveOptionsStore((state) => state.engine);
+  const setImportedEngine = useImportedSolveOptionsStore((state) => state.setEngine);
   const { engines, engineSelection } = useCapabilities();
   useEffect(() => {
     const migrated = migratedLegacyBeatEngine(engine, engines, engineSelection);
     if (migrated !== null) setEngine(migrated);
   }, [engine, engines, engineSelection, setEngine]);
+  // The imported instance can carry the same legacy name from a saved setup.
+  useEffect(() => {
+    const migrated = migratedLegacyBeatEngine(importedEngine, engines, engineSelection);
+    if (migrated !== null) setImportedEngine(migrated);
+  }, [importedEngine, engines, engineSelection, setImportedEngine]);
 }
 
 /**

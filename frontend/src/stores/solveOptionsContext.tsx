@@ -10,6 +10,11 @@ export function solveOptionsStoreForMode(mode: WorkspaceMode): SolveOptionsStore
   return mode === 'cad' ? useImportedSolveOptionsStore : useSolveOptionsStore;
 }
 
+/** The options an exported run is described by: imported runs use the imported instance. */
+export function solveOptionsStoreForJob(job: { config_summary?: Record<string, unknown> | null }): SolveOptionsStoreApi {
+  return job.config_summary?.geometry_type === 'imported' ? useImportedSolveOptionsStore : useSolveOptionsStore;
+}
+
 const SolveOptionsStoreContext = createContext<SolveOptionsStoreApi | null>(null);
 
 export function SolveOptionsStoreProvider({ mode, children }: { mode: WorkspaceMode; children: ReactNode }) {

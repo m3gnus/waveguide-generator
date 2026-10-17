@@ -162,6 +162,18 @@ describe('standalone imported mesh', () => {
     expect(fileMeshSubmission().options).toMatchObject({ frequency_range: [210, 6300], num_frequencies: 23 });
   });
 
+  it('never sends a ground plane for a file mesh, whatever the parametric options say', async () => {
+    useSolveOptionsStore.getState().updateGroundPlane({ enabled: true, height_m: 1 });
+    await loadMeshFile('speaker.msh', MSH, vi.fn<typeof fetch>(async () => response(summary)));
+    expect(useImportedSolveOptionsStore.getState().groundPlane.enabled).toBe(false);
+    useMeshImportStore.setState({ registered: record });
+    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+    // Even if something enabled it on the shared instance, the request drops it.
+    useImportedSolveOptionsStore.getState().updateGroundPlane({ enabled: true });
+    expect(fileMeshSubmission().options).not.toHaveProperty('ground_plane');
+    useSolveOptionsStore.getState().updateGroundPlane({ enabled: false });
+  });
+
   it('opens a new file with a one-way copy of the parametric options', async () => {
     useSolveOptionsStore.getState().setFrequencySpacing('linear');
     useSolveOptionsStore.getState().updatePolar({ distance: 4 });

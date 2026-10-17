@@ -29,7 +29,8 @@ import {
 } from '../results/crossoverSpec';
 import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { resetDocumentStore, useDocumentStore } from './document';
-import { resetSolveOptionsStore, useImportedSolveOptionsStore } from './solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
+import { workspaceModeStore } from './workspaceMode';
 
 const solveProfileStorageKey = 'waveguide-v2-g3-cad-solve-profiles';
 
@@ -80,6 +81,38 @@ describe('CAD return store', () => {
     resetSolveOptionsStore();
     useCadReturnStore.getState().selectBundle(bundle);
     expect(useImportedSolveOptionsStore.getState()).toMatchObject({ accuracy: 'accurate', engine: 'auto' });
+  });
+
+  it('files a file mesh\'s engine choice under no CAD project', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    const before = localStorage.getItem(solveProfileStorageKey);
+    workspaceModeStore.setImportedInput('file');
+    useImportedSolveOptionsStore.getState().setEngine('bempp');
+    expect(localStorage.getItem(solveProfileStorageKey)).toBe(before);
+    workspaceModeStore.setImportedInput('cad');
+    expect(useImportedSolveOptionsStore.getState().engine).toBe('auto');
+  });
+
+  it('opens a project with its own saved selection over a fresh copy, not leftovers', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().updatePolar({ distance: 9 });
+    useCadReturnStore.getState().selectBundle(null, null);
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
+    expect(useImportedSolveOptionsStore.getState()).toMatchObject({
+      accuracy: 'accurate', polar: { distance: useSolveOptionsStore.getState().polar.distance } });
+  });
+
+  it('leaves the options alone when the owner is adopted and no profile exists', () => {
+    useDocumentStore.getState().setCadLink({ designId: 'wgd_new', lineageId: 'wgl_new', baseEditVersion: 1 }, 'current');
+    useCadReturnStore.getState().selectBundle(bundle);
+    useImportedSolveOptionsStore.getState().updatePolar({ distance: 9 });
+    useImportedSolveOptionsStore.getState().setFrequencyMode('list');
+    const store = useCadReturnStore.getState();
+    store.applyIngest({ ...record(), project: project('wgl_other') }, store.beginIngestIntent());
+    expect(useImportedSolveOptionsStore.getState()).toMatchObject({ frequencyMode: 'list', polar: { distance: 9 } });
   });
 
   it('loads a CAD profile saved before accuracy existed as Fast', () => {

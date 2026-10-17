@@ -38,6 +38,12 @@ type CadReturnSnapshot = ReturnType<typeof useCadReturnStore.getState>;
 type SolveOptionsSnapshot = ReturnType<typeof useImportedSolveOptionsStore.getState>;
 type CadPreparationSnapshot = ReturnType<typeof useCadPreparationStore.getState>;
 
+/** CAD publication only follows CAD input: file-mesh edits are not CAD settings. */
+function cadInputActive(): boolean {
+  const { mode, importedInput } = workspaceModeStore.getSnapshot();
+  return mode === 'cad' && importedInput === 'cad';
+}
+
 const SETUP_DEBOUNCE_MS = 750;
 /** A failed recording is tried again after these waits, then given up on. */
 const SETUP_RETRY_DELAYS_MS = [1_000, 4_000];
@@ -212,7 +218,7 @@ export function startCadSetupPublisher(
   };
 
   const onEdit = () => {
-    if (workspaceModeStore.getSnapshot().mode !== 'cad') return;
+    if (!cadInputActive()) return;
     const built = buildCadProjectSetup();
     if (built) schedule(built);
   };
@@ -261,6 +267,8 @@ export function startCadSetupPublisher(
   };
 
   const observeSolverSelection = () => {
+    // A file mesh's engine choice is not the CAD project's.
+    if (workspaceModeStore.getSnapshot().importedInput !== 'cad') return;
     const { engine, accuracy } = useImportedSolveOptionsStore.getState();
     const next = { engine, accuracy };
     const key = JSON.stringify(next);
