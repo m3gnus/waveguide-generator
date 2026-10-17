@@ -50,3 +50,11 @@ export const readMeshImport = async (modelId: string, preparedId: string, fetche
   (await request<{ prepared: RegisteredMesh }>(
     `${modelPath(modelId)}?prepared_id=${encodeURIComponent(preparedId)}`, undefined, fetcher,
   )).prepared;
+/** The model a prepared mesh is filed under, or null when the server has none for it. */
+export async function findPreparedModel(preparedId: string, fetcher: typeof fetch = fetch):
+  Promise<{ model_id: string; prepared_id: string } | null> {
+  const response = await fetcher(`/api/models?prepared_id=${encodeURIComponent(preparedId)}`);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Saved mesh setup unavailable (${response.status}).`);
+  return response.json() as Promise<{ model_id: string; prepared_id: string }>;
+}

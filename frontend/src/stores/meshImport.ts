@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import {
-  fileModelId, inspectMesh, prepareMeshModel, registerMesh, readMeshImport, type MeshSummary, type RegisteredMesh,
+  fileModelId, findPreparedModel, inspectMesh, prepareMeshModel, registerMesh, readMeshImport, type MeshSummary, type RegisteredMesh,
 } from '../api/meshImport';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -42,6 +42,7 @@ const initial: MeshImportState = {
   registered: null, modelId: null, motions: {}, busy: false, error: null, notice: null, request: 0, exactSubmission: null,
 };
 const savedSetupStorage = namespaceStorage('meshImport');
+const SAVED_SETUP_KEY = 'wg-saved-mesh-setup';
 let requestNumber = 0;
 export const useMeshImportStore = create<MeshImportState>(() => ({ ...initial }));
 
@@ -274,24 +275,41 @@ export async function saveMeshSetup(fetcher: typeof fetch = fetch): Promise<void
   const modelId = useMeshImportStore.getState().registered!.model_id;
   await saveImportedSetup(modelId, ingest_id, { geometry, options: submission.options }, fetcher);
   if (useMeshImportStore.getState().registered?.ingest_id === ingest_id) {
-    savedSetupStorage.setItem('wg-saved-mesh-setup', JSON.stringify({ model_id: modelId, prepared_id: ingest_id }));
+    savedSetupStorage.setItem(SAVED_SETUP_KEY, JSON.stringify({ model_id: modelId, prepared_id: ingest_id }));
     useMeshImportStore.setState({ notice: fingerprint === setupFingerprint(useMeshImportStore.getState())
       ? 'Mesh setup saved. It can be resumed after restart.'
       : 'Earlier mesh settings were saved. Your current edits are not saved.' });
   }
 }
 
-export async function restoreSavedMeshSetup(fetcher: typeof fetch = fetch): Promise<boolean> {
-  let saved: { model_id?: unknown; prepared_id?: unknown } | null = null;
-  try { saved = JSON.parse(savedSetupStorage.getItem('wg-saved-mesh-setup') ?? 'null'); }
-  catch { saved = null; }
-  const modelId = typeof saved?.model_id === 'string' ? saved.model_id : null;
-  const id = typeof saved?.prepared_id === 'string' ? saved.prepared_id : null;
-  if (!modelId || !id) {
-    // A pointer from before model records named only a prepared mesh.
-    savedSetupStorage.removeItem('wg-saved-mesh-setup');
-    return false;
+/** The saved setup's model and preparation. A pointer from before model records
+ * named only the prepared mesh: it is resolved to its model once, and dropped
+ * only when the server has no model for it. */
+async function savedSetupPointer(fetcher: typeof fetch): Promise<{ modelId: string; id: string } | null> {
+  const raw = savedSetupStorage.getItem(SAVED_SETUP_KEY);
+  if (!raw) return null;
+  let saved: unknown = null;
+  try { saved = JSON.parse(raw); } catch { saved = raw; }
+  if (saved && typeof saved === 'object') {
+    const { model_id: modelId, prepared_id: id } = saved as { model_id?: unknown; prepared_id?: unknown };
+    if (typeof modelId === 'string' && typeof id === 'string') return { modelId, id };
+  } else if (typeof saved === 'string' && saved) {
+    // A transport failure keeps the pointer for the next start.
+    const found = await findPreparedModel(saved, fetcher).catch(() => undefined);
+    if (found === undefined) return null;
+    if (found?.model_id.startsWith('mesh-file:')) {
+      savedSetupStorage.setItem(SAVED_SETUP_KEY, JSON.stringify(found));
+      return { modelId: found.model_id, id: found.prepared_id };
+    }
   }
+  savedSetupStorage.removeItem(SAVED_SETUP_KEY);
+  return null;
+}
+
+export async function restoreSavedMeshSetup(fetcher: typeof fetch = fetch): Promise<boolean> {
+  const pointer = await savedSetupPointer(fetcher);
+  if (!pointer) return false;
+  const { modelId, id } = pointer;
   const generation = importedMeshStore.beginIntent();
   beginMeshFileImport('Restoring mesh…');
   const request = ++requestNumber;

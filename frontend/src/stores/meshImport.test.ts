@@ -180,6 +180,33 @@ describe('standalone imported mesh', () => {
     useSolveOptionsStore.getState().updateGroundPlane({ enabled: false });
   });
 
+  it('resolves a pointer from before model records to its model, once', async () => {
+    useMeshImportStore.setState({ registered: record });
+    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+    const { type: _t, ingest_id: _i, manifest_sha256: _m, artifact_sha256: _a, acknowledged_findings: _f, ...geometry } = fileMeshSubmission().geometry;
+    const options = fileMeshSubmission().options;
+    useMeshImportStore.setState(initial, true);
+    importedMeshStore.clear();
+    localStorage.setItem('wg-saved-mesh-setup', record.ingest_id);
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => String(url).startsWith('/api/models?')
+      ? response({ model_id: record.model_id, prepared_id: record.ingest_id })
+      : String(url).includes('/setup?') ? response({ setup: { geometry, options } }) : prepared(record));
+    expect(await restoreSavedMeshSetup(fetcher as unknown as typeof fetch)).toBe(true);
+    expect(fetcher.mock.calls[0][0]).toBe(`/api/models?prepared_id=${record.ingest_id}`);
+    expect(JSON.parse(localStorage.getItem('wg-saved-mesh-setup')!)).toEqual({ model_id: record.model_id, prepared_id: record.ingest_id });
+    expect(useMeshImportStore.getState().registered?.ingest_id).toBe(record.ingest_id);
+  });
+
+  it('drops an old pointer only when the server has no model for it', async () => {
+    localStorage.setItem('wg-saved-mesh-setup', 'wgi_offline');
+    expect(await restoreSavedMeshSetup(vi.fn(async () => { throw new TypeError('offline'); }) as unknown as typeof fetch)).toBe(false);
+    expect(localStorage.getItem('wg-saved-mesh-setup')).toBe('wgi_offline');
+    const gone = vi.fn(async () => new Response('{}', { status: 404 }));
+    expect(await restoreSavedMeshSetup(gone as unknown as typeof fetch)).toBe(false);
+    expect(gone).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('wg-saved-mesh-setup')).toBeNull();
+  });
+
   it('opens a new file with a one-way copy of the parametric options', async () => {
     useSolveOptionsStore.getState().setFrequencySpacing('linear');
     useSolveOptionsStore.getState().updatePolar({ distance: 4 });
