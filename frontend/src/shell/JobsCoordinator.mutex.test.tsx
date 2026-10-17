@@ -635,7 +635,7 @@ describe('solve invocation mutex', () => {
     design.enclosure.depth = 0;
     design.simulation.sim_type = 'freestanding';
     act(() => {
-      useDesignStore.getState().loadDesign(design);
+      useDesignStore.getState().replaceDocument(design);
       useSolveOptionsStore.getState().setEngine(engine);
     });
     const revision = useDesignStore.getState().designRevision;

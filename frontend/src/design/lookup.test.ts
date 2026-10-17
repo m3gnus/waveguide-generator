@@ -81,7 +81,7 @@ it('restores the LOOKUP table from autosave', () => {
     removeItem: (key: string) => { records.delete(key); },
   };
   const lookup = designForFamily('LOOKUP');
-  useDesignStore.getState().loadDesign(lookup);
+  useDesignStore.getState().replaceDocument(lookup);
   expect(writeAutosave(storage)).toBe(true);
   resetDesignStore();
   expect(restoreAutosave(storage)).toBe(true);

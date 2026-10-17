@@ -53,7 +53,7 @@ describe('native formula editing and persistence', () => {
       removeItem: (key: string) => { records.delete(key); },
     };
     const design = designForFamily(family);
-    useDesignStore.getState().loadDesign(design);
+    useDesignStore.getState().replaceDocument(design);
     expect(writeAutosave(storage)).toBe(true);
     resetDesignStore();
     expect(restoreAutosave(storage)).toBe(true);

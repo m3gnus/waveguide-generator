@@ -137,7 +137,7 @@ describe('design store revision semantics', () => {
     useDesignStore.getState().updateField('a', 43);
     useDesignStore.getState().undo();
     useDesignStore.getState().redo();
-    useDesignStore.getState().loadDesign({ ...structuredClone(seedDesign), a: 41 });
+    useDesignStore.getState().replaceDocument({ ...structuredClone(seedDesign), a: 41 });
     useDesignStore.getState().setFamily('OSSE');
     expect(seen).toEqual([2, 3, 4, 5, 6]);
     unsubscribe();
@@ -156,7 +156,7 @@ describe('design store revision semantics', () => {
     useDesignStore.getState().beginDrag();
     useDesignStore.getState().updateField('R', 175);
     if (operation === 'family') useDesignStore.getState().setFamily('OSSE');
-    else useDesignStore.getState().loadDesign({ ...structuredClone(seedDesign), R: 190 });
+    else useDesignStore.getState().replaceDocument({ ...structuredClone(seedDesign), R: 190 }, { keepHistory: true });
 
     expect(useDesignStore.getState().dragSnapshot).toBeNull();
     expect(useDesignStore.temporal.getState().isTracking).toBe(true);
@@ -165,7 +165,7 @@ describe('design store revision semantics', () => {
 
   it('starts a new undo epoch when a document is replaced', () => {
     useDesignStore.getState().updateField('a', 43);
-    useDesignStore.getState().replaceDesign({ ...structuredClone(seedDesign), a: 31 });
+    useDesignStore.getState().replaceDocument({ ...structuredClone(seedDesign), a: 31 });
 
     expect(useDesignStore.getState().design.a).toBe(31);
     expect(useDesignStore.temporal.getState().pastStates).toEqual([]);
@@ -264,10 +264,10 @@ describe('undo history boundaries', () => {
     recordCommittedAthPolars(committedPolars);
     const recorded = useDesignStore.getState().design.extra_blocks;
     const userReport = { items: { Title: 'user edit' }, lines: [] };
-    useDesignStore.getState().loadDesign({
+    useDesignStore.getState().replaceDocument({
       ...structuredClone(useDesignStore.getState().design),
       extra_blocks: { ...recorded, Report: userReport },
-    });
+    }, { keepHistory: true });
 
     useDesignStore.getState().undo();
 
@@ -319,7 +319,7 @@ describe('family transitions', () => {
     ['ICW', 'FREEFORM'],
   ] as const)('preserves shared state and emits an immediate revision for %s → %s', (from, to) => {
     const configured = configuredDesign(from);
-    useDesignStore.getState().loadDesign(configured);
+    useDesignStore.getState().replaceDocument(configured);
     const beforeRevision = useDesignStore.getState().designRevision;
     const events: RevisionEvent[] = [];
     const unsubscribe = subscribeRevision((event) => events.push(event));
@@ -340,7 +340,7 @@ describe('family transitions', () => {
   });
 
   it('drops OSSE-only fields, applies R-OSSE defaults, and carries equivalent throat and mouth values', () => {
-    useDesignStore.getState().loadDesign(configuredDesign('OSSE'));
+    useDesignStore.getState().replaceDocument(configuredDesign('OSSE'));
     useDesignStore.getState().setFamily('R-OSSE');
     const design = useDesignStore.getState().design;
     const defaults = designForFamily('R-OSSE');
@@ -358,7 +358,7 @@ describe('family transitions', () => {
   });
 
   it('drops OSSE-only fields, applies ICW defaults, and carries the shared horn dimensions', () => {
-    useDesignStore.getState().loadDesign(configuredDesign('OSSE'));
+    useDesignStore.getState().replaceDocument(configuredDesign('OSSE'));
     useDesignStore.getState().setFamily('ICW');
     const design = useDesignStore.getState().design;
     const defaults = designForFamily('ICW');
@@ -383,7 +383,7 @@ describe('family transitions', () => {
   });
 
   it('drops ICW scalars and initializes FREEFORM defaults around equivalent dimensions', () => {
-    useDesignStore.getState().loadDesign(configuredDesign('ICW'));
+    useDesignStore.getState().replaceDocument(configuredDesign('ICW'));
     useDesignStore.getState().setFamily('FREEFORM');
     const design = useDesignStore.getState().design;
     const defaults = designForFamily('FREEFORM');
@@ -415,7 +415,7 @@ describe('family transitions', () => {
     configured.r0 = 20.5;
     configured.a0 = 16.25;
     configured.a = 48;
-    useDesignStore.getState().loadDesign(configured);
+    useDesignStore.getState().replaceDocument(configured);
     useDesignStore.getState().setFamily('FREEFORM');
 
     const design = useDesignStore.getState().design;
@@ -433,7 +433,7 @@ describe('family transitions', () => {
     configured._expressions = {
       a: { value: 120, raw: '60 * 2' },
     };
-    useDesignStore.getState().loadDesign(configured);
+    useDesignStore.getState().replaceDocument(configured);
     useDesignStore.getState().setFamily('FREEFORM');
 
     const design = useDesignStore.getState().design;
@@ -449,7 +449,7 @@ describe('family transitions', () => {
   it('keeps the FREEFORM length default when the OSSE value is below the target range', () => {
     const configured = designForFamily('OSSE');
     configured.L = 10;
-    useDesignStore.getState().loadDesign(configured);
+    useDesignStore.getState().replaceDocument(configured);
     useDesignStore.getState().setFamily('FREEFORM');
 
     const design = useDesignStore.getState().design;
@@ -461,7 +461,7 @@ describe('family transitions', () => {
     const configured = designForFamily('OSSE');
     configured.a = 45;
     configured.L = 130;
-    useDesignStore.getState().loadDesign(configured);
+    useDesignStore.getState().replaceDocument(configured);
     useDesignStore.getState().setFamily('FREEFORM');
 
     const design = useDesignStore.getState().design;
@@ -476,7 +476,7 @@ describe('family transitions', () => {
   ] as const)('evaluates L = 0.5 against the %s → %s target range', (from, to, expected) => {
     const configured = designForFamily(from);
     configured.L = .5;
-    useDesignStore.getState().loadDesign(configured);
+    useDesignStore.getState().replaceDocument(configured);
     useDesignStore.getState().setFamily(to);
 
     expect(useDesignStore.getState().design.L).toBe(expected);
@@ -495,7 +495,7 @@ describe('family transitions', () => {
       'profile_h.points.0.r': { value: 21, raw: '42 / 2' },
       'profile_v.points.0.r': { value: 21, raw: '21' },
     };
-    useDesignStore.getState().loadDesign(configured);
+    useDesignStore.getState().replaceDocument(configured);
     useDesignStore.getState().setFamily('OSSE');
 
     const design = useDesignStore.getState().design;
@@ -515,7 +515,7 @@ describe('family transitions', () => {
       k: { value: 9, raw: '3 * 3' },
     };
     configured._absent = ['mesh.max_edge', 's'];
-    useDesignStore.getState().loadDesign(configured);
+    useDesignStore.getState().replaceDocument(configured);
     useDesignStore.getState().setFamily('R-OSSE');
 
     const design = useDesignStore.getState().design;
@@ -539,7 +539,7 @@ describe('family transitions', () => {
     configured.profile_v!.points.at(-1)!.r = 172;
     configured.profile_h!.throat_angle_deg = 13;
     configured.profile_v!.throat_angle_deg = 14;
-    useDesignStore.getState().loadDesign(configured);
+    useDesignStore.getState().replaceDocument(configured);
     useDesignStore.getState().setFamily('ICW');
 
     const design = useDesignStore.getState().design;

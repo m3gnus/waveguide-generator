@@ -47,7 +47,7 @@ export function replaceWithJobDesign(
 ): boolean {
   const design = hydrateJobDesign(job);
   if (!design) return false;
-  useDesignStore.getState().replaceDesign(design, options);
+  useDesignStore.getState().replaceDocument(design, options);
   return true;
 }
 

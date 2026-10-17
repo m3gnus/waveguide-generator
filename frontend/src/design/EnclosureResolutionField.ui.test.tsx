@@ -69,7 +69,7 @@ it('shows all imported quadrant spellings and commits a valid edited list', () =
 it('undo restores imported quadrant spellings after editing a new resolution field', () => {
   resetDesignStore();
   const imported = hydrateDesignDocument({ formula:'OSSE', enclosure:{ depth:90, front_resolution:[{value:8,raw:'8.00'},{value:12,raw:'12.0'}] } });
-  useDesignStore.getState().loadDesign(imported);
+  useDesignStore.getState().replaceDocument(imported);
   useDesignStore.getState().updateValue('enclosure.front_resolution', [16,20,24,28]);
   expect((serializeDesign(useDesignStore.getState().design).enclosure as Record<string, unknown>).front_resolution).toEqual([16,20,24,28]);
   useDesignStore.getState().undo();

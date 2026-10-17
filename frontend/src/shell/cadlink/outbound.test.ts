@@ -149,7 +149,7 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
       : json({ selected: true }));
     const { controller } = setup(status(), fetcher);
     const first = controller.sendWgToFusion(); await vi.waitFor(() => expect(writes).toBe(1));
-    if (change === 'document') useDesignStore.getState().replaceDesign(designForFamily('ICW'));
+    if (change === 'document') useDesignStore.getState().replaceDocument(designForFamily('ICW'));
     if (change === 'identity') useDocumentStore.getState().setCadLink({ ...identity, designId: 'wgd_new' }, 'current');
     if (change === 'newer send') await controller.sendWgToFusion();
     if (change === 'dispose') controller.dispose();
@@ -217,7 +217,7 @@ it.each(['document', 'parameters', 'settings', 'identity'] as const)('never send
   const pending = deferred<ReturnType<typeof status>>();
   const { controller, reader, fetcher } = setup(); reader.mockImplementationOnce(() => pending.promise);
   const first = controller.sendWgToFusion();
-  if (change === 'document') useDesignStore.getState().replaceDesign(designForFamily('ICW'));
+  if (change === 'document') useDesignStore.getState().replaceDocument(designForFamily('ICW'));
   if (change === 'parameters') useDesignStore.getState().updateField('R', 111);
   if (change === 'settings') useSolveOptionsStore.getState().updatePolar({ distance: 4 });
   if (change === 'identity') useDocumentStore.getState().setCadLink({ ...identity, designId: 'new' }, 'current');

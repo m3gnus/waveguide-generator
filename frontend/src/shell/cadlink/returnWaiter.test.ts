@@ -136,7 +136,7 @@ describe('Bring in geometry without a mounted coordinator (row 25)', () => {
     fetcher.mockImplementation(() => post.promise);
     const first = waiter.pullFromFusion().catch((error) => error); await flush();
     if (change === 'manual pick') useCadReturnStore.getState().selectBundle(bundle);
-    if (change === 'document') useDesignStore.getState().replaceDesign(designForFamily('ICW'));
+    if (change === 'document') useDesignStore.getState().replaceDocument(designForFamily('ICW'));
     if (change === 'identity') useDocumentStore.getState().setCadLink({ ...identity, designId: 'wgd_new' }, 'current');
     if (change === 'instance') { selectInstance('instance-new'); await connection.read(async () => status({ selectedInstanceId: 'instance-new' })); }
     if (change === 'dispose') waiter.dispose();

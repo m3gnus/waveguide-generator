@@ -143,14 +143,6 @@ export function restoreAutosave(storage: DraftStorage | null = defaultStorage())
   try {
     const record: unknown = JSON.parse(raw);
     if (!isRecord(record) || !hasValidCadLink(record)) throw new Error('Invalid autosave record');
-    useDesignStore.temporal.getState().pause();
-    useDesignStore.setState({
-      design: structuredClone(record.design),
-      designRevision: record.designRevision,
-      dragSnapshot: null,
-    });
-    useDesignStore.temporal.getState().clear();
-    useDesignStore.temporal.getState().resume();
     useDocumentStore.getState().restoreDocumentState({
       // A draft written before the rename unification only has the filename;
       // its stem is the same name, one slugging away.
@@ -164,6 +156,9 @@ export function restoreAutosave(storage: DraftStorage | null = defaultStorage())
       identity: record.identity ? { ...record.identity } : null,
       classification: record.classification ?? null,
     });
+    // Announced last, once the document state it pairs with is in place, so a
+    // restore after mount reloads the preview and resets its revision floor.
+    useDesignStore.getState().replaceDocument(record.design, { revision: record.designRevision });
     return true;
   } catch {
     try { storage.removeItem(AUTOSAVE_KEY); } catch { /* unavailable storage stays non-fatal */ }

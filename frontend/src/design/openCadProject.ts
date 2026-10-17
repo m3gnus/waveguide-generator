@@ -39,7 +39,7 @@ export function applyOpenedDesign(
   loadSource: DesignLoadSource = 'ordinary',
 ): OpenedDesign {
   const openedDesign = hydrateDesignDocument(opened.design);
-  useDesignStore.getState().replaceDesign(openedDesign, { loadSource });
+  useDesignStore.getState().replaceDocument(openedDesign, { loadSource });
   restoreSolveSettingsFromBlocks(openedDesign.extra_blocks, openedDesign);
   const document = useDocumentStore.getState();
   // One name for the whole document: the opened file's, unless the file's own

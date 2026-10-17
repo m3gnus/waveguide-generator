@@ -90,7 +90,7 @@ describe('FREEFORM numeric tables', () => {
   });
 
   it('keeps the z input mounted across its own commit and warns about non-positive radii', () => {
-    useDesignStore.getState().loadDesign({ ...designForFamily('LOOKUP'), lookup_profile: [[0, 12.7], [50, 20], [120, 140]] });
+    useDesignStore.getState().replaceDocument({ ...designForFamily('LOOKUP'), lookup_profile: [[0, 12.7], [50, 20], [120, 140]] });
     const field: ParameterDefinition = { id: 'lookup.profile', legacyKey: 'lookupProfile', section: 'Profile', label: 'Lookup profile points', kind: 'table' };
     const render = () => act(() => root.render(<EditableLookupTable field={field} points={useDesignStore.getState().design.lookup_profile!}/>));
     render();
@@ -110,7 +110,7 @@ describe('FREEFORM numeric tables', () => {
   });
 
   it('keeps a z scrub inside its neighbours and makes it one undo step', () => {
-    useDesignStore.getState().loadDesign({ ...designForFamily('LOOKUP'), lookup_profile: [[0, 12.7], [50, 20], [120, 140]] });
+    useDesignStore.getState().replaceDocument({ ...designForFamily('LOOKUP'), lookup_profile: [[0, 12.7], [50, 20], [120, 140]] });
     const field: ParameterDefinition = { id: 'lookup.profile', legacyKey: 'lookupProfile', section: 'Profile', label: 'Lookup profile points', kind: 'table' };
     const render = () => act(() => root.render(<EditableLookupTable field={field} points={useDesignStore.getState().design.lookup_profile!}/>));
     render();

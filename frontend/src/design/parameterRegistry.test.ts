@@ -408,7 +408,7 @@ describe('complete parameter registry', () => {
       resetDesignStore();
       const saved = JSON.parse(JSON.stringify(useDesignStore.getState().design));
       saved.mesh.aperture_resolution_scale = 1.5;
-      useDesignStore.getState().loadDesign(saved);
+      useDesignStore.getState().replaceDocument(saved);
       expect(useDesignStore.getState().design.mesh.aperture_resolution_scale).toBe(1.5);
     });
   });

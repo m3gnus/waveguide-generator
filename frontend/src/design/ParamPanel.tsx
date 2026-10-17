@@ -1241,7 +1241,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   );
   const waveguideLinked = useWaveguideDefinitionApplies();
   const setFamily = useDesignStore((state) => state.setFamily);
-  const loadDesign = useDesignStore((state) => state.loadDesign);
+  const replaceDocument = useDesignStore((state) => state.replaceDocument);
   const helpVisible = useParameterHelp();
   const [query, setQuery] = useState('');
   const [freeformChoice, setFreeformChoice] = useState(false);
@@ -1412,7 +1412,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
             setConversionError('The design changed while it was being converted. Review the edits and try again.');
             return;
           }
-          loadDesign(converted);
+          replaceDocument(converted, { keepHistory: true });
           // The choice closes on success, so the notice lives outside it.
           setConversionNotice([notice, sectionResetNotice('FREEFORM')].filter(Boolean).join(' ') || null);
           setFreeformChoice(false);

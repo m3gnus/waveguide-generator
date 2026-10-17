@@ -700,10 +700,16 @@ interface DesignStore {
   setQuadrants: (quadrants: number[]) => void;
   setSourceConvention: (convention: DesignDocument['source']['velocity_convention']) => void;
   setFamily: (family: DesignFamily) => void;
-  loadDesign: (design: DesignDocument) => void;
-  replaceDesign: (design: DesignDocument, options?: {
+  /**
+   * The one whole-document replacement: cancels pending revisions, bumps the
+   * load generation, announces a `load` revision, and (unless `keepHistory`)
+   * starts undo history empty. `revision` pins the revision number exactly, for
+   * a restore whose saved-revision bookkeeping refers to it.
+   */
+  replaceDocument: (design: DesignDocument, options?: {
     keepHistory?: boolean;
     loadSource?: DesignLoadSource;
+    revision?: number;
   }) => void;
   beginDrag: () => void;
   endDrag: () => void;
@@ -871,16 +877,14 @@ export const useDesignStore = create<DesignStore>()(
         set((state) => ({ design: mergeDesignForFamily(state.design, family), designRevision: state.designRevision + 1 }));
         bump('family', true);
       },
-      loadDesign: (design) => {
+      replaceDocument: (design, options) => {
         cancelRevisionTimers();
         get().endDrag();
-        set((state) => ({ design: structuredClone(design), designRevision: state.designRevision + 1, loadGeneration: state.loadGeneration + 1 }));
-        bump('load', true, 'ordinary');
-      },
-      replaceDesign: (design, options) => {
-        cancelRevisionTimers();
-        get().endDrag();
-        set((state) => ({ design: structuredClone(design), designRevision: state.designRevision + 1, loadGeneration: state.loadGeneration + 1 }));
+        set((state) => ({
+          design: structuredClone(design),
+          designRevision: options?.revision ?? state.designRevision + 1,
+          loadGeneration: state.loadGeneration + 1,
+        }));
         // Opening a file starts a new document, so its history starts empty.
         // Browsing to a previous run does not: that is a step inside the current
         // session, and undo has to be able to bring the working design back.
@@ -936,15 +940,8 @@ export const useDesignStore = create<DesignStore>()(
 
 export function resetDesignStore(): void {
   // New starts a document, so the one it replaces must not become an undo step
-  // inside it: reset while history is paused, then start history empty.
-  useDesignStore.temporal.getState().pause();
-  try {
-    useDesignStore.setState({ design: structuredClone(seedDesign), designRevision: 1, dragSnapshot: null });
-  } finally {
-    useDesignStore.temporal.getState().clear();
-    useDesignStore.temporal.getState().resume();
-  }
-  bump('load', true, 'ordinary');
+  // inside it: replaceDocument starts history empty.
+  useDesignStore.getState().replaceDocument(seedDesign, { revision: 1 });
 }
 
 /**

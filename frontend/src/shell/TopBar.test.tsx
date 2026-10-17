@@ -94,7 +94,7 @@ describe('workspace mode switch', () => {
     cadProject.L = 111;
     const working = designForFamily('OSSE');
     working.L = 321;
-    act(() => useDesignStore.getState().replaceDesign(cadProject, { loadSource: 'cad-project-switch' }));
+    act(() => useDesignStore.getState().replaceDocument(cadProject, { loadSource: 'cad-project-switch' }));
     act(() => workspaceModeStore.setMode('cad'));
     vi.spyOn(jobsSocket, 'getSnapshot').mockReturnValue({
       connection: 'connected', epoch: 1, cursor: 1, error: null,
@@ -113,7 +113,7 @@ describe('workspace mode switch', () => {
     resetDesignStore();
     const working = designForFamily('OSSE');
     working.L = 321;
-    act(() => useDesignStore.getState().replaceDesign(working));
+    act(() => useDesignStore.getState().replaceDocument(working));
     act(() => workspaceModeStore.setMode('cad'));
     const snapshotSpy = vi.spyOn(jobsSocket, 'getSnapshot');
 

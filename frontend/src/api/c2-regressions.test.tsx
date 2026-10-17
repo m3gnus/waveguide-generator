@@ -57,7 +57,7 @@ describe('document-scoped design size regressions',()=>{
   });
   afterEach(()=>{act(()=>root.unmount());manager.stop();host.remove();vi.useRealTimers()});
   it.each(['New','Open'])('%s while live updates are paused never displays the previous document numbers',(action)=>{
-    act(()=>manager.stop());act(()=>{if(action==='New')resetDesignStore();else {const design=structuredClone(useDesignStore.getState().design);design.scale=2;useDesignStore.getState().loadDesign(design)}});
+    act(()=>manager.stop());act(()=>{if(action==='New')resetDesignStore();else {const design=structuredClone(useDesignStore.getState().design);design.scale=2;useDesignStore.getState().replaceDocument(design,{keepHistory:true})}});
     expect(host.textContent).not.toContain('111.0 × 222.0');
   });
   it('New while paused, then reconnect, accepts the reset new document revision',()=>{
@@ -78,7 +78,7 @@ describe('document-scoped design size regressions',()=>{
     expect(manager.getSnapshot().frame?.header.previewMetadata?.dimensions_mm).toBeUndefined();
     act(()=>manager.stop());act(()=>{
       if(action==='New')resetDesignStore();
-      else {const design=structuredClone(useDesignStore.getState().design);design.scale=2;useDesignStore.getState().loadDesign(design)}
+      else {const design=structuredClone(useDesignStore.getState().design);design.scale=2;useDesignStore.getState().replaceDocument(design,{keepHistory:true})}
     });
     expect(host.textContent).not.toContain('111.0 × 222.0');
     expect(dimensions()).toBeNull();
@@ -89,7 +89,7 @@ describe('document-scoped design size regressions',()=>{
     answer(OLD,{lod:'fine'});
     act(()=>manager.stop());act(()=>{
       if(action==='New')resetDesignStore();
-      else {const design=structuredClone(useDesignStore.getState().design);design.scale=2;useDesignStore.getState().loadDesign(design)}
+      else {const design=structuredClone(useDesignStore.getState().design);design.scale=2;useDesignStore.getState().replaceDocument(design,{keepHistory:true})}
     });
     expect(dimensions()).toBeNull();
     act(()=>manager.start());msg(JSON.stringify({v:1,kind:'hello',epoch:3,heartbeatSec:15}));
@@ -157,7 +157,7 @@ describe('document-scoped design size regressions',()=>{
     expect(preferred).toBe(manager.getSnapshot().frame);
   });
   it('Open then undo does not resurrect prior document numbers',()=>{
-    act(()=>{const design=structuredClone(useDesignStore.getState().design);design.scale=2;useDesignStore.getState().loadDesign(design)});
+    act(()=>{const design=structuredClone(useDesignStore.getState().design);design.scale=2;useDesignStore.getState().replaceDocument(design,{keepHistory:true})});
     const opened=request();act(()=>useDesignStore.getState().undo());
     msg(frame({epoch:3,seq:opened.seq,designRevision:opened.designRevision,previewMetadata:OLD}));
     expect(host.textContent).not.toContain('111.0');answer(NEW);expect(manager.getSnapshot().awaitingDocumentFrame).toBe(false);

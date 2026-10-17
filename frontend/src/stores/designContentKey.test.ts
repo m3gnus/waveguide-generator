@@ -162,7 +162,7 @@ describe('would replacing the design on screen lose it', () => {
   });
 
   it('counts exact expression text restored as kept', () => {
-    useDesignStore.getState().replaceDesign({ ...seed(), R: 150, _expressions: { R: { value: 150, raw: '100 + 50' } } });
+    useDesignStore.getState().replaceDocument({ ...seed(), R: 150, _expressions: { R: { value: 150, raw: '100 + 50' } } });
     useDocumentStore.getState().setOpenedContentKey(keptContentKeyNow());
 
     useDesignStore.getState().updateExpression('R', { value: 150, raw: '150' });

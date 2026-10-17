@@ -192,7 +192,7 @@ it('opening an ordinary design returns to Parametric mode and invalidates held C
   stop = mountCadWorkspaceOwners(); await flush();
   cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
   expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
-  useDesignStore.getState().replaceDesign(designForFamily('ICW')); await flush();
+  useDesignStore.getState().replaceDocument(designForFamily('ICW')); await flush();
   expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
   expect(useCadReturnStore.getState().needsIngest).toBe(true);
 });
@@ -264,7 +264,7 @@ it.each(['reload', 'project open'])('fronted Send remains eligible for initial s
   cadReceiptsStore.setState({ feedId: 'cutover', frontedBundles: [{ path: bundle.bundlePath, manifest: record.manifest_sha256 }] });
   stop = mountCadWorkspaceOwners(); await flush();
   if (scenario === 'project open') {
-    useDesignStore.getState().replaceDesign(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
+    useDesignStore.getState().replaceDocument(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
     await flush();
   }
   expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
@@ -456,7 +456,7 @@ it.each(['mount', 'background poll', 'manual Refresh', 'project open'])('hung re
     // A receipt invalidation read is shared by every discovery entry point.
     void cadReceiptsStore.getState().load().catch(() => undefined);
     if (entry === 'manual Refresh') void cadWorkspace.getSnapshot().refresh({ autoOpenNew: true }).then(() => { refreshed = true; });
-    if (entry === 'project open') useDesignStore.getState().replaceDesign(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
+    if (entry === 'project open') useDesignStore.getState().replaceDocument(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
   }
   await flush(); await vi.advanceTimersByTimeAsync(6_000);
   expect(calls('/api/cadlink/returns').length).toBeGreaterThan(before);
@@ -545,7 +545,7 @@ it.each(['project open', 'application switch'])('R3X defers initial selection th
   cadReceiptsStore.setState({ feedId: 'cutover', cursor: 1, receipts: { 'receipt-1': receipt },
     displayRetries: { 'receipt-1': { attempt: 1, nextAt: Date.now() + 30_000 } } });
   if (entry === 'project open') {
-    useDesignStore.getState().replaceDesign(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
+    useDesignStore.getState().replaceDocument(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
   } else preferencesStore.update({ cadApplication: 'fusion360' });
   await flush();
   expect(cadWorkspace.getSnapshot().bundles).toHaveLength(1);
@@ -596,7 +596,7 @@ it.each(['missing_source', 'unreadable', 'refused', 'superseded'] as const)(
     expect(cadWorkspace.getSnapshot().bundles).toHaveLength(returns.length);
     expect(useCadReturnStore.getState().selectedBundle).toBeNull();
     if (outcome === 'superseded') {
-      useDesignStore.getState().replaceDesign(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
+      useDesignStore.getState().replaceDocument(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
       await flush();
       expect(cadWorkspace.getSnapshot().status).not.toContain('No matching CAD return');
     }
@@ -636,7 +636,7 @@ it('project open resolves its initial choice when receipt transport retries are 
   fetcher.mockImplementation((input, init) => String(input).endsWith('/returns')
     && Object.values(cadReceiptsStore.getState().displayRetries).some((retry) => retry.nextAt <= Date.now())
     && failedReads++ < 3 ? Promise.reject(new Error('offline')) : base(input, init));
-  useDesignStore.getState().replaceDesign(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
+  useDesignStore.getState().replaceDocument(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
   await flush();
   expect(cadWorkspace.getSnapshot().status).not.toContain('No matching CAD return');
   await vi.advanceTimersByTimeAsync(35_000); await flush();

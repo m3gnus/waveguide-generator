@@ -99,7 +99,7 @@ test('structured and quadrant edits clear stale imported expression sidecars', (
     'profile_h.points.1.r': { value: 140, raw: 'mouthRadius()' },
     'mesh.quadrants': { value: 14, raw: '14' },
   };
-  useDesignStore.getState().loadDesign(design);
+  useDesignStore.getState().replaceDocument(design);
   useDesignStore.getState().updateValue('profile_h.points', [{ t: 0, r: 12.7 }, { t: 1, r: 150 }]);
   useDesignStore.getState().setQuadrants([1, 2]);
   expect(useDesignStore.getState().design._expressions).toBeUndefined();
@@ -111,7 +111,7 @@ test('structured and quadrant edits clear stale imported expression sidecars', (
 test('serializes absent paths as null, strips the sidecar, and emits an edited value', () => {
   const design = designForFamily('R-OSSE');
   design._absent = ['morph.target_width'];
-  useDesignStore.getState().loadDesign(design);
+  useDesignStore.getState().replaceDocument(design);
   const absentPayload = serializeDesign(useDesignStore.getState().design);
   expect((absentPayload.morph as Record<string, unknown>).target_width).toBeNull();
   expect(absentPayload).not.toHaveProperty('_absent');
@@ -124,7 +124,7 @@ test('serializes absent paths as null, strips the sidecar, and emits an edited v
 test('round-trips absent wall thickness as null and preserves an explicit zero', () => {
   const design = designForFamily('R-OSSE');
   design._absent = ['mesh.wall_thickness'];
-  useDesignStore.getState().loadDesign(design);
+  useDesignStore.getState().replaceDocument(design);
   expect((serializeDesign(useDesignStore.getState().design).mesh as Record<string, unknown>).wall_thickness).toBeNull();
 
   useDesignStore.getState().updateValue('mesh.wall_thickness', 0);
@@ -135,7 +135,7 @@ test('round-trips absent wall thickness as null and preserves an explicit zero',
 test('clears concrete absent paths when a $last array path is edited', () => {
   const design = designForFamily('FREEFORM');
   design._absent = ['profile_h.points.1.r'];
-  useDesignStore.getState().loadDesign(design);
+  useDesignStore.getState().replaceDocument(design);
   useDesignStore.getState().updateValue('profile_h.points.$last.r', 175);
   expect(useDesignStore.getState().design._absent).toBeUndefined();
   expect(((serializeDesign(useDesignStore.getState().design).profile_h as { points: { r: number }[] }).points[1].r)).toBe(175);

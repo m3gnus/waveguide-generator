@@ -51,7 +51,7 @@ describe('selection actions without the coordinator', () => {
     const actions = createCadArrivalActions({}, (() => pending.promise) as typeof fetch);
     actions.selectBundleAs(bundle);
     const result = actions.ingestSelected().catch((error) => error);
-    useDesignStore.getState().replaceDesign(designForFamily('ICW'));
+    useDesignStore.getState().replaceDocument(designForFamily('ICW'));
     pending.resolve(json(record));
     expect(await result).toBeInstanceOf(SupersededError);
     expect(useCadReturnStore.getState().ingestRecord).toBeNull();

@@ -53,7 +53,7 @@ describe('full DesignConfig client store', () => {
       },
     };
     const wireCopy = JSON.parse(JSON.stringify(populated)) as DesignDocument;
-    useDesignStore.getState().loadDesign(wireCopy);
+    useDesignStore.getState().replaceDocument(wireCopy);
     expect(useDesignStore.getState().design).toEqual(populated);
     expect(useDesignStore.getState().design).not.toBe(wireCopy);
   });
@@ -72,7 +72,7 @@ describe('full DesignConfig client store', () => {
     const design = designForFamily('FREEFORM');
     design.profile_h!.points = [{ t: 0, r: 12.7 }, { t: .5, r: 70, angle_deg: 25 }, { t: 1, r: 140 }];
     design.cross_sections = [{ t: 0, shape: 'ellipse' }, { t: .5, shape: 'superellipse', exponent: 4 }, { t: 1, shape: 'ellipse' }];
-    useDesignStore.getState().loadDesign(design);
+    useDesignStore.getState().replaceDocument(design);
     const payload = serializeDesign(useDesignStore.getState().design);
     expect(payload.profile_h).toEqual(design.profile_h);
     expect(payload.cross_sections).toEqual(design.cross_sections);
@@ -83,7 +83,7 @@ describe('full DesignConfig client store', () => {
       formula: 'R-OSSE',
       morph: { target_shape: 1, target_width: null },
     });
-    useDesignStore.getState().loadDesign(hydrated);
+    useDesignStore.getState().replaceDocument(hydrated);
     expect(useDesignStore.getState().design.morph.target_width).toBe(0);
     expect((serializeDesign(useDesignStore.getState().design).morph as Record<string, unknown>).target_width).toBeNull();
 
@@ -94,7 +94,7 @@ describe('full DesignConfig client store', () => {
 
   it('keeps imported geometry provenance through hydration, edits and serialization', () => {
     const design = hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'ath-2026-08c-v1' });
-    useDesignStore.getState().loadDesign(design);
+    useDesignStore.getState().replaceDocument(design);
     useDesignStore.getState().updateValue('L', 137);
     useDesignStore.getState().undo();
     useDesignStore.getState().redo();
@@ -110,7 +110,7 @@ describe('full DesignConfig client store', () => {
       mesh: { ath_roundover: { radius: 42, segments: 6 }, ath_rear_shape: 3,
         ath_rear_front_offset: 40, ath_rear_step: 50 },
     };
-    useDesignStore.getState().loadDesign(hydrateDesignDocument(wire));
+    useDesignStore.getState().replaceDocument(hydrateDesignDocument(wire));
     useDesignStore.getState().updateValue('L', 137);
     useDesignStore.getState().undo();
     useDesignStore.getState().redo();

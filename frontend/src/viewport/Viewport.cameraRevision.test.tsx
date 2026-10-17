@@ -114,7 +114,7 @@ describe('Viewport camera revision policy', () => {
     act(() => useDesignStore.getState().setFamily('OSSE'));
     expect(latestNonce()).toBe(0);
 
-    act(() => useDesignStore.getState().loadDesign(designForFamily('R-OSSE')));
+    act(() => useDesignStore.getState().replaceDocument(designForFamily('R-OSSE')));
     expect(latestNonce()).toBe(0);
   });
 

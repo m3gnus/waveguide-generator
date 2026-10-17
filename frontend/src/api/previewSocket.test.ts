@@ -3,7 +3,9 @@ import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { LiveDimensions } from '../design/LiveDimensions';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AUTOSAVE_KEY, restoreAutosaveWithLateRetry, writeAutosave } from '../stores/autosave';
 import { resetDesignStore, useDesignStore } from '../stores/design';
+import { resetDocumentStore } from '../stores/document';
 import { PreviewSocketManager, previewSocket, type WebSocketLike } from './previewSocket';
 
 class MockSocket implements WebSocketLike {
@@ -186,6 +188,43 @@ describe('preview socket state machine', () => {
 
     expect(manager.getSnapshot().displayedRevision).toBe(10);
     expect(manager.getSnapshot().stale).toBe(false);
+    manager.stop();
+  });
+
+  it('requests a new preview and resets the revision floor when a late autosave restore lands after mount', () => {
+    localStorage.clear();
+    useDesignStore.getState().updateField('R', 177);
+    expect(writeAutosave()).toBe(true);
+    const draft = localStorage.getItem(AUTOSAVE_KEY)!;
+    resetDesignStore();
+    resetDocumentStore();
+
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    let notify: (() => void) | undefined;
+    const storage = {
+      getItem: vi.fn(() => null as string | null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    };
+    useDesignStore.setState({ designRevision: 57 });
+    const unsubscribe = restoreAutosaveWithLateRetry({
+      subscribe: (_namespace, listener) => { notify = () => listener(draft); return () => undefined; },
+    }, storage);
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    socket.message(fixture());
+    expect(manager.getSnapshot().displayedRevision).toBe(57);
+    const requestsBefore = socket.sent.length;
+
+    storage.getItem.mockReturnValue(draft);
+    notify?.();
+
+    expect(useDesignStore.getState().design.R).toBe(177);
+    expect(useDesignStore.getState().designRevision).toBe(2);
+    expect(socket.sent.length).toBeGreaterThan(requestsBefore);
+    expect(manager.getSnapshot().displayedRevision).toBeNull();
+    unsubscribe();
     manager.stop();
   });
 
@@ -533,7 +572,7 @@ describe('rendered document dimension transitions', () => {
       expect(dimensions()?.textContent).not.toContain(state);
     }
     const oldDocument = structuredClone(useDesignStore.getState().design); oldDocument.scale = 2;
-    useDesignStore.getState().loadDesign(oldDocument);
+    useDesignStore.getState().replaceDocument(oldDocument);
     manager.start(); socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
     act(() => root.render(createElement(LiveDimensions)));
     const firstRevision = useDesignStore.getState().designRevision;
@@ -544,7 +583,7 @@ describe('rendered document dimension transitions', () => {
     const newDocument = structuredClone(oldDocument); newDocument.scale = 3;
     act(() => {
       if (action === 'New') resetDesignStore();
-      else useDesignStore.getState().replaceDesign(newDocument);
+      else useDesignStore.getState().replaceDocument(newDocument);
     });
     expect(dimensions()).toBeNull();
     const revision = useDesignStore.getState().designRevision;
