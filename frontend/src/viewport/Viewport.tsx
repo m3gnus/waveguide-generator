@@ -16,6 +16,7 @@ import { cadCameraAxes } from './cadCamera';
 import { currentDocumentLoad, subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useSolveOptionsStore } from '../stores/solveOptions';
+import { useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { showIngestedMeshInViewport, showIngestedSolverMeshInViewport } from '../shell/cadlink/artifactLoader';
@@ -391,7 +392,6 @@ export function Viewport() {
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
   const solveSymmetry = useSolveOptionsStore((state) => state.symmetry);
-  const solveSolverMode = useSolveOptionsStore((state) => state.solverMode);
   const designName = useDocumentStore((state) => state.designName);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const cadRecord = useCadReturnStore((state) => state.ingestRecord);
@@ -425,7 +425,13 @@ export function Viewport() {
   const observationBasis = useObservationStore((state) => state.basis);
   const observationSource = useObservationStore((state) => state.sourceLabel);
   const observationHovered = useObservationStore((state) => state.hovered);
-  const polar = useSolveOptionsStore((state) => state.polar);
+  // The observation readout follows the workspace: Imported has its own options.
+  const polar = useScopedSolveOptions((state) => state.polar);
+  // Every input the plan depends on (engine, accuracy, symmetry, polar, ...),
+  // so the solver-view plan fetch re-runs when any of them changes.
+  const planOptionsKey = useSolveOptionsStore((state) => {
+    try { return JSON.stringify(state.options()); } catch { return null; }
+  });
   const fieldEnabled = useFieldPlaneStore((state) => state.enabled);
   const fieldSource = useFieldPlaneStore((state) => state.source);
   const [femRendering, setFemRendering] = useState<FemFieldRendering>('smooth');
@@ -894,7 +900,8 @@ export function Viewport() {
     const timer = window.setTimeout(() => {
       let body: string;
       try {
-        body = solvePlanRequestBody(design);
+        if (planOptionsKey === null) throw new Error('Solve options are not usable.');
+        body = solvePlanRequestBody(design, JSON.parse(planOptionsKey));
       } catch {
         setPlanAdjustments([]);
         return;
@@ -913,7 +920,7 @@ export function Viewport() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [design, solveSolverMode, solveSymmetry, solverViewSelected]);
+  }, [design, planOptionsKey, solverViewSelected]);
 
   useEffect(() => {
     if (availablePlaneJob || !fieldEnabled) return;

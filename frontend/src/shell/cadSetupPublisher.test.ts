@@ -11,7 +11,7 @@ import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore } from '../stores/document';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { buildCadProjectSetup, startCadSetupPublisher } from './cadSetupPublisher';
 import { buildImportedSubmission } from '../jobs/importedSubmission';
@@ -124,7 +124,7 @@ describe('CAD setup publisher', () => {
         findings: [], polar_grid_derivation: { axes: { horizontal: { minimum_deg: -180, maximum_deg: 180 } } },
       } as unknown as CadReturnIngestRecord,
     });
-    useSolveOptionsStore.getState().setEngine('bempp');
+    useImportedSolveOptionsStore.getState().setEngine('bempp');
     useCadPreparationStore.getState().setSymmetryMode('full');
 
     const built = buildCadProjectSetup();
@@ -146,7 +146,7 @@ describe('CAD setup publisher', () => {
     expect(setup.options.engine).toBe('bempp');
     expect(setup.options.frequency_range).toEqual([50, 20_000]);
     expect(setup.options.num_frequencies).toBe(36);
-    expect(setup.options.polar_config).toEqual(useSolveOptionsStore.getState().options().polar_config);
+    expect(setup.options.polar_config).toEqual(useImportedSolveOptionsStore.getState().options().polar_config);
     expect(setup.preparation).toEqual({ area_drift_overrides: [], symmetry_mode: 'full' });
   });
 
@@ -242,14 +242,14 @@ describe('CAD setup publisher', () => {
     expect(to('/project-setups')).toHaveLength(1);
 
     workspaceModeStore.setMode('parametric');
-    useSolveOptionsStore.getState().setFrequencySpacing('linear');
-    useSolveOptionsStore.getState().updatePolar({ distance: 3 });
+    useImportedSolveOptionsStore.getState().setFrequencySpacing('linear');
+    useImportedSolveOptionsStore.getState().updatePolar({ distance: 3 });
     await vi.advanceTimersByTimeAsync(2_000);
     expect(to('/project-setups')).toHaveLength(1);
 
     // The same kind of edit made in the CAD workspace is the project's.
     workspaceModeStore.setMode('cad');
-    useSolveOptionsStore.getState().setFrequencySpacing('log');
+    useImportedSolveOptionsStore.getState().setFrequencySpacing('log');
     await vi.advanceTimersByTimeAsync(600);
     const recorded = to('/project-setups') as Array<{ setup: { options: { frequency_spacing: string } } }>;
     expect(recorded).toHaveLength(2);
@@ -262,12 +262,12 @@ describe('CAD setup publisher', () => {
     const { fetcher, to } = recorder();
     const stop = startCadSetupPublisher({ fetcher, debounceMs: 500 });
     await vi.advanceTimersByTimeAsync(0);
-    useSolveOptionsStore.getState().setEngine('bempp');
+    useImportedSolveOptionsStore.getState().setEngine('bempp');
     await vi.advanceTimersByTimeAsync(0);
-    useSolveOptionsStore.getState().setEngine('bempp');
-    useSolveOptionsStore.getState().setEngine('metal');
+    useImportedSolveOptionsStore.getState().setEngine('bempp');
+    useImportedSolveOptionsStore.getState().setEngine('metal');
     await vi.advanceTimersByTimeAsync(0);
-    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
     await vi.advanceTimersByTimeAsync(0);
     expect(to('/solver-selection')).toEqual([
       { engine: 'auto', accuracy: 'fast' },
@@ -314,8 +314,8 @@ describe('CAD solver selection publication', () => {
     const { calls, fetcher } = controlled();
     const stop = startCadSetupPublisher({ fetcher });
     expect(calls[0].selection).toEqual({ engine: 'auto', accuracy: 'fast' });
-    useSolveOptionsStore.getState().setEngine('bempp');
-    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setEngine('bempp');
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
     expect(calls).toHaveLength(1);
     calls[0].resolve(json({}));
     await vi.advanceTimersByTimeAsync(0);
@@ -323,7 +323,7 @@ describe('CAD solver selection publication', () => {
     expect(calls[1].selection).toEqual({ engine: 'auto', accuracy: 'accurate' });
     calls[1].resolve(json({}));
     await vi.advanceTimersByTimeAsync(0);
-    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toHaveLength(2);
     stop();
@@ -357,7 +357,7 @@ describe('CAD solver selection publication', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(calls).toHaveLength(2);
     expect(states).toEqual(['failed']);
-    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
     expect(calls).toHaveLength(3);
     calls[2].resolve(json({}));
     await vi.advanceTimersByTimeAsync(0);
@@ -381,7 +381,7 @@ describe('CAD solver selection publication', () => {
     const stop = startCadSetupPublisher({ fetcher, retryDelaysMs: [100] });
     calls[0].reject(new TypeError('offline'));
     await vi.advanceTimersByTimeAsync(0);
-    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
     expect(calls).toHaveLength(2);
     expect(calls[1].selection.accuracy).toBe('accurate');
     calls[1].resolve(json({}));
@@ -393,7 +393,7 @@ describe('CAD solver selection publication', () => {
   it('sends the current choice when an older in-flight write fails', async () => {
     const { calls, fetcher } = controlled();
     const stop = startCadSetupPublisher({ fetcher, retryDelaysMs: [100] });
-    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
     calls[0].reject(new TypeError('offline'));
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toHaveLength(2);
@@ -412,7 +412,7 @@ describe('CAD solver selection publication', () => {
     await vi.advanceTimersByTimeAsync(0);
     stop();
     await vi.advanceTimersByTimeAsync(10_000);
-    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
     expect(calls).toHaveLength(1);
     expect(states).toEqual([]);
   });
@@ -421,7 +421,7 @@ describe('CAD solver selection publication', () => {
     const { calls, fetcher } = controlled();
     const states: string[] = [];
     const stop = startCadSetupPublisher({ fetcher, retryDelaysMs: [100], onSaveState: (state) => states.push(state) });
-    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
     stop();
     if (outcome === 'success') calls[0].resolve(json({}));
     else calls[0].reject(new TypeError('offline'));
@@ -454,7 +454,7 @@ describe('CAD solver selection publication', () => {
     useCadReturnStore.getState().setExteriorOnly(true);
     await vi.advanceTimersByTimeAsync(100);
     expect(states).toEqual(['failed']);
-    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
     await vi.advanceTimersByTimeAsync(0);
     expect(states).toEqual(['failed']);
     stop();

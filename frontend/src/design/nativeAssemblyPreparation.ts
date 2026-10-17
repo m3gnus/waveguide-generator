@@ -2,7 +2,7 @@ import { deadlineFetch } from '../api/deadlineFetch';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { useSolveOptionsStore } from '../stores/solveOptions';
+import { useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
@@ -48,7 +48,7 @@ export async function prepareNativeAssembly(
   useCadReturnStore.getState().applyIngest(record, generation);
   importedMeshStore.setCad(scene, viewportGeneration);
   importedMeshStore.setCadSolver(scene, viewportGeneration, false);
-  useSolveOptionsStore.getState().setEngine('metal');
+  useImportedSolveOptionsStore.getState().setEngine('metal');
   workspaceModeStore.setImportedInput('cad');
   workspaceModeStore.setMode('cad');
   return record;

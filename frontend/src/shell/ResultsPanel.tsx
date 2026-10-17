@@ -45,7 +45,8 @@ import { ResultsHeader } from './ResultsHeader';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { useVisibleRedraw } from './panelVisibility';
 import { trapDialogFocus } from './dialogFocus';
-import { useSolveOptionsStore } from '../stores/solveOptions';
+import { solveOptionsStoreForMode, useScopedSolveOptions } from '../stores/solveOptionsContext';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { useObservationStore } from '../viewport/observationStore';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
 import { useDesignStore } from '../stores/design';
@@ -1819,7 +1820,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
   // The normalization angle is a display reference, not a solve setting: the
   // stored patterns are re-referenced to whatever is in the field right now,
   // so an archived run answers a change to it without being solved again.
-  const normAngle = useSolveOptionsStore((state) => state.polar.normAngle);
+  const normAngle = useScopedSolveOptions((state) => state.polar.normAngle);
   // Only comparable and driver charts read the cross-job list. Keeping it in the
   // dependency array for every chart would rebuild expensive single-run
   // surfaces whenever the comparison selection changes.
@@ -2029,7 +2030,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     .join('\n');
   // Subscribed rather than read from the snapshot: the subtitle names the angle
   // the map is referenced to, and that has to follow the field as it is typed.
-  const cardNormAngle = useSolveOptionsStore((state) => state.polar.normAngle);
+  const cardNormAngle = useScopedSolveOptions((state) => state.polar.normAngle);
   const cardPreferences = usePreferences();
   const [expanded, setExpanded] = useState(false);
   const [imageReady, setImageReady] = useState(false);
@@ -2748,7 +2749,7 @@ export function ResultsPanel() {
         // Exports follow the maps: the normalization angle is a display
         // reference now, and the angle the run was solved at is no longer shown
         // anywhere, so it is not a candidate.
-        normalizationAngle: useSolveOptionsStore.getState().polar.normAngle,
+        normalizationAngle: solveOptionsStoreForMode(workspaceModeStore.getSnapshot().mode).getState().polar.normAngle,
         preferences,
         destinationToken: destination.token,
         confirmReplacements: askToReplaceExports,

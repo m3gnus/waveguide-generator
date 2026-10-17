@@ -14,7 +14,8 @@ import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { designFileExtension } from '../stores/designName';
-import { parseFrequencyList, useSolveOptionsStore, type FrequencyMode } from '../stores/solveOptions';
+import { parseFrequencyList, type FrequencyMode } from '../stores/solveOptions';
+import { useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { previewErrorMessage, previewMeshMetrics } from '../viewport/presentation';
 import { Icon } from './icons';
@@ -99,10 +100,10 @@ export function StatusBar() {
   const fileActive = mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file';
   const cadReturn = useCadReturnStore();
   const filename = useDocumentStore((state) => state.filename);
-  const selectedEngine = useSolveOptionsStore((state) => state.engine);
-  const accuracy = useSolveOptionsStore((state) => state.accuracy);
-  const frequencyMode = useSolveOptionsStore((state) => state.frequencyMode);
-  const frequencyListText = useSolveOptionsStore((state) => state.frequencyListText);
+  const selectedEngine = useScopedSolveOptions((state) => state.engine);
+  const accuracy = useScopedSolveOptions((state) => state.accuracy);
+  const frequencyMode = useScopedSolveOptions((state) => state.frequencyMode);
+  const frequencyListText = useScopedSolveOptions((state) => state.frequencyListText);
   const preferences = usePreferences();
   // A CAD solve runs on the user's engine choice, always in full 3-D. Once the
   // server has said where that choice lands for this return, the bar names

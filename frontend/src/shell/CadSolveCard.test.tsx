@@ -19,7 +19,7 @@ import type { CadOperationSummary } from '../api/cadOperations';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { RECOVERED_NEGATIVE_HALF } from '../api/domainDecision.fixtures';
 import { resetCadReturnStore } from '../stores/cadReturn';
-import { resetSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { resetSolveStageClocksForTests } from './solveProgress';
 
 vi.mock('./CadOperationsSection', () => ({ OnScreenSolveStatus: () => null }));
@@ -335,6 +335,17 @@ describe('CAD Solve card run status', () => {
     publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);
     await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
     expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Done');
+  });
+
+  it('shows the imported instance\'s engine and sweep, not the parametric ones', async () => {
+    useSolveOptionsStore.getState().setEngine('bempp');
+    useImportedSolveOptionsStore.getState().setFrequencyMode('list');
+    useImportedSolveOptionsStore.getState().setFrequencyListText('300 700 1500');
+    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    const line = host.querySelector('.cad-solve-settings')?.textContent ?? '';
+    expect(line).toContain('3 listed frequencies');
+    expect(line).toContain('AUTO');
+    expect(line).not.toContain('BEMPP');
   });
 
   it('says when WG solved the model with its default settings, and where to change them', async () => {

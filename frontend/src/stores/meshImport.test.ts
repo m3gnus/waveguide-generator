@@ -4,7 +4,7 @@ import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
-import { resetSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { editMeshImport, fileMeshSubmission, fileSolvePress, finishFileSolvePress, loadMeshFile,
   prepareMeshFile, loadMeshReplay, restoreMeshImport, restorePendingMeshPress, restoreSavedMeshSetup, saveMeshSetup, useMeshImportStore } from './meshImport';
 import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
@@ -78,12 +78,12 @@ describe('standalone imported mesh', () => {
     importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
     const wait = deferred<Response>();
     const saving = saveMeshSetup(vi.fn(() => wait.promise));
-    useSolveOptionsStore.getState().setEngine('bempp');
+    useImportedSolveOptionsStore.getState().setEngine('bempp');
     wait.resolve(response({ revision_id: 'wgs_old' }));
     await saving;
     expect(useMeshImportStore.getState().notice).toContain('current edits are not saved');
     await saveMeshSetup(vi.fn(async () => response({ revision_id: 'wgs_new' })));
-    useSolveOptionsStore.setState({ accuracy: 'accurate' });
+    useImportedSolveOptionsStore.setState({ accuracy: 'accurate' });
     expect(useMeshImportStore.getState().notice).toBeNull();
   });
   it('inspects original bytes on the backend, then prepares explicit units and groups', async () => {
@@ -100,9 +100,39 @@ describe('standalone imported mesh', () => {
     expect(body.geometry).not.toHaveProperty('mesh');
     expect(body.geometry.drive_channels).toEqual([{ id: 'group_2', source_ids: ['group_2'], motion: 'normal' }]);
     expect(body.options.symmetry).toBe('full');
-    expect(body.options.polar_config.angle_range).toEqual([-180, 180, 73]);
+    // No hard-coded rig: the imported instance's polar settings and spacing go out.
+    expect(body.options.polar_config.angle_range).toEqual([0, 180, 37]);
+    expect(body.options.frequency_spacing).toBe('log');
     editMeshImport({ units: 'in' });
     expect(() => fileMeshSubmission()).toThrow('Choose units');
+  });
+
+  it('solves with the imported options\' polar settings and frequency spacing, never the parametric ones', async () => {
+    await loadMeshFile('speaker.msh', MSH, vi.fn<typeof fetch>(async () => response(summary)));
+    editMeshImport({ units: 'mm', selected: [2] });
+    await prepareMeshFile(vi.fn<typeof fetch>(async () => response(record)));
+    const parametricBefore = JSON.stringify(useSolveOptionsStore.getState().options());
+    useImportedSolveOptionsStore.getState().setFrequencySpacing('linear');
+    useImportedSolveOptionsStore.getState().updatePolar({
+      angleStart: -90, angleEnd: 90, angleStep: 10, distance: 3.5, normAngle: 15, diagonalAngle: 30,
+      enabledAxes: ['horizontal'], observationOrigin: 'throat', sphericalSampling: true, fieldPlane: false,
+    });
+    const { options } = fileMeshSubmission();
+    expect(options.frequency_spacing).toBe('linear');
+    expect(options.polar_config).toEqual({
+      angle_range: [-90, 90, 19], angle_step: 10, enabled_axes: ['horizontal'], distance: 3.5, norm_angle: 15,
+      inclination: 30, observation_origin: 'throat', spherical_sampling: true, field_plane: false,
+    });
+    expect(JSON.stringify(useSolveOptionsStore.getState().options())).toBe(parametricBefore);
+  });
+
+  it('opens a new file with a one-way copy of the parametric options', async () => {
+    useSolveOptionsStore.getState().setFrequencySpacing('linear');
+    useSolveOptionsStore.getState().updatePolar({ distance: 4 });
+    await loadMeshFile('speaker.msh', MSH, vi.fn<typeof fetch>(async () => response(summary)));
+    expect(useImportedSolveOptionsStore.getState()).toMatchObject({ frequencySpacing: 'linear', polar: { distance: 4 } });
+    useImportedSolveOptionsStore.getState().updatePolar({ distance: 7 });
+    expect(useSolveOptionsStore.getState().polar.distance).toBe(4);
   });
 
   it('never lets a late inspection replace a newer viewport choice', async () => {
@@ -258,7 +288,7 @@ describe('portable mesh replay', () => {
     expect(fetcher.mock.calls[0][0]).toBe('/api/jobs/saved-run/requests');
     expect(fileMeshSubmission()).toEqual(request);
     expect(useMeshImportStore.getState()).toMatchObject({ startHz: 137, endHz: 3987, count: 3 });
-    useSolveOptionsStore.setState({ engine: 'bempp' });
+    useImportedSolveOptionsStore.setState({ engine: 'bempp' });
     expect(fileMeshSubmission()).toEqual(request);
   });
 
@@ -302,16 +332,25 @@ describe('portable mesh replay', () => {
     const request = exactRequest();
     await loadMeshReplay('{}', vi.fn(async () => response({ record, request })));
     if (kind === 'local') useMeshImportStore.setState({ count: 21 });
-    else useSolveOptionsStore.getState().updatePolar({ distance: 9 });
+    else useImportedSolveOptionsStore.getState().updatePolar({ distance: 9 });
     expect(useMeshImportStore.getState().exactSubmission).toBeNull();
     expect(useMeshImportStore.getState().notice).toContain('starts a new setup');
     expect(fileMeshSubmission().options.frequencies_hz).toBeUndefined();
   });
 
+  it('keeps exact replay through an edit to the parametric options', async () => {
+    const request = exactRequest();
+    await loadMeshReplay('{}', vi.fn(async () => response({ record, request })));
+    useSolveOptionsStore.getState().updatePolar({ distance: 9 });
+    useSolveOptionsStore.getState().setEngine('bempp');
+    expect(useMeshImportStore.getState().exactSubmission).not.toBeNull();
+    expect(fileMeshSubmission()).toEqual(request);
+  });
+
   it('keeps exact replay through late hydration and automatic solve-options transitions', async () => {
     const request = exactRequest();
     await loadMeshReplay('{}', vi.fn(async () => response({ record, request })));
-    useSolveOptionsStore.setState(state => ({ engine: 'bempp', accuracy: 'accurate', polar: { ...state.polar, distance: 9 } }));
+    useImportedSolveOptionsStore.setState(state => ({ engine: 'bempp', accuracy: 'accurate', polar: { ...state.polar, distance: 9 } }));
     await useSolveOptionsStore.persist.rehydrate();
     expect(fileMeshSubmission()).toEqual(request);
   });
@@ -321,8 +360,8 @@ describe('portable mesh replay', () => {
     request.options.engine = 'metal';
     request.options.accuracy = 'accurate';
     await loadMeshReplay('{}', vi.fn(async () => response({ record, request })));
-    if (control === 'engine') useSolveOptionsStore.getState().setEngine('bempp');
-    else useSolveOptionsStore.getState().setAccuracy('fast');
+    if (control === 'engine') useImportedSolveOptionsStore.getState().setEngine('bempp');
+    else useImportedSolveOptionsStore.getState().setAccuracy('fast');
     const options = fileMeshSubmission().options;
     expect(options.engine).toBe(control === 'engine' ? 'bempp' : 'auto');
     expect(options.accuracy).toBe('fast');

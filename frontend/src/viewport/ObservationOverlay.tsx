@@ -28,7 +28,7 @@ import {
   Vector2,
   Vector3,
 } from 'three';
-import { useSolveOptionsStore } from '../stores/solveOptions';
+import { useScopedSolveOptions, useScopedSolveOptionsStore } from '../stores/solveOptionsContext';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { MAX_MEASUREMENT_ANGLES } from '../results/measurementAngle';
 import type { DemandRenderScheduler } from './demandRender';
@@ -104,7 +104,9 @@ export function ObservationOverlay({ unitsPerMetre, scheduler }: {
 }) {
   const visible = useObservationStore((state) => state.visible);
   const basis = useObservationStore((state) => state.basis);
-  const polar = useSolveOptionsStore((state) => state.polar);
+  // Imported models have their own solve options; this reads the workspace's.
+  const solveOptionsStore = useScopedSolveOptionsStore();
+  const polar = useScopedSolveOptions((state) => state.polar);
   const preferences = usePreferences();
   const gl = useThree((state) => state.gl);
   const camera = useThree((state) => state.camera);
@@ -249,8 +251,8 @@ export function ObservationOverlay({ unitsPerMetre, scheduler }: {
         // to the centimetre so a drag produces a number a person would type.
         const distance = point.distanceTo(originVector) / unitsPerMetre;
         const next = Math.max(MIN_DISTANCE_M, Math.round(distance * 100) / 100);
-        if (next !== useSolveOptionsStore.getState().polar.distance) {
-          useSolveOptionsStore.getState().updatePolar({ distance: next });
+        if (next !== solveOptionsStore.getState().polar.distance) {
+          solveOptionsStore.getState().updatePolar({ distance: next });
         }
         return;
       }
@@ -285,7 +287,7 @@ export function ObservationOverlay({ unitsPerMetre, scheduler }: {
       element.removeEventListener('pointercancel', endDrag, { capture: true });
       drag.current = null;
     };
-  }, [basis, camera, gl, rig, spec, unitsPerMetre, visible]);
+  }, [basis, camera, gl, rig, solveOptionsStore, spec, unitsPerMetre, visible]);
 
   if (!visible || !rig) return null;
   const pivotRadius = Math.max(radius * PIVOT_SCALE, 1e-6);

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useDesignStore } from '../stores/design';
-import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
+import { useStore } from 'zustand';
+import type { SolveOptions } from '../stores/solveOptions';
+import { solveOptionsStoreForMode } from '../stores/solveOptionsContext';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 import { activeBackendCapability } from '../design/backendSupport';
 import { accuracyEngine, useCapabilities } from './useCapabilities';
@@ -13,7 +15,7 @@ export function useSolveControlBackend(modeOverride?: WorkspaceMode) {
   const workspace = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot);
   const mode = modeOverride ?? workspace.mode;
   const design = useDesignStore((state) => state.design);
-  const store = useSolveOptionsStore(useShallow((state) => ({
+  const store = useStore(solveOptionsStoreForMode(mode), useShallow((state) => ({
     engine: state.engine, accuracy: state.accuracy,
     adaptiveFrequencySampling: state.adaptiveFrequencySampling,
     solverMode: state.solverMode, symmetry: state.symmetry,

@@ -17,7 +17,8 @@ import { bundleIdentity, resetCadReturnStore, useCadReturnStore } from '../store
 import { resolveOuterBodyMode } from '../design/ParamPanel';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { solveOptionsStoreForMode, useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { useMeshImportStore } from '../stores/meshImport';
@@ -228,8 +229,11 @@ function MainSolveButton() {
   return <button disabled={solve.disabled} title={solve.title} onClick={solve.solve}>{solve.label}</button>;
 }
 
+/** The solve-options store of the workspace mode that is currently on screen. */
+const activeOptions = () => solveOptionsStoreForMode(workspaceModeStore.getSnapshot().mode).getState();
+
 function EngineSelect() {
-  const options = useSolveOptionsStore();
+  const options = useScopedSolveOptions();
   return <select value={options.engine} onChange={(event) => options.setEngine(event.target.value)}>
     <option value="auto">AUTO</option><option value="bempp">BEMPP</option><option value="metal">Metal</option>
   </select>;
@@ -497,9 +501,9 @@ describe('solve invocation mutex', () => {
       const { client } = await mountPlanning(mode);
       changeEngine();
       pressSolve('click');
-      act(() => useSolveOptionsStore.getState().updatePolar({ angleStep: 0 }));
+      act(() => activeOptions().updatePolar({ angleStep: 0 }));
       expect(host.querySelector('button')!.disabled).toBe(true);
-      act(() => useSolveOptionsStore.getState().updatePolar({ angleStep: 5 }));
+      act(() => activeOptions().updatePolar({ angleStep: 5 }));
       await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
       await flushPlan();
       expect(host.querySelector('button')!.disabled).toBe(false);
@@ -1401,7 +1405,7 @@ describe('solve invocation mutex', () => {
         registered: { ingest_id: 'wgi_replay', manifest_sha256: replay.geometry.manifest_sha256,
           artifact_sha256: replay.geometry.artifact_sha256, source_tags: { source: 2 } } as unknown as RegisteredMesh });
       importedMeshStore.setFile({ name: 'replayed.msh', source: 'file', ingestId: 'wgi_replay' } as ImportedMeshScene);
-      useSolveOptionsStore.setState({ engine: 'auto', accuracy: 'fast' });
+      useImportedSolveOptionsStore.setState({ engine: 'auto', accuracy: 'fast' });
     });
     await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));
     const solve = host.querySelector<HTMLButtonElement>('button')!;
@@ -1510,11 +1514,13 @@ describe('solve invocation mutex', () => {
   ])('disables the global Solve action in parametric and CAD modes for %s', async (_name, invalid) => {
     await act(async () => { root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>); });
     const solve = host.querySelector<HTMLButtonElement>('button')!;
-    act(() => useSolveOptionsStore.getState().updatePolar(invalid));
+    act(() => activeOptions().updatePolar(invalid));
     expect(solve.disabled).toBe(true);
     expect(solve.title).toMatch(/Directivity|directivity/);
 
+    // Imported mode judges its own directivity settings, not the parametric ones.
     act(() => workspaceModeStore.setMode('cad'));
+    act(() => useImportedSolveOptionsStore.getState().updatePolar(invalid));
     expect(solve.disabled).toBe(true);
     expect(solve.title).toMatch(/Directivity|directivity/);
   });

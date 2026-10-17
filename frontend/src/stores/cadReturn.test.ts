@@ -29,7 +29,7 @@ import {
 } from '../results/crossoverSpec';
 import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { resetDocumentStore, useDocumentStore } from './document';
-import { resetSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore } from './solveOptions';
 
 const solveProfileStorageKey = 'waveguide-v2-g3-cad-solve-profiles';
 
@@ -73,13 +73,13 @@ describe('CAD return store', () => {
       designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 3,
     }, 'current');
     useCadReturnStore.getState().selectBundle(bundle);
-    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
     const saved = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
     expect(saved.profiles[0].solveSelection).toEqual({ accuracy: 'accurate', engine: 'auto' });
     resetCadReturnStore();
     resetSolveOptionsStore();
     useCadReturnStore.getState().selectBundle(bundle);
-    expect(useSolveOptionsStore.getState()).toMatchObject({ accuracy: 'accurate', engine: 'auto' });
+    expect(useImportedSolveOptionsStore.getState()).toMatchObject({ accuracy: 'accurate', engine: 'auto' });
   });
 
   it('loads a CAD profile saved before accuracy existed as Fast', () => {
@@ -89,16 +89,16 @@ describe('CAD return store', () => {
     delete saved.profiles[0].solveSelection.accuracy;
     localStorage.setItem(solveProfileStorageKey, JSON.stringify(saved));
     resetCadReturnStore();
-    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
-    expect(useSolveOptionsStore.getState()).toMatchObject({ accuracy: 'fast', engine: 'auto' });
+    expect(useImportedSolveOptionsStore.getState()).toMatchObject({ accuracy: 'fast', engine: 'auto' });
 
     delete saved.profiles[0].solveSelection;
     localStorage.setItem(solveProfileStorageKey, JSON.stringify(saved));
     resetCadReturnStore();
-    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
-    expect(useSolveOptionsStore.getState().accuracy).toBe('fast');
+    expect(useImportedSolveOptionsStore.getState().accuracy).toBe('fast');
   });
 
   it('initializes complete sizes and one default channel per source', () => {

@@ -17,7 +17,7 @@ import {
   useCadReturnStore,
 } from '../stores/cadReturn';
 import type { CadDriveChannel } from '../stores/cadReturn';
-import { parseFrequencyList, polarValidationError, useSolveOptionsStore } from '../stores/solveOptions';
+import { parseFrequencyList, polarValidationError, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { frequencyText } from '../results/crossoverSpec';
 
 const POLAR_AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
@@ -62,7 +62,7 @@ export function widenPolarToDerivation(
 }
 
 export type CadReturnSnapshot = ReturnType<typeof useCadReturnStore.getState>;
-export type SolveOptionsSnapshot = ReturnType<typeof useSolveOptionsStore.getState>;
+export type SolveOptionsSnapshot = ReturnType<typeof useImportedSolveOptionsStore.getState>;
 
 /**
  * Whether this return can carry a cardioid campaign at all.
@@ -82,7 +82,7 @@ function cardioidSurfacePresent(state: CadReturnSnapshot): boolean {
  * into submitting different geometry or accepting different evidence. */
 export function importedSubmissionBlocker(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
-  solveStore: SolveOptionsSnapshot = useSolveOptionsStore.getState(),
+  solveStore: SolveOptionsSnapshot = useImportedSolveOptionsStore.getState(),
 ): string | null {
   const restoring = importedRunRestoreBlocker('cad');
   if (restoring) return restoring;
@@ -295,7 +295,7 @@ function submittedDriver(
 
 export function resolveCadImportedSetup(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
-  solveStore: SolveOptionsSnapshot = useSolveOptionsStore.getState(),
+  solveStore: SolveOptionsSnapshot = useImportedSolveOptionsStore.getState(),
 ): ImportedSetup {
   const frozen = restoredCadSetup(state.ingestRecord?.ingest_id);
   if (frozen) return frozen;

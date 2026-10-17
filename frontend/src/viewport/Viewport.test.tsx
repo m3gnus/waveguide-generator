@@ -14,6 +14,7 @@ import { currentDocumentLoad, resetDesignStore, serializeDesign, useDesignStore 
 import { useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from './importedMesh';
+import { useSolveOptionsStore } from '../stores/solveOptions';
 import { importedMeshStore } from './importedMeshStore';
 import { parseMSH } from './mshParser';
 import { useFieldPlaneStore } from './fieldPlaneStore';
@@ -1070,6 +1071,34 @@ describe('BEMPP wall plan-adjustment note', () => {
     expect(note).not.toBeNull();
     expect(note?.textContent).toContain('No wall thickness is set');
     expect(note?.textContent).toContain('5 mm closed-wall default');
+  });
+
+  it('plans again when the engine or accuracy changes', async () => {
+    const bodies: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (String(input) === '/api/solve/plan') {
+        bodies.push(String(init?.body));
+        return new Response(JSON.stringify(solvePlanWithAdjustments([])), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    const settle = async () => act(async () => { await new Promise((resolve) => { setTimeout(resolve, 450); }); });
+    act(() => root.render(<Viewport />));
+    await settle();
+    const first = bodies.length;
+    expect(first).toBeGreaterThan(0);
+    act(() => useSolveOptionsStore.getState().setEngine('bempp'));
+    await settle();
+    expect(bodies.length).toBeGreaterThan(first);
+    expect(JSON.parse(bodies.at(-1)!).options.engine).toBe('bempp');
+    const second = bodies.length;
+    act(() => useSolveOptionsStore.getState().setAccuracy('accurate'));
+    await settle();
+    expect(bodies.length).toBeGreaterThan(second);
+    expect(JSON.parse(bodies.at(-1)!).options.accuracy).toBe('accurate');
+    useSolveOptionsStore.getState().setEngine('auto');
   });
 
   it('shows nothing when the plan has no adjustments', async () => {

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { durableSettings } from './durableSettings';
 import {
   MAX_FREQUENCY_POINTS,
   defaultPolarUi,
@@ -6,7 +7,10 @@ import {
   normalizePolarUi,
   parseFrequencyList,
   polarConfigFromUi,
+  applyWireOptionsToImportedSolveOptions,
   resetSolveOptionsStore,
+  seedImportedSolveOptionsFromParametric,
+  useImportedSolveOptionsStore,
   restoreSolveSettingsFromBlocks,
   useSolveOptionsStore,
 } from './solveOptions';
@@ -359,5 +363,59 @@ describe('adaptive sweep preference', () => {
     expect(normalizePersistedSolveOptions({ adaptiveFrequencySampling: 'true' }).adaptiveFrequencySampling).toBe(false);
     expect(normalizePersistedSolveOptions({ adaptiveFrequencySampling: true }).adaptiveFrequencySampling).toBe(true);
     resetSolveOptionsStore();
+  });
+});
+
+
+describe('the imported solve-options instance', () => {
+  beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); });
+
+  it('is made by the same factory and starts from the same defaults', () => {
+    const { options: _a, ...parametric } = useSolveOptionsStore.getState();
+    const { options: _b, ...imported } = useImportedSolveOptionsStore.getState();
+    expect(Object.keys(imported).sort()).toEqual(Object.keys(parametric).sort());
+    expect(useImportedSolveOptionsStore.getState().options()).toEqual(useSolveOptionsStore.getState().options());
+  });
+
+  it('is not persisted, and editing it never writes durable storage or the parametric store', () => {
+    const write = vi.spyOn(durableSettings, 'set');
+    const parametric = JSON.stringify(useSolveOptionsStore.getState());
+    useImportedSolveOptionsStore.getState().setEngine('bempp');
+    useImportedSolveOptionsStore.getState().updatePolar({ distance: 6 });
+    useImportedSolveOptionsStore.getState().setFrequencySpacing('linear');
+    expect(write).not.toHaveBeenCalled();
+    expect(JSON.stringify(useSolveOptionsStore.getState())).toBe(parametric);
+    write.mockRestore();
+  });
+
+  it('is untouched by edits to the parametric store', () => {
+    const imported = JSON.stringify(useImportedSolveOptionsStore.getState());
+    useSolveOptionsStore.getState().setEngine('bempp');
+    useSolveOptionsStore.getState().updatePolar({ distance: 6 });
+    expect(JSON.stringify(useImportedSolveOptionsStore.getState())).toBe(imported);
+  });
+
+  it('is seeded from the parametric options by a one-way copy', () => {
+    useSolveOptionsStore.getState().updatePolar({ distance: 6 });
+    useSolveOptionsStore.getState().setFrequencySpacing('linear');
+    seedImportedSolveOptionsFromParametric();
+    expect(useImportedSolveOptionsStore.getState()).toMatchObject({ frequencySpacing: 'linear', polar: { distance: 6 } });
+    useImportedSolveOptionsStore.getState().updatePolar({ distance: 2.5 });
+    expect(useSolveOptionsStore.getState().polar.distance).toBe(6);
+    // The copy is detached: mutating one polar rig cannot reach the other.
+    expect(useImportedSolveOptionsStore.getState().polar).not.toBe(useSolveOptionsStore.getState().polar);
+  });
+
+  it('takes a recorded run\'s options without writing the parametric store', () => {
+    const parametric = JSON.stringify(useSolveOptionsStore.getState());
+    applyWireOptionsToImportedSolveOptions({
+      engine: 'beat-cpu', accuracy: 'accurate', frequency_spacing: 'linear', frequencies_hz: [100, 200],
+      polar_config: { ...polarConfigFromUi({ ...defaultPolarUi, distance: 3 }) },
+    });
+    expect(useImportedSolveOptionsStore.getState()).toMatchObject({
+      engine: 'beat-cpu', accuracy: 'accurate', frequencySpacing: 'linear', frequencyMode: 'list',
+      frequencyListText: '100\n200', polar: { distance: 3 },
+    });
+    expect(JSON.stringify(useSolveOptionsStore.getState())).toBe(parametric);
   });
 });

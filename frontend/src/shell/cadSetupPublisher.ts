@@ -18,7 +18,7 @@ import {
 import { useDocumentStore } from '../stores/document';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { useCadReceiptsStore } from '../stores/cadReceipts';
-import { polarValidationError, useSolveOptionsStore } from '../stores/solveOptions';
+import { polarValidationError, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { subscribeSolveSettingsEdits } from '../stores/solveSettingsEdits';
 import { workspaceModeStore } from '../stores/workspaceMode';
 
@@ -35,7 +35,7 @@ export interface CadProjectSetup {
 }
 
 type CadReturnSnapshot = ReturnType<typeof useCadReturnStore.getState>;
-type SolveOptionsSnapshot = ReturnType<typeof useSolveOptionsStore.getState>;
+type SolveOptionsSnapshot = ReturnType<typeof useImportedSolveOptionsStore.getState>;
 type CadPreparationSnapshot = ReturnType<typeof useCadPreparationStore.getState>;
 
 const SETUP_DEBOUNCE_MS = 750;
@@ -63,7 +63,7 @@ function projectLineage(state: CadReturnSnapshot): string | null {
  */
 export function buildCadProjectSetup(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
-  solveStore: SolveOptionsSnapshot = useSolveOptionsStore.getState(),
+  solveStore: SolveOptionsSnapshot = useImportedSolveOptionsStore.getState(),
   preparation: CadPreparationSnapshot = useCadPreparationStore.getState(),
   lineageId: string | null = projectLineage(state),
 ): CadProjectSetup | null {
@@ -261,7 +261,7 @@ export function startCadSetupPublisher(
   };
 
   const observeSolverSelection = () => {
-    const { engine, accuracy } = useSolveOptionsStore.getState();
+    const { engine, accuracy } = useImportedSolveOptionsStore.getState();
     const next = { engine, accuracy };
     const key = JSON.stringify(next);
     const changed = key !== JSON.stringify(solverSelection);
@@ -278,7 +278,7 @@ export function startCadSetupPublisher(
   const unsubscribers = [
     subscribeSolveSettingsEdits(onEdit),
     useCadReturnStore.subscribe(onSelection),
-    useSolveOptionsStore.subscribe(observeSolverSelection),
+    useImportedSolveOptionsStore.subscribe(observeSolverSelection),
   ];
   if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
   if (typeof window !== 'undefined') window.addEventListener('pagehide', leave);

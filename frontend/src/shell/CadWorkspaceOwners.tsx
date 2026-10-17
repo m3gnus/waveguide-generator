@@ -14,7 +14,7 @@ import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { documentSettingsSignature } from '../stores/designWire';
-import { useSolveOptionsStore } from '../stores/solveOptions';
+import { useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { connectCadObservation } from './cadObservation';
 import { createCadArrivalActions, createCadReturnArrivalReader, enterCadWorkspace, SupersededError } from './cadlink/arrivals';
@@ -312,7 +312,7 @@ export function mountCadWorkspaceOwners(): () => void {
     jobsSocket.subscribe(followFusionSolve), () => fusionSolves.dispose(),
     jobsSocket.subscribe(settleModels), solvedCadModels.subscribe(settleModels),
     useDesignStore.subscribe(contextChanged), useDocumentStore.subscribe(contextChanged),
-    useCadReturnStore.subscribe(contextChanged), useSolveOptionsStore.subscribe(contextChanged),
+    useCadReturnStore.subscribe(contextChanged), useSolveOptionsStore.subscribe(contextChanged), useImportedSolveOptionsStore.subscribe(contextChanged),
     workspaceModeStore.subscribe(changed), preferencesStore.subscribe(subscribeContext),
     cadCoordinationStore.subscribe(changed), cadWorkspaceSelection.subscribe(() => observation.refresh()),
     subscribeRevision((event) => { if (event.reason !== 'load') actions.supersedePreparation(); }),

@@ -32,7 +32,8 @@ import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
 import { NATIVE_FAMILIES, defaultWallThickness, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { athControlError, lipRadiusWallError, lipUnavailableReason, opusClampNote, opusMountingReason } from './athImportControls';
 import { namespaceStorage } from '../stores/durableSettings';
-import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions';
+import type { SymmetryMode } from '../stores/solveOptions';
+import { SolveOptionsStoreProvider, useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { AdaptiveFrequencyControls, FrequencySweepControls, MeshValidationControl, DirectivityMapControls, SolveOptionsControls, ToggleRow } from './SolveOptionsSections';
 import { ExperimentalBadge } from './ExperimentalBadge';
@@ -422,8 +423,8 @@ function prospectiveValidation(field: ParameterDefinition, design: DesignDocumen
  * than every field in the rail.
  */
 function MouthResolutionHint({ design, value }: { design: DesignDocument; value: unknown }) {
-  const frequencyMode = useSolveOptionsStore((state) => state.frequencyMode);
-  const frequencyListText = useSolveOptionsStore((state) => state.frequencyListText);
+  const frequencyMode = useScopedSolveOptions((state) => state.frequencyMode);
+  const frequencyListText = useScopedSolveOptions((state) => state.frequencyListText);
   const hint = lambdaSixthHint(design, { frequencyMode, frequencyListText });
   if (!hint) return null;
   return <div className={`lambda-hint${Number(value) > hint.limitMm ? ' warning' : ''}`}>
@@ -675,11 +676,11 @@ function AutoSymmetryReadout({ design }: { design: DesignDocument }) {
 function SolveDomainControl({ design }: { design: DesignDocument }) {
   const planned = usePlannedBackendCapabilities();
   const selected = useActiveBackendCapability();
-  const engine = useSolveOptionsStore((state) => state.engine);
+  const engine = useScopedSolveOptions((state) => state.engine);
   const candidates = engine === 'auto' ? planned : selected ? [selected] : [];
-  const accuracy = useSolveOptionsStore((state) => state.accuracy);
-  const symmetry = useSolveOptionsStore((state) => state.symmetry);
-  const setSymmetry = useSolveOptionsStore((state) => state.setSymmetry);
+  const accuracy = useScopedSolveOptions((state) => state.accuracy);
+  const symmetry = useScopedSolveOptions((state) => state.symmetry);
+  const setSymmetry = useScopedSolveOptions((state) => state.setSymmetry);
   const native = isNativeFamily(design.formula);
   const modes: SymmetryMode[] = native ? ['full'] : Object.keys(symmetryModeLabels) as SymmetryMode[];
   // Saved Auto still resolves to Full for native formulas. Keep an invalid
@@ -984,7 +985,7 @@ function RealizedDimensionsCard({ forceOpen = false }: { forceOpen?: boolean }) 
 
 function CadFrequencySweep() {
   const cadReturn = useCadReturnStore();
-  const solveStore = useSolveOptionsStore();
+  const solveStore = useScopedSolveOptions();
   const blocker = importedSubmissionBlocker(cadReturn, solveStore);
   const rangeMessage = blocker === 'Enter a valid explicit frequency sweep.' ? blocker : null;
   return <>
@@ -1431,9 +1432,10 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     </div>}
   </Section>;
 
-  if (workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file') return <MeshImportPanel/>;
+  if (workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file') return <SolveOptionsStoreProvider mode={workspaceMode}><MeshImportPanel/></SolveOptionsStoreProvider>;
 
   return (
+    <SolveOptionsStoreProvider mode={workspaceMode}>
     <div ref={registerParameterPanel} className="param-panel panel-scroll" data-param-tab={tab}>
       <div className="parameter-search">
         <label className="sr-only" htmlFor={`parameter-filter-${tab}`}>Filter {tab} parameters</label>
@@ -1468,5 +1470,6 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         </>}
       {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && matchingCadSections.size === 0 && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}
     </div>
+    </SolveOptionsStoreProvider>
   );
 }

@@ -26,7 +26,6 @@ import {
   polarConfigFromUi,
   polarValidationError,
   polarUiFromConfig,
-  useSolveOptionsStore,
   type FrequencyMode,
   type FrequencySpacing,
   type GroundPlaneAxis,
@@ -35,6 +34,7 @@ import {
   type PolarAxis,
   type PolarUiState,
 } from '../stores/solveOptions';
+import { useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { runDisplayName } from '../prefs/preferences';
 import { useDesignStore } from '../stores/design';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
@@ -181,7 +181,7 @@ function accurateHelp(
  * Adaptive acquisition can interpolate listed points and add coverage queries.
  */
 export function FrequencySweepControls({ idPrefix, context }: { idPrefix: string; context: 'design' | 'imported' }) {
-  const store = useSolveOptionsStore();
+  const store = useScopedSolveOptions();
   const { frequencies, error } = parseFrequencyList(store.frequencyListText);
   const modeId = `${idPrefix}-frequency-mode`;
   const spacingId = `${idPrefix}-frequency-spacing`;
@@ -209,7 +209,7 @@ export function FrequencySweepControls({ idPrefix, context }: { idPrefix: string
 }
 
 export function AdaptiveFrequencyControls({ mode = 'parametric' }: { mode?: WorkspaceMode } = {}) {
-  const store = useSolveOptionsStore();
+  const store = useScopedSolveOptions();
   const controlBackend = useSolveControlBackend(mode);
   const simulation = useDesignStore((state) => state.design.simulation);
   const importedCount = useCadReturnStore((state) => state.frequencyCount);
@@ -230,7 +230,7 @@ export function AdaptiveFrequencyControls({ mode = 'parametric' }: { mode?: Work
 }
 
 export function MeshValidationControl() {
-  const store = useSolveOptionsStore();
+  const store = useScopedSolveOptions();
   return <>
     <SelectRow revealId="mesh-validation-mode" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></SelectRow>
   </>;
@@ -243,7 +243,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   /** A caller that already renders driver guidance can suppress duplicates. */
   showOpenclGuidance?: boolean;
 } = {}) {
-  const store = useSolveOptionsStore();
+  const store = useScopedSolveOptions();
   const { engines, engineSelection, hostPlatform, error, isLoading: capabilitiesLoading,
     qualificationRefreshNeeded, refreshCapabilities } = useCapabilities();
   const backendEngines = engines;
@@ -351,7 +351,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
  * floor is y and a rear wall is z.
  */
 export function GroundPlaneControls() {
-  const store = useSolveOptionsStore();
+  const store = useScopedSolveOptions();
   const { engines, engineSelection } = useCapabilities();
   const ground = store.groundPlane;
   const backend = activeBackendCapability(accuracyEngine(store.engine, store.accuracy, engines), engines, engineSelection);
@@ -607,8 +607,8 @@ export function runPolarFromJob(job: { solve_options?: { polar_config?: unknown 
 export function SolvedWithReadout() {
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
-  const current = useSolveOptionsStore((state) => state.polar);
-  const updatePolar = useSolveOptionsStore((state) => state.updatePolar);
+  const current = useScopedSolveOptions((state) => state.polar);
+  const updatePolar = useScopedSolveOptions((state) => state.updatePolar);
 
   const job = selection.primary ? snapshot.jobs.find((item) => item.id === selection.primary) : undefined;
   const runPolar = runPolarFromJob(job);
@@ -630,9 +630,9 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
   const fieldReason = capability && capability.field_traces !== true
     ? `${capability.label || engineDisplayName(capability.name)} does not advertise field plane data.`
     : undefined;
-  const polar = useSolveOptionsStore((state) => state.polar);
-  const update = useSolveOptionsStore((state) => state.updatePolar);
-  const toggleAxis = useSolveOptionsStore((state) => state.toggleAxis);
+  const polar = useScopedSolveOptions((state) => state.polar);
+  const update = useScopedSolveOptions((state) => state.updatePolar);
+  const toggleAxis = useScopedSolveOptions((state) => state.toggleAxis);
   const infiniteBaffle = useDesignStore((state) => state.design.simulation.sim_type === 'infinite-baffle');
   const validationError = polarValidationError(polar);
   const validationErrorId = 'polar-grid-error';

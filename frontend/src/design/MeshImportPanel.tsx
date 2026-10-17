@@ -3,7 +3,7 @@ import { editMeshImport, prepareMeshFile, saveMeshSetup, useMeshImportStore } fr
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { restoreParametricWorkingDesign } from '../jobs/showJobModel';
 import { noteExplicitNavigation } from '../shell/workspaceNavigation';
-import { useSolveOptionsStore } from '../stores/solveOptions';
+import { useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { useCapabilities } from '../jobs/useCapabilities';
 
 const AXES = ['+x', '-x', '+y', '-y', '+z', '-z'];
@@ -11,8 +11,8 @@ const AXES = ['+x', '-x', '+y', '-y', '+z', '-z'];
 /** The ready-mesh workflow does not expose CAD generation or connection controls. */
 export function MeshImportPanel() {
   const state = useMeshImportStore();
-  const globalEngine = useSolveOptionsStore(s => s.engine);
-  const globalAccuracy = useSolveOptionsStore(s => s.accuracy);
+  const globalEngine = useImportedSolveOptionsStore(s => s.engine);
+  const globalAccuracy = useImportedSolveOptionsStore(s => s.accuracy);
   const engine = state.engine ?? globalEngine;
   const capabilities = useCapabilities();
   const [preparing, setPreparing] = useState(false);

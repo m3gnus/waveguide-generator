@@ -19,14 +19,13 @@ import {
 } from '../../stores/cadReturn';
 import { currentDocumentLoad, isCurrentDocumentLoad, subscribeRevision } from '../../stores/design';
 import { useDriverLibraryStore } from '../../stores/driverLibrary';
-import { polarUiFromConfig, useSolveOptionsStore, type SymmetryMode } from '../../stores/solveOptions';
+import { applyWireOptionsToImportedSolveOptions } from '../../stores/solveOptions';
 import { rememberedCadProject } from '../../stores/cadProjectMemory';
 import { preferencesStore } from '../../prefs/preferences';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { createCadArrivalActions, enterCadWorkspace, type RefreshOptions } from './arrivals';
 import { showIngestedMeshInViewport } from './artifactLoader';
-import type { ImportedSolveSubmission } from '../../jobs/actions';
 import { restoreImportedRun, assertRestoredIdentity } from '../../jobs/importedRunRestoration';
 
 type CadHistorySetup = Pick<ReturnType<typeof useCadReturnStore.getState>,
@@ -162,31 +161,6 @@ export function cadHistorySetup(job: JobItem, record: CadReturnIngestRecord): Ca
   };
 }
 
-function restoreCadJobSolveOptions(options: ImportedSolveSubmission['options']): void {
-  const explicit = Array.isArray(options.frequencies_hz) && options.frequencies_hz.length > 0
-    ? options.frequencies_hz
-    : null;
-  const polar = polarUiFromConfig(options.polar_config);
-  useSolveOptionsStore.setState((state) => ({
-    engine: options.engine,
-    accuracy: options.accuracy ?? 'fast',
-    adaptiveFrequencySampling: options.adaptive_frequency_sampling === true,
-    solverMode: options.solver_mode === 'auto' ? 'auto' : 'full_3d',
-    groundPlane: options.ground_plane ?? { enabled: false, axis: 'y', height_m: 0 },
-    symmetry: ['auto', 'full', 'half_xz', 'half_yz', 'quarter'].includes(options.symmetry)
-      ? options.symmetry as SymmetryMode
-      : state.symmetry,
-    meshValidationMode: ['warn', 'strict', 'off'].includes(options.mesh_validation_mode)
-      ? options.mesh_validation_mode
-      : state.meshValidationMode,
-    verbose: options.verbose,
-    frequencySpacing: options.frequency_spacing === 'linear' ? 'linear' : 'log',
-    frequencyMode: explicit ? 'list' : 'range',
-    frequencyListText: explicit ? explicit.join('\n') : '',
-    polar: polar ?? state.polar,
-  }));
-}
-
 export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch): Promise<string[]> {
   const owner = useCadReturnStore.getState();
   const selection = owner.captureSelectionIntent();
@@ -289,7 +263,9 @@ export async function restoreCadJobModel(
             .filter(finding => String(finding.kind).includes('area-drift')).map(finding => String(finding.source_id)))],
           needsIngest: false, ingestedBundleIdentity: null, ingestStaleReason: null,
         });
-        restoreCadJobSolveOptions(submission.options);
+        // A recalled run's options go to the imported instance only; the
+        // persisted parametric store is never written by an imported flow.
+        applyWireOptionsToImportedSolveOptions(submission.options);
         await integration.showIngestedMesh(record, displayName, integration.reportViewportNotice, fetcher, generation);
         if (!isCurrent()) return false;
         if (importedMeshStore.getSnapshot().cad?.ingestId !== record.ingest_id) return false;

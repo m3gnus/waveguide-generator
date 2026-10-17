@@ -5,7 +5,10 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
 import { DEFAULT_SWEEP } from './solveDefaults';
-import { useSolveOptionsStore } from './solveOptions';
+import {
+  applyWireOptionsToImportedSolveOptions, polarConfigFromUi, seedImportedSolveOptionsFromParametric,
+  useImportedSolveOptionsStore, type SolveOptions,
+} from './solveOptions';
 import type { ImportedSolveSubmission } from '../jobs/actions';
 import { subscribeSolveSettingsEdits } from './solveSettingsEdits';
 import { openMeshReplay } from '../api/meshReplay';
@@ -46,7 +49,7 @@ let requestNumber = 0;
 export const useMeshImportStore = create<MeshImportState>(() => ({ ...initial }));
 
 function setupFingerprint(state: MeshImportState): string {
-  const shared = useSolveOptionsStore.getState();
+  const shared = useImportedSolveOptionsStore.getState();
   return JSON.stringify([state.registered?.ingest_id, state.units, state.forward, state.up, state.selected,
     state.motions, state.engine ?? shared.engine, state.accuracy ?? shared.accuracy, state.startHz, state.endHz, state.count, state.exactSubmission]);
 }
@@ -60,7 +63,7 @@ useMeshImportStore.subscribe((state, previous) => {
   if (state.notice === previous.notice && state.notice?.startsWith('Mesh setup saved.')
     && setupFingerprint(state) !== setupFingerprint(previous)) useMeshImportStore.setState({ notice: null });
 });
-useSolveOptionsStore.subscribe((state, previous) => {
+useImportedSolveOptionsStore.subscribe((state, previous) => {
   const file = useMeshImportStore.getState();
   if (file.notice?.startsWith('Mesh setup saved.') && ((file.engine === null && state.engine !== previous.engine)
     || (file.accuracy === null && state.accuracy !== previous.accuracy))) useMeshImportStore.setState({ notice: null });
@@ -70,7 +73,7 @@ useSolveOptionsStore.subscribe((state, previous) => {
 // not replace a portable replay's exact settings. Only a person operating a
 // solve-options control ends replay; engine/accuracy are a coupled selection.
 subscribeSolveSettingsEdits(edit => {
-  if (edit?.source !== 'solveOptions' || !useMeshImportStore.getState().exactSubmission) return;
+  if (edit?.source !== 'importedSolveOptions' || !useMeshImportStore.getState().exactSubmission) return;
   useMeshImportStore.setState({ exactSubmission: null, notice: EDITED_REPLAY_NOTICE,
     ...(['setEngine', 'setAccuracy'].includes(edit.control ?? '') ? { engine: null, accuracy: null } : {}) });
 });
@@ -79,6 +82,9 @@ subscribeSolveSettingsEdits(edit => {
 export function beginMeshFileImport(filename: string): number {
   const request = ++requestNumber;
   useMeshImportStore.setState({ ...initial, filename, busy: true, request });
+  // A new file has no saved setup: open with a one-way copy of the parametric
+  // options. A restore overwrites this with the saved setup's own options.
+  seedImportedSolveOptionsFromParametric();
   workspaceModeStore.setImportedInput('file');
   workspaceModeStore.setMode('cad');
   return request;
@@ -148,17 +154,17 @@ export function fileMeshSubmission(): ImportedSolveSubmission {
   if (!(state.startHz > 0) || !(state.endHz > state.startHz) || !Number.isInteger(state.count) || state.count < 2 || state.count > 401) {
     throw new Error('Enter an increasing frequency range and 2–401 frequencies.');
   }
-  // These are this import workflow's stated controls, independent of any
-  // parametric design left open behind the file view.
-  const selected = useSolveOptionsStore.getState();
+  // The polar rig and the sweep spacing are the imported options' own; the
+  // sweep range and count are this view's controls. Both are independent of
+  // any parametric design left open behind the file view.
+  const selected = useImportedSolveOptionsStore.getState();
   return bindImportedSetup(record, {
     geometry: { skipped_source_ids: [],
       drive_channels: Object.keys(record.source_tags).map(id => ({ id, source_ids: [id], motion: state.motions[id] ?? 'normal' })) },
     options: { engine: state.engine ?? selected.engine, accuracy: state.accuracy ?? selected.accuracy, symmetry: 'full', solver_mode: 'full_3d',
-      mesh_validation_mode: 'strict', verbose: false, frequency_spacing: 'log',
+      mesh_validation_mode: 'strict', verbose: false, frequency_spacing: selected.frequencySpacing,
       frequency_range: [state.startHz, state.endHz], num_frequencies: state.count,
-      polar_config: { angle_range: [-180, 180, 73], angle_step: 5, enabled_axes: ['horizontal', 'vertical', 'diagonal'],
-        distance: 2, norm_angle: 5, inclination: 45, observation_origin: 'mouth', spherical_sampling: false, field_plane: true } },
+      polar_config: polarConfigFromUi(selected.polar) },
   });
 }
 
@@ -170,13 +176,11 @@ function preparedFileScene(record: RegisteredMesh) {
     [], { drivenTags: Object.values(record.source_tags) });
 }
 
-interface FileOptions {
-  engine?: string;
-  accuracy?: 'fast' | 'accurate';
+type FileOptions = Partial<SolveOptions> & {
   frequencies_hz?: number[] | null;
   frequency_range?: number[] | null;
   num_frequencies?: number | null;
-}
+};
 
 async function restoreRetainedFile(id: string, options: FileOptions,
   channels: Array<{ id: string; motion?: 'normal' | 'axial' }>, fetcher: typeof fetch,
@@ -207,6 +211,10 @@ function restoreFile(record: RegisteredMesh, options: FileOptions,
   if (!importedMeshStore.setFile(preparedFileScene(record), generation)) return false;
   workspaceModeStore.setImportedInput('file');
   workspaceModeStore.setMode('cad');
+  // The saved setup's own options seed the imported instance, over a copy of
+  // the parametric options for whatever the record does not state.
+  seedImportedSolveOptionsFromParametric();
+  applyWireOptionsToImportedSolveOptions(options as Partial<SolveOptions>);
   const frequencies = options.frequencies_hz;
   useMeshImportStore.setState({ ...initial, filename: record.source_file.filename,
     summary: record.summary, registered: record, ...record.source_file.transform, selected: record.source_file.source_tags,
@@ -233,7 +241,7 @@ export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch
     assertFileRequest(opened.record, opened.request);
     const restored = restoreFile(opened.record, opened.request.options,
       opened.request.geometry.drive_channels, generation, opened.request);
-    if (restored) useMeshImportStore.setState({ notice: 'Mesh replay opened. Solve preserves its exact settings. Editing a setup or global solve control starts a new setup.' });
+    if (restored) useMeshImportStore.setState({ notice: 'Mesh replay opened. Solve preserves its exact settings. Editing a setup or solve control starts a new setup.' });
     return restored;
   } catch (error) {
     if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error) });

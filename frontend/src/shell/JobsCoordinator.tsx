@@ -34,6 +34,7 @@ import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadRecoveryNotices } from '../stores/cadRecoveryNotices';
 import { confirmDisplayedFrame, frameSolveBlocker, frameReadInFlight, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
+import { solveOptionsStoreForMode, useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { buildCadProjectSetup } from './cadSetupPublisher';
@@ -287,7 +288,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const revision = useDesignStore((state) => state.designRevision);
   const fileRecovery = useRef({ done: false, inFlight: false, revision, generation: importedMeshStore.captureGeneration() });
   const designName = useDocumentStore((state) => state.designName);
-  const solveOptions = useSolveOptionsStore();
+  // Parametric mode reads the persisted store, Imported mode its own instance.
+  const solveOptions = useScopedSolveOptions();
   const selectedEngine = solveOptions.engine;
   useImportedRunRestoration();
   const cadReturn = useCadReturnStore();
@@ -725,7 +727,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       markMeshDownloaded: (job, filename) => jobsSocket.patchMetadata(job.id, { mesh_artifact_file: filename }),
       exportCompleted: (job, formats) => ownedAutoExport(job, formats, (job, formats, fetcher) => exportRunAutomatically(job, formats, {
         fetcher,
-        normalizationAngle: useSolveOptionsStore.getState().polar.normAngle,
+        normalizationAngle: solveOptionsStoreForMode(workspaceModeStore.getSnapshot().mode).getState().polar.normAngle,
         preferences,
       }), preferences.autoExportFormats),
       markExported: async (job, files, formats, completedAt) => jobsSocket.patchMetadata(job.id, {

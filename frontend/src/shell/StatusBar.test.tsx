@@ -6,7 +6,7 @@ import { preferencesStore } from '../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 
 const previewSnapshot = vi.hoisted(() => ({ connection: 'connected' as const, epoch: null, frame: null, displayedRevision: null, lastValidRevision: null, stale: false, dropped: 0, error: null, errorRevision: null }));
@@ -80,13 +80,14 @@ describe('StatusBar workspace modes', () => {
         frequencyEndHz: 18_000,
         frequencyCount: 31,
       });
+      useImportedSolveOptionsStore.getState().setEngine('bempp');
       workspaceModeStore.setMode('cad');
     });
 
     // The CAD solve runs on the user's own choice, as a design's does. Until the
     // server has judged this return, the bar names that choice.
     expect(host.textContent).toContain('BEMPP · 2.0');
-    act(() => { useSolveOptionsStore.getState().setEngine('auto'); });
+    act(() => { useImportedSolveOptionsStore.getState().setEngine('auto'); });
     expect(host.textContent).toContain('METAL · 1.0');
     // Grouped in the runner's locale, not en-US — see summary.test.ts.
     expect(host.textContent).toContain(`CAD mesh ${(12_345).toLocaleString()} solved tri`);

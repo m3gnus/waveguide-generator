@@ -3,7 +3,7 @@ import type { CadReturnIngestRecord } from '../api/cadlink';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { buildCadProjectSetup } from '../shell/cadSetupPublisher';
 import { channelAcceptsDriver, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import fixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
@@ -38,7 +38,7 @@ describe('native assembly imported workspace handoff', () => {
     expect(submission.geometry.drive_channels).toEqual(record.native_source!.channels);
     expect(submission.geometry.mesh).toEqual(record.mesh_sizes);
     expect(submission.options.engine).toBe('metal');
-    expect(useSolveOptionsStore.getState().engine).toBe('metal');
+    expect(useImportedSolveOptionsStore.getState().engine).toBe('metal');
     expect(useCadReturnStore.getState().isIngestSettled()).toBe(true);
     expect(importedSubmissionBlocker()).toBeNull();
     expect(channelAcceptsDriver(useCadReturnStore.getState().driveChannels[0])).toBe(false);
@@ -76,7 +76,7 @@ describe('native assembly imported workspace handoff', () => {
     await expect(pending).rejects.toThrow('superseded');
     expect(useCadReturnStore.getState().ingestRecord).toBeNull();
     expect(importedMeshStore.getSnapshot().showing).toBe('parametric');
-    expect(useSolveOptionsStore.getState().engine).toBe('auto');
+    expect(useImportedSolveOptionsStore.getState().engine).toBe('auto');
   });
 
   it('requires authoring again after source assignment or motion changes', async () => {

@@ -21,7 +21,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { fileMeshSubmission, useMeshImportStore } from '../stores/meshImport';
 import { useCadReturnStore } from '../stores/cadReturn';
-import { useSolveOptionsStore } from '../stores/solveOptions';
+import { useImportedSolveOptionsStore } from '../stores/solveOptions';
 
 export interface ImportedSolvePlanSnapshot {
   plan: ImportedSolvePlan | null;
@@ -55,7 +55,7 @@ export function useImportedSolvePlan(enabled: boolean, preparedSubmission?: Impo
   const file = useMeshImportStore();
   const viewport = useSyncExternalStore(importedMeshStore.subscribe, importedMeshStore.getSnapshot);
   const cadReturn = useCadReturnStore();
-  const solveOptions = useSolveOptionsStore();
+  const solveOptions = useImportedSolveOptionsStore();
   const { engines } = useCapabilities();
   const currentBody = useMemo(() => {
     if (!enabled) return null;

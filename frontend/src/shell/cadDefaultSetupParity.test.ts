@@ -3,7 +3,7 @@ import type { CadReturnBundle } from '../api/cadlink';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore } from '../stores/document';
-import { DEFAULT_SOLVE_OPTIONS, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { DEFAULT_SOLVE_OPTIONS, resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import sharedDefaults from '../../../shared/solve-defaults.json';
 import hfOnly from '../../../server/tests/fixtures/cad_default_setup/hf-only.json';
 import lfMfHf from '../../../server/tests/fixtures/cad_default_setup/three-way-lf-mf-hf.json';
@@ -71,11 +71,11 @@ describe('WG default CAD setup parity', () => {
   ])('an untouched rail records the backend default setup: %s', (_name, raw) => {
     const fixture = raw as unknown as Fixture;
     useCadReturnStore.getState().selectBundle(bundleOf(fixture), 'wgl_model');
-    useSolveOptionsStore.setState({ engine: fixture.selection.engine, accuracy: fixture.selection.accuracy });
+    useImportedSolveOptionsStore.setState({ engine: fixture.selection.engine, accuracy: fixture.selection.accuracy });
 
     const built = buildCadProjectSetup(
       useCadReturnStore.getState(),
-      useSolveOptionsStore.getState(),
+      useImportedSolveOptionsStore.getState(),
       useCadPreparationStore.getState(),
       'wgl_model',
     );

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { expandLegacy, toWire, withChannel, withDelayMode } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { buildImportedSubmission, importedSubmissionBlocker, importedSubmissionNotices, undrivenChannels, widenPolarToDerivation } from './importedSubmission';
 
 const bundle = {
@@ -82,10 +82,10 @@ describe('imported solve submission wire', () => {
       hp: { family: 'lr', order: 4, fcHz: 800 },
     }));
     expect(importedSubmissionBlocker()).toBeNull();
-    useSolveOptionsStore.getState().setFrequencyMode('list');
-    useSolveOptionsStore.getState().setFrequencyListText('900, 1000, 2000');
+    useImportedSolveOptionsStore.getState().setFrequencyMode('list');
+    useImportedSolveOptionsStore.getState().setFrequencyListText('900, 1000, 2000');
     expect(importedSubmissionBlocker()).toContain('200 Hz crossover is below the 900 Hz sweep start');
-    useSolveOptionsStore.getState().setFrequencyListText('200, 400, 800');
+    useImportedSolveOptionsStore.getState().setFrequencyListText('200, 400, 800');
     expect(importedSubmissionBlocker()).toBeNull();
     useCadReturnStore.getState().updateCombineSpec((spec) => withChannel(spec, 'drive-hf', {
       hp: { family: 'lr', order: 4, fcHz: 801 },
@@ -120,7 +120,7 @@ describe('imported solve submission wire', () => {
       frequencyCount: 37,
       needsIngest: false,
     });
-    useSolveOptionsStore.getState().setVerbose(true);
+    useImportedSolveOptionsStore.getState().setVerbose(true);
 
     const submission = buildImportedSubmission(useCadReturnStore.getState());
     // The crossover travels as the per-channel v2 spec now. Pinning it inside
@@ -152,7 +152,7 @@ describe('imported solve submission wire', () => {
       driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
       needsIngest: false,
     });
-    useSolveOptionsStore.getState().setEngine('beat-cpu');
+    useImportedSolveOptionsStore.getState().setEngine('beat-cpu');
 
     const options = buildImportedSubmission(useCadReturnStore.getState()).options;
 

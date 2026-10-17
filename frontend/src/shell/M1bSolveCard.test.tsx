@@ -25,7 +25,7 @@ import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetCadSolverFrameStore, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { resetDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { expandLegacy, withPair } from '../results/crossoverSpec';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -443,7 +443,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
   it('acceptance: a Fusion request, settings and engine changed in WG, then Solve uses those choices and retry reverts nothing', async () => {
     await deliver(operation('cmd-fusion', 'needs_user_input', { reason: 'setup_required' }));
     await mount();
-    act(() => { useCadReturnStore.setState({ frequencyStartHz: 80, frequencyEndHz: 12000, frequencyCount: 12 }); useSolveOptionsStore.getState().setEngine('bempp'); });
+    act(() => { useCadReturnStore.setState({ frequencyStartHz: 80, frequencyEndHz: 12000, frequencyCount: 12 }); useImportedSolveOptionsStore.getState().setEngine('bempp'); });
     await pressSolve();
     expect(mocks.submitCadSolve).not.toHaveBeenCalled();
     const [id, press] = mocks.solveCadAgain.mock.calls[0];
@@ -454,7 +454,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     const retry = vi.spyOn(jobsSocket, 'retryJob').mockResolvedValue();
     await act(async () => jobsCoordinatorBridge.getSnapshot().retry('job-child'));
     expect(retry).toHaveBeenCalledWith('job-child');
-    expect(useSolveOptionsStore.getState().engine).toBe('bempp');
+    expect(useImportedSolveOptionsStore.getState().engine).toBe('bempp');
     expect(useCadReturnStore.getState().frequencyCount).toBe(12);
     expect(mocks.solveCadAgain).toHaveBeenCalledOnce();
   });

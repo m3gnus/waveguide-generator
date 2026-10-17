@@ -16,7 +16,7 @@ import {
 } from '../results/crossoverSpec';
 import { useDocumentStore } from './document';
 import { namespaceStorage } from './durableSettings';
-import { useSolveOptionsStore, type SolveAccuracy } from './solveOptions';
+import { seedImportedSolveOptionsFromParametric, useImportedSolveOptionsStore, type SolveAccuracy } from './solveOptions';
 import {
   DEFAULT_CROSSOVER,
   DEFAULT_DRIVE_VOLTAGE_V,
@@ -815,8 +815,8 @@ function saveSolveProfile(state: CadReturnState): void {
     inventory,
     settings: persistedSolveSettings(state),
     solveSelection: {
-      accuracy: useSolveOptionsStore.getState().accuracy,
-      engine: useSolveOptionsStore.getState().engine,
+      accuracy: useImportedSolveOptionsStore.getState().accuracy,
+      engine: useImportedSolveOptionsStore.getState().engine,
     },
   };
   writeStoredSolveProfiles([profile, ...readStoredSolveProfiles().filter((item) => item.key !== key)]);
@@ -826,13 +826,16 @@ function saveSolveProfile(state: CadReturnState): void {
 
 function restoreSolveProfile(bundle: CadReturnBundle, projectLineageId: string | null): PersistedSolveSettings | null {
   const key = currentSolveProfileKey(bundle, projectLineageId);
-  if (!key) return null;
-  const profiles = readStoredSolveProfiles();
+  const profiles = key ? readStoredSolveProfiles() : [];
   const index = profiles.findIndex((profile) => profile.key === key);
-  if (index < 0) return null;
-  const profile = profiles[index];
-  if (!compatibleSourceInventory({ readable: true, sources: profile.inventory }, bundle)) return null;
-  useSolveOptionsStore.setState({ accuracy: 'fast', ...profile.solveSelection });
+  const profile = index < 0 ? undefined : profiles[index];
+  if (!profile || !compatibleSourceInventory({ readable: true, sources: profile.inventory }, bundle)) {
+    // No saved setup for this project: open with a one-way copy of the
+    // parametric options. The copy is made here, once, and never written back.
+    seedImportedSolveOptionsFromParametric();
+    return null;
+  }
+  useImportedSolveOptionsStore.setState({ accuracy: 'fast', ...profile.solveSelection });
   if (index > 0) writeStoredSolveProfiles([profile, ...profiles.filter((_, itemIndex) => itemIndex !== index)]);
   return profile.settings;
 }

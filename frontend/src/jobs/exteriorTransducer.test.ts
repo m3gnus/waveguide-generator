@@ -1,7 +1,7 @@
 import { beforeEach, expect, it } from 'vitest';
 import { exteriorTransducerError, parseExteriorTransducer } from '../stores/exteriorTransducer';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { buildImportedSubmission, exteriorModeBlocker, undrivenChannels } from './importedSubmission';
 import { buildCadProjectSetup } from '../shell/cadSetupPublisher';
 
@@ -10,7 +10,7 @@ const form = { version: 1, motion_axis: [1, 2, 3] as [number, number, number],
 beforeEach(() => { resetCadReturnStore(); resetSolveOptionsStore(); });
 
 function enable() {
-  useSolveOptionsStore.getState().setEngine('beat-metal');
+  useImportedSolveOptionsStore.getState().setEngine('beat-metal');
   useCadReturnStore.setState({ driveChannels: [{ id: 'd', source_ids: ['s'], motion: 'normal' }], combineEnabled: false,
     ingestRecord: { ingest_id: 'fixture', manifest_sha256: 'm', artifact_sha256: 'a', polar_grid_derivation: {}, findings: [] } as never,
     sourceSizesMm: { s: 3 }, needsIngest: false, driveVoltageV: 5.66 });
@@ -19,7 +19,7 @@ function enable() {
 
 it('uses explicit SI values and voltage while omitting legacy LEM', () => {
   enable();
-  expect(exteriorModeBlocker(useCadReturnStore.getState(), useSolveOptionsStore.getState())).toBeNull();
+  expect(exteriorModeBlocker(useCadReturnStore.getState(), useImportedSolveOptionsStore.getState())).toBeNull();
   const wire = buildImportedSubmission();
   expect(wire.geometry.drive_channels[0]).toEqual({ id: 'd', source_ids: ['s'], motion: 'axial', exterior_transducer: form });
   expect(wire.geometry.drive_voltage_v).toBe(5.66);
@@ -43,20 +43,20 @@ it('never silently drops incomplete or unknown saved physics', () => {
 
 it('refuses hybrid jobs, automatic engine fallback and adaptive jobs', () => {
   enable();
-  useSolveOptionsStore.getState().setEngine('auto');
+  useImportedSolveOptionsStore.getState().setEngine('auto');
   expect(() => buildImportedSubmission()).toThrow('Choose BEAT');
-  useSolveOptionsStore.getState().setEngine('beat-cpu');
+  useImportedSolveOptionsStore.getState().setEngine('beat-cpu');
   useCadReturnStore.setState({ driveChannels: [...useCadReturnStore.getState().driveChannels, { id: 'ideal', source_ids: ['other'], motion: 'normal' }] });
   expect(() => buildImportedSubmission()).toThrow('every channel');
   useCadReturnStore.setState({ driveChannels: useCadReturnStore.getState().driveChannels.slice(0, 1) });
-  useSolveOptionsStore.getState().setAdaptiveFrequencySampling(true);
+  useImportedSolveOptionsStore.getState().setAdaptiveFrequencySampling(true);
   expect(() => buildImportedSubmission()).toThrow('adaptive');
 });
 
 it('publishes and restores the exact opt-in setup and voltage', () => {
   enable();
   useCadReturnStore.setState({ selectedBundle: { sources: [{ id: 's', role: 'LF', required: true }] } as never });
-  const setup = buildCadProjectSetup(useCadReturnStore.getState(), useSolveOptionsStore.getState(), undefined, 'lineage')!;
+  const setup = buildCadProjectSetup(useCadReturnStore.getState(), useImportedSolveOptionsStore.getState(), undefined, 'lineage')!;
   expect(setup.setup.geometry.drive_channels).toEqual(buildImportedSubmission().geometry.drive_channels);
   expect(setup.setup.geometry.drive_voltage_v).toBe(5.66);
 });
@@ -79,7 +79,7 @@ it('passes and persists v2 physical models with a declared Sd', () => {
   expect(exteriorTransducerError(extended)).toBeNull();
   expect(buildImportedSubmission().geometry.drive_channels[0].exterior_transducer).toEqual(extended);
   useCadReturnStore.setState({ selectedBundle: { sources: [{ id: 's', role: 'LF', required: true }] } as never });
-  const setup = buildCadProjectSetup(useCadReturnStore.getState(), useSolveOptionsStore.getState(), undefined, 'lineage')!;
+  const setup = buildCadProjectSetup(useCadReturnStore.getState(), useImportedSolveOptionsStore.getState(), undefined, 'lineage')!;
   const savedChannels = setup.setup.geometry.drive_channels as Array<{ exterior_transducer: unknown }>;
   const saved = JSON.parse(JSON.stringify(savedChannels[0].exterior_transducer));
   expect(parseExteriorTransducer(saved)).toEqual(extended);
@@ -136,7 +136,7 @@ it('restores v2 driver options through the persisted CAD profile parser', () => 
 it.each(['auto', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'] as const)(
   'admits full FEM driver submissions and setup publication on %s', (engine) => {
     enable();
-    useSolveOptionsStore.getState().setEngine(engine);
+    useImportedSolveOptionsStore.getState().setEngine(engine);
     useCadReturnStore.setState({
       ingestRecord: { ...useCadReturnStore.getState().ingestRecord!,
         evidence: { fem_regions: [{ region_id: 'air' }] } },
@@ -144,21 +144,21 @@ it.each(['auto', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'] as const)(
       driveChannels: [...useCadReturnStore.getState().driveChannels,
         { id: 'ideal-fem', source_ids: [], motion: 'normal' }],
     });
-    expect(exteriorModeBlocker(useCadReturnStore.getState(), useSolveOptionsStore.getState())).toBeNull();
+    expect(exteriorModeBlocker(useCadReturnStore.getState(), useImportedSolveOptionsStore.getState())).toBeNull();
     expect(buildImportedSubmission().options.engine).toBe(engine);
     useCadReturnStore.setState({ selectedBundle: { sources: [{ id: 's', role: 'LF', required: true }] } as never });
-    const setup = buildCadProjectSetup(useCadReturnStore.getState(), useSolveOptionsStore.getState(), undefined, 'lineage');
+    const setup = buildCadProjectSetup(useCadReturnStore.getState(), useImportedSolveOptionsStore.getState(), undefined, 'lineage');
     expect(setup).not.toBeNull();
     expect(setup!.setup.geometry.drive_channels).toHaveLength(2);
     useCadReturnStore.setState({ exteriorOnly: true });
-    expect(exteriorModeBlocker(useCadReturnStore.getState(), useSolveOptionsStore.getState())).not.toBeNull();
+    expect(exteriorModeBlocker(useCadReturnStore.getState(), useImportedSolveOptionsStore.getState())).not.toBeNull();
   },
 );
 
 it.each(['auto', 'beat-cuda', 'beat-rocm'] as const)('keeps non-FEM driver restrictions on %s', (engine) => {
   enable();
-  useSolveOptionsStore.getState().setEngine(engine);
-  expect(exteriorModeBlocker(useCadReturnStore.getState(), useSolveOptionsStore.getState()))
+  useImportedSolveOptionsStore.getState().setEngine(engine);
+  expect(exteriorModeBlocker(useCadReturnStore.getState(), useImportedSolveOptionsStore.getState()))
     .toBe('Choose BEAT CPU or BEAT Metal for coupled exterior drivers.');
 });
 

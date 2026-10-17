@@ -14,6 +14,7 @@ import {
 import { capabilityFingerprint } from './capabilityFingerprint';
 import { preferencesStore } from '../prefs/preferences';
 import { useSolveOptionsStore } from '../stores/solveOptions';
+import { useScopedSolveOptions } from '../stores/solveOptionsContext';
 
 /**
  * One shared capability query for the whole app.
@@ -171,8 +172,8 @@ function qualificationPending(engine: EngineCapability): boolean {
 
 /** Full capability record for controls whose support is version-dependent. */
 export function useActiveBackendCapability(): EngineCapability | null {
-  const engine = useSolveOptionsStore((state) => state.engine);
-  const accuracy = useSolveOptionsStore((state) => state.accuracy);
+  const engine = useScopedSolveOptions((state) => state.engine);
+  const accuracy = useScopedSolveOptions((state) => state.accuracy);
   const { engines, engineSelection } = useCapabilities();
   return activeBackendCapability(accuracyEngine(engine, accuracy, engines), engines, engineSelection);
 }
@@ -186,8 +187,8 @@ export function accuracyEngine(engine: string, accuracy: 'fast' | 'accurate', en
 
 /** Candidates the server may select for the current explicit/AUTO request. */
 export function usePlannedBackendCapabilities(): readonly EngineCapability[] {
-  const engine = useSolveOptionsStore((state) => state.engine);
-  const accuracy = useSolveOptionsStore((state) => state.accuracy);
+  const engine = useScopedSolveOptions((state) => state.engine);
+  const accuracy = useScopedSolveOptions((state) => state.accuracy);
   const { engines, engineSelection } = useCapabilities();
   return plannedBackendCapabilities(accuracyEngine(engine, accuracy, engines), engines, engineSelection);
 }

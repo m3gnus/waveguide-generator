@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { CAPABILITIES_QUERY_KEY } from './useCapabilities';
 import { useImportedSolvePlan } from './useImportedSolvePlan';
 import { capabilityFingerprint } from './capabilityFingerprint';
@@ -39,7 +39,7 @@ it('hides the previous CAD plan on a select change followed immediately by Solve
   const root = createRoot(host);
   function Consumer() {
     const { plan, isPending } = useImportedSolvePlan(true);
-    const options = useSolveOptionsStore();
+    const options = useImportedSolveOptionsStore();
     return <>
       <select value={options.engine} onChange={(event) => options.setEngine(event.target.value)}>
         <option value="auto">AUTO</option><option value="bempp">BEMPP</option>

@@ -8,7 +8,7 @@ import { resetCadReturnStore, useCadReturnStore } from '../../stores/cadReturn';
 import { rememberCadProject } from '../../stores/cadProjectMemory';
 import { resetDesignStore } from '../../stores/design';
 import { resetDocumentStore } from '../../stores/document';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../../stores/solveOptions';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { restoreRememberedCadProject, observeRememberedCadProject, restoreCadJobModel, refreshChannelDriverBases } from './restores';
@@ -74,7 +74,8 @@ describe('job and remembered-project restores without the coordinator', () => {
     });
     expect(useCadReturnStore.getState().isIngestSettled()).toBe(false);
     expect(useCadReturnStore.getState().selectedBundle?.readable).toBe(false);
-    expect(useSolveOptionsStore.getState().frequencyListText).toBe('100\n500\n1000');
+    expect(useImportedSolveOptionsStore.getState().frequencyListText).toBe('100\n500\n1000');
+    expect(useSolveOptionsStore.getState().frequencyListText).toBe('');
     expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
   });
@@ -250,6 +251,21 @@ it('does not refresh drivers into a newer project with the same preset', async (
 });
 
 
+describe('restoring a CAD run and the parametric options', () => {
+  it('leaves the persisted parametric store byte-identical', async () => {
+    useSolveOptionsStore.getState().setFrequencySpacing('linear');
+    useSolveOptionsStore.getState().updatePolar({ distance: 4.5 });
+    const before = JSON.stringify(useSolveOptionsStore.getState().options());
+    const stateBefore = JSON.stringify(useSolveOptionsStore.getState());
+    const storedBefore = JSON.stringify(useSolveOptionsStore.persist.getOptions().partialize?.(useSolveOptionsStore.getState()));
+    expect(await restoreCadJobModel(job(), {}, archiveFetcher)).toBe(true);
+    expect(JSON.stringify(useSolveOptionsStore.getState().options())).toBe(before);
+    expect(JSON.stringify(useSolveOptionsStore.getState())).toBe(stateBefore);
+    expect(JSON.stringify(useSolveOptionsStore.persist.getOptions().partialize?.(useSolveOptionsStore.getState()))).toBe(storedBefore);
+    expect(useImportedSolveOptionsStore.getState().frequencyMode).toBe('list');
+  });
+});
+
 describe('shared historical restoration transaction', () => {
   it.each(['request', 'record', 'viewport'] as const)('blocks a ready A while B is pending at %s and after failure', async stage => {
     expect(await restoreCadJobModel(job(), {}, archiveFetcher)).toBe(true);
@@ -284,7 +300,7 @@ describe('shared historical restoration transaction', () => {
     useCadReturnStore.getState().setChannelDriverPreset('drive-hf', {
       id: 'today', label: 'Today', source: 'database', kind: 'cd', z_ohm: 8, xo_min_hz: null, base: { re_ohm: 99 },
     });
-    useSolveOptionsStore.setState({ engine: 'bempp', accuracy: 'fast', adaptiveFrequencySampling: false });
+    useImportedSolveOptionsStore.setState({ engine: 'bempp', accuracy: 'fast', adaptiveFrequencySampling: false });
     const frozen = archivedRequest();
     frozen.geometry.drive_channels![0].driver = { re_ohm: 6, sd_cm2: 50, bl_t_m: 7, mms_g: 10, cms_m_per_n: .001 };
     const request = { ...frozen, options: { ...frozen.options, adaptive_frequency_sampling: true,
@@ -293,7 +309,7 @@ describe('shared historical restoration transaction', () => {
       ? json({ effective_request: request }) : archiveFetcher(input));
     expect(await restoreCadJobModel(job(), {}, fetcher)).toBe(true);
     expect(fetcher.mock.calls.some(([input]) => String(input).includes('/drivers/'))).toBe(false);
-    expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-cpu', accuracy: 'accurate',
+    expect(useImportedSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-cpu', accuracy: 'accurate',
       adaptiveFrequencySampling: true, groundPlane: { enabled: true, height_m: 1.2 } });
     expect(useCadReturnStore.getState().channelDrivers['archive-hf'].fields.re_ohm).toBe(6);
     expect(buildImportedSubmission()).toEqual(request);
@@ -301,14 +317,14 @@ describe('shared historical restoration transaction', () => {
     expect(setup?.setup.options).toEqual(request.options);
     expect(setup?.setup.geometry).toMatchObject({ drive_channels: [{ driver: { re_ohm: 6 } }] });
     // Background global hydration is not an explicit edit to historical inputs.
-    useSolveOptionsStore.setState({ engine: 'bempp' });
+    useImportedSolveOptionsStore.setState({ engine: 'bempp' });
     expect(buildImportedSubmission()).toEqual(request);
     workspaceModeStore.setMode('parametric');
     resetDesignStore();
     workspaceModeStore.setMode('cad');
     expect(buildImportedSubmission()).toEqual(request);
     // A deliberate edit starts from the restored setup and becomes submittable.
-    useSolveOptionsStore.getState().setEngine('beat-cpu');
+    useImportedSolveOptionsStore.getState().setEngine('beat-cpu');
     useCadReturnStore.getState().setDriveVoltage(4);
     expect(buildCadProjectSetup(undefined, undefined, undefined, 'manual')?.setup.geometry.drive_voltage_v).toBe(4);
   });

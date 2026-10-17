@@ -18,7 +18,7 @@ import { cadReceiptsStore } from '../stores/cadReceipts';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetDesignStore, useDesignStore } from '../stores/design';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
@@ -485,7 +485,7 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     const posted = recordOperationRequests({ setupEngine: 'metal' });
-    const engineBefore = useSolveOptionsStore.getState().engine;
+    const engineBefore = useImportedSolveOptionsStore.getState().engine;
     const jobManager = jobsSocket as unknown as { snapshot: JobsSnapshot; listeners: Set<() => void> };
     const previousJobs = jobManager.snapshot;
     jobManager.snapshot = {
@@ -558,7 +558,7 @@ describe('CadLinkPanel', () => {
       { path: '/api/jobs/op-engine/dismiss', body: {} },
     ]);
     jobManager.snapshot = previousJobs;
-    expect(useSolveOptionsStore.getState().engine).toBe(engineBefore);
+    expect(useImportedSolveOptionsStore.getState().engine).toBe(engineBefore);
   });
 
   it('recovers missing job preparation details and approves its blocking findings on that preparation only', async () => {
@@ -2333,8 +2333,8 @@ describe('CadLinkPanel', () => {
     expect(range.options).toMatchObject({ frequency_range: [250, 12_000], num_frequencies: 31 });
     expect(range.options).not.toHaveProperty('frequencies_hz');
 
-    useSolveOptionsStore.getState().setFrequencyMode('list');
-    useSolveOptionsStore.getState().setFrequencyListText('300 700 1500');
+    useImportedSolveOptionsStore.getState().setFrequencyMode('list');
+    useImportedSolveOptionsStore.getState().setFrequencyListText('300 700 1500');
     const list = buildImportedSubmission(useCadReturnStore.getState());
     expect(list.options.frequencies_hz).toEqual([300, 700, 1_500]);
     expect(list.options).not.toHaveProperty('frequency_range');

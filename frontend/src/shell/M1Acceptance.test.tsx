@@ -23,7 +23,7 @@ import { type CadReturnIngestRecord } from '../api/cadlink';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
@@ -556,10 +556,10 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
   });
 
   it('keeps the result bound to the settings submitted when settings change during the run', async () => {
-    act(() => useSolveOptionsStore.getState().setEngine('metal'));
+    act(() => useImportedSolveOptionsStore.getState().setEngine('metal'));
     const operationId = await pressSolve();
     const submitted = mocks.createSetupRevision.mock.calls[0][0] as CadSolveSetup;
-    act(() => useSolveOptionsStore.getState().setEngine('bempp'));
+    act(() => useImportedSolveOptionsStore.getState().setEngine('bempp'));
     await deliver(operation(operationId, 'accepted', { jobId: 'job-1', setupRevisionId: 'wgs_1', updatedAt: '2026-09-21T10:00:05Z' }));
     await jobs([cadJob('job-1', 'wgi_first')]);
 

@@ -380,7 +380,14 @@ const SOLVE_OPTION_EDITS: ReadonlyArray<keyof SolveOptionsStore> = [
   'setFrequencyMode', 'setFrequencyListText', 'updatePolar', 'updateGroundPlane', 'toggleAxis',
 ];
 
-export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, get) => withEditSignals(get, {
+export type { SolveOptionsStore };
+
+function solveOptionsState(
+  set: (partial: Partial<SolveOptionsStore> | ((state: SolveOptionsStore) => Partial<SolveOptionsStore>)) => void,
+  get: () => SolveOptionsStore,
+  source: string,
+): SolveOptionsStore {
+  return withEditSignals(get, {
   ...defaultSolveOptions(),
   setEngine: (engine) => set({ engine, ...(engine === 'auto' ? {} : { accuracy: 'fast' }) }),
   setAccuracy: (accuracy) => set({ accuracy, engine: 'auto' }),
@@ -429,7 +436,20 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
     if (frequencies === null) throw new Error(`Frequency list is not usable: ${error}`);
     return { ...base, frequencies_hz: frequencies };
   },
-}, SOLVE_OPTION_EDITS, 'solveOptions'), {
+  }, SOLVE_OPTION_EDITS, source);
+}
+
+/**
+ * The one definition of the solve-options store. The persisted parametric store
+ * and the imported-model store are both made from it, so they cannot drift; only
+ * the parametric one is written to durable storage.
+ */
+export function createImportedSolveOptionsStore() {
+  return create<SolveOptionsStore>()((set, get) => solveOptionsState(set, get, 'importedSolveOptions'));
+}
+
+export function createPersistedSolveOptionsStore() {
+  return create<SolveOptionsStore>()(persist((set, get) => solveOptionsState(set, get, 'solveOptions'), {
   name: 'solveOptions',
   // Reads and writes stay synchronous against the durable cache, so the store
   // still initialises during module evaluation; the server's copy arrives
@@ -446,10 +466,61 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
   // not what the next session loads.
   partialize: (state) => normalizePersistedSolveOptions(state),
   merge: (persisted, current) => ({ ...current, ...normalizePersistedSolveOptions(persisted, current) }),
-}));
+  }));
+}
+
+/** The parametric design's solve options: persisted, machine-local. */
+export const useSolveOptionsStore = createPersistedSolveOptionsStore();
+
+/**
+ * The solve options of an imported model (file mesh or CAD). Never persisted
+ * and never written to the parametric store: an imported flow opens it from the
+ * model's saved setup, or from a one-way copy of the parametric options.
+ */
+export const useImportedSolveOptionsStore = createImportedSolveOptionsStore();
+
+/** Replace the imported options wholesale; the parametric store is untouched. */
+export function seedImportedSolveOptions(options: Partial<PersistedSolveOptions>): void {
+  useImportedSolveOptionsStore.setState({ ...defaultSolveOptions(), ...structuredClone(options) });
+}
+
+/**
+ * Put a recorded solve's options (the wire shape) into the imported instance.
+ * Fields the record does not state keep the instance's current value.
+ */
+export function applyWireOptionsToImportedSolveOptions(options: Partial<SolveOptions>): void {
+  const explicit = Array.isArray(options.frequencies_hz) && options.frequencies_hz.length > 0
+    ? options.frequencies_hz
+    : null;
+  const polar = polarUiFromConfig(options.polar_config);
+  useImportedSolveOptionsStore.setState((state) => ({
+    engine: options.engine ?? state.engine,
+    accuracy: options.accuracy ?? 'fast',
+    adaptiveFrequencySampling: options.adaptive_frequency_sampling === true,
+    solverMode: options.solver_mode === 'auto' ? 'auto' : 'full_3d',
+    groundPlane: options.ground_plane ?? { enabled: false, axis: 'y', height_m: 0 },
+    symmetry: SYMMETRY_MODES.includes(options.symmetry as SymmetryMode)
+      ? options.symmetry as SymmetryMode
+      : state.symmetry,
+    meshValidationMode: MESH_VALIDATION_MODES.includes(options.mesh_validation_mode as MeshValidationMode)
+      ? options.mesh_validation_mode as MeshValidationMode
+      : state.meshValidationMode,
+    verbose: options.verbose ?? state.verbose,
+    frequencySpacing: options.frequency_spacing === 'linear' ? 'linear' : 'log',
+    frequencyMode: explicit ? 'list' : 'range',
+    frequencyListText: explicit ? explicit.join('\n') : '',
+    polar: polar ?? state.polar,
+  }));
+}
+
+/** One-way copy of the current parametric options into the imported instance. */
+export function seedImportedSolveOptionsFromParametric(): void {
+  seedImportedSolveOptions(normalizePersistedSolveOptions(useSolveOptionsStore.getState()));
+}
 
 export function resetSolveOptionsStore(): void {
   useSolveOptionsStore.setState(defaultSolveOptions());
+  useImportedSolveOptionsStore.setState(defaultSolveOptions());
 }
 
 // The server's copy is authoritative, so re-read once it has replaced the cache.
