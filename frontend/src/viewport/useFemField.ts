@@ -82,7 +82,7 @@ export function useFemPlane(jobId: string | null, field: DecodedFemField | null,
     if (!key || !jobId || !field || !plane) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      void fetchFemPlane(jobId, plane, field.frequencyHz, field.payload.channel_id, scope === 'combined' ? 'exterior' : scope, quantity, controller.signal)
+      void fetchFemPlane(jobId, plane, field.frequencyHz, field.payload.channel_id, scope, quantity, controller.signal)
         .then((value) => { if (!controller.signal.aborted) { setLoaded({ key, value }); setLoading(false); } })
         .catch((reason: unknown) => { if (!controller.signal.aborted) {
           setError(reason instanceof Error ? reason.message : 'Coupled plane could not be loaded'); setLoading(false);

@@ -25,9 +25,12 @@ describe('masked coupled plane', () => {
 
 afterEach(() => vi.restoreAllMocks());
 
-it('drops sub-grid solid crossings and every mixed interior/exterior cell', () => {
+it('drops sub-grid wall crossings, solids and interior-only cells, but keeps aperture cells', () => {
   expect(decodeFemPlane({ ...payload(), crosses_body: encode(new Uint8Array([1])) }).positions.length).toBe(0);
-  expect(decodeFemPlane({ ...payload(), region_class: encode(new Uint8Array([2, 1, 2, 2])) }).positions.length).toBe(0);
+  // Across an aperture the pressure is continuous: the cell is drawn, so
+  // the exterior grid meets the exact interior cut without a gap.
+  expect(decodeFemPlane({ ...payload(), region_class: encode(new Uint8Array([2, 1, 2, 2])) }).positions.length).toBe(18);
+  expect(decodeFemPlane({ ...payload(), region_class: encode(new Uint8Array([2, 0, 2, 2])) }).positions.length).toBe(0);
   expect(decodeFemPlane({ ...payload(), region_class: encode(new Uint8Array([1, 1, 1, 1])) }).positions.length).toBe(0);
   expect(() => decodeFemPlane({ ...payload(), crosses_body: '' })).toThrow('grid');
 });

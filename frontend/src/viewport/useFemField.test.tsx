@@ -136,11 +136,11 @@ it('coupled plane requests debounce, abort and discard obsolete results', async 
     pressure_imag: btoa(String.fromCharCode(...new Uint8Array(new Float32Array(4).buffer))),
     region_class: btoa(String.fromCharCode(2, 2, 2, 2)), crosses_body: btoa(String.fromCharCode(0)),
     valid_mask: btoa(String.fromCharCode(1, 1, 1, 1)), frequency_hz: 100, channel_id: 'front',
-    scope: 'exterior', quantity: 'pressure', phasor_convention: 'exp(-i omega t)', unit: 'Pa' }));
+    scope: 'combined', quantity: 'pressure', phasor_convention: 'exp(-i omega t)', unit: 'Pa' }));
   try {
     act(() => root.render(<PlaneReader jobId="one" scope="combined" quantity="pressure"/>));
     await act(async () => vi.advanceTimersByTimeAsync(250));
-    expect(JSON.parse(fetchSpy.mock.calls[0][1]!.body as string).scope).toBe('exterior');
+    expect(JSON.parse(fetchSpy.mock.calls[0][1]!.body as string).scope).toBe('combined');
     act(() => root.render(<PlaneReader jobId="one" scope="combined" quantity="pressure" x={1}/>));
     expect(pending[0].signal.aborted).toBe(true); expect(currentPlane.field).toBeNull();
     await act(async () => vi.advanceTimersByTimeAsync(250));

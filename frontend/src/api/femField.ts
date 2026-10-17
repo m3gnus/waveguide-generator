@@ -80,9 +80,11 @@ export function decodeFemPlane(payload: {
   for (let j = 0; j < payload.ny - 1; j++) for (let i = 0; i < payload.nx - 1; i++) {
     const a = j * payload.nx + i, b = a + 1, c = a + payload.nx, d = c + 1;
     const corners = [a, b, c, d];
-    if (crosses[j * (payload.nx - 1) + i] || !corners.every((v) => valid[v] && regions[v] === regions[a])) continue;
-    // FEM polygons already represent interior cuts exactly; the grid is air only.
-    if (regions[a] !== 2) continue;
+    if (crosses[j * (payload.nx - 1) + i] || !corners.every((v) => valid[v] && regions[v] !== 0)) continue;
+    // FEM polygons already represent interior cuts exactly; the grid draws air,
+    // including cells across an aperture (pressure is continuous there), so the
+    // exterior field meets the interior cut without a gap.
+    if (!corners.some((v) => regions[v] === 2)) continue;
     indices.push(a, b, d, a, d, c);
   }
   return { positions: Float32Array.from(indices.flatMap((i) => [points[i * 3], points[i * 3 + 1], points[i * 3 + 2]])),

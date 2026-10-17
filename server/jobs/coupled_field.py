@@ -52,6 +52,27 @@ def sample_interior(xyz, tetrahedra, pressure, points, frequency, density, check
     return values, velocity, inside
 
 
+def wall_triangles(triangles, payload, rotation):
+    """The retained skin without the FEM interface: the apertures are open air.
+
+    Pressure is continuous across an interface, so a plane cell straddling an
+    aperture is not cut by a wall. Interface triangles are the FEM region's
+    own ``kind=interface`` surfaces, matched to the conforming skin by centroid.
+    """
+    from scipy.spatial import cKDTree
+
+    xyz = _decode(payload["points_mm"], "<f4", 3).astype(float) / 1000
+    blocks = [_decode(surface["triangles"], "<u4", 3) for surface in payload.get("surfaces", ())
+              if "kind=interface" in str(surface.get("name", "")).split("|")]
+    if not blocks or not len(triangles):
+        return triangles
+    interface = (xyz[np.concatenate(blocks)] @ rotation.T).mean(axis=1)
+    centroids = triangles.mean(axis=1)
+    # Float32 display coordinates: a micrometre is far below any element size.
+    distance, _ = cKDTree(interface).query(centroids, distance_upper_bound=1e-6)
+    return triangles[~np.isfinite(distance)]
+
+
 def inside_bodies(mesh, points, symmetry, check=lambda: None):
     """Indexed ray parity, including the closed symmetry images."""
     from server.jobs.body_index import RAY_DIRECTION, SkinRayIndex, skin_triangles
@@ -101,7 +122,7 @@ def evaluate_coupled_plane(store, job_id, request, *, evaluator=None, timeout_se
         body = indexes.ray(check).query(image_points, check)[0]
         exterior = ~interior & ~body
         region_class[exterior] = 2
-        crosses = crossing_cells(triangles, request.plane, rotation, check)
+        crosses = crossing_cells(wall_triangles(triangles, payload, rotation), request.plane, rotation, check)
         if exterior.any():
             if evaluator is None:
                 from server.solver.beat_field import evaluate_exterior_from_traces

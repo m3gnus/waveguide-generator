@@ -410,6 +410,49 @@ def test_subgrid_wall_blocks_cells_even_with_all_four_corners_exterior():
     assert crossing_cells(corners[faces], request.plane, np.eye(3)).tolist() == [True]
 
 
+@pytest.mark.parametrize("kind", ["interface", "rigid"])
+def test_an_fem_aperture_does_not_block_cells_but_a_wall_does(kind):
+    from server.jobs.body_index import crossing_cells
+    from server.jobs.coupled_field import wall_triangles
+    request = plane_request()
+    request.plane.nx = request.plane.ny = 2
+    # The same 2 mm slab inside one cell, in a rotated solver frame. As the
+    # FEM region's interface it is open air; as its rigid wall it blocks.
+    corners = np.array([[.014, 0, 0], [.016, 0, 0], [.014, .01, 0], [.016, .01, 0],
+                        [.014, 0, .01], [.016, 0, .01], [.014, .01, .01], [.016, .01, .01]])
+    faces = np.array([[0, 2, 6], [0, 6, 4], [1, 5, 7], [1, 7, 3], [0, 4, 5], [0, 5, 1],
+                      [2, 3, 7], [2, 7, 6], [0, 1, 3], [0, 3, 2], [4, 6, 7], [4, 7, 5]])
+    rotation = np.array([[0., -1, 0], [1, 0, 0], [0, 0, 1]])
+    skin = (corners @ rotation.T)[faces]
+    encode = lambda array, dtype: base64.b64encode(np.ascontiguousarray(array, dtype=dtype).tobytes()).decode()
+    payload = {"points_mm": encode(corners * 1000, "<f4"),
+               "surfaces": [{"name": f"wg-fem-v1|region=r|group=g|kind={kind}", "triangles": encode(faces, "<u4")}]}
+    walls = wall_triangles(skin, payload, rotation)
+    assert len(walls) == (0 if kind == "interface" else len(skin))
+    assert crossing_cells(walls, request.plane, rotation).tolist() == [kind != "interface"]
+
+
+def test_cells_across_a_box_regions_aperture_are_open_but_its_walls_still_block():
+    from server.jobs.body_index import crossing_cells
+    from server.jobs.coupled_field import wall_triangles
+    request = plane_request()
+    request.plane.origin_m = [.0155, .003, .002]
+    # A 10 mm box region whose x = 10 mm face is its aperture. The plane
+    # z = 2 mm meets that face inside the second column of cells only.
+    corners = np.array([[x, y, z] for x in (0, .01) for y in (0, .01) for z in (0, .01)])
+    quads = {"x0": (0, 1, 3, 2), "x1": (4, 6, 7, 5), "y0": (0, 4, 5, 1), "y1": (2, 3, 7, 6),
+             "z0": (0, 2, 6, 4), "z1": (1, 5, 7, 3)}
+    faces = {name: np.array([[a, b, c], [a, c, d]]) for name, (a, b, c, d) in quads.items()}
+    skin = corners[np.concatenate(list(faces.values()))]
+    encode = lambda array, dtype: base64.b64encode(np.ascontiguousarray(array, dtype=dtype).tobytes()).decode()
+    surfaces = [{"name": f"wg-fem-v1|region=r|group={name}|kind={'interface' if name == 'x1' else 'rigid'}",
+                 "triangles": encode(block, "<u4")} for name, block in faces.items()]
+    payload = {"points_mm": encode(corners * 1000, "<f4"), "surfaces": surfaces}
+    blocked = crossing_cells(skin, request.plane, np.eye(3)).reshape(2, 6)
+    assert blocked[:, 1].all() and blocked.sum() == 2
+    assert not crossing_cells(wall_triangles(skin, payload, np.eye(3)), request.plane, np.eye(3)).any()
+
+
 def test_float32_velocity_stencil_reuses_base_mask_and_resolves_remote_points(stored, monkeypatch):
     from server.jobs.body_index import SkinRayIndex
     store, _, _, _, _ = stored
