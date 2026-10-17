@@ -45,7 +45,8 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('standalone imported mesh', () => {
   it('saves and restores a prepared setup before any Solve', async () => {
-    useMeshImportStore.setState({ registered: record, motions: { group_2: 'axial' }, startHz: 250, endHz: 8000, count: 17 });
+    useMeshImportStore.setState({ registered: record, motions: { group_2: 'axial' } });
+    useImportedSolveOptionsStore.getState().setSweep({ startHz: 250, endHz: 8000, count: 17 });
     importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
     const expected = fileMeshSubmission();
     const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_saved' }));
@@ -64,17 +65,17 @@ describe('standalone imported mesh', () => {
     importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
     const wait = deferred<Response>();
     const saving = saveMeshSetup(vi.fn(() => wait.promise));
-    useMeshImportStore.setState({ count: 17 });
+    useImportedSolveOptionsStore.getState().setSweep({ count: 17 });
     wait.resolve(response({ revision_id: 'wgs_old' }));
     await saving;
     expect(useMeshImportStore.getState().notice).toContain('current edits are not saved');
     await saveMeshSetup(vi.fn(async () => response({ revision_id: 'wgs_new' })));
     expect(useMeshImportStore.getState().notice).toContain('Mesh setup saved.');
-    useMeshImportStore.setState({ count: 19 });
+    useImportedSolveOptionsStore.getState().setSweep({ count: 19 });
     expect(useMeshImportStore.getState().notice).toBeNull();
   });
   it('tracks borrowed engine and accuracy changes during and after Save', async () => {
-    useMeshImportStore.setState({ registered: record, engine: null, accuracy: null });
+    useMeshImportStore.setState({ registered: record });
     importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
     const wait = deferred<Response>();
     const saving = saveMeshSetup(vi.fn(() => wait.promise));
@@ -124,6 +125,41 @@ describe('standalone imported mesh', () => {
       inclination: 30, observation_origin: 'throat', spherical_sampling: true, field_plane: false,
     });
     expect(JSON.stringify(useSolveOptionsStore.getState().options())).toBe(parametricBefore);
+  });
+
+  it('honours list-mode frequencies and range-mode edits in the submitted request', async () => {
+    useMeshImportStore.setState({ registered: record });
+    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+    const imported = useImportedSolveOptionsStore.getState();
+    imported.setSweep({ startHz: 120, endHz: 4000, count: 9 });
+    expect(fileMeshSubmission().options).toMatchObject({ frequency_range: [120, 4000], num_frequencies: 9 });
+    imported.setFrequencyMode('list');
+    imported.setFrequencyListText('300 700 1500');
+    const listed = fileMeshSubmission().options;
+    expect(listed.frequencies_hz).toEqual([300, 700, 1500]);
+    expect(listed).not.toHaveProperty('frequency_range');
+    imported.setFrequencyListText('not a list');
+    expect(() => fileMeshSubmission()).toThrow('Frequency list is not usable');
+    imported.setFrequencyMode('range');
+    imported.setSweep({ count: 1 });
+    expect(() => fileMeshSubmission()).toThrow('2–401');
+  });
+
+  it('restores an old saved file setup that carried a range and count as the same frequencies', async () => {
+    useMeshImportStore.setState({ registered: record });
+    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+    const saved = fileMeshSubmission();
+    const { type: _t, ingest_id: _i, manifest_sha256: _m, artifact_sha256: _a, acknowledged_findings: _f, ...geometry } = saved.geometry;
+    // An old setup: the range and count were stored in the options, and nothing else about the sweep.
+    const options = { ...saved.options, frequency_range: [210, 6300] as [number, number], num_frequencies: 23 };
+    useMeshImportStore.setState(initial, true);
+    importedMeshStore.clear();
+    resetSolveOptionsStore();
+    localStorage.setItem('wg-saved-mesh-setup', record.ingest_id);
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => response(String(url).endsWith('/setup') ? { setup: { geometry, options } } : record));
+    expect(await restoreSavedMeshSetup(fetcher as unknown as typeof fetch)).toBe(true);
+    expect(useImportedSolveOptionsStore.getState()).toMatchObject({ sweepStartHz: 210, sweepEndHz: 6300, sweepCount: 23, frequencyMode: 'range' });
+    expect(fileMeshSubmission().options).toMatchObject({ frequency_range: [210, 6300], num_frequencies: 23 });
   });
 
   it('opens a new file with a one-way copy of the parametric options', async () => {
@@ -206,7 +242,8 @@ describe('standalone imported mesh', () => {
   });
 
   it('recovers the same ingest and pending press after a reload, without another registration', async () => {
-    useMeshImportStore.setState({ registered: record, motions: { group_2: 'axial' }, startHz: 250, endHz: 8000, count: 17 });
+    useMeshImportStore.setState({ registered: record, motions: { group_2: 'axial' } });
+    useImportedSolveOptionsStore.getState().setSweep({ startHz: 250, endHz: 8000, count: 17 });
     importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
     const original = fileMeshSubmission();
     const press = fileSolvePress(original, 'lost response');
@@ -287,7 +324,7 @@ describe('portable mesh replay', () => {
     expect(await restoreMeshImport(job, fetcher)).toBe(true);
     expect(fetcher.mock.calls[0][0]).toBe('/api/jobs/saved-run/requests');
     expect(fileMeshSubmission()).toEqual(request);
-    expect(useMeshImportStore.getState()).toMatchObject({ startHz: 137, endHz: 3987, count: 3 });
+    expect(useImportedSolveOptionsStore.getState()).toMatchObject({ sweepStartHz: 137, sweepEndHz: 3987, sweepCount: 3, frequencyMode: 'list' });
     useImportedSolveOptionsStore.setState({ engine: 'bempp' });
     expect(fileMeshSubmission()).toEqual(request);
   });
@@ -331,11 +368,12 @@ describe('portable mesh replay', () => {
   it.each(['local', 'global'] as const)('ends exact replay on a %s setting edit', async kind => {
     const request = exactRequest();
     await loadMeshReplay('{}', vi.fn(async () => response({ record, request })));
-    if (kind === 'local') useMeshImportStore.setState({ count: 21 });
+    if (kind === 'local') useMeshImportStore.setState({ motions: { group_2: 'axial' } });
     else useImportedSolveOptionsStore.getState().updatePolar({ distance: 9 });
     expect(useMeshImportStore.getState().exactSubmission).toBeNull();
     expect(useMeshImportStore.getState().notice).toContain('starts a new setup');
-    expect(fileMeshSubmission().options.frequencies_hz).toBeUndefined();
+    // The restored list is the imported options' own, so it carries over to the new setup.
+    expect(fileMeshSubmission().options.frequencies_hz).toEqual([137, 211, 3987]);
   });
 
   it('keeps exact replay through an edit to the parametric options', async () => {
@@ -364,7 +402,7 @@ describe('portable mesh replay', () => {
     else useImportedSolveOptionsStore.getState().setAccuracy('fast');
     const options = fileMeshSubmission().options;
     expect(options.engine).toBe(control === 'engine' ? 'bempp' : 'auto');
-    expect(options.accuracy).toBe('fast');
+    expect(options.accuracy).toBeUndefined();
     expect(useMeshImportStore.getState().notice).toContain('starts a new setup');
   });
 

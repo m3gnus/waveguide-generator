@@ -4,9 +4,8 @@ import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
-import { DEFAULT_SWEEP } from './solveDefaults';
 import {
-  applyWireOptionsToImportedSolveOptions, polarConfigFromUi, seedImportedSolveOptionsFromParametric,
+  applyWireOptionsToImportedSolveOptions, seedImportedSolveOptionsFromParametric,
   useImportedSolveOptionsStore, type SolveOptions,
 } from './solveOptions';
 import type { ImportedSolveSubmission } from '../jobs/actions';
@@ -28,11 +27,6 @@ interface MeshImportState {
   selected: number[];
   registered: RegisteredMesh | null;
   motions: Record<string, 'normal' | 'axial'>;
-  engine: string | null;
-  accuracy: 'fast' | 'accurate' | null;
-  startHz: number;
-  endHz: number;
-  count: number;
   busy: boolean;
   error: string | null;
   notice: string | null;
@@ -41,17 +35,21 @@ interface MeshImportState {
 }
 const initial: MeshImportState = {
   filename: '', original: null, summary: null, units: '', forward: '+z', up: '+y', selected: [],
-  registered: null, motions: {}, engine: null, accuracy: null, startHz: DEFAULT_SWEEP.startHz, endHz: DEFAULT_SWEEP.endHz,
-  count: DEFAULT_SWEEP.points, busy: false, error: null, notice: null, request: 0, exactSubmission: null,
+  registered: null, motions: {}, busy: false, error: null, notice: null, request: 0, exactSubmission: null,
 };
 const savedSetupStorage = namespaceStorage('meshImport');
 let requestNumber = 0;
 export const useMeshImportStore = create<MeshImportState>(() => ({ ...initial }));
 
+/** The imported options a file setup is made of; the sweep and list live there. */
+function importedOptionsKey(): string {
+  const o = useImportedSolveOptionsStore.getState();
+  return JSON.stringify([o.engine, o.accuracy, o.sweepStartHz, o.sweepEndHz, o.sweepCount, o.frequencyMode,
+    o.frequencyListText, o.frequencySpacing, o.polar, o.adaptiveFrequencySampling, o.meshValidationMode, o.verbose]);
+}
 function setupFingerprint(state: MeshImportState): string {
-  const shared = useImportedSolveOptionsStore.getState();
   return JSON.stringify([state.registered?.ingest_id, state.units, state.forward, state.up, state.selected,
-    state.motions, state.engine ?? shared.engine, state.accuracy ?? shared.accuracy, state.startHz, state.endHz, state.count, state.exactSubmission]);
+    state.motions, importedOptionsKey(), state.exactSubmission]);
 }
 const EDITED_REPLAY_NOTICE = 'Replay settings changed. Solve now uses the mesh setup controls and starts a new setup.';
 useMeshImportStore.subscribe((state, previous) => {
@@ -64,9 +62,13 @@ useMeshImportStore.subscribe((state, previous) => {
     && setupFingerprint(state) !== setupFingerprint(previous)) useMeshImportStore.setState({ notice: null });
 });
 useImportedSolveOptionsStore.subscribe((state, previous) => {
-  const file = useMeshImportStore.getState();
-  if (file.notice?.startsWith('Mesh setup saved.') && ((file.engine === null && state.engine !== previous.engine)
-    || (file.accuracy === null && state.accuracy !== previous.accuracy))) useMeshImportStore.setState({ notice: null });
+  if (useMeshImportStore.getState().notice?.startsWith('Mesh setup saved.') && state !== previous
+    && JSON.stringify([state.engine, state.accuracy, state.sweepStartHz, state.sweepEndHz, state.sweepCount, state.frequencyMode,
+      state.frequencyListText, state.frequencySpacing, state.polar])
+    !== JSON.stringify([previous.engine, previous.accuracy, previous.sweepStartHz, previous.sweepEndHz, previous.sweepCount,
+      previous.frequencyMode, previous.frequencyListText, previous.frequencySpacing, previous.polar])) {
+    useMeshImportStore.setState({ notice: null });
+  }
 });
 
 // Hydration and recalled designs use setState without an edit signal. They must
@@ -74,8 +76,7 @@ useImportedSolveOptionsStore.subscribe((state, previous) => {
 // solve-options control ends replay; engine/accuracy are a coupled selection.
 subscribeSolveSettingsEdits(edit => {
   if (edit?.source !== 'importedSolveOptions' || !useMeshImportStore.getState().exactSubmission) return;
-  useMeshImportStore.setState({ exactSubmission: null, notice: EDITED_REPLAY_NOTICE,
-    ...(['setEngine', 'setAccuracy'].includes(edit.control ?? '') ? { engine: null, accuracy: null } : {}) });
+  useMeshImportStore.setState({ exactSubmission: null, notice: EDITED_REPLAY_NOTICE });
 });
 
 /** Establish file ownership before reading bytes, including failed replacements. */
@@ -85,6 +86,9 @@ export function beginMeshFileImport(filename: string): number {
   // A new file has no saved setup: open with a one-way copy of the parametric
   // options. A restore overwrites this with the saved setup's own options.
   seedImportedSolveOptionsFromParametric();
+  // File meshes have always refused a mesh that is not watertight; that stays
+  // the starting policy here, now as a visible, editable control.
+  useImportedSolveOptionsStore.setState({ meshValidationMode: 'strict' });
   workspaceModeStore.setImportedInput('file');
   workspaceModeStore.setMode('cad');
   return request;
@@ -151,20 +155,24 @@ export function fileMeshSubmission(): ImportedSolveSubmission {
     throw new Error('Choose units and driven groups, then prepare this mesh before solving.');
   }
   if (state.exactSubmission) return structuredClone(state.exactSubmission);
-  if (!(state.startHz > 0) || !(state.endHz > state.startHz) || !Number.isInteger(state.count) || state.count < 2 || state.count > 401) {
-    throw new Error('Enter an increasing frequency range and 2–401 frequencies.');
-  }
-  // The polar rig and the sweep spacing are the imported options' own; the
-  // sweep range and count are this view's controls. Both are independent of
-  // any parametric design left open behind the file view.
+  // Every option, the sweep range and count included, is the imported
+  // instance's; this view only adds the mesh's geometry and source motions.
   const selected = useImportedSolveOptionsStore.getState();
+  const options = selected.options() as ImportedSolveSubmission['options'];
+  if (selected.frequencyMode === 'range') {
+    if (!(selected.sweepStartHz > 0) || !(selected.sweepEndHz > selected.sweepStartHz)
+      || !Number.isInteger(selected.sweepCount) || selected.sweepCount < 2 || selected.sweepCount > 401) {
+      throw new Error('Enter an increasing frequency range and 2–401 frequencies.');
+    }
+    options.frequency_range = [selected.sweepStartHz, selected.sweepEndHz];
+    options.num_frequencies = selected.sweepCount;
+  }
+  options.symmetry = 'full';
+  options.solver_mode = 'full_3d';
   return bindImportedSetup(record, {
     geometry: { skipped_source_ids: [],
       drive_channels: Object.keys(record.source_tags).map(id => ({ id, source_ids: [id], motion: state.motions[id] ?? 'normal' })) },
-    options: { engine: state.engine ?? selected.engine, accuracy: state.accuracy ?? selected.accuracy, symmetry: 'full', solver_mode: 'full_3d',
-      mesh_validation_mode: 'strict', verbose: false, frequency_spacing: selected.frequencySpacing,
-      frequency_range: [state.startHz, state.endHz], num_frequencies: state.count,
-      polar_config: polarConfigFromUi(selected.polar) },
+    options,
   });
 }
 
@@ -215,14 +223,9 @@ function restoreFile(record: RegisteredMesh, options: FileOptions,
   // the parametric options for whatever the record does not state.
   seedImportedSolveOptionsFromParametric();
   applyWireOptionsToImportedSolveOptions(options as Partial<SolveOptions>);
-  const frequencies = options.frequencies_hz;
   useMeshImportStore.setState({ ...initial, filename: record.source_file.filename,
     summary: record.summary, registered: record, ...record.source_file.transform, selected: record.source_file.source_tags,
-    engine: options.engine ?? null, accuracy: options.accuracy ?? null,
     motions: Object.fromEntries(channels.map(channel => [channel.id, channel.motion ?? 'normal'])),
-    startHz: frequencies?.[0] ?? options.frequency_range?.[0] ?? initial.startHz,
-    endHz: frequencies?.at(-1) ?? options.frequency_range?.[1] ?? initial.endHz,
-    count: frequencies?.length ?? options.num_frequencies ?? initial.count,
     exactSubmission: exactSubmission ? structuredClone(exactSubmission) : null,
   });
   return true;

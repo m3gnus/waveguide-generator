@@ -3,10 +3,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ImportedSolveSubmission } from '../jobs/actions';
 import type { RegisteredMesh } from '../api/meshImport';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useMeshImportStore } from '../stores/meshImport';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { MeshImportPanel } from './MeshImportPanel';
 
-vi.mock('../jobs/useCapabilities', () => ({ useCapabilities: () => ({ engines: [] }) }));
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const panel = () => <QueryClientProvider client={queryClient}><MeshImportPanel/></QueryClientProvider>;
 
 const initial = useMeshImportStore.getState();
 let root: Root;
@@ -14,11 +17,15 @@ let host: HTMLDivElement;
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   useMeshImportStore.setState(initial, true);
+  resetSolveOptionsStore();
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ engines: [] }))));
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
 });
 afterEach(() => {
+  vi.unstubAllGlobals();
+  queryClient.clear();
   act(() => root.unmount());
   host.remove();
   useMeshImportStore.setState(initial, true);
@@ -33,23 +40,23 @@ it('shows actual replay frequencies and physics, with full resolved settings ins
       polar_config: { angle_range: [-60, 60, 13], angle_step: 10, distance: 3.7, norm_angle: 17, inclination: 45,
         enabled_axes: ['vertical'], observation_origin: 'mouth', spherical_sampling: false, field_plane: true } },
   };
-  useMeshImportStore.setState({ exactSubmission: replay, filename: 'speaker.msh', engine: 'metal', accuracy: 'accurate',
+  useMeshImportStore.setState({ exactSubmission: replay, filename: 'speaker.msh', 
     registered: { ingest_id: 'wgi_replay', producer: 'mesh-file', manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact',
       source_file: { filename: 'speaker.msh', transform: { units: 'mm', forward: '+z', up: '+y' }, source_tags: [2] },
       msh_text: '', source_tags: { source: 2 }, summary: { node_count: 4, triangle_count: 4, dimensions: [1, 1, 1], groups: [] } } satisfies RegisteredMesh });
-  act(() => root.render(<MeshImportPanel/>));
+  act(() => root.render(panel()));
   const summary = host.querySelector('[aria-label="Exact mesh replay"]')!;
   expect(summary.textContent).toContain('3 explicit frequencies: 137, 211, 3987 Hz');
   expect(summary.textContent).toContain('vertical polars · 10° steps · 3.7 m');
   expect(summary.textContent).toContain('Engine: metal · Accuracy: accurate');
   expect(host.textContent).not.toContain('No electrical driver model or crossover is applied.');
-  expect(host.textContent).not.toContain('Full domain, 5° horizontal/vertical/diagonal polars at 2 m');
+  expect(host.textContent).not.toContain('starts as a copy of the parametric settings');
   expect(host.querySelector('details summary')?.textContent).toBe('Full resolved setup');
   expect(JSON.parse(host.querySelector('[aria-label="Full resolved replay setup"]')!.textContent!)).toEqual(replay);
   expect(host.textContent).toContain('New setup controls');
-  act(() => useMeshImportStore.setState({ count: 29 }));
+  act(() => useImportedSolveOptionsStore.getState().setSweep({ count: 29 }));
   expect(host.querySelector('[aria-label="Exact mesh replay"]')).toBeNull();
-  expect(host.textContent).toContain('Logarithmic sweep.');
+  expect(host.textContent).toContain('starts as a copy of the parametric settings');
   expect(host.textContent).toContain('starts a new setup');
 });
 
@@ -60,7 +67,7 @@ it('offers arbitrary labels as independent radiating surfaces and invalidates pr
     summary: { node_count: 6, triangle_count: 9, dimensions: [1, 1, 1], groups: [
       { tag: 17, name: 'Cone patch', triangle_count: 3 }, { tag: 42, name: 'Rear diaphragm', triangle_count: 4 },
       { tag: 0, name: 'Unassigned', triangle_count: 2 }] } });
-  act(() => root.render(<MeshImportPanel/>));
+  act(() => root.render(panel()));
   const section = [...host.querySelectorAll('fieldset')].find(field => field.querySelector('legend')?.textContent === 'Radiating surfaces')!;
   expect(section.textContent).toContain('unchecked labels are rigid');
   const boxes = section.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
@@ -79,9 +86,48 @@ it('shows retained radiating assignments with a clear reimport requirement', () 
     registered: { source_tags: { group_42: 42 }, summary: {} } as unknown as RegisteredMesh,
     summary: { node_count: 6, triangle_count: 4, dimensions: [1, 1, 1], groups: [
       { tag: 42, name: 'Rear diaphragm', triangle_count: 4 }] } });
-  act(() => root.render(<MeshImportPanel/>));
+  act(() => root.render(panel()));
   const section = [...host.querySelectorAll('fieldset')].find(field => field.querySelector('legend')?.textContent === 'Radiating surfaces')!;
   expect(section.disabled).toBe(true);
   expect(section.querySelector<HTMLInputElement>('input')?.checked).toBe(true);
   expect(section.textContent).toContain('Import the original mesh to change them');
+});
+
+function choose(select: HTMLSelectElement, value: string) {
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, value);
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+function type(area: HTMLTextAreaElement | HTMLInputElement, value: string) {
+  act(() => {
+    const proto = area instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(area, value);
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+it('shows the solve controls in the file rail and writes edits to the imported options', () => {
+  useMeshImportStore.setState({ filename: 'speaker.msh', registered: { ingest_id: 'wgi_f', source_tags: { group_2: 2 }, summary: {} } as unknown as RegisteredMesh });
+  act(() => root.render(panel()));
+  // Sweep range, engine and accuracy, spacing, and the directivity rig are all on screen.
+  expect(host.querySelector('[aria-label="Mesh sweep start"]')).not.toBeNull();
+  expect(host.querySelector('#solve-accuracy')).not.toBeNull();
+  expect(host.querySelector('#cad-solve-engine')).not.toBeNull();
+  expect(host.querySelector('#polar-distance')).not.toBeNull();
+  // The rig on screen is the one a new file starts with.
+  expect((host.querySelector('#polar-distance') as HTMLInputElement).value).toBe(String(useImportedSolveOptionsStore.getState().polar.distance));
+  choose(host.querySelector<HTMLSelectElement>('#cad-solve-frequency-spacing')!, 'linear');
+  expect(useImportedSolveOptionsStore.getState().frequencySpacing).toBe('linear');
+  choose(host.querySelector<HTMLSelectElement>('#solve-accuracy')!, 'accurate');
+  expect(useImportedSolveOptionsStore.getState().accuracy).toBe('accurate');
+  type(host.querySelector<HTMLInputElement>('[aria-label="Mesh frequency count"]')!, '21');
+  expect(useImportedSolveOptionsStore.getState().sweepCount).toBe(21);
+  // The parametric options are not the ones edited.
+  expect(useSolveOptionsStore.getState().frequencySpacing).not.toBe('linear');
+  // List mode replaces the range inputs.
+  choose(host.querySelector<HTMLSelectElement>('#cad-solve-frequency-mode')!, 'list');
+  expect(host.querySelector('[aria-label="Mesh sweep start"]')).toBeNull();
+  type(host.querySelector<HTMLTextAreaElement>('#cad-solve-frequency-list')!, '300 700 1500');
+  expect(useImportedSolveOptionsStore.getState().frequencyListText).toBe('300 700 1500');
 });

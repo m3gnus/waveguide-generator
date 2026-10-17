@@ -104,6 +104,7 @@ export function StatusBar() {
   const accuracy = useScopedSolveOptions((state) => state.accuracy);
   const frequencyMode = useScopedSolveOptions((state) => state.frequencyMode);
   const frequencyListText = useScopedSolveOptions((state) => state.frequencyListText);
+  const fileSweep = useScopedSolveOptions((state) => `${state.sweepStartHz}/${state.sweepEndHz}/${state.sweepCount}`);
   const preferences = usePreferences();
   // A CAD solve runs on the user's engine choice, always in full 3-D. Once the
   // server has said where that choice lands for this return, the bar names
@@ -118,9 +119,11 @@ export function StatusBar() {
   const previewError = preview.error ? previewErrorMessage(preview.error) : null;
   const meshMetrics = previewMeshMetrics(preview.frame);
   const cadTriangles = cadReturn.ingestRecord?.mesh?.stats.triangle_count;
-  const replayFrequencies = file.exactSubmission?.options.frequencies_hz;
+  const [fileStart, fileEnd, fileCount] = fileSweep.split('/').map(Number);
+  const listedFrequencies = frequencyMode === 'list' ? parseFrequencyList(frequencyListText).frequencies ?? undefined : undefined;
+  const replayFrequencies = file.exactSubmission?.options.frequencies_hz ?? listedFrequencies;
   const summary = fileActive
-    ? `next mesh solve ${compactFrequency(replayFrequencies?.[0] ?? file.startHz)} – ${compactFrequency(replayFrequencies?.at(-1) ?? file.endHz)} · ${replayFrequencies?.length ?? file.count} f`
+    ? `next mesh solve ${compactFrequency(replayFrequencies?.[0] ?? fileStart)} – ${compactFrequency(replayFrequencies?.at(-1) ?? fileEnd)} · ${replayFrequencies?.length ?? fileCount} f`
     : mode === 'cad'
     ? cadSolveSummary({ start: cadReturn.frequencyStartHz, end: cadReturn.frequencyEndHz, count: cadReturn.frequencyCount }, { frequencyMode, frequencyListText, smoothing: preferences.smoothing })
     : solveSummary(design, { frequencyMode, frequencyListText, smoothing: preferences.smoothing });

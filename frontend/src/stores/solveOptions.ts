@@ -241,6 +241,10 @@ export const DEFAULT_SOLVE_OPTIONS: Readonly<PersistedSolveOptions> = Object.fre
   groundPlane: Object.freeze({ ...DEFAULT_GROUND_PLANE }) as GroundPlaneConfig,
 });
 
+export function defaultImportedSweep(): ImportedSweep {
+  return { sweepStartHz: DEFAULT_SWEEP.startHz, sweepEndHz: DEFAULT_SWEEP.endHz, sweepCount: DEFAULT_SWEEP.points };
+}
+
 export function defaultSolveOptions(): PersistedSolveOptions {
   return { ...DEFAULT_SOLVE_OPTIONS, polar: structuredClone(defaultPolarUi) };
 }
@@ -356,7 +360,15 @@ function normalizeGroundPlane(
   };
 }
 
-interface SolveOptionsStore extends PersistedSolveOptions {
+/**
+ * The generated-grid sweep of an imported file mesh. Held beside the options so
+ * the imported instance is the one source of a file solve's frequencies. It is
+ * not a persisted setting: `partialize` keeps only `PersistedSolveOptions`.
+ */
+export interface ImportedSweep { sweepStartHz: number; sweepEndHz: number; sweepCount: number }
+
+interface SolveOptionsStore extends PersistedSolveOptions, ImportedSweep {
+  setSweep: (sweep: Partial<{ startHz: number; endHz: number; count: number }>) => void;
   setEngine: (engine: string) => void;
   setAccuracy: (accuracy: SolveAccuracy) => void;
   setAdaptiveFrequencySampling: (enabled: boolean) => void;
@@ -377,7 +389,7 @@ interface SolveOptionsStore extends PersistedSolveOptions {
 /** The setters a person drives, including the advanced engine override. */
 const SOLVE_OPTION_EDITS: ReadonlyArray<keyof SolveOptionsStore> = [
   'setEngine', 'setAccuracy', 'setAdaptiveFrequencySampling', 'setSolverMode', 'setSymmetry', 'setMeshValidationMode', 'setVerbose', 'setFrequencySpacing',
-  'setFrequencyMode', 'setFrequencyListText', 'updatePolar', 'updateGroundPlane', 'toggleAxis',
+  'setFrequencyMode', 'setFrequencyListText', 'setSweep', 'updatePolar', 'updateGroundPlane', 'toggleAxis',
 ];
 
 export type { SolveOptionsStore };
@@ -389,6 +401,12 @@ function solveOptionsState(
 ): SolveOptionsStore {
   return withEditSignals(get, {
   ...defaultSolveOptions(),
+  ...defaultImportedSweep(),
+  setSweep: ({ startHz, endHz, count }) => set((state) => ({
+    sweepStartHz: startHz ?? state.sweepStartHz,
+    sweepEndHz: endHz ?? state.sweepEndHz,
+    sweepCount: count ?? state.sweepCount,
+  })),
   setEngine: (engine) => set({ engine, ...(engine === 'auto' ? {} : { accuracy: 'fast' }) }),
   setAccuracy: (accuracy) => set({ accuracy, engine: 'auto' }),
   setAdaptiveFrequencySampling: (adaptiveFrequencySampling) => set({ adaptiveFrequencySampling }),
@@ -480,8 +498,8 @@ export const useSolveOptionsStore = createPersistedSolveOptionsStore();
 export const useImportedSolveOptionsStore = createImportedSolveOptionsStore();
 
 /** Replace the imported options wholesale; the parametric store is untouched. */
-export function seedImportedSolveOptions(options: Partial<PersistedSolveOptions>): void {
-  useImportedSolveOptionsStore.setState({ ...defaultSolveOptions(), ...structuredClone(options) });
+export function seedImportedSolveOptions(options: Partial<PersistedSolveOptions & ImportedSweep>): void {
+  useImportedSolveOptionsStore.setState({ ...defaultSolveOptions(), ...defaultImportedSweep(), ...structuredClone(options) });
 }
 
 /**
@@ -493,7 +511,19 @@ export function applyWireOptionsToImportedSolveOptions(options: Partial<SolveOpt
     ? options.frequencies_hz
     : null;
   const polar = polarUiFromConfig(options.polar_config);
+  // A setup saved with a range and count restores the same grid; a saved list
+  // also leaves its ends and length as the range a later switch back would use.
+  const range = (options as { frequency_range?: number[] | null }).frequency_range;
+  const count = (options as { num_frequencies?: number | null }).num_frequencies;
+  const sweep = {
+    sweepStartHz: explicit?.[0] ?? (Array.isArray(range) && Number.isFinite(range[0]) ? range[0] : undefined),
+    sweepEndHz: explicit?.at(-1) ?? (Array.isArray(range) && Number.isFinite(range[1]) ? range[1] : undefined),
+    sweepCount: explicit?.length ?? (typeof count === 'number' && Number.isFinite(count) ? count : undefined),
+  };
   useImportedSolveOptionsStore.setState((state) => ({
+    sweepStartHz: sweep.sweepStartHz ?? state.sweepStartHz,
+    sweepEndHz: sweep.sweepEndHz ?? state.sweepEndHz,
+    sweepCount: sweep.sweepCount ?? state.sweepCount,
     engine: options.engine ?? state.engine,
     accuracy: options.accuracy ?? 'fast',
     adaptiveFrequencySampling: options.adaptive_frequency_sampling === true,
@@ -520,7 +550,7 @@ export function seedImportedSolveOptionsFromParametric(): void {
 
 export function resetSolveOptionsStore(): void {
   useSolveOptionsStore.setState(defaultSolveOptions());
-  useImportedSolveOptionsStore.setState(defaultSolveOptions());
+  useImportedSolveOptionsStore.setState({ ...defaultSolveOptions(), ...defaultImportedSweep() });
 }
 
 // The server's copy is authoritative, so re-read once it has replaced the cache.

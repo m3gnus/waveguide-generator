@@ -1369,9 +1369,10 @@ describe('solve invocation mutex', () => {
     const accepted = deferred<string>();
     mocks.submitImported.mockReturnValueOnce(accepted.promise);
     act(() => {
-      useMeshImportStore.setState({ busy: false, filename: 'standalone.msh', startHz: 100, endHz: 200, count: 2,
+      useMeshImportStore.setState({ busy: false, filename: 'standalone.msh',
         registered: { ingest_id: 'wgi_file', manifest_sha256: 'sha256:mesh', artifact_sha256: 'sha256:original',
           source_tags: { group_2: 2 } } as unknown as RegisteredMesh });
+      useImportedSolveOptionsStore.getState().setSweep({ startHz: 100, endHz: 200, count: 2 });
       importedMeshStore.setFile({ name: 'standalone.msh', source: 'file', ingestId: 'wgi_file' } as ImportedMeshScene);
     });
     await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));

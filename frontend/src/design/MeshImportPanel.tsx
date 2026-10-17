@@ -1,20 +1,21 @@
 import { useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { editMeshImport, prepareMeshFile, saveMeshSetup, useMeshImportStore } from '../stores/meshImport';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { restoreParametricWorkingDesign } from '../jobs/showJobModel';
 import { noteExplicitNavigation } from '../shell/workspaceNavigation';
 import { useImportedSolveOptionsStore } from '../stores/solveOptions';
-import { useCapabilities } from '../jobs/useCapabilities';
+import { SolveOptionsStoreProvider } from '../stores/solveOptionsContext';
+import { DirectivityMapControls, SolveOptionsControls } from './SolveOptionsSections';
 
 const AXES = ['+x', '-x', '+y', '-y', '+z', '-z'];
 
 /** The ready-mesh workflow does not expose CAD generation or connection controls. */
 export function MeshImportPanel() {
   const state = useMeshImportStore();
-  const globalEngine = useImportedSolveOptionsStore(s => s.engine);
-  const globalAccuracy = useImportedSolveOptionsStore(s => s.accuracy);
-  const engine = state.engine ?? globalEngine;
-  const capabilities = useCapabilities();
+  const frequencyMode = useImportedSolveOptionsStore(s => s.frequencyMode);
+  const sweep = useImportedSolveOptionsStore(useShallow(s => ({ startHz: s.sweepStartHz, endHz: s.sweepEndHz, count: s.sweepCount })));
+  const setSweep = useImportedSolveOptionsStore(s => s.setSweep);
   const [preparing, setPreparing] = useState(false);
   const [saving, setSaving] = useState(false);
   const dimensions = state.registered?.summary.dimensions_mm;
@@ -27,7 +28,7 @@ export function MeshImportPanel() {
   const frequencySummary = frequencies?.length
     ? `${frequencies.length} explicit frequencies: ${frequencies.slice(0, 8).join(', ')}${frequencies.length > 8 ? ', …' : ''} Hz`
     : `${replayOptions?.frequency_spacing} sweep: ${replayOptions?.frequency_range?.join('–')} Hz, ${replayOptions?.num_frequencies} frequencies`;
-  return <div className="param-panel mesh-import-panel panel-scroll" aria-label="Imported mesh setup">
+  return <SolveOptionsStoreProvider mode="cad"><div className="param-panel mesh-import-panel panel-scroll" aria-label="Imported mesh setup">
     <h3>Imported mesh</h3>
     <p>{state.filename}</p>
     <p className="section-note">Full closed surface · free space. Choose radiating surfaces below; all other labels are rigid.</p>
@@ -79,20 +80,17 @@ export function MeshImportPanel() {
           <option value="normal">Normal to surface</option><option value="axial">Along source axis</option>
         </select>
       </label>)}
-      {(['startHz', 'endHz', 'count'] as const).map((key, index) => <label className="field-row" key={key}>{['Start (Hz)', 'End (Hz)', 'Frequencies'][index]}
-        <input aria-label={['Mesh sweep start', 'Mesh sweep end', 'Mesh frequency count'][index]} type="number" value={Number.isFinite(state[key]) ? state[key] : ''}
+      {frequencyMode === 'range' && (['startHz', 'endHz', 'count'] as const).map((key, index) => <label className="field-row" key={key}>{['Start (Hz)', 'End (Hz)', 'Frequencies'][index]}
+        <input aria-label={['Mesh sweep start', 'Mesh sweep end', 'Mesh frequency count'][index]} type="number" value={Number.isFinite(sweep[key]) ? sweep[key] : ''}
           min={1} max={key === 'count' ? 401 : undefined} step={key === 'count' ? 1 : 'any'}
-          onChange={e => useMeshImportStore.setState({ [key]: e.target.valueAsNumber })}/>
+          onChange={e => setSweep({ [key]: e.target.valueAsNumber })}/>
       </label>)}
-      <label className="field-row">Engine<select aria-label="Mesh solve engine" value={engine} onChange={e => useMeshImportStore.setState({ engine: e.target.value })}>
-        <option value="auto">Auto</option>
-        {capabilities.engines.filter(item => item.geometry_sources?.includes('imported')).map(item => <option key={item.name} value={item.name}>{item.label || item.name}{item.available ? '' : ' (unavailable)'}</option>)}
-        {engine !== 'auto' && !capabilities.engines.some(item => item.name === engine && item.geometry_sources?.includes('imported')) && <option value={engine}>{engine} (unsupported)</option>}
-      </select></label>
-      <label className="field-row">Accuracy<select aria-label="Mesh solve accuracy" value={state.accuracy ?? globalAccuracy} onChange={e => useMeshImportStore.setState({ accuracy: e.target.value as 'fast' | 'accurate' })}>
-        <option value="fast">Fast</option><option value="accurate">Accurate</option>
-      </select></label>
-      {!replay && <p className="section-note">Logarithmic sweep. Full domain, 5° horizontal/vertical/diagonal polars at 2 m from the mesh origin. The origin is not moved automatically. Use Solve above; Runs keeps the exact mesh and settings.</p>}
+      <SolveOptionsControls mode="cad" />
+      {!replay && <p className="section-note">Full domain, free space. The directivity rig below starts as a copy of the parametric settings; the origin of the mesh is not moved automatically. Use Solve above; Runs keeps the exact mesh and settings.</p>}
+    </fieldset>
+    <fieldset disabled={state.busy}>
+      <legend>Directivity map</legend>
+      <DirectivityMapControls />
     </fieldset>
     <button disabled={!state.registered || state.busy || saving} onClick={() => {
       setSaving(true);
@@ -104,5 +102,5 @@ export function MeshImportPanel() {
     <button onClick={() => {
       noteExplicitNavigation(); restoreParametricWorkingDesign(); workspaceModeStore.setMode('parametric');
     }}>Return to parametric design</button>
-  </div>;
+  </div></SolveOptionsStoreProvider>;
 }
