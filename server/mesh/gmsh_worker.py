@@ -19,6 +19,7 @@ import threading
 from collections.abc import Callable, Iterator
 from typing import Any, TypeVar
 
+from server.platform.gmsh_openmp import pin_gmsh_openmp_initial_thread
 from server.platform.shutdown_backstop import shutdown_wait_limit
 from server.platform.warmup import BackgroundWarmup
 from server.platform.signal_rearm import (
@@ -165,6 +166,11 @@ def _run_in_gmsh_session(
         import gmsh
     except Exception:  # pragma: no cover - the builder gives the useful error
         gmsh = None
+
+    if gmsh is not None:
+        # This thread exits at shutdown_gmsh_worker; Gmsh's OpenMP runtime
+        # must not have registered it as the initial thread by then.
+        pin_gmsh_openmp_initial_thread()
 
     opened_here = False
     if gmsh is not None and not gmsh.isInitialized():

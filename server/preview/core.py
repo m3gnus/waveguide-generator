@@ -23,6 +23,7 @@ from server.contracts.canonical import canonical_ascii_strict_json
 from server.design.migrate import apply_migrations
 from server.design.schema import DesignConfig
 from server.integration.mesher_identity import mesher_identity
+from server.platform.gmsh_openmp import pin_gmsh_openmp_initial_thread
 from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES, FrameError, encode
 from server.preview.translate import design_to_mesher_config
 
@@ -864,6 +865,9 @@ class PreviewProtocol:
         if builder is None:
             from hornlab_mesher.preview.api import build_preview_geometry
 
+            # Some mesher preview builders (ATH import) open their own Gmsh
+            # session on this executor thread, which exits at shutdown.
+            pin_gmsh_openmp_initial_thread()
             builder = build_preview_geometry
         cache_key = canonical_ascii_strict_json(
             {
