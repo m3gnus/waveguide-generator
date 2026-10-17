@@ -523,29 +523,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/cadlink/project-setups": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Put Project Setup
-         * @description Record a project's solve settings for its sources (CAD-OPERATIONS.md, "Project setups").
-         *
-         *     A solve Fusion sends for that project is prepared from them, whatever
-         *     project the editor has open. The latest recording is the project's.
-         */
-        put: operations["put_project_setup_api_cadlink_project_setups_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/cadlink/projects/{lineage_id}/documents": {
         parameters: {
             query?: never;
@@ -1238,24 +1215,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/imported-models/{ingest_id}/setup": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Setup */
-        get: operations["read_setup_api_imported_models__ingest_id__setup_get"];
-        /** Save Setup */
-        put: operations["save_setup_api_imported_models__ingest_id__setup_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/integration/v1/design-schema": {
         parameters: {
             query?: never;
@@ -1596,57 +1555,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/mesh-import": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Register */
-        post: operations["register_api_mesh_import_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/mesh-import/inspect": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Inspect */
-        post: operations["inspect_api_mesh_import_inspect_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/mesh-import/{ingest_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read */
-        get: operations["read_api_mesh_import__ingest_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/mesh-replay": {
         parameters: {
             query?: never;
@@ -1658,6 +1566,110 @@ export interface paths {
         put?: never;
         /** Open Package */
         post: operations["open_package_api_mesh_replay_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/models/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register
+         * @description Import a file as a model and prepare it; the same inputs find the same mesh.
+         */
+        post: operations["register_api_models_files_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/models/files/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Inspect
+         * @description Read a file's groups and size, without retaining anything.
+         */
+        post: operations["inspect_api_models_files_inspect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/models/{model_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Model
+         * @description A model, its latest preparation, and one named preparation with its mesh.
+         */
+        get: operations["get_model_api_models__model_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/models/{model_id}/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare
+         * @description Prepare a file model again from its retained original, however it is now set.
+         */
+        post: operations["prepare_api_models__model_id__prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/models/{model_id}/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Setup
+         * @description The setup saved for this model and the sources of a prepared mesh.
+         */
+        get: operations["get_setup_api_models__model_id__setup_get"];
+        /**
+         * Put Setup
+         * @description Save a model's setup for the sources of a prepared mesh (or a CAD return).
+         */
+        put: operations["put_setup_api_models__model_id__setup_put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2829,6 +2841,8 @@ export interface components {
             lineage_id: string | null;
             /** Manifest Sha256 */
             manifest_sha256: string | null;
+            /** Model Id */
+            model_id?: string | null;
             /** Return State Hash */
             return_state_hash: string | null;
             /** Solve Model Sha256 */
@@ -4028,6 +4042,29 @@ export interface components {
             }[];
         };
         /**
+         * FilePreparation
+         * @description How a file is turned into a solver mesh: its units, frame and sources.
+         */
+        FilePreparation: {
+            /**
+             * Forward
+             * @enum {string}
+             */
+            forward: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+            /** Source Tags */
+            source_tags: number[];
+            /**
+             * Units
+             * @enum {string}
+             */
+            units: "mm" | "cm" | "m" | "in";
+            /**
+             * Up
+             * @enum {string}
+             */
+            up: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+        };
+        /**
          * FilterSpec
          * @description One high-pass or low-pass section of a drive channel.
          */
@@ -4964,6 +5001,22 @@ export interface components {
              */
             status: "ok";
         };
+        /**
+         * ModelSetupWrite
+         * @description A setup for one model, for the sources of a prepared mesh.
+         *
+         *     ``prepared_id`` names the prepared mesh; the server reads its sources. A CAD
+         *     project's settings can also be recorded before anything is prepared, for
+         *     the sources its return lists (``inventory``). Neither: the model's latest
+         *     prepared mesh.
+         */
+        ModelSetupWrite: {
+            /** Inventory */
+            inventory?: components["schemas"]["SourceInventoryItem"][] | null;
+            /** Prepared Id */
+            prepared_id?: string | null;
+            setup: components["schemas"]["CadSolveSetup"];
+        };
         /** MorphConfig */
         MorphConfig: {
             allow_shrinkage?: components["schemas"]["Expr"] | null;
@@ -5491,17 +5544,6 @@ export interface components {
             expected_revision?: string | null;
             /** Name */
             name: string;
-        };
-        /** ProjectSetupRequest */
-        ProjectSetupRequest: {
-            /** Inventory */
-            inventory: components["schemas"]["SourceInventoryItem"][];
-            /** Lineageid */
-            lineageId: string;
-            /** Setup */
-            setup: {
-                [key: string]: unknown;
-            };
         };
         /** ROSSEConfig */
         ROSSEConfig: {
@@ -6119,7 +6161,7 @@ export interface components {
         };
         /**
          * SourceInventoryItem
-         * @description One source of a return, as its manifest states it.
+         * @description One source of a CAD return, as its manifest states it.
          */
         SourceInventoryItem: {
             /** Id */
@@ -7139,41 +7181,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_project_setup_api_cadlink_project_setups_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ProjectSetupRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
                 };
             };
             /** @description Validation Error */
@@ -8381,76 +8388,6 @@ export interface operations {
             };
         };
     };
-    read_setup_api_imported_models__ingest_id__setup_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                ingest_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    save_setup_api_imported_models__ingest_id__setup_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                ingest_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CadSolveSetup"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     design_schema_api_integration_v1_design_schema_get: {
         parameters: {
             query?: never;
@@ -9069,109 +9006,6 @@ export interface operations {
             };
         };
     };
-    register_api_mesh_import_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MeshRegistration"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    inspect_api_mesh_import_inspect_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MeshFile"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_api_mesh_import__ingest_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                ingest_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     open_package_api_mesh_replay_post: {
         parameters: {
             query?: never;
@@ -9203,6 +9037,298 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_api_models_files_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MeshRegistration"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Unknown model or prepared mesh */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Restart pending, mismatched or unavailable mesh */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Mesh or setup refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    inspect_api_models_files_inspect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MeshFile"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Mesh or setup refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_model_api_models__model_id__get: {
+        parameters: {
+            query?: {
+                prepared_id?: string | null;
+            };
+            header?: never;
+            path: {
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Unknown model or prepared mesh */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Restart pending, mismatched or unavailable mesh */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Mesh or setup refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    prepare_api_models__model_id__prepare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FilePreparation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Unknown model or prepared mesh */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Restart pending, mismatched or unavailable mesh */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Mesh or setup refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_setup_api_models__model_id__setup_get: {
+        parameters: {
+            query?: {
+                prepared_id?: string | null;
+            };
+            header?: never;
+            path: {
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Unknown model or prepared mesh */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Restart pending, mismatched or unavailable mesh */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Mesh or setup refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    put_setup_api_models__model_id__setup_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelSetupWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Unknown model or prepared mesh */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Restart pending, mismatched or unavailable mesh */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Mesh or setup refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

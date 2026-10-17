@@ -293,10 +293,10 @@ describe('CadLinkPanel', () => {
         posted.push({ path, body: null });
         return json({ id, dismissed: true, repaired: false });
       }
-      if (path === '/api/cadlink/project-setups') {
-        const body = JSON.parse(String(init?.body)) as { lineageId: string };
+      if (/^\/api\/models\/[^/]+\/setup$/.test(path) && init?.method === 'PUT') {
+        const body = { lineageId: decodeURIComponent(path.split('/')[3]), ...JSON.parse(String(init?.body)) };
         posted.push({ path, body });
-        return json({ lineageId: body.lineageId, inventorySha256: 'sha256:i', revisionId: 'wgs_9' });
+        return json({ revision_id: 'wgs_9', content_sha256: 'sha256:c', inventory_sha256: 'sha256:i' });
       }
       if (path === '/api/cadlink/setup-revisions' && init?.method === 'POST') {
         posted.push({ path, body: JSON.parse(String(init.body)) });
@@ -858,7 +858,7 @@ describe('CadLinkPanel', () => {
     await act(async () => { solve().click(); });
     await vi.waitFor(() => expect(posted.filter((item) => item.path.endsWith('/solve-again'))).toHaveLength(1));
     expect(posted[0]).toMatchObject({
-      path: '/api/cadlink/project-setups',
+      path: '/api/models/wgl_speaker/setup',
       body: { lineageId: 'wgl_speaker', inventory: [{ id: 'source-hf', role: 'HF', required: true }] },
     });
     expect((posted[0].body as { setup: { schema_version: number } }).setup.schema_version).toBe(1);

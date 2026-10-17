@@ -75,14 +75,15 @@ describe('CAD operations client', () => {
     expect(request.calls[0].url).toBe('/api/cadlink/setup-revisions/wgs%2F1');
   });
   it('records a project setup for its source inventory', async () => {
-    const { calls, fetcher } = recorder({ lineageId: 'wgl_a', inventorySha256: 'sha256:i', revisionId: 'wgs_1' });
+    const { calls, fetcher } = recorder({ revision_id: 'wgs_1', content_sha256: 'sha256:c', inventory_sha256: 'sha256:i' });
     const setup = { schema_version: 1 as const, geometry: { drive_channels: [] }, options: { engine: 'auto' } };
     const inventory = [{ id: 'source-hf', role: 'HF', required: true }];
     const result = await putProjectSetup({ lineageId: 'wgl_a', inventory, setup }, fetcher);
-    expect(result.revisionId).toBe('wgs_1');
-    expect(calls[0].url).toBe('/api/cadlink/project-setups');
+    expect(result).toEqual({ lineageId: 'wgl_a', inventorySha256: 'sha256:i', revisionId: 'wgs_1' });
+    // The project is an imported model; its sources key the setup.
+    expect(calls[0].url).toBe('/api/models/wgl_a/setup');
     expect(calls[0].init?.method).toBe('PUT');
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ lineageId: 'wgl_a', inventory, setup });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ inventory, setup });
   });
 
   it('records the shared solve selection', async () => {

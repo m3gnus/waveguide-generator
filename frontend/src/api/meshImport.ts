@@ -7,8 +7,11 @@ export interface MeshSummary {
   dimensions_mm?: number[];
   groups: Array<{ tag: number; name: string; triangle_count: number }>;
 }
+/** One prepared mesh of an imported file model, with its solver mesh. */
 export interface RegisteredMesh {
   ingest_id: string;
+  /** The file's model: `mesh-file:` and its original's digest. */
+  model_id: string;
   producer: 'mesh-file';
   manifest_sha256: string;
   artifact_sha256: string;
@@ -17,6 +20,11 @@ export interface RegisteredMesh {
   summary: MeshSummary;
   msh_text: string;
 }
+export interface FilePreparation { units: string; forward: string; up: string; source_tags: number[] }
+
+/** The model a file mesh belongs to: the exact bytes of its original. */
+export const fileModelId = (artifactSha256: string) => `mesh-file:${artifactSha256}`;
+const modelPath = (modelId: string) => `/api/models/${encodeURIComponent(modelId)}`;
 
 async function request<T>(url: string, body?: unknown, fetcher: typeof fetch = fetch): Promise<T> {
   const response = await fetcher(url, body === undefined ? undefined : {
@@ -30,8 +38,15 @@ async function request<T>(url: string, body?: unknown, fetcher: typeof fetch = f
 }
 
 export const inspectMesh = (filename: string, msh_text: string, fetcher?: typeof fetch) =>
-  request<MeshSummary>('/api/mesh-import/inspect', { filename, msh_text }, fetcher);
-export const registerMesh = (body: unknown, fetcher?: typeof fetch) =>
-  request<RegisteredMesh>('/api/mesh-import', body, fetcher);
-export const readMeshImport = (id: string, fetcher?: typeof fetch) =>
-  request<RegisteredMesh>(`/api/mesh-import/${encodeURIComponent(id)}`, undefined, fetcher);
+  request<MeshSummary>('/api/models/files/inspect', { filename, msh_text }, fetcher);
+/** Import a file as its model and prepare it; the same file and preparation is the same mesh. */
+export const registerMesh = async (body: FilePreparation & { filename: string; msh_text: string }, fetcher?: typeof fetch) =>
+  (await request<{ prepared: RegisteredMesh }>('/api/models/files', body, fetcher)).prepared;
+/** Prepare a file model again from the original the server retained. */
+export const prepareMeshModel = async (modelId: string, body: FilePreparation, fetcher?: typeof fetch) =>
+  (await request<{ prepared: RegisteredMesh }>(`${modelPath(modelId)}/prepare`, body, fetcher)).prepared;
+/** One retained preparation of a model, with its solver mesh. */
+export const readMeshImport = async (modelId: string, preparedId: string, fetcher?: typeof fetch) =>
+  (await request<{ prepared: RegisteredMesh }>(
+    `${modelPath(modelId)}?prepared_id=${encodeURIComponent(preparedId)}`, undefined, fetcher,
+  )).prepared;

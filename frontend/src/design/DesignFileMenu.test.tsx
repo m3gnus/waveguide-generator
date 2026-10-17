@@ -232,7 +232,7 @@ describe('design file export menu', () => {
 
     expect(importedMeshStore.getSnapshot().file?.name).toBe('reference.msh');
     expect(importedMeshStore.getSnapshot().showing).toBe('file');
-    expect(inspect).toHaveBeenCalledWith('/api/mesh-import/inspect', expect.objectContaining({ method: 'POST' }));
+    expect(inspect).toHaveBeenCalledWith('/api/models/files/inspect', expect.objectContaining({ method: 'POST' }));
     expect(container.querySelector('[role="status"]')?.textContent).toContain('Choose units and Radiating surfaces');
   });
 

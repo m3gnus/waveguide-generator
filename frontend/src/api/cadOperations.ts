@@ -157,17 +157,21 @@ export async function createCadOperation(
 }
 
 /** Record a project's solve settings for its source inventory. */
-export function putProjectSetup(
+export async function putProjectSetup(
   request: { lineageId: string; inventory: CadSourceInventoryEntry[]; setup: CadSolveSetup },
   fetcher: typeof fetch = fetch,
   /** `keepalive` lets the request finish after the page is gone. */
   options: { keepalive?: boolean } = {},
 ): Promise<{ lineageId: string; inventorySha256: string; revisionId: string }> {
-  return jsonRequest(
-    '/api/cadlink/project-setups',
-    jsonBody('PUT', request, options.keepalive ? { keepalive: true } : {}),
+  // The project is an imported model; before anything is prepared its setup
+  // is recorded for the sources the return lists.
+  const { lineageId, inventory, setup } = request;
+  const saved = await jsonRequest<{ revision_id: string; inventory_sha256: string }>(
+    `/api/models/${encodeURIComponent(lineageId)}/setup`,
+    jsonBody('PUT', { inventory, setup }, options.keepalive ? { keepalive: true } : {}),
     fetcher,
   );
+  return { lineageId, inventorySha256: saved.inventory_sha256, revisionId: saved.revision_id };
 }
 
 /** Record the shared accuracy and engine selection for CAD preparation. */

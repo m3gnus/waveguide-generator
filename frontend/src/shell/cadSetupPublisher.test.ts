@@ -47,13 +47,23 @@ function json(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
 
+/** A project setup recording: `PUT /api/models/{lineage}/setup`. */
+const SETUP_PUT = 'model setup';
+const isSetupPut = (url: string) => /^\/api\/models\/[^/]+\/setup$/.test(url);
+/** The recorded body, with the project it was recorded for (from its path). */
+const setupRecord = (url: string, body: unknown) => ({
+  lineageId: decodeURIComponent(url.split('/')[3]), ...(body as Record<string, unknown>),
+});
+
 function recorder() {
   const calls: Array<{ url: string; body: unknown }> = [];
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     calls.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : null });
     return json({});
   }) as unknown as typeof fetch;
-  const to = (suffix: string) => calls.filter(({ url }) => url.endsWith(suffix)).map(({ body }) => body);
+  const to = (suffix: string) => suffix === SETUP_PUT
+    ? calls.filter(({ url }) => isSetupPut(url)).map(({ url, body }) => setupRecord(url, body))
+    : calls.filter(({ url }) => url.endsWith(suffix)).map(({ body }) => body);
   return { calls, fetcher, to };
 }
 
@@ -158,16 +168,16 @@ describe('CAD setup publisher', () => {
     // nobody chose: the backend keeps asking for a setup instead.
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(to('/project-setups')).toEqual([]);
+    expect(to(SETUP_PUT)).toEqual([]);
 
     useCadReturnStore.getState().setExteriorOnly(true);
     await vi.advanceTimersByTimeAsync(200);
     useCadReturnStore.getState().setExteriorOnly(false);
     await vi.advanceTimersByTimeAsync(200);
     useCadReturnStore.getState().setExteriorOnly(true);
-    expect(to('/project-setups')).toEqual([]);
+    expect(to(SETUP_PUT)).toEqual([]);
     await vi.advanceTimersByTimeAsync(600);
-    const recorded = to('/project-setups') as Array<{ lineageId: string; inventory: unknown; setup: { geometry: { exterior_only: boolean } } }>;
+    const recorded = to(SETUP_PUT) as Array<{ lineageId: string; inventory: unknown; setup: { geometry: { exterior_only: boolean } } }>;
     expect(recorded).toHaveLength(1);
     expect(recorded[0].lineageId).toBe('wgl_speaker');
     expect(recorded[0].inventory).toEqual([{ id: 'source-hf', role: 'HF', required: true }]);
@@ -189,7 +199,7 @@ describe('CAD setup publisher', () => {
     useCadReturnStore.getState().selectBundle(twoWay, 'wgl_speaker');
     useCadReturnStore.getState().setExteriorOnly(true);
     await vi.advanceTimersByTimeAsync(600);
-    const recorded = to('/project-setups') as Array<{ inventory: Array<{ id: string; role: string; required: boolean }> }>;
+    const recorded = to(SETUP_PUT) as Array<{ inventory: Array<{ id: string; role: string; required: boolean }> }>;
     expect(recorded).toHaveLength(1);
     expect(recorded[0].inventory).toEqual(twoWay.sources.map(({ id, role, required }) => ({ id, role, required })));
     expect(recorded[0].inventory.map(({ role }) => role)).toEqual(twoWay.sources.map(({ role }) => role));
@@ -208,7 +218,7 @@ describe('CAD setup publisher', () => {
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
     ingest('wgl_speaker');
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(to('/project-setups')).toEqual([]);
+    expect(to(SETUP_PUT)).toEqual([]);
     stop();
   });
 
@@ -219,7 +229,7 @@ describe('CAD setup publisher', () => {
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
     useCadReturnStore.getState().setExteriorOnly(true);
     await vi.advanceTimersByTimeAsync(600);
-    expect((to('/project-setups') as Array<{ lineageId: string }>).map(({ lineageId }) => lineageId)).toEqual(['wgl_a']);
+    expect((to(SETUP_PUT) as Array<{ lineageId: string }>).map(({ lineageId }) => lineageId)).toEqual(['wgl_a']);
 
     // The ingestion states another project, which has no settings of its own:
     // project A's stay on screen and are saved under B.
@@ -228,7 +238,7 @@ describe('CAD setup publisher', () => {
     useCadReturnStore.getState().selectBundle(null, null);
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_b');
     await vi.advanceTimersByTimeAsync(2_000);
-    expect((to('/project-setups') as Array<{ lineageId: string }>).map(({ lineageId }) => lineageId)).toEqual(['wgl_a']);
+    expect((to(SETUP_PUT) as Array<{ lineageId: string }>).map(({ lineageId }) => lineageId)).toEqual(['wgl_a']);
     stop();
   });
 
@@ -239,19 +249,19 @@ describe('CAD setup publisher', () => {
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
     useCadReturnStore.getState().setExteriorOnly(true);
     await vi.advanceTimersByTimeAsync(600);
-    expect(to('/project-setups')).toHaveLength(1);
+    expect(to(SETUP_PUT)).toHaveLength(1);
 
     workspaceModeStore.setMode('parametric');
     useImportedSolveOptionsStore.getState().setFrequencySpacing('linear');
     useImportedSolveOptionsStore.getState().updatePolar({ distance: 3 });
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(to('/project-setups')).toHaveLength(1);
+    expect(to(SETUP_PUT)).toHaveLength(1);
 
     // The same kind of edit made in the CAD workspace is the project's.
     workspaceModeStore.setMode('cad');
     useImportedSolveOptionsStore.getState().setFrequencySpacing('log');
     await vi.advanceTimersByTimeAsync(600);
-    const recorded = to('/project-setups') as Array<{ setup: { options: { frequency_spacing: string } } }>;
+    const recorded = to(SETUP_PUT) as Array<{ setup: { options: { frequency_spacing: string } } }>;
     expect(recorded).toHaveLength(2);
     expect(recorded[1].setup.options.frequency_spacing).toBe('log');
     stop();
@@ -264,7 +274,7 @@ describe('CAD setup publisher', () => {
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
     useCadReturnStore.getState().setExteriorOnly(true);
     await vi.advanceTimersByTimeAsync(600);
-    const setups = to('/project-setups').length;
+    const setups = to(SETUP_PUT).length;
     const solvers = to('/solver-selection').length;
     workspaceModeStore.setMode('cad');
     workspaceModeStore.setImportedInput('file');
@@ -272,7 +282,7 @@ describe('CAD setup publisher', () => {
     useImportedSolveOptionsStore.getState().setFrequencySpacing('linear');
     useImportedSolveOptionsStore.getState().setEngine('bempp');
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(to('/project-setups')).toHaveLength(setups);
+    expect(to(SETUP_PUT)).toHaveLength(setups);
     expect(to('/solver-selection')).toHaveLength(solvers);
     stop();
     workspaceModeStore.setImportedInput('cad');
@@ -467,7 +477,7 @@ describe('CAD solver selection publication', () => {
   it('keeps a project setup error visible when the solver selection saves successfully', async () => {
     const states: string[] = [];
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
-      if (String(input).endsWith('/project-setups')) throw new TypeError('offline');
+      if (isSetupPut(String(input))) throw new TypeError('offline');
       return json({});
     }) as unknown as typeof fetch;
     const stop = startCadSetupPublisher({ fetcher, debounceMs: 100, retryDelaysMs: [], onSaveState: (state) => states.push(state) });
@@ -504,12 +514,12 @@ describe('CAD setup publisher: what an edit not yet sent does', () => {
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
     useCadReturnStore.getState().setExteriorOnly(true);
     await vi.advanceTimersByTimeAsync(100);
-    expect(to('/project-setups')).toEqual([]);
+    expect(to(SETUP_PUT)).toEqual([]);
 
     useCadReturnStore.getState().selectBundle(null, null);
     await vi.advanceTimersByTimeAsync(0);
 
-    const recorded = to('/project-setups') as Array<{ lineageId: string; setup: { geometry: { exterior_only: boolean } } }>;
+    const recorded = to(SETUP_PUT) as Array<{ lineageId: string; setup: { geometry: { exterior_only: boolean } } }>;
     expect(recorded.map(({ lineageId }) => lineageId)).toEqual(['wgl_a']);
     expect(recorded[0].setup.geometry.exterior_only).toBe(true);
     stop();
@@ -522,23 +532,23 @@ describe('CAD setup publisher: what an edit not yet sent does', () => {
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
     useCadReturnStore.getState().setExteriorOnly(true);
     await vi.advanceTimersByTimeAsync(100);
-    expect(to('/project-setups')).toEqual([]);
+    expect(to(SETUP_PUT)).toEqual([]);
 
     stop();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(to('/project-setups')).toHaveLength(1);
+    expect(to(SETUP_PUT)).toHaveLength(1);
     // The timer went with it: nothing more is sent later.
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(to('/project-setups')).toHaveLength(1);
+    expect(to(SETUP_PUT)).toHaveLength(1);
   });
 
   function flaky(failures: number) {
     const calls: Array<{ body: unknown; keepalive: boolean | undefined }> = [];
     let remaining = failures;
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).endsWith('/project-setups')) {
-        calls.push({ body: JSON.parse(String(init?.body)), keepalive: init?.keepalive });
+      if (isSetupPut(String(input))) {
+        calls.push({ body: setupRecord(String(input), JSON.parse(String(init?.body))), keepalive: init?.keepalive });
         if (remaining > 0) { remaining -= 1; throw new Error('offline'); }
       }
       return json({});
@@ -689,8 +699,8 @@ describe('shell-owned CAD setup publisher', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path.endsWith('/delivery')) healthReads += 1;
-      if (path.endsWith('/project-setups')) {
-        calls.push(JSON.parse(String(init?.body)));
+      if (isSetupPut(path)) {
+        calls.push(setupRecord(path, JSON.parse(String(init?.body))) as (typeof calls)[number]);
         if (failures-- > 0) throw new Error('offline');
       }
       if (path.includes('/operations')) return json({ operations: [] });

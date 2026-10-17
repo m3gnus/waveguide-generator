@@ -1181,7 +1181,7 @@ describe('ParamPanel inventory UX', () => {
   it('shows a publisher failure in the CAD mesh alert without the coordinator mounted', async () => {
     vi.useFakeTimers();
     const save = vi.fn(async () => { throw new Error('offline'); });
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => String(input).endsWith('/project-setups')
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => /^\/api\/models\/[^/]+\/setup$/.test(String(input))
       ? save() : Promise.resolve(new Response('{}', { status: 404 }))));
     try {
       act(() => {

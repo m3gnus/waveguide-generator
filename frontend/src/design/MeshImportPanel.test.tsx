@@ -41,7 +41,7 @@ it('shows actual replay frequencies and physics, with full resolved settings ins
         enabled_axes: ['vertical'], observation_origin: 'mouth', spherical_sampling: false, field_plane: true } },
   };
   useMeshImportStore.setState({ exactSubmission: replay, filename: 'speaker.msh', 
-    registered: { ingest_id: 'wgi_replay', producer: 'mesh-file', manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact',
+    registered: { ingest_id: 'wgi_replay', model_id: 'mesh-file:sha256:artifact', producer: 'mesh-file', manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact',
       source_file: { filename: 'speaker.msh', transform: { units: 'mm', forward: '+z', up: '+y' }, source_tags: [2] },
       msh_text: '', source_tags: { source: 2 }, summary: { node_count: 4, triangle_count: 4, dimensions: [1, 1, 1], groups: [] } } satisfies RegisteredMesh });
   act(() => root.render(panel()));
