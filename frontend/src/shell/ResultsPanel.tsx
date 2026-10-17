@@ -30,6 +30,7 @@ import { FemPortsPanel } from '../results/FemPortsPanel';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
+import { rerunWithPatch } from '../jobs/rerun';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
 import { CHART_TYPES, GROUP_DELAY_UNITS, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
@@ -2624,18 +2625,17 @@ export function ResultsPanel() {
   const selectedJobCanRerun = useMemo(() => Boolean(selectedJob && hydrateJobDesign(selectedJob)), [selectedJob]);
   const enableBalloonAndRerun = useCallback(() => {
     if (!selectedJob) return;
-    const design = hydrateJobDesign(selectedJob);
-    if (!design) {
-      coordinator.reportError('This result has no readable design snapshot, so it cannot be rerun.');
-      return;
-    }
-    useSolveOptionsStore.getState().updatePolar({ sphericalSampling: true });
     // The new solve is a separate job. Follow the latest result so this card
     // replaces the old empty state as soon as that job completes, even when
     // the source result had been pinned for comparison.
     compareSelection.followLatest(selectedJob.id);
     setBeamRerunSubmitting(true);
-    void coordinator.run(design, selectedJob.design_revision)
+    void rerunWithPatch(selectedJob.id, { options: { polar_config: { spherical_sampling: true } } })
+      .then(async (jobId) => {
+        compareSelection.awaitRun(jobId);
+        solveAttention.bindRun(jobId);
+        await jobsSocket.refresh();
+      })
       .catch((reason) => coordinator.reportError(reason instanceof Error ? reason.message : String(reason)))
       .finally(() => setBeamRerunSubmitting(false));
   }, [coordinator, selectedJob]);
