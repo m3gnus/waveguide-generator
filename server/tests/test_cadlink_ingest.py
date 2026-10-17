@@ -599,7 +599,8 @@ def test_endpoint_validates_workspace_and_returns_pipeline_record(monkeypatch, t
     )
     payload = CadReturnIngestRequest.model_validate({"bundlePath": "wgreturn/speaker.wgreturn", "mesh": {"rigidSizeMm": 20, "transitionMm": 40, "sourceSizeMm": {"source-hf": 4}}, "skippedSourceIds": [], "areaDriftOverrides": ["source-hf"], "expectedDesignId": "wgd_speaker", "expectedInstanceId": "instance-a"})
     response = asyncio.run(post_ingest(payload, SimpleNamespace(app=app)))
-    assert response == expected
+    # With the model the record is filed under ('' for none): a Solve names it.
+    assert response == {**expected, "model_id": ""}
     assert captured["expected_design_id"] == "wgd_speaker"
     assert captured["expected_instance_id"] == "instance-a"
     with pytest.raises(ValidationError, match="extra_forbidden"):
@@ -1230,7 +1231,7 @@ def test_get_ingest_reads_store_off_event_loop(monkeypatch, tmp_path: Path) -> N
         return expected
 
     monkeypatch.setattr("server.cadlink.api.asyncio.to_thread", fake_to_thread)
-    assert asyncio.run(get_ingest(ingest_id, SimpleNamespace(app=app))) == expected
+    assert asyncio.run(get_ingest(ingest_id, SimpleNamespace(app=app))) == {**expected, "model_id": ""}
     assert calls
 
 

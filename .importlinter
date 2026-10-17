@@ -39,9 +39,6 @@ ignore_imports =
     server.cadlink.intake.ingest -> server.exports.geometry_identity
     # Legacy use: WgLinkExportRequest, _base_name, _export_wglink_sync.
     server.cadlink.onshape.api -> server.exports.api
-    # cadlink -> updates: existing upward dependency.
-    # Legacy use: UPDATE_RESTART_PENDING.
-    server.cadlink.api -> server.updates.restart
     # design -> cadlink: existing upward dependency.
     # Legacy use: CadLink.
     server.design.textcfg -> server.cadlink.identity

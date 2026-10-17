@@ -1942,12 +1942,16 @@ class JobRuntime:
         request: SolveRequest,
         *,
         cad_provenance: Mapping[str, Any] | None = None,
+        setup_revision_id: str | None = None,
     ) -> str:
         """Queue a solve.
 
         ``cad_provenance`` is the CAD operation's record of what it resolved
         (setup revision, frame, operation and preparation). It is not part of
         the wire request: it is kept on the job as ``task_metadata.cad``.
+        ``setup_revision_id`` is the setup revision an imported request was
+        made from when no CAD provenance names one (a file model's solve,
+        ``server/jobs/model_solve.py``).
         """
 
         _refuse_removed_solver(request)
@@ -1964,7 +1968,7 @@ class JobRuntime:
             )
             if existing_job_id is not None:
                 return existing_job_id
-        composed = await self._compose_job(request, cad_provenance)
+        composed = await self._compose_job(request, cad_provenance, setup_revision_id)
         imported = composed.imported
 
         job_id = str(uuid.uuid4())
@@ -2018,7 +2022,10 @@ class JobRuntime:
         return job_id
 
     async def _compose_job(
-        self, request: SolveRequest, cad_provenance: Mapping[str, Any] | None
+        self,
+        request: SolveRequest,
+        cad_provenance: Mapping[str, Any] | None,
+        setup_revision_id: str | None = None,
     ) -> "_ComposedJob":
         """Everything a job stores of one request, after every submission check.
 
@@ -2093,7 +2100,7 @@ class JobRuntime:
                 "prepared_id": request.geometry.ingest_id,
                 "setup_revision_id": (
                     setup.get("revision_id") if isinstance(setup, Mapping) else None
-                ),
+                ) or setup_revision_id,
                 "anchor_design_id": imported.anchor_design_id,
                 # A run stays attributable to the design and the CAD document it
                 # was solved from long after both have moved on.
@@ -2643,8 +2650,14 @@ class JobRuntime:
         approve_preparation_id: str | None = None,
         approve_finding_ids: tuple[str, ...] | list[str] = (),
         submit: bool = True,
+        request_id: str | None = None,
+        label: str | None = None,
     ) -> str:
         """Solve again a CAD solve that ended before it had a request: a new job.
+
+        ``request_id`` is the client id of the model Solve that continues it
+        (``server/jobs/model_solve.py``), kept on the new job so a replay of
+        that press finds it; ``label`` is that press's run name.
 
         For a job WG refused (setup required, findings to review, the frame, a
         failed preparation) or that was stopped. The new job continues it: same
@@ -2695,6 +2708,7 @@ class JobRuntime:
                     approve_preparation_id=approve_preparation_id,
                     approve_finding_ids=approve_finding_ids,
                     submit=submit,
+                    label=label,
                 )
                 intent = replace(intent, submission_key=continuation_key)
                 record = self._preparing_record(intent)
@@ -2707,6 +2721,8 @@ class JobRuntime:
                     # longer describes this solve. Binding records the new one.
                     record["task_metadata"]["cad"].pop("frame")
                 record["task_metadata"]["cad"]["solve_again_press_sha256"] = press_sha256
+                if request_id:
+                    record["task_metadata"]["cad"]["model_solve_request_id"] = request_id
                 existing, created, event = await asyncio.to_thread(
                     self.store.create_job_idempotent,
                     record,
@@ -2991,11 +3007,22 @@ class JobRuntime:
         if isinstance(request.geometry, ImportedGeometrySource) and cad_of(row):
             provenance = {
                 key: value for key, value in cad_of(row).items()
-                if key not in {"refusal", "solve_again_press_sha256", "last_stage", "manual_waiting"}
+                if key not in {
+                    "refusal", "solve_again_press_sha256", "last_stage", "manual_waiting",
+                    # A model Solve's client id names that press's job only.
+                    "model_solve_request_id",
+                }
             }
             provenance["retried_from"] = job_id
-        if provenance is not None:
-            return await self.submit(request, cad_provenance=provenance)
+        if isinstance(request.geometry, ImportedGeometrySource):
+            # An imported run is solved again as its model is solved, with the
+            # setup it recorded (server/jobs/model_solve.py).
+            from server.jobs.model_solve import recorded_setup_revision, submit_imported_request
+
+            return await submit_imported_request(
+                self, request, cad_provenance=provenance,
+                setup_revision_id=recorded_setup_revision(row),
+            )
         return await self.submit(request)
 
     async def get_job(self, job_id: str) -> dict[str, Any]:
@@ -5090,9 +5117,16 @@ class JobRuntime:
                     logger.warning("Could not read the model of job %s", row.get("id"), exc_info=True)
             if "model_id" not in imported_metadata:
                 model_id = model_id or lineage_id
+            cad = metadata.get("cad") if isinstance(metadata.get("cad"), Mapping) else {}
+            cad_setup = cad.get("setup") if isinstance(cad.get("setup"), Mapping) else {}
             cad_source = {
                 "ingest_id": ingest_id,
                 "model_id": model_id or None,
+                # The setup revision the run was made from, when it recorded one:
+                # an unedited Solve of a restored run sends it back.
+                "setup_revision_id": (
+                    imported_metadata.get("setup_revision_id") or cad_setup.get("revision_id") or None
+                ),
                 "design_id": design_id,
                 "lineage_id": lineage_id,
                 "archive_stem": archive_stem,

@@ -27,7 +27,6 @@ from server.mesh.artifact import (
     read_verified_import_viewport_mesh,
 )
 from server.platform.process import background_process_kwargs
-from server.updates.restart import UPDATE_RESTART_PENDING
 from server.workspace.api import (
     CadWorkspaceState,
     WorkspaceState,
@@ -75,13 +74,7 @@ from server.cadlink.intake.ingest import (
     ingest_bundle,
     resolve_deferred_viewport,
 )
-from server.cadlink.joblane.manual_solve import (
-    OperationConflict,
-    SnapshotNotRetained,
-    UnknownIngest,
-    create_manual_solve,
-    recover_manual_solve,
-)
+from server.cadlink.joblane.manual_solve import create_manual_solve, recover_manual_solve
 # The Onshape leg publishes its bundles under WG's own data directory rather
 # than a user-chosen WGLink folder, so re-ingesting one has to be anchored to
 # that directory. Only the location constant is needed here; the Onshape
@@ -90,19 +83,17 @@ from .build_flags import onshape_enabled
 from .onshape.return_leg import RETURN_SUBDIRECTORY as ONSHAPE_RETURN_SUBDIRECTORY
 from .operations import CANCELLED, KINDS, PREPARE_AND_SOLVE, STATES, TERMINAL_STATES
 from server.cadlink.joblane.preparation import (
-    DismissalUnconfirmed,
     PreparationContext,
-    PreparationInput,
-    dismiss_operation,
     operation_summary,
     recover_operations,
     DeliveryPassReporter,
     settle_received_snapshots,
+    submission_key,
 )
 from server.cadlink.joblane.job_shims import accept_operation_solve, operation_detail, run_delivery_pass, sweep_pending_solves
 from server.cadlink.joblane.project_setup import SOLVER_SELECTION
 from server.cadlink.joblane.setup import setup_content, setup_digest, validate_setup
-from server.cadlink.interpretation.solver_frame import AXES as SOLVER_FRAME_AXES, record_is_unlinked
+from server.cadlink.interpretation.solver_frame import record_is_unlinked
 from server.cadlink.intake.readings import ensure_frame_suggestion
 from server.cadlink.intake.returns_folder import return_inventory, selected_workspace_root
 from .store import CadLinkStore
@@ -938,6 +929,19 @@ def _resolve_ingest_bundle(payload: CadReturnIngestRequest, request: Request) ->
     return bundle_path
 
 
+async def _with_model(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, Any]:
+    """An ingestion record with the model it is filed under ('' when none).
+
+    WG's Solve names its model (``POST /api/models/{id}/solve``); the record's
+    own ``project`` is not always that model for a record an older build wrote.
+    """
+
+    if store is None:
+        return dict(record)
+    row = await asyncio.to_thread(store.get_ingest, str(record.get("ingest_id") or ""))
+    return {**record, "model_id": (row or {}).get("model_id") or ""}
+
+
 @router.post("/ingest")
 async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict[str, Any]:
     bundle_path = _resolve_ingest_bundle(payload, request)
@@ -1001,7 +1005,7 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
     # subject, and it copies tens of megabytes out of a possibly cloud-synced
     # folder. Answering first is what puts the geometry on screen sooner.
     _schedule_cad_document_capture(request.app.state, store, bundle_path, record)
-    return record
+    return await _with_model(store, record)
 
 
 def pending_operation_return_states(store: CadLinkStore | None) -> list[str]:
@@ -1137,6 +1141,7 @@ async def get_ingest(ingest_id: str, request: Request) -> dict[str, Any]:
     record = await asyncio.to_thread(get_ingestion_record, store, ingest_id)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Unknown ingestion record {ingest_id}")
+    record = await _with_model(store, record)
     try:
         evidence = await asyncio.to_thread(current_fem_evidence, record)
     except IngestRefusal:
@@ -1491,13 +1496,6 @@ class SetupRevisionRequest(BaseModel):
     setup: dict[str, Any]
 
 
-class ManualSolveOperationRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    operation_id: str = Field(alias="operationId", min_length=1)
-    ingest_id: str = Field(alias="ingestId", min_length=1)
-
-
 class CadOperationSnapshotSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -1538,35 +1536,6 @@ class ManualSolveOperationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     operation: CadOperationSummary
-
-
-class OperationApprovalsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    preparation_id: str = Field(alias="preparationId", min_length=1)
-    finding_ids: list[str] = Field(alias="findingIds", min_length=1)
-
-
-class PrepareOperationRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    setup_revision_id: str | None = Field(default=None, alias="setupRevisionId")
-    submit: bool = True
-    #: Blocking findings the user reviewed on a preparation. They are approved
-    #: only if this preparation resumes that one: the same snapshot and setup.
-    approvals: OperationApprovalsRequest | None = None
-    #: Answer with the prepared or submitted state instead of at once.
-    wait: bool = False
-    #: The solver frame axis the user saw when they pressed Solve (unlinked
-    #: snapshots): solved only along it, or stopped at the frame gate.
-    frame_axis: str | None = Field(default=None, alias="frameAxis")
-
-    @field_validator("frame_axis")
-    @classmethod
-    def known_axis(cls, value: str | None) -> str | None:
-        if value is not None and value not in SOLVER_FRAME_AXES:
-            raise ValueError(f"frameAxis must be one of {', '.join(SOLVER_FRAME_AXES)}")
-        return value
 
 
 _PENDING_STATES = frozenset(STATES - TERMINAL_STATES)
@@ -1764,130 +1733,32 @@ async def list_cad_operations(
     return {"operations": await asyncio.to_thread(load)}
 
 
-@router.post(
-    "/operations",
-    response_model=ManualSolveOperationResponse,
-    responses={
-        404: {"model": ErrorEnvelope, "description": "CAD ingest not found"},
-        409: {
-            "model": ErrorEnvelope,
-            "description": (
-                "Update restart pending, operation id conflict, or retained snapshot unavailable"
-            ),
-        },
-    },
-)
-async def post_cad_operation(
-    payload: ManualSolveOperationRequest, request: Request
-) -> ManualSolveOperationResponse | JSONResponse:
-    """Create or recover a manual solve from an immutable retained CAD ingest."""
+async def accept_manual_solve(state: Any, operation_id: str, ingest_id: str) -> str:
+    """Accept or recover the manual solve of one retained ingest, and its job.
 
-    return await _create_manual_solve_operation(payload, request)
+    WG's Solve of a CAD model (``server/jobs/model_solve.py``) creates its
+    ledger row and its ``preparing`` job here, under ``cad-solve:<operationId>``.
+    The same operation id and ingest recover the original job, even after the
+    retained copy is gone; another ingest under that id is
+    ``OperationConflict``. Raises ``UnknownIngest`` and ``SnapshotNotRetained``
+    too. The caller refuses new work during an approved update restart.
+    """
 
-
-async def _create_manual_solve_operation(
-    payload: ManualSolveOperationRequest, request: Request,
-    restart_response: Any = None,
-) -> ManualSolveOperationResponse | JSONResponse:
-    """Shared manual intake for the operation shim and the jobs route."""
-
-    state = request.app.state
-    try:
-        recovered, _ingest, _record, _inputs = await asyncio.to_thread(
-            recover_manual_solve,
-            state.cadlink_store,
-            payload.operation_id,
-            payload.ingest_id,
-        )
-    except UnknownIngest as exc:
-        return JSONResponse(
-            status_code=404,
-            content=error_envelope(
-                code="unknown_ingest",
-                stage="submission",
-                message=str(exc),
-                retryable=False,
-            ),
-        )
-    except OperationConflict as exc:
-        return JSONResponse(
-            status_code=409,
-            content=error_envelope(
-                code="operation_conflict",
-                stage="submission",
-                message=str(exc),
-                retryable=False,
-            ),
-        )
-    if recovered is not None:
-        ctx = _preparation_context(state)
-        if ctx.runtime is not None:
-            await accept_operation_solve(ctx, payload.operation_id, manual=True)
-        recovered = await asyncio.to_thread(state.cadlink_store.get_operation, payload.operation_id)
-        return ManualSolveOperationResponse(operation=operation_summary(recovered, ctx.job_store))
-
-    restart = getattr(state, "update_restart", None)
-    refusal = restart.refusal() if restart is not None else None
-    hold = getattr(state, "retirement_hold", None)
-    if refusal is None and hold is not None:
-        refusal = hold.refusal()
-    if restart_response is not None:
-        refused = restart_response()
-        if refused is not None:
-            return refused
-    elif refusal is not None:
-        return JSONResponse(
-            status_code=409,
-            content=error_envelope(
-                code=UPDATE_RESTART_PENDING,
-                stage="submission",
-                message=refusal,
-                retryable=True,
-            ),
-        )
-    try:
-        row, _outcome = await asyncio.to_thread(
-            create_manual_solve,
-            state.cadlink_store,
-            Path(state.data_dir),
-            payload.operation_id,
-            payload.ingest_id,
-        )
-    except UnknownIngest as exc:  # an ingest deleted between the two reads
-        return JSONResponse(
-            status_code=404,
-            content=error_envelope(
-                code="unknown_ingest",
-                stage="submission",
-                message=str(exc),
-                retryable=False,
-            ),
-        )
-    except OperationConflict as exc:
-        return JSONResponse(
-            status_code=409,
-            content=error_envelope(
-                code="operation_conflict",
-                stage="submission",
-                message=str(exc),
-                retryable=False,
-            ),
-        )
-    except SnapshotNotRetained as exc:
-        return JSONResponse(
-            status_code=409,
-            content=error_envelope(
-                code="snapshot_not_retained",
-                stage="submission",
-                message=str(exc),
-                retryable=False,
-            ),
+    recovered, _ingest, _record, _inputs = await asyncio.to_thread(
+        recover_manual_solve, state.cadlink_store, operation_id, ingest_id,
+    )
+    if recovered is None:
+        await asyncio.to_thread(
+            create_manual_solve, state.cadlink_store, Path(state.data_dir), operation_id, ingest_id,
         )
     ctx = _preparation_context(state)
-    if ctx.runtime is not None:
-        await accept_operation_solve(ctx, payload.operation_id, manual=True)
-    row = await asyncio.to_thread(state.cadlink_store.get_operation, payload.operation_id)
-    return ManualSolveOperationResponse(operation=operation_summary(row, ctx.job_store))
+    if ctx.runtime is None:
+        raise RuntimeError("CAD solves cannot be accepted without the jobs runtime")
+    await accept_operation_solve(ctx, operation_id, manual=True)
+    job_id = await asyncio.to_thread(ctx.job_store.job_for_submission_key, submission_key(operation_id))
+    if job_id is None:
+        raise RuntimeError(f"CAD solve {operation_id} was accepted without a job")
+    return job_id
 
 
 @router.get("/operations/{operation_id}")
@@ -1979,148 +1850,6 @@ def _track(state: Any, task: asyncio.Task[Any]) -> None:
             )
 
     task.add_done_callback(done)
-
-
-@router.post("/operations/{operation_id}/prepare")
-async def post_prepare_cad_operation(
-    operation_id: str, payload: PrepareOperationRequest, request: Request
-) -> dict[str, Any]:
-    """Compatibility Solve: create the first intent, or continue its refused job."""
-
-    from server.jobs.runtime import JobConflictError
-    store = request.app.state.cadlink_store
-    row = await asyncio.to_thread(store.get_operation, operation_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
-    if row["kind"] != PREPARE_AND_SOLVE:
-        raise HTTPException(status_code=409, detail=f"CAD operation {operation_id} is not a solve")
-    ctx = _preparation_context(request.app.state)
-    if payload.setup_revision_id and await asyncio.to_thread(ctx.store.get_setup_revision, payload.setup_revision_id) is None:
-        raise HTTPException(status_code=404, detail=f"Unknown setup revision {payload.setup_revision_id}")
-    approvals = payload.approvals
-    press = PreparationInput(
-        setup_revision_id=payload.setup_revision_id, submit=payload.submit,
-        expected_frame_axis=payload.frame_axis,
-        approve_preparation_id=approvals.preparation_id if approvals else None,
-        approve_finding_ids=tuple(approvals.finding_ids) if approvals else (),
-    )
-    try:
-        await ctx.runtime.start()
-        job = await asyncio.to_thread(ctx.job_store.latest_cad_job, operation_id, row.get("job_id"))
-        if job is None:
-            await accept_operation_solve(ctx, operation_id, press)
-        else:
-            await ctx.runtime.prepare_cad_solve(
-                job["id"], setup_revision_id=payload.setup_revision_id, frame_axis=payload.frame_axis,
-                approve_preparation_id=press.approve_preparation_id,
-                approve_finding_ids=press.approve_finding_ids, submit=payload.submit,
-            )
-        if payload.wait:
-            await ctx.runtime.wait_cad_preparations()
-    except (JobConflictError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    row = await asyncio.to_thread(ctx.store.get_operation, operation_id)
-    return {"operation": await asyncio.to_thread(operation_summary, row, ctx.job_store)}
-
-
-@router.post("/operations/{operation_id}/approvals")
-async def post_cad_operation_approvals(
-    operation_id: str, payload: OperationApprovalsRequest, request: Request
-) -> dict[str, Any]:
-    """Acknowledge blocking findings of one preparation. A new preparation needs its own.
-
-    The next preparation of the same snapshot and setup revision resumes that
-    preparation, so these approvals apply to it.
-    """
-
-    store: CadLinkStore = request.app.state.cadlink_store
-    row = await asyncio.to_thread(store.get_operation, operation_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
-    ctx = _preparation_context(request.app.state)
-    if ctx.runtime is not None and row["kind"] == PREPARE_AND_SOLVE:
-        await ctx.runtime.start()
-        job = await asyncio.to_thread(ctx.job_store.latest_cad_job, operation_id, row.get("job_id"))
-        if job is None:
-            raise HTTPException(status_code=409, detail="This CAD solve has no job.")
-        try:
-            await asyncio.to_thread(ctx.job_store.approve_cad_preparation, job["id"], payload.preparation_id, payload.finding_ids)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        detail = await asyncio.to_thread(operation_detail, ctx, row)
-        ctx.publish(detail)
-        return detail
-    try:
-        updated = await asyncio.to_thread(
-            store.add_approvals, operation_id, payload.preparation_id, payload.finding_ids
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if updated is None:
-        raise HTTPException(status_code=409, detail="This CAD operation is finished.")
-    return await asyncio.to_thread(_operation_detail, store, updated)
-
-
-@router.post("/operations/{operation_id}/cancel")
-async def post_cancel_cad_operation(operation_id: str, request: Request) -> dict[str, Any]:
-    """Dismiss an operation: at once when idle, at the next step when running.
-
-    A solve is reconciled with the jobs store first: one whose job already
-    exists follows the job, and one that may have a job is not dismissed
-    while the jobs store cannot be read (409).
-    """
-
-    from server.cadlink.joblane.job_shims import operation_fence
-    async with operation_fence(operation_id):
-        return await _cancel_cad_operation(operation_id, request)
-
-
-async def _cancel_cad_operation(operation_id: str, request: Request) -> dict[str, Any]:
-    """Implement cancellation while the operation admission fence is held."""
-
-    context = _preparation_context(request.app.state)
-    ledger = await asyncio.to_thread(context.store.get_operation, operation_id)
-    if ledger is not None and ledger["kind"] == PREPARE_AND_SOLVE and context.runtime is not None:
-        await context.runtime.start()
-        job = await asyncio.to_thread(context.job_store.latest_cad_job, operation_id, ledger.get("job_id"))
-        if job:
-            if ledger["state"] not in TERMINAL_STATES:
-                # A failed startup may have committed the job/key but not its
-                # receipt. Make that join durable before deleting the intent;
-                # otherwise a restart could accept the dismissed delivery again.
-                try:
-                    await accept_operation_solve(context, operation_id, schedule=False, delivery_released=True)
-                    await asyncio.to_thread(context.store.make_durable)
-                except sqlite3.Error as exc:
-                    raise HTTPException(status_code=409, detail="WG could not durably record this solve's acceptance. Try dismissing it again.") from exc
-                ledger = await asyncio.to_thread(context.store.get_operation, operation_id)
-            from server.jobs.cad_intent import intent_of
-            if intent_of(job) is None:
-                return operation_summary(ledger, context.job_store)
-            summary = operation_summary(ledger, context.job_store)
-            if job["status"] in {"preparing", "queued", "running"}:
-                await context.runtime.stop(job["id"])
-                summary = operation_summary(ledger, context.job_store)
-            else:
-                from server.jobs.runtime import JobConflictError
-                try:
-                    await asyncio.to_thread(context.store.record_job_dismissal, operation_id, summary["updatedAt"])
-                    await context.runtime.dismiss_cad_solve(operation_id)
-                    ledger = await asyncio.to_thread(context.store.get_operation, operation_id)
-                except JobConflictError as exc:
-                    raise HTTPException(status_code=409, detail=str(exc)) from exc
-                summary = operation_summary(ledger, context.job_store)
-            context.publish(summary)
-            return summary
-    try:
-        row = await asyncio.to_thread(dismiss_operation, context, operation_id)
-    except DismissalUnconfirmed as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
-    if context.publish is not None:
-        context.publish(operation_summary(row))
-    return operation_summary(row)
 
 
 class SolverSelectionRequest(BaseModel):

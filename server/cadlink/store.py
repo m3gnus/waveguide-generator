@@ -451,6 +451,9 @@ def _allocate_archive_stem(
 
 #: A file model's id: this prefix and the original file's ``sha256:`` digest.
 FILE_MODEL_PREFIX = "mesh-file:"
+#: The model id a Solve names for a prepared mesh filed under no model
+#: (``server/jobs/model_solve.py``). Reserved: nothing is ever filed under it.
+UNFILED_MODEL_ID = "unfiled"
 #: Before model records, a file setup's owner was this prefix and one ingest id.
 _LEGACY_FILE_OWNER_PREFIX = "mesh-file:wgi_"
 
@@ -498,7 +501,8 @@ def _record_model(conn: sqlite3.Connection, record: Mapping[str, Any]) -> tuple[
             "SELECT lineage_id FROM lineage_cad_names WHERE document_native_id = ?", (native_id,)
         ).fetchone() if native_id else None
         lineage = _text(row["lineage_id"]) if row is not None else ""
-    if not lineage:
+    if not lineage or lineage == UNFILED_MODEL_ID:
+        # Never the reserved id, whatever a return claims: it names "none".
         return "", "cad", "", ""
     names = conn.execute(
         "SELECT archive_stem, document_name FROM lineage_cad_names WHERE lineage_id = ?",
@@ -1552,6 +1556,8 @@ class CadLinkStore:
 
         if not lineage_id or not inventory_sha256 or not revision_id:
             raise ValueError("a project setup names a lineage, an inventory and a revision")
+        if lineage_id == UNFILED_MODEL_ID:
+            raise ValueError(f"{UNFILED_MODEL_ID!r} is reserved and names no model")
         self.initialize()
         with self._lock, self._transaction() as conn:
             conn.execute(

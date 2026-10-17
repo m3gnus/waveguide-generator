@@ -1,8 +1,7 @@
-import { importedSolvePress, finishImportedSolvePress } from '../jobs/importedSolvePress';
-import { importedRunRestoreBlocker, restoredCadSubmission, useImportedRunRestoration } from '../jobs/importedRunRestoration';
+import { importedRunRestoreBlocker, restoredCadRevision, restoredCadSubmission, useImportedRunRestoration } from '../jobs/importedRunRestoration';
 import { nativeSymmetryLimitation } from '../design/nativeFamilies';
 import { durableSettings } from '../stores/durableSettings';
-import { fileMeshSubmission, fileSolvePress, restorePendingMeshPress, restoreSavedMeshSetup, useMeshImportStore } from '../stores/meshImport';
+import { fileMeshSubmission, restoreSavedMeshSetup, useMeshImportStore } from '../stores/meshImport';
 import type { ExportFormat } from '../prefs/preferences';
 import { ownedAutoExport } from '../jobs/autoExportOwner';
 import { exportRunAutomatically } from '../jobs/autoExportRun';
@@ -10,9 +9,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { clearJobLink, jobIdFromLink, openLinkedJob } from '../jobs/jobDeepLink';
 import { compareSelection } from '../api/results';
-import { createSetupRevision, getSetupRevision, putProjectSetup, type CadOperationSummary, type CadSolveSetup } from '../api/cadOperations';
-import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
-import { importedSolvePlanRequestBody, planSolveDesign, postImportedSolvePlan, SolveSubmissionRefused, submitDesign, submitImported, type EngineSubstitution, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
+import type { CadReturnIngestRecord } from '../api/cadlink';
+import { importedSolvePlanRequestBody, planSolveDesign, postImportedSolvePlan, solveModel, SolveSubmissionRefused, submitDesign, type EngineSubstitution, type ImportedSolveSubmission, type ModelSolvePress, type SolvePlan } from '../jobs/actions';
+import { setupOfSubmission } from '../jobs/importedSetup';
 import {
   useCapabilities,
   useCapabilityRefreshOnReconnect,
@@ -22,7 +21,7 @@ import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
-import { acknowledgeCadSolve, beginCadSolve, cadJobSummaries, discardUnsubmittedCadSolve, forgetPendingCadSolve, hasLegacyCadSolve, cadSolveClaim, latestCadJobs, pendingCadSolve, recoverLegacyCadSolves, releaseCadSolve, rememberCadSolve, retainCadSolvePress, solveCadAgain, submitCadSolve } from '../jobs/cadSolve';
+import { acknowledgeCadSolve, cadSolveClaim, forgetCadSolve, latestCadJobs, rememberCadSolve } from '../jobs/cadSolve';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
@@ -32,14 +31,13 @@ import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadRecoveryNotices } from '../stores/cadRecoveryNotices';
-import { confirmDisplayedFrame, frameSolveBlocker, frameReadInFlight, useCadSolverFrameStore } from '../stores/cadSolverFrame';
+import { frameSolveBlocker, frameReadInFlight, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { solveOptionsStoreForJob, useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { buildCadProjectSetup } from './cadSetupPublisher';
 import { getCrossoverDraftError, useCrossoverDraftError } from '../design/crossoverDrafts';
-import { inFlightWords, onScreenRequestInFlight, onScreenRequestToContinue } from './cadOnScreenSettings';
 import { solveAttention, useJobAttention, useRecoveryNoticeAttention } from './solveAttention';
 import { solvedCadModels } from './cadlink/solvedModel';
 
@@ -75,20 +73,16 @@ export class SolveEngineUnavailableError extends Error {}
 
 /** The server refusal that means "no engine here can take this geometry".
  * `imported_engine_unsupported` is deliberately absent: it answers a request
- * that named an engine, which is a verdict on that request, and runImported
- * always sends AUTO. */
+ * that named an engine, which is a verdict on that request. */
 const IMPORTED_CAPABILITY_CODES: ReadonlySet<string> = new Set(['engine_unavailable']);
 
 interface CoordinatorBridgeSnapshot {
   run(design: DesignDocument, designRevision?: number): Promise<void>;
-  /** Resolves with the submitted job id, or null when the submission mutex
-   * refused this call. */
-  runImported(submission: ImportedSolveSubmission): Promise<string | null>;
-  /** The single CAD solve entry point: displayed-press capture, readiness,
-   * job intake or continuation, submission mutex, naming and list refresh.
-   * Throws the blocking reason; returns 'busy' when a solve is already in
-   * flight so an automatic caller can say so instead of silently doing
-   * nothing. */
+  /** The single CAD solve entry point: the displayed axis and reviewed findings,
+   * readiness, one `POST /api/models/{id}/solve`, the submission mutex, naming
+   * and list refresh. Throws the blocking reason; returns 'busy' when a solve
+   * is already in flight so an automatic caller can say so instead of
+   * silently doing nothing. */
   solveCurrentCadImport(): Promise<'submitted' | 'busy'>;
   retry(jobId: string): Promise<void>;
   /** Run one submission under the same mutex as Solve. Resolves null, without
@@ -101,7 +95,6 @@ interface CoordinatorBridgeSnapshot {
 const unavailableRun = async () => { throw new Error('Solve coordinator is unavailable'); };
 let bridgeSnapshot: CoordinatorBridgeSnapshot = {
   run: unavailableRun,
-  runImported: unavailableRun,
   solveCurrentCadImport: unavailableRun,
   retry: unavailableRun,
   runExclusive: unavailableRun,
@@ -162,35 +155,6 @@ export function useOptionalSolveControl(): SolveControl | null {
   return context ?? published;
 }
 
-/** What a setup revision binds for a solve, without the run's own name: the
- * content two revisions must share for a continuation to keep the one bound.
- * Defaults are filled as the server stores them, and keys sorted. */
-export function solveInputsKey(setup: CadSolveSetup): string {
-  const options: Record<string, unknown> = { ...(setup.options ?? {}) };
-  // Imported geometry is solved in full 3-D whatever a setup says.
-  delete options.solver_mode;
-  const canonical = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(canonical);
-    if (value && typeof value === 'object') {
-      return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort()
-        .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
-        .map((key) => [key, canonical((value as Record<string, unknown>)[key])]));
-    }
-    return value;
-  };
-  return JSON.stringify(canonical({
-    schema_version: setup.schema_version ?? 1,
-    geometry: setup.geometry ?? {},
-    options,
-    preparation: {
-      area_drift_overrides: [], symmetry_mode: 'auto', surface_deviation_mm: null,
-      ...(setup.preparation ?? {}),
-    },
-    driver_references: Object.fromEntries(Object.entries(setup.driver_references ?? {})
-      .map(([channel, reference]) => [channel, { source: null, ...reference }])),
-  }));
-}
-
 /** Read naming at submission time, including a commit from the same key event. */
 export function currentJobLabel(
   designName = currentRunNameSource().name,
@@ -218,8 +182,7 @@ const CAD_VIEWPORT_MISMATCH =
  * gate. The viewport check is evidence about what the user is looking at; the
  * rest is the shared imported-submission blocker. */
 export function cadSolveBlockerNow(): string | null {
-  return cadInputBlockerNow() ?? (restoredCadSubmission(useCadReturnStore.getState().ingestRecord?.ingest_id) ? null
-    : frameSolveBlocker(useCadReturnStore.getState().ingestRecord?.ingest_id));
+  return cadInputBlockerNow() ?? frameSolveBlocker(useCadReturnStore.getState().ingestRecord?.ingest_id);
 }
 
 /** The same rule without the frame, which a Solve judges once the frame read
@@ -236,21 +199,45 @@ function cadInputBlockerNow(): string | null {
   return importedSubmissionBlocker(cadReturn);
 }
 
-/** The request for the snapshot a Solve was given for that the backend is
- * preparing or submitting, and the words that say so. Always the snapshot
- * captured at the press, never whatever is selected by the time it is asked. */
-function heldOnRequest(record: CadReturnIngestRecord | null): { operation: CadOperationSummary; words: string } | null {
-  if (record && pendingCadSolve(record.ingest_id)?.press) return null;
-  const operation = onScreenRequestInFlight(cadJobSummaries(jobsSocket.getSnapshot().jobs), record);
-  return operation ? { operation, words: inFlightWords(operation) } : null;
+/** The model a CAD preparation is filed under, as a Solve names it: the reserved
+ * `unfiled` for one the server files under none (server/jobs/model_solve.py). */
+function cadModelId(record: CadReturnIngestRecord): string {
+  if (record.model_id !== undefined) return record.model_id || 'unfiled';
+  return record.project?.lineage_id || 'unfiled';
 }
 
-/** A Solve given while that request is in flight -- a press that raced the
- * button's hold -- is that request's: its arm follows it, so the gate it stops
- * at or the result it ends in follows the user. Nothing new is created. */
-function holdOnRequest(held: { operation: CadOperationSummary }): 'submitted' {
-  solveAttention.bindOperation(held.operation.jobId!);
-  return 'submitted';
+/** The blocking findings already reviewed on the refused solve of this
+ * snapshot that a Solve continues, so the press carries them. */
+function reviewedFindings(record: CadReturnIngestRecord): ModelSolvePress['approvals'] {
+  const refused = latestCadJobs(jobsSocket.getSnapshot().jobs).find((job) => job.cad_state?.state === 'needs_user_input'
+    && job.cad_state.snapshot?.manifest_sha256 === record.manifest_sha256);
+  const preparation = refused?.cad_state?.preparation;
+  if (!refused?.cad_state || !preparation) return undefined;
+  const findingIds = refused.cad_state.approvals
+    .filter((approval) => approval.preparation_id === preparation.preparation_id
+      && preparation.blocking_finding_ids.includes(approval.finding_id))
+    .map((approval) => approval.finding_id);
+  return findingIds.length ? { preparation_id: preparation.preparation_id, finding_ids: findingIds } : undefined;
+}
+
+/** Refusals of a restored run's own saved inputs: the run cannot be solved again as it was. */
+const RESTORED_INPUT_CODES: ReadonlySet<string> = new Set(['setup_required', 'prepared_unavailable', 'model_mismatch']);
+const RESTORED_INPUT_HINT = 'This run’s saved setup is no longer available; review the settings and press Solve.';
+
+/** A refused Solve, in the words the user acts on; "no engine here" stays its own kind.
+ * The envelope's code stays on the error (`code`), never at the front of its words. */
+function importedSolveError(error: unknown, restored = false): unknown {
+  if (error instanceof SolveSubmissionRefused && error.code !== null) {
+    const prefix = `${error.code}: `;
+    const words = error.message.startsWith(prefix) ? error.message.slice(prefix.length) : error.message;
+    if (IMPORTED_CAPABILITY_CODES.has(error.code)) return new SolveEngineUnavailableError(words);
+    if (restored && RESTORED_INPUT_CODES.has(error.code)) {
+      return new SolveSubmissionRefused(RESTORED_INPUT_HINT, error.status, error.code);
+    }
+    const explained = explainImportedRefusal(`${prefix}${words}`);
+    return new SolveSubmissionRefused(explained === `${prefix}${words}` ? words : explained, error.status, error.code);
+  }
+  return error instanceof Error ? new Error(explainImportedRefusal(error.message)) : error;
 }
 
 const jobsConnection = () => jobsSocket.getSnapshot().connection;
@@ -392,14 +379,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     !cadViewportGeometry.ingestId
     || cadViewportGeometry.ingestId !== cadReturn.ingestRecord?.ingest_id
   );
-  const frozenCad = restoredCadSubmission(cadReturn.ingestRecord?.ingest_id);
-  const inFlight = !frozenCad && cadGeometryActive && !pendingCadSolve(cadReturn.ingestRecord?.ingest_id ?? '')?.press
-    ? onScreenRequestInFlight(cadJobSummaries(jobs), cadReturn.ingestRecord) : null;
   const cadSolveBlocker = cadGeometryMismatch
     ? CAD_VIEWPORT_MISMATCH
     : cadGeometryActive
-      ? (inFlight ? inFlightWords(inFlight) : null)
-        ?? importedSubmissionBlocker(cadReturn, solveOptions) ?? (frozenCad ? null : frameSolveBlocker(cadReturn.ingestRecord?.ingest_id))
+      ? importedSubmissionBlocker(cadReturn, solveOptions) ?? frameSolveBlocker(cadReturn.ingestRecord?.ingest_id)
       : null;
   const directivityError = polarValidationError(solveOptions.polar);
   const solveBlocker = fileGeometryActive ? fileBlocker : (cadGeometryActive ? crossoverDraftError : null) ?? cadSolveBlocker ?? directivityError;
@@ -462,188 +445,104 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
   }, [designName, now, preferences]);
 
-  const runImported = useCallback(async (submission: ImportedSolveSubmission, press?: { id: string; label: string; designName?: string }) => {
-    if (submissionInFlight.current) return null;
+  // One press of an imported model's Solve: one POST /api/models/{id}/solve.
+  // The server owns what follows -- a job already in flight for the same
+  // setup, the CAD preparation lane, the frame and findings gates.
+  const solveFileModel = useCallback(async () => {
+    if (submissionInFlight.current) return 'busy' as const;
+    const submission = fileMeshSubmission();
+    const state = useMeshImportStore.getState();
+    const record = state.registered!;
+    const designName = state.filename;
+    const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
+    // An unedited restored run is solved again with the setup it recorded.
+    const revision = state.exactSubmission ? state.exactRevisionId : null;
+    const press: ModelSolvePress = {
+      prepared_id: record.ingest_id, client_request_id: `mesh-${crypto.randomUUID()}`, label,
+      ...(revision ? { setup_revision_id: revision } : { setup: setupOfSubmission(submission) }),
+    };
     submissionInFlight.current = true;
     try {
       setSubmitting(true);
       setActionError(null);
-      // The user's engine choice goes to the server as it is, exactly as for a
-      // parametric design; the server resolves AUTO from what each engine
-      // declares it can solve (`resolve_imported_submission`) and refuses an
-      // explicit engine that cannot, with the reason. The formulation is not
-      // a choice here: imported geometry solves in full 3-D only, and the
-      // domain is the one the ingestion record describes.
-      const options: SolveOptions = press ? { ...submission.options }
-        : { ...submission.options, solver_mode: 'full_3d', symmetry: 'auto' };
-      const effectiveSubmission = { ...submission, options };
-      // The CAD document names its own runs; see jobs/runNameSource.
-      const designName = press?.designName ?? (press ? useMeshImportStore.getState().filename : currentRunNameSource().name);
-      const label = press?.label ?? nextRunLabel(designName, preferencesStore.getSnapshot(), now());
-      // A typed refusal is the server naming a condition; the user needs the
-      // remedy. Translating here covers every imported entry point at once.
-      const submitted = press
-        ? submitImported(effectiveSubmission, fetch, label, press.id)
-        : submitImported(effectiveSubmission, fetch, label);
-      const jobId = await submitted.catch((error) => {
-        // No engine here can solve imported geometry: a capability this
-        // machine lacks, which an automatic caller keeps rather than refuses.
-        if (
-          error instanceof SolveSubmissionRefused
-          && error.code !== null
-          && IMPORTED_CAPABILITY_CODES.has(error.code)
-        ) {
-          throw new SolveEngineUnavailableError(error.message);
-        }
-        throw error instanceof Error
-          ? new Error(explainImportedRefusal(error.message))
-          : error;
-      });
-      // Fusion's "Solve in WG" commands are the backend's to prepare and submit
-      // (under cad-solve:<id>), so a solve from here never carries a command key.
+      const jobId = await solveModel(record.model_id, press)
+        .catch((error) => { throw importedSolveError(error, state.exactSubmission !== null); });
       acceptSubmittedLabel(designName);
-      if (press) finishImportedSolvePress(press.id);
       compareSelection.awaitRun(jobId);
       solveAttention.bindRun(jobId);
       await jobsSocket.refresh();
-      return jobId;
+      return 'submitted' as const;
     } finally {
       submissionInFlight.current = false;
       setSubmitting(false);
     }
   }, [now, preferences]);
 
-  // Capture the displayed press before any plan, frame or setup request waits.
+  // The CAD press captures the axis shown and the findings reviewed, then
+  // makes one call; the server prepares, continues or answers the job in flight.
   const solveCurrentCadImport = useCallback(async (
     clicked?: { cad: ReturnType<typeof useCadReturnStore.getState>; checkPlan: () => Promise<void> },
   ) => {
     if (submissionInFlight.current) return 'busy' as const;
     const cad = clicked?.cad ?? useCadReturnStore.getState();
-    const ingestId = cad.ingestRecord?.ingest_id;
-    if (!ingestId) throw new Error('Ingest a CAD return before solving.');
-    const frozen = restoredCadSubmission(ingestId);
-    if (frozen) {
-      const blocker = cadInputBlockerNow();
-      if (blocker) throw new Error(blocker);
-      // Historical inputs are already prepared. Re-entering the CAD adapter
-      // would reinterpret the frame/domain and remesh under current defaults.
-      if (clicked) await clicked.checkPlan();
-      const designName = currentRunNameSource().name;
-      const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
-      await runImported(frozen, { ...importedSolvePress(frozen, label, 'cad'), designName });
-      return 'submitted' as const;
-    }
+    const record = cad.ingestRecord;
+    if (!record) throw new Error('Ingest a CAD return before solving.');
+    const ingestId = record.ingest_id;
     const frameAtPress = useCadSolverFrameStore.getState().frames[ingestId];
-    const project = cad.ingestRecord?.project?.lineage_id ?? cad.projectLineageId ?? null;
-    const built = buildCadProjectSetup(cad, undefined, undefined, project ?? 'manual-solve');
-    const designName = currentRunNameSource().name;
-    if (hasLegacyCadSolve(ingestId)) {
-      submissionInFlight.current = true;
-      try {
-        await jobsSocket.refresh();
-        await recoverLegacyCadSolves(jobsSocket.getSnapshot().jobs, ingestId);
-      } finally { submissionInFlight.current = false; }
-    }
-    const retained = pendingCadSolve(ingestId);
-    if (retained?.recoveredJobId) {
-      const recovered = jobsSocket.getSnapshot().jobs.find((job) => job.id === retained.recoveredJobId);
-      releaseCadSolve(ingestId, retained, retained.recoveredJobId);
-      if (recovered) completeCadSolve(recovered);
-      return 'submitted' as const;
-    }
-    const heldAtPress = retained ? null : heldOnRequest(cad.ingestRecord);
-    if (heldAtPress) return holdOnRequest(heldAtPress);
     const blocker = cadInputBlockerNow();
-    if (blocker && !retained?.press) throw new Error(blocker);
-    const selectWaiting = () => {
-      const waiting = onScreenRequestToContinue(cadJobSummaries(jobsSocket.getSnapshot().jobs), cad.ingestRecord);
-      if (waiting?.snapshot?.projectLineageId && waiting.snapshot.projectLineageId !== project) {
-        throw new Error('The model on screen is filed under another project than this request names. Open that project first.');
-      }
-      return waiting;
-    };
-    if (!retained?.press) selectWaiting();
-    if (!built && !retained?.press) throw new Error('The CAD solve settings are incomplete. Review the Simulation settings and try again.');
-    const identity = retained ?? beginCadSolve(ingestId, designName, nextRunLabel(designName, preferencesStore.getSnapshot(), now()));
+    if (blocker) throw new Error(blocker);
+    // The settings on screen, or an unedited restored run's own revision.
+    const frozen = restoredCadSubmission(ingestId);
+    const revision = frozen ? restoredCadRevision(ingestId) : null;
+    const built = frozen ? null : buildCadProjectSetup(cad, undefined, undefined, cadModelId(record));
+    if (!frozen && !built) throw new Error('The CAD solve settings are incomplete. Review the Simulation settings and try again.');
+    const setup = revision ? null : frozen ? setupOfSubmission(frozen) : built!.setup;
+    const designName = currentRunNameSource().name;
+    const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
+    const clientRequestId = `cad-${crypto.randomUUID()}`;
+    const key = `cad-solve:manual-solve:${clientRequestId}`;
     submissionInFlight.current = true;
     try {
       setSubmitting(true);
       setActionError(null);
-      if (!identity.press) {
-        // Start confirmation now: a later pick cannot replace the displayed axis.
-        const reading = frameReadInFlight(ingestId);
-        if (reading) await reading;
-        const frameBlocker = frameSolveBlocker(ingestId);
-        if (frameBlocker) throw new Error(frameBlocker);
-        const frameConfirmation = confirmDisplayedFrame(ingestId, fetch, frameAtPress?.status === 'ready' ? frameAtPress : undefined);
-        const frameAxis = await frameConfirmation;
-        if (clicked) await clicked.checkPlan();
-        if (project) await putProjectSetup(built!);
-        const heldNow = heldOnRequest(cad.ingestRecord);
-        if (heldNow && heldNow.operation.jobId !== identity.jobId) {
-          discardUnsubmittedCadSolve(ingestId);
-          return holdOnRequest(heldNow);
-        }
-        const setup = {
-          ...built!.setup, label: identity.label,
-          options: { ...built!.setup.options },
-        };
-        let waiting = selectWaiting();
-        const bound = waiting?.setupRevisionId;
-        const keepBound = bound && await getSetupRevision(bound)
-          .then((revision) => solveInputsKey(revision.setup) === solveInputsKey(setup), () => false);
-        const revisionId = keepBound ? bound : (await createSetupRevision(setup)).revisionId;
-        // A Fusion request can reach a gate during any of the above awaits.
-        // Select it against the snapshot captured at this press, just before
-        // persisting the target and immutable press together.
-        waiting = selectWaiting();
-        const heldAfterSettings = heldOnRequest(cad.ingestRecord);
-        if (heldAfterSettings && heldAfterSettings.operation.jobId !== identity.jobId) {
-          discardUnsubmittedCadSolve(ingestId);
-          return holdOnRequest(heldAfterSettings);
-        }
-        identity.jobId = waiting?.jobId ?? identity.jobId;
-        const waitingJob = jobsSocket.getSnapshot().jobs.find((job) => job.id === identity.jobId);
-        const preparation = waitingJob?.cad_state?.preparation;
-        const approved = revisionId === waiting?.setupRevisionId && preparation ? waitingJob?.cad_state?.approvals
-          .filter((approval) => approval.preparation_id === preparation.preparation_id
-            && preparation.blocking_finding_ids.includes(approval.finding_id))
-          .map((approval) => approval.finding_id) : [];
-        identity.press = {
-          client_request_id: identity.requestId, ingest_id: ingestId,
-          setup_revision_id: revisionId, label: identity.label, submit: true,
-          ...(frameAxis ? { frame_axis: frameAxis } : {}),
-          ...(approved?.length && preparation ? { approvals: { preparation_id: preparation.preparation_id, finding_ids: approved } } : {}),
-        };
-        retainCadSolvePress(ingestId, identity);
-      }
+      // The axis this card shows -- a read under way answers first; a later
+      // pick cannot replace it. The server confirms it as part of the press.
+      const reading = frameReadInFlight(ingestId);
+      if (reading) await reading;
+      const view = frameAtPress?.status === 'ready' ? frameAtPress : useCadSolverFrameStore.getState().frames[ingestId];
+      const frameAxis = view && !view.linked && view.status === 'ready' ? view.axis : null;
+      if (clicked) await clicked.checkPlan();
+      const approvals = reviewedFindings(record);
+      const press: ModelSolvePress = {
+        prepared_id: ingestId, client_request_id: clientRequestId, label,
+        ...(revision ? { setup_revision_id: revision } : { setup: setup! }),
+        ...(frameAxis ? { frame_axis: frameAxis } : {}),
+        ...(approvals ? { approvals } : {}),
+      };
       // The completion claim exists before HTTP: an event may beat the response.
-      rememberCadSolve(`cad-solve:manual-solve:${identity.requestId}`, identity.designName, ingestId);
-      if (identity.jobId) rememberCadSolve(identity.jobId, identity.designName, ingestId);
-      solveAttention.bindOperation(identity.jobId ?? `cad-solve:manual-solve:${identity.requestId}`);
-      const response = identity.jobId
-        ? await solveCadAgain(identity.jobId, identity.press)
-        : await submitCadSolve(identity.press);
-      rememberCadSolve(response.job_id, identity.designName, ingestId);
-      solveAttention.followJob(identity.jobId ?? `cad-solve:manual-solve:${identity.requestId}`, response.job_id);
-      solveAttention.bindRun(response.job_id, identity.jobId ?? `cad-solve:manual-solve:${identity.requestId}`);
-      releaseCadSolve(ingestId, identity, response.job_id);
+      rememberCadSolve(key, designName, ingestId);
+      solveAttention.bindOperation(key);
+      const jobId = await solveModel(cadModelId(record), press).catch((error) => {
+        if (error instanceof SolveSubmissionRefused) {
+          // Refused: no job exists for this press, so nothing may claim it.
+          forgetCadSolve(key);
+          solveAttention.releaseOperation(key);
+        }
+        throw importedSolveError(error, frozen !== null);
+      });
+      rememberCadSolve(jobId, designName, ingestId);
+      solveAttention.followJob(key, jobId);
+      solveAttention.bindRun(jobId, key);
+      if (frameAxis && view?.frame?.confirmed?.axis !== frameAxis) void useCadSolverFrameStore.getState().load(ingestId);
       await jobsSocket.refresh();
-      const job = jobsSocket.getSnapshot().jobs.find((candidate) => candidate.id === response.job_id);
+      const job = jobsSocket.getSnapshot().jobs.find((candidate) => candidate.id === jobId);
       if (job) completeCadSolve(job);
       return 'submitted' as const;
-    } catch (reason) {
-      // A definitive refusal answered this press; transport failures retain it.
-      if (reason instanceof CadLinkApiError && reason.status && reason.status >= 400 && reason.status < 500) {
-        forgetPendingCadSolve(ingestId, identity.requestId);
-      }
-      throw reason;
     } finally {
-      discardUnsubmittedCadSolve(ingestId);
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [completeCadSolve, now, runImported]);
+  }, [completeCadSolve, now]);
 
   const retry = useCallback(async (jobId: string) => {
     if (submissionInFlight.current) return;
@@ -682,7 +581,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         || importedMeshStore.getSnapshot().showing !== 'parametric') return;
       recovery.inFlight = true;
       const generation = importedMeshStore.captureGeneration();
-      void restorePendingMeshPress().then(restored => restored || (importedMeshStore.isCurrentGeneration(generation) && restoreSavedMeshSetup()))
+      void Promise.resolve(importedMeshStore.isCurrentGeneration(generation) && restoreSavedMeshSetup())
         .then(restored => { recovery.done = Boolean(restored); })
         .catch(error => { recovery.done = true; reportError(error instanceof Error ? error.message : String(error)); })
         .finally(() => { recovery.inFlight = false; });
@@ -704,17 +603,16 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     clearJobLink();
   }, [jobs, jobsLoaded, reportError]);
   useEffect(() => {
-    publishBridge({ run, runImported, solveCurrentCadImport, retry, runExclusive, reportError, actionError });
+    publishBridge({ run, solveCurrentCadImport, retry, runExclusive, reportError, actionError });
     return () => publishBridge({
       run: unavailableRun,
-      runImported: unavailableRun,
       solveCurrentCadImport: unavailableRun,
       retry: unavailableRun,
       runExclusive: unavailableRun,
       reportError: () => undefined,
       actionError: null,
     });
-  }, [actionError, reportError, retry, run, runExclusive, runImported, solveCurrentCadImport]);
+  }, [actionError, reportError, retry, run, runExclusive, solveCurrentCadImport]);
 
   useEffect(() => {
     const retryExport = (event: Event) => automation.retryExport((event as CustomEvent<string>).detail);
@@ -771,9 +669,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     solveAttention.armSolve();
     const action = async () => {
       if (fileGeometryActive) {
-        const submission = fileMeshSubmission();
-        const label = nextRunLabel(useMeshImportStore.getState().filename, preferencesStore.getSnapshot(), now());
-        await runImported(submission, fileSolvePress(submission, label));
+        await solveFileModel();
         return;
       }
       if (cadGeometryActive) {
@@ -799,7 +695,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       await run(current.design, current.designRevision);
     };
     void action().catch((error) => reportError(error instanceof Error ? error.message : String(error)));
-  }, [cadGeometryActive, fileGeometryActive, now, planPending, reportError, run, runImported, solveCurrentCadImport, solveEnabled]);
+  }, [cadGeometryActive, fileGeometryActive, planPending, reportError, run, solveCurrentCadImport, solveEnabled, solveFileModel]);
   useEffect(() => {
     if (pendingSolve === null) return;
     if ((pendingSolve === 'file' ? !fileGeometryActive : pendingSolve === 'cad' ? !cadGeometryActive : pendingSolve !== workspaceMode) || !solveEnabled) {

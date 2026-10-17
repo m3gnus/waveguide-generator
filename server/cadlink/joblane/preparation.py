@@ -77,10 +77,10 @@ from server.cadlink.joblane.default_setup import (
     default_setup,
 )
 from server.cadlink.joblane.project_setup import (
+    compose_solve_request,
     inventory_sha256,
     project_setup,
     solver_selection,
-    widen_polar_to_derivation,
 )
 from server.cadlink.intake.readings import snapshot_project, solver_anchor
 from server.jobs.imported_setup import (
@@ -88,14 +88,10 @@ from server.jobs.imported_setup import (
     CadSolveSetup,
     setup_content,
     setup_digest,
-    solve_request_for,
     validate_setup,
 )
 from server.cadlink.interpretation.domain_decision import decision_problem
-from server.cadlink.interpretation.domain_interpretation import (
-    excitation_problem,
-    record_plan_identity,
-)
+from server.cadlink.interpretation.domain_interpretation import record_plan_identity
 from server.cadlink.intake.readings import resolve_domain_plan
 from server.cadlink.interpretation.solver_frame import (
     AS_MODELLED,
@@ -1337,11 +1333,11 @@ def _prepare_sync(
             message="Prepared. Press Solve to start it.",
         )
     try:
-        solve_request = solve_request_for(
+        # The composition and checks ``_submit`` shares with every other solve
+        # of a model (``compose_solve_request``).
+        solve_request = compose_solve_request(
             setup,
-            ingest_id=preparation_id,
-            manifest_sha256=str(record["manifest_sha256"]),
-            artifact_sha256=str(record["artifact_sha256"]),
+            {**record, "ingest_id": preparation_id},
             acknowledged_findings=[
                 f"{record.get('report_sha256')}:{finding}" for finding in blocking
             ],
@@ -1349,20 +1345,10 @@ def _prepare_sync(
             fem_region_ids=[r["region_id"] for r in
                             (retained_manifest.get("scope") or {}).get("fem_regions", ())],
         )
-        # Never narrower than the ingestion derived: the runtime refuses that.
-        solve_request = widen_polar_to_derivation(solve_request, record.get("polar_grid_derivation"))
     except ValueError as exc:
         return "done", _finish(
             ctx, operation_id, generation, NEEDS_USER_INPUT, reason="submission_refused",
             message=str(exc),
-        )
-    # Acoustic compatibility, a hard check on every submission: the excitation
-    # is the setup's, so it is judged again whenever the settings change.
-    excitation = excitation_problem(record, getattr(solve_request.geometry, "drive_channels", ()))
-    if excitation is not None:
-        return "done", _finish(
-            ctx, operation_id, generation, NEEDS_USER_INPUT, reason="submission_refused",
-            message=excitation,
         )
     return "submit", (solve_request, revision_id)
 

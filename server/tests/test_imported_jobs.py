@@ -1119,6 +1119,8 @@ def test_legacy_imported_job_recovers_project_provenance_from_ingest(
                 "ingest_id": ingest["ingest_id"],
                 # Resolved from the ingest's model, as the record files it.
                 "model_id": identity.lineage_id,
+                # A run from before setup revisions were recorded names none.
+                "setup_revision_id": None,
                 "design_id": identity.design_id,
                 "lineage_id": identity.lineage_id,
                 "archive_stem": "Tritonia-V-project",

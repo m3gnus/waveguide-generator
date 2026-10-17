@@ -800,42 +800,6 @@ def test_an_approval_given_on_a_preparation_survives_a_refused_submission(harnes
     assert harness.submitted[-1].geometry.acknowledged_findings == [f"{report}:healing-1"]
 
 
-@old_only(
-    "the approvals route records on the operation (its shim is S4-F1)",
-    "test_job_cad_lane.py::test_an_approval_given_with_solve_again_applies_to_the_resumed_preparation",
-)
-def test_an_approval_through_the_route_applies_to_the_resumed_preparation(
-    harness: Harness,
-) -> None:
-    from fastapi import HTTPException
-
-    from server.cadlink.api import OperationApprovalsRequest, post_cad_operation_approvals
-
-    _received(harness)
-    harness.ingest.findings = [{"id": "healing-1", "kind": "healing-performed", "blocking": True}]
-    revision = _revision(harness.store, _setup())
-    first = harness.prepare(setup_revision_id=revision)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=harness.store)))
-
-    def approve(*finding_ids: str) -> dict[str, Any]:
-        payload = OperationApprovalsRequest(
-            preparationId=first["preparationId"], findingIds=list(finding_ids)
-        )
-        return asyncio.run(post_cad_operation_approvals("cmd-1", payload, request))
-
-    with pytest.raises(HTTPException) as unknown:
-        approve("healing-9")
-    assert unknown.value.status_code == 422
-    assert approve("healing-1")["approvals"] == [
-        {"preparation_id": first["preparationId"], "finding_id": "healing-1"}
-    ]
-
-    resumed = harness.prepare(setup_revision_id=revision)
-
-    assert (resumed["state"], resumed["preparationId"]) == ("accepted", first["preparationId"])
-    assert len(harness.ingest.calls) == 1
-
-
 # -- routes: the authoritative state a reloaded UI reads -----------------------------
 
 
@@ -867,27 +831,6 @@ def test_a_reloaded_ui_reads_the_same_stage(harness: Harness) -> None:
         assert [item["operationId"] for item in listed["operations"]] == ["cmd-1"]
         assert listed["operations"][0]["stage"] == "ready"
     harness._loop.run(read())
-
-
-@old_only(
-    "route validation of the prepare request (its shim is S4-F1)",
-    "test_job_cad_lane.py::test_solve_again_names_the_setup_revision_it_was_given",
-)
-def test_a_preparation_names_a_setup_revision_that_exists(harness: Harness) -> None:
-    from fastapi import HTTPException
-
-    from server.cadlink.api import PrepareOperationRequest, post_prepare_cad_operation
-
-    _received(harness)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=harness.store)))
-
-    with pytest.raises(HTTPException) as refused:
-        asyncio.run(post_prepare_cad_operation(
-            "cmd-1", PrepareOperationRequest(setupRevisionId="wgs_missing"), request
-        ))
-
-    assert refused.value.status_code == 404
-    assert harness.row()["state"] == "received"
 
 
 # -- preparation identity ------------------------------------------------------------
@@ -1705,22 +1648,6 @@ def test_a_cad_mutation_under_way_is_not_dismissed(harness: Harness) -> None:
     assert harness.store.request_cancel("upd-2")["state"] == "cancelled"
 
 
-@backend_free
-def test_preparing_an_operation_that_is_not_a_solve_is_refused(harness: Harness) -> None:
-    from fastapi import HTTPException
-
-    from server.cadlink.api import PrepareOperationRequest, post_prepare_cad_operation
-
-    _update_link(harness.store, "upd-1")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=harness.store)))
-
-    with pytest.raises(HTTPException) as refused:
-        asyncio.run(post_prepare_cad_operation("upd-1", PrepareOperationRequest(), request))
-
-    assert refused.value.status_code == 409
-    assert harness.row("upd-1")["state"] == "received"
-
-
 # -- the legacy solve-command routes -------------------------------------------------
 #
 # A build before the backend owned solves (v0.3.2, v0.3.3-rc.1) polled
@@ -1937,19 +1864,6 @@ class _JobStore:
         return self.harness.jobs.get(key)
 
 
-def _cancel(harness: Harness, jobs: _JobStore, operation_id: str = "cmd-1") -> dict[str, Any]:
-    from server.cadlink.api import post_cancel_cad_operation
-
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        cadlink_store=harness.store,
-        data_dir=str(harness.data_dir),
-        jobs_runtime=SimpleNamespace(store=jobs, submit=None, events=None),
-        update_restart=None,
-        cad_workspace=None,
-    )))
-    return asyncio.run(post_cancel_cad_operation(operation_id, request))
-
-
 def _interrupted_while_bound(harness: Harness) -> None:
     """Submission raised after the jobs system may have committed, and its store was unreadable."""
 
@@ -1967,22 +1881,6 @@ def _interrupted_while_bound(harness: Harness) -> None:
     assert harness.row()["request_json"] is not None  # still bound: a job may exist
 
 
-@old_only(
-    "dismissal reconciled with the jobs store by key",
-    "test_job_cad_lane.py::test_a_preparing_job_is_stopped_where_it_is",
-)
-def test_a_dismissal_follows_a_job_the_operation_already_made(harness: Harness) -> None:
-    _interrupted_while_bound(harness)
-    harness.jobs["cad-solve:cmd-1"] = "job-1"  # it did
-
-    summary = _cancel(harness, _JobStore(harness))
-
-    # The job exists: the operation is accepted with it, and the user cancels
-    # the job in the jobs list. It never reads "cancelled" beside a running job.
-    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
-    assert (harness.row()["state"], harness.row()["job_id"]) == ("accepted", "job-1")
-
-
 def test_preparation_always_defers_the_viewport(harness: Harness) -> None:
     _received(harness)
     revision = _revision(harness.store, _setup())
@@ -1996,43 +1894,6 @@ def test_preparation_always_defers_the_viewport(harness: Harness) -> None:
     harness.prepare(ingest=recording_ingest, setup_revision_id=revision, submit=False)
 
     assert calls and calls[0]["defer_viewport"] is True
-
-
-@old_only(
-    "dismissal reconciled with the jobs store by key",
-    "test_job_cad_lane.py::test_a_preparing_job_is_stopped_where_it_is",
-)
-def test_a_dismissal_waits_while_wg_cannot_tell_whether_a_job_exists(harness: Harness) -> None:
-    from fastapi import HTTPException
-
-    _interrupted_while_bound(harness)
-    before = harness.row()
-    jobs = _JobStore(harness)
-    jobs.error = sqlite3.OperationalError("database is locked")
-
-    with pytest.raises(HTTPException) as refused:
-        _cancel(harness, jobs)
-
-    assert refused.value.status_code == 409
-    assert "cannot confirm" in str(refused.value.detail)
-    assert harness.row() == before
-    # Once the jobs store answers, the dismissal goes through.
-    jobs.error = None
-    assert _cancel(harness, jobs)["state"] == "cancelled"
-
-
-@old_only(
-    "dismissal reconciled with the jobs store by key",
-    "test_job_cad_lane.py::test_a_preparing_job_is_stopped_where_it_is",
-)
-def test_a_request_that_was_never_bound_is_dismissed_without_the_jobs_store(
-    harness: Harness,
-) -> None:
-    _received(harness)
-    jobs = _JobStore(harness)
-    jobs.error = sqlite3.OperationalError("database is locked")
-
-    assert _cancel(harness, jobs)["state"] == "cancelled"
 
 
 # -- correlation in WG's logs --------------------------------------------------------
@@ -2069,39 +1930,6 @@ def test_each_attempt_logs_its_operation_and_generation(harness: Harness, caplog
     assert logged("cmd-1", "attempt 2", "finished accepted", "job-1")
 
 
-@old_only(
-    "dismissal reconciled with the jobs store by key",
-    "test_job_cad_lane.py::test_a_preparing_job_is_stopped_where_it_is",
-)
-def test_a_dismissal_waits_while_a_bound_attempt_runs_and_wg_cannot_read_the_jobs(
-    harness: Harness,
-) -> None:
-    from fastapi import HTTPException
-
-    _received(harness)
-    generation = harness.store.claim("cmd-1", 0)
-    assert harness.store.bind_request(
-        "cmd-1", generation, setup_revision_id="wgs_x", request_json='{"x":1}'
-    ) is not None  # an attempt is submitting this request
-    before = harness.row()
-    jobs = _JobStore(harness)
-    jobs.error = sqlite3.OperationalError("database is locked")
-
-    with pytest.raises(HTTPException) as refused:
-        _cancel(harness, jobs)
-
-    # A dismissal would turn the attempt's "interrupted" into "cancelled",
-    # whatever job its submission made.
-    assert refused.value.status_code == 409
-    assert harness.row() == before
-    # Once the jobs store answers, the dismissal fences the attempt as before,
-    # and a job it made still stands as the outcome.
-    jobs.error = None
-    assert _cancel(harness, jobs)["state"] == "cancel_requested"
-    recorded = harness.store.record_outcome("cmd-1", generation, "accepted", job_id="job-1")
-    assert recorded is not None and (recorded["state"], recorded["job_id"]) == ("accepted", "job-1")
-
-
 # -- the update restart latch --------------------------------------------------------
 #
 # After a restart is approved WG starts no new installation-owned work
@@ -2117,43 +1945,6 @@ def _latched_state(harness: Harness, approval: Any) -> SimpleNamespace:
         update_restart=approval,
         cad_workspace=SimpleNamespace(selected_path=lambda: harness.workspace),
     )
-
-
-@old_only(
-    "the prepare route's latch envelope (its shim is S4-F1)",
-    "test_job_cad_lane.py::test_a_job_accepted_while_a_restart_is_approved_waits_untouched",
-)
-def test_the_prepare_route_refuses_while_an_update_restart_is_pending(
-    harness: Harness, monkeypatch
-) -> None:
-    from server.cadlink import api
-    from server.updates.restart import RestartApproval
-
-    _received(harness)
-    before = harness.row()
-    approval = RestartApproval()
-    approval.approve("0.3.4")
-    started: list[Any] = []
-
-    async def prepare_stand_in(_ctx: Any, operation_id: str, _request: Any, **_kwargs: Any) -> dict[str, Any]:
-        return {"operationId": operation_id}
-
-    monkeypatch.setattr(api, "prepare_operation", prepare_stand_in)
-    monkeypatch.setattr(api, "_track", lambda _state, task: started.append(task))
-    request = SimpleNamespace(app=SimpleNamespace(state=_latched_state(harness, approval)))
-
-    response = asyncio.run(api.post_prepare_cad_operation("cmd-1", api.PrepareOperationRequest(), request))
-
-    # Refused before anything starts, with the envelope every latched route uses.
-    assert started == []
-    assert response.status_code == 409
-    body = json.loads(response.body)
-    assert (body["error"]["code"], body["error"]["retryable"]) == ("update_restart_pending", True)
-    assert "about to restart to install 0.3.4" in body["detail"]
-    assert harness.row() == before
-    approval.release("the launcher discarded the request")
-    asyncio.run(api.post_prepare_cad_operation("cmd-1", api.PrepareOperationRequest(), request))
-    assert len(started) == 1
 
 
 def test_the_delivery_loop_starts_nothing_while_an_update_restart_is_pending(

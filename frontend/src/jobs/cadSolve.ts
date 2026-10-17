@@ -1,15 +1,14 @@
 import { useSyncExternalStore } from 'react';
 import type { components } from '../api/generated/openapi';
-import { CadLinkApiError, jsonRequest } from '../api/cadlink';
-import { getCadOperation } from '../api/cadOperations';
+import { jsonRequest } from '../api/cadlink';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import type { CadOperationSummary } from '../api/cadOperations';
 
 export type CadSolvePress = components['schemas']['CadSolveAgainRequest'];
-export type CadSolveRequest = components['schemas']['CadSolveRequest'];
-const PENDING = 'wg2.cad.solve.pending.v1:';
+/** The completion claims WG keeps for the solves its Solve started (guarantee row 8):
+ * a finished run is shown and named once, whichever response or event comes first.
+ * The press itself is the server's (`POST /api/models/{id}/solve`); nothing caches it. */
 const CLAIM = 'wg2.cad.solve.claim.v1:';
-const LEGACY = 'wg2.cad.manual-solve.v1:';
 
 export interface CadSolveClaim {
   designName: string;
@@ -18,33 +17,12 @@ export interface CadSolveClaim {
   /** The ingestion a WG press solved from; a Fusion request has none. */
   sourceIngestId?: string | null;
 }
-export interface PendingCadSolve {
-  requestId: string;
-  designName: string;
-  label: string;
-  jobId?: string;
-  recoveredJobId?: string;
-  press?: CadSolveRequest;
-}
 function read<T>(key: string): T | null {
   try { return JSON.parse(sessionStorage.getItem(key) ?? 'null') as T | null; }
   catch { return null; }
 }
 function write(key: string, value: unknown): void {
   sessionStorage.setItem(key, JSON.stringify(value));
-}
-export function pendingCadSolve(ingestId: string): PendingCadSolve | null {
-  return read(PENDING + ingestId);
-}
-export function beginCadSolve(ingestId: string, designName: string, label: string): PendingCadSolve {
-  const held = pendingCadSolve(ingestId);
-  if (held) return held;
-  const created = { requestId: crypto.randomUUID(), designName, label };
-  write(PENDING + ingestId, created);
-  return created;
-}
-export function retainCadSolvePress(ingestId: string, held: PendingCadSolve): void {
-  write(PENDING + ingestId, held);
 }
 export function rememberCadSolve(key: string, designName: string, sourceIngestId: string | null = null): void {
   const held = read<CadSolveClaim>(CLAIM + key);
@@ -54,6 +32,10 @@ export function rememberCadSolve(key: string, designName: string, sourceIngestId
     // the response) gains what it lacked; nothing it recorded is replaced.
     write(CLAIM + key, { ...held, designName: held.designName || designName, sourceIngestId: held.sourceIngestId ?? sourceIngestId });
   }
+}
+/** Drop the claim a press made before its request, once the server refused it: no job exists for it. */
+export function forgetCadSolve(key: string): void {
+  sessionStorage.removeItem(CLAIM + key);
 }
 export function cadSolveClaim(job: Pick<JobItem, 'id' | 'client_request_id'>): CadSolveClaim | null {
   return read(CLAIM + job.id) ?? (job.client_request_id ? read(CLAIM + job.client_request_id) : null);
@@ -66,56 +48,6 @@ export function acknowledgeCadSolve(job: JobItem, outcome: 'completion' | 'refus
   if (job.client_request_id) write(CLAIM + job.client_request_id, next);
   return claim;
 }
-export function releaseCadSolve(ingestId: string, held: PendingCadSolve, jobId: string): void {
-  rememberCadSolve(jobId, held.designName, ingestId);
-  sessionStorage.removeItem(PENDING + ingestId);
-}
-
-/** Resolve old identities through the acceptance ledger before migrating them.
- * A list missing a job is not evidence that its creation failed. */
-export async function recoverLegacyCadSolves(jobs: JobItem[], ingestId?: string): Promise<void> {
-  for (const key of Object.keys(sessionStorage)) {
-    if (!key.startsWith(LEGACY) || (ingestId && key !== LEGACY + ingestId)) continue;
-    const raw = sessionStorage.getItem(key)!;
-    const held = read<{ operationId: string; designName?: string; label?: string; completionAcknowledged?: boolean }>(key)
-      ?? { operationId: raw };
-    let operation;
-    try {
-      operation = await getCadOperation(held.operationId);
-    } catch (reason) {
-      if (!(reason instanceof CadLinkApiError) || reason.status !== 404) throw reason;
-      // An authoritative absence means this build can accept a fresh press.
-      sessionStorage.removeItem(key);
-      continue;
-    }
-    const job = jobs.find((candidate) => candidate.id === operation.jobId)
-      ?? latestCadJobs(jobs).find((candidate) => cadJobOperationId(candidate) === held.operationId)
-      ?? jobs.find((candidate) => candidate.client_request_id === `cad-solve:${held.operationId}`);
-    const jobId = job?.id ?? operation.jobId;
-    if (!jobId) throw new Error('The previous solve could not be read from the jobs channel. Reconnect and try again.');
-    write(CLAIM + jobId, {
-      designName: held.designName ?? '', completionAcknowledged: held.completionAcknowledged === true,
-    });
-    const waiting = operation.state === 'received' && job?.cad_intent
-      && job.cad_provenance?.manual_waiting === true;
-    write(PENDING + key.slice(LEGACY.length), {
-      requestId: jobId, designName: held.designName ?? '', label: held.label ?? job?.label ?? '',
-      ...(waiting ? { jobId } : { recoveredJobId: jobId }),
-    });
-    sessionStorage.removeItem(key);
-  }
-}
-
-export function hasLegacyCadSolve(ingestId: string): boolean {
-  return sessionStorage.getItem(LEGACY + ingestId) !== null;
-}
-export function forgetPendingCadSolve(ingestId: string, requestId: string): void {
-  if (pendingCadSolve(ingestId)?.requestId === requestId) sessionStorage.removeItem(PENDING + ingestId);
-}
-export function discardUnsubmittedCadSolve(ingestId: string): void {
-  if (!pendingCadSolve(ingestId)?.press) sessionStorage.removeItem(PENDING + ingestId);
-}
-
 export function cadJobOperationId(job: JobItem): string | null {
   const id = job.cad_provenance?.operation_id ?? job.cad_intent?.operation_id;
   return typeof id === 'string' && id ? id : null;
@@ -170,9 +102,6 @@ export function useCadJobs(): JobItem[] {
 }
 async function post<T>(path: string, body: T): Promise<{ job_id: string }> {
   return jsonRequest(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, fetch);
-}
-export function submitCadSolve(request: CadSolveRequest): Promise<{ job_id: string }> {
-  return post('/api/jobs/cad-solve', request);
 }
 export function solveCadAgain(jobId: string, press: CadSolvePress): Promise<{ job_id: string }> {
   const { setup_revision_id, frame_axis, approvals, submit } = press;

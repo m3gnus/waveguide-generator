@@ -2,9 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket } from '../api/jobsSocket';
 import { cadJobFixture, publishCadJobs } from './cadSolve.fixtures';
 import {
-  acknowledgeCadSolve, approveCadJob, beginCadSolve, cadJobSummary, dismissCadJob,
-  latestCadJobs, pendingCadSolve, recoverLegacyCadSolves, releaseCadSolve,
-  rememberCadSolve, retainCadSolvePress, solveCadAgain, submitCadSolve,
+  acknowledgeCadSolve, approveCadJob, cadJobSummary, dismissCadJob,
+  latestCadJobs, rememberCadSolve, solveCadAgain,
 } from './cadSolve';
 
 const job = () => cadJobFixture({
@@ -20,20 +19,11 @@ describe('CAD job commands and window identities', () => {
   beforeEach(() => { sessionStorage.clear(); publishCadJobs([]); });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); publishCadJobs([]); });
 
-  it('posts the CAD intent and replays its held id and immutable press after a lost response', async () => {
-    const held = beginCadSolve('ingest', 'Speaker', 'Speaker1');
-    held.press = { client_request_id: held.requestId, ingest_id: 'ingest', setup_revision_id: 'setup', frame_axis: '+x' };
-    retainCadSolvePress('ingest', held);
-    const fetcher = vi.fn().mockRejectedValueOnce(new TypeError('network lost')).mockResolvedValue(json({ job_id: 'same-job' }));
-    vi.stubGlobal('fetch', fetcher);
-    await expect(submitCadSolve(held.press)).rejects.toThrow('network lost');
-    const reloaded = pendingCadSolve('ingest')!;
-    expect(beginCadSolve('ingest', 'changed', 'changed')).toEqual(reloaded);
-    expect(await submitCadSolve(reloaded.press!)).toEqual({ job_id: 'same-job' });
-    expect(fetcher.mock.calls[1]).toEqual(fetcher.mock.calls[0]);
-    expect(fetcher.mock.calls[0][0]).toBe('/api/jobs/cad-solve');
-    releaseCadSolve('ingest', reloaded, 'same-job');
-    expect(beginCadSolve('ingest', 'Speaker', 'Speaker2').requestId).not.toBe(held.requestId);
+  it('keeps no press of its own: the server owns it, and only completion claims are stored', async () => {
+    // The PENDING and LEGACY press caches are gone (S5); a lost response is
+    // the server's to answer, by the job already in flight.
+    rememberCadSolve('cad-solve:manual-solve:press', 'Speaker', 'ingest');
+    expect(Object.keys(sessionStorage)).toEqual(['wg2.cad.solve.claim.v1:cad-solve:manual-solve:press']);
   });
 
   it('recovers a bound child after losing the first solve-again response', async () => {
@@ -48,24 +38,16 @@ describe('CAD job commands and window identities', () => {
       return json({ job_id: 'bound-child' });
     });
     vi.stubGlobal('fetch', fetcher);
-    const press = { client_request_id: 'held', ingest_id: 'replay-ingest', setup_revision_id: 'displayed', frame_axis: '-y', submit: true };
-    const held = beginCadSolve('replay-ingest', 'Speaker', 'Speaker1');
-    held.jobId = 'parent';
-    held.press = { ...press, client_request_id: held.requestId };
-    retainCadSolvePress('replay-ingest', held);
-    await expect(solveCadAgain('parent', held.press!)).rejects.toThrow('response lost after binding');
-    const reloaded = pendingCadSolve('replay-ingest')!;
-    expect(reloaded.press).toEqual(held.press);
-    expect(await solveCadAgain(reloaded.jobId!, reloaded.press!)).toEqual({ job_id: 'bound-child' });
+    const press = { setup_revision_id: 'displayed', frame_axis: '-y', submit: true };
+    await expect(solveCadAgain('parent', press)).rejects.toThrow('response lost after binding');
+    expect(await solveCadAgain('parent', press)).toEqual({ job_id: 'bound-child' });
     expect(fetcher.mock.calls[1]).toEqual(fetcher.mock.calls[0]);
-    releaseCadSolve('replay-ingest', reloaded, 'bound-child');
-    expect(pendingCadSolve('replay-ingest')).toBeNull();
   });
 
   it('sends only solve-again fields and returns the child id', async () => {
     const fetcher = vi.fn(async () => json({ job_id: 'child' }));
     vi.stubGlobal('fetch', fetcher);
-    const press = { client_request_id: 'unused', ingest_id: 'unused', label: 'unused', setup_revision_id: 'displayed', frame_axis: '-y', submit: true };
+    const press = { setup_revision_id: 'displayed', frame_axis: '-y', submit: true };
     expect(await solveCadAgain('parent/id', press)).toEqual({ job_id: 'child' });
     expect(fetcher.mock.calls[0]).toEqual(['/api/jobs/parent%2Fid/solve-again', expect.objectContaining({ body: JSON.stringify({ setup_revision_id: 'displayed', frame_axis: '-y', submit: true }) })]);
   });
@@ -121,18 +103,6 @@ describe('CAD job commands and window identities', () => {
     expect(acknowledgeCadSolve({ ...job() }, 'completion')).toBeNull();
     expect(acknowledgeCadSolve(job(), 'refusal')?.designName).toBe('Speaker');
     expect(acknowledgeCadSolve({ ...job() }, 'refusal')).toBeNull();
-  });
-
-  it('recovers old identities only once and preserves their completion fence', async () => {
-    const fetcher = vi.fn(async () => json({ ...cadJobSummary(job()), approvals: [], preparation: null }));
-    vi.stubGlobal('fetch', fetcher);
-    sessionStorage.setItem('wg2.cad.manual-solve.v1:ingest', JSON.stringify({ operationId: 'manual-solve:press', completionAcknowledged: true, designName: 'Speaker' }));
-    await recoverLegacyCadSolves([job()]);
-    expect(sessionStorage.getItem('wg2.cad.manual-solve.v1:ingest')).toBeNull();
-    expect(pendingCadSolve('ingest')?.recoveredJobId).toBe('refused');
-    expect(acknowledgeCadSolve(job(), 'completion')).toBeNull();
-    await recoverLegacyCadSolves([job()]);
-    expect(acknowledgeCadSolve(job(), 'completion')).toBeNull();
   });
 
   it('shows only the latest leaf when a chain has more than one continuation', () => {

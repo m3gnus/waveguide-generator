@@ -25,12 +25,12 @@ from server.integration.contracts import ErrorEnvelope, error_envelope
 from server.jobs.models import (
     CadApprovalsRequest,
     CadSolveAgainRequest,
-    CadSolveRequest,
     ChannelCombineSpec,
     ClearFailedResponse,
     DeleteResponse,
     FieldPlaneRequest,
     FieldPlaneSpec,
+    ImportedGeometrySource,
     JobListResponse,
     JobMetadataPatch,
     JobStatusResponse,
@@ -562,7 +562,15 @@ def create_jobs_router(
         if refused is not None:
             return refused
         try:
-            job_id = await runtime.submit(body)
+            if isinstance(body.geometry, ImportedGeometrySource):
+                # Imported geometry is its model's solve: the same setup record
+                # and in-flight rule as a Solve of the model. Imported here:
+                # it reaches the CAD lanes, which import this package.
+                from server.jobs.model_solve import submit_imported_request
+
+                job_id = await submit_imported_request(runtime, body)
+            else:
+                job_id = await runtime.submit(body)
         except UnknownEngineError as exc:
             return _error_response(
                 422,
@@ -620,37 +628,6 @@ def create_jobs_router(
     async def check_cad_setup(revision_id: str | None) -> None:
         if revision_id and await asyncio.to_thread(runtime.cadlink_store.get_setup_revision, revision_id) is None:
             raise HTTPException(status_code=404, detail=f"Unknown setup revision {revision_id}")
-
-    @router.post(
-        "/api/jobs/cad-solve", response_model=SolveAccepted,
-        responses={404: {"model": ErrorEnvelope, "description": "Unknown ingest or setup revision"},
-                   409: {"model": ErrorEnvelope, "description": "Restart pending, conflicting ingest or snapshot unavailable"}},
-    )
-    async def cad_solve(body: CadSolveRequest, request: Request) -> SolveAccepted | JSONResponse:
-        """Accept the displayed CAD Solve press, or recover its original job."""
-
-        from server.cadlink.api import ManualSolveOperationRequest, _create_manual_solve_operation
-        from server.jobs.cad_intent import cad_of
-
-        operation_id = f"manual-solve:{body.client_request_id}"
-        key = f"cad-solve:{operation_id}"
-        existing = await asyncio.to_thread(runtime.store.job_for_submission_key, key)
-        existing_row = await asyncio.to_thread(runtime.store.get_job_row, existing) if existing else None
-        if existing_row is None or cad_of(existing_row).get("manual_waiting"):
-            await check_cad_setup(body.setup_revision_id)
-        result = await _create_manual_solve_operation(
-            ManualSolveOperationRequest(operation_id=operation_id, ingest_id=body.ingest_id), request,
-            restart_response=lambda: restart_refusal(body.client_request_id),
-        )
-        if isinstance(result, JSONResponse):
-            return result
-        job_id = await asyncio.to_thread(runtime.store.job_for_submission_key, key)
-        row = await asyncio.to_thread(runtime.store.get_job_row, job_id)
-        # A transport replay recovers the original job, even after refusal or
-        # binding. Only its waiting first press may be captured here.
-        if row is not None and cad_of(row).get("manual_waiting"):
-            await runtime.prepare_cad_solve(job_id, **body.press(), label=body.label)
-        return SolveAccepted(job_id=job_id, client_request_id=body.client_request_id)
 
     @router.post(
         "/api/jobs/{job_id}/solve-again", response_model=SolveAccepted,

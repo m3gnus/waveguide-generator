@@ -1337,16 +1337,6 @@ class CadSolveAgainRequest(JobModel):
         }
 
 
-class CadSolveRequest(CadSolveAgainRequest):
-    # The manual prefix is separate from the delivery id's charset and bound.
-    client_request_id: str = Field(
-        min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
-        description="Stable manual Solve id; an exact ingest replay recovers its original job.",
-    )
-    ingest_id: str = Field(min_length=1)
-    label: str | None = None
-
-
 class CadStateSnapshot(JobModel):
     document_name: str | None
     manifest_sha256: str | None
@@ -1441,6 +1431,9 @@ class CadSource(JobModel):
     #: ``mesh-file:sha256:<original>`` for a file, the lineage for CAD; None
     #: when it belongs to none.
     model_id: str | None = None
+    #: The setup revision this run was solved with (``model_solve.py``); None
+    #: for a run that recorded none.
+    setup_revision_id: str | None = None
     design_id: str | None
     lineage_id: str | None
     #: The folder this design's runs are archived under -- the name its
@@ -1625,7 +1618,6 @@ class JobMetadataPatch(JobModel):
 __all__ = [
     "CadApprovalsRequest",
     "CadSolveAgainRequest",
-    "CadSolveRequest",
     "CadState",
     "CadStateApproval",
     "CadStatePreparation",

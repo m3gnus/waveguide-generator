@@ -165,8 +165,12 @@ def solve_again_intent(
     approve_preparation_id: str | None = None,
     approve_finding_ids: Sequence[str] = (),
     submit: bool = True,
+    label: str | None = None,
 ) -> CadSolveIntent:
     """The intent of the job that continues an unbound CAD job (Solve again).
+
+    ``label`` names the new run when the press names one (a model Solve);
+    otherwise it keeps the parent's.
 
     What the user names now replaces what the parent had; what they did not name
     is carried, as an operation's follow-up carried it: the frame axis the parent
@@ -187,6 +191,7 @@ def solve_again_intent(
             else None
         ),
         submit=submit,
+        label=label or intent.label,
         parent_job_id=str(parent["id"]),
     )
 

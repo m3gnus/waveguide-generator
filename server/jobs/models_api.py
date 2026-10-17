@@ -26,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 from server.cadlink.identity import mint_id, utc_now
 from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING
 from server.cadlink.roles import inventory_sha256
-from server.cadlink.store import FILE_MODEL_PREFIX, file_model_id
+from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID, file_model_id
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
 from server.integration.contracts import ErrorEnvelope, error_envelope
@@ -37,6 +37,8 @@ from server.jobs.imported_setup import (
     solve_request_for,
     validate_setup,
 )
+from server.jobs.model_solve import ModelSolveRefusal, ModelSolveRequest, solve_model
+from server.jobs.models import SolveAccepted
 from server.jobs.runtime import ImportedSolveRefusal
 from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.file_import import MAX_MESH_BYTES, mesh_text, parse_file_mesh, prepare_file_mesh
@@ -510,6 +512,8 @@ def mount_models_api(application: FastAPI) -> None:
         """Save a model's setup for the sources of a prepared mesh (or a CAD return)."""
 
         runtime = application.state.jobs_runtime
+        if model_id == UNFILED_MODEL_ID:
+            return _refusal(404, "model_not_found", "No model has this id: it names a mesh filed under none.")
         try:
             setup = validate_setup(body.setup.model_dump(mode="json"))
         except ValueError as exc:
@@ -566,6 +570,43 @@ def mount_models_api(application: FastAPI) -> None:
             "content_sha256": revision["content_sha256"],
             "inventory_sha256": inventory,
         }
+
+    @router.post(
+        "/{model_id}/solve",
+        response_model=SolveAccepted,
+        response_model_exclude_none=True,
+        responses={
+            404: {"model": ErrorEnvelope, "description": "Unknown model or prepared mesh"},
+            409: {
+                "model": ErrorEnvelope,
+                "description": (
+                    "Restart pending, mismatched or unavailable mesh, settings needed, "
+                    "solver frame to confirm, findings to review, or a conflicting Solve id"
+                ),
+            },
+            422: {"model": ErrorEnvelope, "description": "Setup or request refused"},
+            503: {"model": ErrorEnvelope, "description": "Engine unavailable"},
+        },
+    )
+    async def solve(model_id: str, body: ModelSolveRequest) -> Any:
+        """Solve this model as the press showed it: the one way an imported solve starts.
+
+        A job already preparing, queued or running for the same model,
+        prepared mesh and setup is returned instead of a second one.
+        """
+
+        try:
+            job_id = await solve_model(application.state, model_id, body)
+        except ModelSolveRefusal as exc:
+            return JSONResponse(
+                status_code=exc.status,
+                content=error_envelope(
+                    code=exc.code, stage="submission", message=str(exc),
+                    retryable=exc.retryable, details=exc.details,
+                    client_request_id=body.client_request_id,
+                ),
+            )
+        return SolveAccepted(job_id=job_id, client_request_id=body.client_request_id)
 
     application.include_router(router)
 

@@ -17,8 +17,6 @@ from server.jobs.store import JobStore
 from server.platform import paths
 from server.updates.restart import RestartApproval
 
-from cad_backends import JobsHarness
-from test_cad_manual_solve import _ingest, _request as manual_request
 from server.tests._asgi import SOLVE_BODY, _post
 
 
@@ -697,37 +695,6 @@ def test_health_defaults_and_submission_routes(tmp_path, monkeypatch):
             await runtime.shutdown()
 
     asyncio.run(scenario())
-
-
-def test_manual_cad_solve_refuses_then_accepts_after_release(tmp_path):
-    from server.cadlink import api
-
-    harness = JobsHarness(tmp_path)
-    try:
-        ingest_id, _retained = _ingest(harness)
-        approval = RestartApproval()
-        request = manual_request(harness)
-        request.app.state.update_restart = approval
-        request.app.state.retirement_hold = approval.retirement_hold
-        approval.retirement_hold.hold("test")
-        payload = api.ManualSolveOperationRequest(operationId="manual-1", ingestId=ingest_id)
-        response = harness._loop.run(api.post_cad_operation(payload, request))
-        error = json.loads(response.body)["error"]
-        assert response.status_code == 409
-        assert (error["code"], error["retryable"], error["stage"], error["message"]) == (
-            "update_restart_pending", True, "submission", approval.retirement_hold.refusal(),
-        )
-        assert harness.store.list_operations() == []
-        approval.approve("v1")
-        response = harness._loop.run(api.post_cad_operation(payload, request))
-        assert json.loads(response.body)["error"]["message"] == approval.refusal()
-        approval.release("test")
-        assert approval.retirement_hold.held
-        approval.retirement_hold.release()
-        response = harness._loop.run(api.post_cad_operation(payload, request))
-        assert response.operation.operation_id == "manual-1"
-    finally:
-        harness.close()
 
 
 @pytest.mark.parametrize("name", [

@@ -1,3 +1,5 @@
+import type { components } from '../api/generated/openapi';
+import type { CadSolveSetup } from '../api/cadOperations';
 import { deadlineSignal, PLAN_TIMEOUT_MS } from '../api/deadlineFetch';
 import type { ExteriorTransducerForm } from '../stores/exteriorTransducer';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
@@ -540,19 +542,29 @@ async function submissionRefusal(response: Response): Promise<SolveSubmissionRef
   );
 }
 
-// No client_request_id: the only one the browser ever sent was a Fusion
-// command's cad-solve:<id>, and that namespace now belongs to the backend,
-// which prepares and submits Fusion's commands itself.
-export async function submitImported(
-  submission: ImportedSolveSubmission,
+/** One Solve of an imported model, as the press showed it (server/jobs/model_solve.py). */
+export type ModelSolvePress = Omit<components['schemas']['ModelSolveRequest'], 'setup'> & {
+  setup?: CadSolveSetup;
+};
+
+/**
+ * The one way an imported solve starts: `POST /api/models/{id}/solve`.
+ *
+ * The server owns everything after the press: a file model is submitted, a CAD
+ * model goes through its preparation lane, a job already in flight for the same
+ * model, prepared mesh and setup is answered instead of a second one, and an
+ * unlinked model's displayed axis is confirmed. A refusal is a
+ * `SolveSubmissionRefused` carrying the envelope's code.
+ */
+export async function solveModel(
+  modelId: string,
+  press: ModelSolvePress,
   fetcher: typeof fetch = fetch,
-  label = 'cad-import',
-  clientRequestId?: string,
 ): Promise<string> {
-  const response = await fetcher('/api/solve', {
+  const response = await fetcher(`/api/models/${encodeURIComponent(modelId)}/solve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...submission, label, ...(clientRequestId ? { client_request_id: clientRequestId } : {}) }),
+    body: JSON.stringify(press),
   });
   if (!response.ok) throw await submissionRefusal(response);
   return ((await response.json()) as { job_id: string }).job_id;

@@ -351,7 +351,7 @@ class JobsHarness(Harness):
     async def _subscribe(self) -> asyncio.Queue[dict[str, Any]]:
         return self.runtime.events.subscribe()
 
-    async def _compose(self, request: Any, cad_provenance: Any) -> _ComposedJob:
+    async def _compose(self, request: Any, cad_provenance: Any, setup_revision_id: Any = None) -> _ComposedJob:
         label = await self._submit(request, cad_provenance=cad_provenance)
         self._next_label = label
         return _ComposedJob(
@@ -678,3 +678,50 @@ __all__ = [
     "make_harness",
     "old_only",
 ]
+
+
+async def compat_prepare(
+    state: Any,
+    operation_id: str,
+    *,
+    setup_revision_id: str | None = None,
+    frame_axis: str | None = None,
+    approvals: tuple[str, list[str]] | None = None,
+    submit: bool = True,
+    wait: bool = False,
+) -> dict[str, Any]:
+    """A press on an operation's solve, as the retired ``POST /operations/{id}/prepare`` made it.
+
+    The route went with the other CAD-operation POST routes in S5 (decision
+    D1); the presses it made remain the runtime's: the first intent of an
+    operation with no job (``accept_operation_solve``), else the waiting
+    first press or Solve again of its latest job (``prepare_cad_solve``).
+    Scenarios that exercised the preparation lane through it keep doing so.
+    """
+
+    from server.cadlink.api import _preparation_context
+    from server.cadlink.joblane.job_shims import accept_operation_solve
+    from server.cadlink.joblane.preparation import PreparationInput, operation_summary
+
+    ctx = _preparation_context(state)
+    row = await asyncio.to_thread(ctx.store.get_operation, operation_id)
+    assert row is not None, operation_id
+    press = PreparationInput(
+        setup_revision_id=setup_revision_id, submit=submit, expected_frame_axis=frame_axis,
+        approve_preparation_id=approvals[0] if approvals else None,
+        approve_finding_ids=tuple(approvals[1]) if approvals else (),
+    )
+    await ctx.runtime.start()
+    job = await asyncio.to_thread(ctx.job_store.latest_cad_job, operation_id, row.get("job_id"))
+    if job is None:
+        await accept_operation_solve(ctx, operation_id, press)
+    else:
+        await ctx.runtime.prepare_cad_solve(
+            job["id"], setup_revision_id=setup_revision_id, frame_axis=frame_axis,
+            approve_preparation_id=press.approve_preparation_id,
+            approve_finding_ids=press.approve_finding_ids, submit=submit,
+        )
+    if wait:
+        await ctx.runtime.wait_cad_preparations()
+    row = await asyncio.to_thread(ctx.store.get_operation, operation_id)
+    return {"operation": await asyncio.to_thread(operation_summary, row, ctx.job_store)}

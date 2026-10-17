@@ -408,11 +408,7 @@ export interface paths {
          */
         get: operations["list_cad_operations_api_cadlink_operations_get"];
         put?: never;
-        /**
-         * Post Cad Operation
-         * @description Create or recover a manual solve from an immutable retained CAD ingest.
-         */
-        post: operations["post_cad_operation_api_cadlink_operations_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -430,73 +426,6 @@ export interface paths {
         get: operations["get_cad_operation_api_cadlink_operations__operation_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/cadlink/operations/{operation_id}/approvals": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Post Cad Operation Approvals
-         * @description Acknowledge blocking findings of one preparation. A new preparation needs its own.
-         *
-         *     The next preparation of the same snapshot and setup revision resumes that
-         *     preparation, so these approvals apply to it.
-         */
-        post: operations["post_cad_operation_approvals_api_cadlink_operations__operation_id__approvals_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/cadlink/operations/{operation_id}/cancel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Post Cancel Cad Operation
-         * @description Dismiss an operation: at once when idle, at the next step when running.
-         *
-         *     A solve is reconciled with the jobs store first: one whose job already
-         *     exists follows the job, and one that may have a job is not dismissed
-         *     while the jobs store cannot be read (409).
-         */
-        post: operations["post_cancel_cad_operation_api_cadlink_operations__operation_id__cancel_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/cadlink/operations/{operation_id}/prepare": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Post Prepare Cad Operation
-         * @description Compatibility Solve: create the first intent, or continue its refused job.
-         */
-        post: operations["post_prepare_cad_operation_api_cadlink_operations__operation_id__prepare_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1283,26 +1212,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jobs/cad-solve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Cad Solve
-         * @description Accept the displayed CAD Solve press, or recover its original job.
-         */
-        post: operations["cad_solve_api_jobs_cad_solve_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/jobs/clear-failed": {
         parameters: {
             query?: never;
@@ -1690,6 +1599,29 @@ export interface paths {
          */
         put: operations["put_setup_api_models__model_id__setup_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/models/{model_id}/solve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Solve
+         * @description Solve this model as the press showed it: the one way an imported solve starts.
+         *
+         *     A job already preparing, queued or running for the same model,
+         *     prepared mesh and setup is returned instead of a second one.
+         */
+        post: operations["solve_api_models__model_id__solve_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2785,28 +2717,6 @@ export interface components {
              */
             submit?: boolean;
         };
-        /** CadSolveRequest */
-        CadSolveRequest: {
-            approvals?: components["schemas"]["CadApprovalsRequest"] | null;
-            /**
-             * Client Request Id
-             * @description Stable manual Solve id; an exact ingest replay recovers its original job.
-             */
-            client_request_id: string;
-            /** Frame Axis */
-            frame_axis?: string | null;
-            /** Ingest Id */
-            ingest_id: string;
-            /** Label */
-            label?: string | null;
-            /** Setup Revision Id */
-            setup_revision_id?: string | null;
-            /**
-             * Submit
-             * @default true
-             */
-            submit?: boolean;
-        };
         /**
          * CadSolveSetup
          * @description One setup revision's content.
@@ -2865,6 +2775,8 @@ export interface components {
             model_id?: string | null;
             /** Return State Hash */
             return_state_hash: string | null;
+            /** Setup Revision Id */
+            setup_revision_id?: string | null;
             /** Solve Model Sha256 */
             solve_model_sha256?: string | null;
             /** Transformed Geometry Hash */
@@ -4898,13 +4810,6 @@ export interface components {
             /** Volume M3 */
             volume_m3?: number | null;
         };
-        /** ManualSolveOperationRequest */
-        ManualSolveOperationRequest: {
-            /** Ingestid */
-            ingestId: string;
-            /** Operationid */
-            operationId: string;
-        };
         /** ManualSolveOperationResponse */
         ManualSolveOperationResponse: {
             operation: components["schemas"]["CadOperationSummary"];
@@ -5036,6 +4941,34 @@ export interface components {
             /** Prepared Id */
             prepared_id?: string | null;
             setup: components["schemas"]["CadSolveSetup"];
+        };
+        /**
+         * ModelSolveRequest
+         * @description One Solve of an imported model: what the press showed.
+         */
+        ModelSolveRequest: {
+            approvals?: components["schemas"]["CadApprovalsRequest"] | null;
+            /**
+             * Client Request Id
+             * @description Stable id of this press; a replay recovers its original job.
+             */
+            client_request_id: string;
+            /** Frame Axis */
+            frame_axis?: string | null;
+            /** Label */
+            label?: string | null;
+            /**
+             * Prepared Id
+             * @description The prepared mesh on screen (its ingest id).
+             */
+            prepared_id: string;
+            /** @description The setup on screen. */
+            setup?: components["schemas"]["CadSolveSetup"] | null;
+            /**
+             * Setup Revision Id
+             * @description A saved setup revision: an unedited restored run sends its own.
+             */
+            setup_revision_id?: string | null;
         };
         /** MorphConfig */
         MorphConfig: {
@@ -5281,13 +5214,6 @@ export interface components {
             designId: string;
             /** Instanceid */
             instanceId?: string | null;
-        };
-        /** OperationApprovalsRequest */
-        OperationApprovalsRequest: {
-            /** Findingids */
-            findingIds: string[];
-            /** Preparationid */
-            preparationId: string;
         };
         /** OutputConfig */
         OutputConfig: {
@@ -5538,24 +5464,6 @@ export interface components {
              * @enum {string}
              */
             symmetry_mode?: "auto" | "full";
-        };
-        /** PrepareOperationRequest */
-        PrepareOperationRequest: {
-            approvals?: components["schemas"]["OperationApprovalsRequest"] | null;
-            /** Frameaxis */
-            frameAxis?: string | null;
-            /** Setuprevisionid */
-            setupRevisionId?: string | null;
-            /**
-             * Submit
-             * @default true
-             */
-            submit?: boolean;
-            /**
-             * Wait
-             * @default false
-             */
-            wait?: boolean;
         };
         /** PresetWrite */
         PresetWrite: {
@@ -6974,57 +6882,6 @@ export interface operations {
             };
         };
     };
-    post_cad_operation_api_cadlink_operations_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ManualSolveOperationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ManualSolveOperationResponse"];
-                };
-            };
-            /** @description CAD ingest not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Update restart pending, operation id conflict, or retained snapshot unavailable */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_cad_operation_api_cadlink_operations__operation_id__get: {
         parameters: {
             query?: never;
@@ -7035,113 +6892,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    post_cad_operation_approvals_api_cadlink_operations__operation_id__approvals_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                operation_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OperationApprovalsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    post_cancel_cad_operation_api_cadlink_operations__operation_id__cancel_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                operation_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    post_prepare_cad_operation_api_cadlink_operations__operation_id__prepare_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                operation_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PrepareOperationRequest"];
-            };
-        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -8513,57 +8263,6 @@ export interface operations {
             };
         };
     };
-    cad_solve_api_jobs_cad_solve_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CadSolveRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SolveAccepted"];
-                };
-            };
-            /** @description Unknown ingest or setup revision */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Restart pending, conflicting ingest or snapshot unavailable */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     clear_failed_api_jobs_clear_failed_delete: {
         parameters: {
             query?: never;
@@ -9420,6 +9119,68 @@ export interface operations {
             };
             /** @description Mesh or setup refused */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    solve_api_models__model_id__solve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelSolveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolveAccepted"];
+                };
+            };
+            /** @description Unknown model or prepared mesh */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Restart pending, mismatched or unavailable mesh, settings needed, solver frame to confirm, findings to review, or a conflicting Solve id */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Setup or request refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Engine unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

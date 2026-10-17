@@ -28,13 +28,6 @@ import { CadWorkspaceOwners } from './CadWorkspaceOwners';
 import { JobsCoordinator } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 
-const mocks = vi.hoisted(() => ({ submitImported: vi.fn() }));
-
-vi.mock('../jobs/actions', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../jobs/actions')>();
-  return { ...actual, submitImported: mocks.submitImported };
-});
-
 const listing: CadReturnListing = {
   cadFolderConfigured: true,
   coordination: 'on',
@@ -292,6 +285,10 @@ describe('CadLinkPanel', () => {
         const id = decodeURIComponent(path.split('/')[4]); delete fixtureOperations[id];
         posted.push({ path, body: null });
         return json({ id, dismissed: true, repaired: false });
+      }
+      if (/^\/api\/models\/[^/]+\/solve$/.test(path) && init?.method === 'POST') {
+        posted.push({ path, body: JSON.parse(String(init?.body)) });
+        return json({ job_id: 'job-model' });
       }
       if (/^\/api\/models\/[^/]+\/setup$/.test(path) && init?.method === 'PUT') {
         const body = { lineageId: decodeURIComponent(path.split('/')[3]), ...JSON.parse(String(init?.body)) };
@@ -822,7 +819,7 @@ describe('CadLinkPanel', () => {
     expect(buttonTexts(card)).toEqual(['Dismiss']);
   });
 
-  it('solves a stored snapshot with Fusion closed: one Solve records its settings for the project, then prepares that request', async () => {
+  it('solves a stored snapshot with Fusion closed: one Solve of the model, which the server prepares', async () => {
     workspaceModeStore.setMode('cad');
     const withProject = { ...record, project: { lineage_id: 'wgl_speaker' } };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -856,17 +853,13 @@ describe('CadLinkPanel', () => {
     const solve = () => host.querySelector<HTMLButtonElement>('.cad-solve-card button[data-action="solve"]')!;
     await vi.waitFor(() => expect(solve().disabled).toBe(false));
     await act(async () => { solve().click(); });
-    await vi.waitFor(() => expect(posted.filter((item) => item.path.endsWith('/solve-again'))).toHaveLength(1));
-    expect(posted[0]).toMatchObject({
-      path: '/api/models/wgl_speaker/setup',
-      body: { lineageId: 'wgl_speaker', inventory: [{ id: 'source-hf', role: 'HF', required: true }] },
-    });
-    expect((posted[0].body as { setup: { schema_version: number } }).setup.schema_version).toBe(1);
-    // The same request, prepared with the settings on screen; nothing created beside it.
-    const prepared = posted.find((item) => item.path.endsWith('/solve-again'))!;
-    expect(prepared.path).toBe('/api/jobs/op-stored/solve-again');
-    expect(prepared.body).toMatchObject({ setup_revision_id: expect.any(String), submit: true });
-    expect(posted.some((item) => item.path === '/api/cadlink/operations')).toBe(false);
+    await vi.waitFor(() => expect(posted.filter((item) => item.path.endsWith('/solve'))).toHaveLength(1));
+    // One press with the settings on screen; the server records them for the
+    // model and continues the waiting request.
+    const pressed = posted.find((item) => item.path.endsWith('/solve'))!;
+    expect(pressed.path).toBe('/api/models/wgl_speaker/solve');
+    expect(pressed.body).toMatchObject({ prepared_id: record.ingest_id, setup: { schema_version: 1 } });
+    expect(posted.some((item) => item.path.endsWith('/solve-again') || item.path === '/api/cadlink/operations')).toBe(false);
   });
 
   it('leaves Fusion solve commands to the backend: nothing on screen reads or solves one', async () => {
@@ -896,7 +889,6 @@ describe('CadLinkPanel', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
 
     expect(requests.filter((path) => path.includes('/solve-command'))).toEqual([]);
-    expect(mocks.submitImported).not.toHaveBeenCalled();
     expect(host.querySelector('.cad-operation')).toBeNull();
   });
 

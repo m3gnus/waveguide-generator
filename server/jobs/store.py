@@ -976,6 +976,42 @@ class JobStore:
             ).fetchone()
         return None if row is None else str(row["job_id"])
 
+    def job_for_model_solve(self, request_id: str) -> str | None:
+        """The job a model Solve continuing a refused CAD solve made (``model_solve.py``).
+
+        A Solve that starts a new CAD solve is found by its submission key; one
+        that continues a refused solve makes that solve's child, which keeps
+        the press's client id in ``task_metadata.cad.model_solve_request_id``.
+        """
+
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                """SELECT id FROM simulation_jobs
+                   WHERE json_extract(task_metadata_json, '$.cad.model_solve_request_id') = ?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (request_id,),
+            ).fetchone()
+        return None if row is None else str(row["id"])
+
+    def refused_cad_intents(self, manifest_sha256: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Refused CAD solves of one snapshot that never bound a request, newest first."""
+
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT simulation_jobs.*, job_identity.run_number, job_identity.parent_job_id
+                FROM simulation_jobs
+                LEFT JOIN job_identity ON job_identity.job_id = simulation_jobs.id
+                WHERE simulation_jobs.status = 'error'
+                  AND json_extract(simulation_jobs.config_json, '$.type') = 'cad_intent'
+                  AND json_extract(simulation_jobs.config_json, '$.manifest_sha256') = ?
+                ORDER BY simulation_jobs.created_at DESC
+                LIMIT ?
+                """,
+                (manifest_sha256, int(limit)),
+            ).fetchall()
+        return [self._row_to_job(row) for row in rows]
+
     def create_job_idempotent(
         self,
         job: Mapping[str, Any],
@@ -1386,7 +1422,8 @@ class JobStore:
             ).fetchone()
             metadata = dict(task_metadata)
             previous_cad = json.loads(row["task_metadata_json"] or "{}").get("cad", {}) if row else {}
-            kept = {key: previous_cad[key] for key in ("solve_again_press_sha256", "first_press_sha256")
+            kept = {key: previous_cad[key]
+                    for key in ("solve_again_press_sha256", "first_press_sha256", "model_solve_request_id")
                     if previous_cad.get(key)}
             if kept:
                 metadata["cad"] = {**(metadata.get("cad") or {}), **kept}

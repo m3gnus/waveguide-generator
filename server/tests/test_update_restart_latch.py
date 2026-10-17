@@ -335,9 +335,10 @@ def test_a_cad_preparation_requested_after_restart_approval_is_held(tmp_path: Pa
         retain_operation_snapshot(store, tmp_path / "data", workspace, "cmd-1")
         app.state.update_restart.approve("v2.0.1")
         try:
-            status, raw = await _post(app, "/api/cadlink/operations/cmd-1/prepare", {"frameAxis": "+z"})
-            body = json.loads(raw)
-            assert status == 200, raw[:200]
+            # A press on Fusion's request (the retired prepare route's, cad_backends.compat_prepare).
+            from cad_backends import compat_prepare
+
+            body = await compat_prepare(app.state, "cmd-1", frame_axis="+z")
             assert (body["operation"]["state"], body["operation"]["reason"]) == (
                 "needs_user_input", "update_restart_pending",
             )

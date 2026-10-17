@@ -18,11 +18,10 @@ application itself uses, with nothing faked:
   file ships, everywhere else. So this solve never skips. An unavailable BEMPP
   fails, with the application's own reason.
 - **CAD import.** The committed linked return ``round.wgreturn`` through the
-  path a CAD Link solve takes: ``POST /api/cadlink/ingest``, a manual solve
-  operation, a setup revision, and ``POST /api/cadlink/operations/{id}/prepare``
-  -- which re-ingests the retained snapshot with the production ingest, holds
-  the blocking findings for review, and submits to the jobs runtime once they
-  are approved. Imported geometry is offered only by an engine that declares
+  path a CAD Link solve takes: ``POST /api/cadlink/ingest``, then WG's Solve of
+  the model, ``POST /api/models/{id}/solve`` -- which re-ingests the retained
+  snapshot with the production ingest, holds the blocking findings for
+  review, and submits to the jobs runtime once a Solve approves them. Imported geometry is offered only by an engine that declares
   it: BEMPP on OpenCL (numba is never a shipping backend for imported
   geometry) or Metal. Hosted Ubuntu CI installs a pinned PoCL CPU runtime and
   requires this solve. Other hosted jobs may skip with the registry's reasons.
@@ -555,7 +554,7 @@ def test_this_host_offers_an_imported_engine_where_one_is_expected(tmp_path: Pat
 
 
 @pytest.mark.real_runtime
-def test_a_cad_return_ingests_prepares_and_solves_through_the_operation(tmp_path: Path) -> None:
+def test_a_cad_return_ingests_prepares_and_solves_through_its_model(tmp_path: Path) -> None:
     manifest = json.loads((ROUND_RETURN / "wgreturn.json").read_text(encoding="utf-8"))
     design_id = manifest["instances"][0]["design_id"]
     source = manifest["sources"][0]
@@ -595,68 +594,52 @@ def test_a_cad_return_ingests_prepares_and_solves_through_the_operation(tmp_path
             assert record["tag_namespace"] == "wg-import-v1", record["tag_namespace"]
             assert source_id in record["source_tags"], record["source_tags"]
 
-            operation = (
-                await _call(
-                    app,
-                    "POST",
-                    "/api/cadlink/operations",
-                    {"operation_id": "real-pipeline-cad", "ingest_id": record["ingest_id"]},
-                )
-            )["operation"]
-            assert operation["state"] == "received", operation
-            revision = await _call(
-                app,
-                "POST",
-                "/api/cadlink/setup-revisions",
-                {
-                    "setup": {
-                        "geometry": {
-                            "drive_channels": [{"id": channel_id, "source_ids": [source_id]}],
-                            "mesh": mesh_request,
-                        },
-                        "options": {"engine": engine, "frequencies_hz": IMPORTED_FREQUENCIES},
-                    }
+            runtime = app.state.jobs_runtime
+            # A design this fresh data directory does not know: filed under no model.
+            assert record["model_id"] == ""
+            model_id = record["model_id"] or "unfiled"
+            setup = {
+                "geometry": {
+                    "drive_channels": [{"id": channel_id, "source_ids": [source_id]}],
+                    "mesh": mesh_request,
                 },
-            )
-            prepare = f"/api/cadlink/operations/{operation['operationId']}/prepare"
-            held = (
-                await _call(app, "POST", prepare, {"setupRevisionId": revision["revisionId"], "wait": True})
-            )["operation"]
+                "options": {"engine": engine, "frequencies_hz": IMPORTED_FREQUENCIES},
+            }
+            solve = f"/api/models/{model_id}/solve"
+            pressed = await _call(app, "POST", solve, {
+                "prepared_id": record["ingest_id"], "client_request_id": "real-pipeline-cad", "setup": setup,
+            })
+            await runtime.wait_cad_preparations()
+            held = runtime.store.get_job_row(pressed["job_id"])
+            cad = held["task_metadata"]["cad"]
             # Prepared through the production ingest, then held: this design is
             # unknown to a fresh data directory, which the user has to review.
-            assert (held["state"], held["stage"], held["reason"]) == (
-                "needs_user_input", "ready", "findings_need_review",
+            assert (held["status"], held["stage"], cad["refusal"]["code"]) == (
+                "error", "error", "findings_need_review",
             ), held
-            prepared = app.state.cadlink_store.get_ingest(held["preparationId"])
+            preparation_id = cad["preparation"]["preparation_id"]
+            prepared = app.state.cadlink_store.get_ingest(preparation_id)
             findings = json.loads(prepared["record_json"])["findings"]
             blocking = [item for item in findings if item.get("blocking")]
             kinds = {item["kind"]: item.get("verdict") for item in blocking}
             assert set(kinds) == set(EXPECTED_BLOCKING) and all(
                 EXPECTED_BLOCKING[kind] in (None, verdict) for kind, verdict in kinds.items()
             ), f"blocking findings {kinds}, expected exactly {EXPECTED_BLOCKING}"
-            submitted = (
-                await _call(
-                    app,
-                    "POST",
-                    prepare,
-                    {
-                        "setupRevisionId": revision["revisionId"],
-                        "wait": True,
-                        "approvals": {
-                            "preparationId": held["preparationId"],
-                            "findingIds": [item["id"] for item in blocking],
-                        },
-                    },
-                )
-            )["operation"]
-            assert (submitted["state"], submitted["stage"]) == ("accepted", "submitted"), submitted
-            assert submitted["preparationId"] == held["preparationId"], submitted
-            # The refused first job keeps no run; approving continues as its
-            # Solve-again child (S4-F1).
-            parent = app.state.jobs_runtime.store.job_for_submission_key("cad-solve:real-pipeline-cad")
-            assert parent is not None and parent != submitted["jobId"], (parent, submitted)
-            result = await _finish(app, submitted["jobId"])
-            return engine, held["preparationId"], result, parent
+            approved = await _call(app, "POST", solve, {
+                "prepared_id": record["ingest_id"], "client_request_id": "real-pipeline-cad-approved",
+                "setup": setup,
+                "approvals": {"preparation_id": preparation_id, "finding_ids": [item["id"] for item in blocking]},
+            })
+            await runtime.wait_cad_preparations()
+            submitted = runtime.store.get_job_row(approved["job_id"])
+            assert submitted["status"] in {"queued", "running", "complete"}, submitted
+            assert submitted["task_metadata"]["cad"]["preparation"]["preparation_id"] == preparation_id
+            # The refused first job keeps no run; the approving Solve continues
+            # it as its Solve-again child (S4-F1).
+            parent = runtime.store.job_for_submission_key("cad-solve:manual-solve:real-pipeline-cad")
+            assert parent == pressed["job_id"] != approved["job_id"], (parent, approved)
+            result = await _finish(app, approved["job_id"])
+            return engine, preparation_id, result, parent
         finally:
             await _close(app)
 

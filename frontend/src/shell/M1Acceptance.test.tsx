@@ -45,28 +45,14 @@ import {
 } from './workspaceNavigation';
 
 const mocks = vi.hoisted(() => ({
-  submitImported: vi.fn(),
+  solveModel: vi.fn(),
   submitDesign: vi.fn(),
   planSolveDesign: vi.fn(),
-  createSetupRevision: vi.fn(),
-  submitCadSolve: vi.fn(),
-  solveCadAgain: vi.fn(),
 }));
 
-vi.mock('../api/cadOperations', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../api/cadOperations')>();
-  return {
-    ...actual,
-    createSetupRevision: mocks.createSetupRevision,
-  };
-});
-vi.mock('../jobs/cadSolve', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../jobs/cadSolve')>(),
-  submitCadSolve: mocks.submitCadSolve, solveCadAgain: mocks.solveCadAgain,
-}));
 vi.mock('../jobs/actions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../jobs/actions')>();
-  return { ...actual, planSolveDesign: mocks.planSolveDesign, submitDesign: mocks.submitDesign, submitImported: mocks.submitImported };
+  return { ...actual, planSolveDesign: mocks.planSolveDesign, submitDesign: mocks.submitDesign, solveModel: mocks.solveModel };
 });
 vi.mock('../jobs/useCapabilities', () => ({
   useCapabilities: () => ({
@@ -203,8 +189,8 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     const button = host.querySelector<HTMLButtonElement>('.solve-button')!;
     expect(button.disabled).toBe(false);
     await act(async () => { button.click(); await flush(8); });
-    const calls = mocks.submitCadSolve.mock.calls;
-    return `manual-solve:${calls[calls.length - 1][0].client_request_id}`;
+    const calls = mocks.solveModel.mock.calls;
+    return `manual-solve:${calls[calls.length - 1][1].client_request_id}`;
   }
 
   async function deliver(summary: CadOperationSummary): Promise<void> {
@@ -248,11 +234,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     publishVisiblePanels(visible);
     bindWorkspaceNavigation(dockActivate);
     vi.stubGlobal('fetch', vi.fn(async () => resultResponse()));
-    mocks.createSetupRevision.mockImplementation(async (setup: CadSolveSetup) => ({
-      revisionId: `wgs_${mocks.createSetupRevision.mock.calls.length}`, contentSha256: 'sha256:setup', createdAt: 'now', setup,
-    }));
-    mocks.submitCadSolve.mockResolvedValue({ job_id: 'job-1' });
-    mocks.solveCadAgain.mockResolvedValue({ job_id: 'job-child' });
+    mocks.solveModel.mockResolvedValue('job-1');
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
@@ -278,12 +260,11 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
   it('runs the whole chain: Solve, operation, job, selected result, revealed Results, CAD mode kept', async () => {
     const operationId = await pressSolve();
 
-    // Capture the intended input: the setup on screen, bound once.
-    expect(mocks.createSetupRevision).toHaveBeenCalledOnce();
-    // Create or recover the operation, for the ingestion on screen.
-    expect(mocks.submitCadSolve).toHaveBeenCalledWith(expect.objectContaining({ client_request_id: operationId.slice('manual-solve:'.length), ingest_id: 'wgi_first' }));
-    // Submit the job.
-    expect(mocks.submitCadSolve).toHaveBeenCalledWith(expect.objectContaining({ setup_revision_id: 'wgs_1', submit: true }));
+    // One model Solve: the setup on screen, for the ingestion on screen.
+    expect(mocks.solveModel).toHaveBeenCalledOnce();
+    expect(mocks.solveModel).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      client_request_id: operationId.slice('manual-solve:'.length), prepared_id: 'wgi_first', setup: expect.any(Object),
+    }));
 
     await deliver(operation(operationId, 'accepted', { jobId: 'job-1', stage: 'submitted', updatedAt: '2026-09-21T10:00:05Z' }));
     await jobs([cadJob('job-1', 'wgi_first', 'running')]);
@@ -330,9 +311,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     await deliver({ ...accepted, updatedAt: '2026-09-21T10:00:07Z' });
     await jobs([cadJob('job-1', 'wgi_first')]);
 
-    expect(mocks.submitCadSolve).toHaveBeenCalledOnce();
-    expect(mocks.submitCadSolve).toHaveBeenCalledOnce();
-    expect(mocks.submitImported).not.toHaveBeenCalled();
+    expect(mocks.solveModel).toHaveBeenCalledOnce();
     expect(activations.filter((panel) => panel === 'results')).toEqual(['results']);
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'job-1', overlays: [] });
     expect(solveAttention.resultsReady('job-1')).toBe('repeated');
@@ -371,8 +350,8 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     // The run the user asked for is shown, for the model it was submitted with,
     // and a newer model on screen does not hand the slot on.
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'job-1', following: false });
-    expect(mocks.submitCadSolve).toHaveBeenCalledOnce();
-    expect(mocks.submitCadSolve).toHaveBeenCalledWith(expect.objectContaining({ ingest_id: 'wgi_first' }));
+    expect(mocks.solveModel).toHaveBeenCalledOnce();
+    expect(mocks.solveModel).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ prepared_id: 'wgi_first' }));
     await jobs([cadJob('job-1', 'wgi_first'), cadJob('earlier', 'wgi_first')]);
     expect(compareSelection.getSnapshot().primary).toBe('job-1');
     expect(activations).toContain('results');
@@ -444,7 +423,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     expect(activations).toContain('results');
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     // No WG-side request was made for it: the backend owns that solve.
-    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
+    expect(mocks.solveModel).not.toHaveBeenCalled();
   });
 
   it('leaves a Fusion solve that had already finished before this page saw it as history', async () => {
@@ -510,9 +489,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     });
     // Every caller, at call time.
     await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('does not match the selected ingestion');
-    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
-    expect(mocks.createSetupRevision).not.toHaveBeenCalled();
-    expect(mocks.solveCadAgain).not.toHaveBeenCalled();
+    expect(mocks.solveModel).not.toHaveBeenCalled();
   });
 
   it('solves once the displayed mesh is the selected ingestion again (the control)', async () => {
@@ -520,7 +497,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     act(() => { importedMeshStore.setCad({ name: 'Fusion speaker', source: 'cad', ingestId: 'wgi_first' } as ImportedMeshScene); });
     await act(async () => { await flush(); });
     await pressSolve();
-    expect(mocks.submitCadSolve).toHaveBeenCalledOnce();
+    expect(mocks.solveModel).toHaveBeenCalledOnce();
   });
 
   // -- V1: explicit navigation disarms the reveal ---------------------------
@@ -558,15 +535,13 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
   it('keeps the result bound to the settings submitted when settings change during the run', async () => {
     act(() => useImportedSolveOptionsStore.getState().setEngine('metal'));
     const operationId = await pressSolve();
-    const submitted = mocks.createSetupRevision.mock.calls[0][0] as CadSolveSetup;
+    const submitted = mocks.solveModel.mock.calls[0][1].setup as CadSolveSetup;
     act(() => useImportedSolveOptionsStore.getState().setEngine('bempp'));
     await deliver(operation(operationId, 'accepted', { jobId: 'job-1', setupRevisionId: 'wgs_1', updatedAt: '2026-09-21T10:00:05Z' }));
     await jobs([cadJob('job-1', 'wgi_first')]);
 
     // Nothing was bound or prepared again for the edited settings.
-    expect(mocks.createSetupRevision).toHaveBeenCalledOnce();
-    expect(mocks.submitCadSolve).toHaveBeenCalledOnce();
-    expect(mocks.submitCadSolve).toHaveBeenCalledWith(expect.objectContaining({ setup_revision_id: 'wgs_1', submit: true }));
+    expect(mocks.solveModel).toHaveBeenCalledOnce();
     expect(submitted.options.engine).toBe('metal');
     expect(compareSelection.getSnapshot().primary).toBe('job-1');
   });

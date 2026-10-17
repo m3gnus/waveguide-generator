@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
-import { fetchSymmetry, formatApiDetail, getCapabilities, planSolveDesign, postSymmetry, resolveEngine, SolveSubmissionRefused, submitDesign, submitImported, toSolveDesign } from './actions';
+import { fetchSymmetry, formatApiDetail, getCapabilities, planSolveDesign, postSymmetry, resolveEngine, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
   it('surfaces nested solve request validation instead of the generic envelope', async () => {
@@ -92,65 +92,43 @@ describe('solve submission', () => {
     expect(body).toEqual({ design: toSolveDesign(design), options });
   });
 
-  it('submits the imported geometry union without a parametric design sibling', async () => {
+  it('makes an imported solve one model Solve, with the press as it was shown', async () => {
+    let path = '';
     let body: Record<string, unknown> | undefined;
-    const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      path = String(input);
       body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return new Response(JSON.stringify({ job_id: 'job-imported' }), { status: 200 });
     };
-    await submitImported({
-      geometry: {
-        type: 'imported', ingest_id: 'wgi_example', manifest_sha256: 'sha256:m', artifact_sha256: 'sha256:a',
-        drive_channels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
-        mesh: { rigid_size_mm: 8, transition_mm: 8, source_size_mm: { 'source-hf': 4 } },
-        acknowledged_findings: ['sha256:r:finding-a'], skipped_source_ids: [],
-      },
-      options: {
-        engine: 'metal', symmetry: 'auto', mesh_validation_mode: 'warn', verbose: false, frequency_spacing: 'log',
-        frequency_range: [200, 20_000], num_frequencies: 24,
-        polar_config: { angle_range: [0, 180, 37], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'], observation_origin: 'mouth', spherical_sampling: false, field_plane: true },
-      },
-    }, fetcher as typeof fetch, 'cad-run');
-    expect(body).toMatchObject({
-      geometry: { type: 'imported', ingest_id: 'wgi_example' },
-      label: 'cad-run',
-    });
+    const press = {
+      prepared_id: 'wgi_example', client_request_id: 'cad-1', label: 'cad-run', frame_axis: '+x',
+      setup: { schema_version: 1 as const, geometry: { drive_channels: [{ id: 'drive-hf', source_ids: ['source-hf'] }] },
+        options: { engine: 'metal' } },
+    };
+    await expect(solveModel('wgl/model', press, fetcher as typeof fetch)).resolves.toBe('job-imported');
+    expect(path).toBe('/api/models/wgl%2Fmodel/solve');
+    expect(body).toEqual(press);
     expect(body).not.toHaveProperty('design');
-    // cad-solve:<id> keys are the backend's, for Fusion's commands; the browser
-    // sends none.
-    expect(body).not.toHaveProperty('client_request_id');
   });
 
   // Which engine solves imported geometry is the server's decision, and "no
   // engine here can" is one answer a caller must tell apart from every other.
   // The error envelope names it; the code has to survive the trip.
   it('throws a typed refusal carrying the envelope code when an imported solve is refused', async () => {
-    const submission = {
-      geometry: {
-        type: 'imported' as const, ingest_id: 'wgi_example', manifest_sha256: 'sha256:m', artifact_sha256: 'sha256:a',
-        drive_channels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' as const }],
-        mesh: { rigid_size_mm: 8, transition_mm: 8, source_size_mm: { 'source-hf': 4 } },
-        acknowledged_findings: [], skipped_source_ids: [],
-      },
-      options: {
-        engine: 'auto', symmetry: 'auto' as const, mesh_validation_mode: 'warn' as const, verbose: false, frequency_spacing: 'log' as const,
-        frequency_range: [200, 20_000] as [number, number], num_frequencies: 24,
-        polar_config: { angle_range: [0, 180, 37] as [number, number, number], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal' as const], observation_origin: 'mouth' as const, spherical_sampling: false, field_plane: true },
-      },
-    };
+    const press = { prepared_id: 'wgi_example', client_request_id: 'cad-1', setup_revision_id: 'wgs_1' };
     const message = 'No solve engine on this host that supports imported geometry is available.';
     const refused = async () => new Response(JSON.stringify({
       detail: message,
       error: { code: 'engine_unavailable', stage: 'submission', message, retryable: false, details: {} },
     }), { status: 503, headers: { 'Content-Type': 'application/json' } });
 
-    const caught = await submitImported(submission, refused as typeof fetch).catch((error: unknown) => error);
+    const caught = await solveModel('wgl_model', press, refused as typeof fetch).catch((error: unknown) => error);
     expect(caught).toBeInstanceOf(SolveSubmissionRefused);
     expect(caught).toMatchObject({ message, status: 503, code: 'engine_unavailable' });
 
     // No envelope, no code -- and the message is still the one detail() gave.
     const opaque = async () => new Response('gateway down', { status: 502, statusText: 'Bad Gateway' });
-    const bare = await submitImported(submission, opaque as typeof fetch).catch((error: unknown) => error);
+    const bare = await solveModel('wgl_model', press, opaque as typeof fetch).catch((error: unknown) => error);
     expect(bare).toBeInstanceOf(SolveSubmissionRefused);
     expect(bare).toMatchObject({ message: '502 Bad Gateway', status: 502, code: null });
   });

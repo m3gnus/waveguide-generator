@@ -529,8 +529,9 @@ def test_a_known_excitation_incompatibility_stops_the_solve(real, monkeypatch) -
         seen.append([channel.id for channel in channels])
         return "Drive channel mf moves its sources 'tangential', which is not the same under the mirror."
 
-    from server.jobs import cad_preparation
-    monkeypatch.setattr(cad_preparation, "excitation_problem", incompatible)
+    # The composition every solve of a model shares (``compose_solve_request``).
+    from server.cadlink.joblane import project_setup
+    monkeypatch.setattr(project_setup, "excitation_problem", incompatible)
     stopped = _prepare(harness)
 
     assert (stopped["state"], stopped["reason"]) == ("needs_user_input", "submission_refused"), stopped

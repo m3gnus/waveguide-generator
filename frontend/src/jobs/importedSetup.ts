@@ -1,3 +1,4 @@
+import type { CadSolveSetup } from '../api/cadOperations';
 import type { ImportedGeometrySubmission, ImportedSolveSubmission } from './actions';
 
 export interface PreparedMeshIdentity {
@@ -31,4 +32,11 @@ export function bindImportedSetup(
       ...geometry } as ImportedGeometrySubmission,
     options: setup.options,
   });
+}
+
+/** The setup a bound submission was made of: everything but the prepared mesh's identity. */
+export function setupOfSubmission(submission: ImportedSolveSubmission): CadSolveSetup {
+  const { type: _type, ingest_id: _ingest, manifest_sha256: _manifest, artifact_sha256: _artifact,
+    acknowledged_findings: _findings, ...geometry } = submission.geometry;
+  return structuredClone({ schema_version: 1, geometry, options: submission.options }) as unknown as CadSolveSetup;
 }

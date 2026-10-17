@@ -45,7 +45,6 @@ from server.cadlink.joblane.default_setup import (
     DEFAULT_SETTINGS_NOTE,
     SolveDefaultsDamaged,
 )
-from server.cadlink.interpretation.domain_interpretation import excitation_problem
 from server.cadlink.intake.readings import resolve_domain_plan
 from server.cadlink.intake.ingest import (
     IngestRefusal,
@@ -83,8 +82,8 @@ from server.cadlink.joblane.preparation import (
     cad_provenance_record,
     resumable_record,
 )
-from server.cadlink.joblane.project_setup import widen_polar_to_derivation
-from server.jobs.imported_setup import DEFAULTS_ORIGIN, solve_request_for
+from server.cadlink.joblane.project_setup import compose_solve_request
+from server.jobs.imported_setup import DEFAULTS_ORIGIN
 from server.cadlink.interpretation.solver_frame import (
     AS_MODELLED,
     REASON as FRAME_CONFIRMATION_REQUIRED,
@@ -701,11 +700,10 @@ def prepare_job_sync(
     if not intent.submit:
         return run.refuse("ready_to_solve", "Prepared. Press Solve to start it.")
     try:
-        solve_request = solve_request_for(
+        # The same composition and checks as every other solve of a model.
+        solve_request = compose_solve_request(
             setup,
-            ingest_id=preparation_id,
-            manifest_sha256=str(record["manifest_sha256"]),
-            artifact_sha256=str(record["artifact_sha256"]),
+            {**record, "ingest_id": preparation_id},
             acknowledged_findings=[
                 f"{record.get('report_sha256')}:{finding}" for finding in blocking
             ],
@@ -714,15 +712,8 @@ def prepare_job_sync(
             fem_region_ids=[r["region_id"] for r in
                             (retained_manifest.get("scope") or {}).get("fem_regions", ())],
         )
-        # Never narrower than the ingestion derived: the runtime refuses that.
-        solve_request = widen_polar_to_derivation(solve_request, record.get("polar_grid_derivation"))
     except ValueError as exc:
         return run.refuse("submission_refused", str(exc))
-    # Acoustic compatibility, a hard check on every submission: the excitation
-    # is the setup's, so it is judged again whenever the settings change.
-    excitation = excitation_problem(record, getattr(solve_request.geometry, "drive_channels", ()))
-    if excitation is not None:
-        return run.refuse("submission_refused", excitation)
     if intent.parent_job_id:
         solve_request.parent_job_id = intent.parent_job_id
     return "bind", (solve_request, revision_id, preparation)

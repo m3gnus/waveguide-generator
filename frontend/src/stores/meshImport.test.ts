@@ -5,8 +5,8 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
-import { editMeshImport, fileMeshSubmission, fileSolvePress, finishFileSolvePress, loadMeshFile,
-  prepareMeshFile, loadMeshReplay, restoreMeshImport, restorePendingMeshPress, restoreSavedMeshSetup, saveMeshSetup, useMeshImportStore } from './meshImport';
+import { editMeshImport, fileMeshSubmission, loadMeshFile,
+  prepareMeshFile, loadMeshReplay, restoreMeshImport, restoreSavedMeshSetup, saveMeshSetup, useMeshImportStore } from './meshImport';
 import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
 import { bindImportedSetup, type ImportedSetup } from '../jobs/importedSetup';
 import type { JobItem } from '../api/jobsSocket';
@@ -24,7 +24,6 @@ const initial = useMeshImportStore.getState();
 const response = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
 /** What `/api/models/...` answers for a prepared mesh. */
 const prepared = (mesh: RegisteredMesh) => response({ model: { model_id: mesh.model_id }, prepared: mesh });
-const MODEL_URL = `/api/models/${encodeURIComponent(record.model_id)}?prepared_id=${record.ingest_id}`;
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 
 function retainedJobFetcher(job: JobItem, mesh = record) {
@@ -299,41 +298,12 @@ describe('standalone imported mesh', () => {
     expect(surfaces.find(surface => surface.role.includes('HF'))?.materialClass).toBe('horn-smooth');
   });
 
-  it('recovers the same ingest and pending press after a reload, without another registration', async () => {
-    useMeshImportStore.setState({ registered: record, motions: { group_2: 'axial' } });
-    useImportedSolveOptionsStore.getState().setSweep({ startHz: 250, endHz: 8000, count: 17 });
-    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
-    const original = fileMeshSubmission();
-    const press = fileSolvePress(original, 'lost response');
-    useMeshImportStore.setState(initial, true);
-    importedMeshStore.clear();
-    const fetcher = vi.fn<typeof fetch>(async () => prepared(record));
-    expect(await restorePendingMeshPress(fetcher)).toBe(true);
-    expect(fetcher.mock.calls[0][0]).toBe(MODEL_URL);
-    const restored = fileMeshSubmission();
-    expect(restored).toEqual(original);
-    expect(fileSolvePress(restored, 'new time')).toMatchObject(press);
-  });
-
-  it.each(['manifest_sha256', 'artifact_sha256'] as const)('refuses pending recovery when retained %s changed', async key => {
-    useMeshImportStore.setState({ registered: record });
-    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
-    fileSolvePress(fileMeshSubmission(), 'unanswered');
-    useMeshImportStore.setState(initial, true);
-    importedMeshStore.clear();
-    await expect(restorePendingMeshPress(vi.fn(async () => prepared({ ...record, [key]: 'changed' })))).rejects.toThrow('does not match');
-    expect(importedMeshStore.getSnapshot().file).toBeNull();
-    expect(useMeshImportStore.getState().registered).toBeNull();
-  });
-
-  it('reuses the unanswered press ID and label, then gives a deliberate solve a new ID', () => {
-    useMeshImportStore.setState({ registered: record });
-    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
-    const body = fileMeshSubmission();
-    const first = fileSolvePress(body, 'first label');
-    expect(fileSolvePress(body, 'later label')).toMatchObject(first);
-    finishFileSolvePress(first.id);
-    expect(fileSolvePress(body, 'new label').id).not.toBe(first.id);
+  it('keeps the setup revision a restored run recorded while its exact settings are unedited', async () => {
+    const job = { cad_source: { ingest_id: record.ingest_id, setup_revision_id: 'wgs_recorded' },
+      solve_options: {} } as unknown as JobItem;
+    await restoreMeshImport(job, retainedJobFetcher(job, record));
+    expect(useMeshImportStore.getState().exactSubmission).not.toBeNull();
+    expect(useMeshImportStore.getState().exactRevisionId).toBe('wgs_recorded');
   });
 });
 
@@ -367,12 +337,6 @@ describe('portable mesh replay', () => {
     importedMeshStore.clear();
     await restoreSavedMeshSetup(vi.fn(async url => String(url).includes('/setup?') ? response({ setup }) : prepared(record)));
     expect(fileMeshSubmission()).toEqual(request);
-    const press = fileSolvePress(fileMeshSubmission(), 'Replay');
-    useMeshImportStore.setState(initial, true);
-    importedMeshStore.clear();
-    await restorePendingMeshPress(vi.fn(async () => prepared(record)));
-    expect(fileMeshSubmission()).toEqual(request);
-    expect(fileSolvePress(fileMeshSubmission(), 'Other label')).toEqual(expect.objectContaining({ id: press.id, label: 'Replay' }));
   });
 
   it('restores a selected run with its full effective request, never execution settings', async () => {

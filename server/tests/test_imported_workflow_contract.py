@@ -58,8 +58,12 @@ def test_standalone_cancellation_is_durable_and_duplicate_press_does_not_restart
             async with asyncio.timeout(3):
                 await started.wait()
             if queued:
+                # Another solve of the model while the first runs: other
+                # settings, since the same ones would be the running job.
                 body["client_request_id"] = "mesh-queued-cancel-press"
+                body["options"]["frequencies_hz"] = [100, 300]
                 cancelled = await call(app, "POST", "/api/solve", body)
+                assert cancelled != first
             else:
                 cancelled = first
             await call(app, "POST", f"/api/stop/{cancelled['job_id']}")

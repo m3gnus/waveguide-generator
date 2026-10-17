@@ -135,7 +135,7 @@ it('mounts the receipt feed and display without a solve or operations-list reade
   channels.forEach((channel) => channel.resync()); await flush();
   expect(calls('/api/cadlink/ingest')).toHaveLength(1);
   expect(calls('/api/cadlink/operations')).toHaveLength(0);
-  expect(calls('/api/jobs/cad-solve')).toHaveLength(0);
+  expect(fetcher.mock.calls.filter(([input]) => /^\/api\/models\/[^/]+\/solve$/.test(String(input)))).toHaveLength(0);
   expect(cadWorkspace.getSnapshot().status).toContain('Received Speaker');
   channels.forEach((channel) => channel.resync()); await flush();
   expect(calls('/api/cadlink/ingest')).toHaveLength(1);

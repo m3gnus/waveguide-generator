@@ -92,7 +92,7 @@ def test_a_real_manual_solve_holds_for_59_minutes_and_not_61(tmp_path, minute, c
     harness = JobsHarness(tmp_path)
     try:
         ingest_id, _copy = _ingest(harness)
-        assert _create(harness, ingest_id).operation.state == "received"
+        assert _create(harness, ingest_id).state == "received"
         job = harness.jobs_store.latest_cad_job("manual-1")
         assert job["status"] == "preparing" and job["started_at"] is None
         assert job["task_metadata"]["cad"]["manual_waiting"] is True

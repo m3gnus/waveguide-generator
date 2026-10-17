@@ -1,8 +1,11 @@
-"""A manual CAD-mode Solve is a backend-owned durable operation."""
+"""A manual CAD-mode Solve is a backend-owned durable operation.
+
+WG's Solve of a CAD model (``POST /api/models/{id}/solve``, model_solve.py)
+creates it through ``api.accept_manual_solve``.
+"""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import shutil
 from pathlib import Path
@@ -14,6 +17,8 @@ from server.cadlink import api
 from server.cadlink.intake import ingest as ingest_module
 from server.cadlink.joblane import preparation as preparation_module
 from server.cadlink.intake.ingest import retain_snapshot
+from server.cadlink.joblane.manual_solve import OperationConflict, SnapshotNotRetained, UnknownIngest
+from server.cadlink.joblane.preparation import operation_summary
 from server.cadlink.operations import PREPARE_AND_SOLVE
 from server.cadlink.wgreturn import WgReturnIntegrityError
 
@@ -28,7 +33,9 @@ def harness(tmp_path: Path) -> Harness:
     h.close()
 
 
-def _ingest(harness: Harness, *, name: str = "speaker.wgreturn") -> tuple[str, Path]:
+def _ingest(
+    harness: Harness, *, name: str = "speaker.wgreturn", lineage: str | None = None
+) -> tuple[str, Path]:
     relative, _manifest = _write_return(harness.workspace, name)
     retained = retain_snapshot(harness.workspace / relative, harness.data_dir)
 
@@ -41,7 +48,7 @@ def _ingest(harness: Harness, *, name: str = "speaker.wgreturn") -> tuple[str, P
                 "manifest_sha256": retained["manifest_sha256"],
                 "artifact_sha256": retained["artifact_sha256"],
                 "document": {"name": "Speaker"},
-                "project": None,
+                "project": {"lineage_id": lineage} if lineage else None,
             }
         )
 
@@ -67,13 +74,26 @@ def _request(harness: Harness) -> SimpleNamespace:
     )
 
 
+_REFUSALS = {
+    UnknownIngest: (404, "unknown_ingest"),
+    OperationConflict: (409, "operation_conflict"),
+    SnapshotNotRetained: (409, "snapshot_not_retained"),
+}
+
+
 def _create(harness: Harness, ingest_id: str, operation_id: str = "manual-1"):
-    return harness._loop.run(
-        api.post_cad_operation(
-            api.ManualSolveOperationRequest(operationId=operation_id, ingestId=ingest_id),
-            _request(harness),
-        )
-    )
+    """Accept or recover a manual solve: its job and its ledger state, or the refusal."""
+
+    async def run():
+        try:
+            job_id = await api.accept_manual_solve(_request(harness).app.state, operation_id, ingest_id)
+        except tuple(_REFUSALS) as exc:
+            status, code = _REFUSALS[type(exc)]
+            return SimpleNamespace(status_code=status, body=json.dumps({"error": {"code": code}}))
+        row = harness.store.get_operation(operation_id)
+        return SimpleNamespace(job_id=job_id, state=operation_summary(row, harness.jobs_store)["state"])
+
+    return harness._loop.run(run())
 
 
 def test_retaining_refuses_a_bundle_swapped_after_initial_verification(
@@ -119,7 +139,7 @@ def test_a_manual_solve_prepares_from_the_retained_copy_with_the_folder_gone(
         "manual-1", setup_revision_id=_revision(harness.store, _setup(engine="metal"))
     )
 
-    assert created.operation.state == "received"
+    assert created.state == "received"
     assert harness.store.get_operation("manual-1")["snapshot_json"] is not None
     assert replayed == created
     assert (solved["state"], solved["jobId"]) == ("accepted", "job-1")
@@ -183,47 +203,6 @@ def test_an_unknown_ingest_is_404(harness: Harness) -> None:
     assert json.loads(refused.body)["error"]["code"] == "unknown_ingest"
 
 
-def test_an_update_restart_latch_creates_no_manual_operation(harness: Harness) -> None:
-    from server.updates.restart import RestartApproval
-
-    ingest_id, _retained = _ingest(harness)
-    approval = RestartApproval()
-    approval.approve("0.3.4")
-    request = _request(harness)
-    request.app.state.update_restart = approval
-
-    response = asyncio.run(
-        api.post_cad_operation(
-            api.ManualSolveOperationRequest(operationId="manual-1", ingestId=ingest_id),
-            request,
-        )
-    )
-
-    assert response.status_code == 409
-    assert json.loads(response.body)["error"]["code"] == "update_restart_pending"
-    assert harness.store.list_operations() == []
-
-
-def test_an_exact_replay_recovers_while_an_update_restart_is_pending(harness: Harness) -> None:
-    from server.updates.restart import RestartApproval
-
-    ingest_id, _retained = _ingest(harness)
-    created = _create(harness, ingest_id)
-    approval = RestartApproval()
-    approval.approve("0.3.4")
-    request = _request(harness)
-    request.app.state.update_restart = approval
-
-    replayed = asyncio.run(
-        api.post_cad_operation(
-            api.ManualSolveOperationRequest(operationId="manual-1", ingestId=ingest_id),
-            request,
-        )
-    )
-
-    assert replayed == created
-
-
 def test_a_manual_solve_whose_only_copy_is_damaged_waits_rather_than_rejects(
     harness: Harness,
 ) -> None:
@@ -257,7 +236,7 @@ def test_a_manual_solve_whose_only_copy_is_damaged_waits_rather_than_rejects(
 def test_a_manual_intent_waits_for_its_first_press_across_restart(harness):
     ingest_id, _copy = _ingest(harness)
     result = _create(harness, ingest_id)
-    assert result.operation.state == "received"
+    assert result.state == "received"
     job = harness.jobs_store.latest_cad_job("manual-1")
     assert job["task_metadata"]["cad"]["manual_waiting"] is True
     assert job["id"] not in harness.jobs_store.unheld_preparing_job_ids()
@@ -273,7 +252,7 @@ def test_a_manual_intent_waits_for_its_first_press_across_restart(harness):
     assert solved["state"] == "accepted" and len(harness.submitted) == 1
 
 
-# The WG jobs routes and operation compatibility routes share one intake.
+# The jobs routes continue what a model Solve (or Fusion) started.
 def _jobs_app(harness):
     from fastapi import FastAPI
     from server.jobs.api import create_jobs_router
@@ -291,79 +270,85 @@ async def _post_job(app, path, body):
     return status, json.loads(content)
 
 
-@pytest.mark.parametrize("after", ["waiting", "refused", "bound"])
-def test_f2_job_cad_solve_recovers_the_original_job_and_compatibility_operation(harness, after):
-    ingest_id, retained = _ingest(harness)
+def _models_app(harness):
+    from fastapi import FastAPI
+    from server.jobs.models_api import mount_models_api
+
+    app = FastAPI()
+    for key, value in vars(_request(harness).app.state).items():
+        setattr(app.state, key, value)
+    mount_models_api(app)
+    return app
+
+
+async def _solve(app, body, model_id="wgl_speaker"):
+    return await _post_job(app, f"/api/models/{model_id}/solve", body)
+
+
+@pytest.mark.parametrize("after", ["refused", "bound"])
+def test_a_model_solve_replay_recovers_the_original_job(harness, after):
+    ingest_id, retained = _ingest(harness, lineage="wgl_speaker")
     revision = _revision(harness.store, _setup(engine="metal"))
-    harness.runtime._ensure_prep_lane = lambda: None
-    app = _jobs_app(harness)
+    if after == "refused":
+        harness.ingest.findings = [{"id": "review-1", "blocking": True}]
+    app = _models_app(harness)
     body = {
-        "client_request_id": "press-1", "ingest_id": ingest_id,
-        "setup_revision_id": revision, "frame_axis": "+z", "label": "Speaker run",
-        "approvals": {"preparation_id": "reviewed", "finding_ids": ["review-1"]},
-        "submit": after != "refused",
+        "client_request_id": "press-1", "prepared_id": ingest_id,
+        "setup": _setup(engine="metal"), "label": "Speaker run",
     }
 
     async def flow():
-        status, created = await _post_job(app, "/api/jobs/cad-solve", body)
+        status, created = await _solve(app, body)
         assert status == 200, created
         job_id = created["job_id"]
-        row = harness.jobs_store.get_job_row(job_id)
         assert harness.jobs_store.job_for_submission_key("cad-solve:manual-solve:press-1") == job_id
-        assert row["config_json"]["setup_revision_id"] == revision
-        assert row["config_json"]["frame_axis"] == "+z"
-        assert row["config_json"]["approvals"] == body["approvals"]
+        await harness.runtime.wait_cad_preparations()
+        row = harness.jobs_store.get_job_row(job_id)
+        assert row["status"] == ("queued" if after == "bound" else "error")
+        assert row["task_metadata"]["cad"]["setup"]["revision_id"] == revision
         assert row["label"] == body["label"]
         assert "manual_waiting" not in row["task_metadata"]["cad"]
-        if after != "waiting":
-            harness.runtime._ensure_prep_lane = type(harness.runtime)._ensure_prep_lane.__get__(harness.runtime)
-            harness.runtime._ensure_prep_lane()
-            await harness.runtime.wait_cad_preparations()
-            assert harness.jobs_store.get_job_row(job_id)["status"] == ("queued" if after == "bound" else "error")
         # Recover without another press, retention, or an open restart latch.
         shutil.rmtree(retained)
         harness.blocked = "Restart approved"
-        if after != "waiting":
-            body["setup_revision_id"] = "revision-no-longer-retained"
-        replay_status, replay = await _post_job(app, "/api/jobs/cad-solve", body)
-        assert replay_status == 200 and replay == created
-        compat = await api.post_cad_operation(
-            api.ManualSolveOperationRequest(operationId="manual-solve:press-1", ingestId=ingest_id), _request(harness)
-        )
-        assert compat.operation.operation_id == "manual-solve:press-1"
+        replay_status, recovered = await _solve(app, body)
+        assert replay_status == 200 and recovered == created
+        # The same id for another press is a conflict, not a recovery.
+        changed = {**body, "setup": None, "setup_revision_id": "revision-no-longer-retained"}
+        changed.pop("setup")
+        conflict_status, conflict = await _solve(app, changed)
+        assert (conflict_status, conflict["error"]["code"]) == (409, "submission_key_conflict")
         assert harness.jobs_store.list_jobs()[1] == 1
         assert harness.store.get_operation("manual-solve:press-1")["job_id"] == job_id
     harness._loop.run(flow())
 
 
 @pytest.mark.parametrize("problem, expected, code", [
-    ("conflict", 409, "operation_conflict"), ("unknown", 404, "unknown_ingest"),
-    ("snapshot", 409, "snapshot_not_retained"), ("restart", 409, "update_restart_pending"),
-    ("setup", 404, None),
+    ("conflict", 409, "submission_key_conflict"), ("unknown", 404, "prepared_unavailable"),
+    ("snapshot", 409, "prepared_unavailable"), ("restart", 409, "update_restart_pending"),
+    ("setup", 409, "setup_required"),
 ])
-def test_f2_job_cad_solve_maps_intake_refusals(harness, problem, expected, code):
-    ingest_id, retained = _ingest(harness)
+def test_a_model_solve_maps_intake_refusals(harness, problem, expected, code):
+    ingest_id, retained = _ingest(harness, lineage="wgl_speaker")
     harness.runtime._ensure_prep_lane = lambda: None
-    app = _jobs_app(harness)
-    body = {"client_request_id": "press-2", "ingest_id": ingest_id}
+    app = _models_app(harness)
+    body = {"client_request_id": "press-2", "prepared_id": ingest_id, "setup": _setup(engine="metal")}
     async def flow():
         if problem == "conflict":
-            assert (await _post_job(app, "/api/jobs/cad-solve", body))[0] == 200
-            body["ingest_id"], _ = _ingest(harness, name="second.wgreturn")
+            assert (await _solve(app, body))[0] == 200
+            body["prepared_id"], _ = _ingest(harness, name="second.wgreturn", lineage="wgl_speaker")
         elif problem == "unknown":
-            body["ingest_id"] = "gone"
+            body["prepared_id"] = "gone"
         elif problem == "snapshot":
             shutil.rmtree(retained)
         elif problem == "restart":
             harness.blocked = "Restart approved"
         else:
+            body.pop("setup")
             body["setup_revision_id"] = "gone"
-        status, result = await _post_job(app, "/api/jobs/cad-solve", body)
+        status, result = await _solve(app, body)
         assert status == expected, result
-        if code:
-            assert result["error"]["code"] == code
-        else:
-            assert "Unknown setup revision" in result["detail"]
+        assert result["error"]["code"] == code
         if problem != "conflict":
             assert harness.store.get_operation("manual-solve:press-2") is None
             assert harness.jobs_store.list_jobs()[1] == 0
@@ -371,9 +356,10 @@ def test_f2_job_cad_solve_maps_intake_refusals(harness, problem, expected, code)
 
 
 @pytest.mark.parametrize("client_id", ["", "../press", "a:b", "a" * 129])
-def test_f2_job_cad_solve_validates_the_client_id(harness, client_id):
-    app = _jobs_app(harness)
-    status, _ = harness._loop.run(_post_job(app, "/api/jobs/cad-solve", {"client_request_id": client_id, "ingest_id": "gone"}))
+def test_a_model_solve_validates_the_client_id(harness, client_id):
+    app = _models_app(harness)
+    status, _ = harness._loop.run(_solve(app, {"client_request_id": client_id, "prepared_id": "gone",
+                                               "setup": _setup()}))
     assert status == 422
     assert harness.jobs_store.list_jobs()[1] == 0
 
@@ -414,9 +400,6 @@ def test_f2_job_solve_again_captures_the_first_press_and_continues_a_refused_job
         assert harness.jobs_store.get_job_row(child["job_id"])["status"] == "queued"
         status, refused = await _post_job(app, f"/api/jobs/{child['job_id']}/solve-again", {})
         assert status == 409 and "retry it instead" in refused["detail"]
-        # The compatibility Prepare of a bound job still returns acceptance.
-        compat = await api.post_prepare_cad_operation("manual-1", api.PrepareOperationRequest(), _request(harness))
-        assert compat["operation"]["state"] == "accepted"
     harness._loop.run(flow())
 
 
@@ -485,9 +468,12 @@ def test_review_solve_again_replays_bound_child_before_all_refusals(harness, mon
     revision = _revision(harness.store, _setup(engine="metal"))
     app = _jobs_app(harness)
 
+    created = _create(harness, ingest_id, "review-parent")
+    parent = {"job_id": created.job_id}
+
     async def flow():
-        _, parent = await _post_job(app, "/api/jobs/cad-solve", {
-            "client_request_id": "review-parent", "ingest_id": ingest_id,
+        # The first press stops short of solving: the parent ends ready to solve.
+        await _post_job(app, f"/api/jobs/{parent['job_id']}/solve-again", {
             "setup_revision_id": revision, "frame_axis": "+z", "submit": False,
         })
         await harness.runtime.wait_cad_preparations()

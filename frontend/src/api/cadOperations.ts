@@ -4,8 +4,10 @@ import { jsonRequest } from './cadlink';
  * CAD operations as the backend owns them (docs/architecture/CAD-OPERATIONS.md).
  *
  * The backend consumes Fusion's solve commands and prepares each one from its
- * project's own setup. The UI records that setup and the solver selection,
- * issues prepare, approvals and cancel, and observes the result.
+ * project's own setup. The UI records that setup and the solver selection and
+ * observes the result; WG's own Solve is `POST /api/models/{id}/solve`
+ * (`jobs/actions.ts` `solveModel`), and a CAD solve's approvals, Solve again
+ * and dismissal are the jobs routes (`jobs/cadSolve.ts`).
  */
 export interface CadOperationSummary {
   operationId: string;
@@ -90,22 +92,6 @@ export interface CadSolveSetup {
   origin?: 'wg_defaults' | null;
 }
 
-/** Blocking findings the user reviewed, on the one preparation that reported them. */
-export interface CadOperationApprovals {
-  preparationId: string;
-  findingIds: string[];
-}
-
-export interface PrepareCadOperationRequest {
-  /** Omitted: the backend resolves the snapshot's project setup itself. */
-  setupRevisionId?: string;
-  submit?: boolean;
-  approvals?: CadOperationApprovals;
-  /** The solver frame axis shown when Solve was pressed (a model authored in
-   * CAD): solved only along it, or stopped at the frame gate. */
-  frameAxis?: string;
-}
-
 export interface SetupRevisionSummary {
   revisionId: string;
   contentSha256: string;
@@ -143,17 +129,6 @@ export function getSetupRevision(
   fetcher: typeof fetch = fetch,
 ): Promise<SetupRevisionDetail> {
   return jsonRequest(`/api/cadlink/setup-revisions/${encodeURIComponent(revisionId)}`, undefined, fetcher);
-}
-
-/** Create or recover a backend-owned solve for one retained ingestion. */
-export async function createCadOperation(
-  request: { operationId: string; ingestId: string },
-  fetcher: typeof fetch = fetch,
-): Promise<CadOperationSummary> {
-  const response = await jsonRequest<{ operation: CadOperationSummary }>(
-    '/api/cadlink/operations', jsonBody('POST', request), fetcher,
-  );
-  return response.operation;
 }
 
 /** Record a project's solve settings for its source inventory. */
@@ -227,40 +202,6 @@ export function getCadOperation(
   fetcher: typeof fetch = fetch,
 ): Promise<CadOperationDetail> {
   return jsonRequest(operationPath(operationId), undefined, fetcher);
-}
-
-/** Start a preparation, which takes over any attempt already running. */
-export async function prepareCadOperation(
-  operationId: string,
-  request: PrepareCadOperationRequest = {},
-  fetcher: typeof fetch = fetch,
-): Promise<CadOperationSummary> {
-  const body = {
-    ...(request.setupRevisionId ? { setupRevisionId: request.setupRevisionId } : {}),
-    submit: request.submit ?? true,
-    ...(request.approvals ? { approvals: request.approvals } : {}),
-    ...(request.frameAxis ? { frameAxis: request.frameAxis } : {}),
-  };
-  const response = await jsonRequest<{ operation: CadOperationSummary }>(
-    `${operationPath(operationId)}/prepare`, jsonBody('POST', body), fetcher,
-  );
-  return response.operation;
-}
-
-export function approveCadOperationFindings(
-  operationId: string,
-  approvals: CadOperationApprovals,
-  fetcher: typeof fetch = fetch,
-): Promise<CadOperationDetail> {
-  return jsonRequest(`${operationPath(operationId)}/approvals`, jsonBody('POST', approvals), fetcher);
-}
-
-/** Dismiss: at once when idle, at the attempt's next step when one runs. */
-export function cancelCadOperation(
-  operationId: string,
-  fetcher: typeof fetch = fetch,
-): Promise<CadOperationSummary> {
-  return jsonRequest(`${operationPath(operationId)}/cancel`, { method: 'POST' }, fetcher);
 }
 
 /** Re-read Fusion's heartbeat and link evidence for an interrupted mutation. */

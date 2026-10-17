@@ -1,5 +1,8 @@
 """Both snapshot-binding call sites reset exclusions for a changed FEM set.
 
+Both bind through the composition every solve of a model shares
+(``compose_solve_request``).
+
 The retired operation lane's binding is exercised directly without reviving its
 lifecycle; the active job lane also has an end-to-end preparation regression.
 """
@@ -11,7 +14,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from server.cadlink.joblane.setup import solve_request_for, validate_setup
+from server.cadlink.joblane.project_setup import compose_solve_request
+from server.cadlink.joblane.setup import validate_setup
 
 
 @pytest.mark.parametrize("lane", ["operations", "jobs"])
@@ -24,7 +28,7 @@ def test_snapshot_binding_supplies_current_regions(lane, excluded):
     module = preparation if lane == "operations" else cad_preparation
     tree = ast.parse(inspect.getsource(module))
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
-             and isinstance(node.func, ast.Name) and node.func.id == "solve_request_for"]
+             and isinstance(node.func, ast.Name) and node.func.id == "compose_solve_request"]
     assert len(calls) == 1
     setup_value = _setup()
     setup_value["geometry"]["exterior_only"] = True
@@ -32,7 +36,7 @@ def test_snapshot_binding_supplies_current_regions(lane, excluded):
         setup_value["geometry"]["exterior_only_region_ids"] = excluded
     scope = {"fem_regions": [{"region_id": "current"}]}
     namespace = {
-        "solve_request_for": solve_request_for, "setup": validate_setup(setup_value),
+        "compose_solve_request": compose_solve_request, "setup": validate_setup(setup_value),
         "preparation_id": "wgi_" + "0" * 26,
         "record": {"manifest_sha256": "sha256:" + "0" * 64,
                    "artifact_sha256": "sha256:" + "1" * 64},

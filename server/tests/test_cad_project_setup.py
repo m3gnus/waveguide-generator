@@ -1,8 +1,9 @@
 """A solve is prepared from its project's own setup, by the backend alone.
 
 docs/architecture/CAD-OPERATIONS.md, "Project setups" and "Delivery". A solve
-Fusion sends for project B is prepared from B's recorded setup with the engine
-selected in WG, whatever project the editor has open; the backend collects and
+Fusion sends for project B is prepared from B's recorded setup, engine and
+accuracy included (the solver selection seeds a first setup only), whatever
+project the editor has open; the backend collects and
 prepares solve commands itself, so the frontend only issues and observes.
 """
 
@@ -291,41 +292,41 @@ def test_a_solve_for_project_b_is_prepared_from_b_setup(harness: Harness) -> Non
     assert json.loads(revision["setup_json"])["geometry"]["mesh"]["rigid_size_mm"] == 9.0
 
 
-def test_the_engine_is_the_one_selected_in_wg(harness: Harness) -> None:
+def test_the_engine_is_the_models_own_once_it_has_a_setup(harness: Harness) -> None:
+    """D2: the solver selection seeds a first setup only; the model's setup wins."""
+
     b_design, b_lineage = _project(harness, 60.0)
-    _record_setup(harness, b_lineage, _setup(engine="bempp"))
+    recorded = _record_setup(harness, b_lineage, _setup(engine="bempp"))
     _select_engine(harness, "metal")
     bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
     _accept(harness.store, "cmd-b", bundle_path, manifest)
 
     summary = harness.prepare("cmd-b")
 
-    assert harness.submitted[-1].options.engine == "metal"
-    # The operation names the exact setup it was solved with, engine included.
-    revision = json.loads(harness.store.get_setup_revision(summary["setupRevisionId"])["setup_json"])
-    assert revision["options"]["engine"] == "metal"
+    assert harness.submitted[-1].options.engine == "bempp"
+    # The operation names the exact setup it was solved with: the recorded one.
+    assert summary["setupRevisionId"] == recorded["revisionId"]
 
 
 @pytest.mark.parametrize(
     ("stored_accuracy", "shared_accuracy"),
     [("fast", "accurate"), ("accurate", "fast")],
 )
-def test_backend_preparation_uses_shared_accuracy_in_both_directions(
+def test_backend_preparation_keeps_the_models_accuracy_in_both_directions(
     harness: Harness, stored_accuracy: str, shared_accuracy: str,
 ) -> None:
     design_id, lineage = _project(harness, 60.0)
     setup = _setup(engine="auto")
     setup["options"]["accuracy"] = stored_accuracy
-    _record_setup(harness, lineage, setup)
+    recorded = _record_setup(harness, lineage, setup)
     _select_engine(harness, "auto", shared_accuracy)
     bundle_path, manifest = _project_return(harness, "choice", design_id, lineage)
     _accept(harness.store, "cmd-choice", bundle_path, manifest)
 
     summary = harness.prepare("cmd-choice")
 
-    assert harness.submitted[-1].options.accuracy == shared_accuracy
-    revision = json.loads(harness.store.get_setup_revision(summary["setupRevisionId"])["setup_json"])
-    assert revision["options"]["accuracy"] == shared_accuracy
+    assert harness.submitted[-1].options.accuracy == stored_accuracy
+    assert summary["setupRevisionId"] == recorded["revisionId"]
 
 
 def test_backend_preparation_defaults_older_selection_and_setup_to_fast(harness: Harness) -> None:

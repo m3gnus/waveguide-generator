@@ -956,78 +956,6 @@
         "title": "CadSolveAgainRequest",
         "type": "object"
       },
-      "CadSolveRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "approvals": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CadApprovalsRequest"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "client_request_id": {
-            "description": "Stable manual Solve id; an exact ingest replay recovers its original job.",
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
-            "title": "Client Request Id",
-            "type": "string"
-          },
-          "frame_axis": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Frame Axis"
-          },
-          "ingest_id": {
-            "minLength": 1,
-            "title": "Ingest Id",
-            "type": "string"
-          },
-          "label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Label"
-          },
-          "setup_revision_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Setup Revision Id"
-          },
-          "submit": {
-            "default": true,
-            "title": "Submit",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "client_request_id",
-          "ingest_id"
-        ],
-        "title": "CadSolveRequest",
-        "type": "object"
-      },
       "CadSolveSetup": {
         "additionalProperties": false,
         "description": "One setup revision's content.",
@@ -1201,6 +1129,17 @@
               }
             ],
             "title": "Return State Hash"
+          },
+          "setup_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Revision Id"
           },
           "solve_model_sha256": {
             "anyOf": [
@@ -7771,27 +7710,6 @@
         "title": "LumpedSealedRearChamberSpec",
         "type": "object"
       },
-      "ManualSolveOperationRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "ingestId": {
-            "minLength": 1,
-            "title": "Ingestid",
-            "type": "string"
-          },
-          "operationId": {
-            "minLength": 1,
-            "title": "Operationid",
-            "type": "string"
-          }
-        },
-        "required": [
-          "operationId",
-          "ingestId"
-        ],
-        "title": "ManualSolveOperationRequest",
-        "type": "object"
-      },
       "ManualSolveOperationResponse": {
         "additionalProperties": false,
         "properties": {
@@ -8280,6 +8198,88 @@
           "setup"
         ],
         "title": "ModelSetupWrite",
+        "type": "object"
+      },
+      "ModelSolveRequest": {
+        "additionalProperties": false,
+        "description": "One Solve of an imported model: what the press showed.",
+        "properties": {
+          "approvals": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadApprovalsRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "client_request_id": {
+            "description": "Stable id of this press; a replay recovers its original job.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "frame_axis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame Axis"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "prepared_id": {
+            "description": "The prepared mesh on screen (its ingest id).",
+            "minLength": 1,
+            "title": "Prepared Id",
+            "type": "string"
+          },
+          "setup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadSolveSetup"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The setup on screen."
+          },
+          "setup_revision_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A saved setup revision: an unedited restored run sends its own.",
+            "title": "Setup Revision Id"
+          }
+        },
+        "required": [
+          "prepared_id",
+          "client_request_id"
+        ],
+        "title": "ModelSolveRequest",
         "type": "object"
       },
       "MorphConfig": {
@@ -9238,30 +9238,6 @@
         "title": "OnshapeUnlinkRequest",
         "type": "object"
       },
-      "OperationApprovalsRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "findingIds": {
-            "items": {
-              "type": "string"
-            },
-            "minItems": 1,
-            "title": "Findingids",
-            "type": "array"
-          },
-          "preparationId": {
-            "minLength": 1,
-            "title": "Preparationid",
-            "type": "string"
-          }
-        },
-        "required": [
-          "preparationId",
-          "findingIds"
-        ],
-        "title": "OperationApprovalsRequest",
-        "type": "object"
-      },
       "OutputConfig": {
         "additionalProperties": false,
         "properties": {
@@ -9973,55 +9949,6 @@
           }
         },
         "title": "PreparationOptions",
-        "type": "object"
-      },
-      "PrepareOperationRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "approvals": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OperationApprovalsRequest"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "frameAxis": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Frameaxis"
-          },
-          "setupRevisionId": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Setuprevisionid"
-          },
-          "submit": {
-            "default": true,
-            "title": "Submit",
-            "type": "boolean"
-          },
-          "wait": {
-            "default": false,
-            "title": "Wait",
-            "type": "boolean"
-          }
-        },
-        "title": "PrepareOperationRequest",
         "type": "object"
       },
       "PresetWrite": {
@@ -13148,66 +13075,6 @@
         "tags": [
           "cadlink"
         ]
-      },
-      "post": {
-        "description": "Create or recover a manual solve from an immutable retained CAD ingest.",
-        "operationId": "post_cad_operation_api_cadlink_operations_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ManualSolveOperationRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ManualSolveOperationResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "CAD ingest not found"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Update restart pending, operation id conflict, or retained snapshot unavailable"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Post Cad Operation",
-        "tags": [
-          "cadlink"
-        ]
       }
     },
     "/api/cadlink/operations/{operation_id}": {
@@ -13249,161 +13116,6 @@
           }
         },
         "summary": "Get Cad Operation",
-        "tags": [
-          "cadlink"
-        ]
-      }
-    },
-    "/api/cadlink/operations/{operation_id}/approvals": {
-      "post": {
-        "description": "Acknowledge blocking findings of one preparation. A new preparation needs its own.\n\nThe next preparation of the same snapshot and setup revision resumes that\npreparation, so these approvals apply to it.",
-        "operationId": "post_cad_operation_approvals_api_cadlink_operations__operation_id__approvals_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "operation_id",
-            "required": true,
-            "schema": {
-              "title": "Operation Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OperationApprovalsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Post Cad Operation Approvals Api Cadlink Operations  Operation Id  Approvals Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Post Cad Operation Approvals",
-        "tags": [
-          "cadlink"
-        ]
-      }
-    },
-    "/api/cadlink/operations/{operation_id}/cancel": {
-      "post": {
-        "description": "Dismiss an operation: at once when idle, at the next step when running.\n\nA solve is reconciled with the jobs store first: one whose job already\nexists follows the job, and one that may have a job is not dismissed\nwhile the jobs store cannot be read (409).",
-        "operationId": "post_cancel_cad_operation_api_cadlink_operations__operation_id__cancel_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "operation_id",
-            "required": true,
-            "schema": {
-              "title": "Operation Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Post Cancel Cad Operation Api Cadlink Operations  Operation Id  Cancel Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Post Cancel Cad Operation",
-        "tags": [
-          "cadlink"
-        ]
-      }
-    },
-    "/api/cadlink/operations/{operation_id}/prepare": {
-      "post": {
-        "description": "Compatibility Solve: create the first intent, or continue its refused job.",
-        "operationId": "post_prepare_cad_operation_api_cadlink_operations__operation_id__prepare_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "operation_id",
-            "required": true,
-            "schema": {
-              "title": "Operation Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PrepareOperationRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Post Prepare Cad Operation Api Cadlink Operations  Operation Id  Prepare Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Post Prepare Cad Operation",
         "tags": [
           "cadlink"
         ]
@@ -15261,65 +14973,6 @@
         "summary": "Settle"
       }
     },
-    "/api/jobs/cad-solve": {
-      "post": {
-        "description": "Accept the displayed CAD Solve press, or recover its original job.",
-        "operationId": "cad_solve_api_jobs_cad_solve_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CadSolveRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SolveAccepted"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unknown ingest or setup revision"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Restart pending, conflicting ingest or snapshot unavailable"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Cad Solve"
-      }
-    },
     "/api/jobs/clear-failed": {
       "delete": {
         "operationId": "clear_failed_api_jobs_clear_failed_delete",
@@ -16443,6 +16096,89 @@
           }
         },
         "summary": "Put Setup",
+        "tags": [
+          "Imported models"
+        ]
+      }
+    },
+    "/api/models/{model_id}/solve": {
+      "post": {
+        "description": "Solve this model as the press showed it: the one way an imported solve starts.\n\nA job already preparing, queued or running for the same model,\nprepared mesh and setup is returned instead of a second one.",
+        "operationId": "solve_api_models__model_id__solve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelSolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolveAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown model or prepared mesh"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Restart pending, mismatched or unavailable mesh, settings needed, solver frame to confirm, findings to review, or a conflicting Solve id"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Setup or request refused"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Engine unavailable"
+          }
+        },
+        "summary": "Solve",
         "tags": [
           "Imported models"
         ]

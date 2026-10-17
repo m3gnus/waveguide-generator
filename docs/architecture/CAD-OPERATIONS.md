@@ -327,10 +327,11 @@ submission still enforces CAD frame, domain, finding and FEM obligations.
 Runs is the sole history presentation owner. The CAD panel links to its
 project filter; shared run details offer native document attachments. The
 displaced CAD row, grouping, compare/delete and document-list state are retired.
-The CAD preparation lane, project publisher, operation-route adapters, legacy
-row migration and native document capture remain: they still own supported
-retention, meshing, confirmation and delivery behavior. No installed operation
-route or acoustic feature is removed by this convergence.
+The CAD preparation lane, project publisher, legacy row migration and native
+document capture remain: they still own supported retention, meshing,
+confirmation and delivery behavior. The CAD-operation POST routes
+(`POST /operations`, `/{id}/prepare`, `/{id}/approvals`, `/{id}/cancel`) were
+removed in S5 (decision D1); `GET /operations` stays for delivery health.
 
 A setup revision is everything a solve of one snapshot needs except the snapshot itself:
 the drive channels with resolved driver numbers, the voltages, mesh sizes, skipped
@@ -343,8 +344,8 @@ reproduces, because the driver library has no revisions.
 - **Immutable and content-named.** `cad_setup_revisions` holds each revision once; the
   same content is the same revision (`POST /api/cadlink/setup-revisions`). A revision
   names no snapshot, and is validated as a complete solve request before it is stored.
-- **The engine is the user's.** A setup carries the engine selected in WG's solver
-  selector, never one CAD Link chose. If that engine cannot take the record, the
+- **The engine is the user's.** A setup carries the engine chosen for that model in
+  WG, never one CAD Link chose. If that engine cannot take the record, the
   operation waits (`engine_cannot_solve_return`, or `engine_unavailable` when the engine is not on this host) with the capable engines named, and nothing
   switches engines silently. Opening a historical run restores its recorded engine and
   accuracy along with the complete effective request; it does not read today's driver
@@ -358,8 +359,10 @@ whatever project is open. Nothing on the backend reads the live UI:
 - **Recorded by the frontend.** As the user changes a project's solve settings, the
   frontend records them as that project's setup for its source inventory
   (`PUT /api/models/{lineage}/setup`, `{inventory, setup}`, or `{prepared_id, setup}`
-  once a snapshot is prepared); the latest recording is the project's. The solver selection is recorded the same way
-  (`PUT /api/cadlink/solver-selection`, `{engine}`).
+  once a snapshot is prepared); the latest recording is the project's. An admitted
+  Solve of the CAD model in WG records the setup it solved with the same way. The solver selection is
+  recorded too (`PUT /api/cadlink/solver-selection`, `{engine}`), but only to seed a
+  first-time model's setup (WG's defaults, below).
 - **The operation keeps its settings.** The revision an attempt selects is recorded on the
   operation before it meshes, so it survives a preparation that fails. A follow-up that
   names no revision -- a frame confirmation, an approval, a retry -- continues with the
@@ -381,9 +384,10 @@ whatever project is open. Nothing on the backend reads the live UI:
   it, the project (`snapshot.documentName`, `snapshot.projectLineageId`), so the UI can
   offer to open that project for its settings; the `setup_required` message names the
   document as well.
-- **The engine is the one selected in WG.** A recorded setup keeps its engine only until
-  the selection says otherwise; the setup actually used is itself a setup revision, which
-  the operation names.
+- **The model's setup wins** (decision D2). The app-wide solver selection seeds only a
+  model's first setup; once the model has one, its engine and accuracy are used as
+  recorded, for a solve started in WG and a Fusion "Solve in WG" alike. The setup
+  actually used is itself a setup revision, which the operation names.
 - **None yet** means WG's default settings: a first-time model is prepared and solved
   with them (`server/cadlink/joblane/default_setup.py`), never with another project's. The
   defaults are stated once, in `shared/solve-defaults.json`, which the frontend's initial
@@ -627,18 +631,80 @@ refused preparation is an unnumbered `error` job with the same reason and messag
 Per-project setup, frame and domain memory is unchanged. Approvals belong to the
 exact preparation and resume only when its complete identity matches.
 
-The jobs API also accepts the WG UI's displayed press directly:
+### Solving a model (S5)
 
-- `POST /api/jobs/cad-solve` takes `{client_request_id, ingest_id,
-  setup_revision_id?, frame_axis?, approvals?: {preparation_id, finding_ids},
-  label?, submit?: true}`. It creates the same manual ledger row and job as
-  the compatibility intake, under `manual-solve:<client_request_id>` and
-  `cad-solve:manual-solve:<client_request_id>`, and captures the first press.
-  The client id uses the delivery id's letters, digits, underscores and
-  hyphens, starts with a letter or digit, and has at most 128 characters.
-  Reposting the same id and ingest recovers the original job, including after
-  refusal or binding; another ingest under that id is a 409. An exact replay
-  still recovers while an update restart is pending or the retained copy is gone.
+Every imported solve WG starts goes through one route,
+`POST /api/models/{model_id}/solve` (`server/jobs/model_solve.py`):
+`{prepared_id, setup_revision_id | setup, client_request_id, label?, frame_axis?,
+approvals?: {preparation_id, finding_ids}}`. The press names its model, the
+prepared mesh on screen and either a saved setup revision (an unedited restored
+run sends its own) or the setup itself, which becomes a revision. The client id
+uses the delivery id's letters, digits, underscores and hyphens, starts with a
+letter or digit, and has at most 128 characters. A prepared mesh filed under no
+model (`ingests.model_id` is '') is named by the reserved model id `unfiled`;
+nothing is ever filed under it, and no setup can be recorded for it.
+
+- **A file model** is solved directly: the setup is composed into the request by
+  `compose_solve_request` (`server/cadlink/joblane/project_setup.py`), the same
+  composition and checks both CAD preparations use (the job lane's bind and the
+  operation preparation's `_submit`), and submitted under
+  `model-solve:<client_request_id>`. Unreviewed blocking findings are refused
+  before anything is created.
+- **A CAD model** goes through the preparation lane, as a Fusion "Solve in WG"
+  does. Once the press is admitted (never when it is refused, nor when it is
+  answered by an identical job in flight), its setup -- or the revision it
+  names, for an unedited restored run -- is recorded as the model's for the
+  prepared mesh's sources. A refused CAD solve of the same snapshot with the
+  same settings, frame and domain plan (waiting at findings, an engine, a failed
+  or interrupted preparation) is continued as its Solve-again child, named as
+  the press names the run; a refused solve of other settings is left as it is.
+  Otherwise a manual intent is created under
+  `manual-solve:<client_request_id>` and `cad-solve:manual-solve:<client_request_id>`
+  and its first press captured. The preparation is resumed (`resumable_record`)
+  when snapshot, setup revision, meshing semantics, frame and domain plan make
+  the same one, and made again otherwise; a changed engine is a new revision and
+  so a new preparation. Revisions that differ only in their label count as the
+  same settings, and a continuation keeps the revision its parent holds. An
+  unlinked model's displayed axis (`frame_axis`) is confirmed for its project as
+  part of the press; with no axis shown and none confirmed or confidently
+  suggested, the press is refused.
+- **In flight.** While a job for the same model, prepared snapshot, setup
+  inputs, solver frame and domain plan is preparing, queued or running,
+  including a Fusion "Solve in WG" accepted first, the press answers that job
+  instead of starting another. The press's axis is confirmed first, so a job
+  meshed along another axis, or under another domain reading, is never the
+  answer. A Fusion request still choosing its settings (no setup yet, or WG's
+  defaults before it has prepared) takes up the press's setup: the press records
+  it as the model's and is answered by that request, which then prepares with
+  it. A request that has already passed that point keeps its own settings; a
+  press racing that moment can still be answered by it.
+- **Accepted limits.** A Fusion request delivered while a WG press is in flight
+  still makes its own job: its acknowledgement needs one. The SPA keeps no
+  press across a reload, so after a reload a press whose response was lost is
+  deduplicated only while its job is still active.
+- **Replays.** The same client id recovers the job it was answered with,
+  however that job ended, even while an update restart is pending or the
+  retained copy is gone: the answer is kept per press id
+  (`cad_settings` key `model-solve-press:<client id>`), including a press
+  answered by a job already in flight. The same id for any other press (setup,
+  frame axis, approvals, label) is `submission_key_conflict`.
+- **Refusals** are error envelopes: `model_not_found` and `prepared_unavailable`
+  (404), `model_mismatch`, `prepared_unavailable` (no retained copy),
+  `setup_required` (a named revision is gone), `frame_confirmation_required`,
+  `findings_need_review`, `submission_key_conflict` and `update_restart_pending`
+  (409), the request's own reason (422) and `engine_unavailable` (503). A CAD
+  preparation that cannot go on still ends its job refused with the operations'
+  reasons, as below.
+
+Every imported job records the setup revision it was made from
+(`task_metadata.imported_geometry.setup_revision_id`, served as
+`cad_source.setup_revision_id`). `POST /api/solve` with imported geometry and
+`POST /api/jobs/{job_id}/retry` of an imported run are adapters onto the same
+rules: the exact request is kept, recorded as its setup revision (a retry
+reuses the one the run recorded) and held to the in-flight rule.
+
+The jobs API continues what a Solve started:
+
 - `POST /api/jobs/{job_id}/solve-again` takes `{setup_revision_id?, frame_axis?,
   approvals?: {preparation_id, finding_ids}, submit?: true}`. It captures a
   waiting first press on the same job, or continues a refused intent as a new
@@ -653,52 +719,29 @@ The jobs API also accepts the WG UI's displayed press directly:
   faithful retry remains `POST /api/jobs/{job_id}/retry`, without a body.
 - `POST /api/jobs/{job_id}/approvals` takes `{preparation_id, finding_ids}`.
   It records only blocking findings on that refused job's exact preparation,
-  without solving. A different preparation is a 422, as on the operation shim.
+  without solving. A different preparation is a 422.
 - `POST /api/jobs/{job_id}/dismiss` dismisses a CAD solve that was never bound:
-  it deletes the refused job and its refused ancestors in one transaction, as
-  the compatibility Dismiss does, so a reconnect cannot bring a parent back. A
-  solve still preparing is a 409 (stop it first); so is a job with a request.
+  it deletes the refused job and its refused ancestors in one transaction, so
+  a reconnect cannot bring a parent back. A solve still preparing is a 409
+  (stop it first); so is a job with a request.
 
-Both solve routes return `SolveAccepted {job_id}`. Unknown jobs, ingests and
-setup revisions are 404; a missing retained snapshot is 409. New work during
-an approved update restart uses the jobs API's `update_restart_pending` refusal.
-All bodies use snake_case and are described by OpenAPI.
+These return `SolveAccepted {job_id}`. Unknown jobs and setup revisions are 404.
+New work during an approved update restart uses the jobs API's
+`update_restart_pending` refusal. All bodies use snake_case and are described
+by OpenAPI.
 
-WG's Solve controls use these job routes and the jobs channel. Solve cards,
-waiting notices and completion claims read the latest job of each continuation
-chain, independently of operation events. Session-scoped client ids retain an
-unfinished displayed press across a lost response or reload; a known response
-releases the id for a later deliberate solve. The previous build's manual ids
-are resolved through `GET /api/cadlink/operations/{operationId}` on the next
-Solve. A 404 drops an identity whose creation never committed, allowing new
-work. An existing `received` manual intent still waiting for its first press
-is admitted through `/api/jobs/{job_id}/solve-again` with the displayed settings.
-Already admitted or bound work is recovered without another admission. A
-transport failure retains the legacy identity for another lookup. Continuation
-selection is repeated after the frame, plan and settings awaits against the
-snapshot and project captured at the press, before retaining that press.
+WG's Solve controls make one `POST /api/models/{id}/solve` per press and read
+the jobs channel. Solve cards, waiting notices and completion claims read the
+latest job of each continuation chain, independently of operation events. The
+server owns the press identity: no session cache holds a press across a lost
+response or reload, since a repeated press of the same settings is the job
+already in flight.
 
-Older clients can still use compatibility shims:
-
-- `POST /operations` resolves a retained ingest and creates an unstarted manual
-  intent. It meshes nothing until the next Prepare press supplies the displayed
-  settings. Repeating the operation id and ingest recovers its job, even if the
-  retained file has since gone; another ingest under that id conflicts.
-- `POST /operations/{id}/prepare` captures that first press, or calls Solve again
-  on its latest refused job. A running preparation is never taken over. An
-  approved update restart leaves the job waiting for the lane, with the press's
-  settings and displayed axis captured.
-- `GET /operations` filters by **derived** state, so accepted ledger rows whose
-  jobs need user input remain in the pending listing. Detail, events, approvals,
-  solver-frame and domain preview read the latest job's preparation. Bound jobs
-  always read `accepted/submitted`, including a solver failure or cancellation;
-  their execution status is shown by the jobs UI.
-- `/approvals` records only the blocking findings on that refused job's exact
-  preparation. `/cancel` stops an active intent or deletes a refused intent. A
-  bound request remains an accepted operation and is stopped from the jobs UI.
-  Dismissing a refused child deletes its refused ancestors atomically, so a
-  reconnect cannot revive its parent. The accepted delivery ledger stays intact;
-  the missing job derives a cancelled compatibility summary.
+`GET /operations` filters by **derived** state, so accepted ledger rows whose
+jobs need user input remain in the pending listing. Detail, events,
+solver-frame and domain preview read the latest job's preparation. Bound jobs
+always read `accepted/submitted`, including a solver failure or cancellation;
+their execution status is shown by the jobs UI.
 
 Startup sweeps all pending legacy `prepare_and_solve` rows, page by page:
 
@@ -846,8 +889,8 @@ under `frontend/src/` unless they start with `server/`.
 | 15 | Intake refusals with no operation or job stay visible and deduplicated, also for a late page | none | Server refusal log, `stores/cadDeliveryHealth.ts` refusal/unseen state, receipt recovery in `stores/cadReceipts.ts` | `cadReceipts.test.ts` late refusal recovery/dedupe; `CadDeliveryHealth.test.tsx` unseen badge; `test_cad_receipts.py` durable intake refusals |
 | 16 | An interrupted Insert/Update is loud only for the active Fusion document, settles from evidence, and Dismiss never repeats it | none | `server/cadlink/fusion/recovery_api.py`, `server/cadlink/fusion/fusion_outcomes.py`, `stores/cadRecoveryNotices.ts`; `shell/CadOperationsSection.tsx` Check Fusion again asks the server to reconcile the exact mutation, then refreshes status/notices; notices alone write delivery-health recovery errors | `cadRecoveryNotices.test.ts` status changes/expiry, dismissal fences, sole health-feedback ownership and delayed unmount failure; `CadOperationsSection.onScreen.test.tsx` exact reconcile before refresh; `test_cad_recovery_notices.py` exact document evidence |
 | 17 | Sending WG changes picks guarded Insert/Update from current evidence, confirms a two-way conflict and fences late identity adoption | none | `shell/cadlink/outbound.ts` retains published IDs and consumes operation outcomes for observation/reconnect, shared guards in `shell/cadlink/send.ts`, `stores/cadConnection.ts` observations | `CadWorkspaceOwners.test.ts` polling until settlement; `outbound.test.ts` every guard/entry point, folder joins, conflict confirmation and identity fences; `DesignFileMenu.test.tsx` silent supersession |
-| 18 | Solve captures the snapshot and settings on screen before any await, under the right project | *job* (press captured into `POST /api/jobs/cad-solve`) | `shell/JobsCoordinator.tsx` captures and records the clicked snapshot/settings under its project before job submission | `JobsCoordinator.mutex.test.tsx :: uses the clicked settings while the fresh Advanced plan is pending`; `:: refuses to record the settings under a mismatched job project` |
-| 19 | Solve confirms the axis actually shown and reports a frame changed elsewhere | *job* (axis passed explicitly) | Ingest-keyed `stores/cadSolverFrame.ts`, `shell/JobsCoordinator.tsx` | `cadSolverFrame.test.ts`; `M1bSolveCard.test.tsx :: never solves along an axis the card did not show…` |
+| 18 | Solve captures the snapshot and settings on screen before any await, under the right project | *job* (press captured into `POST /api/models/{id}/solve`) | `shell/JobsCoordinator.tsx` captures the clicked snapshot/settings before any await and names its model; the server records them under that model and refuses a mismatched one (`model_mismatch`) | `JobsCoordinator.mutex.test.tsx :: uses the clicked settings while the fresh Advanced plan is pending`; `:: keeps the snapshot and settings captured at the press across the frame read`; `test_model_solve.py :: test_refusals_of_the_press_itself` |
+| 19 | Solve confirms the axis actually shown and reports a frame changed elsewhere | *job* (axis passed explicitly) | Ingest-keyed `stores/cadSolverFrame.ts`; `shell/JobsCoordinator.tsx` sends the axis shown (`frame_axis`) and `server/jobs/model_solve.py` confirms it with the press | `cadSolverFrame.test.ts`; `M1bSolveCard.test.tsx :: never solves along an axis the card did not show…` |
 | 20 | Only deliberate settings edits publish a project setup, with retries and correct-project flushing | *re-homed* (not tied to a job) | `shell/cadSetupPublisher.ts :: CadSetupPublisher` mounted in Shell, settings stores and its own save-feedback store | `cadSetupPublisher.test.ts` deliberate edits, retries and correct-project flushing; `ParamPanel.test.tsx` publisher failure feedback |
 | 21 | A compatible arrival keeps the project's solve settings; a changed inventory resets them | none | `stores/cadReturn.ts` project/inventory profiles via `shell/cadlink/arrivals.ts` and `shell/cadlink/receiptDisplay.ts` | `arrivals.test.ts :: keeps settings for a compatible arrival and resets a changed inventory`; `receiptDisplay.test.ts` shared continuity tests; `cadReturn.test.ts` |
 | 22 | A return for another project never replaces the parametric design or its undo history | none | `shell/cadlink/arrivals.ts`, `shell/cadlink/restores.ts`, `shell/cadlink/receiptDisplay.ts` design-identity fences | `arrivals.test.ts :: refuses a foreign arrival without replacing design or undo history`; `receiptDisplay.test.ts` foreign project and undo tests |

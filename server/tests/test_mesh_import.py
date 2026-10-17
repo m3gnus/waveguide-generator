@@ -257,7 +257,10 @@ def test_http_import_plan_solve_restart_and_faithful_retry_without_cad_routes(tm
                 metadata = runtime.store.get_job_row(job_id)["task_metadata"]["imported_geometry"]
                 assert metadata["model_id"] == model_id
                 assert metadata["prepared_id"] == record["ingest_id"]
-                assert metadata["setup_revision_id"] is None
+                # The exact request is the setup revision it was solved with (model_solve.py).
+                revision = store.get_setup_revision(metadata["setup_revision_id"])
+                assert json.loads(revision["setup_json"])["options"]["engine"] == "metal"
+                assert job["cad_source"]["setup_revision_id"] == metadata["setup_revision_id"]
                 path = f"/api/models/{model_id}?prepared_id={record['ingest_id']}"
                 read = (await client.get(path)).json()
                 assert read["prepared"] == record

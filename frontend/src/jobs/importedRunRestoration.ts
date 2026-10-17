@@ -14,6 +14,8 @@ interface Restoration {
   phase: 'loading' | 'ready' | 'failed';
   error: string | null;
   submission: ImportedSolveSubmission | null;
+  /** The setup revision the run recorded: an unedited Solve sends it back. */
+  setupRevisionId?: string | null;
   isCurrent?: () => boolean;
 }
 export const useImportedRunRestoration = create<{ restoration: Restoration | null }>(() => ({ restoration: null }));
@@ -33,7 +35,8 @@ export async function restoreImportedRun(
   const generation = importedMeshStore.beginIntent();
   const ingestId = job.cad_source?.ingest_id ?? '';
   const restoration: Restoration = { generation, input: adapter.input, ingestId,
-    phase: 'loading', error: null, submission: null, isCurrent: adapter.isCurrent };
+    phase: 'loading', error: null, submission: null, setupRevisionId: recordedSetupRevision(job),
+    isCurrent: adapter.isCurrent };
   useImportedRunRestoration.setState({ restoration });
   adapter.invalidate();
   const current = () => useImportedRunRestoration.getState().restoration?.generation === generation
@@ -64,6 +67,11 @@ export async function restoreImportedRun(
   }
 }
 
+/** The setup revision a run says it was solved with, or null for one that recorded none. */
+export function recordedSetupRevision(job: JobItem): string | null {
+  return job.cad_source?.setup_revision_id ?? job.cad_provenance?.setup?.revision_id ?? null;
+}
+
 export function assertRestoredIdentity(record: PreparedMeshIdentity, submission: ImportedSolveSubmission): void {
   if (submission.geometry.ingest_id !== record.ingest_id
     || submission.geometry.manifest_sha256 !== record.manifest_sha256
@@ -84,6 +92,11 @@ export function restoredCadSubmission(ingestId?: string): ImportedSolveSubmissio
   const state = useImportedRunRestoration.getState().restoration;
   return state?.input === 'cad' && state.phase === 'ready' && state.isCurrent?.() !== false && state.ingestId === ingestId && state.submission
     ? structuredClone(state.submission) : null;
+}
+/** The revision an unedited restored CAD run is solved again with, or null. */
+export function restoredCadRevision(ingestId?: string): string | null {
+  return restoredCadSubmission(ingestId)
+    ? useImportedRunRestoration.getState().restoration?.setupRevisionId ?? null : null;
 }
 export function restoredCadSetup(ingestId?: string): ImportedSetup | null {
   const submission = restoredCadSubmission(ingestId);

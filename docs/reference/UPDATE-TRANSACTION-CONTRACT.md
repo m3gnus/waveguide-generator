@@ -54,7 +54,7 @@ the release owner that this contract records but does not design.
 | The launcher accepts the request only with exactly its five keys and staged paths inside the data directory. It deletes the request as it consumes it. | `launchers/statusapp/updater.py:108-175` |
 | The launcher runs the **staged** helper, `<staged app>/launchers/apply_update.py`, with `cwd` at the data directory. It checks containment again. | `updater.py:562-566`, `:571`, `:587-604`, `:611-616` |
 | The launcher consumes the request **before** it stops the server. | `launchers/statusapp/controller.py:1013-1026`; `view.py:141`, `:191-201` |
-| Writing the handoff request latches "restart approved" in the server (§4.2). While it is latched, `POST /api/solve`, `POST /api/jobs/{job_id}/retry`, `POST /api/updates/install`, `POST /api/cadlink/ingest` and the file preparations `POST /api/models/files` and `POST /api/models/{model_id}/prepare` answer 409 `update_restart_pending`. Saving a setup (`PUT /api/models/{model_id}/setup`) starts nothing and is never refused for it. | `server/updates/restart.py`; writers in `server/updates/bundle.py` and `server/updates/service.py`; refusals in `server/jobs/api.py`, `server/updates/api.py`, `server/app.py` and `server/jobs/models_api.py` |
+| Writing the handoff request latches "restart approved" in the server (§4.2). While it is latched, `POST /api/solve`, `POST /api/models/{model_id}/solve`, `POST /api/jobs/{job_id}/retry`, `POST /api/updates/install`, `POST /api/cadlink/ingest` and the file preparations `POST /api/models/files` and `POST /api/models/{model_id}/prepare` answer 409 `update_restart_pending`. Saving a setup (`PUT /api/models/{model_id}/setup`) starts nothing and is never refused for it. | `server/updates/restart.py`; writers in `server/updates/bundle.py` and `server/updates/service.py`; refusals in `server/jobs/api.py`, `server/updates/api.py`, `server/app.py`, `server/jobs/models_api.py` and `server/jobs/model_solve.py` |
 
 After `8bccff0c`, the writing side of area 1 was implemented. `commit_transaction` writes
 the completion record (§2.2) before `remove_journal`, and healthy-start cleanup on both
@@ -541,13 +541,13 @@ process (`application.state.update_restart`):
   middleware in `server/app.py` (`RESTART_GATED_POSTS`) before its handler runs. It
   schedules a deferred viewport and a capture of the CAD document, which copies tens of
   megabytes, and both outlive the request.
-- Since S4-F1, the CAD compatibility Prepare route accepts a durable intent (or
-  Solve-again child) while the latch is set. It captures the press's settings and
-  displayed axis, but the lane copies and meshes nothing and assigns no run number.
-  Its derived operation reads `needs_user_input` / `update_restart_pending`, with
-  the pending restart's message. This is the declared job-lifecycle difference;
-  it does not start installation-owned work. New manual `POST /operations` still
-  refuses while latched; a replay of an already accepted delivery stays readable.
+- A Solve-again of a CAD solve (`POST /api/jobs/{job_id}/solve-again`) whose first
+  press is still waiting captures that press while the latch is set, but the lane
+  copies and meshes nothing and assigns no run number. Its derived operation reads
+  `needs_user_input` / `update_restart_pending`, with the pending restart's message.
+  This is the declared job-lifecycle difference; it does not start
+  installation-owned work. A new `POST /api/models/{model_id}/solve` refuses while
+  latched; a replay of an already accepted press stays readable.
 - **What stays open.** A route that does bounded work inside its request and persists no
   job stays open: every read, `POST /api/solve/plan`, the field plane,
   `/api/solver-mesh`, the STEP, STL and WGLink exports, and the job routes that act on a

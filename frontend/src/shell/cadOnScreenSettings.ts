@@ -1,7 +1,5 @@
-import type { CadReturnIngestRecord } from '../api/cadlink';
 import { type CadOperationSummary } from '../api/cadOperations';
 import { bundleIdentity, useCadReturnStore } from '../stores/cadReturn';
-import { isPendingCadOperation } from '../api/cadOperations';
 
 /** The project the settings on screen may be recorded under for this
  * operation, or why they may not.
@@ -38,57 +36,9 @@ export function settingsProjectFor(
   return filed;
 }
 
-/** States in which the backend is preparing or submitting a request: not yet
- * at a gate, not finished. */
-const IN_FLIGHT: ReadonlySet<string> = new Set(['received', 'processing']);
-
-/** The request for the model on screen that the backend is preparing or
- * submitting right now, if any.
- *
- * One job per intent (PLAN.md M1b): while it is in flight, Solve does
- * not start a second request for the same snapshot. It is held on this one,
- * which either stops at a gate -- where Solve continues it -- or finishes and
- * reveals its own result.
- *
- * JobsCoordinator checks its persisted press before using this hold: a
- * response it lost is recovered by reposting that captured job request. */
-export function onScreenRequestInFlight(
-  operations: Record<string, CadOperationSummary>,
-  record: CadReturnIngestRecord | null,
-): CadOperationSummary | null {
-  if (!record) return null;
-  return Object.values(operations).filter(isPendingCadOperation).find((operation) => operation.kind === 'prepare_and_solve'
-    && IN_FLIGHT.has(operation.state)
-    && operation.snapshot?.manifestSha256 === record.manifest_sha256) ?? null;
-}
-
-/** What the Solve card and the top bar say while Solve is held on that request. */
+/** What the Solve card says while the backend prepares a request for the model on screen. */
 export function inFlightWords(operation: CadOperationSummary): string {
   return operation.operationId.startsWith('manual-solve:')
     ? 'Preparing your solve…'
     : 'Preparing the request from Fusion…';
-}
-
-/** Why a request can wait that a WG Solve does not continue: the backend
- * queues it again by itself once the update restart is over. */
-const NOT_CONTINUED: ReadonlySet<string> = new Set(['update_restart_pending']);
-
-/** The request for the model on screen that WG's Solve continues: one Fusion
- * sent ("Solve in WG") for this very snapshot, waiting for the user at any of
- * its gates -- its first settings, its solver frame, an engine that cannot
- * solve it, a failed or interrupted preparation.
- *
- * Solve continues that job, with the settings and frame on screen, using
- * its id explicitly (PLAN.md M1b, "one card per intent"). A
- * request for another snapshot is not this, and neither is one the backend is
- * still preparing or will queue again by itself. */
-export function onScreenRequestToContinue(
-  operations: Record<string, CadOperationSummary>,
-  record: CadReturnIngestRecord | null,
-): CadOperationSummary | null {
-  if (!record) return null;
-  return Object.values(operations).filter(isPendingCadOperation).find((operation) => operation.kind === 'prepare_and_solve'
-    && operation.state === 'needs_user_input'
-    && !NOT_CONTINUED.has(operation.reason ?? '')
-    && operation.snapshot?.manifestSha256 === record.manifest_sha256) ?? null;
 }

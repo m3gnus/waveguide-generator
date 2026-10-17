@@ -1,3 +1,4 @@
+import type { ModelSolvePress } from '../jobs/actions';
 /**
  * PLAN.md M1b ("One Solve card") with M1e's automatic frame, end to end in the
  * application shell: the model card's one Solve captures the snapshot,
@@ -16,11 +17,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cadJobFixture, publishCadSummary } from '../jobs/cadSolve.fixtures';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
-import type { CadOperationSummary, CadSolveSetup } from '../api/cadOperations';
+import type { CadOperationSummary } from '../api/cadOperations';
 import type { SolverFrameState } from '../api/solverFrame';
 import { compareSelection, provisionalResults, resultsCache } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
-import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
+import type { CadReturnIngestRecord } from '../api/cadlink';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetCadSolverFrameStore, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { resetDesignStore } from '../stores/design';
@@ -47,31 +48,16 @@ import {
 } from './workspaceNavigation';
 
 const mocks = vi.hoisted(() => ({
-  submitImported: vi.fn(),
-  createSetupRevision: vi.fn(),
-  getSetupRevision: vi.fn(),
-  putProjectSetup: vi.fn(),
-  submitCadSolve: vi.fn(),
-  solveCadAgain: vi.fn(),
+  solveModel: vi.fn(),
 }));
 
-vi.mock('../api/cadOperations', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../api/cadOperations')>();
-  return {
-    ...actual,
-    createSetupRevision: mocks.createSetupRevision,
-    getSetupRevision: mocks.getSetupRevision,
-    putProjectSetup: mocks.putProjectSetup,
-  };
-});
-vi.mock('../jobs/cadSolve', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../jobs/cadSolve')>(),
-  submitCadSolve: mocks.submitCadSolve, solveCadAgain: mocks.solveCadAgain,
-}));
 vi.mock('../jobs/actions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../jobs/actions')>();
-  return { ...actual, submitImported: mocks.submitImported };
+  return { ...actual, solveModel: mocks.solveModel };
 });
+
+/** The n-th press WG sent (POST /api/models/{id}/solve): [model, body]. */
+const pressOf = (index = 0) => mocks.solveModel.mock.calls[index][1] as ModelSolvePress;
 vi.mock('../jobs/useCapabilities', () => ({
   useCapabilities: () => ({
     engines: [{ name: 'metal', available: true, reason: null, version: null, fast_paths: [], formulations: ['full-3d'] }],
@@ -243,10 +229,8 @@ describe('M1b: one Solve card, to the revealed result', () => {
   let visible: Set<WorkspacePanel>;
   /** What `GET /solver-frame` answers now; a confirmation updates it as the server does. */
   let frame: SolverFrameState;
-  /** Every `PUT /solver-frame` body, in order. */
+  /** Every `PUT /solver-frame` body, in order: the card's own confirmations (Solve's go with its press). */
   let puts: Array<{ ingestId?: string; operationId?: string; axis: string }>;
-  /** Setup revisions by id, as `GET /setup-revisions/{id}` returns them. */
-  let revisions: Map<string, CadSolveSetup>;
 
   const dockActivate = (panel: WorkspacePanel) => {
     activations.push(panel);
@@ -317,7 +301,6 @@ describe('M1b: one Solve card, to the revealed result', () => {
     bindWorkspaceNavigation(dockActivate);
     frame = frameAnswer({ suggestion: automatic('+x'), preselected: { axis: '+x', source: 'suggested' } });
     puts = [];
-    revisions = new Map();
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/api/cadlink/solver-frame?ingestId=wgi_first' && !init?.method) return json(frame);
@@ -330,27 +313,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
       if (url.startsWith('/api/cadlink/ingest/wgi_first/')) return new Response(MSH, { status: 200 });
       return resultResponse();
     }));
-    const store = (setup: CadSolveSetup) => {
-      // Identical content is one revision, as the server stores them.
-      const key = JSON.stringify(setup);
-      for (const [id, held] of revisions) if (JSON.stringify(held) === key) return id;
-      const id = `wgs_${revisions.size + 1}`;
-      revisions.set(id, setup);
-      return id;
-    };
-    mocks.createSetupRevision.mockImplementation(async (setup: CadSolveSetup) => ({
-      revisionId: store(setup), contentSha256: 'sha256:setup', createdAt: 'now',
-    }));
-    mocks.putProjectSetup.mockImplementation(async (request: { lineageId: string; setup: CadSolveSetup }) => ({
-      lineageId: request.lineageId, inventorySha256: 'sha256:inv', revisionId: store(request.setup),
-    }));
-    mocks.getSetupRevision.mockImplementation(async (revisionId: string) => {
-      const setup = revisions.get(revisionId);
-      if (!setup) throw new CadLinkApiError('Unknown setup revision', [], 404);
-      return { revisionId, contentSha256: 'sha256:setup', createdAt: 'now', setup };
-    });
-    mocks.submitCadSolve.mockResolvedValue({ job_id: 'job-1' });
-    mocks.solveCadAgain.mockResolvedValue({ job_id: 'job-child' });
+    mocks.solveModel.mockResolvedValue('job-1');
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
@@ -376,11 +339,11 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await mount();
     expect(host.querySelector('.cad-solve-settings > span')!.textContent).toContain('AUTO (Metal)');
     await pressSolve();
-    expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '+x' }]);
-    expect(mocks.submitCadSolve).toHaveBeenCalledWith(expect.objectContaining({ ingest_id: 'wgi_first', frame_axis: '+x', setup_revision_id: expect.any(String) }));
-    const press = mocks.submitCadSolve.mock.calls[0][0];
-    expect(revisions.get(press.setup_revision_id)?.options).toMatchObject({ frequency_range: [50, 20000], num_frequencies: 36 });
-    expect(mocks.putProjectSetup.mock.calls[0][0]).toMatchObject({ lineageId: 'wgl_test' });
+    // One call: the server confirms the axis shown and records the setup for the model.
+    expect(puts).toEqual([]);
+    expect(mocks.solveModel).toHaveBeenCalledWith('wgl_test', expect.objectContaining({ prepared_id: 'wgi_first', frame_axis: '+x' }));
+    const press = pressOf();
+    expect(press.setup!.options).toMatchObject({ frequency_range: [50, 20000], num_frequencies: 36 });
     await jobs([cadJobFixture(operation(`manual-solve:${press.client_request_id}`, 'accepted', { jobId: 'job-1' }), cadJob('job-1'))]);
     expect(compareSelection.getSnapshot().primary).toBe('job-1');
     expect(activations.filter((panel) => panel === 'results')).toEqual(['results']);
@@ -390,7 +353,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     const claim = vi.spyOn(solvedCadModels, 'claim');
     await mount();
     await pressSolve();
-    const press = mocks.submitCadSolve.mock.calls[0][0];
+    const press = pressOf();
     await jobs([cadJobFixture(operation(`manual-solve:${press.client_request_id}`, 'accepted', { jobId: 'job-1' }), cadJob('job-1'))]);
     // Without it, adoption would replace a newer rebuild of the same return.
     expect(claim).toHaveBeenCalledWith('job-1', expect.objectContaining({ sourceIngestId: 'wgi_first' }));
@@ -402,7 +365,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     const claim = vi.spyOn(solvedCadModels, 'claim');
     await mount();
     await pressSolve();
-    const press = mocks.submitCadSolve.mock.calls[0][0];
+    const press = pressOf();
     const parent = cadJobFixture(operation(`manual-solve:${press.client_request_id}`, 'needs_user_input', { jobId: 'job-1', reason: 'findings_need_review' }));
     await jobs([parent]);
     // approveCadJob claims the child it got back before the coordinator sees it.
@@ -430,7 +393,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
       await vi.waitFor(() => expect(button.disabled).toBe(false));
       expect(button.title).not.toBe('Solve is not available here.');
       await act(async () => { button.click(); await flush(12); });
-      expect(mocks.submitCadSolve).toHaveBeenCalledWith(expect.objectContaining({ ingest_id: 'wgi_first' }));
+      expect(mocks.solveModel).toHaveBeenCalledWith('wgl_test', expect.objectContaining({ prepared_id: 'wgi_first' }));
       // Once the coordinator is gone, the card has no command to borrow.
       await act(async () => { root.render(<div/>); await flush(); });
       expect(panelHost.querySelector<HTMLButtonElement>('button[data-action="solve"]')!.disabled).toBe(true);
@@ -444,60 +407,33 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await deliver(operation('cmd-fusion', 'needs_user_input', { reason: 'setup_required' }));
     await mount();
     act(() => { useCadReturnStore.setState({ frequencyStartHz: 80, frequencyEndHz: 12000, frequencyCount: 12 }); useImportedSolveOptionsStore.getState().setEngine('bempp'); });
+    // The server continues the waiting Fusion request with the settings on screen.
+    mocks.solveModel.mockResolvedValueOnce('job-child');
     await pressSolve();
-    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
-    const [id, press] = mocks.solveCadAgain.mock.calls[0];
-    expect(id).toBe('cmd-fusion');
-    const setup = revisions.get(press.setup_revision_id)!;
-    expect(setup.options).toMatchObject({ engine: 'bempp', frequency_range: [80, 12000], num_frequencies: 12 });
+    expect(mocks.solveModel).toHaveBeenCalledOnce();
+    expect(pressOf().setup!.options).toMatchObject({ engine: 'bempp', frequency_range: [80, 12000], num_frequencies: 12 });
     await jobs([cadJobFixture(operation('cmd-fusion', 'accepted', { jobId: 'job-child' }), { ...cadJob('job-child', 'error'), parent_job_id: 'cmd-fusion' })]);
     const retry = vi.spyOn(jobsSocket, 'retryJob').mockResolvedValue();
     await act(async () => jobsCoordinatorBridge.getSnapshot().retry('job-child'));
     expect(retry).toHaveBeenCalledWith('job-child');
     expect(useImportedSolveOptionsStore.getState().engine).toBe('bempp');
     expect(useCadReturnStore.getState().frequencyCount).toBe(12);
-    expect(mocks.solveCadAgain).toHaveBeenCalledOnce();
-  });
-
-  it('keeps a continuation on its exact setup revision when the displayed inputs have not changed', async () => {
-    await mount();
-    await pressSolve();
-    const first = mocks.submitCadSolve.mock.calls[0][0];
-    await deliver(operation('manual-solve:first', 'needs_user_input', { jobId: 'job-1', reason: 'findings_need_review', setupRevisionId: first.setup_revision_id }));
-    await pressSolve();
-    expect(mocks.solveCadAgain.mock.calls[0][1].setup_revision_id).toBe(first.setup_revision_id);
-    expect(mocks.createSetupRevision).toHaveBeenCalledOnce();
-  });
-
-  it('uses a fresh revision when the bound revision cannot be read', async () => {
-    await deliver(operation('cmd-fusion', 'needs_user_input', { reason: 'setup_required', setupRevisionId: 'gone' }));
-    await mount(); await pressSolve();
-    expect(mocks.solveCadAgain.mock.calls[0][1].setup_revision_id).not.toBe('gone');
-  });
-
-  it('preserves a deliberate axis pick during a pending settings save', async () => {
-    await mount();
-    act(() => useCadSolverFrameStore.getState().pick('wgi_first', '-y'));
-    let release!: (value: { revisionId: string }) => void;
-    mocks.putProjectSetup.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
-    await act(async () => { solveButton().click(); await flush(); });
-    act(() => useCadSolverFrameStore.getState().pick('wgi_first', '+z'));
-    await act(async () => { release({ revisionId: 'saved' }); await flush(12); });
-    expect(mocks.submitCadSolve.mock.calls[0][0].frame_axis).toBe('-y');
+    expect(mocks.solveModel).toHaveBeenCalledOnce();
   });
 
   it('never solves along an axis the card did not show: a changed project frame stops the job visibly', async () => {
     frame = frameAnswer({ confirmed: '+z', preselected: { axis: '+z', source: 'confirmed' } });
     await mount();
-    mocks.putProjectSetup.mockImplementationOnce(async () => { frame = frameAnswer({ confirmed: '+x', preselected: { axis: '+x', source: 'confirmed' } }); return { revisionId: 'saved' }; });
+    // The project's frame is changed elsewhere while the press is answered.
+    mocks.solveModel.mockImplementationOnce(async () => { frame = frameAnswer({ confirmed: '+x', preselected: { axis: '+x', source: 'confirmed' } }); return 'job-1'; });
     await pressSolve();
-    expect(mocks.submitCadSolve.mock.calls[0][0].frame_axis).toBe('+z');
+    expect(pressOf().frame_axis).toBe('+z');
     await deliver(operation('manual-solve:first', 'needs_user_input', { jobId: 'job-1', reason: 'frame_confirmation_required', message: 'The project frame changed elsewhere.' }));
     expect(host.textContent).toContain('check which way it radiates');
     await act(async () => useCadSolverFrameStore.getState().load('wgi_first'));
     expect(host.textContent).toContain('changed');
     await pressSolve();
-    expect(mocks.solveCadAgain.mock.calls[0][1].frame_axis).toBe('+x');
+    expect(pressOf(1).frame_axis).toBe('+x');
   });
 
   it('captures the original snapshot and settings while the initial frame read waits', async () => {
@@ -510,36 +446,25 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await act(async () => { solve = jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); await flush(); });
     act(() => { readyCad(); useCadReturnStore.setState({ ingestRecord: { ...useCadReturnStore.getState().ingestRecord!, ingest_id: 'wgi_second', manifest_sha256: SECOND } }); useCadReturnStore.setState({ frequencyCount: 99 }); });
     await act(async () => { release(); await loading; await solve; });
-    const press = mocks.submitCadSolve.mock.calls[0][0];
-    expect(press.ingest_id).toBe('wgi_first');
-    expect(revisions.get(press.setup_revision_id)?.options.num_frequencies).toBe(36);
+    const press = pressOf();
+    expect(press.prepared_id).toBe('wgi_first');
+    expect(press.setup!.options.num_frequencies).toBe(36);
   });
 
-  it('holds Solve on the job already preparing the displayed snapshot', async () => {
-    await deliver(operation('cmd-fusion', 'processing'));
+  it('leaves the job already preparing the displayed snapshot to the server: Solve is one model call', async () => {
+    await deliver(operation('cmd-fusion', 'processing', { jobId: 'job-fusion' }));
     await mount();
-    expect(solveButton().disabled).toBe(true);
-    expect(host.textContent).toContain('Preparing the request from Fusion');
+    // No frontend hold: Solve stays available.
+    expect(solveButton().disabled).toBe(false);
+    mocks.solveModel.mockResolvedValueOnce('job-fusion');
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
-    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
-    expect(mocks.solveCadAgain).not.toHaveBeenCalled();
-  });
-
-  it('ignores a new request for another snapshot while saving the pressed settings', async () => {
-    await mount();
-    mocks.putProjectSetup.mockImplementationOnce(async () => {
-      readyCad(); useCadReturnStore.setState({ ingestRecord: { ...useCadReturnStore.getState().ingestRecord!, ingest_id: 'wgi_second', manifest_sha256: SECOND } });
-      publishCadSummary(operation('cmd-second', 'processing', { snapshot: { manifestSha256: SECOND } }));
-      return { revisionId: 'saved' };
-    });
-    await pressSolve();
-    expect(mocks.submitCadSolve.mock.calls[0][0].ingest_id).toBe('wgi_first');
-    expect(mocks.solveCadAgain).not.toHaveBeenCalled();
+    // The server answers the job in flight for the same settings; nothing else is made here.
+    expect(mocks.solveModel).toHaveBeenCalledOnce();
   });
 
   it('shows failed and cancelled execution without revealing Results', async () => {
     await mount(); await pressSolve();
-    const press = mocks.submitCadSolve.mock.calls[0][0];
+    const press = pressOf();
     await jobs([cadJobFixture(operation(`manual-solve:${press.client_request_id}`, 'accepted', { jobId: 'job-1' }), cadJob('job-1', 'error'))]);
     expect(activations).not.toContain('results');
     expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Failed');
@@ -599,7 +524,8 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(solveButton().disabled).toBe(true);
     await act(async () => { host.querySelector<HTMLInputElement>('input[value="+z"]')!.click(); await flush(); });
     await pressSolve();
-    expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '+z' }]);
+    expect(puts).toEqual([]);
+    expect(pressOf().frame_axis).toBe('+z');
   });
 
   it('changes the axis on the card, and Solve confirms the one shown', async () => {
@@ -614,7 +540,8 @@ describe('M1b: one Solve card, to the revealed result', () => {
     // Changing it confirms nothing by itself.
     expect(puts).toEqual([]);
     await pressSolve();
-    expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '-z' }]);
+    // Solve sends the axis shown; the server confirms it with the press.
+    expect(pressOf().frame_axis).toBe('-z');
   });
 
   it('opens the axis chooser when the run line asks to change an automatic axis', async () => {
@@ -683,7 +610,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(host.querySelector('.cad-solver-frame-source')!.textContent).toBe('this project’s frame');
     expect(host.querySelector('input[type="radio"]')).toBeNull();
     await pressSolve();
-    expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '+y' }]);
+    expect(pressOf().frame_axis).toBe('+y');
   });
 
 });

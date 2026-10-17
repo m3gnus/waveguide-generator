@@ -70,6 +70,10 @@ export const solveAttention = {
     operationArms.set(operationId, pendingSolve);
     pendingSolve = null;
   },
+  /** A press bound to an operation was refused: nothing will claim its arm. */
+  releaseOperation(operationId: string): void {
+    operationArms.delete(operationId);
+  },
   followJob(from: string, jobId: string): void {
     const arm = operationArms.get(from);
     if (arm !== undefined) operationArms.set(jobId, arm);

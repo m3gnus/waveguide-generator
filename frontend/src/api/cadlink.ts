@@ -329,6 +329,9 @@ export interface CadFemRegion {
 }
 
 export interface CadReturnIngestRecord {
+  /** The imported model this preparation is filed under ('' for none), as the
+   * server files it; WG's Solve names it (`POST /api/models/{id}/solve`). */
+  model_id?: string;
   evidence_unverified?: boolean;
   fem_regions?: CadFemRegion[];
   producer?: string;
