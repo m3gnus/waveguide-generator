@@ -18,6 +18,24 @@ from test_real_pipeline import (
 from test_real_pipeline import real_pipeline_session as real_pipeline_session
 
 
+@pytest.fixture
+def isolated_import_bempp_host(real_pipeline_session):
+    """Spawn under this test's session, not an earlier app test's warm host.
+
+    The application owns one session for its lifetime. This pytest process
+    creates many, so a live global worker may still carry an earlier (or absent)
+    session. Close only this process's host before probing/solving, and close its
+    replacement before the dependent session fixture removes the directory.
+    """
+    from server.solver.bempp_process import shutdown_bempp_process
+
+    shutdown_bempp_process()
+    try:
+        yield
+    finally:
+        shutdown_bempp_process()
+
+
 @pytest.mark.parametrize("queued", [False, True], ids=["running", "queued"])
 def test_standalone_cancellation_is_durable_and_duplicate_press_does_not_restart(tmp_path, queued):
     async def scenario():
@@ -68,6 +86,7 @@ def test_standalone_cancellation_is_durable_and_duplicate_press_does_not_restart
 
 
 @pytest.mark.real_runtime
+@pytest.mark.usefixtures("isolated_import_bempp_host")
 def test_equivalent_cad_and_file_meshes_use_same_engine_and_agree(tmp_path: Path):
     """Real CAD preparation, then that same full mesh as a CAD-free file import."""
     manifest = json.loads((ROUND_RETURN / "wgreturn.json").read_text())
