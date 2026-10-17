@@ -1,5 +1,10 @@
-import { restoreCadJobModel } from './cadlink/restores';
-import { archivedRequest, job as archivedJob, json, mesh as archivedMesh, record as archivedRecord } from './cadlink/selection.fixtures';
+import './cadlink/restores';
+import { archivedRequest, job as archivedJob, json, mesh as archivedMesh, record as archivedRecord, workspaceFor } from './cadlink/selection.fixtures';
+import { openImported, resetImportedModelStore, useImportedModelStore } from '../stores/importedModel';
+
+/** Reopen a CAD run as history does: `openImported` of the run, shown by the CAD rail. */
+const restoreCadJobModel = (run: JobItem, display = {}, fetcher: typeof fetch = fetch) =>
+  openImported({ kind: 'run', job: run, display }, fetcher).catch(() => false);
 import { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
@@ -242,6 +247,7 @@ describe('solve invocation mutex', () => {
     sessionStorage.clear();
     importedMeshStore.clear();
     workspaceModeStore.setImportedInput('cad');
+    resetImportedModelStore();
     workspaceModeStore.setMode('parametric');
     mocks.capabilities.engines = [
       { name: 'metal', available: true, reason: null, version: null, fast_paths: [], formulations: ['full-3d'] },
@@ -296,7 +302,7 @@ describe('solve invocation mutex', () => {
   it('keeps saved file recovery eligible while startup is in CAD mode', async () => {
     act(() => root.unmount());
     workspaceModeStore.setMode('cad');
-    const restore = vi.spyOn(meshImport, 'restoreSavedMeshSetup').mockResolvedValue(false);
+    const restore = vi.spyOn(meshImport, 'reopenSavedMeshModel').mockResolvedValue(false);
     root = createRoot(host);
     await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
     expect(restore).not.toHaveBeenCalled();
@@ -310,7 +316,7 @@ describe('solve invocation mutex', () => {
       if (namespace === 'meshImport') hydrated = () => listener('wgi_remote');
       return () => undefined;
     });
-    const saved = vi.spyOn(meshImport, 'restoreSavedMeshSetup').mockResolvedValue(false);
+    const saved = vi.spyOn(meshImport, 'reopenSavedMeshModel').mockResolvedValue(false);
     root = createRoot(host);
     await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
     expect(saved).toHaveBeenCalledOnce();
@@ -1188,9 +1194,10 @@ describe('solve invocation mutex', () => {
   it('solves a restored CAD run again through its model, with the setup revision it recorded', async () => {
     const request = { ...archivedRequest(), options: { ...archivedRequest().options, symmetry: 'half_xz',
       ground_plane: { enabled: true, axis: 'y', height_m: 1.2 } } };
-    const recorded = { ...archivedJob(), cad_source: { ...archivedJob().cad_source!, setup_revision_id: 'wgs_recorded' } } as JobItem;
-    const fetcher = vi.fn<typeof fetch>(async input => String(input).endsWith('/requests')
-      ? json({ effective_request: request }) : String(input).endsWith('/viewport-mesh')
+    const recorded = archivedJob();
+    const fetcher = vi.fn<typeof fetch>(async input => String(input).endsWith('/workspace')
+      ? json(workspaceFor(archivedRecord.ingest_id, request as never, { revision: 'wgs_recorded', modelId: 'wgl_archived' }))
+      : String(input).endsWith('/viewport-mesh')
         ? new Response(archivedMesh) : json({ ...archivedRecord, model_id: 'wgl_archived' }));
     await act(async () => { expect(await restoreCadJobModel(recorded, {}, fetcher)).toBe(true); });
     await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));
@@ -1215,9 +1222,9 @@ describe('solve invocation mutex', () => {
     ['prepared_unavailable', 'This run’s prepared mesh is no longer available. Import or prepare the model again, then press Solve.'],
     ['model_mismatch', 'This run belongs to another model. Open that model, or import this one again, then press Solve.'],
   ])('says how to recover when a restored run is refused with %s', async (code, hint) => {
-    const recorded = { ...archivedJob(), cad_source: { ...archivedJob().cad_source!, setup_revision_id: 'wgs_gone' } } as JobItem;
-    await act(async () => { await restoreCadJobModel(recorded, {}, (async input => String(input).endsWith('/requests')
-      ? json({ effective_request: archivedRequest() }) : String(input).endsWith('/viewport-mesh')
+    const recorded = archivedJob();
+    await act(async () => { await restoreCadJobModel(recorded, {}, (async input => String(input).endsWith('/workspace')
+      ? json(workspaceFor(archivedRecord.ingest_id, archivedRequest(), { revision: 'wgs_gone' })) : String(input).endsWith('/viewport-mesh')
         ? new Response(archivedMesh) : json(archivedRecord)) as typeof fetch); });
     mocks.solveModel.mockRejectedValueOnce(new SolveSubmissionRefused(`${code}: refused`, 409, code));
     let caught: unknown;
@@ -1226,15 +1233,20 @@ describe('solve invocation mutex', () => {
     expect((caught as SolveSubmissionRefused).code).toBe(code);
   });
 
-  it('solves a restored CAD run that recorded no revision with its exact setup', async () => {
-    await act(async () => { await restoreCadJobModel(archivedJob(), {}, (async input => String(input).endsWith('/requests')
-      ? json({ effective_request: archivedRequest() }) : String(input).endsWith('/viewport-mesh')
+  it('solves a restored CAD run from before setup revisions with the revision the server derived, and an edited one with its setup', async () => {
+    await act(async () => { await restoreCadJobModel(archivedJob(), {}, (async input => String(input).endsWith('/workspace')
+      ? json(workspaceFor(archivedRecord.ingest_id, archivedRequest(), { revision: 'wgs_derived' })) : String(input).endsWith('/viewport-mesh')
         ? new Response(archivedMesh) : json(archivedRecord)) as typeof fetch); });
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
-    const { type: _type, ingest_id: _ingest, manifest_sha256: _manifest, artifact_sha256: _artifact,
-      acknowledged_findings: _findings, ...geometry } = archivedRequest().geometry as Record<string, unknown>;
-    expect(press().setup).toEqual({ schema_version: 1, geometry, options: archivedRequest().options });
-    expect(press().setup_revision_id).toBeUndefined();
+    expect(press()).toMatchObject({ prepared_id: archivedRecord.ingest_id, setup_revision_id: 'wgs_derived' });
+    expect(press().setup).toBeUndefined();
+    // One edit: the press sends the setup on screen, a new revision.
+    act(() => useImportedSolveOptionsStore.getState().setFrequencySpacing('linear'));
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    const edited = mocks.solveModel.mock.calls.at(-1)![1] as ModelSolvePress;
+    expect(edited.setup_revision_id).toBeUndefined();
+    expect(edited.setup!.options).toMatchObject({ frequency_spacing: 'linear', frequencies_hz: [100, 500, 1000] });
+    expect(edited.setup!.geometry).toMatchObject({ drive_channels: [{ id: 'archive-hf', source_ids: ['source-hf'] }] });
   });
 
   it('requires explicit setup before solving a standalone msh import', async () => {
@@ -1253,9 +1265,9 @@ describe('solve invocation mutex', () => {
     const accepted = deferred<string>();
     mocks.solveModel.mockReturnValueOnce(accepted.promise);
     act(() => {
-      useMeshImportStore.setState({ busy: false, filename: 'standalone.msh',
-        registered: { ingest_id: 'wgi_file', model_id: 'mesh-file:sha256:original', manifest_sha256: 'sha256:mesh',
-          artifact_sha256: 'sha256:original', source_tags: { group_2: 2 } } as unknown as RegisteredMesh });
+      useMeshImportStore.setState({ busy: false, filename: 'standalone.msh' });
+      void openImported({ kind: 'file', prepared: { ingest_id: 'wgi_file', model_id: 'mesh-file:sha256:original', manifest_sha256: 'sha256:mesh',
+        artifact_sha256: 'sha256:original', source_tags: { group_2: 2 } } as unknown as RegisteredMesh });
       useImportedSolveOptionsStore.getState().setSweep({ startHz: 100, endHz: 200, count: 2 });
       importedMeshStore.setFile({ name: 'standalone.msh', source: 'file', ingestId: 'wgi_file' } as ImportedMeshScene);
     });
@@ -1275,10 +1287,10 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitDesign).not.toHaveBeenCalled();
     await act(async () => { accepted.resolve('file-run'); await accepted.promise; });
     expect(compareSelection.getSnapshot().awaiting).toBe('file-run');
-    act(() => useMeshImportStore.setState({ registered: null }));
+    act(() => resetImportedModelStore());
   });
 
-  it.each([null, 'wgs_restored'])('submits portable replay options verbatim after automatic global settings restoration (revision %s)', async (revision) => {
+  it.each([null, 'wgs_restored'])('submits an unedited opened file setup verbatim after automatic global settings restoration (revision %s)', async (revision) => {
     workspaceModeStore.setImportedInput('file'); workspaceModeStore.setMode('cad');
     const replay = importedSubmission('wgi_replay');
     delete replay.geometry.mesh;
@@ -1288,9 +1300,12 @@ describe('solve invocation mutex', () => {
     const accepted = deferred<string>();
     mocks.solveModel.mockReturnValueOnce(accepted.promise);
     act(() => {
-      useMeshImportStore.setState({ busy: false, filename: 'replayed.msh', exactSubmission: structuredClone(replay),
-        exactRevisionId: revision,
-        registered: { ingest_id: 'wgi_replay', model_id: 'mesh-file:replay', manifest_sha256: replay.geometry.manifest_sha256,
+      const { type: _t, ingest_id: _i, manifest_sha256: _m, artifact_sha256: _a, acknowledged_findings: _f, ...opened } = replay.geometry;
+      useMeshImportStore.setState({ busy: false, filename: 'replayed.msh' });
+      // What `openImported` leaves for a replay (no revision) or a reopened run (its revision).
+      useImportedModelStore.setState({ input: 'file', phase: 'ready', modelId: 'mesh-file:replay',
+        setup: structuredClone({ geometry: opened, options: replay.options }), restoredRevisionId: revision,
+        prepared: { ingest_id: 'wgi_replay', model_id: 'mesh-file:replay', manifest_sha256: replay.geometry.manifest_sha256,
           artifact_sha256: replay.geometry.artifact_sha256, source_tags: { source: 2 } } as unknown as RegisteredMesh });
       importedMeshStore.setFile({ name: 'replayed.msh', source: 'file', ingestId: 'wgi_replay' } as ImportedMeshScene);
       useImportedSolveOptionsStore.setState({ engine: 'auto', accuracy: 'fast' });
@@ -1310,7 +1325,7 @@ describe('solve invocation mutex', () => {
     }
     expect(press().client_request_id).toMatch(/^mesh-/);
     await act(async () => { accepted.resolve('replayed-run'); await accepted.promise; });
-    act(() => useMeshImportStore.setState({ registered: null, exactSubmission: null, exactRevisionId: null }));
+    act(() => resetImportedModelStore());
   });
 
   // V2: Solve has one meaning. It solves the model and settings on screen;

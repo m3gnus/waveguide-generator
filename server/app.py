@@ -926,6 +926,9 @@ def create_app(
     from server.jobs.models_api import mount_models_api
 
     mount_models_api(application)
+    from server.jobs.run_workspace import mount_run_workspace
+
+    mount_run_workspace(application)
     from server.jobs.mesh_replay import mount_mesh_replay
 
     mount_mesh_replay(application)

@@ -45,7 +45,7 @@ import { ResultsHeader } from './ResultsHeader';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { useVisibleRedraw } from './panelVisibility';
 import { trapDialogFocus } from './dialogFocus';
-import { solveOptionsStoreForJob, useScopedSolveOptions } from '../stores/solveOptionsContext';
+import { solveOptionsStoreForJob, useRunNormAngle } from '../stores/solveOptionsContext';
 import { useObservationStore } from '../viewport/observationStore';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
 import { useDesignStore } from '../stores/design';
@@ -1819,7 +1819,9 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
   // The normalization angle is a display reference, not a solve setting: the
   // stored patterns are re-referenced to whatever is in the field right now,
   // so an archived run answers a change to it without being solved again.
-  const normAngle = useScopedSolveOptions((state) => state.polar.normAngle);
+  // It is the shown run's: an imported run's angle is the imported options',
+  // a parametric run's the design's, whichever workspace is on screen.
+  const normAngle = useRunNormAngle(job);
   // Only comparable and driver charts read the cross-job list. Keeping it in the
   // dependency array for every chart would rebuild expensive single-run
   // surfaces whenever the comparison selection changes.
@@ -2029,7 +2031,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     .join('\n');
   // Subscribed rather than read from the snapshot: the subtitle names the angle
   // the map is referenced to, and that has to follow the field as it is typed.
-  const cardNormAngle = useScopedSolveOptions((state) => state.polar.normAngle);
+  const cardNormAngle = useRunNormAngle(job);
   const cardPreferences = usePreferences();
   const [expanded, setExpanded] = useState(false);
   const [imageReady, setImageReady] = useState(false);

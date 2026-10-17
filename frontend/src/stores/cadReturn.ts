@@ -16,7 +16,8 @@ import {
 } from '../results/crossoverSpec';
 import { useDocumentStore } from './document';
 import { namespaceStorage } from './durableSettings';
-import { applyCadSolveSelection, cadSolveSelection, discardCadSolveOptionsSnapshot, seedImportedSolveOptionsFromParametric, type SolveAccuracy } from './solveOptions';
+import { seedImportedSolveOptionsFromParametric, type SolveAccuracy } from './solveOptions';
+import { applyCadSolveSelection, cadSolveSelection, discardParkedCadOptions, openImported } from './importedModel';
 import { workspaceModeStore } from './workspaceMode';
 import {
   DEFAULT_CROSSOVER,
@@ -846,7 +847,7 @@ function restoreSolveProfile(bundle: CadReturnBundle, projectLineageId: string |
   const cadActive = workspaceModeStore.getSnapshot().importedInput === 'cad';
   // Selecting a project with a file on screen: the saved CAD options are the
   // previous project's, so none of them may carry over.
-  if (how === 'select' && !cadActive) discardCadSolveOptionsSnapshot();
+  if (how === 'select' && !cadActive) discardParkedCadOptions();
   if (!profile || !compatibleSourceInventory({ readable: true, sources: profile.inventory }, bundle)) {
     // No saved setup for this project: open with a one-way copy of the
     // parametric options, made once here and never written back.
@@ -1221,6 +1222,8 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       selectedSolveProfileKey = currentSolveProfileKey(current.selectedBundle, project);
     }
     saveSolveProfile(get());
+    // An arrival is the CAD input's model now; nothing is restored with it.
+    void openImported({ kind: 'cad', record: ingestRecord });
     return true;
   },
   setSourceSize: (sourceId, value) => {

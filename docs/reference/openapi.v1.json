@@ -10675,6 +10675,83 @@
         "title": "ResultProvenance",
         "type": "object"
       },
+      "RunWorkspace": {
+        "description": "Everything the frontend opens an imported run with.",
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "original_available": {
+            "default": false,
+            "title": "Original Available",
+            "type": "boolean"
+          },
+          "prepared": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The prepared mesh the run solved; a file's carries its solver mesh.",
+            "title": "Prepared"
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkspaceRefusal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "setup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkspaceSetup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "solve_options": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The options the run was solved with (its effective request).",
+            "title": "Solve Options"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "RunWorkspace",
+        "type": "object"
+      },
       "RuntimePreparationResponse": {
         "properties": {
           "backend": {
@@ -12106,6 +12183,50 @@
           "designRevision"
         ],
         "title": "WgLinkExportRequest",
+        "type": "object"
+      },
+      "WorkspaceRefusal": {
+        "description": "Why a run's workspace cannot be reopened (in part or at all).",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "WorkspaceRefusal",
+        "type": "object"
+      },
+      "WorkspaceSetup": {
+        "description": "The setup revision a run was made from, and its content.",
+        "properties": {
+          "content": {
+            "additionalProperties": true,
+            "title": "Content",
+            "type": "object"
+          },
+          "derived": {
+            "default": false,
+            "title": "Derived",
+            "type": "boolean"
+          },
+          "revision_id": {
+            "title": "Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision_id",
+          "content"
+        ],
+        "title": "WorkspaceSetup",
         "type": "object"
       },
       "server__exports__api__ExportRequest": {
@@ -16747,6 +16868,69 @@
           }
         },
         "summary": "Field Plane"
+      }
+    },
+    "/api/runs/{job_id}/workspace": {
+      "get": {
+        "description": "Reopen a run: its model, prepared mesh, original and the setup it was made from.",
+        "operationId": "run_workspace_api_runs__job_id__workspace_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunWorkspace"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown run"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A retained record is unreadable"
+          }
+        },
+        "summary": "Run Workspace",
+        "tags": [
+          "Runs"
+        ]
       }
     },
     "/api/runtimes/beat/{backend}/prepare": {

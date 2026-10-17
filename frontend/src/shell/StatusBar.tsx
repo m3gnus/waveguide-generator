@@ -10,6 +10,7 @@ import { accuracyEngine, useCapabilities } from '../jobs/useCapabilities';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { usePreferences, type Preferences } from '../prefs/preferences';
 import { useMeshImportStore } from '../stores/meshImport';
+import { useImportedModelStore } from '../stores/importedModel';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -97,6 +98,8 @@ export function StatusBar() {
   const design = useDesignStore((state) => state.design);
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const file = useMeshImportStore();
+  const openedSetup = useImportedModelStore((state) => state.input === 'file' ? state.setup : null);
+  const fileRegistered = useImportedModelStore((state) => state.input === 'file' && state.prepared !== null);
   const fileActive = mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file';
   const cadReturn = useCadReturnStore();
   const filename = useDocumentStore((state) => state.filename);
@@ -121,7 +124,7 @@ export function StatusBar() {
   const cadTriangles = cadReturn.ingestRecord?.mesh?.stats.triangle_count;
   const [fileStart, fileEnd, fileCount] = fileSweep.split('/').map(Number);
   const listedFrequencies = frequencyMode === 'list' ? parseFrequencyList(frequencyListText).frequencies ?? undefined : undefined;
-  const replayFrequencies = file.exactSubmission?.options.frequencies_hz ?? listedFrequencies;
+  const replayFrequencies = openedSetup?.options.frequencies_hz ?? listedFrequencies;
   const summary = fileActive
     ? `next mesh solve ${compactFrequency(replayFrequencies?.[0] ?? fileStart)} – ${compactFrequency(replayFrequencies?.at(-1) ?? fileEnd)} · ${replayFrequencies?.length ?? fileCount} f`
     : mode === 'cad'
@@ -147,6 +150,6 @@ export function StatusBar() {
     <span className="spacer"/>
     <div className="status-item right">{summary}</div>
     <div className="status-item right status-drop-1"><Icon name="folder"/>{document}</div>
-    <div className="status-item right">{fileActive ? (file.registered ? 'Mesh · ready' : 'Mesh · not prepared') : <><i className={`connection-dot ${mode === 'cad' ? cadReturn.ingestRecord ? 'connected' : 'disconnected' : preview.connection}`}/>{mode === 'cad' ? cadReturn.ingestRecord ? 'CAD return · ingested' : 'CAD return · empty' : preview.connection === 'connected' ? 'local · connected' : `local · ${preview.connection}`}</>}</div>
+    <div className="status-item right">{fileActive ? (fileRegistered ? 'Mesh · ready' : 'Mesh · not prepared') : <><i className={`connection-dot ${mode === 'cad' ? cadReturn.ingestRecord ? 'connected' : 'disconnected' : preview.connection}`}/>{mode === 'cad' ? cadReturn.ingestRecord ? 'CAD return · ingested' : 'CAD return · empty' : preview.connection === 'connected' ? 'local · connected' : `local · ${preview.connection}`}</>}</div>
   </footer>;
 }

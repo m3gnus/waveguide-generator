@@ -6,8 +6,14 @@ import { resetDocumentStore, useDocumentStore } from '../../stores/document';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { createCadArrivalActions, SupersededError } from './arrivals';
 import { createCadReturnWaiter, FUSION_RETURN_TIMEOUT_MS } from './returnWaiter';
-import { archivedRequest } from './selection.fixtures';
-import { restoreCadJobModel } from './restores';
+import { workspaceFor } from './selection.fixtures';
+import type { JobItem } from '../../api/jobsSocket';
+import { openImported, type ImportedDisplay } from '../../stores/importedModel';
+import './restores';
+/** Reopen a CAD run as history does: `openImported` of the run, shown by the CAD rail. */
+const restoreCadJobModel = (run: JobItem, display: ImportedDisplay = {}, fetcher: typeof fetch = fetch) =>
+  openImported({ kind: 'run', job: run, display }, fetcher).catch(() => false);
+
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { bundle, deferred, job, json, mesh, record } from './selection.fixtures';
 import { identity, link, status } from './outbound.fixtures';
@@ -256,7 +262,7 @@ it.each(['status', 'listing'] as const)('a delayed archive restore supersedes a 
   // Restoration immediately invalidates the previous solvable setup.
   const state = useCadReturnStore.getState();
   const restored = restoreCadJobModel(job(), { enterCadWorkspace: () => undefined },
-    (async (input) => String(input).endsWith('/viewport-mesh') ? new Response(mesh) : String(input).endsWith('/requests') ? json({ effective_request: archivedRequest() }) : archive.promise) as typeof fetch);
+    (async (input) => String(input).endsWith('/viewport-mesh') ? new Response(mesh) : String(input).endsWith('/workspace') ? json(workspaceFor()) : archive.promise) as typeof fetch);
   expect(useCadReturnStore.getState()).not.toBe(state);
   expect(useCadReturnStore.getState().ingestRecord).toBeNull();
   const viewportIntent = importedMeshStore.captureGeneration();

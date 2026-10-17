@@ -1,4 +1,4 @@
-import { importedRunRestoreBlocker, restoredCadSubmission, restoredCadSetup } from './importedRunRestoration';
+import { importedModelBlocker } from '../stores/importedModel';
 import { exteriorTransducerError } from '../stores/exteriorTransducer';
 import type { ImportedSolveSubmission } from './actions';
 import { bindImportedSetup, type ImportedSetup } from './importedSetup';
@@ -84,8 +84,8 @@ export function importedSubmissionBlocker(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
   solveStore: SolveOptionsSnapshot = useImportedSolveOptionsStore.getState(),
 ): string | null {
-  const restoring = importedRunRestoreBlocker('cad');
-  if (restoring) return restoring;
+  const opening = importedModelBlocker('cad');
+  if (opening) return opening;
   const rangeInvalid = solveStore.frequencyMode === 'range' && (
     !(state.frequencyStartHz > 0)
     || state.frequencyEndHz <= state.frequencyStartHz
@@ -297,8 +297,6 @@ export function resolveCadImportedSetup(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
   solveStore: SolveOptionsSnapshot = useImportedSolveOptionsStore.getState(),
 ): ImportedSetup {
-  const frozen = restoredCadSetup(state.ingestRecord?.ingest_id);
-  if (frozen) return frozen;
   // The readiness gate already refuses this, but the builder is the last thing
   // between the rail and the wire and an enabled-yet-incomplete form must never
   // become a silently pre-campaign submission.
@@ -357,11 +355,9 @@ export function buildImportedSubmission(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
 ): ImportedSolveSubmission {
   const record = state.ingestRecord;
-  const restoring = importedRunRestoreBlocker('cad');
-  if (restoring) throw new Error(restoring);
+  const opening = importedModelBlocker('cad');
+  if (opening) throw new Error(opening);
   if (!record) throw new Error('Ingest a CAD return before solving.');
-  const frozen = restoredCadSubmission(record.ingest_id);
-  if (frozen) return frozen;
   if (record.evidence_unverified) throw new Error('The retained return manifest cannot be verified; re-ingest this return before solving.');
   const setup = resolveCadImportedSetup(state);
   if (record.native_source) setup.geometry.required_features = [...record.native_source.required_features];

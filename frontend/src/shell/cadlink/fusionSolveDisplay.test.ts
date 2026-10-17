@@ -11,7 +11,7 @@ import { workspaceModeStore } from '../../stores/workspaceMode';
 import { noteExplicitNavigation, resetWorkspaceNavigationForTests } from '../workspaceNavigation';
 import { resetSolveAttentionForTests } from '../solveAttention';
 import { createFusionSolveDisplay } from './fusionSolveDisplay';
-import { archivedRequest, bundle, deferred, job, json, record } from './selection.fixtures';
+import { bundle, deferred, job, json, record, workspaceFor } from './selection.fixtures';
 
 const NOW = Date.parse('2026-10-15T18:00:00Z');
 function external(id = 'fusion', created = NOW - 120_000) {
@@ -22,8 +22,8 @@ function external(id = 'fusion', created = NOW - 120_000) {
 }
 const disposers: Array<() => void> = [];
 afterEach(() => { disposers.splice(0).forEach((dispose) => dispose()); });
-function fixture(fetcher: typeof fetch = vi.fn(async input => json(String(input).endsWith('/requests')
-  ? { effective_request: archivedRequest() } : record))) {
+function fixture(fetcher: typeof fetch = vi.fn(async input => json(String(input).endsWith('/workspace')
+  ? workspaceFor() : record))) {
   let sendAt = 0;
   const display = { isActive: () => true, newestSendAt: () => sendAt, onIntent: vi.fn(),
     enterCadWorkspace: () => workspaceModeStore.setMode('cad'), reportStatus: vi.fn(), reportViewportNotice: vi.fn(),

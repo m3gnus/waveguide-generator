@@ -74,8 +74,8 @@ frequency lists and directivity settings, without the original job database or
 mesh file. Packages up to 64 MiB are accepted. Press **Solve** for a new run using
 those settings. The panel shows the actual frequencies, polars, engine and
 accuracy, with the complete resolved setup available under **Full resolved setup**.
-Automatic settings restoration does not change replay. Editing a mesh setup
-control or a global solve option ends exact replay and starts a new setup using the mesh controls; WG shows this change.
+Automatic settings restoration and parametric solve options do not change replay. Editing a mesh setup
+control or one of the mesh's solve options ends exact replay and starts a new setup from what the controls show; the exact-replay summary then disappears.
 Run archives also include the replay package when its inputs remain available.
 If an old run cannot supply those inputs, its archive record explains why replay
 is unavailable while keeping the result exports. CAD runs keep their existing

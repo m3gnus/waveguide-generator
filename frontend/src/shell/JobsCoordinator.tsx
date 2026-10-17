@@ -1,7 +1,7 @@
-import { importedRunRestoreBlocker, restoredCadRevision, restoredCadSubmission, useImportedRunRestoration } from '../jobs/importedRunRestoration';
+import { importedModelBlocker, unchangedSetup, useImportedModelStore } from '../stores/importedModel';
 import { nativeSymmetryLimitation } from '../design/nativeFamilies';
 import { durableSettings } from '../stores/durableSettings';
-import { fileMeshSubmission, restoreSavedMeshSetup, useMeshImportStore } from '../stores/meshImport';
+import { fileMeshSubmission, registeredMesh, reopenSavedMeshModel, useMeshImportStore } from '../stores/meshImport';
 import type { ExportFormat } from '../prefs/preferences';
 import { ownedAutoExport } from '../jobs/autoExportOwner';
 import { exportRunAutomatically } from '../jobs/autoExportRun';
@@ -188,8 +188,8 @@ export function cadSolveBlockerNow(): string | null {
 /** The same rule without the frame, which a Solve judges once the frame read
  * the card has under way has answered. */
 function cadInputBlockerNow(): string | null {
-  const restoring = importedRunRestoreBlocker('cad');
-  if (restoring) return restoring;
+  const opening = importedModelBlocker('cad');
+  if (opening) return opening;
   const cadReturn = useCadReturnStore.getState();
   const cad = importedMeshStore.getSnapshot().cad;
   if (cadReturn.ingestRecord !== null && cad !== null
@@ -282,7 +282,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // Parametric mode reads the persisted store, Imported mode its own instance.
   const solveOptions = useScopedSolveOptions();
   const selectedEngine = solveOptions.engine;
-  useImportedRunRestoration();
+  useImportedModelStore();
   const cadReturn = useCadReturnStore();
   const viewportGeometry = useSyncExternalStore(
     importedMeshStore.subscribe,
@@ -455,22 +455,21 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const solveFileModel = useCallback(async () => {
     if (submissionInFlight.current) return 'busy' as const;
     const submission = fileMeshSubmission();
-    const state = useMeshImportStore.getState();
-    const record = state.registered!;
-    const designName = state.filename;
+    const record = registeredMesh()!;
+    const designName = useMeshImportStore.getState().filename;
     const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
-    // An unedited restored run is solved again with the setup it recorded.
-    const revision = state.exactSubmission ? state.exactRevisionId : null;
+    // An unedited reopened model is solved again with the setup it was opened with.
+    const unchanged = unchangedSetup('file', record.ingest_id);
     const press: ModelSolvePress = {
       prepared_id: record.ingest_id, client_request_id: `mesh-${crypto.randomUUID()}`, label,
-      ...(revision ? { setup_revision_id: revision } : { setup: setupOfSubmission(submission) }),
+      ...(unchanged ?? { setup: setupOfSubmission(submission) }),
     };
     submissionInFlight.current = true;
     try {
       setSubmitting(true);
       setActionError(null);
       const jobId = await solveModel(record.model_id, press)
-        .catch((error) => { throw importedSolveError(error, state.exactSubmission !== null); });
+        .catch((error) => { throw importedSolveError(error, unchanged !== null); });
       acceptSubmittedLabel(designName);
       compareSelection.awaitRun(jobId);
       solveAttention.bindRun(jobId);
@@ -495,12 +494,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     const frameAtPress = useCadSolverFrameStore.getState().frames[ingestId];
     const blocker = cadInputBlockerNow();
     if (blocker) throw new Error(blocker);
-    // The settings on screen, or an unedited restored run's own revision.
-    const frozen = restoredCadSubmission(ingestId);
-    const revision = frozen ? restoredCadRevision(ingestId) : null;
-    const built = frozen ? null : buildCadProjectSetup(cad, undefined, undefined, cadModelId(record));
-    if (!frozen && !built) throw new Error('The CAD solve settings are incomplete. Review the Simulation settings and try again.');
-    const setup = revision ? null : frozen ? setupOfSubmission(frozen) : built!.setup;
+    // The settings on screen, or the setup an unedited reopened run was opened with.
+    const unchanged = unchangedSetup('cad', ingestId);
+    const built = unchanged ? null : buildCadProjectSetup(cad, undefined, undefined, cadModelId(record));
+    if (!unchanged && !built) throw new Error('The CAD solve settings are incomplete. Review the Simulation settings and try again.');
     const designName = currentRunNameSource().name;
     const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
     const clientRequestId = `cad-${crypto.randomUUID()}`;
@@ -519,7 +516,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       const approvals = reviewedFindings(record);
       const press: ModelSolvePress = {
         prepared_id: ingestId, client_request_id: clientRequestId, label,
-        ...(revision ? { setup_revision_id: revision } : { setup: setup! }),
+        ...(unchanged ?? { setup: built!.setup }),
         ...(frameAxis ? { frame_axis: frameAxis } : {}),
         ...(approvals ? { approvals } : {}),
       };
@@ -532,7 +529,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
           forgetCadSolve(key);
           solveAttention.releaseOperation(key);
         }
-        throw importedSolveError(error, frozen !== null);
+        throw importedSolveError(error, unchanged !== null);
       });
       rememberCadSolve(jobId, designName, ingestId);
       solveAttention.followJob(key, jobId);
@@ -585,7 +582,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         || importedMeshStore.getSnapshot().showing !== 'parametric') return;
       recovery.inFlight = true;
       const generation = importedMeshStore.captureGeneration();
-      void Promise.resolve(importedMeshStore.isCurrentGeneration(generation) && restoreSavedMeshSetup())
+      void Promise.resolve(importedMeshStore.isCurrentGeneration(generation) && reopenSavedMeshModel())
         .then(restored => { recovery.done = Boolean(restored); })
         .catch(error => { recovery.done = true; reportError(error instanceof Error ? error.message : String(error)); })
         .finally(() => { recovery.inFlight = false; });

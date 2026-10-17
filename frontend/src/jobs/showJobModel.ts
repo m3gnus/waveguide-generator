@@ -1,11 +1,13 @@
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { restoreCadJobModel } from '../shell/cadlink/restores';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { currentDesignLoadSource } from '../stores/design';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { noteExplicitNavigation } from '../shell/workspaceNavigation';
 import { canLoadJobDesign, replaceWithJobDesign } from './jobDesign';
-import { restoreMeshImport } from '../stores/meshImport';
+import { openImported } from '../stores/importedModel';
+// The rails a reopened imported run is shown in: the file and the CAD rail.
+import '../stores/meshImport';
+import '../shell/cadlink/restores';
 
 /** Put the model represented by a history run back into its owning workspace. */
 export async function showJobModel(
@@ -14,14 +16,18 @@ export async function showJobModel(
 ): Promise<boolean> {
   // Asked for from a run's own controls: the user is choosing what to look at.
   noteExplicitNavigation();
-  if (job.config_summary.import_origin === 'mesh-file') {
-    try { return await restoreMeshImport(job); }
-    catch (error) { onError(error instanceof Error ? error.message : String(error)); return false; }
+  if (job.config_summary.geometry_type === 'imported') {
+    // A file or a CAD run: its model, prepared mesh and setup, from the server.
+    try {
+      return await openImported({ kind: 'run', job, display: {
+        reportStatus: cadWorkspace.getSnapshot().reportStatus,
+        reportViewportNotice: cadWorkspace.getSnapshot().reportViewportNotice,
+      } });
+    } catch (error) {
+      onError(error instanceof Error ? error.message : String(error));
+      return false;
+    }
   }
-  if (job.config_summary.geometry_type === 'imported') return restoreCadJobModel(job, {
-    reportStatus: cadWorkspace.getSnapshot().reportStatus,
-    reportViewportNotice: cadWorkspace.getSnapshot().reportViewportNotice,
-  });
   if (!replaceWithJobDesign(job, { keepHistory: true })) {
     onError('This result has no readable design snapshot, so its model cannot be shown.');
     return false;

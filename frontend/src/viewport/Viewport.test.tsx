@@ -1,5 +1,10 @@
-import { restoreCadJobModel } from '../shell/cadlink/restores';
-import { archivedRequest, deferred, job as archivedJob, json, mesh as archivedMesh, record as archivedRecord } from '../shell/cadlink/selection.fixtures';
+import '../shell/cadlink/restores';
+import { openImported, type ImportedDisplay } from '../stores/importedModel';
+import { deferred, job as archivedJob, json, mesh as archivedMesh, record as archivedRecord, workspaceFor } from '../shell/cadlink/selection.fixtures';
+/** Reopen a CAD run as history does: `openImported` of the run, shown by the CAD rail. */
+const restoreCadJobModel = (run: JobItem, display: ImportedDisplay = {}, fetcher: typeof fetch = fetch) =>
+  openImported({ kind: 'run', job: run, display }, fetcher).catch(() => false);
+
 import { readFileSync } from 'node:fs';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -713,12 +718,12 @@ describe('Viewport preview errors', () => {
     const reached = deferred<void>();
     const fetcher = vi.fn<typeof fetch>(async input => {
       const path = String(input);
-      if ((stage === 'request' && path.endsWith('/requests'))
+      if ((stage === 'request' && path.endsWith('/workspace'))
         || (stage === 'record' && path.endsWith(`/ingest/${archivedRecord.ingest_id}`))
         || (stage === 'viewport' && path.endsWith('/viewport-mesh'))) {
         reached.resolve(); return pending.promise;
       }
-      if (path.endsWith('/requests')) return json({ effective_request: archivedRequest() });
+      if (path.endsWith('/workspace')) return json(workspaceFor());
       if (path.endsWith('/viewport-mesh')) return new Response(archivedMesh);
       return json(archivedRecord);
     });
@@ -729,7 +734,7 @@ describe('Viewport preview errors', () => {
     // Both no-record and new-record effects run while the adapter awaits input.
     expect(importedMeshStore.isCurrentGeneration(intent)).toBe(true);
     await act(async () => {
-      pending.resolve(stage === 'request' ? json({ effective_request: archivedRequest() })
+      pending.resolve(stage === 'request' ? json(workspaceFor())
         : stage === 'record' ? json(archivedRecord) : new Response(archivedMesh));
       expect(await restoring).toBe(true);
     });

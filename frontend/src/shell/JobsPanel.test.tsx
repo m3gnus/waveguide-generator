@@ -1,4 +1,4 @@
-import { archivedRequest } from './cadlink/selection.fixtures';
+import { archivedRequest, workspaceFor } from './cadlink/selection.fixtures';
 import { useRunFilters } from '../jobs/runFilters';
 import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { act } from 'react';
@@ -413,8 +413,8 @@ describe('jobs panel run list', () => {
     const mesh = ['$MeshFormat', '2.2 0 8', '$EndMeshFormat', '$Nodes', '3', '1 0 0 0', '2 1 0 0', '3 0 1 0', '$EndNodes', '$Elements', '1', '1 2 2 1 1 1 2 3', '$EndElements', ''].join('\n');
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/viewport-mesh')
       ? new Response(mesh, { status: 200 })
-      : new Response(JSON.stringify(String(input).endsWith('/requests') ? { effective_request: { ...archivedRequest(record.ingest_id), geometry: {
-        ...archivedRequest(record.ingest_id).geometry, manifest_sha256: record.manifest_sha256, artifact_sha256: record.artifact_sha256 } } } : record),
+      : new Response(JSON.stringify(String(input).endsWith('/workspace') ? workspaceFor(record.ingest_id, { ...archivedRequest(record.ingest_id), geometry: {
+        ...archivedRequest(record.ingest_id).geometry, manifest_sha256: record.manifest_sha256, artifact_sha256: record.artifact_sha256 } }) : record),
         { status: 200, headers: { 'Content-Type': 'application/json' } })));
     publishJobs([imported]);
     await act(async () => root.render(<JobsPanel/>));
@@ -443,7 +443,7 @@ describe('jobs panel run list', () => {
       host.querySelector<HTMLButtonElement>('[aria-label="Select #19 · Retained setup"]')!.click();
       await new Promise(resolve => setTimeout(resolve, 0));
     });
-    expect(fetcher).toHaveBeenCalledWith(`/api/jobs/${imported.id}/requests`, undefined);
+    expect(fetcher).toHaveBeenCalledWith(`/api/runs/${imported.id}/workspace`);
     expect(reportStatus.mock.calls.at(-1)?.[0]).toContain('Specific retained input unavailable');
     expect(useCadReturnStore.getState().ingestRecord).toBeNull();
   });

@@ -64,3 +64,18 @@ export function archivedRequest(ingestId = record.ingest_id) {
       inclination: 45, enabled_axes: ['horizontal', 'vertical', 'diagonal'],
       observation_origin: 'mouth', spherical_sampling: false, field_plane: true } } };
 }
+
+/** `GET /api/runs/{id}/workspace` for a CAD run: its model, prepared mesh and setup revision. */
+export function workspaceFor(ingestId = record.ingest_id, request: ReturnType<typeof archivedRequest> = archivedRequest(ingestId),
+  { revision = 'wgs_archived', modelId = 'wgl_project' } = {}) {
+  const { type: _type, ingest_id: _ingest, manifest_sha256: _manifest, artifact_sha256: _artifact, ...geometry } = request.geometry;
+  return {
+    job_id: `job-${ingestId}`,
+    model: { model_id: modelId, producer: 'cad', display_name: 'Speaker' },
+    prepared: { ingest_id: ingestId, model_id: modelId, producer: 'cad',
+      manifest_sha256: request.geometry.manifest_sha256, artifact_sha256: request.geometry.artifact_sha256 },
+    original_available: false,
+    setup: { revision_id: revision, content: { schema_version: 1, geometry, options: request.options } },
+    solve_options: request.options,
+  };
+}

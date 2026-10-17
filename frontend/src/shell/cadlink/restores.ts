@@ -1,7 +1,7 @@
 import { parseExteriorTransducer } from '../../stores/exteriorTransducer';
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import { CadLinkApiError, getIngest, listReturns, type CadReturnBundle, type CadReturnIngestRecord } from '../../api/cadlink';
-import type { CadSetup, JobItem } from '../../api/jobsSocket';
+import type { CadSetup } from '../../api/jobsSocket';
 import { cadProjectName, listCadProjects, newestReturnForProject } from '../../api/cadProjects';
 import { getDriver } from '../../api/drivers';
 import { fromResult, parseWire } from '../../results/crossoverSpec';
@@ -26,7 +26,8 @@ import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { createCadArrivalActions, enterCadWorkspace, type RefreshOptions } from './arrivals';
 import { showIngestedMeshInViewport } from './artifactLoader';
-import { restoreImportedRun, assertRestoredIdentity } from '../../jobs/importedRunRestoration';
+import { registerImportedView, type ImportedView } from '../../stores/importedModel';
+import type { ImportedSetup } from '../../jobs/importedSetup';
 
 type CadHistorySetup = Pick<ReturnType<typeof useCadReturnStore.getState>,
   'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds'
@@ -109,9 +110,10 @@ function savedPassiveCardioid(setup: CadSetup | null | undefined): PassiveCardio
   };
 }
 
-/** Translate the exact persisted imported request into the editable CAD rail. */
-export function cadHistorySetup(job: JobItem, record: CadReturnIngestRecord): CadHistorySetup {
-  const setup = job.cad_setup;
+/** Translate a setup (a run's or a model's) into the editable CAD rail. */
+export function cadHistorySetup(saved: ImportedSetup, record: CadReturnIngestRecord): CadHistorySetup {
+  const setup = saved.geometry as unknown as CadSetup;
+  const options = saved.options as unknown as Record<string, unknown>;
   const mesh = object(setup?.mesh);
   const channels = savedDriveChannels(setup, record);
   const skippedSourceIds = Array.isArray(setup?.skipped_source_ids)
@@ -136,10 +138,10 @@ export function cadHistorySetup(job: JobItem, record: CadReturnIngestRecord): Ca
   const combine = object(setup?.combine);
   const combineSpec = parseWire(combine) ?? fromResult(combine ?? undefined);
   const validCombine = combineSpec !== null;
-  const explicitFrequencies = Array.isArray(job.solve_options.frequencies_hz)
-    ? job.solve_options.frequencies_hz.filter((value) => finite(value) !== null)
+  const explicitFrequencies = Array.isArray(options.frequencies_hz)
+    ? (options.frequencies_hz as unknown[]).filter((value): value is number => finite(value) !== null)
     : [];
-  const range = job.solve_options.frequency_range;
+  const range = options.frequency_range;
   const fallbackRange = Array.isArray(range) && range.length === 2 ? range.map(Number) : [200, 20_000];
   const sourceSizes = finiteRecord(mesh?.source_size_mm) ?? { ...record.mesh_sizes.source_size_mm };
   return {
@@ -157,7 +159,7 @@ export function cadHistorySetup(job: JobItem, record: CadReturnIngestRecord): Ca
     maxDriveVoltageV: finite(setup?.max_drive_voltage_v) ?? null,
     frequencyStartHz: explicitFrequencies[0] ?? fallbackRange[0],
     frequencyEndHz: explicitFrequencies.at(-1) ?? fallbackRange[1],
-    frequencyCount: explicitFrequencies.length || Number(job.solve_options.num_frequencies) || 1,
+    frequencyCount: explicitFrequencies.length || Number(options.num_frequencies) || 1,
   };
 }
 
@@ -193,96 +195,79 @@ export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch): 
   return useCadReturnStore.getState().refreshChannelDriverBases(updates);
 }
 
-export interface CadJobRestoreIntegration {
-  /** Automatic callers relinquish their display when the user moves on. */
-  isCurrent?(): boolean;
-  enterCadWorkspace(): void;
-  reportStatus(message: string): void;
-  reportViewportNotice(message: string | null): void;
-  showIngestedMesh(
-    record: CadReturnIngestRecord,
-    name: string,
-    onNotice: ((notice: string) => void) | undefined,
-    fetcher: typeof fetch,
-    generation: number,
-  ): Promise<void>;
-}
-
-/** Recall the immutable ingestion, saved setup and viewport behind an archived CAD run. */
-export async function restoreCadJobModel(
-  job: JobItem,
-  overrides: Partial<CadJobRestoreIntegration> = {},
-  fetcher: typeof fetch = fetch,
-): Promise<boolean> {
-  const integration: CadJobRestoreIntegration = {
-    enterCadWorkspace, reportStatus: () => undefined, reportViewportNotice: () => undefined,
-    showIngestedMesh: showIngestedMeshInViewport, ...overrides,
-  };
-  if (job.config_summary.geometry_type !== 'imported') return false;
-  if (job.run_number === null) return false;
-  const displayName = job.cad_source?.document_name || job.label || `run #${job.run_number}`;
-  let selection = 0;
-  let documentLoad = currentDocumentLoad();
-  const current = () => useCadReturnStore.getState().isCurrentIngestIntent(selection)
-    && isCurrentDocumentLoad(documentLoad) && integration.isCurrent?.() !== false;
-  try {
-    return await restoreImportedRun(job, {
-      input: 'cad',
-      invalidate: () => {
-        workspaceModeStore.setImportedInput('cad');
-        integration.enterCadWorkspace();
-        integration.reportViewportNotice(null);
-        useCadReturnStore.getState().beginSelectionIntent();
-        selection = useCadReturnStore.getState().beginIngestIntent();
-        documentLoad = currentDocumentLoad();
-        // A new target owns Solve before any request can fail or stall.
-        useCadReturnStore.setState({ ingestRecord: null, needsIngest: true,
-          ingestStaleReason: 'Loading the selected run’s retained setup.' });
-        integration.reportStatus(`Loading ${displayName} from run #${job.run_number}…`);
-      },
-      isCurrent: current,
-      ownsSetup: () => useCadReturnStore.getState().isCurrentIngestIntent(selection),
-      restore: async (submission, generation, isCurrent) => {
-        const record = await getIngest(submission.geometry.ingest_id, fetcher);
-        if (!isCurrent()) return false;
-        assertRestoredIdentity(record, submission);
+/**
+ * The CAD rail as a view of the imported-model store: it shows a model
+ * `openImported` reopened (a run or a model) -- its retained ingestion, its
+ * setup on the rail and its options, and its mesh in the viewport. The
+ * project is the model the server named, never one guessed from what is open.
+ */
+export const cadImportedView: ImportedView = {
+  begin({ generation, source, display, fetcher }) {
+    const job = source.kind === 'run' ? source.job : null;
+    const displayName = job ? job.cad_source?.document_name || job.label || `run #${job.run_number}` : 'this model';
+    const from = job ? ` from run #${job.run_number}` : '';
+    const enter = display.enterCadWorkspace ?? enterCadWorkspace;
+    const reportStatus = display.reportStatus ?? (() => undefined);
+    const reportViewportNotice = display.reportViewportNotice ?? (() => undefined);
+    const showIngestedMesh = display.showIngestedMesh ?? showIngestedMeshInViewport;
+    enter();
+    reportViewportNotice(null);
+    useCadReturnStore.getState().beginSelectionIntent();
+    const selection = useCadReturnStore.getState().beginIngestIntent();
+    const documentLoad = currentDocumentLoad();
+    // A new target owns Solve before any request can fail or stall.
+    useCadReturnStore.setState({ ingestRecord: null, needsIngest: true,
+      ingestStaleReason: 'Loading the selected run’s retained setup.' });
+    reportStatus(`Loading ${displayName}${from}…`);
+    const current = () => useCadReturnStore.getState().isCurrentIngestIntent(selection) && isCurrentDocumentLoad(documentLoad);
+    return {
+      current,
+      async fill(opened) {
+        if (!opened.setup) throw new Error('This run’s settings are no longer retained. Select the run again.');
+        const record = await getIngest(opened.prepared.ingest_id, fetcher).catch((reason: unknown) => {
+          throw reason instanceof CadLinkApiError && reason.status === 404
+            ? new Error('The archived CAD ingestion and mesh artifacts are no longer available.') : reason;
+        });
+        if (!current()) return null;
+        if (record.ingest_id !== opened.prepared.ingest_id || record.manifest_sha256 !== opened.prepared.manifest_sha256
+          || record.artifact_sha256 !== opened.prepared.artifact_sha256) {
+          throw new Error('This run’s saved request does not match its retained mesh. Select the run again.');
+        }
+        const name = job ? displayName : record.project?.document_name || opened.model?.display_name || displayName;
         const bundle: CadReturnBundle = {
-          name: `${displayName}.wgreturn`, bundlePath: '', modifiedAt: record.created_at,
+          name: `${name}.wgreturn`, bundlePath: '', modifiedAt: record.created_at,
           readable: false, reason: 'Recalled from an archived run; the original return bundle is not active.',
-          documentName: displayName, requestId: null, sourceCount: record.sources.length, instanceCount: null,
-          sources: record.sources.map(source => ({ id: source.id, role: source.role, required: source.required,
-            suggestedResolutionMm: source.suggested_resolution_mm, defaultDriveChannelId: source.default_drive_channel_id })),
+          documentName: name, requestId: null, sourceCount: record.sources.length, instanceCount: null,
+          sources: record.sources.map(item => ({ id: item.id, role: item.role, required: item.required,
+            suggestedResolutionMm: item.suggested_resolution_mm, defaultDriveChannelId: item.default_drive_channel_id })),
         };
-        const historical = { ...job, cad_setup: submission.geometry, solve_options: submission.options } as unknown as JobItem;
-        const savedSetup = cadHistorySetup(historical, record);
-        const project = record.project?.lineage_id ?? useCadReturnStore.getState().projectLineageId ?? rememberedCadProject();
+        const project = opened.modelId !== 'unfiled' ? opened.modelId : record.project?.lineage_id ?? null;
         useCadReturnStore.getState().restoreIngest(record, selection, {
-          selectedBundle: bundle, ingestRecord: record, projectLineageId: project, ...savedSetup,
+          selectedBundle: bundle, ingestRecord: record, projectLineageId: project,
+          ...cadHistorySetup(opened.setup, record),
           areaDriftOverrides: [],
           areaDriftSourceIds: [...new Set((record.role_findings ?? [])
             .filter(finding => String(finding.kind).includes('area-drift')).map(finding => String(finding.source_id)))],
           needsIngest: false, ingestedBundleIdentity: null, ingestStaleReason: null,
         });
-        // A recalled run's options go to the imported instance only; the
-        // persisted parametric store is never written by an imported flow.
-        applyWireOptionsToImportedSolveOptions(submission.options);
-        await integration.showIngestedMesh(record, displayName, integration.reportViewportNotice, fetcher, generation);
-        if (!isCurrent()) return false;
-        if (importedMeshStore.getSnapshot().cad?.ingestId !== record.ingest_id) return false;
-        integration.reportStatus(`Showing ${displayName} from run #${job.run_number}. Stored solve settings restored.`);
-        return true;
+        // The model's options go to the imported instance only; the persisted
+        // parametric store is never written by an imported flow.
+        applyWireOptionsToImportedSolveOptions(opened.setup.options);
+        await showIngestedMesh(record, name, reportViewportNotice, fetcher, generation);
+        if (!current()) return null;
+        if (importedMeshStore.getSnapshot().cad?.ingestId !== record.ingest_id) return null;
+        reportStatus(`Showing ${name}${from}. Stored solve settings restored.`);
+        return record;
       },
-    }, fetcher);
-  } catch (reason) {
-    if (!current()) return false;
-    const message = reason instanceof CadLinkApiError && reason.status === 404
-      ? 'The archived CAD ingestion and mesh artifacts are no longer available.'
-      : reason instanceof Error ? reason.message : String(reason);
-    useCadReturnStore.setState({ ingestRecord: null, needsIngest: true, ingestStaleReason: message });
-    integration.reportStatus(`Cannot show ${displayName}: ${message}`);
-    return false;
-  }
-}
+      fail(message) {
+        if (!current()) return;
+        useCadReturnStore.setState({ ingestRecord: null, needsIngest: true, ingestStaleReason: message });
+        reportStatus(`Cannot show ${displayName}: ${message}`);
+      },
+    };
+  },
+};
+registerImportedView('cad', cadImportedView);
 
 export interface UseCadRestoresOptions {
   enterCadWorkspace(): void;

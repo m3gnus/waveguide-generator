@@ -22,8 +22,6 @@ export interface RegisteredMesh {
 }
 export interface FilePreparation { units: string; forward: string; up: string; source_tags: number[] }
 
-/** The model a file mesh belongs to: the exact bytes of its original. */
-export const fileModelId = (artifactSha256: string) => `mesh-file:${artifactSha256}`;
 const modelPath = (modelId: string) => `/api/models/${encodeURIComponent(modelId)}`;
 
 async function request<T>(url: string, body?: unknown, fetcher: typeof fetch = fetch): Promise<T> {
@@ -45,11 +43,6 @@ export const registerMesh = async (body: FilePreparation & { filename: string; m
 /** Prepare a file model again from the original the server retained. */
 export const prepareMeshModel = async (modelId: string, body: FilePreparation, fetcher?: typeof fetch) =>
   (await request<{ prepared: RegisteredMesh }>(`${modelPath(modelId)}/prepare`, body, fetcher)).prepared;
-/** One retained preparation of a model, with its solver mesh. */
-export const readMeshImport = async (modelId: string, preparedId: string, fetcher?: typeof fetch) =>
-  (await request<{ prepared: RegisteredMesh }>(
-    `${modelPath(modelId)}?prepared_id=${encodeURIComponent(preparedId)}`, undefined, fetcher,
-  )).prepared;
 /** The model a prepared mesh is filed under, or null when the server has none for it. */
 export async function findPreparedModel(preparedId: string, fetcher: typeof fetch = fetch):
   Promise<{ model_id: string; prepared_id: string } | null> {

@@ -5,10 +5,11 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
-import { editMeshImport, fileMeshSubmission, loadMeshFile,
-  prepareMeshFile, loadMeshReplay, restoreMeshImport, restoreSavedMeshSetup, saveMeshSetup, useMeshImportStore } from './meshImport';
+import { editMeshImport, fileMeshSubmission, loadMeshFile, prepareMeshFile, loadMeshReplay, registeredMesh,
+  reopenSavedMeshModel, saveMeshSetup, setMeshMotion, useMeshImportStore } from './meshImport';
+import { openImported, resetImportedModelStore, unchangedSetup, useImportedModelStore } from './importedModel';
 import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
-import { bindImportedSetup, type ImportedSetup } from '../jobs/importedSetup';
+import type { ImportedSetup } from '../jobs/importedSetup';
 import type { JobItem } from '../api/jobsSocket';
 import { runSourceForJob } from '../jobs/exportNaming';
 import { runMatchesContext, runContext } from '../results/runCoherence';
@@ -21,18 +22,31 @@ const record: RegisteredMesh = { ingest_id: 'wgi_file', model_id: 'mesh-file:sha
   source_file: { filename: 'speaker.msh', transform: { units: 'mm', forward: '+z', up: '+y' }, source_tags: [2] },
   source_tags: { group_2: 2 }, msh_text: MSH };
 const initial = useMeshImportStore.getState();
-const response = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 /** What `/api/models/...` answers for a prepared mesh. */
-const prepared = (mesh: RegisteredMesh) => response({ model: { model_id: mesh.model_id }, prepared: mesh });
+const prepared = (mesh: RegisteredMesh) => response({ model: { model_id: mesh.model_id, producer: 'mesh-file', display_name: 'speaker.msh' },
+  prepared: mesh, latest_prepared: mesh, original_available: true });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 
-function retainedJobFetcher(job: JobItem, mesh = record) {
-  const effective_request = bindImportedSetup(mesh, {
-    geometry: { skipped_source_ids: [], drive_channels: (job.cad_setup?.drive_channels ?? [{ id: 'group_2', source_ids: ['group_2'] }])
-      .map(channel => ({ ...channel, motion: channel.motion ?? 'normal', driver: channel.driver ?? undefined })) },
-    options: job.solve_options as unknown as ImportedSetup['options'],
-  });
-  return vi.fn<typeof fetch>(async url => String(url).endsWith('/requests') ? response({ effective_request }) : prepared(mesh));
+const fileJob = (id = 'file-job') => ({ id, run_number: 1, cad_source: { ingest_id: record.ingest_id },
+  config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' } }) as unknown as JobItem;
+const setupOf = (options: Record<string, unknown>, motion: 'normal' | 'axial' = 'normal'): ImportedSetup => ({
+  geometry: { skipped_source_ids: [], drive_channels: [{ id: 'group_2', source_ids: ['group_2'], motion }] },
+  options: options as unknown as ImportedSetup['options'],
+});
+/** `GET /api/runs/{id}/workspace` for a file run. */
+function workspaceFetcher(setup: ImportedSetup, mesh = record, { revision = 'wgs_recorded', original = true } = {}) {
+  return vi.fn<typeof fetch>(async (url) => String(url).startsWith('/api/runs/') ? response({
+    job_id: 'file-job', model: { model_id: mesh.model_id, producer: 'mesh-file', display_name: 'speaker.msh' },
+    prepared: mesh, original_available: original,
+    setup: { revision_id: revision, content: { schema_version: 1, ...setup } }, solve_options: setup.options,
+  }) : prepared(mesh));
+}
+/** A prepared file on screen, as a registration leaves it. */
+function showPrepared(mesh = record) {
+  workspaceModeStore.setImportedInput('file');
+  void openImported({ kind: 'file', prepared: mesh });
+  importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', mesh.ingest_id));
 }
 
 beforeEach(() => {
@@ -40,16 +54,17 @@ beforeEach(() => {
   importedMeshStore.clear();
   workspaceModeStore.setMode('parametric');
   resetSolveOptionsStore();
+  resetImportedModelStore();
   sessionStorage.clear();
   localStorage.removeItem('wg-saved-mesh-setup');
 });
 afterEach(() => vi.restoreAllMocks());
 
 describe('standalone imported mesh', () => {
-  it('saves and restores a prepared setup before any Solve', async () => {
-    useMeshImportStore.setState({ registered: record, motions: { group_2: 'axial' } });
+  it('saves a prepared setup before any Solve and reopens its model with it', async () => {
+    showPrepared();
+    useMeshImportStore.setState({ motions: { group_2: 'axial' } });
     useImportedSolveOptionsStore.getState().setSweep({ startHz: 250, endHz: 8000, count: 17 });
-    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
     const expected = fileMeshSubmission();
     const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_saved' }));
     await saveMeshSetup(save);
@@ -59,14 +74,19 @@ describe('standalone imported mesh', () => {
     expect(setup.geometry).not.toHaveProperty('ingest_id');
     expect(setup.geometry).not.toHaveProperty('mesh');
     useMeshImportStore.setState(initial, true);
+    resetImportedModelStore();
     importedMeshStore.clear();
-    expect(await restoreSavedMeshSetup(vi.fn(async url => String(url).includes('/setup?') ? response({ setup }) : prepared(record)))).toBe(true);
+    const fetcher = vi.fn<typeof fetch>(async url => String(url).includes('/setup?')
+      ? response({ setup, revision_id: 'wgs_saved' }) : prepared(record));
+    expect(await reopenSavedMeshModel(fetcher)).toBe(true);
+    expect(fetcher.mock.calls[0][0]).toBe(`/api/models/${encodeURIComponent(record.model_id)}?prepared_id=${record.ingest_id}`);
     expect(fileMeshSubmission()).toEqual(expected);
+    // Reopened unedited, a Solve names the saved revision.
+    expect(unchangedSetup('file', record.ingest_id)).toEqual({ setup_revision_id: 'wgs_saved' });
   });
 
   it('does not mark settings edited during or after saving as saved', async () => {
-    useMeshImportStore.setState({ registered: record });
-    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+    showPrepared();
     const wait = deferred<Response>();
     const saving = saveMeshSetup(vi.fn(() => wait.promise));
     useImportedSolveOptionsStore.getState().setSweep({ count: 17 });
@@ -78,19 +98,17 @@ describe('standalone imported mesh', () => {
     useImportedSolveOptionsStore.getState().setSweep({ count: 19 });
     expect(useMeshImportStore.getState().notice).toBeNull();
   });
-  it('tracks borrowed engine and accuracy changes during and after Save', async () => {
-    useMeshImportStore.setState({ registered: record });
-    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+
+  it('tracks borrowed engine changes during Save', async () => {
+    showPrepared();
     const wait = deferred<Response>();
     const saving = saveMeshSetup(vi.fn(() => wait.promise));
     useImportedSolveOptionsStore.getState().setEngine('bempp');
     wait.resolve(response({ revision_id: 'wgs_old' }));
     await saving;
     expect(useMeshImportStore.getState().notice).toContain('current edits are not saved');
-    await saveMeshSetup(vi.fn(async () => response({ revision_id: 'wgs_new' })));
-    useImportedSolveOptionsStore.setState({ accuracy: 'accurate' });
-    expect(useMeshImportStore.getState().notice).toBeNull();
   });
+
   it('inspects original bytes on the backend, then prepares explicit units and groups', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => response(summary));
     await loadMeshFile('speaker.msh', MSH, fetcher);
@@ -102,6 +120,9 @@ describe('standalone imported mesh', () => {
     expect(register.mock.calls[0][0]).toBe('/api/models/files');
     expect(JSON.parse(register.mock.calls[0][1]?.body as string)).toMatchObject({ units: 'mm', source_tags: [2], msh_text: MSH });
     expect(importedMeshStore.getSnapshot().file?.ingestId).toBe(record.ingest_id);
+    // A registration fills the store: the file's model and its prepared mesh.
+    expect(useImportedModelStore.getState()).toMatchObject({ input: 'file', modelId: record.model_id, phase: 'ready',
+      fileDraft: { units: 'mm', forward: '+z', up: '+y', selected: [2] }, restoredRevisionId: null });
     const body = fileMeshSubmission();
     expect(body.geometry).not.toHaveProperty('mesh');
     expect(body.geometry.drive_channels).toEqual([{ id: 'group_2', source_ids: ['group_2'], motion: 'normal' }]);
@@ -133,8 +154,7 @@ describe('standalone imported mesh', () => {
   });
 
   it('honours list-mode frequencies and range-mode edits in the submitted request', async () => {
-    useMeshImportStore.setState({ registered: record });
-    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+    showPrepared();
     const imported = useImportedSolveOptionsStore.getState();
     imported.setSweep({ startHz: 120, endHz: 4000, count: 9 });
     expect(fileMeshSubmission().options).toMatchObject({ frequency_range: [120, 4000], num_frequencies: 9 });
@@ -150,19 +170,19 @@ describe('standalone imported mesh', () => {
     expect(() => fileMeshSubmission()).toThrow('2–401');
   });
 
-  it('restores an old saved file setup that carried a range and count as the same frequencies', async () => {
-    useMeshImportStore.setState({ registered: record });
-    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+  it('reopens an old saved file setup that carried a range and count as the same frequencies', async () => {
+    showPrepared();
     const saved = fileMeshSubmission();
     const { type: _t, ingest_id: _i, manifest_sha256: _m, artifact_sha256: _a, acknowledged_findings: _f, ...geometry } = saved.geometry;
     // An old setup: the range and count were stored in the options, and nothing else about the sweep.
     const options = { ...saved.options, frequency_range: [210, 6300] as [number, number], num_frequencies: 23 };
     useMeshImportStore.setState(initial, true);
+    resetImportedModelStore();
     importedMeshStore.clear();
     resetSolveOptionsStore();
     localStorage.setItem('wg-saved-mesh-setup', JSON.stringify({ model_id: record.model_id, prepared_id: record.ingest_id }));
     const fetcher = vi.fn(async (url: RequestInfo | URL) => String(url).includes('/setup?') ? response({ setup: { geometry, options } }) : prepared(record));
-    expect(await restoreSavedMeshSetup(fetcher as unknown as typeof fetch)).toBe(true);
+    expect(await reopenSavedMeshModel(fetcher as unknown as typeof fetch)).toBe(true);
     expect(useImportedSolveOptionsStore.getState()).toMatchObject({ sweepStartHz: 210, sweepEndHz: 6300, sweepCount: 23, frequencyMode: 'range' });
     expect(fileMeshSubmission().options).toMatchObject({ frequency_range: [210, 6300], num_frequencies: 23 });
   });
@@ -171,8 +191,7 @@ describe('standalone imported mesh', () => {
     useSolveOptionsStore.getState().updateGroundPlane({ enabled: true, height_m: 1 });
     await loadMeshFile('speaker.msh', MSH, vi.fn<typeof fetch>(async () => response(summary)));
     expect(useImportedSolveOptionsStore.getState().groundPlane.enabled).toBe(false);
-    useMeshImportStore.setState({ registered: record });
-    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+    showPrepared();
     // Even if something enabled it on the shared instance, the request drops it.
     useImportedSolveOptionsStore.getState().updateGroundPlane({ enabled: true });
     expect(fileMeshSubmission().options).not.toHaveProperty('ground_plane');
@@ -180,28 +199,28 @@ describe('standalone imported mesh', () => {
   });
 
   it('resolves a pointer from before model records to its model, once', async () => {
-    useMeshImportStore.setState({ registered: record });
-    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+    showPrepared();
     const { type: _t, ingest_id: _i, manifest_sha256: _m, artifact_sha256: _a, acknowledged_findings: _f, ...geometry } = fileMeshSubmission().geometry;
     const options = fileMeshSubmission().options;
     useMeshImportStore.setState(initial, true);
+    resetImportedModelStore();
     importedMeshStore.clear();
     localStorage.setItem('wg-saved-mesh-setup', record.ingest_id);
     const fetcher = vi.fn(async (url: RequestInfo | URL) => String(url).startsWith('/api/models?')
       ? response({ model_id: record.model_id, prepared_id: record.ingest_id })
       : String(url).includes('/setup?') ? response({ setup: { geometry, options } }) : prepared(record));
-    expect(await restoreSavedMeshSetup(fetcher as unknown as typeof fetch)).toBe(true);
+    expect(await reopenSavedMeshModel(fetcher as unknown as typeof fetch)).toBe(true);
     expect(fetcher.mock.calls[0][0]).toBe(`/api/models?prepared_id=${record.ingest_id}`);
     expect(JSON.parse(localStorage.getItem('wg-saved-mesh-setup')!)).toEqual({ model_id: record.model_id, prepared_id: record.ingest_id });
-    expect(useMeshImportStore.getState().registered?.ingest_id).toBe(record.ingest_id);
+    expect(registeredMesh()?.ingest_id).toBe(record.ingest_id);
   });
 
   it('drops an old pointer only when the server has no model for it', async () => {
     localStorage.setItem('wg-saved-mesh-setup', 'wgi_offline');
-    expect(await restoreSavedMeshSetup(vi.fn(async () => { throw new TypeError('offline'); }) as unknown as typeof fetch)).toBe(false);
+    expect(await reopenSavedMeshModel(vi.fn(async () => { throw new TypeError('offline'); }) as unknown as typeof fetch)).toBe(false);
     expect(localStorage.getItem('wg-saved-mesh-setup')).toBe('wgi_offline');
     const gone = vi.fn(async () => new Response('{}', { status: 404 }));
-    expect(await restoreSavedMeshSetup(gone as unknown as typeof fetch)).toBe(false);
+    expect(await reopenSavedMeshModel(gone as unknown as typeof fetch)).toBe(false);
     expect(gone).toHaveBeenCalledTimes(1);
     expect(localStorage.getItem('wg-saved-mesh-setup')).toBeNull();
   });
@@ -241,16 +260,25 @@ describe('standalone imported mesh', () => {
     editMeshImport({ selected: [1] });
     wait.resolve(prepared(record));
     await pending;
-    expect(useMeshImportStore.getState().registered).toBeNull();
+    expect(registeredMesh()).toBeNull();
     expect(useMeshImportStore.getState().busy).toBe(false);
     expect(() => fileMeshSubmission()).toThrow('Choose units');
   });
 
-  it('restores the retained file in file mode, with no CAD identity or original file', async () => {
-    const job = { id: 'file-job', cad_source: { ingest_id: record.ingest_id },
-      config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' },
-      solve_options: { frequencies_hz: [100, 200] } } as unknown as JobItem;
-    expect(await restoreMeshImport(job, retainedJobFetcher(job))).toBe(true);
+  it('does not submit a prepared record while a different file occupies the viewport', () => {
+    showPrepared();
+    importedMeshStore.setFile(createImportedMeshScene('different.msh', parseMSH(MSH), 'file', 'wgi_other'));
+    expect(() => fileMeshSubmission()).toThrow('Choose units');
+  });
+});
+
+describe('a reopened file run', () => {
+  it('opens the retained file in file mode, with no CAD identity or original file', async () => {
+    const job = fileJob();
+    const fetcher = workspaceFetcher(setupOf({ frequencies_hz: [100, 200] }));
+    expect(await openImported({ kind: 'run', job }, fetcher)).toBe(true);
+    expect(fetcher.mock.calls[0][0]).toBe('/api/runs/file-job/workspace');
+    expect(fetcher).toHaveBeenCalledTimes(1);
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     expect(workspaceModeStore.getSnapshot().importedInput).toBe('file');
     expect(useMeshImportStore.getState().original).toBeNull();
@@ -260,30 +288,26 @@ describe('standalone imported mesh', () => {
     expect(runMatchesContext({ ...job, config_summary: {} }, runContext())).toBe('other-model');
   });
 
-  it('prepares a restored file again from the original the server retained', async () => {
-    const job = { id: 'file-job', cad_source: { ingest_id: record.ingest_id }, solve_options: {} } as unknown as JobItem;
-    await restoreMeshImport(job, retainedJobFetcher(job));
+  it('is editable: it is prepared again from the original the server retained', async () => {
+    await openImported({ kind: 'run', job: fileJob() }, workspaceFetcher(setupOf({})));
     expect(useMeshImportStore.getState().original).toBeNull();
+    expect(useImportedModelStore.getState()).toMatchObject({ originalAvailable: true, restoredRevisionId: 'wgs_recorded',
+      fileDraft: { units: 'mm', forward: '+z', up: '+y', selected: [2] } });
     editMeshImport({ units: 'cm' });
+    // Changing the preparation ends the opened setup.
+    expect(useImportedModelStore.getState()).toMatchObject({ prepared: null, restoredRevisionId: null, setup: null });
     const again = { ...record, ingest_id: 'wgi_again', source_file: { ...record.source_file, transform: { units: 'cm', forward: '+z', up: '+y' } } };
     const fetcher = vi.fn<typeof fetch>(async () => prepared(again));
     await prepareMeshFile(fetcher);
     expect(fetcher.mock.calls[0][0]).toBe(`/api/models/${encodeURIComponent(record.model_id)}/prepare`);
     expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string)).toEqual({ units: 'cm', forward: '+z', up: '+y', source_tags: [2] });
-    expect(useMeshImportStore.getState()).toMatchObject({ registered: again, modelId: record.model_id });
+    expect(useImportedModelStore.getState()).toMatchObject({ prepared: again, modelId: record.model_id });
+    expect(fileMeshSubmission().geometry.ingest_id).toBe('wgi_again');
   });
 
-  it('does not submit a prepared record while a different file occupies the viewport', () => {
-    useMeshImportStore.setState({ registered: record });
-    importedMeshStore.setFile(createImportedMeshScene('different.msh', parseMSH(MSH), 'file', 'wgi_other'));
-    expect(() => fileMeshSubmission()).toThrow('Choose units');
-  });
-
-  it('restores generated sweep, axial motion and solver settings without borrowing the open design', async () => {
-    const job = { cad_source: { ingest_id: record.ingest_id },
-      solve_options: { frequencies_hz: null, frequency_range: [250, 8000], num_frequencies: 17, engine: 'metal', accuracy: 'accurate' },
-      cad_setup: { drive_channels: [{ id: 'group_2', source_ids: ['group_2'], motion: 'axial' }] } } as unknown as JobItem;
-    await restoreMeshImport(job, retainedJobFetcher(job));
+  it('opens generated sweep, axial motion and solver settings without borrowing the open design', async () => {
+    const setup = setupOf({ frequencies_hz: null, frequency_range: [250, 8000], num_frequencies: 17, engine: 'metal', accuracy: 'accurate' }, 'axial');
+    await openImported({ kind: 'run', job: fileJob() }, workspaceFetcher(setup));
     const body = fileMeshSubmission();
     expect(body.options).toMatchObject({ frequency_range: [250, 8000], num_frequencies: 17, engine: 'metal', accuracy: 'accurate' });
     expect(body.geometry.drive_channels[0].motion).toBe('axial');
@@ -291,112 +315,77 @@ describe('standalone imported mesh', () => {
 
   it('shows excitation by registered tag instead of trusting a group named HF', async () => {
     const selectedRigid = { ...record, source_tags: { group_1: 1 } };
-    const job = { cad_source: { ingest_id: record.ingest_id }, solve_options: {} } as unknown as JobItem;
-    await restoreMeshImport(job, retainedJobFetcher(job, selectedRigid));
+    await openImported({ kind: 'run', job: fileJob() }, workspaceFetcher(setupOf({}), selectedRigid));
     const surfaces = importedMeshStore.getSnapshot().file!.scene.surfaces;
     expect(surfaces.find(surface => surface.role.includes('Rigid'))?.materialClass).toBe('source-smooth');
     expect(surfaces.find(surface => surface.role.includes('HF'))?.materialClass).toBe('horn-smooth');
   });
 
-  it('keeps the setup revision a restored run recorded while its exact settings are unedited', async () => {
-    const job = { cad_source: { ingest_id: record.ingest_id, setup_revision_id: 'wgs_recorded' },
-      solve_options: {} } as unknown as JobItem;
-    await restoreMeshImport(job, retainedJobFetcher(job, record));
-    expect(useMeshImportStore.getState().exactSubmission).not.toBeNull();
-    expect(useMeshImportStore.getState().exactRevisionId).toBe('wgs_recorded');
+  it('keeps the setup revision the run was made from until a setting is edited', async () => {
+    await openImported({ kind: 'run', job: fileJob() }, workspaceFetcher(setupOf({ frequencies_hz: [100, 200] })));
+    expect(unchangedSetup('file', record.ingest_id)).toEqual({ setup_revision_id: 'wgs_recorded' });
+    // Parametric edits are not this model's.
+    useSolveOptionsStore.getState().updatePolar({ distance: 9 });
+    expect(unchangedSetup('file', record.ingest_id)).toEqual({ setup_revision_id: 'wgs_recorded' });
+    // Late hydration and automatic transitions are not edits either.
+    useImportedSolveOptionsStore.setState({ engine: 'bempp' });
+    expect(unchangedSetup('file', record.ingest_id)).not.toBeNull();
+    setMeshMotion('group_2', 'axial');
+    expect(unchangedSetup('file', record.ingest_id)).toBeNull();
+  });
+
+  it('refuses a run whose retained mesh is gone, with the server\'s words', async () => {
+    showPrepared();
+    const gone = vi.fn<typeof fetch>(async () => response({ job_id: 'file-job', original_available: false,
+      refusal: { code: 'prepared_unavailable', message: 'This run\'s prepared mesh is no longer retained. Import the geometry again.' } }));
+    await expect(openImported({ kind: 'run', job: fileJob() }, gone)).rejects.toThrow('no longer retained');
+    expect(useMeshImportStore.getState().busy).toBe(false);
+    expect(useMeshImportStore.getState().error).toContain('no longer retained');
+    expect(() => fileMeshSubmission()).toThrow('no longer retained');
+  });
+
+  it('refuses a response naming another prepared mesh', async () => {
+    const job = fileJob();
+    const fetcher = vi.fn<typeof fetch>(async () => response({ job_id: job.id, original_available: true,
+      prepared: { ...record, producer: 'cad' }, setup: { revision_id: 'wgs', content: setupOf({}) } }));
+    await expect(openImported({ kind: 'run', job }, fetcher)).rejects.toThrow(/another kind/);
+  });
+
+  it('ignores a run whose workspace arrives after navigation', async () => {
+    const wait = deferred<Response>();
+    const opening = openImported({ kind: 'run', job: fileJob() }, vi.fn(() => wait.promise));
+    importedMeshStore.showParametric();
+    wait.resolve(await workspaceFetcher(setupOf({}))('/api/runs/file-job/workspace'));
+    expect(await opening).toBe(false);
+    expect(importedMeshStore.getSnapshot().showing).toBe('parametric');
   });
 });
 
-
 describe('portable mesh replay', () => {
   function exactRequest() {
-    useMeshImportStore.setState({ registered: record });
-    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', record.ingest_id));
+    showPrepared();
     const request = fileMeshSubmission();
     request.options.frequencies_hz = [137, 211, 3987];
     request.options.polar_config = { ...request.options.polar_config, distance: 3.7, norm_angle: 17, enabled_axes: ['vertical'] };
     request.geometry.drive_voltage_v = 4.2;
     return request;
   }
+  const setupOfRequest = (request: ReturnType<typeof fileMeshSubmission>) => {
+    const { type: _t, ingest_id: _i, manifest_sha256: _m, artifact_sha256: _a, acknowledged_findings: _f, ...geometry } = request.geometry;
+    return { schema_version: 1, geometry, options: request.options };
+  };
 
-  it('preserves the complete request through open, Save, reload and unanswered press recovery', async () => {
+  it('solves the complete request until a setting is edited', async () => {
     const request = exactRequest();
     const opening = vi.fn(async () => response({ record, request }));
     expect(await loadMeshReplay('{"version":1}', opening)).toBe(true);
     expect(opening.mock.calls[0]).toEqual(['/api/mesh-replay', expect.objectContaining({ body: '{"version":1}' })]);
-    expect(fileMeshSubmission()).toEqual(request);
-    const mutated = fileMeshSubmission();
-    mutated.options.frequencies_hz![0] = 1;
-    expect(fileMeshSubmission()).toEqual(request);
-    const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'saved' }));
-    await saveMeshSetup(save);
-    const { prepared_id: savedFor, setup } = JSON.parse(save.mock.calls[0][1]?.body as string);
-    expect(savedFor).toBe(record.ingest_id);
-    expect(save.mock.calls[0][0]).toBe(`/api/models/${encodeURIComponent(record.model_id)}/setup`);
-    useMeshImportStore.setState(initial, true);
-    importedMeshStore.clear();
-    await restoreSavedMeshSetup(vi.fn(async url => String(url).includes('/setup?') ? response({ setup }) : prepared(record)));
-    expect(fileMeshSubmission()).toEqual(request);
-  });
-
-  it('restores a selected run with its full effective request, never execution settings', async () => {
-    const request = exactRequest();
-    request.geometry.drive_channels[0].driver = { name: 'Frozen driver', re_ohm: 6.2 };
-    const job = { id: 'saved-run', cad_source: { ingest_id: record.ingest_id }, solve_options: {} } as JobItem;
-    const fetcher = vi.fn<typeof fetch>(async url => response(String(url).endsWith('/requests')
-      ? { effective_request: { ...request, parent_job_id: 'old-parent', client_request_id: 'spent' }, execution_request: { ...request, options: {} } } : { prepared: record }));
-    expect(await restoreMeshImport(job, fetcher)).toBe(true);
-    expect(fetcher.mock.calls[0][0]).toBe('/api/jobs/saved-run/requests');
-    expect(fileMeshSubmission()).toEqual(request);
-    expect(useImportedSolveOptionsStore.getState()).toMatchObject({ sweepStartHz: 137, sweepEndHz: 3987, sweepCount: 3, frequencyMode: 'list' });
-    useImportedSolveOptionsStore.setState({ engine: 'bempp' });
-    expect(fileMeshSubmission()).toEqual(request);
-  });
-
-  it.each(['ingest_id', 'manifest_sha256', 'artifact_sha256'] as const)('refuses a retained run with mismatched %s', async key => {
-    const request = exactRequest();
-    request.geometry[key] = 'different';
-    const job = { id: 'saved-run', cad_source: { ingest_id: record.ingest_id } } as JobItem;
-    await expect(restoreMeshImport(job, vi.fn(async url => response(String(url).endsWith('/requests')
-      ? { effective_request: request } : { prepared: record })))).rejects.toThrow(/does not match/);
-    expect(() => fileMeshSubmission()).toThrow('does not match');
-  });
-
-  it('refuses unavailable run settings without borrowing the open model', async () => {
-    exactRequest();
-    const job = { id: 'missing-run', cad_source: { ingest_id: record.ingest_id } } as JobItem;
-    await expect(restoreMeshImport(job, vi.fn(async () => new Response('{}', { status: 404 })))).rejects.toThrow('404');
-    expect(useMeshImportStore.getState().busy).toBe(false);
-    expect(() => fileMeshSubmission()).toThrow('404');
-  });
-
-  it.each(['request', 'mesh'])('ignores a selected run whose %s response arrives after navigation', async stage => {
-    const request = exactRequest();
-    const wait = deferred<Response>();
-    const job = { id: 'saved-run', cad_source: { ingest_id: record.ingest_id } } as JobItem;
-    const meshStarted = deferred<void>();
-    const restoring = restoreMeshImport(job, vi.fn(async url => {
-      if (stage === 'request') return wait.promise;
-      if (String(url).endsWith('/requests')) return response({ effective_request: request });
-      meshStarted.resolve();
-      return wait.promise;
-    }));
-    if (stage === 'mesh') await meshStarted.promise;
-    importedMeshStore.showParametric();
-    wait.resolve(response(stage === 'request' ? { effective_request: request } : { prepared: record }));
-    expect(await restoring).toBe(false);
-    expect(importedMeshStore.getSnapshot().showing).toBe('parametric');
-    expect(useMeshImportStore.getState().busy).toBe(false);
-  });
-
-  it.each(['local', 'global'] as const)('ends exact replay on a %s setting edit', async kind => {
-    const request = exactRequest();
-    await loadMeshReplay('{}', vi.fn(async () => response({ record, request })));
-    if (kind === 'local') useMeshImportStore.setState({ motions: { group_2: 'axial' } });
-    else useImportedSolveOptionsStore.getState().updatePolar({ distance: 9 });
-    expect(useMeshImportStore.getState().exactSubmission).toBeNull();
-    expect(useMeshImportStore.getState().notice).toContain('starts a new setup');
-    // The restored list is the imported options' own, so it carries over to the new setup.
+    // No revision is known for a replay: an unedited Solve sends its exact setup.
+    expect(unchangedSetup('file', record.ingest_id)).toEqual({ setup: setupOfRequest(request) });
+    expect(fileMeshSubmission().options.frequencies_hz).toEqual([137, 211, 3987]);
+    useImportedSolveOptionsStore.getState().updatePolar({ distance: 9 });
+    expect(unchangedSetup('file', record.ingest_id)).toBeNull();
+    // The replayed list is the imported options' own, so it carries over to the new setup.
     expect(fileMeshSubmission().options.frequencies_hz).toEqual([137, 211, 3987]);
   });
 
@@ -405,29 +394,7 @@ describe('portable mesh replay', () => {
     await loadMeshReplay('{}', vi.fn(async () => response({ record, request })));
     useSolveOptionsStore.getState().updatePolar({ distance: 9 });
     useSolveOptionsStore.getState().setEngine('bempp');
-    expect(useMeshImportStore.getState().exactSubmission).not.toBeNull();
-    expect(fileMeshSubmission()).toEqual(request);
-  });
-
-  it('keeps exact replay through late hydration and automatic solve-options transitions', async () => {
-    const request = exactRequest();
-    await loadMeshReplay('{}', vi.fn(async () => response({ record, request })));
-    useImportedSolveOptionsStore.setState(state => ({ engine: 'bempp', accuracy: 'accurate', polar: { ...state.polar, distance: 9 } }));
-    await useSolveOptionsStore.persist.rehydrate();
-    expect(fileMeshSubmission()).toEqual(request);
-  });
-
-  it.each(['engine', 'accuracy'] as const)('honors a user %s choice after ending exact replay', async control => {
-    const request = exactRequest();
-    request.options.engine = 'metal';
-    request.options.accuracy = 'accurate';
-    await loadMeshReplay('{}', vi.fn(async () => response({ record, request })));
-    if (control === 'engine') useImportedSolveOptionsStore.getState().setEngine('bempp');
-    else useImportedSolveOptionsStore.getState().setAccuracy('fast');
-    const options = fileMeshSubmission().options;
-    expect(options.engine).toBe(control === 'engine' ? 'bempp' : 'auto');
-    expect(options.accuracy).toBeUndefined();
-    expect(useMeshImportStore.getState().notice).toContain('starts a new setup');
+    expect(unchangedSetup('file', record.ingest_id)).toEqual({ setup: setupOfRequest(request) });
   });
 
   it('does not let a delayed replay replace a newer viewport choice', async () => {

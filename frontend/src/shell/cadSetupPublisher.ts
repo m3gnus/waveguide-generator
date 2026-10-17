@@ -15,7 +15,6 @@ import {
   passiveCardioidBlocker,
   useCadReturnStore,
 } from '../stores/cadReturn';
-import { useDocumentStore } from '../stores/document';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { useCadReceiptsStore } from '../stores/cadReceipts';
 import { polarValidationError, useImportedSolveOptionsStore } from '../stores/solveOptions';
@@ -48,12 +47,10 @@ const SETUP_DEBOUNCE_MS = 750;
 /** A failed recording is tried again after these waits, then given up on. */
 const SETUP_RETRY_DELAYS_MS = [1_000, 4_000];
 
-/** The project these settings belong to, as the solve profile files them. */
+/** The project these settings belong to: the one the ingestion or the selection
+ * names. Never the open document's: that is whatever design is in the editor. */
 function projectLineage(state: CadReturnSnapshot): string | null {
-  return state.ingestRecord?.project?.lineage_id
-    ?? state.projectLineageId
-    ?? useDocumentStore.getState().identity?.lineageId
-    ?? null;
+  return state.ingestRecord?.project?.lineage_id ?? state.projectLineageId ?? null;
 }
 
 /**

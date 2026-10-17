@@ -40,3 +40,13 @@ export function useScopedSolveOptions<T>(selector?: (state: SolveOptionsStore) =
   const store = useScopedSolveOptionsStore();
   return useStore(store, selector as (state: SolveOptionsStore) => T);
 }
+
+/**
+ * A run's display normalization angle: the options its own geometry is solved
+ * with (an imported run the imported instance, a parametric run the persisted
+ * store), whatever workspace mode is on screen. No run: the scope's.
+ */
+export function useRunNormAngle(job?: { config_summary?: Record<string, unknown> | null } | null): number {
+  const scoped = useScopedSolveOptionsStore();
+  return useStore(job ? solveOptionsStoreForJob(job) : scoped, (state) => state.polar.normAngle);
+}

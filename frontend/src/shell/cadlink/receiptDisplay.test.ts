@@ -7,8 +7,14 @@ import { resetSolveOptionsStore } from '../../stores/solveOptions';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { resetDesignStore, useDesignStore } from '../../stores/design';
 import { workspaceModeStore } from '../../stores/workspaceMode';
-import { restoreCadJobModel } from './restores';
-import { archivedRequest, deferred, job, record as archivedRecord } from './selection.fixtures';
+import type { JobItem } from '../../api/jobsSocket';
+import { openImported, type ImportedDisplay } from '../../stores/importedModel';
+import './restores';
+import { deferred, job, record as archivedRecord, workspaceFor } from './selection.fixtures';
+/** Reopen a CAD run as history does: `openImported` of the run, shown by the CAD rail. */
+const restoreCadJobModel = (run: JobItem, display: ImportedDisplay = {}, fetcher: typeof fetch = fetch) =>
+  openImported({ kind: 'run', job: run, display }, fetcher).catch(() => false);
+
 import { createReceiptDisplay, type ReceiptDisplay } from './receiptDisplay';
 
 const NOW = Date.parse('2026-10-11T12:00:00Z');
@@ -381,8 +387,8 @@ it('a delayed receipt yields to an archived run as soon as its restore begins (r
   const store = createCadReceiptsStore(null, () => NOW);
   const display = renderer();
   const sending = createReceiptDisplay(display, store, () => folder.promise)(receipt());
-  const restoring = restoreCadJobModel(job(), renderer(), async input => String(input).endsWith('/requests')
-    ? new Response(JSON.stringify({ effective_request: archivedRequest() })) : archive.promise);
+  const restoring = restoreCadJobModel(job(), renderer(), async (input: RequestInfo | URL) => String(input).endsWith('/workspace')
+    ? new Response(JSON.stringify(workspaceFor())) : archive.promise);
   folder.resolve(new Response(JSON.stringify({ items: [bundle], cadFolderConfigured: true })));
   await sending;
   expect(display.showIngestedMesh).not.toHaveBeenCalled();

@@ -6,6 +6,9 @@ import type { ChartTokens } from '../results/EChart';
 import type { NamedResult } from '../results/mappers';
 import type { ResultPayload } from '../results/types';
 import { ResultsChartGrid } from './ResultsPanel';
+import type { JobItem } from '../api/jobsSocket';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { workspaceModeStore } from '../stores/workspaceMode';
 
 const charts = vi.hoisted(() => ({ drawn: [] as Array<{ label: string; option: unknown }> }));
 vi.mock('../results/EChart', async (importOriginal) => ({
@@ -92,5 +95,23 @@ describe('rendered directivity comparison maps', () => {
       expect(labelText(option, '-3 dB contour')).toEqual(['-3 dB']);
       expect(labelText(option, '-12 dB contour')).toEqual(['-12 dB']);
     });
+  });
+
+  it('references a shown run\'s map to its own geometry\'s normalization angle, whatever the workspace mode', () => {
+    resetSolveOptionsStore();
+    useSolveOptionsStore.getState().updatePolar({ normAngle: 10 });
+    useImportedSolveOptionsStore.getState().updatePolar({ normAngle: 30 });
+    const subtitle = () => host.querySelector('.result-subtitle')?.textContent ?? '';
+    const importedRun = { id: 'cad-run', config_summary: { geometry_type: 'imported' } } as unknown as JobItem;
+    const parametricRun = { id: 'design-run', config_summary: { geometry_type: 'osse' } } as unknown as JobItem;
+    act(() => workspaceModeStore.setMode('parametric'));
+    act(() => root.render(<ResultsChartGrid chartTypes={['directivity_map_h']} result={named[0].result} named={[]} tokens={tokens} job={importedRun}/>));
+    // Parametric on screen, an imported run shown: the imported options' angle.
+    expect(subtitle()).toContain('0 dB at 30°');
+    act(() => workspaceModeStore.setMode('cad'));
+    act(() => root.render(<ResultsChartGrid chartTypes={['directivity_map_h']} result={named[0].result} named={[]} tokens={tokens} job={parametricRun}/>));
+    // Imported on screen, a parametric run shown: the design's angle.
+    expect(subtitle()).toContain('0 dB at 10°');
+    act(() => workspaceModeStore.setMode('parametric'));
   });
 });

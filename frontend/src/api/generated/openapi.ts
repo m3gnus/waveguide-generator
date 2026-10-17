@@ -1837,6 +1837,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runs/{job_id}/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Run Workspace
+         * @description Reopen a run: its model, prepared mesh, original and the setup it was made from.
+         */
+        get: operations["run_workspace_api_runs__job_id__workspace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runtimes/beat/{backend}/prepare": {
         parameters: {
             query?: never;
@@ -5671,6 +5691,39 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * RunWorkspace
+         * @description Everything the frontend opens an imported run with.
+         */
+        RunWorkspace: {
+            /** Job Id */
+            job_id: string;
+            /** Model */
+            model?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Original Available
+             * @default false
+             */
+            original_available?: boolean;
+            /**
+             * Prepared
+             * @description The prepared mesh the run solved; a file's carries its solver mesh.
+             */
+            prepared?: {
+                [key: string]: unknown;
+            } | null;
+            refusal?: components["schemas"]["WorkspaceRefusal"] | null;
+            setup?: components["schemas"]["WorkspaceSetup"] | null;
+            /**
+             * Solve Options
+             * @description The options the run was solved with (its effective request).
+             */
+            solve_options?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** RuntimePreparationResponse */
         RuntimePreparationResponse: {
             /**
@@ -6168,6 +6221,33 @@ export interface components {
              * @default MWG Horn
              */
             modelName?: string;
+        };
+        /**
+         * WorkspaceRefusal
+         * @description Why a run's workspace cannot be reopened (in part or at all).
+         */
+        WorkspaceRefusal: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * WorkspaceSetup
+         * @description The setup revision a run was made from, and its content.
+         */
+        WorkspaceSetup: {
+            /** Content */
+            content: {
+                [key: string]: unknown;
+            };
+            /**
+             * Derived
+             * @default false
+             */
+            derived?: boolean;
+            /** Revision Id */
+            revision_id: string;
         };
         /** ExportRequest */
         server__exports__api__ExportRequest: {
@@ -9565,6 +9645,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FieldPlaneStringErrorResponse"];
+                };
+            };
+        };
+    };
+    run_workspace_api_runs__job_id__workspace_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunWorkspace"];
+                };
+            };
+            /** @description Unknown run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description A retained record is unreadable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

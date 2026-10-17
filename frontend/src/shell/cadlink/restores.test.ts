@@ -11,12 +11,18 @@ import { resetDocumentStore } from '../../stores/document';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../../stores/solveOptions';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
-import { restoreRememberedCadProject, observeRememberedCadProject, restoreCadJobModel, refreshChannelDriverBases } from './restores';
-import { archivedRequest, bundle, deferred, job, json, mesh, record } from './selection.fixtures';
+import { restoreRememberedCadProject, observeRememberedCadProject, refreshChannelDriverBases } from './restores';
+import { archivedRequest, bundle, deferred, job, json, mesh, record, workspaceFor } from './selection.fixtures';
+import { openImported, resetImportedModelStore, unchangedSetup, useImportedModelStore, type ImportedDisplay } from '../../stores/importedModel';
 
 import type { JobItem } from '../../api/jobsSocket';
 import { createCadArrivalActions, createCadReturnArrivalReader } from './arrivals';
 import { adoptSolvedCadModel } from './solvedModel';
+
+/** Reopen a CAD run as history does: `openImported` of the run, shown by the CAD rail. */
+const restoreCadJobModel = (run: JobItem, display: ImportedDisplay = {}, fetcher: typeof fetch = fetch) =>
+  openImported({ kind: 'run', job: run, display }, fetcher).catch(() => false);
+const isWorkspace = (input: RequestInfo | URL) => String(input).endsWith('/workspace');
 
 it('does not recall an unnumbered CAD preparation as an archived run', async () => {
   const enterCadWorkspace = vi.fn();
@@ -43,7 +49,7 @@ it('restores the coupled BEAT model without legacy driver conversion', async () 
     drive_voltage_v: 5.66 }, solve_options: { frequencies_hz: [100, 500] } } as unknown as JobItem;
   const record = { sources: [{ id: 's', default_drive_channel_id: 'd' }], skipped_source_ids: [],
     mesh_sizes: { rigid_size_mm: 8, transition_mm: 20, source_size_mm: { s: 3 } } } as never;
-  const restored = cadHistorySetup(job, record);
+  const restored = cadHistorySetup({ geometry: job.cad_setup, options: job.solve_options } as never, record);
   expect(restored.driveChannels[0]).toEqual({ id: 'd', source_ids: ['s'], motion: 'axial', exterior_transducer: model });
   expect(restored.driveVoltageV).toBe(5.66);
   expect(restored.channelDrivers).toEqual({});
@@ -53,13 +59,13 @@ it('restores the coupled BEAT model without legacy driver conversion', async () 
 beforeEach(() => {
   localStorage.clear(); resetDesignStore(); resetDocumentStore(); resetCadReturnStore();
   resetSolveOptionsStore(); preferencesStore.resetForTests(); importedMeshStore.clear();
-  workspaceModeStore.setImportedInput('cad');
+  workspaceModeStore.setImportedInput('cad'); resetImportedModelStore();
   workspaceModeStore.setMode('parametric');
 });
 afterEach(() => { importedMeshStore.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 const archiveFetcher = (async (input: RequestInfo | URL) => String(input).endsWith('/viewport-mesh')
-  ? new Response(mesh) : String(input).endsWith('/requests') ? json({ effective_request: archivedRequest() }) : json(record)) as typeof fetch;
+  ? new Response(mesh) : isWorkspace(input) ? json(workspaceFor()) : json(record)) as typeof fetch;
 
 describe('job and remembered-project restores without the coordinator', () => {
   it('restores a job ingest, saved setup, sweep and model through standalone defaults', async () => {
@@ -98,8 +104,8 @@ describe('job and remembered-project restores without the coordinator', () => {
     const first = restoreCadJobModel(job(), {}, (() => pending.promise) as typeof fetch);
     const nextRecord = { ...record, ingest_id: 'wgi_next' };
     expect(await restoreCadJobModel(job('wgi_next'), {}, (async (input: RequestInfo | URL) =>
-      String(input).endsWith('/viewport-mesh') ? new Response(mesh) : String(input).endsWith('/requests')
-        ? json({ effective_request: archivedRequest('wgi_next') }) : json(nextRecord)) as typeof fetch)).toBe(true);
+      String(input).endsWith('/viewport-mesh') ? new Response(mesh) : isWorkspace(input)
+        ? json(workspaceFor('wgi_next')) : json(nextRecord)) as typeof fetch)).toBe(true);
     pending.resolve(json(record)); expect(await first).toBe(false);
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_next');
     expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_next');
@@ -109,7 +115,7 @@ describe('job and remembered-project restores without the coordinator', () => {
     const pending = deferred<Response>(); const requested = deferred<void>(); const status = vi.fn();
     const first = restoreCadJobModel(job(), { reportStatus: status }, (async (input: RequestInfo | URL) => {
       if (String(input).endsWith('/viewport-mesh')) { requested.resolve(); return pending.promise; }
-      return String(input).endsWith('/requests') ? json({ effective_request: archivedRequest() }) : json(record);
+      return isWorkspace(input) ? json(workspaceFor()) : json(record);
     }) as typeof fetch);
     await requested.promise;
     useCadReturnStore.getState().selectBundle(bundle);
@@ -275,12 +281,12 @@ describe('shared historical restoration transaction', () => {
     const status = vi.fn();
     const restoring = restoreCadJobModel(job('wgi_missing'), { reportStatus: status }, (async input => {
       const path = String(input);
-      if ((stage === 'request' && path.endsWith('/requests'))
+      if ((stage === 'request' && path.endsWith('/workspace'))
         || (stage === 'viewport' && path.endsWith('/viewport-mesh'))
-        || (stage === 'record' && !path.endsWith('/requests'))) {
+        || (stage === 'record' && !path.endsWith('/workspace'))) {
         reached.resolve(); return pending.promise;
       }
-      return path.endsWith('/requests') ? json({ effective_request: archivedRequest('wgi_missing') })
+      return path.endsWith('/workspace') ? json(workspaceFor('wgi_missing'))
         : json({ ...record, ingest_id: 'wgi_missing' });
     }) as typeof fetch);
     await reached.promise;
@@ -295,7 +301,7 @@ describe('shared historical restoration transaction', () => {
     expect(status.mock.calls.at(-1)?.[0]).toContain('Cannot show');
   });
 
-  it('restores frozen CAD inputs without reading current project drivers or silently replacing options', async () => {
+  it('opens a run\'s setup without reading current project drivers, and solves its revision until edited', async () => {
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_project');
     useCadReturnStore.getState().setChannelDriverPreset('drive-hf', {
       id: 'today', label: 'Today', source: 'database', kind: 'cd', z_ohm: 8, xo_min_hz: null, base: { re_ohm: 99 },
@@ -305,35 +311,53 @@ describe('shared historical restoration transaction', () => {
     frozen.geometry.drive_channels![0].driver = { re_ohm: 6, sd_cm2: 50, bl_t_m: 7, mms_g: 10, cms_m_per_n: .001 };
     const request = { ...frozen, options: { ...frozen.options, adaptive_frequency_sampling: true,
       ground_plane: { enabled: true, axis: 'y', height_m: 1.2 } } };
-    const fetcher = vi.fn<typeof fetch>(async input => String(input).endsWith('/requests')
-      ? json({ effective_request: request }) : archiveFetcher(input));
+    const fetcher = vi.fn<typeof fetch>(async input => isWorkspace(input)
+      ? json(workspaceFor(record.ingest_id, request as never)) : archiveFetcher(input));
     expect(await restoreCadJobModel(job(), {}, fetcher)).toBe(true);
+    expect(fetcher.mock.calls[0][0]).toBe(`/api/runs/job-${record.ingest_id}/workspace`);
     expect(fetcher.mock.calls.some(([input]) => String(input).includes('/drivers/'))).toBe(false);
+    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith('/requests'))).toBe(false);
     expect(useImportedSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-cpu', accuracy: 'accurate',
       adaptiveFrequencySampling: true, groundPlane: { enabled: true, height_m: 1.2 } });
     expect(useCadReturnStore.getState().channelDrivers['archive-hf'].fields.re_ohm).toBe(6);
-    expect(buildImportedSubmission()).toEqual(request);
+    // The project is the model the server named.
+    expect(useCadReturnStore.getState().projectLineageId).toBe('wgl_project');
+    expect(useImportedModelStore.getState()).toMatchObject({ input: 'cad', modelId: 'wgl_project', phase: 'ready' });
+    // An unedited Solve names the run's setup revision.
+    expect(unchangedSetup('cad', record.ingest_id)).toEqual({ setup_revision_id: 'wgs_archived' });
+    // The rail shows the same setup, so an edit starts from it.
     const setup = buildCadProjectSetup(undefined, undefined, undefined, 'manual');
-    expect(setup?.setup.options).toEqual(request.options);
-    expect(setup?.setup.geometry).toMatchObject({ drive_channels: [{ driver: { re_ohm: 6 } }] });
-    // Background global hydration is not an explicit edit to historical inputs.
+    expect(setup?.setup.geometry).toMatchObject({ drive_channels: [{ driver: { re_ohm: 6 } }], drive_voltage_v: 8 });
+    expect(setup?.setup.options).toMatchObject({ engine: 'beat-cpu', accuracy: 'accurate', adaptive_frequency_sampling: true,
+      frequencies_hz: [100, 500, 1000] });
+    // Background global hydration is not an explicit edit to the opened setup.
     useImportedSolveOptionsStore.setState({ engine: 'bempp' });
-    expect(buildImportedSubmission()).toEqual(request);
     workspaceModeStore.setMode('parametric');
     resetDesignStore();
     workspaceModeStore.setMode('cad');
-    expect(buildImportedSubmission()).toEqual(request);
-    // A deliberate edit starts from the restored setup and becomes submittable.
+    expect(unchangedSetup('cad', record.ingest_id)).toEqual({ setup_revision_id: 'wgs_archived' });
+    // A deliberate edit ends it and becomes the setup a Solve sends.
     useImportedSolveOptionsStore.getState().setEngine('beat-cpu');
+    expect(unchangedSetup('cad', record.ingest_id)).toBeNull();
     useCadReturnStore.getState().setDriveVoltage(4);
     expect(buildCadProjectSetup(undefined, undefined, undefined, 'manual')?.setup.geometry.drive_voltage_v).toBe(4);
+  });
+
+  it('files an unfiled run under no guessed project', async () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_open_project');
+    const fetcher = vi.fn<typeof fetch>(async input => isWorkspace(input)
+      ? json({ ...workspaceFor(record.ingest_id, archivedRequest(), { modelId: 'unfiled' }), model: null })
+      : archiveFetcher(input));
+    expect(await restoreCadJobModel(job(), {}, fetcher)).toBe(true);
+    expect(useCadReturnStore.getState().projectLineageId).toBeNull();
+    expect(useImportedModelStore.getState().modelId).toBe('unfiled');
   });
 
   it('rejects mismatched CAD retained hashes before publishing its setup', async () => {
     expect(await restoreCadJobModel(job(), {}, archiveFetcher)).toBe(true);
     const status = vi.fn();
-    expect(await restoreCadJobModel(job('wgi_bad'), { reportStatus: status }, (async input => String(input).endsWith('/requests')
-      ? json({ effective_request: archivedRequest('wgi_bad') }) : json({ ...record, ingest_id: 'wgi_bad', artifact_sha256: 'wrong' })) as typeof fetch)).toBe(false);
+    expect(await restoreCadJobModel(job('wgi_bad'), { reportStatus: status }, (async input => isWorkspace(input)
+      ? json(workspaceFor('wgi_bad')) : json({ ...record, ingest_id: 'wgi_bad', artifact_sha256: 'wrong' })) as typeof fetch)).toBe(false);
     expect(status.mock.calls.at(-1)?.[0]).toContain('does not match');
     expect(() => buildImportedSubmission()).toThrow();
   });

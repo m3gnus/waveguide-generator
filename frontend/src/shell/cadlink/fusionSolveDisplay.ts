@@ -7,9 +7,11 @@ import { currentDocumentLoad, isCurrentDocumentLoad, subscribeRevision } from '.
 import { subscribeSolveSettingsEdits } from '../../stores/solveSettingsEdits';
 import { navigationGeneration } from '../workspaceNavigation';
 import { solveAttention } from '../solveAttention';
-import { restoreCadJobModel, type CadJobRestoreIntegration } from './restores';
+import { openImported, type ImportedDisplay } from '../../stores/importedModel';
+// The CAD rail is the view a reopened CAD run is shown in.
+import './restores';
 
-interface FusionSolveDisplay extends Partial<CadJobRestoreIntegration> {
+interface FusionSolveDisplay extends ImportedDisplay {
   isActive(): boolean;
   newestSendAt(): number;
   onIntent(): void;
@@ -17,7 +19,7 @@ interface FusionSolveDisplay extends Partial<CadJobRestoreIntegration> {
 
 /** Follow an explicit Fusion solve, including a running job first seen on opening
  * WG. Old history is not a new request; later user choices and Sends win.
- * Reuse history's exact-ingestion loader, never relax the result/model guard.
+ * Reopen it as history does (`openImported`), never relax the result/model guard.
  */
 export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: typeof fetch = fetch,
   now = Date.now) {
@@ -77,7 +79,8 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
       // from which JobsCoordinator could have remembered this external press.
       rememberCadSolve(job.id, '');
       acknowledgeCadSolve(job, 'completion');
-      const shown = await restoreCadJobModel(job, { ...display, isCurrent: current }, fetcher);
+      const shown = await openImported({ kind: 'run', job, display: { ...display, isCurrent: current } }, fetcher)
+        .catch(() => false);
       if (!shown || !current()) return;
       compareSelection.awaitRun(job.id);
       if (job.client_request_id) solveAttention.followJob(job.client_request_id, job.id);

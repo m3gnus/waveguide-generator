@@ -47,8 +47,8 @@ durable submission ID. An unavailable explicit engine is refused by that path.
 
 The UI preserves the exact request through Save, restart and unanswered-request
 recovery. Automatic settings hydration cannot replace it. Actual setup edits
-end exact replay with an explanation; the panel shows both the recorded setup
-and controls for a new ordinary mesh setup.
+end exact replay, and the recorded-setup summary goes; until then the panel shows
+both the recorded setup and controls for a new ordinary mesh setup.
 
 ## Limits and existing archives
 

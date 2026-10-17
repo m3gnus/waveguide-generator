@@ -19,3 +19,54 @@ export const saveImportedSetup = (modelId: string, preparedId: string, setup: Im
   Promise<{ revision_id: string; content_sha256: string }> => request(modelId, preparedId, setup, fetcher);
 export const readImportedSetup = (modelId: string, preparedId: string, fetcher?: typeof fetch):
   Promise<{ setup: ImportedSetup | null; revision_id?: string | null }> => request(modelId, preparedId, undefined, fetcher);
+
+/** An imported model as the server keeps it (`server/jobs/models_api.py`). */
+export interface ImportedModelSummary {
+  model_id: string;
+  producer: 'mesh-file' | 'cad';
+  display_name: string;
+  archive_stem?: string | null;
+  latest_prepared_id?: string | null;
+}
+
+/** A prepared mesh as a model read names it; a file's carries its solver mesh. */
+export interface PreparedSummary {
+  ingest_id: string;
+  model_id: string | null;
+  producer: string;
+  manifest_sha256: string;
+  artifact_sha256: string;
+  msh_text?: string;
+  [key: string]: unknown;
+}
+
+/** Everything a run is reopened with (`GET /api/runs/{id}/workspace`). */
+export interface RunWorkspace {
+  job_id: string;
+  model?: ImportedModelSummary | null;
+  prepared?: PreparedSummary | null;
+  original_available: boolean;
+  setup?: { revision_id: string; content: { geometry: ImportedSetup['geometry']; options: ImportedSetup['options'] }; derived?: boolean } | null;
+  solve_options?: ImportedSetup['options'] | null;
+  refusal?: { code: string; message: string } | null;
+}
+
+async function read<T>(path: string, fetcher: typeof fetch, what: string): Promise<T> {
+  const response = await fetcher(path);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: { message?: unknown }; detail?: unknown } | null;
+    const message = typeof body?.error?.message === 'string' ? body.error.message : formatApiDetail(body?.detail);
+    throw new Error(message ?? `${what} unavailable (${response.status}).`);
+  }
+  return response.json() as Promise<T>;
+}
+
+/** The one read a run is reopened from: its model, prepared mesh, original and setup. */
+export const readRunWorkspace = (jobId: string, fetcher: typeof fetch = fetch): Promise<RunWorkspace> =>
+  read(`/api/runs/${encodeURIComponent(jobId)}/workspace`, fetcher, 'This run’s workspace');
+
+/** A model, its latest preparation and, when named, one preparation with its mesh. */
+export const readImportedModel = (modelId: string, preparedId: string | null, fetcher: typeof fetch = fetch):
+  Promise<{ model: ImportedModelSummary; latest_prepared: PreparedSummary | null; prepared?: PreparedSummary; original_available: boolean }> =>
+  read(`/api/models/${encodeURIComponent(modelId)}${preparedId ? `?prepared_id=${encodeURIComponent(preparedId)}` : ''}`,
+    fetcher, 'This model');

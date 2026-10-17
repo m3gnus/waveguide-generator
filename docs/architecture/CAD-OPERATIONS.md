@@ -348,8 +348,9 @@ reproduces, because the driver library has no revisions.
   WG, never one CAD Link chose. If that engine cannot take the record, the
   operation waits (`engine_cannot_solve_return`, or `engine_unavailable` when the engine is not on this host) with the capable engines named, and nothing
   switches engines silently. Opening a historical run restores its recorded engine and
-  accuracy along with the complete effective request; it does not read today's driver
-  library or project profile. Changing a setup control explicitly starts a new draft.
+  accuracy with the setup revision it was made from (see "Opening a run's workspace");
+  it does not read today's driver library or project profile. Changing a setup control
+  explicitly starts a new draft.
 
 ## Project setups
 
@@ -895,7 +896,7 @@ under `frontend/src/` unless they start with `server/`.
 | 21 | A compatible arrival keeps the project's solve settings; a changed inventory resets them | none | `stores/cadReturn.ts` project/inventory profiles via `shell/cadlink/arrivals.ts` and `shell/cadlink/receiptDisplay.ts` | `arrivals.test.ts :: keeps settings for a compatible arrival and resets a changed inventory`; `receiptDisplay.test.ts` shared continuity tests; `cadReturn.test.ts` |
 | 22 | A return for another project never replaces the parametric design or its undo history | none | `shell/cadlink/arrivals.ts`, `shell/cadlink/restores.ts`, `shell/cadlink/receiptDisplay.ts` design-identity fences | `arrivals.test.ts :: refuses a foreign arrival without replacing design or undo history`; `receiptDisplay.test.ts` foreign project and undo tests |
 | 23 | Entering an empty CAD mode reopens the remembered project only while still empty | none | `shell/cadlink/restores.ts` guarded remembered-project observer, `stores/cadProjectMemory.ts` | `restores.test.ts` remembered empty-mode observer and delayed-read fences |
-| 24 | Opening an archived CAD run restores its ingest and setup; a late restore never overtakes a newer pick | partial (`cad_source`, `cad_setup` on the job) | `shell/cadlink/restores.ts` job-model restore, `stores/cadReturn.ts` archive fencing | `restores.test.ts` standalone archived ingest/setup/sweep restore and newer-selection fences |
+| 24 | Opening an archived CAD run restores its ingest and setup; a late restore never overtakes a newer pick | `GET /api/runs/{id}/workspace` (model, prepared mesh, setup revision) | `stores/importedModel.ts` `openImported`, `shell/cadlink/restores.ts` CAD rail view, `stores/cadReturn.ts` archive fencing | `restores.test.ts` standalone archived ingest/setup/sweep restore and newer-selection fences; `importedModel.test.ts`; `test_runs_workspace.py` |
 | 25 | "Bring in geometry" joins repeated pulls, waits for the correlated return, reports refusal or timeout; late returns after timeout remain discoverable | none (a correlation id, not a job) | `shell/cadlink/returnWaiter.ts`, exact file outcome reader/router `server/cadlink/fusion/fusion_return.py`; the waiter alone selects a pending correlated pull; Bring in and solve reports preparation/submission and clears stale status on failure | `returnWaiter.test.ts` correlation, joining, refusal, deadline, stalled batches and command cancellation; `CadWorkspaceOwners.test.ts` plain-pull and pull-and-solve ingestion, phase/error feedback and late-after-timeout discovery; `test_fusion_return.py :: test_production_cadlink_mount_exposes_exact_file_return_outcome` |
 | 26 | Onshape returns stay ingestible with their own origin, without Fusion-folder polling | none | `shell/cadlink/arrivals.ts` origin-aware Onshape actions/readers, UI capability gate; `shell/CadWorkspaceOwners.tsx` gates Fusion receipt display and fences every deferred boundary | `arrivals.test.ts` Onshape origin/identity/instance fences; `CadWorkspaceOwners.test.ts` Onshape mount and deferred display isolation; `CadLinkPanel.test.tsx` Onshape choices and return display |
 | 27 | Retries and reloads keep one solve identity; a waiting solve for the snapshot is continued, not duplicated | *job* | `jobs/cadSolve.ts`, `shell/JobsCoordinator.tsx` client request id and `/solve-again` | `M1bSolveCard.test.tsx`; `JobsCoordinator.mutex.test.tsx` continuation and press-mutex tests |
@@ -1014,17 +1015,14 @@ load, so starting auto-ingest does not discard fresh library values. Artifact lo
 belong to the held ingest record, document load and viewport choice; edits that
 leave that immutable record held do not prevent its model or solver slot loading.
 Entering empty CAD mode may clear the viewport slot without cancelling remembered
-project reopening. File and CAD run restoration share `jobs/importedRunRestoration.ts`:
-select target, invalidate the previous solvable setup, load the effective request,
-verify retained identity/hashes, publish through the producer's scene/control adapter,
-and mark ready. An unedited restored CAD run uses the same direct imported
-submission path as a file run, retaining its mesh/frame/domain rather than re-entering
-CAD preparation. Explicit edits return to CAD preparation when needed. Pending or
-failed restoration blocks Solve; newer intent supersedes
-all remaining awaits. Unrepresented CAD settings stay in the frozen request until an
-explicit settings edit. Failed, cancelled and result-pruned imported runs can open
-retained inputs independently of parametric-design or result availability; missing
-inputs report a refusal. Existing retry, admission, runtime and archive owners remain shared.
+project reopening. File and CAD runs are reopened one way, `openImported` in
+`stores/importedModel.ts` (see "Opening a run's workspace"): select the target,
+invalidate the previous solvable setup, read the run's workspace, verify the retained
+identity and hashes, show it through the input's rail (the view) and the viewport, and
+mark it ready. Pending or failed opening blocks Solve; newer intent supersedes all
+remaining awaits. Failed, cancelled and result-pruned imported runs can open retained
+inputs independently of parametric-design or result availability; missing inputs
+report the server's refusal. Existing retry, admission, runtime and archive owners remain shared.
 Archived restore preserves the saved setup and project profile
 without marking the record as settled by current preparation, keeping recalled
 runs ineligible for automatic solved-model adoption. Manual picks fence an older
@@ -1166,6 +1164,42 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`). The lane is the
   is the one the client reads as the job being queued.
 - **The operation routes.** `operation_summary` for a solve is derived from its job
   (`job_operation_view`).
+
+## Opening a run's workspace
+
+`GET /api/runs/{id}/workspace` (`server/jobs/run_workspace.py`) is the one read an
+imported run is reopened from. It answers `{model, prepared, original_available, setup:
+{revision_id, content, derived}, solve_options, refusal?}`:
+
+- **The model** is the one the run's prepared mesh is filed under (`ingests.model_id`;
+  `prepared.model_id` is `unfiled` for a mesh filed under none). Only when the prepared
+  mesh is gone does the run's own record name it (`imported_geometry.model_id`, then
+  `anchor_lineage_id`). Nothing reads the project or document open in the editor.
+- **The prepared mesh** carries a file's solver mesh (`msh_text`); a CAD snapshot is
+  read through CAD Link as before. `original_available` says the server still holds the
+  file's `original.msh` (or the CAD bundle), so a restored file is prepared again with
+  `POST /api/models/{id}/prepare` and its controls stay editable.
+- **The setup** is the revision the run recorded. A run from before setup revisions
+  (or one whose revision is gone) has its setup derived from its effective request,
+  without the fields the prepared mesh contributes, and stored as the content-addressed
+  revision it is (`derived: true`). The same run always derives the same revision, the
+  one a retry of it records too; the job row is not rewritten.
+- **Refusals.** A run that cannot be reopened answers 200 with `refusal` beside what
+  could be read: `prepared_unavailable` (the prepared mesh is no longer retained),
+  `model_not_found`, `no_request` (a CAD solve that ended before it had a request),
+  `setup_unavailable`. An unknown run is 404. A parametric run answers
+  `parametric_run`: it reopens its design from the run itself (its design snapshot
+  travels with the run list, `replaceWithJobDesign`), so there is one way to reopen a
+  design and one way to reopen an imported model.
+
+In the SPA, `openImported(source)` is the only filler of the imported-model store
+(`stores/importedModel.ts`): a run (this read), a model (`GET /api/models/{id}` and its
+setup), a file just registered, or a CAD return that arrived. The file and CAD rails are
+views over it. Exact replay is the setup being unchanged since it was opened: an
+unedited Solve sends `setup_revision_id` (a portable replay, which names no revision,
+sends its exact setup); a person's edit of any imported setting ends it, and the press
+then sends the setup on screen. Each input keeps its open model and options while the
+other input is on screen.
 
 ## Opening a run by link
 
