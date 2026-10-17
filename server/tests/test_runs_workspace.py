@@ -13,6 +13,7 @@ from server.cadlink.store import CadLinkStore
 from server.jobs.imported_setup import setup_digest, solve_request_for, validate_setup
 from server.jobs.model_solve import _request_revision
 from server.jobs.models import SolveRequest
+from server.jobs.api import create_jobs_router
 from server.jobs.run_workspace import derived_setup, mount_run_workspace
 
 from cad_backends import JobsHarness
@@ -122,7 +123,7 @@ def test_a_file_run_from_before_setup_revisions_derives_one_deterministically(tm
         assert content["options"]["frequencies_hz"] == [100, 200]
         assert not {"type", "ingest_id", "manifest_sha256", "artifact_sha256"} & set(content["geometry"])
         # It is the revision a retry of this run records.
-        assert _request_revision(store, SolveRequest.model_validate(exact)) == first["setup"]["revision_id"]
+        assert _request_revision(store, SolveRequest.model_validate(exact), record) == first["setup"]["revision_id"]
         # The run's job row is not rewritten.
         assert runtime.store.get_job_row("old-file-run")["task_metadata"] == metadata
 
@@ -224,6 +225,28 @@ def test_an_exterior_only_fem_run_keeps_its_exclusion(tmp_path) -> None:
             acknowledged_findings=[], fem_region_ids=["fem-a", "fem-b"],
         )
         assert resolved.geometry.exterior_only is True
+
+        # A retry of that run records the same revision, exclusion included,
+        # and the retried run reopens to a setup that keeps the FEM air out.
+        runtime.store.update_job("fem", status="complete")
+        app.include_router(create_jobs_router(runtime))
+        status, raw = await _request(app, "POST", "/api/jobs/fem/retry")
+        assert status == 200, raw
+        retried = json.loads(raw)["job_id"]
+        recorded = runtime.store.get_job_row(retried)["task_metadata"]["imported_geometry"]["setup_revision_id"]
+        assert recorded == opened["setup"]["revision_id"]
+        again = await _workspace(app, retried)
+        assert again["setup"]["derived"] is False and again["setup"]["exact"] is True
+        assert again["setup"]["content"]["geometry"]["exterior_only_region_ids"] == ["fem-a", "fem-b"]
+        resolved_again = solve_request_for(
+            validate_setup(again["setup"]["content"]), ingest_id=record["ingest_id"],
+            manifest_sha256=record["manifest_sha256"], artifact_sha256=record["artifact_sha256"],
+            acknowledged_findings=[], fem_region_ids=["fem-a", "fem-b"],
+        )
+        assert resolved_again.geometry.exterior_only is True
+        # Without the prepared record no revision is recorded, rather than a lossy one.
+        assert _request_revision(store, SolveRequest.model_validate(request), None) is None
+        assert _request_revision(store, SolveRequest.model_validate(request), record) == recorded
 
         # Without its prepared mesh the exclusion cannot be known: not exact.
         gone = {**request, "geometry": {**request["geometry"], "ingest_id": "wgi_" + "7" * 26}}

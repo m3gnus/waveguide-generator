@@ -44,14 +44,12 @@ from pydantic import BaseModel, Field
 from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID
 from server.integration.contracts import ErrorEnvelope, error_envelope
 from server.jobs.cad_intent import CAD_INTENT, cad_of
-from server.jobs.imported_setup import setup_content, setup_digest, validate_setup
+from server.jobs.imported_setup import setup_content, setup_digest, setup_of_request, validate_setup
 from server.jobs.model_solve import recorded_setup_revision
 from server.jobs.models import SolveRequest
 from server.jobs.models_api import ModelRefusal, public_record, read_original
 from server.mesh.artifact import read_verified_import_mesh
 
-# What a prepared mesh contributes to a request, and so what a setup is without.
-_SNAPSHOT_FIELDS = ("type", "ingest_id", "manifest_sha256", "artifact_sha256", "acknowledged_findings")
 
 
 class WorkspaceRefusal(BaseModel):
@@ -129,35 +127,10 @@ def _prepared_id(row: Mapping[str, Any], request: Mapping[str, Any] | None) -> s
     return str(preparation["ingest_id"]) if preparation.get("ingest_id") else None
 
 
-def _fem_region_ids(record: Mapping[str, Any]) -> list[str]:
-    evidence = _mapping(record.get("evidence"))
-    regions = evidence.get("fem_regions") or record.get("fem_regions") or []
-    return sorted(
-        str(region["region_id"]) for region in regions
-        if isinstance(region, Mapping) and isinstance(region.get("region_id"), str)
-    )
-
-
 def derived_setup(request: Mapping[str, Any], record: Mapping[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
-    """The setup an exact imported request is: everything but the prepared mesh.
+    """The setup an exact imported request is, and whether it is exact (``setup_of_request``)."""
 
-    Also says whether it is exact. A request names no FEM exclusion
-    (``exterior_only_region_ids`` is a setup field): an admitted exterior-only
-    request excluded exactly its snapshot's FEM regions, which the prepared
-    record states, so they are recovered from it. Without the record they
-    cannot be, and a re-solve would include the FEM air again.
-    """
-
-    geometry = dict(_mapping(request.get("geometry")))
-    for field in _SNAPSHOT_FIELDS:
-        geometry.pop(field, None)
-    exact = True
-    if geometry.get("exterior_only") is True and "exterior_only_region_ids" not in geometry:
-        if record is None:
-            exact = False
-        elif regions := _fem_region_ids(record):
-            geometry["exterior_only_region_ids"] = regions
-    return {"geometry": geometry, "options": dict(_mapping(request.get("options")))}, exact
+    return setup_of_request(request, record)
 
 
 def _setup(

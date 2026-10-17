@@ -67,6 +67,7 @@ from server.jobs.imported_setup import (
     ImportedSolveSetup,
     setup_content,
     setup_digest,
+    setup_of_request,
     validate_setup,
 )
 from server.jobs.models import CadApprovalsRequest, ImportedGeometrySource, SolveRequest
@@ -86,8 +87,6 @@ FILE_PRODUCER = "mesh-file"
 #: press names for a prepared mesh filed under no model (its ``ingests.model_id``
 #: is ''): a CAD return of a design this workspace does not know. It is solved
 #: as any other; no setup is recorded for it.
-# What a prepared mesh contributes to a request, and so what a setup is without.
-_SNAPSHOT_FIELDS = ("type", "ingest_id", "manifest_sha256", "artifact_sha256", "acknowledged_findings")
 # Refusals of the request that mean the prepared mesh itself is gone.
 _PREPARED_GONE = frozenset({"ingest_not_found", "ingest_mesh_unavailable"})
 
@@ -501,14 +500,19 @@ def _lane_target(
     )
 
 
-def _request_revision(store: Any, request: SolveRequest) -> str | None:
-    """The setup revision an exact imported request is, stored once (content-named)."""
+def _request_revision(store: Any, request: SolveRequest, record: Mapping[str, Any] | None) -> str | None:
+    """The setup revision an exact imported request is, stored once (content-named).
 
-    geometry = request.geometry.model_dump(mode="json")
-    for field in _SNAPSHOT_FIELDS:
-        geometry.pop(field, None)
+    None when the request is not a setup, or when its setup cannot be known
+    exactly without the prepared record (``setup_of_request``): no revision
+    is better than one that solves differently.
+    """
+
+    content, exact = setup_of_request(request.model_dump(mode="json"), record)
+    if not exact:
+        return None
     try:
-        setup = validate_setup({"geometry": geometry, "options": request.options.model_dump(mode="json")})
+        setup = validate_setup(content)
     except ValueError:
         return None
     return str(store.create_setup_revision(setup_content(setup), setup_digest(setup))["revision_id"])
@@ -778,12 +782,12 @@ async def submit_imported_request(
     row = await asyncio.to_thread(store.get_ingest, geometry.ingest_id) if store is not None else None
     if row is None:
         return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=setup_revision_id)
+    record = json.loads(row["record_json"])
     if setup_revision_id is None and not (cad_provenance or {}).get("setup"):
-        setup_revision_id = await asyncio.to_thread(_request_revision, store, request)
+        setup_revision_id = await asyncio.to_thread(_request_revision, store, request, record)
     model_id = row.get("model_id") or None
     if model_id is None:
         return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=setup_revision_id)
-    record = json.loads(row["record_json"])
     revision = setup_revision_id or recorded_setup_revision({"task_metadata": {"cad": dict(cad_provenance or {})}})
     async with _model_lock(model_id):
         replay = request.client_request_id is not None and await asyncio.to_thread(

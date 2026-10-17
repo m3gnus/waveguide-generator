@@ -155,6 +155,42 @@ def validate_setup(value: Mapping[str, Any]) -> CadSolveSetup:
     return setup
 
 
+def _fem_region_ids(record: Mapping[str, Any]) -> list[str]:
+    evidence = record.get("evidence") if isinstance(record.get("evidence"), Mapping) else {}
+    regions = evidence.get("fem_regions") or record.get("fem_regions") or []
+    return sorted(
+        str(region["region_id"]) for region in regions
+        if isinstance(region, Mapping) and isinstance(region.get("region_id"), str)
+    )
+
+
+def setup_of_request(
+    request: Mapping[str, Any], record: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], bool]:
+    """The setup an exact imported request (its JSON) is, and whether it is exact.
+
+    Everything but what the prepared mesh contributes. A request carries no
+    FEM exclusion (``exterior_only_region_ids`` is a setup field): an admitted
+    exterior-only request excluded exactly its snapshot's FEM regions, which
+    the prepared record states, so they are recovered from it. Without the
+    record they cannot be, and a solve of the setup would include the FEM air
+    again: the setup is then not exact. Shared by a reopened run's derived
+    setup (``run_workspace.py``) and the revision an exact request records
+    (``model_solve._request_revision``).
+    """
+
+    geometry = dict(request.get("geometry") or {})
+    for field in _SNAPSHOT_FIELDS:
+        geometry.pop(field, None)
+    exact = True
+    if geometry.get("exterior_only") is True and "exterior_only_region_ids" not in geometry:
+        if record is None:
+            exact = False
+        elif regions := _fem_region_ids(record):
+            geometry["exterior_only_region_ids"] = regions
+    return {"geometry": geometry, "options": dict(request.get("options") or {})}, exact
+
+
 def setup_content(setup: CadSolveSetup) -> str:
     """The canonical JSON a revision stores and is identified by."""
 
@@ -176,6 +212,7 @@ __all__ = [
     "SETUP_SCHEMA_VERSION",
     "setup_content",
     "setup_digest",
+    "setup_of_request",
     "solve_request_for",
     "validate_setup",
 ]
