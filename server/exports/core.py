@@ -869,13 +869,22 @@ async def build_step_solid(design: DesignConfig) -> StepSolidResult:
     )
 
 
+# SOURCE-DISK bodies emit tag 1 (rigid) and tag 2 (moving source disc).
+STL_SURFACE_TAGS_BY_FORMULA: dict[str, tuple[int, ...]] = {"SOURCE-DISK": (1, 2)}
+
+
 def binary_stl(
     vertices_m: list[float] | np.ndarray,
     indices: list[int] | np.ndarray,
     surface_tags: list[int] | np.ndarray,
     model_name: str = "MWG Horn",
+    keep_tags: tuple[int, ...] = (1,),
 ) -> bytes:
-    """Serialize tag-1 horn triangles as v1-compatible transformed millimetres."""
+    """Serialize the ``keep_tags`` triangles as v1-compatible transformed millimetres.
+
+    The caller names the surfaces: ordinary horns export tag 1 only, a SOURCE-DISK
+    body exports its rigid surface (1) and its moving source disc (2).
+    """
 
     points = np.asarray(vertices_m, dtype=float).reshape(-1, 3)
     triangles = np.asarray(indices, dtype=np.int64).reshape(-1, 3)
@@ -884,9 +893,12 @@ def binary_stl(
         raise ValueError("STL vertex coordinates must all be finite")
     if len(tags) != len(triangles):
         raise ValueError("surface tag count does not match triangle count")
-    triangles = triangles[tags == 1]
+    triangles = triangles[np.isin(tags, np.asarray(keep_tags, dtype=np.int64))]
     if not len(triangles):
-        raise RuntimeError("solver mesh contains no horn inner-surface triangles (tag 1)")
+        raise RuntimeError(
+            "solver mesh contains no exportable surface triangles "
+            f"(tags {', '.join(str(tag) for tag in keep_tags)})"
+        )
     if np.any(triangles < 0) or np.any(triangles >= len(points)):
         raise ValueError("triangle index is outside the vertex buffer")
 
@@ -1110,6 +1122,7 @@ async def build_stl(design: DesignConfig, model_name: str = "MWG Horn") -> StlRe
             canonical.get("indices", []),
             canonical.get("surfaceTags", []),
             model_name,
+            keep_tags=STL_SURFACE_TAGS_BY_FORMULA.get(design.formula, (1,)),
         ),
         warning=" ".join(warnings) or None,
     )

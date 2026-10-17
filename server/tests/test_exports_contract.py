@@ -145,6 +145,34 @@ def test_binary_stl_filters_to_horn_and_applies_mm_axis_transform() -> None:
     assert record[9:12] == pytest.approx((4.0, -2.0, 3.0))
 
 
+def _stl_through_build(monkeypatch, formula: str) -> bytes:
+    from types import SimpleNamespace
+
+    async def fake_mesh(_fn, _dump):
+        return {
+            "vertices": [0.001, 0.002, 0.003, 0.004, 0.002, 0.003, 0.001, 0.006, 0.003, 0.001, 0.002, 0.008],
+            "indices": [0, 1, 2, 0, 2, 3, 1, 2, 3],
+            "surfaceTags": [1, 2, 3],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(core, "run_mesh_build", fake_mesh)
+    design = SimpleNamespace(formula=formula, model_dump=lambda mode="json": {})
+    return asyncio.run(core.build_stl(design, "disk")).data
+
+
+def test_source_disk_stl_keeps_rigid_and_source_disc_triangles(monkeypatch) -> None:
+    data = _stl_through_build(monkeypatch, "SOURCE-DISK")
+    assert struct.unpack_from("<I", data, 80)[0] == 2
+    assert len(data) == 84 + 2 * 50
+
+
+def test_ordinary_horn_stl_stays_tag_one_only(monkeypatch) -> None:
+    data = _stl_through_build(monkeypatch, "R-OSSE")
+    assert struct.unpack_from("<I", data, 80)[0] == 1
+    assert len(data) == 84 + 50
+
+
 def test_profile_csv_axes_units_rows_and_closed_slices() -> None:
     points = np.asarray(
         [
