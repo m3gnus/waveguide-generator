@@ -493,9 +493,9 @@ def main(argv: list[str] | None = None) -> int:
             print("      git commit, in the build only -- never pushed, never tagged")
         else:
             # No `git tag` instruction: the tag is created last, by release.yml,
-            # after every asset has been built and validated. Printing one here
+            # after every promoted asset has been verified. Printing one here
             # invited exactly the ordering that spent v0.2.5 and v0.2.6.
-            print("      git commit, then ./release.sh <repo> publish when ready")
+            print("      git commit, then follow docs/RELEASING.md (signed rc-build, then release.yml)")
         return 0
     except VersionError as exc:
         print(f"error: {exc}", file=sys.stderr)

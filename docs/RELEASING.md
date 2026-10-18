@@ -29,11 +29,12 @@ Version preparation and publication are deliberate phases, with a qualified
 candidate build between them. **The tag is created last, by CI**:
 
 ```bash
-../hornlab-policy/release.sh waveguide-generator patch
-# After phase 1 has pushed the versioned commit to main:
+../hornlab-policy/scripts/land.sh waveguide-generator version patch
+# After the Version commit is on main (per-operation authorization, GIT-WORKFLOW.md §1.2.3):
 gh workflow run rc-build.yml --ref main -f sha=<full-release-sha> -f sign_candidate=true
-# Approve update-signing, wait for that exact run to succeed, then promote it:
-../hornlab-policy/release.sh waveguide-generator publish --source-run-id <qualified-run-id>
+# Approve update-signing, wait for that exact run to succeed, then promote it
+# (per-operation authorization; approve update-signing again on the publish job):
+gh workflow run release.yml --ref main -f sha=<full-release-sha> -f source_run_id=<qualified-run-id>
 ```
 
 Phase 1 prepares the version; nothing is tagged
@@ -44,11 +45,13 @@ plus Windows setup gates. Its protected signing job runs only after all these
 jobs succeed. Stable, alpha, beta and RC versions use this same route; build
 stamps remain refused. **Every release, including a hotfix, must be built from
 `main` through rc-build's signed route** (`sign_candidate=true`). An unsigned
-branch rehearsal cannot be promoted; there is no branch-release override.
+branch rehearsal cannot be promoted; there is no branch-release override. An app
+hotfix goes through `dev`: fix it there, freeze `dev` and revert what must not
+ship, then release the qualified `dev` tip (the workspace `GIT-WORKFLOW.md` §2).
 
 Phase 2 requires a separate approval of the existing protected `update-signing`
 environment on the publish job. Signing approval for a platform rehearsal does
-not authorize publication. `release.sh` dispatches `.github/workflows/release.yml`
+not authorize publication. Dispatch `.github/workflows/release.yml` on `main`
 with the full source SHA and that **explicit qualified run id**. It builds and signs nothing. It refuses a
 version that does not move forward past published tags or a commit outside
 `origin/main`, and requires the dispatch source to equal the release SHA on
@@ -73,10 +76,10 @@ digests match the staged candidate. It is then left untouched; a differing
 companion or draft inventory is refused before publication. An orphan companion
 tag is also refused rather than reused or moved automatically.
 
-The policy repository owns `release.sh`, the only supported publication entry
-point. Land its companion promotion change (including `--source-run-id` and the
-promotion capability check) before using this application's promotion workflow.
-Do not bypass its guards with a raw workflow dispatch.
+`release.yml` is the only owner of these publication checks, and they run on
+the exact dispatch, server-side, so no client-side wrapper repeats them. The
+policy repository's `scripts/land.sh` prepares the Version commit (`version`)
+and moves `main` (`release`); it does not dispatch publication.
 
 The five artifacts promotion consumes (`release-spa`, the three
 `rc-<platform>-sign-inputs`, and `rc-signed-candidate`) explicitly retain for
@@ -115,18 +118,17 @@ to build. When a cross-platform gate failed twice on 2026-08-26, `v0.2.5` and
 nothing before the tag push. Recovery depends on how far publication got:
 
 - **Before the companion is public:** fix the candidate and use a new signed run
-  or a full re-run, then publish through `release.sh` with the selected run id.
+  or a full re-run, then dispatch `release.yml` with the selected run id.
 - **After `v<version>-updates` is public:** only the same source run id and its
   original artifact bytes can finish that version. Builds are not
   byte-reproducible; a fresh run or a full re-run can change the archives even
   for the same SHA, and the public companion must match exactly. Keep that
-  source commit at main's tip while retrying. Retry `release.sh ... publish
-  --source-run-id <original-run-id>` without re-running rc-build. If that run's
+  source commit at main's tip while retrying. Retry the `release.yml` dispatch
+  with `source_run_id=<original-run-id>` without re-running rc-build. If that run's
   artifacts are expired, lost or unusable, prepare a **new version bump** and a
   new signed run. Do not replace the public companion or move its tag.
 - **After the annotated release tag was pushed, but `gh release edit
-  --draft=false` failed:** both `release.sh` and the workflow refuse the existing
-  tag, so an ordinary retry cannot finish. With publication authorization,
+  --draft=false` failed:** the workflow refuses the existing tag, so an ordinary retry cannot finish. With publication authorization,
   manually verify the existing remote tag is annotated and peels to the original
   release SHA, the user-facing release is still a draft with the correct
   pre-release flag, and both releases' exact inventories, sizes and SHA-256
@@ -156,12 +158,12 @@ dispatch the signed RC build above on the new full SHA and record its successful
 run id:
 
 ```bash
-../hornlab-policy/release.sh waveguide-generator rc       # 0.3.1      -> 0.3.2-rc.1
-../hornlab-policy/release.sh waveguide-generator publish --source-run-id <qualified-run-id>
-../hornlab-policy/release.sh waveguide-generator rc       # 0.3.2-rc.1 -> 0.3.2-rc.2
-../hornlab-policy/release.sh waveguide-generator publish --source-run-id <qualified-run-id>
-../hornlab-policy/release.sh waveguide-generator patch    # 0.3.2-rc.2 -> 0.3.2   (the release)
-../hornlab-policy/release.sh waveguide-generator publish --source-run-id <qualified-run-id>
+../hornlab-policy/scripts/land.sh waveguide-generator version rc     # 0.3.1      -> 0.3.2-rc.1
+gh workflow run release.yml --ref main -f sha=<full-sha> -f source_run_id=<qualified-run-id>
+../hornlab-policy/scripts/land.sh waveguide-generator version rc     # 0.3.2-rc.1 -> 0.3.2-rc.2
+gh workflow run release.yml --ref main -f sha=<full-sha> -f source_run_id=<qualified-run-id>
+../hornlab-policy/scripts/land.sh waveguide-generator version patch  # 0.3.2-rc.2 -> 0.3.2   (the release)
+gh workflow run release.yml --ref main -f sha=<full-sha> -f source_run_id=<qualified-run-id>
 ```
 
 **`patch` on a candidate removes the label and keeps the core numbers.** That is

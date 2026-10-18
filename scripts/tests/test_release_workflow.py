@@ -106,11 +106,11 @@ def test_the_tag_is_created_after_the_assets_and_before_publication() -> None:
     assert "git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin" in WORKFLOW
 
 
-def test_release_instructions_are_two_phases_that_tag_last() -> None:
+def test_release_instructions_prepare_then_promote_and_tag_last() -> None:
     release = (ROOT / "docs" / "RELEASING.md").read_text(encoding="utf-8")
 
-    bump = release.index("release.sh waveguide-generator patch")
-    publish = release.index("release.sh waveguide-generator publish")
+    bump = release.index("land.sh waveguide-generator version patch")
+    publish = release.index("gh workflow run release.yml --ref main -f sha=")
     assert bump < publish
     assert "nothing is tagged\nand no version is spent" in release
     assert "then** creates the annotated\ntag" in release

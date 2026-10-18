@@ -60,7 +60,7 @@ check in its identity job.
   split one RC across two commits.
 - **Release, including a hotfix:** every release must be built from `main`
   through rc-build's signed route (`sign_candidate=true`), using its full SHA,
-  then promoted with that successful run id through `release.sh`. There is no
+  then promoted with that successful run id by dispatching `release.yml`. There is no
   branch-release override; unsigned branch RCs are development rehearsals.
   `release.yml` verifies the matching source SHA and each payload's attestation, including
   the selected run and attempt. Publication requires its own `update-signing`
