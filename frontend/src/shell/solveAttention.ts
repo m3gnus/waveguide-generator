@@ -64,6 +64,10 @@ export const solveAttention = {
     pendingSolve = navigationGeneration();
     setReadyRun(null);
   },
+  /** A Solve press that created nothing: its arm must not be adopted later. */
+  releaseSolve(): void {
+    pendingSolve = null;
+  },
   /** The operation a Solve press created or recovered carries its arm. */
   bindOperation(operationId: string): void {
     if (pendingSolve === null) return;

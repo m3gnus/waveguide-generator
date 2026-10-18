@@ -550,7 +550,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       setSubmitting(true);
       setActionError(null);
       solveAttention.armSolve();
-      const childJobId = await jobsSocket.retryJob(jobId);
+      let childJobId: string;
+      try {
+        childJobId = await jobsSocket.retryJob(jobId);
+      } catch (error) {
+        solveAttention.releaseSolve();
+        throw error;
+      }
       compareSelection.awaitRun(childJobId);
       solveAttention.bindRun(childJobId);
     } finally {

@@ -1441,6 +1441,21 @@ describe('solve invocation mutex', () => {
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: child.id, awaiting: null });
   });
 
+  it('leaves no Solve arm behind when a retry is refused', async () => {
+    const parent = failedJob();
+    vi.spyOn(jobsSocket, 'retryJob').mockRejectedValue(new Error('retry refused'));
+    const bindRun = vi.spyOn(solveAttention, 'bindRun');
+    publishJobs([parent]);
+    await act(async () => { root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>); });
+
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().retry(parent.id)).rejects.toThrow('retry refused');
+    });
+    solveAttention.bindRun('unrelated-run');
+    expect(bindRun).toHaveBeenCalledWith('unrelated-run');
+    expect(solveAttention.getReadyRun()).toBeNull();
+  });
+
   it('guards two fast retries routed through the coordinator bridge', async () => {
     // A retry replays the stored run on the server rather than resubmitting the
     // design from the browser, so the guarded call here is retryJob.

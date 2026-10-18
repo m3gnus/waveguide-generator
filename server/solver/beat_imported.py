@@ -734,17 +734,13 @@ def solve_imported_beat_from_msh_text(
     )
     channel_identity = channel_source_identity(geometry, record, axial_identity)
     frame_basis = _frame_basis(frame)
-    channel_groups = {
-        channel.id: _drive_groups(channel_tags[channel.id], channel.motion, axial_signs)
-        for channel in geometry.drive_channels
-    }
     frequency_count = len(frequencies)
     channel_count = len(geometry.drive_channels)
     adaptive = adaptive_enabled(context)
     acquisition_count = (
         len(native_acquisition_frequencies(context)) if adaptive else frequency_count
     )
-    total_work = max(1, acquisition_count * sum(1 for groups in channel_groups.values()))
+    total_work = max(1, acquisition_count * channel_count)
 
     def stage_status(message: str) -> None:
         if stage_callback and message:

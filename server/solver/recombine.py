@@ -178,8 +178,8 @@ def recombine_stored_results(
             metadata[copied] = dict(value)
     # Live combined builders omit fields describing just one member's drive.
     for backend, member_fields in (
-        ("beat", ("merged_source_tags", "axially_reversed_source_tags")),
-        ("bempp", ("velocity_source_tags", "source_motion")),
+        ("beat", ("merged_source_tags", "axially_reversed_source_tags", "solver_log")),
+        ("bempp", ("velocity_source_tags", "source_motion", "solver_log")),
     ):
         for field in member_fields:
             if backend in metadata:

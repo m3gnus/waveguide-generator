@@ -55,8 +55,10 @@ def test_recombine_preserves_solve_metadata(backend, engine, existing):
         "role": "LF", "drive_channel_id": "low", "source_ids": ["source-low"],
     }
     member_fields = {
-        "beat": {"merged_source_tags": [101], "axially_reversed_source_tags": [101]},
-        "bempp": {"velocity_source_tags": [101], "source_motion": "normal"},
+        "beat": {"merged_source_tags": [101], "axially_reversed_source_tags": [101],
+                 "solver_log": ["member log"]},
+        "bempp": {"velocity_source_tags": [101], "source_motion": "normal",
+                  "solver_log": ["member log"]},
     }.get(backend, {})
     member_metadata[backend].update(member_fields)
     results = {"channels": {"low": {"metadata": member_metadata}, "high": {}},
