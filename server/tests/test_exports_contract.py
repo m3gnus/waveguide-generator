@@ -173,6 +173,27 @@ def test_ordinary_horn_stl_stays_tag_one_only(monkeypatch) -> None:
     assert len(data) == 84 + 50
 
 
+@pytest.mark.parametrize("formula", ["SOURCE-DISK", "R-OSSE"])
+def test_stl_export_uses_mesher_printable_surface_tags(monkeypatch, formula) -> None:
+    import hornlab_mesher
+    from hornlab_mesher import printable_surface_tags
+
+    selected = []
+    serialize = core.binary_stl
+
+    def capture_tags(*args, keep_tags):
+        selected.append(keep_tags)
+        return serialize(*args, keep_tags=keep_tags)
+
+    monkeypatch.setattr(core, "binary_stl", capture_tags)
+    _stl_through_build(monkeypatch, formula)
+    assert selected == [printable_surface_tags({"formula": formula})]
+    selected.clear()
+    monkeypatch.setattr(hornlab_mesher, "printable_surface_tags", lambda config: (3,))
+    _stl_through_build(monkeypatch, formula)
+    assert selected == [(3,)]
+
+
 def test_profile_csv_axes_units_rows_and_closed_slices() -> None:
     points = np.asarray(
         [

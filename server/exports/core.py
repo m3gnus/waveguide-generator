@@ -841,23 +841,23 @@ async def build_step_solid(design: DesignConfig) -> StepSolidResult:
     )
 
 
-# SOURCE-DISK bodies emit tag 1 (rigid) and tag 2 (moving source disc).
-STL_SURFACE_TAGS_BY_FORMULA: dict[str, tuple[int, ...]] = {"SOURCE-DISK": (1, 2)}
-
-
 def binary_stl(
     vertices_m: list[float] | np.ndarray,
     indices: list[int] | np.ndarray,
     surface_tags: list[int] | np.ndarray,
     model_name: str = "MWG Horn",
-    keep_tags: tuple[int, ...] = (1,),
+    keep_tags: tuple[int, ...] | None = None,
 ) -> bytes:
     """Serialize the ``keep_tags`` triangles as v1-compatible transformed millimetres.
 
-    The caller names the surfaces: ordinary horns export tag 1 only, a SOURCE-DISK
-    body exports its rigid surface (1) and its moving source disc (2).
+    The caller names the surfaces using the mesher's printable-surface contract.
+    Omitting ``keep_tags`` preserves the ordinary horn selection.
     """
 
+    if keep_tags is None:
+        from hornlab_mesher import printable_surface_tags
+
+        keep_tags = printable_surface_tags({})
     points = np.asarray(vertices_m, dtype=float).reshape(-1, 3)
     triangles = np.asarray(indices, dtype=np.int64).reshape(-1, 3)
     tags = np.asarray(surface_tags, dtype=np.int64).reshape(-1)
@@ -999,6 +999,7 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
         validate_export_segments(design)
         return _build_ath_stl_mesh(design)
     try:
+        from hornlab_mesher import printable_surface_tags
         from hornlab_mesher.config_builder import build_from_config
     except ImportError as exc:
         raise RuntimeError(
@@ -1065,7 +1066,7 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
         if vertices.ndim != 2 or vertices.shape[1:] != (3,) or not np.isfinite(vertices).all():
             raise ValueError("parsed STL mesh contains invalid or non-finite coordinates")
     horn_triangles = int(
-        np.isin(tags, np.asarray(STL_SURFACE_TAGS_BY_FORMULA.get(design.formula, (1,)))).sum()
+        np.isin(tags, np.asarray(printable_surface_tags(config))).sum()
     )
     if horn_triangles > STL_TRIANGLE_CEILING:
         warnings.append(
@@ -1084,6 +1085,8 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
 async def build_stl(design: DesignConfig, model_name: str = "MWG Horn") -> StlResult:
     """Build the horn surface at print resolution, sized by the export itself."""
 
+    from hornlab_mesher import printable_surface_tags
+
     # Same mesher call, same crash risk as the solve mesh: killable child.
     canonical = await run_mesh_build(
         _build_stl_mesh_sync,
@@ -1096,7 +1099,7 @@ async def build_stl(design: DesignConfig, model_name: str = "MWG Horn") -> StlRe
             canonical.get("indices", []),
             canonical.get("surfaceTags", []),
             model_name,
-            keep_tags=STL_SURFACE_TAGS_BY_FORMULA.get(design.formula, (1,)),
+            keep_tags=printable_surface_tags({"formula": design.formula}),
         ),
         warning=" ".join(warnings) or None,
     )
