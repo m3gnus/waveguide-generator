@@ -370,11 +370,7 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
                      "failed" if state == "failed" else
                      "unprepared" if state in {"unprepared", "unprovisioned", "stale", "no-julia", "julia-gone", "interrupted", "fingerprint-unavailable"} else
                      "unavailable")
-    overlay, reason = beat_cpu_runtime.runtime_preparation_status(backend)
-    if overlay == "failed" and status.get("available"):
-        # A later manual preparation can supersede an unexpected local error.
-        overlay, reason = None, None
-    runtime_state = overlay or runtime_state
+    reason = None
     preparable = runtime_state in {"unprepared", "failed"} and state not in {
         "no-device", "package-unusable", "package-too-old", "no-project", "unsupported", "identity-unavailable", "detection-failed",
     }
@@ -921,8 +917,9 @@ class EngineRegistry:
         if not self._initial_probe_task.done():
             await self._wait_for_probe(self._initial_probe_task)
         if self._cache is None:
-            return tuple(EngineInfo(name, False, "Engine detection is in progress.", None)
-                         for name in full3d_engine_order() if name != "dryrun")
+            return self._readiness_snapshot(tuple(
+                EngineInfo(name, False, "Engine detection is in progress.", None)
+                for name in full3d_engine_order() if name != "dryrun"))
         try:
             self._check_official_state()
         except Exception:  # noqa: BLE001 - a bad runtime root must not break engine selection
@@ -933,7 +930,23 @@ class EngineRegistry:
         if not initial:
             self._schedule_bempp_refresh()
         self._schedule_opencl_retry()
-        return self._cache
+        return self._readiness_snapshot()
+
+    def _readiness_snapshot(
+        self, detected: tuple[EngineInfo, ...] | None = None,
+    ) -> tuple[EngineInfo, ...]:
+        """Overlay live preparation once, without mutating the cached probe."""
+        from server.solver.beat_cpu_runtime import runtime_preparation_status
+
+        snapshot = []
+        for item in (self._cache or ()) if detected is None else detected:
+            state, reason = (runtime_preparation_status(item.name[5:])
+                             if item.name.startswith("beat-") else (None, None))
+            if state is not None and not (state == "failed" and item.available):
+                item = replace(item, runtime_state=state, reason=reason, available=False,
+                               runtime_preparable=state == "failed" and item.runtime_preparable)
+            snapshot.append(item)
+        return tuple(snapshot)
 
     async def refresh_official_readiness(self) -> None:
         """Explicit UI refresh waits for a full proof instead of a warm verdict."""
@@ -975,7 +988,7 @@ class EngineRegistry:
         self._schedule_bempp_refresh()
         if self._bempp_refresh_task is not None:
             await asyncio.shield(self._bempp_refresh_task)
-        return self._cache or capabilities
+        return self._readiness_snapshot() if self._cache is not None else capabilities
 
     def _has_bempp_timeout(self) -> bool:
         from server.solver.bempp_opencl import TRANSIENT_REASONS

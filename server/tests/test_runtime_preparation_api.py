@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from server.diagnostics.capabilities import capabilities_payload
-from server.engines.registry import _beat_engine_info
+from server.engines.registry import EngineRegistry, _beat_engine_info
 from server.engines.runtime_api import mount_runtime_preparation
 from server.solver import beat_cpu_runtime as runtime
 from server.solver.beat_runtime import hardware, readiness
@@ -50,7 +50,14 @@ def preparation(monkeypatch):
 
     class Registry:
         async def capabilities(self):
-            return tuple(_beat_engine_info(backend, record) for backend, record in records.items())
+            snapshot = EngineRegistry(
+                detector=lambda: [_beat_engine_info(backend, record) for backend, record in records.items()],
+                cpu_refresh=False,
+            )
+            try:
+                return await snapshot.capabilities()
+            finally:
+                await snapshot.shutdown_prewarm()
 
         def cpu_preparation_in_flight(self):
             return runtime.cpu_preparation_in_flight()
@@ -200,3 +207,35 @@ def test_stale_missing_or_interrupted_runtime_can_prepare(preparation, state):
     assert client.post("/api/runtimes/beat/cpu/prepare").status_code == 202
     runtime._provision_thread.join(2)
     assert rows(client)["beat-cpu"]["available"]
+
+
+def test_prepare_endpoint_revokes_cached_ready_submission_and_http(preparation):
+    """Persisted readiness changed while the registry still holds its old proof."""
+    from server.jobs.runtime import EngineUnavailableError, resolve_submission
+    from server.tests.test_engines_registry import _planner_request
+
+    client, release, entered, records, outcome, calls = preparation
+    cached = _beat_engine_info("cpu", {"available": True, "state": "ready"})
+    engines = EngineRegistry(detector=lambda: [cached], cpu_refresh=False)
+    app = FastAPI()
+
+    @app.get("/api/capabilities")
+    async def capabilities():
+        return await capabilities_payload(engines)
+
+    @app.get("/submission-plan")
+    async def plan():
+        with pytest.raises(EngineUnavailableError):
+            await resolve_submission(_planner_request(engine="beat-cpu"), engines)
+        return {"engine": await engines.resolve("auto", solver_mode="full_3d", mounting="free-standing")}
+
+    with TestClient(app) as cached_client:
+        assert rows(cached_client)["beat-cpu"]["available"]
+        # The provisioner observes today's unprepared record, not the cached proof.
+        assert not records["cpu"]["available"]
+        assert client.post("/api/runtimes/beat/cpu/prepare").status_code == 202
+        assert entered.wait(2)
+        row = rows(cached_client)["beat-cpu"]
+        assert row["available"] is False and row["runtime_state"] == "preparing"
+        assert cached_client.get("/submission-plan").json() == {"engine": None}
+        assert engines._cache == (cached,)

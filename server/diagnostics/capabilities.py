@@ -56,14 +56,6 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
             and info.opencl_unavailable_reason in TRANSIENT_REASONS
             and retry_pending()
         )
-    from server.solver.beat_cpu_runtime import runtime_preparation_status
-
-    for engine in engines:
-        if engine["name"].startswith("beat-"):
-            state, reason = runtime_preparation_status(engine["name"][5:])
-            if state is not None and not (state == "failed" and engine["available"]):
-                engine.update(runtime_state=state, reason=reason, available=False,
-                              runtime_preparable=state == "failed" and engine["runtime_preparable"])
     available = {item["name"] for item in engines if item.get("available") is True}
     # The planner's own order, asked for the same way it asks: the preference
     # puts ready BEAT CPU ahead of BEMPP on every platform. An interface

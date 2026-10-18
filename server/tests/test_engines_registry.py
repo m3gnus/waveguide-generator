@@ -1915,3 +1915,56 @@ def _runtime_rows(cpu_status):
         return {"cpu": {"available": available, "reason": reason,
                         "state": "ready" if available else "unprepared"}}
     return statuses
+
+
+@pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm"])
+def test_preparation_snapshot_agrees_with_http_and_submission(monkeypatch, backend):
+    """Preparation wins immediately, before the asynchronous probe refresh."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from server.diagnostics.capabilities import capabilities_payload
+    from server.solver import beat_cpu_runtime
+
+    name = f"beat-{backend}"
+    row = registry.EngineInfo(name, True, "Cached ready proof", "test", runtime_state="ready")
+    engines = registry.EngineRegistry(detector=lambda: [row], cpu_refresh=False)
+    app = FastAPI()
+
+    @app.get("/api/capabilities")
+    async def capabilities():
+        return await capabilities_payload(engines)
+
+    @app.get("/submission-plan")
+    async def submission_plan():
+        with pytest.raises(EngineUnavailableError):
+            await resolve_submission(_planner_request(engine=name), engines)
+        return {"engine": await engines.resolve(name, solver_mode="full_3d", mounting="free-standing"),
+                "rows": [item.available for item in await engines.wait_for_bempp()]}
+
+    with TestClient(app) as client:
+        assert client.get("/api/capabilities").json()["engines"][0]["available"]
+        with beat_cpu_runtime._provision_lock:
+            monkeypatch.setattr(beat_cpu_runtime, "_preparation_in_flight", True)
+            monkeypatch.setattr(beat_cpu_runtime, "_requested_backend", backend)
+        published = client.get("/api/capabilities").json()["engines"][0]
+        assert published["runtime_state"] == "preparing"
+        assert published["available"] is False
+        assert client.get("/submission-plan").json() == {"engine": None, "rows": [False]}
+        assert engines._cache == (row,)
+        with beat_cpu_runtime._provision_lock:
+            monkeypatch.setattr(beat_cpu_runtime, "_preparation_in_flight", False)
+        assert client.get("/api/capabilities").json()["engines"][0]["available"]
+
+
+def test_preparation_overlays_initial_detection_placeholder(monkeypatch):
+    from server.solver import beat_cpu_runtime
+
+    engines = registry.EngineRegistry(detector=lambda: [], cpu_refresh=False)
+    engines._initial_probe_task = SimpleNamespace(done=lambda: True)
+    monkeypatch.setattr(engines, "_start_detection", lambda: None)
+    monkeypatch.setattr(beat_cpu_runtime, "runtime_preparation_status", lambda backend:
+                        ("preparing", "Preparing CPU") if backend == "cpu" else (None, None))
+    rows = {row.name: row for row in asyncio.run(engines.capabilities())}
+    assert rows["beat-cpu"].runtime_state == "preparing"
+    assert rows["beat-cpu"].reason == "Preparing CPU"
+    assert rows["beat-cpu"].available is False
