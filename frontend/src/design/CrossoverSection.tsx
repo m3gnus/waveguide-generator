@@ -290,7 +290,8 @@ function LiveNote({ shown, live, busy, error, members, outside }: {
         cad.setSweep(outside < start ? { frequencyStartHz: outside } : { frequencyEndHz: outside });
         useImportedSolveOptionsStore.getState().setFrequencyMode('range');
         const design = useDesignStore.getState();
-        void jobsCoordinatorBridge.getSnapshot().run(design.design, design.designRevision);
+        // The coordinator reports a refused or failed submission itself.
+        void jobsCoordinatorBridge.getSnapshot().run(design.design, design.designRevision).catch(() => undefined);
       }}>Re-solve with sweep {outside < start ? 'from' : 'to'} {outside} Hz</button>
     </p>;
   }
