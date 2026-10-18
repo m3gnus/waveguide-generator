@@ -84,7 +84,9 @@ class StaleWriteError(SettingsError):
 
 
 def valid_namespace(name: str) -> bool:
-    return bool(NAMESPACE_PATTERN.match(name))
+    return bool(NAMESPACE_PATTERN.fullmatch(name)) or bool(
+        re.fullmatch(r"cadSetupDraft_[A-Za-z0-9_-]{1,4096}", name)
+    )
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:

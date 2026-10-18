@@ -112,7 +112,7 @@ export interface ImportedViewOpen {
 }
 export interface ImportedView {
   /** An unsolved model can still have an editable durable draft. */
-  hasDraft?(modelId: string): boolean;
+  hasDraft?(modelId: string, fetcher: typeof fetch): Promise<boolean>;
   begin(context: { generation: number; source: ImportedSource; display: ImportedDisplay; fetcher: typeof fetch }): ImportedViewOpen;
 }
 
@@ -312,7 +312,7 @@ export async function reopenLastModel(fetcher: typeof fetch = fetch, options: Re
     if (!read.latest_prepared) { clearLastModel(pointer); return false; }
     // The CAD view shows a model by its stored setup; one never solved has none.
     if (pointer.input === 'cad' && !(await readImportedSetup(pointer.model_id, read.latest_prepared.ingest_id, reachable)).setup
-      && !views.cad?.hasDraft?.(pointer.model_id)) {
+      && !await views.cad?.hasDraft?.(pointer.model_id, reachable)) {
       if (!stillEmpty() || !options.openUnsolved) return false;
       const shown = await options.openUnsolved(pointer, read.latest_prepared);
       if (shown) rememberLastModel(pointer);

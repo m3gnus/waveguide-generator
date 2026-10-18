@@ -200,6 +200,14 @@ describe('CadLinkPanel', () => {
     expect(host.textContent).not.toContain('Loading model settings…');
   });
 
+  it('explains which settings Fusion uses while the rail contains an incomplete draft', async () => {
+    await renderAndSelect(); await clickIngest();
+    act(() => useCadReturnStore.getState().setChannelDriverField('drive-hf', 'sd_cm2', 42));
+    expect(host.textContent).toContain('Fusion solves use the last complete setup.');
+    act(() => useCadReturnStore.getState().setChannelDriverField('drive-hf', 'sd_cm2', null));
+    expect(host.textContent).not.toContain('Fusion solves use the last complete setup.');
+  });
+
   it('lists a blocking finding for understanding without gating the solve', async () => {
     await renderAndSelect();
     await clickIngest();

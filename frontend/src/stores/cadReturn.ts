@@ -13,8 +13,8 @@ import {
   type CrossoverWire,
   type FilterFamily,
 } from '../results/crossoverSpec';
-import { useDocumentStore } from './document';
-import type { CadSourceInventoryEntry as SourceInventoryEntry } from '../api/cadOperations';import { seedImportedSolveOptionsFromParametric } from './solveOptions';
+import type { CadSourceInventoryEntry as SourceInventoryEntry } from '../api/cadOperations';
+import { seedImportedSolveOptionsFromParametric } from './solveOptions';
 import { loadCadProjectSettings, resetCadProjectSettingsLoad } from './cadProjectSettings';
 import { discardParkedCadModel, endOpenedSetup, openImported } from './importedModel';
 import { workspaceModeStore } from './workspaceMode';
@@ -371,8 +371,6 @@ function compatibleSourceInventory(previous: SourceInventoryCarrier, next: Sourc
 function resolvedProjectLineage(state: CadReturnState, bundle: CadReturnBundle | null, projectLineageId?: string | null): string | null {
   if (projectLineageId !== undefined) return projectLineageId;
   if (bundle?.projectLineageId !== undefined) return bundle.projectLineageId;
-  const document = useDocumentStore.getState().identity;
-  if (document && bundle?.designIds?.includes(document.designId)) return document.lineageId;
   const previous = state.selectedBundle;
   const same = previous && bundle && (previous.documentNativeId && bundle.documentNativeId
     ? previous.documentNativeId === bundle.documentNativeId : previous.bundlePath === bundle.bundlePath);

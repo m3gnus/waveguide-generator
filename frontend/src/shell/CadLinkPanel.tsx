@@ -1,4 +1,4 @@
-import { useCadFeedbackError } from './cadSetupPublisher';
+import { buildCadProjectSetup, useCadFeedbackError } from './cadSetupPublisher';
 import { ExperimentalBadge } from '../design/ExperimentalBadge';
 import { useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useEffect } from 'react';
@@ -871,6 +871,7 @@ export function CadLinkPanel() {
         The round trip still works for building and exporting geometry, and the
         parametric workspace still solves here.
       </div>}
+      {bundle && !state.setupLoading && !buildCadProjectSetup(state, undefined, undefined, state.projectLineageId ?? 'unclaimed') && <p className="cad-detail" role="status">Fusion solves use the last complete setup.</p>}
       {state.setupLoading && <div className="cad-alert cad-alert-notice" role="status">Loading model settings…</div>}
       {state.ingestStaleReason && <div className="cad-alert cad-alert-notice" role="status">{state.ingestStaleReason} Prepare the model again before solving.</div>}
       {viewportNotice && <div className="cad-alert cad-alert-notice" role="status">{viewportNotice}</div>}

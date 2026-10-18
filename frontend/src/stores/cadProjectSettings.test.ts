@@ -10,7 +10,8 @@ import { resetImportedModelStore, openImported, reopenLastModel, unchangedSetup 
 import { createCadArrivalActions } from '../shell/cadlink/arrivals';
 import { driverValues, channelDriverWire } from './cadReturn';
 import { resetDocumentStore, useDocumentStore } from './document';
-import { DurableSettings, durableSettings } from './durableSettings';
+import { DurableSettings, cadDraftNamespace, durableSettings } from './durableSettings';
+import { importedMeshStore } from '../viewport/importedMeshStore';
 import { workspaceModeStore } from './workspaceMode';
 import { cadDraftKey, retainCadDraft, waitForCadProjectSettings, observeCadDraftHydration } from './cadProjectSettings';
 
@@ -28,7 +29,7 @@ const saved = { ...workspaceFor().setup.content,
 function server(setup: unknown = saved) {
   return vi.fn<typeof fetch>(async input => {
     const path = String(input);
-    if (path.includes('/setup')) return json({ setup, revision_id: 'wgs_saved' });
+    if (path.includes('/setup')) return json({ setup, revision_id: setup ? 'wgs_saved' : null, cad_claimed: true });
     if (path === `/api/models/${model}`) return json({ model: workspaceFor().model,
       latest_prepared: workspaceFor().prepared, original_available: false });
     if (path.endsWith('/viewport-mesh')) return new Response(mesh);
@@ -66,14 +67,14 @@ it('persists an incomplete driver immediately, restores it over the last valid s
   const stop = publisher({ fetcher, debounceMs: 1 });
   useCadReturnStore.getState().setChannelDriverField('archive-hf', 'sd_cm2', 42);
   expect(buildCadProjectSetup()).toBeNull();
-  expect(durableSettings.get('cadSetupDrafts')).toContain('42');
+  expect(durableSettings.get(cadDraftNamespace(model))).toContain('42');
   stop(); resetCadReturnStore(); resetSolveOptionsStore();
   useCadReturnStore.getState().selectBundle(bundle, model); await waitForCadProjectSettings();
   expect(useCadReturnStore.getState().channelDrivers['archive-hf'].fields).toEqual({ sd_cm2: 42 });
   expect(buildCadProjectSetup()).toBeNull();
   const again = publisher({ fetcher, debounceMs: 1 });
   useCadReturnStore.getState().setChannelDriverField('archive-hf', 'sd_cm2', null);
-  await vi.waitFor(() => expect(durableSettings.get('cadSetupDrafts')).toBeNull());
+  await vi.waitFor(() => expect(durableSettings.get(cadDraftNamespace(model))).toBeNull());
   again();
 });
 
@@ -97,7 +98,7 @@ it('keeps an incomplete successor when an older valid publish acknowledges', asy
   await vi.waitFor(() => expect(writer.mock.calls.some(([input]) => String(input).endsWith('/setup'))).toBe(true));
   useCadReturnStore.getState().setChannelDriverField('archive-hf', 'sd_cm2', 51);
   ack.resolve(json({})); await Promise.resolve(); await Promise.resolve();
-  expect(durableSettings.get('cadSetupDrafts')).toContain('51'); stop();
+  expect(durableSettings.get(cadDraftNamespace(model))).toContain('51'); stop();
 });
 
 function profile(version = 4) {
@@ -107,7 +108,7 @@ function profile(version = 4) {
     'drive-hf': { preset: null, fields: { sd_cm2: 42, bl_t_m: 7, re_ohm: 6, mms_g: 20, cms_m_per_n: .001 } },
   } });
   const snapshot = JSON.parse(retainCadDraft()!.raw).settings;
-  durableSettings.set('cadSetupDrafts', null);
+  durableSettings.set(cadDraftNamespace(model), null);
   if (version < 3) Object.assign(snapshot, { combineCrossoversHz: {}, combineAlign: null, combineLevelMatch: null });
   if (version === 1) snapshot.combineEnabled = false;
   return { version, profiles: [{ key: JSON.stringify([`cad:${model}`, sourceInventorySignature(bundle)]),
@@ -121,8 +122,8 @@ it.each([1, 2, 3, 4])('migrates a v%i profile once into the publisher draft when
   useCadReturnStore.getState().selectBundle(bundle, model); await waitForCadProjectSettings();
   expect(useCadReturnStore.getState().driveVoltageV).toBe(9);
   expect(useImportedSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-cpu', accuracy: 'accurate' });
-  expect(durableSettings.get('cadSolveProfiles')).toBeNull();
-  expect(JSON.parse(durableSettings.get('cadSetupDrafts')!)[key].legacy).toBe(true);
+  await vi.waitFor(() => expect(durableSettings.get('cadSolveProfiles')).toBeNull());
+  expect(JSON.parse(durableSettings.get(cadDraftNamespace(model))!)[key].legacy).toBe(true);
 });
 
 it('lets an existing server setup win over a v4 profile and drops the legacy key', async () => {
@@ -130,8 +131,8 @@ it('lets an existing server setup win over a v4 profile and drops the legacy key
   durableSettings.set('cadSolveProfiles', JSON.stringify(profile())); resetCadReturnStore();
   useCadReturnStore.getState().selectBundle(bundle, model); await waitForCadProjectSettings();
   expect(useCadReturnStore.getState().driveVoltageV).toBe(8);
-  expect(durableSettings.get('cadSolveProfiles')).toBeNull();
-  expect(durableSettings.get('cadSetupDrafts')).toBeNull();
+  await vi.waitFor(() => expect(durableSettings.get('cadSolveProfiles')).toBeNull());
+  expect(durableSettings.get(cadDraftNamespace(model))).toBeNull();
 });
 
 it('publishes a migrated v4 profile through the publisher and deletes its draft', async () => {
@@ -139,7 +140,7 @@ it('publishes a migrated v4 profile through the publisher and deletes its draft'
   durableSettings.set('cadSolveProfiles', JSON.stringify(profile())); resetCadReturnStore();
   const stop = publisher({ fetcher, debounceMs: 1 });
   useCadReturnStore.getState().selectBundle(bundle, model); await waitForCadProjectSettings();
-  await vi.waitFor(() => expect(durableSettings.get('cadSetupDrafts')).toBeNull());
+  await vi.waitFor(() => expect(durableSettings.get(cadDraftNamespace(model))).toBeNull());
   const put = fetcher.mock.calls.find(([input, init]) => String(input).endsWith('/setup') && init?.method === 'PUT')!;
   expect(JSON.parse(String(put[1]!.body)).setup.geometry.drive_voltage_v).toBe(9);
   stop();
@@ -153,7 +154,7 @@ it('never applies another inventory or model draft', async () => {
     useCadReturnStore.getState().selectBundle(next, id); await waitForCadProjectSettings();
     expect(useCadReturnStore.getState().driveVoltageV).toBe(2.83);
   }
-  expect(durableSettings.get('cadSetupDrafts')).toContain('9');
+  expect(durableSettings.get(cadDraftNamespace(model))).toContain('9');
 });
 
 it('fences delayed reads by selection and edits', async () => {
@@ -189,7 +190,7 @@ it('holds edits during a setup read and applies them over the fetched baseline b
   pending.resolve(json({ setup })); await waitForCadProjectSettings();
   expect(useCadReturnStore.getState()).toMatchObject({ driveVoltageV: 7, rigidSizeMm: 12, setupLoading: false });
   expect(useImportedSolveOptionsStore.getState().polar.distance).toBe(saved.options.polar_config.distance);
-  await vi.waitFor(() => expect(durableSettings.get('cadSetupDrafts')).toBeNull());
+  await vi.waitFor(() => expect(durableSettings.get(cadDraftNamespace(model))).toBeNull());
   const put = fetcher.mock.calls.find(([input, init]) => String(input).endsWith('/setup') && init?.method === 'PUT')!;
   expect(JSON.parse(String(put[1]!.body)).setup.geometry).toMatchObject({ drive_voltage_v: 7, mesh: { rigid_size_mm: 12 },
     drive_channels: [{ driver: { re_ohm: 7 } }] });
@@ -220,7 +221,7 @@ it('adopts a draft that hydrates after the model has opened', async () => {
   const fetcher = server(); vi.stubGlobal('fetch', fetcher);
   useCadReturnStore.getState().selectBundle(bundle, model); await waitForCadProjectSettings();
   useCadReturnStore.getState().setChannelDriverField('archive-hf', 'sd_cm2', 55); retainCadDraft();
-  const draft = durableSettings.get('cadSetupDrafts')!;
+  const draft = durableSettings.get(cadDraftNamespace(model))!;
   localStorage.clear(); resetCadReturnStore();
   const remote = deferred<Response>();
   const settings = new DurableSettings({ storage: localStorage, fetcher: () => remote.promise });
@@ -228,7 +229,7 @@ it('adopts a draft that hydrates after the model has opened', async () => {
   const hydrate = settings.hydrate({ timeoutMs: 1 }); await hydrate;
   useCadReturnStore.getState().selectBundle(bundle, model); await waitForCadProjectSettings();
   expect(buildCadProjectSetup()).not.toBeNull();
-  remote.resolve(json({ namespaces: { cadSetupDrafts: draft } }));
+  remote.resolve(json({ namespaces: { [cadDraftNamespace(model)]: draft } }));
   await vi.waitFor(() => expect(useCadReturnStore.getState().channelDrivers['archive-hf']?.fields.sd_cm2).toBe(55));
   expect(buildCadProjectSetup()).toBeNull(); stop();
 });
@@ -288,4 +289,130 @@ it('reopens an unsolved model’s incomplete draft without requiring its origina
   expect(useCadReturnStore.getState().channelDrivers['drive-hf'].fields.sd_cm2).toBe(66);
   expect(buildCadProjectSetup()).toBeNull();
   expect(unchangedSetup('cad', record.ingest_id)).toBeNull();
+});
+
+it.each(['read failure', 'missing ingest', 'file supersedes'])('releases a pending return setup read when a model open ends with %s', async outcome => {
+  const old = deferred<Response>();
+  useCadReturnStore.getState().selectBundle(bundle, model, false, () => old.promise);
+  await vi.waitFor(() => expect(useCadReturnStore.getState().setupLoading).toBe(true));
+  const newer = deferred<Response>();
+  const base = server();
+  const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+    if (String(input) === `/api/models/${model}`) {
+      if (outcome === 'read failure') throw new Error('read failed');
+      if (outcome === 'file supersedes') return newer.promise;
+    }
+    if (outcome === 'missing ingest' && String(input).includes('/ingest/')) return new Response('{}', { status: 404 });
+    return base(input, init);
+  });
+  const opened = openImported({ kind: 'model', modelId: model }, fetcher);
+  if (outcome === 'file supersedes') {
+    importedMeshStore.beginIntent();
+    workspaceModeStore.setImportedInput('file');
+    await openImported({ kind: 'file', prepared: null }, fetcher);
+    newer.resolve(json({ model: workspaceFor().model, latest_prepared: workspaceFor().prepared }));
+    expect(await opened).toBe(false);
+  } else await expect(opened).rejects.toThrow();
+  expect(useCadReturnStore.getState().setupLoading).toBe(false);
+  old.resolve(json({ setup: saved, revision_id: 'old' }));
+  await Promise.resolve(); await Promise.resolve();
+  workspaceModeStore.setImportedInput('cad');
+  useCadReturnStore.getState().setDriveVoltage(6);
+  expect(useCadReturnStore.getState().driveVoltageV).toBe(6);
+  expect(useCadReturnStore.getState().setupLoading).toBe(false);
+});
+
+it('discards a failed publication draft when a newer server revision exists, without publishing it', async () => {
+  const initial = server(); vi.stubGlobal('fetch', initial);
+  useCadReturnStore.getState().selectBundle(bundle, model); await waitForCadProjectSettings();
+  const failed = vi.fn<typeof fetch>(async () => { throw new Error('offline'); });
+  const stop = publisher({ fetcher: failed, debounceMs: 1, retryDelaysMs: [] });
+  useCadReturnStore.getState().setDriveVoltage(7);
+  await vi.waitFor(() => expect(failed).toHaveBeenCalled()); stop();
+  expect(JSON.parse(durableSettings.get(cadDraftNamespace(model))!)[key].baseRevisionId).toBe('wgs_saved');
+  resetCadReturnStore();
+  const newer = vi.fn<typeof fetch>(async (input, init) => String(input).includes('/setup') && init?.method !== 'PUT'
+    ? json({ setup: saved, revision_id: 'wgs_newer' }) : initial(input, init));
+  vi.stubGlobal('fetch', newer);
+  const again = publisher({ fetcher: newer, debounceMs: 1 });
+  useCadReturnStore.getState().selectBundle(bundle, model); await waitForCadProjectSettings();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(useCadReturnStore.getState().driveVoltageV).toBe(8);
+  expect(durableSettings.get(cadDraftNamespace(model))).toBeNull();
+  expect(newer.mock.calls.filter(([input, init]) => String(input).includes('/setup') && init?.method === 'PUT')).toHaveLength(0);
+  again();
+});
+
+it('drops a design-owned profile whose recorded lineage was never claimed by CAD', async () => {
+  const legacy = profile(3);
+  legacy.profiles[0].lineageId = 'wgl_unrelated_design';
+  durableSettings.set('cadSolveProfiles', JSON.stringify(legacy)); resetCadReturnStore();
+  const fetcher = vi.fn<typeof fetch>(async input => json({ setup: null, cad_claimed: !String(input).includes('wgl_unrelated_design') }));
+  vi.stubGlobal('fetch', fetcher);
+  useCadReturnStore.getState().selectBundle(bundle, 'wgl_unrelated_design'); await waitForCadProjectSettings();
+  expect(useCadReturnStore.getState().driveVoltageV).toBe(2.83);
+  expect(durableSettings.get(cadDraftNamespace('wgl_unrelated_design'))).toBeNull();
+});
+
+it('skips malformed legacy entries and retains the source until migrated drafts upload', async () => {
+  const legacy = profile();
+  durableSettings.set('cadSolveProfiles', JSON.stringify({ ...legacy, profiles: [null, { bad: true }, ...legacy.profiles] }));
+  resetCadReturnStore();
+  const upload = deferred<Response>();
+  const base = server(null);
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => String(input).startsWith('/api/settings/cadSetupDraft_') ? upload.promise : base(input, init)));
+  useCadReturnStore.getState().selectBundle(bundle, model); await waitForCadProjectSettings();
+  expect(useCadReturnStore.getState().driveVoltageV).toBe(9);
+  expect(durableSettings.get('cadSolveProfiles')).not.toBeNull();
+  upload.resolve(json({}));
+  await vi.waitFor(() => expect(durableSettings.get('cadSolveProfiles')).toBeNull());
+});
+
+it('journals and restores edits before a new CAD document is claimed, then transfers them to its model', async () => {
+  vi.stubGlobal('fetch', server(null));
+  useCadReturnStore.getState().selectBundle(bundle, null); await waitForCadProjectSettings();
+  useCadReturnStore.getState().setDriveVoltage(6); retainCadDraft();
+  resetCadReturnStore();
+  useCadReturnStore.getState().selectBundle(bundle, null); await waitForCadProjectSettings();
+  expect(useCadReturnStore.getState().driveVoltageV).toBe(6);
+  const before = durableSettings.draftNamespaces();
+  useCadReturnStore.getState().applyIngest({ ...record, project: { ...record.project!, lineage_id: model } }, useCadReturnStore.getState().beginIngestIntent());
+  await waitForCadProjectSettings();
+  expect(useCadReturnStore.getState().driveVoltageV).toBe(6);
+  expect(durableSettings.get(cadDraftNamespace(model))).toContain('6');
+  expect(before.every(namespace => durableSettings.get(namespace) === null)).toBe(true);
+});
+
+it('bounds the journal to the most recent 20 drafts', async () => {
+  vi.stubGlobal('fetch', server(null));
+  for (let i = 0; i < 22; i += 1) {
+    vi.spyOn(Date, 'now').mockReturnValue(i + 1);
+    useCadReturnStore.getState().selectBundle(bundle, `wgl_${i}`); await waitForCadProjectSettings();
+    retainCadDraft();
+  }
+  expect(durableSettings.draftNamespaces()).toHaveLength(20);
+  expect(durableSettings.get(cadDraftNamespace('wgl_0'))).toBeNull();
+  expect(durableSettings.get(cadDraftNamespace('wgl_21'))).not.toBeNull();
+  vi.restoreAllMocks();
+});
+
+it('advances an incomplete draft through multiple queued successful predecessors', async () => {
+  vi.stubGlobal('fetch', server());
+  useCadReturnStore.getState().selectBundle(bundle, model); await waitForCadProjectSettings();
+  const a = deferred<Response>(); const b = deferred<Response>(); let count = 0;
+  const writer = vi.fn<typeof fetch>(async input => String(input).endsWith('/setup') ? (++count === 1 ? a.promise : b.promise) : json({}));
+  const stop = publisher({ fetcher: writer, debounceMs: 1 });
+  useCadReturnStore.getState().setDriveVoltage(5);
+  await vi.waitFor(() => expect(count).toBe(1));
+  useCadReturnStore.getState().setDriveVoltage(6);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  useCadReturnStore.getState().setChannelDriverField('archive-hf', 'sd_cm2', 51);
+  a.resolve(json({ revision_id: 'wgs_a' }));
+  await vi.waitFor(() => expect(count).toBe(2));
+  b.resolve(json({ revision_id: 'wgs_b' }));
+  await vi.waitFor(() => expect(JSON.parse(durableSettings.get(cadDraftNamespace(model))!)[key].baseRevisionId).toBe('wgs_b'));
+  stop(); resetCadReturnStore();
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => json({ setup: saved, revision_id: 'wgs_b' })));
+  useCadReturnStore.getState().selectBundle(bundle, model); await waitForCadProjectSettings();
+  expect(useCadReturnStore.getState().channelDrivers['archive-hf'].fields.sd_cm2).toBe(51);
 });

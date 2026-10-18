@@ -1,3 +1,4 @@
+import { cadDraftNamespace, durableSettings } from '../../stores/durableSettings';
 import { importedSubmissionBlocker, buildImportedSubmission } from '../../jobs/importedSubmission';
 import { buildCadProjectSetup } from '../cadSetupPublisher';
 import { cadSolveBlockerNow } from '../JobsCoordinator';
@@ -353,11 +354,11 @@ it('an archive restore leaves the project draft intact', async () => {
   const state = useCadReturnStore.getState(); state.selectBundle(bundle, 'wgl_project');
   await waitForCadProjectSettings();
   state.setDriveVoltage(5); retainCadDraft();
-  const profile = localStorage.getItem('wg2.cad.setup.drafts.v1');
+  const profile = durableSettings.get(cadDraftNamespace('wgl_project'));
   expect(profile).not.toBeNull();
   expect(await restoreCadJobModel(job(), {}, archiveFetcher)).toBe(true);
   expect(useCadReturnStore.getState().driveVoltageV).toBe(8);
-  expect(localStorage.getItem('wg2.cad.setup.drafts.v1')).toBe(profile);
+  expect(durableSettings.get(cadDraftNamespace('wgl_project'))).toBe(profile);
   resetCadReturnStore(); useCadReturnStore.getState().selectBundle(bundle, 'wgl_project');
   await waitForCadProjectSettings();
   expect(useCadReturnStore.getState().driveVoltageV).toBe(5);

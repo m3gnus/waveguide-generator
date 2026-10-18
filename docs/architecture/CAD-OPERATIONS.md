@@ -360,22 +360,35 @@ using Fusion's project lookup; the open parametric design is never a fallback ow
 Before preparation, `GET /api/models/{lineage}/setup?inventory=<JSON>` uses the same
 inventory key as the retained-mesh read with `prepared_id`.
 
-The rail is an in-memory draft. `cadSetupPublisher` journals user edits in durable
-settings `cadSetupDrafts`, keyed by model and inventory, including incomplete driver,
-polar, and preparation edits. Only a successful valid setup publication clears the
-matching journal; an older acknowledgement cannot clear a newer edit. This reuses
-the existing durable settings transport instead of introducing another database field
-or API writer. A failed publication resumes from its journal when the model opens.
-Controls edited during a setup read apply after its baseline arrives. Late settings
-hydration restores an unedited model's draft too. Archived runs retain their immutable
-revision and never overlay the current model draft.
+The rail is an in-memory draft. `cadSetupPublisher` journals user edits in separate
+`cadSetupDraft_<encoded-model>` durable settings namespaces, with inventory keys,
+including incomplete driver, polar, and preparation edits. Each draft records its
+base setup revision. Reopening discards a draft if the server revision has changed;
+otherwise a failed publication resumes through the publisher. A successful valid
+publication clears only its matching journal, and advances a newer edit's base.
+The journal retains the most recent 20 drafts. Before the first preparation claims
+a model, the returned document's native id (or bundle path) owns the journal; claiming
+it transfers that draft only if the model has no saved setup. The open design never
+supplies the CAD owner. The rail explains that Fusion solves use the last complete
+setup when the visible settings are incomplete.
 
-The old v1–v4 `cadSolveProfiles` namespace migrates once into the draft journal and is
-deleted. Legacy drafts apply only if that model has no server setup for the inventory;
-valid ones publish through the same publisher. Versions 1–3 only recorded a design
-lineage, sometimes the unrelated design open when a CAD-only project was edited.
-Those entries retain their recorded lineage; there is no provenance for safely
-assigning them to a different CAD document. New profiles and MRU lists are not written.
+Controls edited during a setup read apply after its baseline arrives. Superseding
+or stopping that read clears its loading gate. Late settings hydration restores an
+unedited model's draft too. Archived runs retain their immutable revision and never
+overlay the current model draft. Pagehide sends the newest pending or queued setup
+immediately with keepalive, even when an older write is in flight. Per-window setup
+write sequences prevent an older request from overwriting that successor. Clients
+without ordering headers retain their existing write behavior.
+
+The old v1–v4 `cadSolveProfiles` namespace migrates once into the draft journal.
+Malformed entries are skipped individually. Legacy drafts apply only if that model
+has no server setup for the inventory; valid ones publish through the same publisher.
+Versions 1–3 migrate only when the server proves their recorded lineage is claimed
+in `lineage_cad_names`; otherwise they are dropped. Separate settings namespace
+writes cannot share one atomic upload, so migrated draft destinations are uploaded
+successfully before the legacy namespace is deleted. A failed upload retains the
+source for retry. The initial shared K3 journal is retired too: entries without a
+base revision cannot safely overlay a saved setup. New profiles are not written.
 
 A solve Fusion sends for project B is prepared from B's own setup, while the editor keeps
 whatever project is open. Nothing on the backend reads the live UI:

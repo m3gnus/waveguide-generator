@@ -358,3 +358,12 @@ def test_driver_library_namespace_round_trips(tmp_path: Path) -> None:
         "deleted": [],
     }
     assert store_for(tmp_path).get("driverLibrary") == payload
+
+
+def test_model_draft_namespaces_support_encoded_unclaimed_document_ids(tmp_path: Path) -> None:
+    store = store_for(tmp_path)
+    namespace = "cadSetupDraft_" + "a" * 300
+    store.put(namespace, "draft")
+    assert store_for(tmp_path).get(namespace) == "draft"
+    with pytest.raises(SettingsError):
+        store.put("cadSetupDraft_../escape", "draft")

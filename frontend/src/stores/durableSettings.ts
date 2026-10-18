@@ -58,7 +58,16 @@ export const SETTINGS_NAMESPACES = {
   sourceAssemblyDraft: 'wg2.source-assembly-draft.v1',
 } as const;
 
-export type SettingsNamespace = keyof typeof SETTINGS_NAMESPACES;
+export type SettingsNamespace = keyof typeof SETTINGS_NAMESPACES | `cadSetupDraft_${string}`;
+const DRAFT_PREFIX = 'cadSetupDraft_';
+function storageKey(namespace: SettingsNamespace): string {
+  return namespace.startsWith(DRAFT_PREFIX) ? `wg2.${namespace}` : SETTINGS_NAMESPACES[namespace as keyof typeof SETTINGS_NAMESPACES];
+}
+/** A separate server key per model prevents cross-window read/modify/write loss. */
+export function cadDraftNamespace(model: string): SettingsNamespace {
+  const bytes = new TextEncoder().encode(model);
+  return `cadSetupDraft_${btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')}`;
+}
 
 /** The design draft changes on every edit; the rest change when a user acts. */
 const WRITE_DELAY_MS: Partial<Record<SettingsNamespace, number>> = { designDraft: 1_500 };
@@ -137,9 +146,33 @@ export class DurableSettings {
   get(namespace: SettingsNamespace): string | null {
     if (this.failedCacheWrites.has(namespace)) return this.memory.get(namespace) ?? null;
     try {
-      if (this.storage) return this.storage.getItem(SETTINGS_NAMESPACES[namespace]);
+      if (this.storage) return this.storage.getItem(storageKey(namespace));
     } catch { /* fall through to the in-memory copy */ }
     return this.memory.get(namespace) ?? null;
+  }
+
+  /** Known per-model keys from hydration, cache, or edits in this page. */
+  draftNamespaces(): SettingsNamespace[] {
+    const names = new Set<SettingsNamespace>([...this.memory.keys()].filter(name => name.startsWith(DRAFT_PREFIX)));
+    try {
+      for (let i = 0; this.storage && i < this.storage.length; i += 1) {
+        const key = this.storage.key(i);
+        if (key?.startsWith(`wg2.${DRAFT_PREFIX}`) && !key.endsWith(LOCAL_NEWER_SUFFIX)) names.add(key.slice(4) as SettingsNamespace);
+      }
+    } catch { /* memory remains available */ }
+    return [...names].filter(name => this.get(name) !== null);
+  }
+
+  /** Persist destinations before deleting a migration source. Failure retains it for retry. */
+  async retireAfterUpload(source: SettingsNamespace, destinations: SettingsNamespace[], raw: string): Promise<void> {
+    for (const namespace of destinations) {
+      const timer = this.timers.get(namespace);
+      if (timer !== undefined) clearTimeout(timer);
+      this.timers.delete(namespace);
+      await this.upload(namespace, false);
+      if (this.isLocalNewer(namespace)) return;
+    }
+    if (this.get(source) === raw) this.set(source, null);
   }
 
   /** Record a change locally, then push it to the server in the background. */
@@ -166,7 +199,7 @@ export class DurableSettings {
     // is still applied when it lands, so a sluggish backend costs a moment of
     // cached settings rather than a whole session of them.
     const cachedAtRequest = new Map<SettingsNamespace, string | null>();
-    for (const namespace of Object.keys(SETTINGS_NAMESPACES) as SettingsNamespace[]) {
+    for (const namespace of [...Object.keys(SETTINGS_NAMESPACES) as SettingsNamespace[], ...this.draftNamespaces()]) {
       cachedAtRequest.set(namespace, this.get(namespace));
     }
     const request = (async () => {
@@ -196,7 +229,8 @@ export class DurableSettings {
       (Array.isArray(envelope?.deleted) ? envelope.deleted : [])
         .filter((name): name is string => typeof name === 'string'),
     );
-    for (const namespace of Object.keys(SETTINGS_NAMESPACES) as SettingsNamespace[]) {
+    const names = new Set<SettingsNamespace>([...cachedAtRequest.keys(), ...Object.keys(stored).filter(name => name.startsWith(DRAFT_PREFIX)) as SettingsNamespace[], ...[...deleted].filter(name => name.startsWith(DRAFT_PREFIX)) as SettingsNamespace[]]);
+    for (const namespace of names) {
       const local = this.get(namespace);
       // A prior publish failed or has not completed. This marker is stored next
       // to the cache so it survives a restart: an older server answer may not
@@ -209,7 +243,7 @@ export class DurableSettings {
       // The request describes the server state from before any edits made
       // while it was in flight. A diverged cache is therefore newer and must
       // neither be overwritten nor reported to subscribers as server state.
-      if (local !== cachedAtRequest.get(namespace)) continue;
+      if (local !== (cachedAtRequest.get(namespace) ?? null)) continue;
       const remote = stored[namespace];
       if (typeof remote === 'string') {
         if (remote === local) continue;
@@ -241,8 +275,8 @@ export class DurableSettings {
   private writeCache(namespace: SettingsNamespace, raw: string | null): void {
     this.memory.set(namespace, raw);
     try {
-      if (raw === null) this.storage?.removeItem(SETTINGS_NAMESPACES[namespace]);
-      else this.storage?.setItem(SETTINGS_NAMESPACES[namespace], raw);
+      if (raw === null) this.storage?.removeItem(storageKey(namespace));
+      else this.storage?.setItem(storageKey(namespace), raw);
       this.failedCacheWrites.delete(namespace);
     } catch {
       // Readable storage can still reject writes (for example at quota). Its
@@ -252,13 +286,14 @@ export class DurableSettings {
   }
 
   private notify(namespace: SettingsNamespace, raw: string | null): void {
-    for (const listener of this.listeners.get(namespace) ?? []) {
+    const listeners = [...this.listeners.get(namespace) ?? [], ...(namespace.startsWith(DRAFT_PREFIX) ? this.listeners.get('cadSetupDrafts') ?? [] : [])];
+    for (const listener of listeners) {
       try { listener(raw); } catch { /* one bad subscriber must not stop the rest */ }
     }
   }
 
   private localNewerKey(namespace: SettingsNamespace): string {
-    return `${SETTINGS_NAMESPACES[namespace]}${LOCAL_NEWER_SUFFIX}`;
+    return `${storageKey(namespace)}${LOCAL_NEWER_SUFFIX}`;
   }
 
   private isLocalNewer(namespace: SettingsNamespace): boolean {
@@ -305,7 +340,7 @@ export class DurableSettings {
       const sequence = ++this.writeSequence;
       this.outstanding.set(namespace, (this.outstanding.get(namespace) ?? 0) + 1);
       try {
-        const response = await this.fetcher(`/api/settings/${namespace}`, {
+        const response = await this.fetcher(`/api/settings/${encodeURIComponent(namespace)}`, {
           method: raw === null ? 'DELETE' : 'PUT',
           headers: {
             'Content-Type': 'application/json',

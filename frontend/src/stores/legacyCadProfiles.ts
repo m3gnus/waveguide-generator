@@ -308,6 +308,7 @@ export function readLegacySolveProfiles(): StoredSolveProfile[] {
     for (const value of parsed.profiles) {
       // A migrated entry is re-keyed rather than re-validated against the key
       // its own version wrote: the owner is the thing that changed.
+      if (!isObject(value)) continue;
       const owner = designOwned
         ? (typeof value.designId === 'string' && value.designId
           && typeof value.lineageId === 'string' && value.lineageId
@@ -315,19 +316,16 @@ export function readLegacySolveProfiles(): StoredSolveProfile[] {
           : null)
         : (isObject(value) && typeof value.owner === 'string' && value.owner ? value.owner : null);
       if (!isObject(value) || typeof value.key !== 'string' || !owner) {
-        dropStoredSolveProfiles();
-        return [];
+        continue;
       }
       const inventory = parseInventory(value.inventory);
       const settings = inventory ? parseSolveSettings(value.settings, inventory, version) : null;
       if (!inventory || !settings) {
-        dropStoredSolveProfiles();
-        return [];
+        continue;
       }
       const key = solveProfileKey(owner, { readable: true, sources: inventory });
       if (!designOwned && value.key !== key) {
-        dropStoredSolveProfiles();
-        return [];
+        continue;
       }
       profiles.push({
         key,
@@ -345,11 +343,7 @@ export function readLegacySolveProfiles(): StoredSolveProfile[] {
           : {}),
       });
     }
-    if (new Set(profiles.map(({ key }) => key)).size !== profiles.length) {
-      dropStoredSolveProfiles();
-      return [];
-    }
-    return profiles;
+    return profiles.filter((profile, index) => profiles.findIndex(other => other.key === profile.key) === index);
   } catch {
     dropStoredSolveProfiles();
     return [];

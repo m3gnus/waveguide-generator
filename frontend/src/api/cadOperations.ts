@@ -131,6 +131,8 @@ export function getSetupRevision(
   return jsonRequest(`/api/cadlink/setup-revisions/${encodeURIComponent(revisionId)}`, undefined, fetcher);
 }
 
+const setupWriter = globalThis.crypto?.randomUUID?.() ?? `w${Date.now()}${Math.random()}`;
+let setupSequence = 0;
 /** Record a project's solve settings for its source inventory. */
 export async function putProjectSetup(
   request: { lineageId: string; inventory: CadSourceInventoryEntry[]; setup: CadSolveSetup },
@@ -143,7 +145,8 @@ export async function putProjectSetup(
   const { lineageId, inventory, setup } = request;
   const saved = await jsonRequest<{ revision_id: string; inventory_sha256: string }>(
     `/api/models/${encodeURIComponent(lineageId)}/setup`,
-    jsonBody('PUT', { inventory, setup }, options.keepalive ? { keepalive: true } : {}),
+    jsonBody('PUT', { inventory, setup }, { ...(options.keepalive ? { keepalive: true } : {}),
+      headers: { 'Content-Type': 'application/json', 'X-WG-Setup-Writer': setupWriter, 'X-WG-Setup-Seq': String(++setupSequence) } }),
     fetcher,
   );
   return { lineageId, inventorySha256: saved.inventory_sha256, revisionId: saved.revision_id };

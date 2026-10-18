@@ -18,7 +18,7 @@ import { cadProjectName, listCadProjects, newestReturnForProject } from '../../a
 import { enterCadWorkspace, type RefreshOptions } from './arrivals';
 import { showIngestedMeshInViewport } from './artifactLoader';
 import { isCurrentOpen, registerImportedView, reopenLastModel, type ImportedView } from '../../stores/importedModel';
-import { restoreCadProjectSettings, resetCadProjectSettingsLoad, hasCadDraftForModel } from '../../stores/cadProjectSettings';
+import { restoreCadProjectSettings, resetCadProjectSettingsLoad, hasCadDraftForModel, migrateCadProfiles } from '../../stores/cadProjectSettings';
 import { cadHistorySetup } from '../../stores/cadSetupRestore';
 import { seedImportedSolveOptionsFromParametric } from '../../stores/solveOptions';
 import { DEFAULT_SWEEP } from '../../stores/solveDefaults';
@@ -121,7 +121,9 @@ export const cadImportedView: ImportedView = {
         // The model's options go to the imported instance only; the persisted
         // parametric store is never written by an imported flow.
         if (!opened.setup) seedImportedSolveOptionsFromParametric();
-        const draft = restoreCadProjectSettings(opened.setup, record, source.kind === 'model');
+        await migrateCadProfiles(fetcher);
+        if (!current()) return null;
+        const draft = restoreCadProjectSettings(opened.setup, record, source.kind === 'model', opened.revisionId);
         if (draft) { opened.setup = null; opened.revisionId = null; }
         await showIngestedMesh(record, name, reportViewportNotice, fetcher, generation);
         if (!current()) return null;

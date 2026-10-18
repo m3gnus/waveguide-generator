@@ -640,6 +640,29 @@ describe('CAD setup publisher: what an edit not yet sent does', () => {
     stop();
   });
 
+  it('sends a queued write directly with keepalive on pagehide while its predecessor is in flight', async () => {
+    vi.useFakeTimers();
+    let finish!: (response: Response) => void;
+    const first = new Promise<Response>(resolve => { finish = resolve; });
+    const fetcher = vi.fn<typeof fetch>(async (input) => isSetupPut(String(input)) ? first : json({}));
+    const stop = startCadSetupPublisher({ fetcher, debounceMs: 1 });
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    useCadReturnStore.getState().setRigidSize(5);
+    await vi.advanceTimersByTimeAsync(1);
+    useCadReturnStore.getState().setRigidSize(6);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetcher.mock.calls.filter(([input]) => isSetupPut(String(input)))).toHaveLength(1);
+    window.dispatchEvent(new Event('pagehide'));
+    const puts = fetcher.mock.calls.filter(([input]) => isSetupPut(String(input)));
+    expect(puts).toHaveLength(2);
+    expect(puts[1][1]?.keepalive).toBe(true);
+    expect(JSON.parse(String(puts[1][1]?.body)).setup.geometry.mesh.rigid_size_mm).toBe(6);
+    finish(json({ revision_id: 'wgs_saved' }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetcher.mock.calls.filter(([input]) => isSetupPut(String(input)))).toHaveLength(2);
+    stop();
+  });
+
   it('does nothing when the page becomes visible again, and an ordinary send is not keepalive', async () => {
     vi.useFakeTimers();
     const { calls, fetcher } = flaky(0);

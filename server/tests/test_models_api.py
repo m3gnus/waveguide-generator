@@ -265,6 +265,9 @@ def test_a_cad_project_setup_is_recorded_for_its_return_inventory(tmp_path, monk
             )
             query = quote(json.dumps(inventory))
             found = await call(app, "GET", f"/api/models/{project}/setup?inventory={query}")
+            assert found["cad_claimed"] is True
+            unclaimed = await call(app, "GET", f"/api/models/wgl_unclaimed_design/setup?inventory={query}")
+            assert unclaimed["cad_claimed"] is False
             assert found["revision_id"] == saved["revision_id"]
             assert found["setup"] == json.loads(store.get_setup_revision(saved["revision_id"])["setup_json"])
             # The Fusion job reads the very revision the UI inventory read shows.
@@ -390,3 +393,36 @@ def test_return_listing_resolves_the_same_project_as_fusion_before_preparation(t
         assert api._return_listing(tmp_path, store)[0]["projectLineageId"] is None
     finally:
         store.close()
+
+
+def test_pagehide_setup_cannot_be_overwritten_by_an_older_write(tmp_path):
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        project = store.claim_cad_document_lineage("urn:fusion:ordered", "Ordered")
+        inventory = [{"id": "hf", "role": "HF", "required": True}]
+
+        async def write(sequence, count, writer="window-a"):
+            async def with_headers(scope, receive, send):
+                scope = {**scope, "headers": [*scope["headers"],
+                    (b"x-wg-setup-writer", writer.encode()),
+                    (b"x-wg-setup-seq", str(sequence).encode())]}
+                await app(scope, receive, send)
+            return await _request(with_headers, "PUT", f"/api/models/{project}/setup", body={
+                "inventory": inventory,
+                "setup": {"geometry": {"drive_channels": [{"id": "hf", "source_ids": ["hf"]}]},
+                          "options": {"engine": "metal", "frequency_range": [100, 1000], "num_frequencies": count}},
+            })
+
+        try:
+            newer, raw = await write(2, 23)
+            assert newer == 200
+            revision = json.loads(raw)["revision_id"]
+            assert (await write(1, 17))[0] == 409
+            query = quote(json.dumps(inventory))
+            assert (await call(app, "GET", f"/api/models/{project}/setup?inventory={query}"))["revision_id"] == revision
+            assert (await write(1, 31, "window-b"))[0] == 200
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())

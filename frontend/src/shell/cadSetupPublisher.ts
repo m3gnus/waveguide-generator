@@ -171,14 +171,20 @@ export function startCadSetupPublisher(
   let stopped = false;
 
   let writeInFlight = false;
-  const writes: Array<() => void> = [];
+  let writeSequence = 0;
+  const acknowledgedWrites = new Map<string, number>();
+  const writes: Array<{ run: () => void; next: CadProjectSetup; key: string; attempt: number }> = [];
   const send = (next: CadProjectSetup, key: string, attempt: number, keepalive: boolean) => {
     retrying = null;
     const journal = journals.get(key);
+    const sequence = ++writeSequence;
     const run = () => {
-      writeInFlight = true;
-      void putProjectSetup(next, fetcher, { keepalive }).then(() => {
-        if (journal) { clearCadDraft(journal.key, journal.raw); journals.delete(key); }
+      if (!keepalive) writeInFlight = true;
+      void putProjectSetup(next, fetcher, { keepalive }).then(saved => {
+        if (journal && sequence > (acknowledgedWrites.get(journal.key) ?? 0)) {
+          acknowledgedWrites.set(journal.key, sequence);
+          clearCadDraft(journal.key, journal.raw, saved.revisionId ?? null); journals.delete(key);
+        }
         if (failed && published === key) { failed = false; reportSaveState(); }
       }, () => {
         // A newer edit has taken over: it is what needs recording now.
@@ -191,11 +197,13 @@ export function startCadSetupPublisher(
         published = null;
         if (!failed) { failed = true; reportSaveState(); }
       }).finally(() => {
-        writeInFlight = false;
-        writes.shift()?.();
+        if (!keepalive) {
+          writeInFlight = false;
+          writes.shift()?.run();
+        }
       });
     };
-    if (writeInFlight) writes.push(run);
+    if (writeInFlight && !keepalive) writes.push({ run, next, key, attempt });
     else run();
   };
 
@@ -216,6 +224,9 @@ export function startCadSetupPublisher(
 
   // The page is going away or out of sight: nothing later will retry for us.
   const leave = () => {
+    const queued = writes.at(-1);
+    writes.length = 0;
+    if (!pending && queued) send(queued.next, queued.key, queued.attempt, true);
     flush(true);
     if (retrying) {
       const { next, key, attempt, timer: wait } = retrying;

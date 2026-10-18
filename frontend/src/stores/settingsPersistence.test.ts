@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { athPolarOverrides } from './athPolars';
-import { DurableSettings, SETTINGS_NAMESPACES } from './durableSettings';
+import { DurableSettings, cadDraftNamespace, SETTINGS_NAMESPACES } from './durableSettings';
 import {
   resetSolveOptionsStore,
   restorePolarUiFromAthBlocks,
@@ -589,4 +589,20 @@ describe('durable settings', () => {
 
     expect(backend.namespaces.get('theme')).toBe('dark');
   });
+});
+
+
+it('keeps two windows’ model draft keys independent through writes, hydration and deletion', async () => {
+  const backend = settingsBackend();
+  const first = new DurableSettings({ storage: null, fetcher: backend.fetcher, writeDelayMs: () => 0 });
+  const second = new DurableSettings({ storage: null, fetcher: backend.fetcher, writeDelayMs: () => 0 });
+  const a = cadDraftNamespace('wgl_a'); const b = cadDraftNamespace('unclaimed:urn:fusion:other');
+  await first.hydrate(); await second.hydrate();
+  first.set(a, 'draft a'); second.set(b, 'draft b'); await tick();
+  first.set(a, 'new a'); await tick();
+  const reopened = new DurableSettings({ storage: null, fetcher: backend.fetcher });
+  await reopened.hydrate();
+  expect(reopened.get(a)).toBe('new a'); expect(reopened.get(b)).toBe('draft b');
+  first.set(a, null); await tick(); await reopened.hydrate();
+  expect(reopened.get(a)).toBeNull(); expect(reopened.get(b)).toBe('draft b');
 });

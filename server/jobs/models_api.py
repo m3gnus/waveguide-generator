@@ -18,7 +18,7 @@ from pathlib import Path
 import shutil
 from typing import Any, Literal
 
-from fastapi import APIRouter, FastAPI, Query
+from fastapi import APIRouter, FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter, model_validator
@@ -419,6 +419,7 @@ def read_setup(
     return {
         "setup": json.loads(revision["setup_json"]) if revision else None,
         "revision_id": revision["revision_id"] if revision else None,
+        **({"cad_claimed": store.get_lineage_cad_names(model_id) is not None} if sources is not None else {}),
     }
 
 
@@ -426,6 +427,10 @@ def mount_models_api(application: FastAPI) -> None:
     router = APIRouter(prefix="/api/models", tags=["Imported models"])
     store = application.state.cadlink_store
     data_dir = Path(application.state.data_dir)
+    # Pagehide sends immediately. Refuse an older request from that same page
+    # if its successor already committed; clients without headers keep working.
+    setup_writes = asyncio.Lock()
+    accepted_setup_writes: dict[tuple[str, str, str], int] = {}
     refused = {
         404: {"model": ErrorEnvelope, "description": "Unknown model or prepared mesh"},
         409: {"model": ErrorEnvelope, "description": "Restart pending, mismatched or unavailable mesh"},
@@ -540,7 +545,7 @@ def mount_models_api(application: FastAPI) -> None:
         return await read(read_setup, store, model_id, None, sources)
 
     @router.put("/{model_id}/setup", responses=refused)
-    async def put_setup(model_id: str, body: ModelSetupWrite) -> Any:
+    async def put_setup(model_id: str, body: ModelSetupWrite, http_request: Request) -> Any:
         """Save a model's setup for the sources of a prepared mesh (or a CAD return)."""
 
         runtime = application.state.jobs_runtime
@@ -596,7 +601,19 @@ def mount_models_api(application: FastAPI) -> None:
             store.record_model_setup(model_id, inventory, revision["revision_id"])
             return revision
 
-        revision = await asyncio.to_thread(record_setup)
+        writer = http_request.headers.get("X-WG-Setup-Writer")
+        sequence_header = http_request.headers.get("X-WG-Setup-Seq")
+        try:
+            sequence = int(sequence_header) if sequence_header is not None else 0
+        except ValueError:
+            return _refusal(422, "setup_refused", "Invalid setup write sequence.")
+        async with setup_writes:
+            key = (model_id, inventory, writer or "")
+            if writer and sequence <= accepted_setup_writes.get(key, -1):
+                return _refusal(409, "setup_write_superseded", "A newer setup from this window is already saved.")
+            revision = await asyncio.to_thread(record_setup)
+            if writer:
+                accepted_setup_writes[key] = sequence
         return {
             "revision_id": revision["revision_id"],
             "content_sha256": revision["content_sha256"],

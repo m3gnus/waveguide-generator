@@ -1,18 +1,20 @@
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadSolveSetup, CadSourceInventoryEntry } from '../api/cadOperations';
 import { workspaceModeStore } from './workspaceMode';
-import { readCadInventorySetup } from '../api/importedModels';
+import { ImportedModelApiError, readCadInventorySetup } from '../api/importedModels';
 import type { ImportedSetup } from '../jobs/importedSetup';
 import { cadHistorySetup } from './cadSetupRestore';
 import { useCadReturnStore, sourceInventorySignature } from './cadReturn';
 import { useCadPreparationStore } from './cadPreparation';
-import { durableSettings } from './durableSettings';
+import { cadDraftNamespace, durableSettings } from './durableSettings';
 import { applyCadOptions, cadOptionsSnapshot, endOpenedSetup } from './importedModel';
-import { readLegacySolveProfiles, dropStoredSolveProfiles, parseSolveSettings, type PersistedSolveSettings } from './legacyCadProfiles';
+import { readLegacySolveProfiles, parseSolveSettings, type PersistedSolveSettings } from './legacyCadProfiles';
 import { defaultSolveOptions, importedOptionsFromWire, normalizePersistedSolveOptions, type ImportedOptionsSnapshot } from './solveOptions';
 import { gateSolveSettingsEdits, subscribeSolveSettingsEdits } from './solveSettingsEdits';
 
 interface CadDraft {
+  baseRevisionId: string | null;
+  updatedAt: number;
   settings: PersistedSolveSettings;
   options: ImportedOptionsSnapshot;
   preparation: { symmetryMode: 'auto' | 'full'; areaDriftOverrides: string[] };
@@ -22,21 +24,44 @@ interface CadDraft {
 const fields = ['sourceSizesMm', 'rigidSizeMm', 'transitionMm', 'skippedSourceIds', 'driveChannels',
   'exteriorOnly', 'exteriorOnlyRegionIds', 'combineEnabled', 'combineSpec', 'channelDrivers',
   'passiveCardioid', 'driveVoltageV', 'maxDriveVoltageV', 'frequencyStartHz', 'frequencyEndHz', 'frequencyCount'] as const;
+const baseRevisions = new Map<string, string | null>();
 function drafts(): Record<string, CadDraft> {
-  try {
-    const parsed = JSON.parse(durableSettings.get('cadSetupDrafts') ?? '{}');
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch { return {}; }
+  const all: Record<string, CadDraft> = {};
+  for (const namespace of durableSettings.draftNamespaces()) {
+    try {
+      for (const [key, draft] of Object.entries(JSON.parse(durableSettings.get(namespace) ?? '{}'))) {
+        const owner = JSON.parse(key)?.[0];
+        if (typeof owner === 'string' && cadDraftNamespace(owner) === namespace && draft && typeof draft === 'object') all[key] = draft as CadDraft;
+      }
+    } catch { /* discard corrupt cache */ }
+  }
+  return all;
 }
 function writeDrafts(next: Record<string, CadDraft>): void {
-  durableSettings.set('cadSetupDrafts', Object.keys(next).length ? JSON.stringify(next) : null);
+  const groups = new Map<ReturnType<typeof cadDraftNamespace>, Record<string, CadDraft>>();
+  const entries = Object.entries(next).sort((a, b) => (b[1].updatedAt ?? 0) - (a[1].updatedAt ?? 0)).slice(0, 20);
+  for (const [key, draft] of entries) {
+    const namespace = cadDraftNamespace(JSON.parse(key)[0]);
+    const group = groups.get(namespace) ?? {};
+    group[key] = draft; groups.set(namespace, group);
+  }
+  for (const namespace of new Set([...durableSettings.draftNamespaces(), ...groups.keys()])) {
+    const group = groups.get(namespace);
+    const raw = group ? JSON.stringify(group) : null;
+    if (raw !== durableSettings.get(namespace)) durableSettings.set(namespace, raw);
+  }
+}
+/** Before the first prepare the return itself is the owner, never the open design. */
+function unclaimedOwner(): string | null {
+  const bundle = useCadReturnStore.getState().selectedBundle;
+  return bundle ? `unclaimed:${bundle.documentNativeId || bundle.bundlePath}` : null;
 }
 export function cadDraftKey(model: string, sources: CadSourceInventoryEntry[]): string {
   return JSON.stringify([model, sourceInventorySignature({ readable: true, sources })]);
 }
 export function currentCadDraftKey(): string | null {
   const state = useCadReturnStore.getState();
-  const model = state.ingestRecord?.project?.lineage_id ?? state.projectLineageId;
+  const model = state.ingestRecord?.project?.lineage_id ?? state.projectLineageId ?? unclaimedOwner();
   return model && state.selectedBundle?.sources.length && state.selectedBundle.bundleOrigin !== 'native'
     ? cadDraftKey(model, state.selectedBundle.sources) : null;
 }
@@ -47,6 +72,7 @@ export function retainCadDraft(): { key: string; raw: string } | null {
   if (!key || !options) return null;
   const state = useCadReturnStore.getState();
   const draft: CadDraft = structuredClone({
+    baseRevisionId: baseRevisions.get(key) ?? null, updatedAt: Date.now(),
     settings: Object.fromEntries(fields.map(field => [field, state[field]])) as PersistedSolveSettings,
     options,
     preparation: { symmetryMode: useCadPreparationStore.getState().symmetryMode, areaDriftOverrides: state.areaDriftOverrides },
@@ -55,36 +81,63 @@ export function retainCadDraft(): { key: string; raw: string } | null {
   return { key, raw: JSON.stringify(draft) };
 }
 /** An older acknowledgement must never clear a newer edit's journal. */
-export function clearCadDraft(key: string, raw: string): void {
+export function clearCadDraft(key: string, raw: string, revisionId: string | null = null): void {
   const next = drafts();
-  if (JSON.stringify(next[key]) !== raw) return;
+  const acknowledgedBase = baseRevisions.get(key);
+  baseRevisions.set(key, revisionId);
+  const previous = JSON.parse(raw) as CadDraft;
+  const current = next[key];
+  if (!current) return;
+  // A successful predecessor is now the base of a newer incomplete edit too.
+  if (JSON.stringify({ ...current, baseRevisionId: previous.baseRevisionId }) !== raw) {
+    if (current.baseRevisionId === previous.baseRevisionId || current.baseRevisionId === acknowledgedBase) {
+      current.baseRevisionId = revisionId; writeDrafts(next);
+    }
+    return;
+  }
   delete next[key];
   writeDrafts(next);
 }
 
 /** Move every old entry once; no MRU and no legacy key writes remain. */
-function migrateProfiles(): void {
+export async function migrateCadProfiles(fetcher: typeof fetch = fetch): Promise<void> {
+  const raw = durableSettings.get('cadSolveProfiles');
+  const shared = durableSettings.get('cadSetupDrafts');
   const legacy = readLegacySolveProfiles();
-  const next = drafts();
+  const additions: Record<string, CadDraft> = {};
+  // The shared K3 journal has neither base revisions nor verified legacy provenance.
+  let verificationFailed = false;
   for (const profile of legacy) {
-    // v1-v3 carry only their design's lineage; retain that provenance rather than guessing a CAD owner.
-    const model = profile.owner.startsWith('cad:') ? profile.owner.slice(4) : profile.owner.split(':').at(-1)!;
+    const cadOwned = profile.owner.startsWith('cad:');
+    const model = cadOwned ? profile.owner.slice(4) : profile.owner.split(':').at(-1)!;
+    if (!cadOwned) {
+      // The server checks lineage_cad_names; a design's lineage alone proves nothing.
+      try {
+        const saved = await readCadInventorySetup(model, profile.inventory, fetcher);
+        if (!saved.cad_claimed) continue;
+      } catch (error) {
+        if (!(error instanceof ImportedModelApiError && error.status === 404)) verificationFailed = true;
+        continue;
+      }
+    }
     const key = cadDraftKey(model, profile.inventory);
-    if (next[key]) continue;
-    next[key] = {
-      settings: profile.settings,
+    additions[key] = {
+      baseRevisionId: null, updatedAt: Date.now(), settings: profile.settings,
       options: { ...defaultSolveOptions(), sweepStartHz: profile.settings.frequencyStartHz,
         sweepEndHz: profile.settings.frequencyEndHz, sweepCount: profile.settings.frequencyCount,
         ...profile.solveSelection },
       preparation: { symmetryMode: 'auto', areaDriftOverrides: [] }, legacy: true,
     };
   }
-  if (legacy.length) writeDrafts(next);
-  // The draft journal now owns every unsent edit, including unopened models.
-  if (durableSettings.get('cadSolveProfiles') !== null) dropStoredSolveProfiles();
+  const next = { ...additions, ...drafts() };
+  if (Object.keys(additions).length) writeDrafts(next);
+  const destinations = durableSettings.draftNamespaces();
+  // Separate namespace writes cannot be atomic: acknowledge destinations before retiring the source.
+  if (raw !== null && !verificationFailed) void durableSettings.retireAfterUpload('cadSolveProfiles', destinations, raw);
+  if (shared !== null) void durableSettings.retireAfterUpload('cadSetupDrafts', destinations, shared);
 }
-export function hasCadDraftForModel(model: string): boolean {
-  migrateProfiles();
+export async function hasCadDraftForModel(model: string, fetcher: typeof fetch = fetch): Promise<boolean> {
+  await migrateCadProfiles(fetcher);
   return Object.keys(drafts()).some(key => {
     try { return JSON.parse(key)[0] === model; } catch { return false; }
   });
@@ -97,13 +150,20 @@ export function subscribeCadDraftRestores(listener: () => void): () => void {
 
 /** Shared by model reopen and return selection/arrival. Runs keep their immutable setup. */
 export function restoreCadProjectSettings(saved: ImportedSetup | null, record: CadReturnIngestRecord,
-  includeDraft = true): boolean {
+  includeDraft = true, revisionId: string | null = null): boolean {
   allowLateDraft = includeDraft;
   restoredAtEdit = edits;
-  migrateProfiles();
   const state = useCadReturnStore.getState();
   const key = currentCadDraftKey();
   const all = drafts();
+  // Claiming a return transfers its journal before any setup can be published.
+  const unclaimed = unclaimedOwner();
+  const unclaimedKey = unclaimed && state.selectedBundle ? cadDraftKey(unclaimed, state.selectedBundle.sources) : null;
+  if (key && unclaimedKey && key !== unclaimedKey && all[unclaimedKey]) {
+    if (!all[key] && !saved) all[key] = all[unclaimedKey];
+    delete all[unclaimedKey]; writeDrafts(all);
+  }
+  if (key) baseRevisions.set(key, revisionId);
   let draft = includeDraft && key ? all[key] : undefined;
   if (draft) {
     const settings = state.selectedBundle && parseSolveSettings(draft.settings, state.selectedBundle.sources, 4);
@@ -113,7 +173,7 @@ export function restoreCadProjectSettings(saved: ImportedSetup | null, record: C
       || draft.preparation.areaDriftOverrides.some(id => typeof id !== 'string')) draft = undefined;
     else draft = { ...draft, settings, options: { ...draft.options, ...normalizePersistedSolveOptions(draft.options) } };
   }
-  if (draft?.legacy && saved && key) {
+  if (draft && key && ((draft.legacy && saved) || (!draft.legacy && draft.baseRevisionId !== revisionId))) {
     delete all[key]; writeDrafts(all); draft = undefined;
   }
   if (saved) {
@@ -183,7 +243,10 @@ observeCadDraftHydration();
 subscribeSolveSettingsEdits(edit => { if (edit?.source !== 'solveOptions') edits += 1; });
 let readGeneration = 0;
 let loading: Promise<boolean> = Promise.resolve(true);
-export function resetCadProjectSettingsLoad(): void { readGeneration += 1; loading = Promise.resolve(true); heldEdits.length = 0; allowLateDraft = false; }
+export function resetCadProjectSettingsLoad(): void {
+  readGeneration += 1; loading = Promise.resolve(true); heldEdits.length = 0; allowLateDraft = false;
+  useCadReturnStore.setState({ setupLoading: false });
+}
 export function waitForCadProjectSettings(): Promise<boolean> { return loading; }
 /** Selection starts this read immediately; ingestion waits before capturing its settings. */
 export function loadCadProjectSettings(fetcher: typeof fetch = fetch): Promise<boolean> {
@@ -191,7 +254,16 @@ export function loadCadProjectSettings(fetcher: typeof fetch = fetch): Promise<b
   const state = useCadReturnStore.getState();
   const bundle = state.selectedBundle;
   const model = state.projectLineageId;
-  if (!bundle || !model || bundle.bundleOrigin === 'native' || !bundle.sources.length) return loading = Promise.resolve(true);
+  if (!bundle || bundle.bundleOrigin === 'native' || !bundle.sources.length) {
+    resetCadProjectSettingsLoad(); return loading;
+  }
+  if (!model) {
+    resetCadProjectSettingsLoad();
+    restoreCadProjectSettings(null, { sources: bundle.sources, skipped_source_ids: state.skippedSourceIds,
+      mesh_sizes: { source_size_mm: state.sourceSizesMm, rigid_size_mm: state.rigidSizeMm, transition_mm: state.transitionMm },
+    } as unknown as CadReturnIngestRecord);
+    return loading;
+  }
   const selection = state.captureSelectionIntent();
   for (let i = heldEdits.length - 1; i >= 0; i -= 1) if (heldEdits[i].selection !== selection) heldEdits.splice(i, 1);
   useCadReturnStore.setState({ setupLoading: true });
@@ -199,6 +271,7 @@ export function loadCadProjectSettings(fetcher: typeof fetch = fetch): Promise<b
     && useCadReturnStore.getState().projectLineageId === model;
   loading = (async () => {
     try {
+      if (durableSettings.get('cadSolveProfiles') !== null || durableSettings.get('cadSetupDrafts') !== null) await migrateCadProfiles(fetcher);
       const saved = await readCadInventorySetup(model, bundle.sources.map(({ id, role, required }) => ({ id, role, required })), fetcher);
       if (!current()) return useCadReturnStore.getState().isCurrentSelectionIntent(selection);
       const held = useCadReturnStore.getState();
@@ -206,7 +279,7 @@ export function loadCadProjectSettings(fetcher: typeof fetch = fetch): Promise<b
         default_drive_channel_id: source.defaultDriveChannelId })), skipped_source_ids: held.skippedSourceIds,
         mesh_sizes: { source_size_mm: held.sourceSizesMm, rigid_size_mm: held.rigidSizeMm, transition_mm: held.transitionMm },
       } as unknown as CadReturnIngestRecord;
-      restoreCadProjectSettings(saved.setup, record);
+      restoreCadProjectSettings(saved.setup, record, true, saved.revision_id ?? null);
       useCadReturnStore.setState({ setupLoading: false });
       releaseEdits(selection, true);
       return true;
@@ -215,6 +288,11 @@ export function loadCadProjectSettings(fetcher: typeof fetch = fetch): Promise<b
         ingestStaleReason: `Could not load model settings: ${error instanceof Error ? error.message : String(error)}` });
       if (request === readGeneration) releaseEdits(selection, false);
       return false;
+    } finally {
+      if (request === readGeneration) {
+        useCadReturnStore.setState({ setupLoading: false });
+        releaseEdits(selection, false);
+      }
     }
   })();
   return loading;
