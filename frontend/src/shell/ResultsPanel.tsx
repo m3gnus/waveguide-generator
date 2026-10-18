@@ -2636,18 +2636,14 @@ export function ResultsPanel() {
     // the source result had been pinned for comparison.
     setBeamRerunSubmitting(true);
     const sourceId = selectedJob.id;
-    void coordinator.runExclusive(() => rerunWithPatch(sourceId, { options: { polar_config: { spherical_sampling: true } } }))
-      .then(async (jobId) => {
-        if (jobId === null) {
-          coordinator.reportError('Another solve is being submitted. Try again in a moment.');
-          return;
-        }
-        compareSelection.followLatest(sourceId);
-        compareSelection.awaitRun(jobId);
-        solveAttention.bindRun(jobId);
-        await jobsSocket.refresh();
-      })
-      .catch((reason) => coordinator.reportError(reason instanceof Error ? reason.message : String(reason)))
+    void coordinator.acceptSubmission(
+      () => rerunWithPatch(sourceId, { options: { polar_config: { spherical_sampling: true } } }),
+      {
+        onAccepted: () => compareSelection.followLatest(sourceId),
+        busyMessage: 'Another solve is being submitted. Try again in a moment.',
+      },
+    )
+      .catch(() => undefined) // The coordinator reports submission errors.
       .finally(() => setBeamRerunSubmitting(false));
   }, [coordinator, selectedJob]);
   const beamShapeAction = useMemo<ChartStubAction | undefined>(() => selectedJobCanRerun ? {
@@ -2694,7 +2690,7 @@ export function ResultsPanel() {
   const solveCurrentDesign = useCallback(() => {
     const current = useDesignStore.getState();
     void coordinator.run(current.design, current.designRevision)
-      .catch((reason) => coordinator.reportError(reason instanceof Error ? reason.message : String(reason)));
+      .catch(() => undefined); // The coordinator reports submission errors.
   }, [coordinator]);
   // Everything above keeps following the solve while this panel is covered --
   // results are still fetched, combined and labelled, so the panel is never

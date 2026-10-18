@@ -39,7 +39,7 @@ import { SolveActions } from './TopBar';
 import { CadSolveCard } from './CadSolveCard';
 import { CadOperationsSection } from './CadOperationsSection';
 import { solvedCadModels } from './cadlink/solvedModel';
-import { resetSolveAttentionForTests } from './solveAttention';
+import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
 import {
   bindWorkspaceNavigation,
   publishVisiblePanels,
@@ -413,9 +413,12 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(mocks.solveModel).toHaveBeenCalledOnce();
     expect(pressOf().setup!.options).toMatchObject({ engine: 'bempp', frequency_range: [80, 12000], num_frequencies: 12 });
     await jobs([cadJobFixture(operation('cmd-fusion', 'accepted', { jobId: 'job-child' }), { ...cadJob('job-child', 'error'), parent_job_id: 'cmd-fusion' })]);
+    const bind = vi.spyOn(solveAttention, 'bindRun');
     const retry = vi.spyOn(jobsSocket, 'retryJob').mockResolvedValue('retry-child');
     await act(async () => jobsCoordinatorBridge.getSnapshot().retry('job-child'));
     expect(retry).toHaveBeenCalledWith('job-child');
+    expect(compareSelection.getSnapshot().awaiting).toBe('retry-child');
+    expect(bind).toHaveBeenCalledWith('retry-child');
     expect(useImportedSolveOptionsStore.getState().engine).toBe('bempp');
     expect(useCadReturnStore.getState().frequencyCount).toBe(12);
     expect(mocks.solveModel).toHaveBeenCalledOnce();

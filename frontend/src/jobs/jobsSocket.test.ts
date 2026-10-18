@@ -219,7 +219,7 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
-  it('uses the faithful retry endpoint and refreshes the run list', async () => {
+  it('returns the faithful retry child before the coordinator refreshes the run list', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) =>
       String(input).includes('/retry')
         ? json({ job_id: 'child' })
@@ -230,8 +230,7 @@ describe('jobs websocket state machine', () => {
     await expect(manager.retryJob('job-1')).resolves.toBe('child');
 
     expect(fetcher).toHaveBeenNthCalledWith(1, '/api/jobs/job-1/retry', { method: 'POST' });
-    expect(fetcher).toHaveBeenNthCalledWith(2, '/api/jobs?limit=200&offset=0', { signal: expect.any(AbortSignal) });
-    expect(manager.getSnapshot().jobs[0]).toMatchObject({ id: 'child', parent_job_id: 'job-1' });
+    expect(fetcher).toHaveBeenCalledOnce();
   });
 
   it('does not apply messages from an unsupported protocol version', () => {

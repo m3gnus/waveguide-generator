@@ -195,7 +195,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
   // Only ever this job's own design. Falling back to whatever was on screen
   // ran a *different* waveguide under this job's name and looked like it
   // worked; RerunButton refuses instead, and says why.
-  const retry = () => { void retryJob(job.id).catch((error) => onError(String(error))); };
+  const retry = () => { void retryJob(job.id).catch(() => undefined); };
   // A run in flight or one that failed still has to show its progress or its
   // diagnostic; only finished runs collapse down to their name.
   const expanded = selected || running || failed || cancelled || editing;

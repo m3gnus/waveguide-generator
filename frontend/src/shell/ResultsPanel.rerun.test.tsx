@@ -6,8 +6,26 @@ import { compareSelection, provisionalResults, resultsCache } from '../api/resul
 import { preferencesStore } from '../prefs/preferences';
 import { seedDesign, serializeDesign } from '../stores/design';
 import { provideExportDestinationPrompt } from './exportDestinationPrompt';
-import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
 import { ResultsPanel } from './ResultsPanel';
+import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
+import { resetSolveOptionsStore } from '../stores/solveOptions';
+import { workspaceModeStore } from '../stores/workspaceMode';
+
+vi.mock('../jobs/useCapabilities', () => ({
+  useCapabilities: () => ({ error: null }),
+  useCapabilityRefreshOnReconnect: () => undefined,
+  useLegacyBeatEngineMigration: () => undefined,
+}));
+vi.mock('../jobs/useSolvePlan', () => ({ useSolvePlan: () => ({ plan: null, error: null, isPending: false }) }));
+vi.mock('../jobs/useImportedSolvePlan', () => ({ useImportedSolvePlan: () => ({ plan: null, error: null, isPending: false }) }));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
 
 const rerun = vi.hoisted(() => ({ rerunWithPatch: vi.fn() }));
 vi.mock('../jobs/rerun', () => ({ rerunWithPatch: rerun.rerunWithPatch }));
@@ -83,8 +101,12 @@ describe('Enable & rerun wiring', () => {
     preferencesStore.update({ chartTypes: ['beam_shape'] });
     provideExportDestinationPrompt(async () => ({ token: 't', directory: '/exports' }));
     rerun.rerunWithPatch.mockReset().mockResolvedValue('job-new');
-    (jobsCoordinatorBridge.getSnapshot() as unknown as { runExclusive: unknown }).runExclusive =
-      (submit: () => Promise<unknown>) => submit();
+    resetSolveAttentionForTests();
+    resetSolveOptionsStore();
+    workspaceModeStore.setMode('parametric');
+    vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
+    vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
     vi.stubGlobal('fetch', vi.fn(async () => response([100])));
     publishJobs([job('parametric-run'), job('cad-run', true)]);
     host = document.createElement('div');
@@ -108,18 +130,66 @@ describe('Enable & rerun wiring', () => {
 
   it('reruns the selected run with spherical sampling switched on', async () => {
     compareSelection.setPrimary('parametric-run');
-    await act(async () => { root.render(<ResultsPanel/>); });
+    await act(async () => { root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>); });
     await act(async () => { await Promise.resolve(); });
     expect(button()).toBeTruthy();
-    await act(async () => { button()!.click(); });
+    const pending = deferred<string>();
+    rerun.rerunWithPatch.mockReturnValueOnce(pending.promise);
+    const arm = vi.spyOn(solveAttention, 'armSolve');
+    const bind = vi.spyOn(solveAttention, 'bindRun');
+    const blocked = vi.fn(async () => 'wrong-job');
+    await act(async () => {
+      button()!.click(); button()!.click();
+      expect(await jobsCoordinatorBridge.getSnapshot().acceptSubmission(blocked)).toBeNull();
+    });
+    expect(arm).toHaveBeenCalledOnce();
+    expect(arm.mock.invocationCallOrder[0]).toBeLessThan(rerun.rerunWithPatch.mock.invocationCallOrder[0]);
+    expect(rerun.rerunWithPatch).toHaveBeenCalledOnce();
+    expect(blocked).not.toHaveBeenCalled();
+    await act(async () => { pending.resolve('job-new'); await pending.promise; });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'parametric-run', following: true, awaiting: 'job-new' });
+    expect(bind).toHaveBeenCalledWith('job-new');
+    expect(jobsSocket.refresh).toHaveBeenCalledOnce();
+    expect(solveAttention.resultsReady('job-new')).toBe('revealed');
     expect(rerun.rerunWithPatch).toHaveBeenCalledWith(
       'parametric-run', { options: { polar_config: { spherical_sampling: true } } },
     );
   });
 
+  it('releases attention, reports a refusal and permits another press', async () => {
+    rerun.rerunWithPatch.mockRejectedValueOnce(new Error('rerun refused'));
+    const release = vi.spyOn(solveAttention, 'releaseSolve');
+    compareSelection.setPrimary('parametric-run');
+    await act(async () => root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>));
+    await act(async () => { button()!.click(); });
+    expect(release).toHaveBeenCalledOnce();
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('rerun refused');
+    expect(compareSelection.getSnapshot().awaiting).toBeNull();
+    expect(jobsSocket.refresh).not.toHaveBeenCalled();
+    solveAttention.bindRun('unrelated');
+    expect(solveAttention.resultsReady('unrelated')).toBe('indicated');
+    await act(async () => { button()!.click(); });
+    expect(rerun.rerunWithPatch).toHaveBeenCalledTimes(2);
+    expect(compareSelection.getSnapshot().awaiting).toBe('job-new');
+  });
+
+  it('reports a busy coordinator without submitting or arming the rerun', async () => {
+    compareSelection.setPrimary('parametric-run');
+    await act(async () => root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>));
+    const pending = deferred<string>();
+    let other!: Promise<string | null>;
+    await act(async () => { other = jobsCoordinatorBridge.getSnapshot().acceptSubmission(() => pending.promise); });
+    const arm = vi.spyOn(solveAttention, 'armSolve');
+    await act(async () => { button()!.click(); });
+    expect(rerun.rerunWithPatch).not.toHaveBeenCalled();
+    expect(arm).not.toHaveBeenCalled();
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('Another solve is being submitted. Try again in a moment.');
+    await act(async () => { pending.resolve('other-child'); await other; });
+  });
+
   it('does not offer the rerun on an imported run', async () => {
     compareSelection.setPrimary('cad-run');
-    await act(async () => { root.render(<ResultsPanel/>); });
+    await act(async () => { root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>); });
     await act(async () => { await Promise.resolve(); });
     expect(button()).toBeUndefined();
   });

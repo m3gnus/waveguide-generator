@@ -78,6 +78,12 @@ export class SolveEngineUnavailableError extends Error {}
  * that named an engine, which is a verdict on that request. */
 const IMPORTED_CAPABILITY_CODES: ReadonlySet<string> = new Set(['engine_unavailable']);
 
+interface SubmissionAcceptanceOptions {
+  /** Request-specific naming or selection, after HTTP acceptance, before awaitRun. */
+  onAccepted?: (jobId: string) => void;
+  busyMessage?: string;
+}
+
 interface CoordinatorBridgeSnapshot {
   run(design: DesignDocument, designRevision?: number): Promise<void>;
   /** The single CAD solve entry point: the displayed axis and reviewed findings,
@@ -87,9 +93,10 @@ interface CoordinatorBridgeSnapshot {
    * silently doing nothing. */
   solveCurrentCadImport(): Promise<'submitted' | 'busy'>;
   retry(jobId: string): Promise<void>;
-  /** Run one submission under the same mutex as Solve. Resolves null, without
-   * calling `submit`, when another submission is in flight. */
-  runExclusive<T>(submit: () => Promise<T>): Promise<T | null>;
+  /** Accept a plain job under Solve's mutex; null means busy. Reports errors
+   * and rethrows them for callers that need to handle a refusal. CAD uses its
+   * own acceptance observer and must not enter this lifecycle. */
+  acceptSubmission(submit: () => Promise<string>, opts?: SubmissionAcceptanceOptions): Promise<string | null>;
   reportError(message: string): void;
   actionError: string | null;
 }
@@ -99,7 +106,7 @@ let bridgeSnapshot: CoordinatorBridgeSnapshot = {
   run: unavailableRun,
   solveCurrentCadImport: unavailableRun,
   retry: unavailableRun,
-  runExclusive: unavailableRun,
+  acceptSubmission: unavailableRun,
   reportError: () => undefined,
   actionError: null,
 };
@@ -279,7 +286,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   useLegacyBeatEngineMigration();
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
-  const designName = useDocumentStore((state) => state.designName);
   // Parametric mode reads the persisted store, Imported mode its own instance.
   const solveOptions = useScopedSolveOptions();
   const selectedEngine = solveOptions.engine;
@@ -410,77 +416,68 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     ? 'Checking which engines can solve this imported mesh…'
     : importedPlan.plan?.reason ?? importedPlan.error;
 
-  const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision) => {
-    if (submissionInFlight.current) return;
+  const acceptSubmission = useCallback(async (
+    submit: () => Promise<string>, opts: SubmissionAcceptanceOptions = {},
+  ): Promise<string | null> => {
+    if (submissionInFlight.current) {
+      if (opts.busyMessage) setActionError(opts.busyMessage);
+      return null;
+    }
     submissionInFlight.current = true;
+    setSubmitting(true);
+    setActionError(null);
+    solveAttention.armSolve();
     try {
-      setSubmitting(true);
-      setActionError(null);
-      // Pressing Solve never edits the design. BEMPP's own closed-wall default
-      // for a bare free-standing horn is applied by the server, on the copy it
-      // stores as the run's design and snapshot (server/jobs/runtime/core.py's
-      // `_apply_bempp_wall_default`). Doing it here as well used to rewrite the
-      // live document: choosing "Bare shell" and pressing Solve flipped the
-      // Outer body control back to "Thickened waveguide (freestanding)",
-      // discarded any expression bound to the field, bumped the revision, and
-      // marked the file unsaved -- for a correction the run had already made.
+      const jobId = await submit();
+      opts.onAccepted?.(jobId);
+      compareSelection.awaitRun(jobId);
+      solveAttention.bindRun(jobId);
+      await jobsSocket.refresh();
+      return jobId;
+    } catch (error) {
+      solveAttention.releaseSolve();
+      setActionError(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      submissionInFlight.current = false;
+      setSubmitting(false);
+    }
+  }, []);
+
+  const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision) => {
+    let designName = '';
+    await acceptSubmission(async () => {
+      // Solve leaves the live document alone. The server applies BEMPP's
+      // closed-wall default to its own stored request, not the editor's design.
       const options = useSolveOptionsStore.getState().options();
       const symmetryError = nativeSymmetryLimitation(nextDesign.formula, options.symmetry);
       if (symmetryError) throw new Error(symmetryError);
       await planSolveDesign(nextDesign, options);
-      const designName = useDocumentStore.getState().designName;
+      designName = useDocumentStore.getState().designName;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
-      const jobId = await submitDesign(
-        nextDesign,
-        options,
-        fetch,
-        { label, designRevision: nextRevision },
-      );
-      // Pressing Solve is a request to see that solve. Claiming the primary
-      // slot for it here is what makes the finished run the one on screen even
-      // when a result had been pinned for comparison; without it, a pin taken
-      // at any point in the session quietly kept every later solve hidden.
-      compareSelection.awaitRun(jobId);
-      solveAttention.bindRun(jobId);
-      acceptSubmittedLabel(designName);
-      await jobsSocket.refresh();
-    } finally {
-      submissionInFlight.current = false;
-      setSubmitting(false);
-    }
-  }, [designName, now, preferences]);
+      return submitDesign(nextDesign, options, fetch, { label, designRevision: nextRevision });
+    }, { onAccepted: () => acceptSubmittedLabel(designName) });
+  }, [acceptSubmission, now, revision]);
 
-  // One press of an imported model's Solve: one POST /api/models/{id}/solve.
-  // The server owns what follows -- a job already in flight for the same
-  // setup, the CAD preparation lane, the frame and findings gates.
+  // One press of a file model's Solve: one POST /api/models/{id}/solve.
   const solveFileModel = useCallback(async () => {
-    if (submissionInFlight.current) return 'busy' as const;
-    const submission = fileMeshSubmission();
-    const record = registeredMesh()!;
-    const designName = useMeshImportStore.getState().filename;
-    const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
-    // An unedited reopened model is solved again with the setup it was opened with.
-    const unchanged = unchangedSetup('file', record.ingest_id);
-    const press: ModelSolvePress = {
-      prepared_id: record.ingest_id, client_request_id: `mesh-${crypto.randomUUID()}`, label,
-      ...(unchanged ?? { setup: setupOfSubmission(submission) }),
-    };
-    submissionInFlight.current = true;
-    try {
-      setSubmitting(true);
-      setActionError(null);
-      const jobId = await solveModel(record.model_id, press)
+    let designName = '';
+    const jobId = await acceptSubmission(async () => {
+      const submission = fileMeshSubmission();
+      const record = registeredMesh()!;
+      designName = useMeshImportStore.getState().filename;
+      const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
+      // An unedited reopened model keeps the setup it was opened with.
+      const unchanged = unchangedSetup('file', record.ingest_id);
+      const press: ModelSolvePress = {
+        prepared_id: record.ingest_id, client_request_id: `mesh-${crypto.randomUUID()}`, label,
+        ...(unchanged ?? { setup: setupOfSubmission(submission) }),
+      };
+      return solveModel(record.model_id, press)
         .catch((error) => { throw importedSolveError(error, unchanged !== null); });
-      acceptSubmittedLabel(designName);
-      compareSelection.awaitRun(jobId);
-      solveAttention.bindRun(jobId);
-      await jobsSocket.refresh();
-      return 'submitted' as const;
-    } finally {
-      submissionInFlight.current = false;
-      setSubmitting(false);
-    }
-  }, [now, preferences]);
+    }, { onAccepted: () => acceptSubmittedLabel(designName) });
+    return jobId === null ? 'busy' as const : 'submitted' as const;
+  }, [acceptSubmission, now]);
 
   // The CAD press captures the axis shown and the findings reviewed, then
   // makes one call; the server prepares, continues or answers the job in flight.
@@ -547,39 +544,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [completeCadSolve, now]);
 
   const retry = useCallback(async (jobId: string) => {
-    if (submissionInFlight.current) return;
-    submissionInFlight.current = true;
-    try {
-      setSubmitting(true);
-      setActionError(null);
-      solveAttention.armSolve();
-      let childJobId: string;
-      try {
-        childJobId = await jobsSocket.retryJob(jobId);
-      } catch (error) {
-        solveAttention.releaseSolve();
-        throw error;
-      }
-      compareSelection.awaitRun(childJobId);
-      solveAttention.bindRun(childJobId);
-    } finally {
-      submissionInFlight.current = false;
-      setSubmitting(false);
-    }
-  }, []);
-
-  const runExclusive = useCallback(async <T,>(submit: () => Promise<T>): Promise<T | null> => {
-    if (submissionInFlight.current) return null;
-    submissionInFlight.current = true;
-    try {
-      setSubmitting(true);
-      setActionError(null);
-      return await submit();
-    } finally {
-      submissionInFlight.current = false;
-      setSubmitting(false);
-    }
-  }, []);
+    await acceptSubmission(() => jobsSocket.retryJob(jobId));
+  }, [acceptSubmission]);
 
   const reportError = useCallback((message: string) => setActionError(message), []);
   // An empty `?job=` names no run; drop it at once.
@@ -594,16 +560,16 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     clearJobLink();
   }, [jobs, jobsLoaded, reportError]);
   useEffect(() => {
-    publishBridge({ run, solveCurrentCadImport, retry, runExclusive, reportError, actionError });
+    publishBridge({ run, solveCurrentCadImport, retry, acceptSubmission, reportError, actionError });
     return () => publishBridge({
       run: unavailableRun,
       solveCurrentCadImport: unavailableRun,
       retry: unavailableRun,
-      runExclusive: unavailableRun,
+      acceptSubmission: unavailableRun,
       reportError: () => undefined,
       actionError: null,
     });
-  }, [actionError, reportError, retry, run, runExclusive, solveCurrentCadImport]);
+  }, [actionError, reportError, retry, run, acceptSubmission, solveCurrentCadImport]);
 
   useEffect(() => {
     const retryExport = (event: Event) => automation.retryExport((event as CustomEvent<string>).detail);
@@ -657,13 +623,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       return;
     }
     setPendingSolve(null);
-    solveAttention.armSolve();
     const action = async () => {
       if (fileGeometryActive) {
         await solveFileModel();
         return;
       }
       if (cadGeometryActive) {
+        solveAttention.armSolve();
         const draftError = getCrossoverDraftError();
         if (draftError) throw new Error(draftError);
         const focused = document.activeElement;
@@ -685,7 +651,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       const current = useDesignStore.getState();
       await run(current.design, current.designRevision);
     };
-    void action().catch((error) => reportError(error instanceof Error ? error.message : String(error)));
+    void action().catch((error) => {
+      // Plain jobs report through acceptSubmission; CAD retains its observer.
+      if (cadGeometryActive) reportError(error instanceof Error ? error.message : String(error));
+    });
   }, [cadGeometryActive, fileGeometryActive, planPending, reportError, run, solveCurrentCadImport, solveEnabled, solveFileModel]);
   useEffect(() => {
     if (pendingSolve === null) return;

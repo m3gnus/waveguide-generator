@@ -847,7 +847,6 @@ export class JobsSocketManager {
     );
     if (!response.ok) throw await responseError(response);
     const accepted = await response.json() as { job_id: string };
-    await this.refetchJobs();
     return accepted.job_id;
   }
 

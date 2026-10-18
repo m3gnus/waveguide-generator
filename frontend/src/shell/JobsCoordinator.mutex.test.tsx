@@ -44,7 +44,7 @@ import { CrossoverAdvanced } from '../design/CrossoverAdvanced';
 import { expandLegacy } from '../results/crossoverSpec';
 import { JobsPanel } from './JobsPanel';
 import { ResultsPanel } from './ResultsPanel';
-import { solveAttention } from './solveAttention';
+import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
 
 const mocks = vi.hoisted(() => ({
   planSolveDesign: vi.fn(),
@@ -247,6 +247,7 @@ describe('solve invocation mutex', () => {
 
     resetSolveOptionsStore();
     sessionStorage.clear();
+    resetSolveAttentionForTests();
     importedMeshStore.clear();
     workspaceModeStore.setImportedInput('cad');
     resetImportedModelStore();
@@ -295,6 +296,73 @@ describe('solve invocation mutex', () => {
     workspaceModeStore.setMode('parametric');
     vi.clearAllTimers();
     vi.useRealTimers();
+  });
+
+  it.each(['parametric', 'file', 'retry'] as const)('%s uses plain acceptance for refusal, child selection, attention, refresh and locking', async (path) => {
+    const refused = deferred<string>();
+    const accepted = deferred<string>();
+    const request = path === 'retry' ? vi.spyOn(jobsSocket, 'retryJob')
+      : path === 'file' ? mocks.solveModel : mocks.submitDesign;
+    request.mockReturnValueOnce(refused.promise).mockReturnValueOnce(accepted.promise);
+    if (path === 'file') {
+      act(() => {
+        workspaceModeStore.setImportedInput('file');
+        workspaceModeStore.setMode('cad');
+        useMeshImportStore.setState({ busy: false, filename: 'standalone.msh' });
+        void openImported({ kind: 'file', prepared: {
+          ingest_id: 'wgi_file', model_id: 'mesh-file:sha256:original',
+          manifest_sha256: 'sha256:mesh', artifact_sha256: 'sha256:original', source_tags: { group_2: 2 },
+        } as unknown as RegisteredMesh });
+        useImportedSolveOptionsStore.getState().setSweep({ startHz: 100, endHz: 200, count: 2 });
+        importedMeshStore.setFile({ name: 'standalone.msh', source: 'file', ingestId: 'wgi_file' } as ImportedMeshScene);
+      });
+    }
+    await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));
+    const invoke = () => path === 'retry' ? jobsCoordinatorBridge.getSnapshot().retry('parent')
+      : path === 'parametric' ? jobsCoordinatorBridge.getSnapshot().run(designForFamily('OSSE'))
+      : Promise.resolve(host.querySelector<HTMLButtonElement>('button')!.click());
+    const arm = vi.spyOn(solveAttention, 'armSolve');
+    const release = vi.spyOn(solveAttention, 'releaseSolve');
+    const bind = vi.spyOn(solveAttention, 'bindRun');
+    const blocked = vi.fn(async () => 'must-not-submit');
+    const refresh = vi.mocked(jobsSocket.refresh);
+    let refusal!: Promise<unknown>;
+    await act(async () => {
+      refusal = invoke().catch((error: unknown) => error);
+      await Promise.resolve();
+      expect(await jobsCoordinatorBridge.getSnapshot().acceptSubmission(blocked)).toBeNull();
+    });
+    expect(request).toHaveBeenCalledOnce();
+    expect(arm).toHaveBeenCalledOnce();
+    expect(arm.mock.invocationCallOrder[0]).toBeLessThan(request.mock.invocationCallOrder[0]);
+    await act(async () => { refused.reject(new Error('submission refused')); await refusal; });
+    expect(release).toHaveBeenCalledOnce();
+    expect(bind).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('submission refused');
+    expect(compareSelection.getSnapshot().awaiting).toBeNull();
+    solveAttention.bindRun('unrelated');
+    expect(solveAttention.resultsReady('unrelated')).toBe('indicated');
+
+    const refreshed = deferred<void>();
+    refresh.mockReturnValueOnce(refreshed.promise);
+    let submitting!: Promise<unknown>;
+    await act(async () => { submitting = invoke(); await Promise.resolve(); });
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBeNull();
+    expect(host.querySelector<HTMLButtonElement>('button')!.disabled).toBe(true);
+    await act(async () => { accepted.resolve('new-child'); await accepted.promise; });
+    expect(compareSelection.getSnapshot().awaiting).toBe('new-child');
+    expect(bind).toHaveBeenCalledWith('new-child');
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(bind.mock.invocationCallOrder.at(-1)!).toBeLessThan(refresh.mock.invocationCallOrder[0]);
+    await act(async () => {
+      expect(await jobsCoordinatorBridge.getSnapshot().acceptSubmission(blocked)).toBeNull();
+      refreshed.resolve(); await submitting;
+    });
+    expect(blocked).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(host.querySelector<HTMLButtonElement>('button')!.disabled).toBe(false);
+    expect(solveAttention.resultsReady('new-child')).toBe('revealed');
   });
 
   it('shares its plan with a viewport consumer in a separate dock root', async () => {
@@ -1463,6 +1531,36 @@ describe('solve invocation mutex', () => {
 
     await act(async () => { publishJobs([{ ...child, status: 'complete', has_results: true }, parent, pinned]); });
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: child.id, awaiting: null });
+  });
+
+  it('selects a retry child that completes during the acceptance refresh', async () => {
+    const parent = failedJob();
+    const child = { ...parent, id: 'fast-child', parent_job_id: parent.id, status: 'complete' as const, has_results: true };
+    vi.spyOn(jobsSocket, 'retryJob').mockResolvedValue(child.id);
+    vi.mocked(jobsSocket.refresh).mockImplementationOnce(async () => {
+      expect(compareSelection.getSnapshot().awaiting).toBe(child.id);
+      publishJobs([child, parent]);
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
+    publishJobs([parent]);
+    compareSelection.setPrimary('pinned');
+    await act(async () => root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>));
+    await act(async () => jobsCoordinatorBridge.getSnapshot().retry(parent.id));
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: child.id, awaiting: null });
+  });
+
+  it('reports a refresh error without losing the accepted child and unlocks the next press', async () => {
+    vi.spyOn(jobsSocket, 'retryJob').mockResolvedValue('accepted-child');
+    vi.mocked(jobsSocket.refresh).mockRejectedValueOnce(new Error('refresh failed'));
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().retry('parent')).rejects.toThrow('refresh failed');
+    });
+    expect(compareSelection.getSnapshot().awaiting).toBe('accepted-child');
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('refresh failed');
+    expect(solveAttention.resultsReady('accepted-child')).toBe('revealed');
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().acceptSubmission(async () => 'next-child')).resolves.toBe('next-child');
+    });
   });
 
   it('leaves no Solve arm behind when a retry is refused', async () => {

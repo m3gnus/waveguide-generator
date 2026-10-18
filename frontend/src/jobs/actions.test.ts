@@ -66,6 +66,11 @@ describe('solve submission', () => {
     expect((body?.design_snapshot as { design: unknown }).design).toEqual(body?.design);
   });
 
+  it('propagates a refused parametric submission for the coordinator to report', async () => {
+    const fetcher = async () => new Response(JSON.stringify({ detail: 'solve refused' }), { status: 409 });
+    await expect(submitDesign(designForFamily('OSSE'), undefined, fetcher)).rejects.toThrow('solve refused');
+  });
+
   it('preflights the same design and options that submission will use', async () => {
     const design = designForFamily('OSSE');
     design.simulation.sim_type = 'infinite-baffle';
