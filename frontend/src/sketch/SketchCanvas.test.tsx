@@ -18,7 +18,7 @@ function Harness({ initial = base(), diagnosis }: { initial?: Sketch; diagnosis?
   const [session, setSession] = useState<SketchController<null>>();
   const handle = useRef<SketchController<null> | undefined>(undefined);
   useEffect(() => {
-    const controller = new SketchController({ sketch: initial, meta: null }, [], (s, c) => { const r = applyCommand(s.sketch, c); return 'error' in r ? r : { ...s, sketch: r.sketch }; }, (s, d) => { setState(s.sketch); setResult(diagnosis ?? d); setSession(controller); });
+    const controller = new SketchController({ sketch: initial, meta: null }, [], (s, c) => { const r = applyCommand(s.sketch, c); return 'error' in r ? r : { ...s, sketch: r.sketch }; }, (s, d) => { setState(s.sketch); setResult(diagnosis ?? d); setSession(controller); }, undefined, undefined, (s, d) => { setState(s.sketch); setResult(diagnosis ?? d); });
     handle.current = controller; return () => controller.destroy();
   }, [initial, diagnosis]);
   return <SketchCanvas sketch={state} diagnosis={result} session={session} references={[]} problems={[]}/>;
@@ -117,8 +117,8 @@ describe('SketchCanvas with real slvs', () => {
     expect(host.querySelector('[aria-label^="Dimension distance"]')).not.toBeNull();
     expect(document.activeElement).toBe(host.querySelector('[aria-label="Dimension value"]'));
     await key('Escape'); await key('d');
-    await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown');
-    await pointer(host.querySelector('[data-id="other"]')!, 'pointerdown');
+    await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown', 0, 0, { altKey: true });
+    await pointer(host.querySelector('[data-id="other"]')!, 'pointerdown', 0, 0, { altKey: true });
     expect(host.querySelector('[aria-label^="Dimension angle"]')).not.toBeNull();
     expect(host.querySelector<HTMLInputElement>('[aria-label="Dimension value"]')!.value).toBe('90');
     await key('Escape'); await key('d');
@@ -246,4 +246,79 @@ describe('SketchCanvas with real slvs', () => {
     await key('s'); expect(button('Split (S)').getAttribute('aria-pressed')).toBe('true');
     await key('d'); expect(button('Dimension (D)').getAttribute('aria-pressed')).toBe('true');
   });
+  it('fix 2: refocuses and selects the inline dimension value after every refusal', async () => {
+    const r = applyCommand(base(), { kind: 'addConstraint', constraint: { kind: 'distance', a: 'p', b: 'q', value: 10, driving: false } });
+    if ('error' in r) throw new Error(r.error);
+    await mount(r.sketch);
+    await pointer(host.querySelector('.sketch-glyph')!, 'dblclick');
+    const field = host.querySelector<HTMLInputElement>('[aria-label="Dimension value"]')!;
+    for (let i = 0; i < 2; i++) {
+      await act(async () => { button('Apply dimension value').focus(); button('Apply dimension value').click(); });
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain('driving dimension');
+      expect(document.activeElement).toBe(field);
+      expect(field.selectionStart).toBe(0); expect(field.selectionEnd).toBe(field.value.length);
+    }
+  });
+  it('fix 8: preserves Space on toolbar and context buttons and pans only from the surface', async () => {
+    await mount();
+    await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown');
+    for (const control of [button('Line (L)'), button('Horizontal')]) {
+      const event = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+      await act(async () => { control.focus(); control.dispatchEvent(event); });
+      expect(event.defaultPrevented).toBe(false);
+      await key(' ', { });
+      await act(async () => svg().dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true })));
+    }
+    const space = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+    await act(async () => { svg().focus(); svg().dispatchEvent(space); });
+    expect(space.defaultPrevented).toBe(true);
+    const before = coordinate('q').x;
+    await pointer(svg(), 'pointerdown', 100, 100); await pointer(svg(), 'pointermove', 120, 100); await pointer(svg(), 'pointerup');
+    expect(coordinate('q').x).toBeCloseTo(before + 20);
+    await act(async () => {
+      svg().blur(); svg().dispatchEvent(new MouseEvent('pointerover', { bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }));
+    });
+    const hoverSpace = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+    await act(async () => document.body.dispatchEvent(hoverSpace));
+    expect(hoverSpace.defaultPrevented).toBe(true);
+    await pointer(svg(), 'pointerdown', 100, 100); await pointer(svg(), 'pointermove', 120, 100); await pointer(svg(), 'pointerup');
+    expect(coordinate('q').x).toBeCloseTo(before + 40);
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' })));
+  });
+  it('fix 9: gives the drawing one tab stop with arrow navigation, activation and deletion', async () => {
+    await mount();
+    expect(svg().querySelectorAll('[tabindex="0"]')).toHaveLength(0);
+    expect(svg().getAttribute('tabindex')).toBe('0');
+    await act(async () => svg().focus()); await key('ArrowRight');
+    const active = document.activeElement!;
+    expect(active.getAttribute('aria-label')).toBe('Select line line');
+    await act(async () => active.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })));
+    expect(host.querySelector('.sketch-entity.selected')).not.toBeNull();
+    await act(async () => active.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true })));
+    expect(host.querySelector('.sketch-entity')).toBeNull();
+  });
+  it('fix 10: queues fast line clicks and run actions in order', async () => {
+    await mount(); await key('l');
+    await act(async () => {
+      for (const [x, y] of [[150, 100], [250, 130], [350, 160], [450, 190]])
+        svg().dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: x, clientY: y, ctrlKey: true }));
+    });
+    expect(host.querySelectorAll('.sketch-entity')).toHaveLength(4);
+    await key('Escape');
+    await act(async () => { for (let i = 0; i < 2; i++) svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true })); });
+    expect(host.querySelectorAll('.sketch-entity')).toHaveLength(2);
+  });
+  it('fix 11: explicit Alt two-line picks add only an angle without an extra length', async () => {
+    const initial = importedSketch([{ id: 'p', x: 0, y: 0 }, { id: 'q', x: 10, y: 0 }, { id: 'r', x: 10, y: 10 }], [
+      { kind: 'line', id: 'line', p1: 'p', p2: 'q' }, { kind: 'line', id: 'other', p1: 'q', p2: 'r' },
+    ]);
+    await mount(initial); await key('d');
+    await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown', 0, 0, { altKey: true });
+    expect(host.querySelector('.sketch-glyph')).toBeNull();
+    await pointer(host.querySelector('[data-id="other"]')!, 'pointerdown', 0, 0, { altKey: true });
+    expect(host.querySelectorAll('.sketch-glyph')).toHaveLength(1);
+    expect(host.querySelector('[aria-label^="Dimension angle"]')).not.toBeNull();
+  });
+
 });

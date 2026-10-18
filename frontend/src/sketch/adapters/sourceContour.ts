@@ -88,6 +88,28 @@ function chain(sketch: Sketch, meta: SourceMeta): Chain | DomainProblem {
   return result;
 }
 const role = (e: Entity): unknown => e.data && typeof e.data === 'object' && !Array.isArray(e.data) ? e.data.role ?? 'moving' : 'moving';
+/** Default absent moving weights without rounding or replacing literal signed values. */
+export function movingWeights(sketch: Sketch, weights: Record<string, number>) {
+  return Object.fromEntries(sketch.entities.filter(e => !e.construction && role(e) === 'moving').map(e => [e.id, weights[e.id] ?? 1]));
+}
+/** Best-effort table order also works while the domain chain is unfinished. */
+export function contourPointOrder(sketch: Sketch, meta: SourceMeta): string[] {
+  const ordered = chain(sketch, meta);
+  if (!('code' in ordered)) return ordered.points;
+  const edges = sketch.entities.filter(e => !e.construction).flatMap(e => e.kind === 'line' ? [[e.p1, e.p2]] : e.kind === 'arc' ? [[e.start, e.end]] : []);
+  const ids = new Set(edges.flat()), adjacent = (id: string) => edges.filter(e => e.includes(id));
+  const axis = meta.references.find(r => r.kind === 'axis')?.id;
+  const pole = sketch.constraints.find(c => c.kind === 'pointOnLine' && c.line === axis && ids.has(c.point));
+  let cursor: string | undefined = pole && 'point' in pole ? pole.point : sketch.points.filter(p => ids.has(p.id) && adjacent(p.id).length === 1).sort((a, b) => a.x - b.x)[0]?.id;
+  const result: string[] = [], visited = new Set<string[]>();
+  while (cursor && !result.includes(cursor)) {
+    result.push(cursor);
+    const next: string[][] = adjacent(cursor).filter(e => !visited.has(e));
+    if (next.length !== 1) break;
+    visited.add(next[0]); cursor = next[0].find(id => id !== cursor);
+  }
+  return [...result, ...sketch.points.filter(p => ids.has(p.id) && !result.includes(p.id)).map(p => p.id)];
+}
 export function rules(sketch: Sketch, meta: SourceMeta): DomainProblem[] {
   const valid = validateSketch(sketch); if (!valid.ok) return [{ code: 'schema', ids: [], message: valid.reason }];
   const ordered = chain(sketch, meta); if ('code' in ordered) return [ordered];

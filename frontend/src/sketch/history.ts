@@ -26,6 +26,10 @@ export class History<T = Sketch> {
     if (!this.transaction) throw new Error('No active transaction.');
     this.current = this.transaction.snapshot; this.transaction = undefined; return this.current;
   }
+  peek(redo = false) {
+    if (this.transaction) throw new Error('Finish the active transaction first.');
+    return (redo ? this.future : this.past).at(-1)?.snapshot ?? this.current;
+  }
   undo() {
     if (this.transaction) throw new Error('Finish the active transaction first.');
     const previous = this.past.pop(); if (!previous) return this.current;

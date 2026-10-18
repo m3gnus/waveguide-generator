@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type PointerEvent, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { sourceEditorApi, type SourceAttachment, type SourceDocument, type SourcePatch, type SourcePoint, type SourcePreset, type SourceValidation } from '../api/sourceEditor';
 import { durableSettings, namespaceStorage } from '../stores/durableSettings';
@@ -8,7 +8,7 @@ import { drawnSource, editPatch, editPoint, identityProblem, INITIAL_SOURCE, rem
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
 import { SketchController, type Authoring } from '../sketch/controller';
-import { applySourceCommand, lower, rules, seed, type SourceMeta } from '../sketch/adapters/sourceContour';
+import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, type SourceMeta } from '../sketch/adapters/sourceContour';
 import { uniqueProblems } from '../sketch/adapter';
 import { parseSketch } from '../sketch/model';
 import type { Command } from '../sketch/commands';
@@ -50,7 +50,7 @@ function sameDocument(a: SourceDocument, b: SourceDocument) {
   return canonical(a) === canonical(b);
 }
 export function readSourceAuthoring(document: SourceDocument): Authoring<SourceMeta> {
-  const fallback = seed(document);
+  const fallback = seed(document); fallback.meta.weights = movingWeights(fallback.sketch, fallback.meta.weights);
   try {
     const envelope = JSON.parse(storage.getItem('') ?? 'null');
     if (envelope?.version !== 'wg-source-authoring-v1') return fallback;
@@ -60,8 +60,16 @@ export function readSourceAuthoring(document: SourceDocument): Authoring<SourceM
       || !meta.references.every(r => ['axis', 'baffle'].includes(r.kind) && parsed.sketch.entities.some(e => e.id === r.id && e.reference && e.kind === 'line'))
       || ![meta.physical_source_id, meta.rim_id, meta.channel_id].every(v => typeof v === 'string') || !['normal', 'axial'].includes(meta.motion)) return fallback;
     const lowered = lower(parsed.sketch, meta);
-    return lowered.ok && sameDocument(lowered.document, document) ? { sketch: parsed.sketch, meta } : fallback;
+    return envelope.pending === true || lowered.ok && sameDocument(lowered.document, document)
+      ? { sketch: parsed.sketch, meta: { ...meta, weights: movingWeights(parsed.sketch, meta.weights) } } : fallback;
   } catch { return fallback; }
+}
+
+function newerEnvelope(): Record<string, unknown> | undefined {
+  try {
+    const raw = JSON.parse(storage.getItem('') ?? 'null');
+    if (raw?.sketch && parseSketch(raw.sketch).ok === false && raw.sketch.version !== 'wg-sketch-v1') return raw;
+  } catch { /* use the document fallback */ }
 }
 
 function restorationNotice(author: Authoring<SourceMeta>): string {
@@ -101,10 +109,16 @@ export function SourceContourDialog() {
 
 export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; onDraftChange?: (document: SourceDocument) => void }) {
   const [draft, setDraft] = useState(() => initialDocument ? structuredClone(initialDocument) : readSourceDraft());
-  const [author, setAuthor] = useState(() => initialDocument ? seed(draft) : readSourceAuthoring(draft));
+  const [author, setAuthor] = useState(() => {
+    const next = initialDocument ? seed(draft) : readSourceAuthoring(draft);
+    return { ...next, meta: { ...next.meta, weights: movingWeights(next.sketch, next.meta.weights) } };
+  });
   const authorRef = useRef(author); authorRef.current = author;
   const [generation, setGeneration] = useState(0);
-  const [classic, setClassic] = useState(false);
+  const [newer, setNewer] = useState(() => initialDocument ? undefined : newerEnvelope());
+  const [classic, setClassic] = useState(() => !!newer);
+  const [preview, setPreview] = useState<Authoring<SourceMeta>>();
+  const displayAuthor = preview ?? author;
   const [diagnosis, setDiagnosis] = useState<Diagnosis>();
   const [fitRequest, setFitRequest] = useState(0);
   const [canvasSelection, setCanvasSelection] = useState<string[]>([]);
@@ -113,22 +127,25 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   const [sketchReady, setSketchReady] = useState(false);
   const [sketchPending, setSketchPending] = useState(false);
 
-  const lowered = lower(author.sketch, author.meta);
-  const sketchProblems = uniqueProblems([...rules(author.sketch, author.meta), ...(!lowered.ok ? lowered.problems : [])]);
-  const hasSketchProblems = !classic && sketchProblems.length > 0;
-  const endpointIds = new Set(author.sketch.entities.filter(e => !e.construction).flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : e.kind === 'arc' ? [e.start, e.end] : []));
-  const tablePoints = classic ? draft.contour.points : author.sketch.points.filter(p => endpointIds.has(p.id)).map(p => ({ id: p.id, r_mm: p.x, z_mm: p.y }));
-  const tablePatches: SourcePatch[] = classic ? draft.contour.segments : author.sketch.entities.flatMap(e => e.construction || e.kind !== 'line' && e.kind !== 'arc' ? [] : [{
+  const lowering = useRef<{ state: Authoring<SourceMeta>; result: ReturnType<typeof lower> } | undefined>(undefined);
+  const lowered = useMemo(() => lowering.current?.state === author ? lowering.current.result : lower(author.sketch, author.meta), [author]);
+  const sketchRules = useMemo(() => rules(displayAuthor.sketch, displayAuthor.meta), [displayAuthor.sketch, displayAuthor.meta]);
+  const sketchProblems = useMemo(() => uniqueProblems([...sketchRules, ...(!preview && !lowered.ok ? lowered.problems : [])]), [sketchRules, lowered, preview]);
+  const committedProblemCount = useRef(sketchProblems.length);
+  if (!preview) committedProblemCount.current = sketchProblems.length;
+  const hasSketchProblems = !classic && committedProblemCount.current > 0;
+  const tablePoints = useMemo(() => classic ? draft.contour.points : contourPointOrder(author.sketch, author.meta).map(id => author.sketch.points.find(p => p.id === id)!).map(p => ({ id: p.id, r_mm: p.x, z_mm: p.y })), [classic, draft.contour.points, author]);
+  const tablePatches: SourcePatch[] = useMemo(() => classic ? draft.contour.segments : author.sketch.entities.flatMap(e => e.construction || e.kind !== 'line' && e.kind !== 'arc' ? [] : [{
     id: e.id, kind: e.kind, start: e.kind === 'line' ? e.p1 : e.start, end: e.kind === 'line' ? e.p2 : e.end,
     center_mm: e.kind === 'arc' ? [author.sketch.points.find(p => p.id === e.center)!.x, author.sketch.points.find(p => p.id === e.center)!.y] : null,
     direction: e.kind === 'arc' && !e.ccw ? 'cw' : 'ccw',
     role: e.data && typeof e.data === 'object' && !Array.isArray(e.data) && e.data.role === 'rigid' ? 'rigid' : 'moving',
-  }]);
+  }]), [classic, draft.contour.segments, author]);
   const [undo, setUndo] = useState<SourceDocument[]>([]);
   const [view, setView] = useState(() => fit(draft.contour.points));
   const [accepted, setAccepted] = useState<{ key: string; value: SourceValidation }>();
   const [validationError, setValidationError] = useState('');
-  const [error, setError] = useState(''); const [notice, setNotice] = useState(() => initialDocument ? '' : restorationNotice(author));
+  const [error, setError] = useState(''); const [notice, setNotice] = useState(() => newer ? 'Newer sketch data is read-only. Classic drawing edits preserve it unchanged.' : initialDocument ? '' : restorationNotice(author));
   const [busy, setBusy] = useState(false);
   const [presets, setPresets] = useState<SourcePreset[]>([]);
   const [selected, setSelected] = useState<SourcePreset>();
@@ -144,7 +161,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   const svg = useRef<SVGSVGElement>(null);
   const close = useCallback(() => { if (!busy) onClose(); }, [busy, onClose]);
   const dialog = useModalDialogFocus<HTMLDivElement>({ open: true, onClose: close });
-  const key = JSON.stringify(draft);
+  const key = useMemo(() => JSON.stringify(draft), [draft]);
   const valid = accepted?.key === key && drawPoints === null && (classic || sketchReady && !sketchPending && sketchProblems.length === 0);
   const [identifiersOpen, setIdentifiersOpen] = useState(false);
   const identityIssue = identityProblem(validationError, [draft.contour.physical_source_id, draft.contour.rim_id]) || draft.drive.channel_id.trim() === '';
@@ -153,9 +170,11 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   useEffect(() => initialDocument ? undefined : durableSettings.subscribe('sourceContourDraft', () => {
     // The settings owner only notifies adopted server state: it already protects
     // edits made while hydration was in flight. Follow that same authority here.
+    if (editingIntent.current) return;
+    const envelope = newerEnvelope(); setNewer(envelope); if (envelope) setClassic(true);
     const restored = readSourceDraft(), next = readSourceAuthoring(restored); setDraft(restored); replaceAuthor(next); setUndo([]); setSelected(undefined); setSelectedPatch(0);
     fitted.current = false; drag.current = null;
-    setNotice(restorationNotice(next) || 'Restored source draft from saved settings.');
+    setNotice(envelope ? 'Newer sketch data is read-only. Classic drawing edits preserve it unchanged.' : restorationNotice(next) || 'Restored source draft from saved settings.');
   }), [initialDocument]);
 
   useEffect(() => {
@@ -170,26 +189,24 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
     }, (state, result) => {
       if (!current) return;
       setDiagnosis(result); setSketchReady(true);
-      if (opening) { opening = false; return; }
-      authorRef.current = state; setAuthor(state);
-      const lowered = lower(state.sketch, state.meta);
+      if (opening) { opening = false; if (sameDocument(draftRef.current, { ...draftRef.current, drive: { ...draftRef.current.drive, weights: state.meta.weights } })) return; }
+      authorRef.current = state; setAuthor(state); setPreview(undefined);
+      const lowered = lower(state.sketch, state.meta); lowering.current = { state, result: lowered };
       if (lowered.ok) {
-        setDraft(lowered.document); draftCallback.current?.(lowered.document);
+        draftRef.current = lowered.document; setDraft(lowered.document); draftCallback.current?.(lowered.document);
       }
-      if (!initialDocument) storage.setItem('', JSON.stringify({ version: 'wg-source-authoring-v1', document: lowered.ok ? lowered.document : draftRef.current, ...state }));
+      if (!initialDocument) storage.setItem('', JSON.stringify({ version: 'wg-source-authoring-v1', document: lowered.ok ? lowered.document : draftRef.current, ...state, pending: !lowered.ok }));
       setNotice(next.notice ?? ''); setError('');
-    }, reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }, active => { if (current) { setSketchPending(active); if (active) rememberEditIntent(); } });
+    }, reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }, active => { if (current) { editingIntent.current = active; setSketchPending(active); } }, (state, result) => { if (current) { setPreview(state === authorRef.current ? undefined : state); setDiagnosis(result); } });
     controller.current = next;
     // Initialization errors are reported by queued operations as well.
     return () => { current = false; next.destroy(); controller.current = undefined; };
   }, [classic, generation]);
   const draftRef = useRef(draft); draftRef.current = draft;
+  const editingIntent = useRef(false);
   function replaceAuthor(next: Authoring<SourceMeta>) {
     setFitRequest(v => v + 1);
-    authorRef.current = next; setAuthor(next); setGeneration(v => v + 1); setDiagnosis(undefined); setCanvasSelection([]);
-  }
-  function rememberEditIntent() {
-    if (!initialDocument) storage.setItem('', JSON.stringify({ version: 'wg-source-authoring-v1', document: draftRef.current, ...authorRef.current }));
+    authorRef.current = next; setAuthor(next); setPreview(undefined); setGeneration(v => v + 1); setDiagnosis(undefined); setCanvasSelection([]);
   }
   function sketchCommand(command: Command) {
     void controller.current?.command(command).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)));
@@ -207,12 +224,11 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
 
   function change(next: SourceDocument, recordUndo = true) {
     if (!classic && recordUndo && controller.current) {
-      const meta = { ...authorRef.current.meta, physical_source_id: next.contour.physical_source_id, rim_id: next.contour.rim_id,
-        channel_id: next.drive.channel_id, motion: next.drive.motion, weights: { ...next.drive.weights } };
-      void controller.current.metadata(meta).catch(reason => setError(String(reason))); return;
+      void controller.current.metadata(meta => ({ ...meta, physical_source_id: next.contour.physical_source_id, rim_id: next.contour.rim_id,
+        channel_id: next.drive.channel_id, motion: next.drive.motion })).catch(reason => setError(String(reason))); return;
     }
     if (recordUndo) setUndo((history) => [...history.slice(-19), structuredClone(draft)]);
-    setDraft(next); if (!initialDocument) storage.setItem('', JSON.stringify({ version: 'wg-source-authoring-v1', document: next, ...(classic ? seed(next) : authorRef.current) })); onDraftChange?.(next); setNotice(''); setError('');
+    setDraft(next); if (!initialDocument) storage.setItem('', JSON.stringify(newer ? { ...newer, document: next } : { version: 'wg-source-authoring-v1', document: next, ...(classic ? seed(next) : authorRef.current) })); onDraftChange?.(next); setNotice(''); setError('');
   }
   async function run(action: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
@@ -243,7 +259,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
 
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Source contour editor" className="source-editor">
     <header><div><h2>Source contour</h2><ExperimentalBadge/><p>{EXPERIMENTAL_NOTE}</p><p>Full circular source · dimensions in mm · aligned +Z</p></div><button type="button" disabled={busy} onClick={close}>Close</button></header>
-    <fieldset disabled={busy || !classic && sketchPending}>
+    <fieldset disabled={busy}>
       <div className="source-editor-columns"><div>
         {classic && <div className="source-editor-toolbar">
           <button type="button" onClick={() => setView(fit(draft.contour.points, valid ? accepted!.value.meridian : {}))}>Fit drawing</button>
@@ -251,11 +267,11 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
           <button type="button" disabled={drawPoints !== null} onClick={() => setDrawPoints([])}>Draw lines</button>
           {drawPoints !== null && <><button type="button" disabled={drawPoints.length < 2} onClick={() => { change(drawnSource(draft, drawPoints, id)); setSelectedPatch(0); setDrawPoints(null); }}>Finish at rim</button><button type="button" onClick={() => setDrawPoints(null)}>Cancel drawing</button></>}
         </div>}
-        {!classic && <SketchCanvas fitRequest={fitRequest} sketch={author.sketch} diagnosis={diagnosis} references={author.meta.references} problems={validationError && !hasSketchProblems ? [...sketchProblems, { code: 'server', ids: [], message: validationError }] : sketchProblems} session={sketchReady && !busy ? controller.current : undefined}
+        {!classic && <SketchCanvas fitRequest={fitRequest} sketch={displayAuthor.sketch} diagnosis={diagnosis} references={author.meta.references} problems={validationError && !hasSketchProblems ? [...sketchProblems, { code: 'server', ids: [], message: validationError }] : sketchProblems} session={sketchReady && !busy ? controller.current : undefined}
           onClassicDrawing={() => { setClassic(true); setCanvasSelection([]); }}
           entityClassName={entity => entity.data && typeof entity.data === 'object' && !Array.isArray(entity.data) && entity.data.role === 'rigid' ? 'rigid' : 'moving'}
           selection={canvasSelection} onSelectionChange={ids => { setCanvasSelection(ids); const index = tablePatches.findIndex(p => ids.includes(p.id)); if (index >= 0) setSelectedPatch(index); }}
-          entityStyle={entity => ({ '--sketch-patch': entity.data && typeof entity.data === 'object' && !Array.isArray(entity.data) && entity.data.role === 'rigid' ? 'var(--fg3)' : 'var(--source-moving)' } as CSSProperties)}
+          entityStyle={entity => ({ '--sketch-patch': entity.data && typeof entity.data === 'object' && !Array.isArray(entity.data) && entity.data.role === 'rigid' ? 'var(--fg2)' : 'var(--source-moving)' } as CSSProperties)}
           problemAction={problem => {
             if (problem.code !== 'pole' && problem.code !== 'rim') return;
             const reference = author.meta.references.find(r => r.kind === (problem.code === 'pole' ? 'axis' : 'baffle')), point = problem.ids[0];
@@ -283,7 +299,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
         <h3>Patches</h3><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch ID</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{tablePatches.map((patch, i) => <tr key={patch.id}><td title={patch.id}><button type="button" aria-label={`Select patch ${i + 1}`} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}>{patch.id}</button></td>
           <td>{classic && <select aria-label={`Patch ${i + 1} curve`} value={patch.kind} onChange={(e) => change(editPatch(draft, i, { kind: e.target.value as 'line' | 'arc' }))}><option value="line">Line</option><option value="arc">Arc</option></select>}{!classic && patch.kind}</td>
           <td><select aria-label={`Patch ${i + 1} role`} value={patch.role} onChange={(e) => classic ? change(editPatch(draft, i, { role: e.target.value as 'moving' | 'rigid' })) : sketchCommand({ kind: 'setEntityData', id: patch.id, data: { role: e.target.value } })}><option value="moving">Moving</option><option value="rigid">Rigid</option></select></td>
-          <td>{patch.role === 'moving' ? <NumberField label={`Patch ${i + 1} weight`} value={classic ? draft.drive.weights[patch.id] : author.meta.weights[patch.id] ?? 1} precision={6} displayPrecision={3} step={.1} onCommit={(v) => { if (classic) change({ ...draft, drive: { ...draft.drive, weights: { ...draft.drive.weights, [patch.id]: v } } }); else { void controller.current?.metadata({ ...authorRef.current.meta, weights: { ...authorRef.current.meta.weights, [patch.id]: v } }).catch(reason => setError(String(reason))); } }}/> : '—'}</td></tr>)}</tbody></table></div>
+          <td>{patch.role === 'moving' ? <NumberField label={`Patch ${i + 1} weight`} value={classic ? draft.drive.weights[patch.id] : author.meta.weights[patch.id] ?? 1} precision={6} displayPrecision={3} step={.1} onCommit={(v) => { if (classic) change({ ...draft, drive: { ...draft.drive, weights: { ...draft.drive.weights, [patch.id]: v } } }); else { void controller.current?.metadata(meta => ({ ...meta, weights: { ...meta.weights, [patch.id]: v } })).catch(reason => setError(String(reason))); } }}/> : '—'}</td></tr>)}</tbody></table></div>
         {classic && draft.contour.segments[selectedPatch]?.kind === 'arc' && <div className="source-fields">
           <NumberField label="Arc center radius" unit="mm" precision={9} displayPrecision={2} step={.1} value={draft.contour.segments[selectedPatch].center_mm![0]} onCommit={(v) => change(editPatch(draft, selectedPatch, { center_mm: [v, draft.contour.segments[selectedPatch].center_mm![1]] }))}/>
           <NumberField label="Arc center z" unit="mm" precision={9} displayPrecision={2} step={.1} value={draft.contour.segments[selectedPatch].center_mm![1]} onCommit={(v) => change(editPatch(draft, selectedPatch, { center_mm: [draft.contour.segments[selectedPatch].center_mm![0], v] }))}/>

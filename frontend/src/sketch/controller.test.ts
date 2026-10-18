@@ -1,8 +1,9 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SketchController, type Authoring } from './controller';
 import { applyCommand, importedSketch } from './ops';
 import { seed, applySourceCommand } from './adapters/sourceContour';
+import * as sessions from './session';
 import { INITIAL_SOURCE } from '../design/sourceContourEditing';
 const base = () => importedSketch([{ id: 'p', x: 0, y: 0 }, { id: 'q', x: 10, y: 0 }], [{ kind: 'line', id: 'line', p1: 'p', p2: 'q' }]);
 function generic(sketch = base()) {
@@ -86,4 +87,33 @@ describe('authoring session transactions', () => {
       expect(controller.current.meta.motion).toBe('axial'); await controller.undo(); expect(controller.current).toBe(initial);
     } finally { controller.destroy(); }
   });
+  it('fix 3: does not publish or record a point click without movement', async () => {
+    const changed = vi.fn(), initial = base();
+    const controller = new SketchController({ sketch: initial, meta: null }, [], (s, c) => {
+      const r = applyCommand(s.sketch, c); return 'error' in r ? r : { ...s, sketch: r.sketch };
+    }, changed);
+    try {
+      await controller.beginDrag('q'); changed.mockClear();
+      await controller.endDrag();
+      expect(changed).not.toHaveBeenCalled();
+      expect(controller.history.canUndo).toBe(false);
+      expect(controller.current.sketch).toBe(initial);
+    } finally { controller.destroy(); }
+  });
+  it.each([false, true])('fix 13: keeps history and publication intact when %s restoration fails', async redo => {
+    const controller = generic();
+    try {
+      await controller.command({ kind: 'movePoint', id: 'q', x: 12, y: 0 });
+      if (redo) await controller.undo();
+      const before = controller.current, canUndo = controller.history.canUndo, canRedo = controller.history.canRedo;
+      const failure = vi.spyOn(sessions, 'createSession').mockRejectedValueOnce(new Error('Session creation failed'));
+      try { await expect(controller.undo(redo)).rejects.toThrow('Session creation failed'); }
+      finally { failure.mockRestore(); }
+      expect(controller.current).toBe(before);
+      expect(controller.history.canUndo).toBe(canUndo); expect(controller.history.canRedo).toBe(canRedo);
+      await controller.undo(redo);
+      expect(controller.current).not.toBe(before);
+    } finally { controller.destroy(); }
+  });
+
 });

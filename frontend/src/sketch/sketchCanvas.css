@@ -14,13 +14,13 @@
 .sketch-selection-context { position: absolute; top: 8px; left: 8px; z-index: 1; margin: 0; max-width: calc(100% - 24px); }
 .sketch-surface svg { display: block; width: 100%; height: 100%; touch-action: none; outline-offset: -3px; }
 .sketch-grid { stroke: var(--hair); stroke-width: .5; opacity: .45; pointer-events: none; }
-.sketch-references { stroke: var(--fg3); stroke-width: 1; pointer-events: none; }
+.sketch-references { stroke: var(--fg3); stroke-width: 1; stroke-dasharray: 4 4; pointer-events: none; }
 .sketch-references text { fill: var(--fg3); stroke: none; font-size: 10px; }
 .sketch-entity { fill: none; stroke: var(--sketch-patch, var(--fg)); stroke-width: 2.5; cursor: pointer; }
 .sketch-entity.under { stroke: var(--sketch-patch, var(--blue)); }
 .sketch-entity.determined { stroke: var(--sketch-patch, var(--fg)); }
 .sketch-entity.moving { stroke: var(--source-moving); }
-.sketch-entity.rigid { stroke: var(--fg3); }
+.sketch-entity.rigid { stroke: var(--fg2); stroke-width: 3; }
 .sketch-entity.conflicting { stroke: var(--red); }
 .sketch-entity.construction { stroke-dasharray: 6 4; }
 .sketch-curve-hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }

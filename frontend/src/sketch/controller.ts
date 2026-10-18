@@ -19,9 +19,10 @@ export class SketchController<T> {
   private work: Promise<unknown> = Promise.resolve();
   private destroyed = false;
   private dragging = false;
+  private dragStart?: Authoring<T>;
   private pending = 0;
   private busy = false;
-  constructor(initial: Authoring<T>, private references: Reference[] | ((state: Authoring<T>) => Reference[]), private apply: Apply<T>, private changed: (state: Authoring<T>, diagnosis?: Diagnosis) => void, failed?: (reason: unknown) => void, private activity?: (busy: boolean) => void) {
+  constructor(initial: Authoring<T>, private references: Reference[] | ((state: Authoring<T>) => Reference[]), private apply: Apply<T>, private changed: (state: Authoring<T>, diagnosis?: Diagnosis) => void, failed?: (reason: unknown) => void, private activity?: (busy: boolean) => void, private preview?: (state: Authoring<T>, diagnosis?: Diagnosis) => void) {
     this.history = new History(initial);
     this.ready = createSession(initial.sketch, { references: this.getReferences(initial) }).then(async session => {
       if (this.destroyed) { session.destroy(); return; }
@@ -139,12 +140,12 @@ export class SketchController<T> {
       next.sketch = state.sketch; session.destroy(); this.session = next; return state;
     }));
   }
-  metadata(meta: T) {
-    return this.queue(session => this.transaction(session, 'Metadata', async () => ({ ...this.current, meta })));
+  metadata(meta: T | ((current: T) => T)) {
+    return this.queue(session => this.transaction(session, 'Metadata', async () => ({ ...this.current, meta: typeof meta === 'function' ? (meta as (current: T) => T)(this.current.meta) : meta })));
   }
   beginDrag(id: string) {
     return this.queue(async session => {
-      this.notice = undefined; this.history.begin('Drag'); session.sketch = this.current.sketch;
+      this.notice = undefined; this.dragStart = this.current; this.history.begin('Drag'); session.sketch = this.current.sketch;
       try { await session.beginDrag([id]); this.dragging = true; }
       catch (e) { this.history.cancel(); throw e; }
     });
@@ -154,7 +155,8 @@ export class SketchController<T> {
       const start = this.measureDrag ? performance.now() : 0;
       const result = await session.dragTo({ pointId: id, ...target });
       if (this.measureDrag) this.lastSolveMs = performance.now() - start;
-      this.history.update({ ...this.current, sketch: result.sketch }); this.publish(this.current); return result;
+      this.history.update({ ...this.current, sketch: result.sketch });
+      if (!this.destroyed) this.preview?.(this.current, this.diagnosis); return result;
     });
   }
   endDrag(cancel = false) {
@@ -162,19 +164,30 @@ export class SketchController<T> {
       if (!this.dragging) return;
       try {
         this.diagnosis = await session.endDrag();
-        if (cancel || this.diagnosis.status !== 'ok') session.sketch = this.history.cancel().sketch;
-        else { this.history.update({ ...this.current, sketch: session.sketch }); this.history.commit(); }
-        this.publish(this.current);
-      } finally { this.dragging = false; }
+        const unchanged = this.current === this.dragStart || JSON.stringify(session.sketch) === JSON.stringify(this.dragStart!.sketch);
+        if (cancel || this.diagnosis.status !== 'ok' || unchanged) {
+          session.sketch = this.history.cancel().sketch;
+          if (!this.destroyed) this.preview?.(this.current, this.diagnosis);
+        } else {
+          this.history.update({ ...this.current, sketch: session.sketch }); this.history.commit(); this.publish(this.current);
+        }
+      } finally { this.dragging = false; this.dragStart = undefined; }
     });
   }
   undo(redo = false) {
     return this.queue(async session => {
       this.notice = undefined;
-      const state = redo ? this.history.redo() : this.history.undo();
+      const state = this.history.peek(redo);
+      if (state === this.current) return;
       const next = await createSession(state.sketch, { references: this.getReferences(state) });
-      try { this.diagnosis = await next.solveFull(); } catch (e) { next.destroy(); throw e; }
-      next.sketch = state.sketch; session.destroy(); this.session = next; this.publish(state);
+      let diagnosis: Diagnosis;
+      try {
+        diagnosis = await next.solveFull();
+        if (diagnosis.status !== 'ok') throw new Error(diagnosis.reason ?? 'The history state cannot be solved.');
+      } catch (e) { next.destroy(); throw e; }
+      next.sketch = state.sketch; session.destroy(); this.session = next; this.diagnosis = diagnosis;
+      if (redo) this.history.redo(); else this.history.undo();
+      this.publish(state);
     });
   }
   destroy() { this.destroyed = true; void this.ready.catch(() => {}).then(() => this.work).finally(() => this.session?.destroy()); }

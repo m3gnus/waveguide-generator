@@ -7,6 +7,7 @@ import { INITIAL_SOURCE } from './sourceContourEditing';
 import { Editor, readSourceDraft, readSourceAuthoring, SourceContourDialog, SourceContourEditor } from './SourceContourEditor';
 
 vi.mock('../api/sourceEditor', () => ({ sourceEditorApi: { validate: vi.fn(), presets: vi.fn(), save: vi.fn(), delete: vi.fn(), expand: vi.fn(), split: vi.fn(), export: vi.fn() } }));
+import * as sourceAdapter from '../sketch/adapters/sourceContour';
 import { realSessionReady } from '../sketch/testSupport';
 import { readFileSync } from 'node:fs';
 const tokensCss = new TextDecoder().decode(readFileSync('src/styles/tokens.css'));
@@ -33,6 +34,137 @@ describe('source editor interactions', () => {
   const input = (text: string) => { const direct = host.querySelector<HTMLInputElement>(`input[aria-label="${text}"]`); if (direct) return direct; const label = [...host.querySelectorAll('label')].find((l) => l.querySelector('.field-name')?.textContent === text)!; return document.getElementById(label.htmlFor) as HTMLInputElement; };
   async function enter(text: string, value: string) { await act(async () => { const field = input(text); field.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value); field.dispatchEvent(new Event('input', { bubbles: true })); }); await act(async () => input(text).blur()); }
 
+
+  const pointer = async (element: Element, type = 'pointerdown', x = 0, y = 0) => act(async () => { element.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y })); });
+  async function deletePoleLock() {
+    const lock = [...host.querySelectorAll('[aria-label^="Constraint pointOnLine"]')][0];
+    await pointer(lock); await act(async () => button('Delete selection').click());
+  }
+  async function splitCanvas() {
+    await act(async () => host.querySelector('[aria-label="Sketch drawing"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true })));
+    const line = host.querySelector('.sketch-entity[data-id="piston"]')!, values = line.getAttribute('d')!.match(/[\d.e+-]+/g)!.map(Number);
+    await pointer(line, 'pointerdown', (values[0] + values[2]) / 2, (values[1] + values[3]) / 2);
+  }
+  it('fix 1: preserves split weights when metadata changes while lowering fails', async () => {
+    await mount(); await splitCanvas(); await deletePoleLock(); await splitCanvas();
+    const before = JSON.parse(storage.getItem('')!);
+    expect(Object.keys(before.meta.weights)).toHaveLength(3);
+    await act(async () => {
+      const motion = host.querySelector<HTMLSelectElement>('[aria-label="Prescribed motion"]')!;
+      motion.value = 'axial'; motion.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(JSON.parse(storage.getItem('')!).meta.weights).toEqual(before.meta.weights);
+    await act(async () => button('Lock pole to axis').click()); await settle();
+    expect(Object.keys(readSourceDraft().drive.weights)).toHaveLength(3);
+  });
+  it('fix 1: fills a missing moving weight so the displayed default can be committed', async () => {
+    const doc = structuredClone(INITIAL_SOURCE); doc.drive.weights = {};
+    storage.setItem('', JSON.stringify(doc)); await mount();
+    expect(input('Patch 1 weight').value).toBe('1.000');
+    await enter('Patch 1 weight', '1'); await settle();
+    await enter('Drive channel ID', 'filled'); await settle();
+    expect(readSourceDraft().drive.weights).toEqual({ piston: 1 });
+    expect(button('Export STEP + mesh bundle').disabled).toBe(false);
+  });
+  it('fix 2: keeps a weight field focused and enabled through two queued ArrowUp steps', async () => {
+    await mount(); const field = input('Patch 1 weight');
+    await act(async () => field.focus());
+    act(() => field.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })));
+    expect(field.matches(':disabled')).toBe(false);
+    expect(document.activeElement).toBe(field);
+    await act(async () => field.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })));
+    await settle();
+    expect(readSourceDraft().drive.weights.piston).toBe(1.2);
+    expect(document.activeElement).toBe(field);
+    expect(input('Point 2 z').matches(':disabled')).toBe(false);
+  });
+  it('fix 4: keeps newer sketch data untouched and uses the Classic fallback', async () => {
+    const sketch = { version: 'wg-sketch-v99', future: { opaque: ['keep', 9] } };
+    storage.setItem('', JSON.stringify({ version: 'wg-source-authoring-v1', document: INITIAL_SOURCE, sketch, meta: { future: true } }));
+    await mount();
+    expect(host.textContent).toContain('Newer sketch data');
+    expect(host.querySelector('[aria-label="Sketch drawing"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Source meridian drawing"]')).not.toBeNull();
+    await enter('Point 2 radius', '12'); await settle();
+    expect(JSON.parse(storage.getItem('')!).sketch).toEqual(sketch);
+    vi.mocked(sourceEditorApi.expand).mockResolvedValue(validation(INITIAL_SOURCE));
+    await act(async () => button('Apply shape').click());
+    expect(JSON.parse(storage.getItem('')!).sketch).toEqual(sketch);
+  });
+  it('fix 5: persists and reopens unfinished sketches with the last valid document', async () => {
+    await mount(); await deletePoleLock();
+    const saved = JSON.parse(storage.getItem('')!);
+    expect(saved.pending).toBe(true); expect(saved.document).toEqual(INITIAL_SOURCE);
+    await act(async () => root.render(null)); await mount();
+    expect(host.querySelector('.sketch-domain-problem')?.textContent).toContain('Lock the pole');
+    expect(readSourceAuthoring(readSourceDraft()).sketch).toEqual(saved.sketch);
+    expect(button('Export STEP + mesh bundle').disabled).toBe(true);
+    await act(async () => button('Lock pole to axis').click()); await settle();
+    expect(JSON.parse(storage.getItem('')!).pending).toBe(false);
+  });
+  it('fix 6: orders points and their labels along the contour after splitting, even unfinished', async () => {
+    await mount(); await splitCanvas();
+    expect(Number(input('Point 2 radius').value)).toBe(4);
+    expect(Number(input('Point 3 radius').value)).toBe(8);
+    await deletePoleLock();
+    expect(Number(input('Point 1 radius').value)).toBe(0);
+    expect(Number(input('Point 2 radius').value)).toBe(4);
+    expect(Number(input('Point 3 radius').value)).toBe(8);
+  });
+  it('fix 7: publishes and writes storage once for a multi-frame drag', async () => {
+    const callback = vi.fn();
+    await act(async () => root.render(<Editor onClose={() => {}} onDraftChange={callback}/>)); await settle();
+    const writes = vi.spyOn(durableSettings, 'set'), lowering = vi.spyOn(sourceAdapter, 'lower'), rules = vi.spyOn(sourceAdapter, 'rules'); callback.mockClear();
+    const svg = host.querySelector<SVGSVGElement>('[aria-label="Sketch drawing"]')!, rim = host.querySelector('.sketch-point[data-id="rim"]')!;
+    const x = Number(rim.getAttribute('cx')), y = Number(rim.getAttribute('cy'));
+    await pointer(rim, 'pointerdown', x, y);
+    for (let i = 1; i <= 3; i++) {
+      rules.mockClear(); await pointer(svg, 'pointermove', x + i * 5, y); await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+      expect(rules.mock.calls.length).toBeLessThanOrEqual(1);
+    }
+    expect(writes).not.toHaveBeenCalled(); expect(callback).not.toHaveBeenCalled(); expect(lowering).not.toHaveBeenCalled();
+    await pointer(svg, 'pointerup');
+    expect(writes).toHaveBeenCalledTimes(1); expect(callback).toHaveBeenCalledTimes(1); expect(lowering).toHaveBeenCalledTimes(1);
+    expect(readSourceDraft().contour.points[1].r_mm).toBeGreaterThan(8);
+  });
+  it('fix 12: distinguishes solid rigid sections from thin dashed references in both canvases', () => {
+    expect(canvasCss).toContain('.sketch-entity.rigid { stroke: var(--fg2); stroke-width: 3; }');
+    expect(canvasCss).toContain('stroke-dasharray: 4 4');
+    expect(editorCss).toContain('.source-meridian .rigid { stroke: var(--fg2); stroke-width: 3; }');
+    expect(editorCss).toContain('.source-axis { stroke: var(--fg3); stroke-width: 1; stroke-dasharray: 4 4; }');
+  });
+  it('fix 14: sketch mode preserves concise exact values through a queued keyboard metadata edit', async () => {
+    const doc = structuredClone(INITIAL_SOURCE); doc.contour.points[1].r_mm = 8.123456789; doc.drive.weights.piston = .123456789;
+    storage.setItem('', JSON.stringify(doc)); await mount();
+    for (const [label, displayed] of [['Point 2 radius', '8.12'], ['Patch 1 weight', '0.123']]) {
+      expect(input(label).value).toBe(displayed); await act(async () => input(label).focus()); await act(async () => input(label).blur());
+    }
+    await enter('Drive channel ID', 'changed'); await settle();
+    expect(readSourceDraft().contour).toEqual(doc.contour); expect(readSourceDraft().drive.weights).toEqual(doc.drive.weights);
+    act(() => input('Patch 1 weight').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })));
+    expect(input('Point 2 radius').matches(':disabled')).toBe(false);
+    await settle();
+  });
+  it('sketch mode keeps zero and negative weights moving and refuses stale validation', async () => {
+    await mount(); await enter('Patch 1 weight', '-0.5'); await settle();
+    expect(readSourceDraft().drive.weights.piston).toBe(-.5);
+    await enter('Patch 1 weight', '0'); await settle();
+    expect(readSourceDraft().contour.segments[0].role).toBe('moving');
+    vi.mocked(sourceEditorApi.validate).mockRejectedValueOnce(new Error('Invalid rim radius'));
+    await enter('Point 2 radius', '12');
+    expect(button('Export STEP + mesh bundle').disabled).toBe(true);
+    await settle(); expect(host.textContent).toContain('Invalid rim radius');
+    expect(host.querySelector('.sketch-entity.moving')).not.toBeNull();
+  });
+  it('sketch mode ignores an older accepted response after a newer draft was refused', async () => {
+    await mount(); let resolve!: (value: SourceValidation) => void;
+    vi.mocked(sourceEditorApi.validate).mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    await enter('Point 2 radius', '12'); await settle(); const old = readSourceDraft();
+    vi.mocked(sourceEditorApi.validate).mockRejectedValueOnce(new Error('Newest draft invalid'));
+    await enter('Point 2 radius', '13'); await settle();
+    await act(async () => resolve(validation(old)));
+    expect(button('Export STEP + mesh bundle').disabled).toBe(true); expect(host.textContent).toContain('Newest draft invalid');
+  });
   it('keeps role classes and theme tokens in the portalled dialog in both themes', async () => {
     const doc = structuredClone(INITIAL_SOURCE);
     doc.contour.points.push({ id: 'land', r_mm: 10, z_mm: 0 });
@@ -61,7 +193,7 @@ describe('source editor interactions', () => {
       expect(editorCss).toContain('var(--ctl-grad-h)');
       expect(editorCss).toContain('var(--surface-field)');
       expect(canvasCss).toContain('.sketch-entity.moving { stroke: var(--source-moving); }');
-      expect(canvasCss).toContain('.sketch-entity.rigid { stroke: var(--fg3); }');
+      expect(canvasCss).toContain('.sketch-entity.rigid { stroke: var(--fg2); stroke-width: 3; }');
       expect(tokensCss).toContain('--source-moving: #69d4ce');
       expect(tokensCss).toContain('--source-moving: #176d68');
     } finally {

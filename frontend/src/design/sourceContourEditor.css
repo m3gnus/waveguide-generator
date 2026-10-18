@@ -37,10 +37,10 @@
 .source-table .field-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .source-meridian { width: 100%; height: 260px; background: var(--surface-raised); border: 1px solid var(--hair); border-radius: 6px; touch-action: none; }
 .source-meridian text { fill: var(--fg3); font-size: 11px; }
-.source-axis { stroke: var(--fg3); stroke-width: 1; }
+.source-axis { stroke: var(--fg3); stroke-width: 1; stroke-dasharray: 4 4; }
 .source-meridian path { fill: none; stroke-width: 3; cursor: pointer; }
 .source-meridian .moving { stroke: var(--source-moving); }
-.source-meridian .rigid { stroke: var(--fg3); }
+.source-meridian .rigid { stroke: var(--fg2); stroke-width: 3; }
 .source-meridian .selected { stroke: var(--acc); stroke-width: 5; }
 .source-meridian .draft { stroke-dasharray: 5 4; }
 .source-handle { fill: var(--fg); stroke: var(--surface-raised); stroke-width: 2; cursor: grab; }
