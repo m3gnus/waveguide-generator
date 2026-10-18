@@ -9,9 +9,9 @@ name: CI
 # and a CAD-return variant required on Ubuntu with pinned CPU OpenCL (PoCL).
 # Other platforms run the CAD variant only where an imported engine is offered.
 
-# Routine integration is gated by the full local suite, run once per landed
-# batch under the workspace landing policy, so this is never a landing gate. It
-# runs in three ways:
+# Routine merges use affected local checks under workspace policy section 3.1;
+# the full suite runs at dev checkpoints and on release candidates. Hosted CI
+# is not a landing gate. It runs in three ways:
 #
 # - on every push to `dev`, which is where a landed batch arrives one step
 #   before `main`: a diagnostic on the integration candidate. A push runs Linux

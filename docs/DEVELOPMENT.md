@@ -179,13 +179,16 @@ prefixes to conservative Python test globs. Changes to existing test files selec
 those files. Unknown paths, deleted test files, shared code, conftests, requirements,
 and the test launcher/map select the full Python suite. An empty diff is refused.
 This is an inner-loop aid: frontend changes still require Node 20 frontend checks,
-and it does not replace the full gate.
+and validation scope follows the workspace policy (§3.1), not this selector.
 
-### Parallel suite gate and landing
+### Parallel suite execution and checkpoints
 
 Development requirements are maintained in `server/requirements-dev.txt`; the
-resolved versions also belong in `server/requirements-lock.txt`. Only
-`requirements-pins.txt` is generated (`scripts/gen_requirements.py`). When changing
+resolved versions also belong in `server/requirements-lock.txt`.
+`scripts/gen_requirements.py` generates `server/requirements-pins.txt` from
+`pins.json`; `scripts/hash_lock_requirements.py --write` generates
+`server/requirements-hashed.txt` and `server/requirements-runtime-hashed.txt`
+from the lock. Do not edit these generated files by hand. When changing
 dependencies, create a fresh Python 3.13 venv and install the lock, then the pins
 with `--no-deps`, then the dev requirements. Do not modify another session's venv.
 
@@ -222,10 +225,13 @@ thread. A `serial` marker groups tests onto one worker; it does **not** pause ot
 workers or the other broker lane. Use it only when those tests share a resource,
 not to claim an idle machine for a wall-clock assertion.
 
-The lander's landing gate remains the full suite on the exact landing tree.
-Parallel landing is permitted only with identical pass/skip counts from serial
-and parallel runs on that tree; a fast inner-loop run is never landing evidence.
-Use `--full -n0` for landing until that tree has parity evidence.
+Validation scope is owned by [the workspace policy](../GIT-WORKFLOW.md) §3.1:
+each routine merge requires fast checks, affected tests and a scoped review.
+The full suite runs at the `dev` checkpoint and on release candidates, or earlier
+for a concrete broad-impact risk. A correction reruns only failed and affected
+checks; unchanged results remain valid. Serial/parallel parity is evidence for
+the runner configuration, not a requirement to run both modes for every merge.
+Use the launcher above for execution and the compute broker for heavy runs.
 
 S1-full qualification on the shared ten-logical-CPU Mac used a fresh Python 3.13
 environment and both complete Python suites, with slow tests included:

@@ -42,8 +42,8 @@ name: RC build
 #
 # Nothing is built until the qualify job has passed: it runs the whole of
 # ci.yml at this run's commit, github.sha, and the SPA job needs it, so every
-# later job does too. CI no longer runs on push, so without it a candidate of
-# main would be built from a commit nothing hosted had checked. The source guard
+# later job does too. Push CI runs on dev, not main, so this call qualifies
+# the exact candidate even when no push run exists for it. The source guard
 # therefore runs after qualification: a mismatched dispatch still builds
 # nothing, it only finds out later.
 on:

@@ -15,7 +15,7 @@ name: Release
 # ci.yml, which a same-repository call runs at this run's own commit,
 # github.sha; the SPA job needs it, and every later job needs the SPA job. It
 # replaced a lookup of a push-triggered ci.yml run on the release commit, which
-# stopped existing when CI stopped running on push.
+# no longer exists for main: push CI runs only on dev.
 #
 # Every action is pinned to an immutable commit, with the release it belonged to
 # in a trailing comment. A major tag such as `@v4` moves, so a workflow that
