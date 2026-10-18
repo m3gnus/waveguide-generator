@@ -76,7 +76,7 @@ def test_row_without_locator_recovers_on_retry(monkeypatch, tmp_path):
     assert len(writes) == 1
 
 
-def test_locator_without_handoff_recovers_exact_target_once(monkeypatch, tmp_path):
+def test_restart_defers_handoff_until_live_same_key_retry(monkeypatch, tmp_path):
     store, saved, workspace, writes = setup(monkeypatch, tmp_path)
     real_handoff = cad_handoff.publish_fusion_handoff
 
@@ -104,6 +104,11 @@ def test_locator_without_handoff_recovers_exact_target_once(monkeypatch, tmp_pat
     recovered = CadLinkStore(store.db_path)
     assert publication.recover_publications(recovered) == []
     folder = tmp_path / "data" / "ipc" / "wglink" / ".fusion-handoffs"
+    assert not list(folder.glob("*.json"))
+    journal = publication._journal_folder(recovered) / f"{row['export_id']}.json"
+    assert json.loads(journal.read_text())["handoffState"] == "not_delivered"
+    retry = api._export_wglink_sync(_request(saved), recovered, workspace, "A")
+    assert retry["cadHandoff"] == "published"
     handoffs = list(folder.glob("*.json"))
     assert len(handoffs) == 1
     payload = json.loads(handoffs[0].read_text())
@@ -135,7 +140,8 @@ def test_locator_contention_never_regresses_and_is_exact(monkeypatch, tmp_path):
     assert not list(locator(b).parent.glob("*.tmp"))
 
 
-def test_windows_replace_failure_keeps_old_locator(monkeypatch, tmp_path):
+@pytest.mark.parametrize("winerror", [5, 32, 33])
+def test_windows_replace_failure_keeps_old_locator(monkeypatch, tmp_path, winerror):
     path = tmp_path / "design.latest.json"
     publication.atomic_json(path, {"sequence": 1})
     old = path.read_bytes()
@@ -144,7 +150,7 @@ def test_windows_replace_failure_keeps_old_locator(monkeypatch, tmp_path):
     def denied(src, dst):
         calls.append((src, dst))
         error = OSError("sharing violation")
-        error.winerror = 32
+        error.winerror = winerror
         raise error
 
     monkeypatch.setattr(publication, "_WINDOWS", True)
@@ -326,4 +332,121 @@ def test_crash_after_handoff_does_not_republish_consumed_operation(monkeypatch, 
     assert publication.recover_publications(store) == []
     assert not list(folder.glob("*.json"))
     assert store.get_operation(request_id) is not None
+    assert len(writes) == 1
+
+
+@pytest.mark.parametrize("update", [False, True])
+def test_failed_handoff_restart_and_retry_after_newer_export_are_superseded(monkeypatch, tmp_path, update):
+    store, saved, workspace, writes = setup(monkeypatch, tmp_path)
+    handoff = {"dataDir": str(tmp_path / "data")}
+    if update:
+        handoff.update(documentId="doc", instanceId="instance", returnStateHash="sha256:baseline")
+    real_handoff = cad_handoff.publish_fusion_handoff
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(args)
+        raise OSError("handoff unavailable")
+
+    monkeypatch.setattr(cad_handoff, "publish_fusion_handoff", fail)
+    with pytest.raises(HTTPException) as error:
+        api._export_wglink_sync(_request(saved), store, workspace, "A", handoff=handoff)
+    assert error.value.status_code == 503
+    a = store.find_export_by_idempotency_key("A")
+    recovered = CadLinkStore(store.db_path)
+    assert publication.recover_publications(recovered) == []
+    assert len(calls) == 1  # Startup must not even attempt a handoff.
+    monkeypatch.setattr(cad_handoff, "publish_fusion_handoff", real_handoff)
+    b = api._export_wglink_sync(_request(saved), recovered, workspace, "B", handoff=handoff)
+    folder = tmp_path / "data" / "ipc" / "wglink" / ".fusion-handoffs"
+    before = {p.name: p.read_bytes() for p in folder.iterdir()}
+    retry = api._export_wglink_sync(_request(saved), recovered, workspace, "A", handoff=handoff)
+    assert retry["exportId"] == a["export_id"]
+    assert retry["cadHandoff"] == "failed"
+    assert retry["cadHandoffReason"] == "superseded"
+    assert "cadHandoffRequestId" not in retry
+    assert {p.name: p.read_bytes() for p in folder.iterdir()} == before
+    assert recovered.get_operation(b["cadHandoffRequestId"])["state"] == "received"
+    assert json.loads(locator(b).read_text())["exportId"] == b["exportId"]
+    assert len(writes) == 2
+
+
+@pytest.mark.parametrize("journal", ["missing", "onshape"])
+def test_journalless_or_onshape_retry_reports_no_handoff(monkeypatch, tmp_path, journal):
+    import asyncio
+    from types import SimpleNamespace
+
+    store, saved, workspace, writes = setup(monkeypatch, tmp_path)
+    original = api._export_wglink_sync(_request(saved), store, workspace, "A")
+    if journal == "missing":
+        (publication._journal_folder(store) / f"{original['exportId']}.json").unlink()
+    app = SimpleNamespace(state=SimpleNamespace(
+        cadlink_store=store, data_dir=tmp_path / "data",
+        cad_workspace=SimpleNamespace(selected_path=lambda: workspace),
+    ))
+    monkeypatch.setattr(api, "focus_cad", lambda: False)
+    monkeypatch.setattr(api, "_handoff_waiting_notice", lambda _: None)
+    result = asyncio.run(api.export_wglink(_request(saved), SimpleNamespace(app=app), "A"))
+    assert result["exportId"] == original["exportId"]
+    assert result["cadHandoff"] == "failed"
+    assert result["cadHandoffReason"] == "not_published"
+    assert "cadHandoffRequestId" not in result
+    assert len(writes) == 1
+
+
+def test_windows_access_denied_is_retried_then_replaced(monkeypatch, tmp_path):
+    path = tmp_path / "design.latest.json"
+    publication.atomic_json(path, {"sequence": 1})
+    replace = publication.os.replace
+    calls = []
+
+    def busy_once(src, dst):
+        calls.append(dst)
+        if len(calls) == 1:
+            error = PermissionError("access denied")
+            error.winerror = 5
+            raise error
+        replace(src, dst)
+
+    monkeypatch.setattr(publication, "_WINDOWS", True)
+    monkeypatch.setattr(publication.os, "replace", busy_once)
+    monkeypatch.setattr(publication.time, "sleep", lambda _: None)
+    publication.atomic_json(path, {"sequence": 2})
+    assert len(calls) == 2
+    assert json.loads(path.read_text()) == {"sequence": 2}
+
+
+def test_crash_between_accept_and_file_is_cancelled_before_live_retry(monkeypatch, tmp_path):
+    from server.cadlink.fusion import fusion_delivery
+    from server.cadlink.fusion.fusion_outcomes import settle_unpublished_handoffs
+    from server.cadlink.ipc import ipc_folder
+
+    class Crash(BaseException):
+        pass
+
+    store, saved, workspace, writes = setup(monkeypatch, tmp_path)
+    data = tmp_path / "data"
+    replace = fusion_delivery.os.replace
+
+    def crash(src, dst):
+        if Path(dst).parent.name == ".fusion-handoffs":
+            raise Crash()
+        replace(src, dst)
+
+    monkeypatch.setattr(fusion_delivery.os, "replace", crash)
+    with pytest.raises(Crash):
+        api._export_wglink_sync(_request(saved), store, workspace, "A", handoff={"dataDir": str(data)})
+    row = store.find_export_by_idempotency_key("A")
+    journal = publication._journal_folder(store) / f"{row['export_id']}.json"
+    old_id = json.loads(journal.read_text())["requestId"]
+    assert store.get_operation(old_id)["state"] == "received"
+    monkeypatch.setattr(fusion_delivery.os, "replace", replace)
+    recovered = CadLinkStore(store.db_path)
+    assert publication.recover_publications(recovered) == []
+    assert settle_unpublished_handoffs(recovered, ipc_folder(data)) == 1
+    assert recovered.get_operation(old_id)["reason"] == "publication_failed"
+    retry = api._export_wglink_sync(_request(saved), recovered, workspace, "A")
+    assert retry["cadHandoff"] == "published"
+    assert retry["cadHandoffRequestId"] != old_id
+    assert retry["exportId"] == row["export_id"]
     assert len(writes) == 1

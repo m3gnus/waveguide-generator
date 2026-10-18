@@ -198,8 +198,8 @@ def _write_json(
                 replace_failed(receipt, exc)
             except Exception:
                 # The staged document is durable recovery evidence. If the
-                # compensating store write also fails, startup finishes this
-                # publication instead of stranding a received row with no file.
+                # compensating store write also fails, startup can finish a
+                # return request; an unpublished handoff is cancelled instead.
                 keep_for_recovery = True
                 logger.warning(
                     "Could not compensate failed Fusion request publication %s.",
@@ -430,17 +430,18 @@ def recover_staged_fusion_requests(
     *,
     lookup_operation: Callable[[str], Mapping[str, Any] | None],
 ) -> tuple[str, ...]:
-    """Finish files staged before a backend interruption.
+    """Finish return files staged before a backend interruption.
 
     The JSON is durable before its operation is accepted. A received row plus
     this hidden file proves the interruption happened between acceptance and
     publication. Existing visible requests and add-in claims always win.
+    Handoffs are never delivered by startup recovery; a live Send must retry.
 
     A legacy HTTP claim hid a request under the same pattern,
     ``.<requestId>.json.live-<claimId>.tmp``, before it claims the operation
     in the store. Interrupted before that claim, the row is still ``received``
-    and the request is restored; interrupted after it, the row is not, and the
-    hidden file is deleted -- as is one whose operation was cancelled meanwhile.
+    and a return request is restored; interrupted after it, the row is not, and
+    the hidden file is deleted -- as is a handoff or a cancelled operation's file.
     """
 
     recovered: list[str] = []
@@ -473,6 +474,7 @@ def recover_staged_fusion_requests(
                     or claimed
                     or row is None
                     or row.get("state") != "received"
+                    or channel == HANDOFFS
                 ):
                     temporary.unlink(missing_ok=True)
                     continue

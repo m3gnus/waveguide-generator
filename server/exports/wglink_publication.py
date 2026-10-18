@@ -61,7 +61,7 @@ def atomic_json(path: Path, payload: Mapping[str, object]) -> None:
                 os.replace(temporary, path)
                 break
             except OSError as exc:
-                if not _WINDOWS or getattr(exc, "winerror", None) not in {32, 33} or attempt == 9:
+                if not _WINDOWS or getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 9:
                     raise
                 time.sleep(0.02)
         _sync_directory(path.parent)
@@ -255,35 +255,41 @@ def publish_bundle(
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def finish_publication(store: CadLinkStore, row: Mapping[str, Any]) -> Any:
-    """Commit locator before the exact-target handoff, replaying durable intent."""
+def finish_publication(
+    store: CadLinkStore, row: Mapping[str, Any], *, deliver_handoff: bool = True,
+) -> dict[str, Any]:
+    """Repair durable boundaries; only a live request may deliver its handoff."""
     store.make_durable()
     publish_locator(store, row)
     journal = _journal_folder(store) / f"{_component(row['export_id'])}.json"
     with _LOCK:
         if not journal.exists():
-            return None
+            return {"cadHandoff": "failed", "cadHandoffReason": "not_published"}
         intent = json.loads(journal.read_text(encoding="utf-8"))
         handoff = intent["handoff"]
+        if not deliver_handoff:
+            if not intent.get("done"):
+                atomic_json(journal, {**intent, "handoffState": "not_delivered"})
+            return {}
+        if any(
+            candidate["design_id"] == row["design_id"]
+            and candidate["sequence"] > row["sequence"]
+            for candidate in store.publication_exports()
+        ):
+            atomic_json(journal, {**intent, "handoffState": "superseded"})
+            return {"cadHandoff": "failed", "cadHandoffReason": "superseded"}
+        existing = store.get_operation(intent["requestId"]) if handoff else None
         if intent.get("done"):
             if not handoff:
-                return None
-            from server.cadlink.fusion.fusion_delivery import PublishedRequest, HANDOFFS
-            from server.cadlink.ipc import IPC_SUBDIRECTORY
-
-            return PublishedRequest(
-                intent["requestId"],
-                Path(handoff["dataDir"])
-                / IPC_SUBDIRECTORY
-                / HANDOFFS.directory
-                / f"{intent['requestId']}.json",
-            )
+                return {"cadHandoff": "failed", "cadHandoffReason": "not_published"}
+            if existing is not None and existing.get("state") == "cancelled":
+                return {"cadHandoff": "failed", "cadHandoffReason": existing.get("reason")}
+            return {"cadHandoff": "published", "cadHandoffRequestId": intent["requestId"]}
         published = None
         if handoff:
             from .cad_handoff import publish_fusion_handoff
 
             # A consumed or terminal operation must never become runnable again.
-            existing = store.get_operation(intent["requestId"])
             if existing is not None and existing.get("reason") == "publication_failed":
                 intent["requestId"] = str(uuid.uuid4())
                 atomic_json(journal, intent)
@@ -310,8 +316,14 @@ def finish_publication(store: CadLinkStore, row: Mapping[str, Any]) -> Any:
             store.make_durable()
             if published is not None:
                 _sync_directory(published.path.parent)
-        atomic_json(journal, {**intent, "done": True})
-        return published
+        atomic_json(journal, {**intent, "done": True,
+                              "handoffState": "published" if handoff else "not_delivered"})
+        if published is not None:
+            return {"cadHandoff": "published", "cadHandoffRequestId": published.request_id,
+                    "cadHandoffSuperseded": list(published.withdrawn)}
+        if handoff and existing is not None and existing.get("reason") != "publication_failed":
+            return {"cadHandoff": "published", "cadHandoffRequestId": intent["requestId"]}
+        return {"cadHandoff": "failed", "cadHandoffReason": "not_published"}
 
 
 def recover_publications(store: CadLinkStore) -> list[str]:
@@ -341,7 +353,7 @@ def recover_publications(store: CadLinkStore) -> list[str]:
                     idempotency_key=reservation["idempotency_key"],
                     export_builder=lambda reserved: bundle_products(path, reserved),
                 )
-            finish_publication(store, row)
+            finish_publication(store, row, deliver_handoff=False)
         except Exception as exc:
             failures.append(journal.name)
             logger.warning("Could not recover WGLink publication %s: %s", journal.name, exc)

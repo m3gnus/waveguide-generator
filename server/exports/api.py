@@ -405,9 +405,7 @@ def _export_wglink_sync(
         ):
             raise HTTPException(status_code=409, detail="Idempotency key names a different CAD export identity.")
         result = _wglink_response(retry, _identity_for_export(store, retry))
-        published = _finish_publication(store, retry)
-        if published is not None:
-            result["cadHandoffRequestId"] = published.request_id
+        result.update(_finish_publication(store, retry))
         return result
 
     design_name = _base_name(request.base_name)
@@ -457,15 +455,11 @@ def _export_wglink_sync(
         raise _export_error(exc) from exc
 
     result = _wglink_response(row, identity)
-    published = _finish_publication(store, row)
-    if published is not None:
-        result["cadHandoffRequestId"] = published.request_id
-        if published.withdrawn:
-            result["cadHandoffSuperseded"] = list(published.withdrawn)
+    result.update(_finish_publication(store, row))
     return result
 
 
-def _finish_publication(store: CadLinkStore, row: Mapping[str, Any]) -> Any:
+def _finish_publication(store: CadLinkStore, row: Mapping[str, Any]) -> dict[str, Any]:
     try:
         return finish_publication(store, row)
     except PublicationConflict as exc:
@@ -578,9 +572,8 @@ async def export_wglink(
                  "instanceId": payload.expected_fusion_instance_id,
                  "returnStateHash": payload.expected_fusion_return_state_hash},
     )
-    # Publication intent was persisted before building; startup/retry recovers
-    # every boundary before this courtesy focus operation.
-    result["cadHandoff"] = "published"
+    # Startup repairs artifacts only. A live request earns the delivery outcome
+    # above before this courtesy focus operation.
     waiting = await asyncio.to_thread(_handoff_waiting_notice, Path(request.app.state.data_dir))
     if waiting is not None:
         result["cadHandoffWaiting"] = waiting

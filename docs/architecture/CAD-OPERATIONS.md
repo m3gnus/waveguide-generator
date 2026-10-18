@@ -1981,11 +1981,20 @@ one file under `<data dir>/ipc/wglink/`:
 
 WG commits the operation row before renaming the request file into place. A registry
 failure publishes no file. The complete hidden staged file is fsynced first; if the
-rename and its compensating cancellation both fail, startup finishes that staged
-publication. Otherwise a file-write failure cancels the newly created row as
+rename and its compensating cancellation both fail, startup finishes a staged
+return request only. Startup never publishes a handoff. A received handoff with
+no visible request and no store or file claim is cancelled as `publication_failed`;
+its hidden staging is discarded. Otherwise a file-write failure cancels the newly created row as
 `publication_failed`, so no request is left waiting for a file that never existed.
 A recovered same-ID operation is never republished: its visible file or hidden Fusion
 claim, if any, already owns delivery, and a terminal operation must never run twice.
+
+WGLink publication recovery repairs the immutable bundle, registry row and latest
+locator only, recording undelivered handoff intent in the journal. A live same-key
+retry may deliver that intent with a fresh operation ID after `publication_failed`.
+If a newer export of that design exists, it returns the original export with
+`cadHandoff: failed` and `cadHandoffReason: superseded`, without publishing. A retry
+without handoff intent also reports `failed`, with reason `not_published`.
 
 - **Fields.** `schemaVersion: 3`, `target: "fusion360"`, `requestId`, `operationId`
   (equal to `requestId`), `deliverySequence`, and the request's own fields.
