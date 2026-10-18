@@ -110,6 +110,10 @@ it('slvs adapters share one instance until a trap retires it', async () => {
   try {
     a.load(diagnosticCases[0].sketch);
     expect(() => a.solve({ mode: 'full' })).toThrow(WebAssembly.RuntimeError);
+    trap.mockRestore();
+    // Every adapter on the retired instance refuses work instead of silently reusing it.
+    expect(() => a.solve({ mode: 'full' })).toThrow('retired');
+    b.load(diagnosticCases[0].sketch); expect(() => b.solve({ mode: 'full' })).toThrow('retired');
   } finally { trap.mockRestore(); a.destroy(); b.destroy(); }
   const c = await createSolver('slvs');
   try {

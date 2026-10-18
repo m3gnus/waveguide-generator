@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Reproducible build of SolveSpace libslvs WASM (separate .wasm, small growable heap).
-# Run from the builds/ directory:  slvs/build.sh [stripped|dwarf]
+# Run from a work directory laid out as in BUILD.md "Reproduce":  slvs/build.sh [stripped|dwarf]
 #   stripped (default): adds -g0 at link -> no DWARF, full post-link wasm-opt; output slvs/
 #   dwarf: upstream's RelWithDebInfo link as-is (DWARF kept, limited wasm-opt); output slvs/with-dwarf/
 # Expects src/solvespace = solvespace v3.2 (27b6a080c8b669421bd4d444650c3b8eddec5687) with

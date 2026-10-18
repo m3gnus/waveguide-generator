@@ -12,7 +12,7 @@ function wasmModule() {
     const { default: url } = await import('slvs/slvs.wasm?url');
     const input = await wasmInput(url);
     return WebAssembly.compile(typeof input === 'string' ? await (await fetch(input)).arrayBuffer() : input as Uint8Array<ArrayBuffer>);
-  })();
+  })().catch(e => { compiled = undefined; throw e; });
 }
 type Instantiate = (imports: WebAssembly.Imports, done: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void) => object;
 async function instantiate(): Promise<SlvsModule> {
@@ -30,7 +30,10 @@ export async function create() {
   current ??= instantiate().then(m => (live = m), e => { current = undefined; throw e; });
   return new SolveSpace(await current);
 }
-function retire(s: SlvsModule) { if (live === s) { live = undefined; current = undefined; } }
+// A trapped instance can keep answering, possibly from a corrupted heap, so every adapter
+// still holding it refuses further work and must be recreated.
+const retired = new WeakSet<SlvsModule>();
+function retire(s: SlvsModule) { retired.add(s); if (live === s) { live = undefined; current = undefined; } }
 // libslvs keeps one global sketch per module instance. Adapters sharing a module rebuild
 // when another one solved in between.
 const owners = new WeakMap<SlvsModule, SolveSpace>();
@@ -68,9 +71,11 @@ class SolveSpace extends Adapter {
   protected prepareDrag(targets: DragTarget[]) { this.native(() => this.build(targets)); }
   /** A trap leaves the instance unusable: retire it so the next createSolver() recovers. */
   private native<T>(call: () => T): T {
-    try { return call(); } catch (e) { if (e instanceof WebAssembly.RuntimeError) retire(this.s); throw e; }
+    if (retired.has(this.s)) throw new Error('The slvs instance was retired after a WASM trap; create a new solver.');
+    // RuntimeError is a trap; RangeError here is a wasm call-stack overflow.
+    try { return call(); } catch (e) { if (e instanceof WebAssembly.RuntimeError || e instanceof RangeError) retire(this.s); throw e; }
   }
-  protected release() { if (owners.get(this.s) === this) { this.s.clearSketch(); owners.delete(this.s); } }
+  protected release() { if (owners.get(this.s) === this) { if (!retired.has(this.s)) this.s.clearSketch(); owners.delete(this.s); } }
   private build(targets: DragTarget[] = []) {
     const s = this.s; owners.delete(s); s.clearSketch();
     const wp = s.addBase2D(1), normal = s.addNormal3D(1, 1, 0, 0, 0), group = 2;
