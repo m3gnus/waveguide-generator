@@ -9,6 +9,10 @@ const productVersion = (JSON.parse(readFileSync(new URL('../shared/version.json'
 export default defineConfig({
   define: { __WG2_VERSION__: JSON.stringify(productVersion) },
   plugins: [react(), tailwindcss(), lazyChunkPreloader()],
+  ...(process.env.SKETCH_BENCH === '1' ? {
+    worker: { format: 'es' as const },
+    build: { rollupOptions: { input: { main: 'index.html', sketchBench: 'sketch-bench.html' } } },
+  } : {}),
   server: {
     port: 3101,
     fs: { allow: ['..'] },

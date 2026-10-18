@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sketch solver bake-off</title></head>
+<body><main><h1>Sketch solver bake-off</h1><p>Worker-isolated solver and marshaling measurements. No render timing. Maximum run: 300 seconds (30 seconds per row).</p>
+<button id="run">Run bench</button> <button id="download">Download JSON</button><p id="status" role="status">Ready</p>
+<table id="results"><caption>Times in milliseconds; memory in bytes. Empty cells mean unmeasured.</caption><thead><tr>
+<th>Solver</th><th>Segments</th><th>Variant</th><th>Status</th><th>Cold start</th><th>Setup</th><th>Frames</th><th>p50</th><th>p95</th><th>p99</th><th>Max</th><th>Full diagnosis</th><th>Failed frames</th><th>Flips</th><th>Memory source</th><th>Before</th><th>After</th><th>Cycles</th>
+</tr></thead><tbody></tbody></table><pre id="details"></pre></main><script type="module" src="/src/sketch/bench/main.ts"></script></body></html>
