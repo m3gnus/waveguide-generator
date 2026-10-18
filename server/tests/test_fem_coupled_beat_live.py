@@ -78,6 +78,22 @@ def worker():
         pytest.skip(status["reason"] + " (or set WG2_TEST_BEAT_JULIA)")
 
 
+def _events(worker, request):
+    """Every worker event for a raw compiled-system request, in order."""
+    from server.solver.beat_runtime.manager import ManagedWorker
+
+    if not isinstance(worker, ManagedWorker):
+        # The engine's own worker takes the request mapping directly.
+        return list(worker.submit(request))
+    from types import SimpleNamespace
+    from server.solver.official_beat import _solve_session
+
+    # A managed worker has no submit: it runs through the production session
+    # transport, with its admission lease, negotiation and request file.
+    return _solve_session(SimpleNamespace(wire=request), lambda events, _cancel: list(events),
+                          worker_manager=SimpleNamespace(get_worker=lambda *a, **k: worker))
+
+
 def _solve(worker, system, frequencies, outputs):
     request = {
         "schema_version": 1,
@@ -88,7 +104,7 @@ def _solve(worker, system, frequencies, outputs):
         "solver_options": {"phasor_convention": "exp(+i omega t)", "precision": "float64", "bem_backend": "cpu"},
     }
     results: dict[tuple[float, str], np.ndarray] = {}
-    for event in worker.submit(request):
+    for event in _events(worker, request):
         if event.get("type") == "result":
             result = event.get("result", event)
             for quantity in result["quantities"]:
