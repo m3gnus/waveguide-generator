@@ -4,7 +4,7 @@ import type { SlvsModule } from 'slvs';
 import { GcsWrapper } from '@salusoft89/planegcs';
 import * as acs from 'acs-solver';
 import { createSolver, solverNames } from './types';
-import { branchCases, contourChainConstrained, diagnosticCases, residual } from './corpus';
+import { branchCases, constraintCase, contourChainConstrained, diagnosticCases, residual } from './corpus';
 
 const capture = vi.hoisted(() => ({ slvs: undefined as SlvsModule | undefined }));
 vi.mock('slvs', async importOriginal => {
@@ -100,4 +100,18 @@ it('ACS honors top-level analysis and iteration options', async () => {
   expect(limited.status).toBe('failed'); expect(limited.stats.iterations).toBe(1);
   const nested = solve({ options: { analyze: false, maxIterations: 1 } });
   expect(nested.status).toBe('converged'); expect(nested.dof).toBe(1); expect(nested.stats.iterations).toBeGreaterThan(1);
+});
+
+it('slvs preserves the loaded unsigned-distance side through cursor fallback and rebuilds', async () => {
+  const s = await createSolver('slvs');
+  try {
+    const sketch = constraintCase('pointLineDistance', 'opposite');
+    s.load(sketch); s.beginDrag(['p']);
+    for (const x of [5, 6, 7]) {
+      const r = s.dragTo([{ pointId: 'p', x, y: 4 }]);
+      expect(r.status).toBe('ok'); expect(r.points.p.y).toBeCloseTo(-3, 6);
+      expect(residual(sketch, sketch.constraints[0], r.points)).toBeLessThan(1e-6);
+    }
+    expect(s.endDrag().points.p.y).toBeCloseTo(-3, 6);
+  } finally { s.destroy(); }
 });

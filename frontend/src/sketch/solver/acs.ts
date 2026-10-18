@@ -24,6 +24,7 @@ class Acs extends Adapter {
   capabilities() {
     const c = capabilities();
     c.diagnostics.conflicting = emulated('Native user-constraint diagnosis plus an exact equal-radius check for implicit arc rules, owned by the public arc ID.');
+    c.constraints.angle.detail = 'Native angle equation; pinned 0.1.17 can accept supplementary signed branches from mirrored seeds (retained conformance findings).';
     c.constraints.fix = emulated('Two native x/y constraints at the loaded coordinates.');
     c.diagnostics.partiallyRedundant = unsupported('ACS JSON reports redundant IDs, without a separate partial category.');
     c.constraints.tangent = emulated('At coincident endpoints: perpendicular line/radius or parallel radii. Otherwise native finite-curve tangency.');
@@ -99,12 +100,14 @@ class Acs extends Adapter {
       ids, reverse: new Map([...index].map(([user, key]) => [key, user])), goals };
   }
   protected run(options: SolveOptions): NativeResult {
+    const updateStart = performance.now();
     if (!this.dragPointIds || !this.prepared) this.build(options);
     const { request, ids, reverse, goals } = this.prepared!;
     for (const target of options.dragTargets ?? []) {
       const pair = goals.get(target.pointId)!; pair[0].value = target.x; pair[1].value = target.y;
     }
     const input = JSON.stringify(request);
+    const updateMs = performance.now() - updateStart;
     const t = performance.now(); const output = this.api.acsSolveSketch(input); const solveMs = performance.now() - t;
     const r: Response = JSON.parse(output);
     if (r.status === 'invalid') throw new Error(`ACS rejected adapter request: ${r.error}`);
@@ -122,7 +125,7 @@ class Acs extends Adapter {
     for (const p of r.primitives ?? []) if (p.type === 'point' && typeof p.x === 'number' && typeof p.y === 'number') {
       const key = reverse.get(p.id); if (key) points[key] = { x: p.x, y: p.y };
     }
-    return { status: r.status === 'converged' ? 'ok' : 'failed', nativeStatus: r.status, points, solveMs, iterations: r.stats?.iterations,
+    return { status: r.status === 'converged' ? 'ok' : 'failed', nativeStatus: r.status, points, updateMs, solveMs, iterations: r.stats?.iterations,
       ...(options.mode === 'full' ? { dof: r.dof, conflicting: publicIds(r.conflicting ?? [], ids),
         redundant: publicIds(r.redundant ?? [], ids) } : {}) };
   }

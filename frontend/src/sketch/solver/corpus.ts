@@ -102,7 +102,7 @@ export const branchCases: BranchCase[] = [0.0001, Math.PI - 0.0001, Math.PI + 0.
   name: `CCW sweep ${sweep}`, sketch: { entities: [point('c', 0, 0, true), point('s', 10, 0, true),
     point('e', 10 * Math.cos(sweep), 10 * Math.sin(sweep)), arc('arc', 'c', 's', 'e')], constraints: [] },
   expected: { dof: 1, valid: true, conflicting: [], note: 'Fixed center and start set the radius; the end has one angular DOF.' },
-  targets: [{ pointId: 'e', x: 10 * Math.cos(sweep), y: 10 * Math.sin(sweep) }],
+  targets: [0.01, 0.02, 0.03].map(delta => ({ pointId: 'e', x: 10 * Math.cos(sweep + delta), y: 10 * Math.sin(sweep + delta) })),
 }));
 branchCases.push({ name: 'tangent arc crosses line and 100 mm cursor jump', sketch: {
   entities: [point('a', -10, 0, true), point('s', 0, 0, true), point('c', 0, 10), point('e', 10, 10),
@@ -113,6 +113,20 @@ branchCases.push({ name: 'tangent arc crosses line and 100 mm cursor jump', sket
 });
 /** Small, perturbed systems: solving must actually change the residual. */
 export function constraintCase(kind: ConstraintKind, variant = ''): Sketch {
+  if (kind === 'pointLineDistance' && variant) {
+    const y = (variant.includes('opposite') ? -1 : 1) * (variant.includes('fixed') ? 3 : 4), reversed = variant.includes('reversed');
+    return { entities: [point('a', 0, 0, true), point('b', 10, 0, true), point('p', 4, y, variant.includes('fixed')),
+      line('l', reversed ? 'b' : 'a', reversed ? 'a' : 'b')],
+      constraints: [{ id: 'test', kind, point: 'p', line: 'l', value: 3, driving: true }] };
+  }
+  if (kind === 'angle' && variant) {
+    const negative = variant.includes('negative'), mirror = variant.includes('mirrored'), reversed = variant.includes('reversed');
+    const value = (negative ? -1 : 1) * Math.PI / 3;
+    const heading = value + (reversed ? Math.PI : 0), seed = mirror ? -value : heading + 0.1;
+    return { entities: [point('a', 0, 0, true), point('b', 10, 0, true), point('c', 0, 5, true),
+      point('d', 10 * Math.cos(seed), 5 + 10 * Math.sin(seed)), line('l', reversed ? 'b' : 'a', reversed ? 'a' : 'b'), line('m', 'c', 'd')],
+      constraints: [dim('test', kind, 'l', 'm', value)] };
+  }
   const entities: Entity[] = [point('a', 0, 0, true), point('b', 10, 2), point('c', 0, 5, true), point('d', 9, 8),
     line('l', 'a', 'b'), line('m', 'c', 'd')];
   let c: Constraint;

@@ -23,11 +23,31 @@ export function arcValues(s: Sketch, a: Arc) {
   return { radius: Math.hypot(p.x - c.x, p.y - c.y), start,
     end: start + positiveAngle(Math.atan2(q.y - c.y, q.x - c.x) - start) };
 }
-export function orientation(a: Arc, pts: Record<string, XY>) {
+/** Signed endpoint sweep, unwrapped against the previous frame (sampling must be < pi). */
+export function signedSweep(a: Arc, pts: Record<string, XY>, previous?: number): number {
   const c = pts[a.center], s = pts[a.start], e = pts[a.end];
-  return Math.sign((s.x - c.x) * (e.y - c.y) - (s.y - c.y) * (e.x - c.x));
+  const raw = Math.atan2((s.x - c.x) * (e.y - c.y) - (s.y - c.y) * (e.x - c.x),
+    (s.x - c.x) * (e.x - c.x) + (s.y - c.y) * (e.y - c.y));
+  return previous === undefined ? positiveAngle(raw) : raw + tau * Math.round((previous - raw) / tau);
 }
-export type NativeResult = Omit<SolveResult, 'timings'> & { solveMs: number };
+export class SweepTracker {
+  readonly sweeps: Record<string, number> = {};
+  constructor(private sketch: Sketch, points = pointsOf(sketch)) {
+    for (const a of sketch.entities) if (a.kind === 'arc') this.sweeps[a.id] = signedSweep(a, points);
+  }
+  update(points: Record<string, XY>) {
+    let flips = 0;
+    for (const a of this.sketch.entities) if (a.kind === 'arc') {
+      const prev = this.sweeps[a.id], next = signedSweep(a, points, prev);
+      // Includes exact-zero samples: entering a collapsed/full-turn sweep is a crossing.
+      if ((prev > 0 && next <= 0) || (prev < tau && next >= tau)
+        || (prev <= 0 && next > 0) || (prev >= tau && next < tau)) flips++;
+      this.sweeps[a.id] = next;
+    }
+    return flips;
+  }
+}
+export type NativeResult = Omit<SolveResult, 'timings'> & { updateMs: number; solveMs: number };
 /** Shared validation, successful continuation seeds and explicit drag-session lifecycle. */
 export abstract class Adapter implements SketchSolver {
   protected sketch: Sketch = { entities: [], constraints: [] };
@@ -93,10 +113,12 @@ export abstract class Adapter implements SketchSolver {
     try {
       this.validate();
       for (const target of options.dragTargets ?? []) entity(this.sketch, target.pointId, 'point');
+      const beforeRun = performance.now();
       result = this.run(options);
+      result.updateMs += beforeRun - t;
     } catch (e) {
       if (!(e instanceof Unsupported)) throw e;
-      result = { status: 'unsupported', reason: e.message, points: pointsOf(this.sketch), solveMs: 0 };
+      result = { status: 'unsupported', reason: e.message, points: pointsOf(this.sketch), updateMs: performance.now() - t, solveMs: 0 };
     }
     // Some native APIs omit implicit arc-rule failures (or call them redundant).
     // This exact geometric invariant catches them without manufacturing constraint IDs.
@@ -117,8 +139,9 @@ export abstract class Adapter implements SketchSolver {
     }
     if (result.status !== 'ok') this.invalidatePrepared();
     const totalMs = performance.now() - t;
-    const { solveMs, ...rest } = result;
-    return { ...rest, timings: { totalMs, solveMs, marshalMs: totalMs - solveMs } };
+    const { updateMs, solveMs, ...rest } = result;
+    const readbackMs = totalMs - updateMs - solveMs;
+    return { ...rest, timings: { totalMs, updateMs, solveMs, readbackMs, marshalMs: totalMs - solveMs } };
   }
   destroy() { if (!this.destroyed) { this.release(); this.dragPointIds = undefined; this.invalidatePrepared(); this.sketch = { entities: [], constraints: [] }; this.destroyed = true; } }
 }

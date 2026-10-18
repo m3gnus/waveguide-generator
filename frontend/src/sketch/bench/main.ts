@@ -11,7 +11,7 @@ function render(state: BenchState) {
   const tbody = document.querySelector('tbody')!; tbody.replaceChildren();
   for (const r of state.results) {
     const tr = document.createElement('tr');
-    for (const value of [r.solver, r.n, r.variant, r.status, r.coldStartMs, r.setupMs, r.frames, r.totalMs?.p50, r.totalMs?.p95,
+    for (const value of [r.solver, r.n, r.variant, r.status, r.coldStartMs, r.setupMs, `${r.frames}/${r.plannedFrames}`, r.distribution, r.cursorError?.max, r.totalMs?.p50, r.totalMs?.p95,
       r.totalMs?.p99, r.totalMs?.max, r.diagnosisMs, r.failedFrames, r.branchFlips, r.memory?.source,
       r.memory?.before, r.memory?.after, r.memory?.cycles]) {
       const td = document.createElement('td'); td.textContent = value === undefined ? '' : typeof value === 'number'
@@ -21,11 +21,13 @@ function render(state: BenchState) {
   }
   document.querySelector('#status')!.textContent = state.done ? 'Done; inspect timeout/error rows before comparing.' : 'Running…';
   document.querySelector('#details')!.textContent = JSON.stringify({ notes: state.notes,
-    details: state.results.map(r => ({ solver: r.solver, n: r.n, variant: r.variant, frameSamples: r.frameSamples, reason: r.reason, branchCases: r.branchCases })) }, null, 2);
+    details: state.results.map(r => ({ solver: r.solver, n: r.n, variant: r.variant, reason: r.reason,
+      updateMs: r.updateMs, solveMs: r.solveMs, readbackMs: r.readbackMs,
+      ...(state.done ? { frameSamples: r.frameSamples, dragScenarios: r.dragScenarios, branchCases: r.branchCases } : {}) })) }, null, 2);
 }
 run.onclick = async () => {
   const params = new URLSearchParams(location.search), solver = params.get('solver'), n = params.get('n'), variant = params.get('variant');
-  if ((solver && !solverNames.includes(solver as SolverName)) || (n && !['8', '60', '256'].includes(n))
+  if ((solver && !solverNames.includes(solver as SolverName)) || (n && !['8', '16', '24', '32', '60', '256'].includes(n))
     || (variant && !['underconstrained', 'constrained'].includes(variant))) {
     document.querySelector('#status')!.textContent = 'Invalid solver, n or variant filter'; return;
   }

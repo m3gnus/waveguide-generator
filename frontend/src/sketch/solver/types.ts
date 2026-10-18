@@ -32,7 +32,7 @@ export interface SolveOptions { mode: 'drag' | 'full'; dragTargets?: DragTarget[
 export interface SolveResult {
   status: 'ok' | 'failed' | 'unsupported'; points: Record<string, XY>; iterations?: number;
   dof?: number; conflicting?: string[]; redundant?: string[]; partiallyRedundant?: string[];
-  timings: { totalMs: number; solveMs: number; marshalMs: number };
+  timings: { totalMs: number; updateMs: number; solveMs: number; readbackMs: number; marshalMs: number };
   /** Explains unsupported input, without inventing solver diagnostics. */
   reason?: string;
   /** Unmodified package status, when available. */

@@ -26,7 +26,7 @@ class PlaneGCS extends Adapter {
     c.constraints.midpoint = emulated('Point on supporting line + point on perpendicular bisector (two exact scalar equations).');
     c.constraints.fix = emulated('Two coordinate equations at the loaded point position.');
     c.constraints.tangent = emulated('At coincident endpoints: perpendicular line/radius or parallel radii. Otherwise native supporting-curve tangency.');
-    c.drag = 'Session pushes once; fixed named coordinate goals update in place. Native solve still reinitializes and diagnoses on every frame.';
+    c.drag = 'Session pushes once; fixed named coordinate goals update in place. Native solve reinitializes partitions each frame; diagnosis is cached unless invalidated.';
     c.constraints.distanceX = emulated('Difference of point x parameters (signed b.x - a.x).');
     c.constraints.distanceY = emulated('Difference of point y parameters (signed b.y - a.y).');
     return c;
@@ -116,19 +116,21 @@ class PlaneGCS extends Adapter {
     this.prepared = { internal, ids };
   }
   protected run(options: SolveOptions): NativeResult {
+    const updateStart = performance.now();
     if (!this.dragPointIds || !this.prepared) this.build(options);
     const w = this.wrapper, { internal, ids } = this.prepared!;
     if (this.dragPointIds) for (const target of options.dragTargets ?? []) {
       const i = this.dragPointIds.indexOf(target.pointId);
       w.set_sketch_param(`goal${i}x`, target.x); w.set_sketch_param(`goal${i}y`, target.y);
     }
+    const updateMs = performance.now() - updateStart;
     const t = performance.now(), status = w.solve(); const solveMs = performance.now() - t;
     w.apply_solution();
     const points = pointsOf(this.sketch);
     for (const e of this.sketch.entities) if (e.kind === 'point') {
       const p = w.sketch_index.get_sketch_point(internal.get(e.id)!); points[e.id] = { x: p.x, y: p.y };
     }
-    return { status: status <= 1 ? 'ok' : 'failed', nativeStatus: status, points, solveMs, ...(options.mode === 'full' ? {
+    return { status: status <= 1 ? 'ok' : 'failed', nativeStatus: status, points, updateMs, solveMs, ...(options.mode === 'full' ? {
       dof: w.gcs.dof(), conflicting: publicIds(w.get_gcs_conflicting_constraints(), ids),
       redundant: publicIds(w.get_gcs_redundant_constraints(), ids),
       partiallyRedundant: publicIds(w.get_gcs_partially_redundant_constraints(), ids) } : {}) };

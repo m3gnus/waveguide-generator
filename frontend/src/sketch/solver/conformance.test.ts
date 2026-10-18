@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { arcResidual, branchCases, constraintCase, contourChain, contourChainConstrained, diagnosticCases, residual, arc, point } from './corpus';
-import { pointsOf } from './common';
+import { pointsOf, signedSweep, SweepTracker } from './common';
 import { constraintKinds, createSolver, solverNames, type Sketch, type SketchSolver } from './types';
 
 for (const name of solverNames) {
@@ -24,6 +24,9 @@ for (const name of solverNames) {
         for (const a of sketch.entities) if (a.kind === 'arc') expect(arcResidual(sketch, a, r.points)).toBeLessThan(1e-5);
         for (const e of sketch.entities) if (e.kind === 'point' && e.fixed) expect(r.points[e.id]).toEqual({ x: e.x, y: e.y });
         expect(r.timings.totalMs).toBeGreaterThanOrEqual(r.timings.solveMs);
+        const { totalMs, updateMs, solveMs, readbackMs } = r.timings;
+        expect([updateMs, solveMs, readbackMs].every(v => Number.isFinite(v) && v >= 0)).toBe(true);
+        expect(updateMs + solveMs + readbackMs).toBeCloseTo(totalMs, 8);
       });
     });
     for (const kind of ['horizontal', 'vertical'] as const) supported(kind, `${kind} point pair`, () => {
@@ -36,6 +39,29 @@ for (const name of solverNames) {
       return withSolver(sketch, s => { const r = s.solve({ mode: 'full' }); expect(r.status).toBe('ok');
         expect(residual(sketch, sketch.constraints[0], r.points)).toBeLessThan(1e-5); });
     });
+    for (const variant of ['positive-fixed', 'opposite-fixed', 'reversed-fixed', 'opposite-reversed-fixed', 'opposite', 'opposite-reversed']) {
+      // slvs rejects a satisfied equation involving only fixed-group geometry as redundant.
+      const test = name === 'slvs' && variant.includes('fixed') ? it.fails : it;
+      test(`unsigned line distance ${variant}`, () => {
+        const sketch = constraintCase('pointLineDistance', variant);
+        return withSolver(sketch, s => { const r = s.solve({ mode: 'full' }); expect(r.status, r.reason).toBe('ok');
+          expect(residual(sketch, sketch.constraints[0], r.points)).toBeLessThan(1e-6);
+          expect(Math.sign(r.points.p.y)).toBe(variant.includes('opposite') ? -1 : 1); });
+      });
+    }
+    for (const variant of ['negative', 'reversed', 'negative-reversed', 'mirrored', 'negative-mirrored']) {
+      // ACS 0.1.17 accepts a supplementary signed angle from these mirrored seeds.
+      const test = name === 'acs' && variant.includes('mirrored') ? it.fails : it;
+      test(`signed angle ${variant}`, () => {
+        const sketch = constraintCase('angle', variant);
+        return withSolver(sketch, s => {
+          const r = s.solve({ mode: 'full' });
+          if (name === 'slvs' && variant.includes('mirrored')) {
+            expect(r.status).toBe('failed'); expect(r.reason).toContain('branch guard'); expect(r.conflicting).toContain('test');
+          } else { expect(r.status, r.reason).toBe('ok'); expect(residual(sketch, sketch.constraints[0], r.points)).toBeLessThan(1e-6); }
+        });
+      });
+    }
     supported('equal', 'equal arc radii', () => {
       const sketch: Sketch = { entities: [point('c', 0, 0, true), point('s', 10, 0), point('e', 0, 10), arc('a', 'c', 's', 'e'),
         point('c2', 30, 0, true), point('s2', 35, 0), point('e2', 30, 5), arc('b', 'c2', 's2', 'e2')],
@@ -60,15 +86,16 @@ for (const name of solverNames) {
       const missing = sample.sketch.constraints.find(c => caps.constraints[c.kind].support === 'unsupported');
       const run = () => withSolver(sample.sketch, s => {
         const r = s.solve({ mode: 'full' });
-        if (!sample.expected.valid) expect(r.status).toBe('failed');
+        expect(r.status, sample.expected.note).toBe(sample.expected.valid ? 'ok' : 'failed');
         if (sample.expected.dof !== undefined) expect(r.dof, sample.expected.note).toBe(sample.expected.dof);
         const allowed = [...sample.sketch.entities, ...sample.sketch.constraints].map(e => e.id);
         for (const id of [...r.conflicting ?? [], ...r.redundant ?? [], ...r.partiallyRedundant ?? []]) expect(allowed).toContain(id);
       });
       if (missing) it.skip(`${sample.name} DOF — ${caps.constraints[missing.kind].detail}`, run);
       // Four coordinates minus the rank-one equation y_a - y_b = 0 = 3 DOF.
-      // slvs 3.2.0 reports 2 for two copies; retain the native rank defect as an expected failure.
-      else if (name === 'slvs' && sample.name === 'duplicate constraint') it.fails(`${sample.name} DOF`, run);
+      // slvs 3.2.0 reports 2 for two copies. It also rejects feasible partial redundancy
+      // and duplicate triangle dimensions as failed. Keep valid-status and DOF assertions intact.
+      else if (name === 'slvs' && ['duplicate constraint', 'partial redundancy', 'overdimensioned triangle'].includes(sample.name)) it.fails(`${sample.name} DOF`, run);
       else it(`${sample.name} DOF`, run);
       if (sample.expected.conflicting.length) {
         const test = () => withSolver(sample.sketch, s => {
@@ -100,15 +127,24 @@ for (const name of solverNames) {
         else it(`${sample.name} ${key} user IDs`, test);
       }
     }
-    for (const sample of branchCases) it(`${sample.name}: CCW endpoint order and radius survive drag`, () => withSolver(sample.sketch, s => {
+    for (const sample of branchCases) it(`${sample.name}: unwrapped sweep and radius survive moving drag`, () => withSolver(sample.sketch, s => {
+      const tracker = new SweepTracker(sample.sketch), initial = pointsOf(sample.sketch);
+      let movement = 0;
+      s.beginDrag([...new Set(sample.targets.map(t => t.pointId))]);
       for (const target of sample.targets) {
-        const r = s.solve({ mode: 'drag', dragTargets: [target] }); expect(r.status).toBe('ok');
-        for (const a of sample.sketch.entities) if (a.kind === 'arc') expect(arcResidual(sample.sketch, a, r.points)).toBeLessThan(1e-5);
+        const r = s.dragTo([target]); expect(r.status).toBe('ok');
+        expect(tracker.update(r.points)).toBe(0);
+        for (const a of sample.sketch.entities) if (a.kind === 'arc') {
+          expect(arcResidual(sample.sketch, a, r.points)).toBeLessThan(1e-5);
+          const expectedSweep = signedSweep(a, { ...initial, [a.end]: target }, tracker.sweeps[a.id]);
+          expect(tracker.sweeps[a.id]).toBeGreaterThan(0); expect(tracker.sweeps[a.id]).toBeLessThan(2 * Math.PI);
+          expect(tracker.sweeps[a.id]).toBeCloseTo(expectedSweep, 5);
+        }
         for (const c of sample.sketch.constraints) expect(residual(sample.sketch, c, r.points)).toBeLessThan(1e-5);
         for (const e of sample.sketch.entities) if (e.kind === 'point' && e.fixed) expect(r.points[e.id]).toEqual({ x: e.x, y: e.y });
-        // First three cases pin the cursor on the original branch, on either side of pi.
-        if (sample.targets.length === 1) expect(Math.hypot(r.points.e.x - target.x, r.points.e.y - target.y)).toBeLessThan(1e-4);
+        movement = Math.max(movement, Math.hypot(r.points.e.x - initial.e.x, r.points.e.y - initial.e.y));
       }
+      expect(movement).toBeGreaterThan(.01);
     }));
     it('8 segment contour is initially exact and solves', () => {
       const sample = contourChain(8), pts = pointsOf(sample.sketch);

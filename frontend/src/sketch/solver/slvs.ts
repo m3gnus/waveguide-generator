@@ -1,6 +1,6 @@
 import type { Entity as SEntity, SlvsModule } from 'slvs';
 import { Adapter, capabilities, emulated, entity, equivalent, pointsOf, unsupported, type NativeResult } from './common';
-import { Unsupported, type DragTarget, type SolveOptions } from './types';
+import { Unsupported, type DragTarget, type SolveOptions, type Sketch } from './types';
 let modulePromise: Promise<SlvsModule> | undefined;
 export async function create() {
   modulePromise ??= import('slvs').then(m => m.default());
@@ -14,6 +14,8 @@ class SolveSpace extends Adapter {
     const c = capabilities();
     c.diagnostics.conflicting = emulated('Native user-constraint diagnosis plus an exact equal-radius check for implicit arc rules, owned by the public arc ID.');
     c.constraints.fix = emulated('A fixed point in group 1 plus coincidence in solved group 2.');
+    c.constraints.angle = emulated('Native cosine equation plus a signed-angle branch guard. Wrong signed branches return failed; no mirrored solution is accepted.');
+    c.constraints.pointLineDistance = emulated('Unsigned distance converted to native signed distance using the point side at load time; the side is retained across rebuilds.');
     c.constraints.radius = emulated('Native diameter = 2 × radius.');
     c.constraints.distanceX = emulated('Native signed projected distance onto a fixed unit X axis.');
     c.constraints.distanceY = emulated('Native signed projected distance onto a fixed unit Y axis.');
@@ -21,16 +23,25 @@ class SolveSpace extends Adapter {
     c.constraints.tangent.detail = 'Native at shared arc endpoints only; disjoint supporting-curve tangencies return unsupported.';
     c.diagnostics.redundant = unsupported('solveSketch exposes bad handles, without a separate redundancy category.');
     c.diagnostics.partiallyRedundant = unsupported('No partial redundancy API.');
-    c.diagnostics.conflicting.detail += ' SolveSpace bad handles include overconstraints; no minimal-set guarantee.';
-    c.drag = 'Session builds once, updates setParamValue in place (rebuilds only after another instance uses the global sketch). Emulated by cursor seeding, then native projection onto constraints; no soft-goal API. calculateFaileds:false during drag. WHERE_DRAGGED is a hard pin.';
+    c.diagnostics.conflicting.detail += ' Signed-angle guard failures name the public angle ID. SolveSpace bad handles include overconstraints; no minimal-set guarantee.';
+    c.drag = 'Reachable targets use native dragged()/C_WHERE_DRAGGED hard cursor equations. On native failure, rebuild from the last successful seed without pins and project the cursor seed onto hard constraints. This fallback is not a guaranteed least-movement cursor projection. Handles are reused while cursor pins succeed; fallback and global-owner changes rebuild the system. calculateFaileds:false during drag. WHERE_DRAGGED is a hard pin.';
     return c;
   }
   memoryBytes() { return (this.s as SlvsModule & { HEAPU8?: Uint8Array }).HEAPU8?.buffer.byteLength; }
-  private prepared?: { handles: Map<string, SEntity>; constraints: Map<number, string> };
+  private sides = new Map<string, number>();
+  override load(sketch: Sketch) {
+    super.load(sketch); this.sides.clear();
+    for (const c of sketch.constraints) if (c.kind === 'pointLineDistance') {
+      const l = entity(sketch, c.line, 'line'), a = entity(sketch, l.p1, 'point'), b = entity(sketch, l.p2, 'point'), p = entity(sketch, c.point, 'point');
+      // SolveSpace uses (point - line start) cross line direction.
+      this.sides.set(c.id, Math.sign((p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x)) || 1);
+    }
+  }
+  private prepared?: { pinned: boolean; handles: Map<string, SEntity>; constraints: Map<number, string> };
   protected invalidatePrepared() { this.prepared = undefined; }
-  protected prepareDrag(_targets: DragTarget[]) { this.build(); }
+  protected prepareDrag(targets: DragTarget[]) { this.build(targets); }
   protected release() { if (owner === this) { this.s.clearSketch(); owner = undefined; } }
-  private build() {
+  private build(targets: DragTarget[] = []) {
     const s = this.s; owner = undefined; s.clearSketch();
     const wp = s.addBase2D(1), normal = s.addNormal3D(1, 1, 0, 0, 0), group = 2;
     const handles = new Map<string, SEntity>(), constraints = new Map<number, string>();
@@ -85,29 +96,51 @@ class SolveSpace extends Adapter {
           add(c.id, s.C_POINTS_COINCIDENT, 0, h(c.point), s.addPoint2D(1, p.x, p.y, wp)); break; }
         case 'distance': add(c.id, s.C_PT_PT_DISTANCE, c.value, h(c.a), h(c.b)); break;
         case 'distanceX': case 'distanceY': add(c.id, s.C_PROJ_PT_DISTANCE, -c.value, h(c.a), h(c.b), axis(c.kind === 'distanceX')); break;
-        case 'pointLineDistance': add(c.id, s.C_PT_LINE_DISTANCE, c.value, h(c.point), n, h(c.line)); break;
+        case 'pointLineDistance': add(c.id, s.C_PT_LINE_DISTANCE, c.value * this.sides.get(c.id)!, h(c.point), n, h(c.line)); break;
         case 'radius': add(c.id, s.C_DIAMETER, 2 * c.value, n, n, h(c.arc)); break;
       }
     }
-    this.prepared = { handles, constraints }; owner = this;
+    for (const target of targets) if (!entity(this.sketch, target.pointId, 'point').fixed) s.dragged(group, h(target.pointId), wp);
+    this.prepared = { pinned: targets.length > 0, handles, constraints }; owner = this;
   }
   protected run(options: SolveOptions): NativeResult {
-    if (!this.dragPointIds || !this.prepared || owner !== this) this.build();
-    const s = this.s, group = 2, { handles, constraints } = this.prepared!;
-    const h = (id: string) => handles.get(id)!;
-    for (const target of options.dragTargets ?? []) {
-      const p = entity(this.sketch, target.pointId, 'point'); if (p.fixed) continue;
-      const handle = h(p.id); s.setParamValue(handle.param[0], target.x); s.setParamValue(handle.param[1], target.y);
-      // WHERE_DRAGGED adds two hard equations in this package. Cursor seeding
-      // preserves hard sketch constraints even when the cursor is unreachable.
+    const updateStart = performance.now();
+    const targets = options.dragTargets ?? [];
+    if (!this.dragPointIds || !this.prepared || owner !== this || (targets.length && !this.prepared.pinned)) this.build(targets);
+    const s = this.s, group = 2;
+    const seed = () => {
+      for (const target of targets) {
+        if (entity(this.sketch, target.pointId, 'point').fixed) continue;
+        const handle = this.prepared!.handles.get(target.pointId)!;
+        s.setParamValue(handle.param[0], target.x); s.setParamValue(handle.param[1], target.y);
+      }
+    };
+    seed();
+    let t = performance.now(), r = s.solveSketch(group, options.mode === 'full'), solveMs = performance.now() - t;
+    if (r.result !== 0 && targets.length) {
+      // Hard cursor equations can be infeasible or redundant with sketch constraints.
+      // Discard the failed native seed before trying unconstrained cursor seeding.
+      this.build(); seed(); t = performance.now();
+      r = s.solveSketch(group, options.mode === 'full'); solveMs += performance.now() - t;
     }
-    const t = performance.now(); const r = s.solveSketch(group, options.mode === 'full'); const solveMs = performance.now() - t;
+    const updateMs = performance.now() - updateStart - solveMs;
+    const { handles, constraints } = this.prepared!;
+    const h = (id: string) => handles.get(id)!;
     const points = pointsOf(this.sketch);
     for (const e of this.sketch.entities) if (e.kind === 'point') {
       const p = h(e.id); points[e.id] = { x: s.getParamValue(p.param[0]), y: s.getParamValue(p.param[1]) };
     }
     const conflicting = [...new Set(Array.from(r.bad ?? []).slice(0, r.nbad).flatMap(v => constraints.has(v) ? [constraints.get(v)!] : []))];
-    return { status: r.result === 0 ? 'ok' : 'failed', nativeStatus: r.result, points, solveMs,
+    const wrongAngles = this.sketch.constraints.filter(c => {
+      if (r.result !== 0 || c.kind !== 'angle' || !c.driving) return false;
+      const vector = (id: string) => { const l = entity(this.sketch, id, 'line');
+        return { x: points[l.p2].x - points[l.p1].x, y: points[l.p2].y - points[l.p1].y }; };
+      const a = vector(c.a), b = vector(c.b), actual = Math.atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y);
+      return Math.abs(Math.atan2(Math.sin(actual - c.value), Math.cos(actual - c.value))) > 1e-7;
+    });
+    if (wrongAngles.length) return { status: 'failed', reason: 'Signed angle branch guard rejected native cosine solution',
+      points, updateMs, solveMs, nativeStatus: r.result, ...(options.mode === 'full' ? { dof: r.dof, conflicting: [...new Set([...conflicting, ...wrongAngles.map(c => c.id)])] } : {}) };
+    return { status: r.result === 0 ? 'ok' : 'failed', nativeStatus: r.result, points, updateMs, solveMs,
       ...(options.mode === 'full' ? { dof: r.dof, conflicting } : {}) };
   }
 }
