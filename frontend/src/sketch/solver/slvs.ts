@@ -14,6 +14,7 @@ function wasmModule() {
     return WebAssembly.compile(typeof input === 'string' ? await (await fetch(input)).arrayBuffer() : input as Uint8Array<ArrayBuffer>);
   })().catch(e => { compiled = undefined; throw e; });
 }
+type DragModule = SlvsModule & { markDragged(point: SEntity): void };
 type Instantiate = (imports: WebAssembly.Imports, done: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void) => object;
 async function instantiate(): Promise<SlvsModule> {
   const [{ default: factory }, wasm] = await Promise.all([import('slvs'), wasmModule()]);
@@ -45,6 +46,7 @@ class SolveSpace extends Adapter {
     c.constraints.fix = emulated('A fixed point in group 1 plus coincidence in solved group 2.');
     c.constraints.angle = emulated('Native cosine equation plus a signed-angle branch guard. Wrong signed branches return failed; no mirrored solution is accepted.');
     c.constraints.pointLineDistance = emulated('Unsigned distance converted to native signed distance using the point side at load time; the side is retained across rebuilds.');
+    c.constraints.pointOnLine = emulated('Native signed point-line distance = 0; avoids the persistent PT_ON_LINE interpolation parameter being treated as known on repeat solves.');
     c.constraints.radius = emulated('Native diameter = 2 × radius.');
     c.constraints.distanceX = emulated('Native signed projected distance onto a fixed unit X axis.');
     c.constraints.distanceY = emulated('Native signed projected distance onto a fixed unit Y axis.');
@@ -53,7 +55,7 @@ class SolveSpace extends Adapter {
     c.diagnostics.redundant = unsupported('solveSketch exposes bad handles, without a separate redundancy category.');
     c.diagnostics.partiallyRedundant = unsupported('No partial redundancy API.');
     c.diagnostics.conflicting.detail += ' Signed-angle guard failures name the public angle ID. SolveSpace bad handles include overconstraints; no minimal-set guarantee.';
-    c.drag = 'Reachable targets use native dragged()/C_WHERE_DRAGGED hard cursor equations. On native failure, rebuild from the last successful seed without pins and project the cursor seed onto hard constraints. This fallback is not a guaranteed least-movement cursor projection. Handles are reused while cursor pins succeed; fallback and global-owner changes rebuild the system. calculateFaileds:false during drag. WHERE_DRAGGED is a hard pin.';
+    c.drag = 'Seed free arc centers on the chord bisector, seed cursor coordinates and markDragged point parameters for native least-movement projection. Rebuild when dragged IDs change or on release; no hard cursor equations. Up to six native refinements reduce finite-weight cursor error. calculateFaileds:false during drag.';
     return c;
   }
   memoryBytes() { return (this.s as SlvsModule & { HEAPU8?: Uint8Array }).HEAPU8?.buffer.byteLength; }
@@ -66,7 +68,7 @@ class SolveSpace extends Adapter {
       this.sides.set(c.id, Math.sign((p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x)) || 1);
     }
   }
-  private prepared?: { pinned: boolean; handles: Map<string, SEntity>; constraints: Map<number, string> };
+  private prepared?: { dragged: string; handles: Map<string, SEntity>; constraints: Map<number, string> };
   protected invalidatePrepared() { this.prepared = undefined; }
   protected prepareDrag(targets: DragTarget[]) { this.native(() => this.build(targets)); }
   /** A trap leaves the instance unusable: retire it so the next createSolver() recovers. */
@@ -76,7 +78,7 @@ class SolveSpace extends Adapter {
     try { return call(); } catch (e) { if (e instanceof WebAssembly.RuntimeError || e instanceof RangeError) retire(this.s); throw e; }
   }
   protected release() { if (owners.get(this.s) === this) { if (!retired.has(this.s)) this.s.clearSketch(); owners.delete(this.s); } }
-  private build(targets: DragTarget[] = []) {
+  private build(targets: DragTarget[] = [], fixedPoint?: string) {
     const s = this.s; owners.delete(s); s.clearSketch();
     const wp = s.addBase2D(1), normal = s.addNormal3D(1, 1, 0, 0, 0), group = 2;
     const handles = new Map<string, SEntity>(), constraints = new Map<number, string>();
@@ -125,7 +127,9 @@ class SolveSpace extends Adapter {
           } break;
         }
         case 'midpoint': add(c.id, s.C_AT_MIDPOINT, 0, h(c.point), n, h(c.line)); break;
-        case 'pointOnLine': add(c.id, s.C_PT_ON_LINE, 0, h(c.point), n, h(c.line)); break;
+        // PT_ON_LINE introduces a valP that this binding reuses as known after a solve.
+        // Signed zero distance is the same locus without that persistent parameter.
+        case 'pointOnLine': add(c.id, s.C_PT_LINE_DISTANCE, 0, h(c.point), n, h(c.line)); break;
         case 'pointOnArc': throw new Unsupported('Finite arc membership is unavailable');
         case 'fix': { const p = entity(this.sketch, c.point, 'point');
           add(c.id, s.C_POINTS_COINCIDENT, 0, h(c.point), s.addPoint2D(1, p.x, p.y, wp)); break; }
@@ -135,14 +139,44 @@ class SolveSpace extends Adapter {
         case 'radius': add(c.id, s.C_DIAMETER, 2 * c.value, n, n, h(c.arc)); break;
       }
     }
-    for (const target of targets) if (!entity(this.sketch, target.pointId, 'point').fixed) s.dragged(group, h(target.pointId), wp);
-    this.prepared = { pinned: targets.length > 0, handles, constraints }; owners.set(s, this);
+    if (fixedPoint) {
+      const p = entity(this.sketch, fixedPoint, 'point');
+      add(fixedPoint, s.C_POINTS_COINCIDENT, 0, h(fixedPoint), s.addPoint2D(1, p.x, p.y, wp));
+    }
+    for (const target of targets) if (!entity(this.sketch, target.pointId, 'point').fixed) (s as DragModule).markDragged(h(target.pointId));
+    this.prepared = { dragged: JSON.stringify(targets.map(t => t.pointId).sort()), handles, constraints }; owners.set(s, this);
   }
-  protected run(options: SolveOptions): NativeResult { return this.native(() => this.runNative(options)); }
+  private determinationCache?: { key: string; points: Record<string, boolean> };
+  protected run(options: SolveOptions): NativeResult {
+    return this.native(() => {
+      const result = this.runNative(options);
+      if (options.mode !== 'full' || result.status !== 'ok' || this.sketch.entities.length > 64) return result;
+      const solved = { ...this.sketch, entities: this.sketch.entities.map(e => e.kind === 'point' ? { ...e, ...result.points[e.id] } : e) };
+      const key = JSON.stringify(solved);
+      if (this.determinationCache?.key !== key) {
+        const start = performance.now(); let solveMs = 0;
+        const original = this.sketch, points: Record<string, boolean> = {};
+        try {
+          this.sketch = solved;
+          for (const p of solved.entities) if (p.kind === 'point') {
+            if (p.fixed || solved.constraints.some(c => c.kind === 'fix' && c.point === p.id)) { points[p.id] = true; continue; }
+            this.build([], p.id);
+            const solveStart = performance.now(), r = this.s.solveSketch(2, false); solveMs += performance.now() - solveStart;
+            points[p.id] = (r.result === 0 || r.result === 4) && r.dof === result.dof;
+          }
+          this.determinationCache = { key, points };
+        } finally {
+          this.sketch = original; this.prepared = undefined;
+          result.updateMs += performance.now() - start - solveMs; result.solveMs += solveMs;
+        }
+      }
+      return { ...result, pointDetermined: { ...this.determinationCache!.points } };
+    });
+  }
   private runNative(options: SolveOptions): NativeResult {
     const updateStart = performance.now();
     const targets = options.dragTargets ?? [];
-    if (!this.dragPointIds || !this.prepared || owners.get(this.s) !== this || (targets.length && !this.prepared.pinned)) this.build(targets);
+    if (!this.dragPointIds || !this.prepared || owners.get(this.s) !== this || this.prepared.dragged !== JSON.stringify(targets.map(t => t.pointId).sort())) this.build(targets);
     const s = this.s, group = 2;
     const seed = () => {
       for (const target of targets) {
@@ -152,14 +186,32 @@ class SolveSpace extends Adapter {
       }
     };
     seed();
+    // Keep an unconstrained arc's other endpoint still by seeding its free center
+    // on the new chord bisector. Explicit center/arc constraints stay native-owned.
+    const moved = new Set(targets.map(t => t.pointId));
+    const constrained = new Set(this.sketch.constraints.flatMap(c => Object.entries(c).flatMap(([k, v]) => ['point', 'a', 'b', 'arc'].includes(k) ? [String(v)] : [])));
+    for (const a of this.sketch.entities) if (a.kind === 'arc' && !moved.has(a.center)
+      && (moved.has(a.start) || moved.has(a.end)) && !constrained.has(a.id) && !constrained.has(a.center)
+      && !entity(this.sketch, a.center, 'point').fixed) {
+      const get = (id: string) => { const h = this.prepared!.handles.get(id)!; return { x: s.getParamValue(h.param[0]), y: s.getParamValue(h.param[1]) }; };
+      const p = get(a.start), q = get(a.end), c = get(a.center), dx = q.x - p.x, dy = q.y - p.y, d2 = dx * dx + dy * dy;
+      if (d2 > 1e-18) {
+        const offset = ((q.x * q.x + q.y * q.y - p.x * p.x - p.y * p.y) / 2 - c.x * dx - c.y * dy) / d2;
+        const h = this.prepared!.handles.get(a.center)!;
+        s.setParamValue(h.param[0], c.x + offset * dx); s.setParamValue(h.param[1], c.y + offset * dy);
+      }
+    }
     let t = performance.now(), r = s.solveSketch(group, options.mode === 'full'), solveMs = performance.now() - t;
     // SLVS_RESULT_OKAY (0) and SLVS_RESULT_REDUNDANT_OKAY (4) are both solved states.
     const solved = (code: number) => code === 0 || code === 4;
-    if (!solved(r.result) && targets.length) {
-      // Hard cursor equations can be infeasible or redundant with sketch constraints.
-      // Discard the failed native seed before trying unconstrained cursor seeding.
-      this.build(); seed(); t = performance.now();
-      r = s.solveSketch(group, options.mode === 'full'); solveMs += performance.now() - t;
+    let lastError = Infinity;
+    for (let refine = 0; targets.length && solved(r.result) && refine < 6; refine++) {
+      const error = Math.max(...targets.map(target => {
+        const h = this.prepared!.handles.get(target.pointId)!;
+        return Math.hypot(s.getParamValue(h.param[0]) - target.x, s.getParamValue(h.param[1]) - target.y);
+      }));
+      if (error <= 1e-8 || error >= lastError - 1e-10) break;
+      lastError = error; seed(); t = performance.now(); r = s.solveSketch(group, options.mode === 'full'); solveMs += performance.now() - t;
     }
     const updateMs = performance.now() - updateStart - solveMs;
     const { handles, constraints } = this.prepared!;

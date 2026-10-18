@@ -3,8 +3,8 @@ import type { SnapResult } from './snap';
 
 export type PointRef = string | { x: number; y: number; snap?: SnapResult | null };
 export type Command =
-  | { kind: 'addPoint'; x: number; y: number; id?: string }
-  | { kind: 'addLine'; from: PointRef; to: PointRef; id?: string }
+  | { kind: 'addPoint'; x: number; y: number }
+  | { kind: 'addLine'; from: PointRef; to: PointRef }
   | { kind: 'addTangentArc'; from: string; to: PointRef }
   | { kind: 'addArc3'; start: PointRef; end: PointRef; through: { x: number; y: number } }
   | { kind: 'addConstraint'; constraint: NewConstraint }

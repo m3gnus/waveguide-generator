@@ -100,7 +100,7 @@ describe('source contour exact import and lowering', () => {
   it('lowers a new segment joined by an explicit endpoint snap with one shared output joint', () => {
     const { sketch, meta } = seed(INITIAL_SOURCE);
     const result = applySourceCommand(sketch, meta, { kind: 'addLine', from: { x: 8, y: 0,
-      snap: { x: 8, y: 0, glyph: 'endpoint', constraint: { kind: 'coincident', point: 'rim' } } }, to: { x: 12, y: 0 } });
+      snap: { x: 8, y: 0, glyph: 'endpoint', constraint: { kind: 'coincident', point: 'rim' } } }, to: { x: 12, y: 0, snap: { x: 12, y: 0, glyph: 'baffle', constraint: { kind: 'pointOnLine', line: meta.references[1].id } } } });
     if ('error' in result) throw new Error(result.error);
     const lowered = lower(result.sketch, result.meta);
     expect(lowered.ok).toBe(true);
@@ -118,8 +118,8 @@ describe('analytic mesher rule agreement table', () => {
   const add = (name: string, edit: (d: SourceDocument) => void, code: string) => { const doc = copy(); edit(doc); cases.push({ name, doc, code }); };
   add('decreasing radius', d => { d.contour.points[1].r_mm = -1; }, 'radius-order');
   add('vertical output', d => { d.contour.points[1].r_mm = 0; }, 'radius-order');
-  add('rim off baffle', d => { d.contour.points[1].z_mm = 1e-12; }, 'rim');
-  add('pole off axis', d => { d.contour.points[0].r_mm = 1e-12; }, 'pole');
+  add('rim off baffle', d => { d.contour.points[1].z_mm = 2e-9; }, 'rim');
+  add('pole off axis', d => { d.contour.points[0].r_mm = 2e-9; }, 'pole');
   add('no moving patch', d => { d.contour.segments[0].role = 'rigid'; d.drive.weights = {}; }, 'moving');
   add('sweep greater than pi', d => { d.contour.points[0].z_mm = 1; d.contour.points[1].r_mm = 1; d.contour.segments[0] = { ...d.contour.segments[0], kind: 'arc', center_mm: [0, 0], direction: 'ccw' }; }, 'arc-fold');
   add('interior radial extremum', d => {

@@ -30,7 +30,7 @@ exactly once. Destroy releases per-sketch state; WASM modules remain cached.
 Every result splits `totalMs` into `updateMs`, `solveMs` and `readbackMs`:
 
 - Update includes validation, any rebuild, target updates and input serialization.
-- Solve times native calls (including both attempts when slvs falls back).
+- Solve times native calls, including slvs cursor refinements and point-determination probes.
 - Readback includes solution application, output parsing, point/diagnostic extraction,
   invariant checks and continuation-seed updates.
 
@@ -44,16 +44,37 @@ Every result splits `totalMs` into `updateMs`, `solveMs` and `readbackMs`:
   reinitializes solution partitions each solve. Diagnosis can remain cached; saying it
   diagnoses every frame was incorrect. Soft goals select SQP and can entail dense work.
   No package/binary changes were made.
-- **slvs:** `dragged()` adds native `C_WHERE_DRAGGED` hard cursor equations. Reachable
-  free-chain targets now track exactly, instead of merely projecting seeded coordinates.
-  If native solve rejects pins (infeasible **or redundant**, including rim y=0 pins),
-  rebuild from the last successful sketch without pins, seed the target coordinates,
-  and project onto hard constraints. This fallback satisfies equations but does not
-  guarantee minimum cursor movement. Handles persist while pins succeed; fallback or
-  global-sketch ownership changes rebuild. Drag disables failed-constraint analysis.
+- **slvs:** cursor coordinates are written into point parameters, then `markDragged`
+  supplies native weighted drag semantics. Its missing binding type is declared locally
+  in the adapter; the vendored declarations are unchanged. No `dragged()` hard pins remain.
+  The native weight is finite (1/20 in the Jacobian columns), so up to six additional
+  native solves refine cursor error, stopping at 1e-8 mm or when improvement stops.
+  Free, unconstrained arc centers are seeded on the new chord's perpendicular bisector
+  to preserve the other endpoint. Explicit arc/center constraints still go to the solver.
+  `pointOnLine` uses native signed point-line distance zero: `PT_ON_LINE` creates an
+  interpolation parameter that the binding retains as known across repeated solves,
+  which otherwise freezes motion along the line and can move the cold seed.
+  Handles persist for the same dragged ID set and native owner. Changes to that set,
+  global ownership, failure, or release rebuild and clear native drag marks. Drag frames
+  disable failed-constraint analysis.
 - **ACS:** temporary x/y soft goals with `analyze:false`; each frame serializes a reused
   request and reconstructs the Rust sketch. Successful point and arc seeds persist.
   Full release uses `analyze:true`. Serialization/reconstruction are package costs.
+
+## Session diagnosis and measurements
+
+Sessions require the adapter's explicit references, including an empty array for a
+consumer with none. Reference dimension values are re-measured in the immutable model
+on successful full solves and drag frames; these updates create no history entries.
+`projectToEntity` returns the nearest point on a line segment or the finite arc span.
+
+For slvs full diagnosis, `pointDetermined` compares the base DOF with the DOF after fixing
+each point at its solved position. An uncached diagnosis costs at most one additional
+native rebuild/solve per point; explicitly fixed points need no probe. The solved sketch
+(including coordinates and constraints) keys a single-entry cache. Drag frames never
+probe. Sketches with more than 64 solver entities return `undefined` instead. Probe
+build time and native solve time are included in the reported timings. The native DOF
+limitations listed below still apply.
 
 ## Measurements and telemetry
 
@@ -183,8 +204,9 @@ Trajectory maximum interior deviations from planegcs, in order n/4, n/2, 3n/4 (m
 | slvs | 0.002366, 0.001566, 0.003546 | 0.002230, 0.002251, 0.003037 |
 | ACS | 3.142227, 1.823204, 1.084802 | 2.019032, 2.017003, 1.175055 |
 
-slvs's unreachable nearest-projection tests are `it.fails` at both sizes. Native
-cursor pins fix free-end tracking, but the rim's redundant hard y pin still forces
+At the historical Round 3 revision, slvs's unreachable nearest-projection tests were
+`it.fails` at both sizes. The Phase 1a fix round makes both normal passing tests. At that revision, native
+cursor pins fixed free-end tracking, but the rim's redundant hard y pin still forced
 the old projection fallback even on the trajectory path. Equal residual accuracy
 does not establish equivalent drag behavior or qualify a performance winner.
 

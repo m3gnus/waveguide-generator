@@ -2,7 +2,7 @@ import { constraintKinds, type Constraint as SolverConstraint } from './solver/t
 
 export type JSONValue = null | boolean | number | string | JSONValue[] | { [key: string]: JSONValue };
 export interface Point { id: string; x: number; y: number }
-type Base = { id: string; construction?: boolean; data?: JSONValue };
+type Base = { id: string; reference?: boolean; construction?: boolean; data?: JSONValue };
 export type Line = Base & { kind: 'line'; p1: string; p2: string };
 export type Arc = Base & { kind: 'arc'; center: string; start: string; end: string; ccw: boolean };
 export type Entity = Line | Arc | (Base & { kind: 'circle' | 'ellipse' | 'bspline' });

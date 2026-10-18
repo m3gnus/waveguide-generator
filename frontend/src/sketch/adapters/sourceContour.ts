@@ -7,7 +7,7 @@ import { arcGeometry } from '../geometry';
 
 export interface SourceMeta {
   physical_source_id: string; rim_id: string; channel_id: string; motion: 'normal' | 'axial';
-  weights: Record<string, number>; references: Reference[]; endpoints: { pole: string; rim: string };
+  weights: Record<string, number>; references: Reference[];
 }
 export const references: Reference[] = [{ id: 'axis', kind: 'axis' }, { id: 'baffle', kind: 'baffle' }];
 export function seed(document: SourceDocument): { sketch: Sketch; meta: SourceMeta } {
@@ -16,30 +16,26 @@ export function seed(document: SourceDocument): { sketch: Sketch; meta: SourceMe
   const entities: Entity[] = contour.segments.map(e => e.kind === 'line'
     ? { kind: 'line', id: e.id, p1: e.start, p2: e.end, data: { role: e.role } }
     : { kind: 'arc', id: e.id, center: e.start, start: e.start, end: e.end, ccw: e.direction === 'ccw', data: { role: e.role } });
-  let sketch = importedSketch(points, entities);
-  const run = (command: Command) => {
-    const result = applyCommand(sketch, command); if ('error' in result) throw new Error(result.error);
-    sketch = result.sketch; return result.created;
-  };
-  for (const e of contour.segments) if (e.kind === 'arc') {
-    if (!e.center_mm) throw new Error(`Missing arc center: ${e.id}.`);
-    const [center] = run({ kind: 'addPoint', x: e.center_mm[0], y: e.center_mm[1] });
-    sketch = { ...sketch, entities: sketch.entities.map(a => a.id === e.id && a.kind === 'arc' ? { ...a, center } : a) };
-  }
-  const declared = references.map(ref => {
-    const used = [...sketch.points, ...sketch.entities, ...sketch.constraints].some(e => e.id === ref.id);
-    const [p1] = run({ kind: 'addPoint', x: 0, y: 0 });
-    const [p2] = run({ kind: 'addPoint', x: ref.kind === 'axis' ? 0 : 1, y: ref.kind === 'axis' ? 1 : 0 });
-    const [id] = run({ kind: 'addLine', from: p1, to: p2, ...(used ? {} : { id: ref.id }) });
-    run({ kind: 'setConstruction', id, construction: true }); return { ...ref, id };
+  let declared: Reference[] = [];
+  const sketch = importedSketch(points, entities, b => {
+    const centers = new Map<string, string>();
+    for (const e of contour.segments) if (e.kind === 'arc') {
+      if (!e.center_mm) throw new Error(`Missing arc center: ${e.id}.`);
+      centers.set(e.id, b.point(e.center_mm[0], e.center_mm[1]));
+    }
+    b.sketch.entities = b.sketch.entities.map(e => e.kind === 'arc' ? { ...e, center: centers.get(e.id)! } : e);
+    declared = references.map(ref => {
+      const p1 = b.point(0, 0), p2 = b.point(ref.kind === 'axis' ? 0 : 1, ref.kind === 'axis' ? 1 : 0);
+      return { ...ref, id: b.line(p1, p2, ref.id) };
+    });
+    if (contour.points.length) {
+      b.constraint({ kind: 'pointOnLine', point: contour.points[0].id, line: declared[0].id });
+      b.constraint({ kind: 'pointOnLine', point: contour.points.at(-1)!.id, line: declared[1].id });
+    }
   });
-  if (contour.points.length) {
-    run({ kind: 'addConstraint', constraint: { kind: 'pointOnLine', point: contour.points[0].id, line: declared[0].id } });
-    run({ kind: 'addConstraint', constraint: { kind: 'pointOnLine', point: contour.points.at(-1)!.id, line: declared[1].id } });
-  }
+  const valid = validateSketch(sketch); if (!valid.ok) throw new Error(valid.reason);
   return { sketch, meta: { physical_source_id: contour.physical_source_id, rim_id: contour.rim_id,
-    channel_id: drive.channel_id, motion: drive.motion, weights: { ...drive.weights }, references: declared,
-    endpoints: { pole: contour.points[0]?.id ?? '', rim: contour.points.at(-1)?.id ?? '' } } };
+    channel_id: drive.channel_id, motion: drive.motion, weights: { ...drive.weights }, references: declared } };
 }
 type Chain = { points: string[]; entities: { entity: Entity; reversed: boolean }[] };
 function chain(sketch: Sketch, meta: SourceMeta): Chain | DomainProblem {
@@ -58,10 +54,13 @@ function chain(sketch: Sketch, meta: SourceMeta): Chain | DomainProblem {
   for (const e of entities) for (const id of ends(e)) adjacent.set(id, [...adjacent.get(id) ?? [], e]);
   if ([...adjacent.values()].some(a => a.length > 2)) return problem();
   const tips = [...adjacent].filter(([, es]) => es.length === 1).map(([id]) => id);
-  if (tips.length !== 2 || !tips.includes(root(meta.endpoints.pole)) || !tips.includes(root(meta.endpoints.rim))) return problem();
+  if (tips.length !== 2) return problem();
   const axis = meta.references.find(r => r.kind === 'axis')?.id;
   const locked = sketch.constraints.filter(c => c.kind === 'pointOnLine' && c.line === axis).map(c => root('point' in c ? c.point : ''));
-  const poles = tips.filter(id => locked.length ? locked.includes(id) : sketch.points.find(p => p.id === id)?.x === 0);
+  const poles = tips.filter(id => locked.includes(id));
+  const baffle = meta.references.find(r => r.kind === 'baffle')?.id;
+  const rims = sketch.constraints.flatMap(c => c.kind === 'pointOnLine' && c.line === baffle ? [root(c.point)] : []);
+  if (!tips.some(id => rims.includes(id) && !poles.includes(id))) return problem();
   if (poles.length !== 1) return problem();
   const result: Chain = { points: [poles[0]], entities: [] }, visited = new Set<string>();
   let cursor = poles[0];
@@ -76,7 +75,8 @@ function chain(sketch: Sketch, meta: SourceMeta): Chain | DomainProblem {
   if (visited.size !== entities.length) return problem();
   const used = new Set(entities.flatMap(entityPoints));
   const refPoints = new Set(sketch.entities.filter(e => e.construction).flatMap(entityPoints));
-  if (sketch.points.some(p => !used.has(p.id) && !refPoints.has(p.id))) return problem();
+  const stray = sketch.points.find(p => !used.has(p.id) && !refPoints.has(p.id));
+  if (stray) return { code: 'stray-point', ids: [stray.id], message: 'Remove the free point or join it to the contour.' };
   return result;
 }
 const role = (e: Entity): unknown => e.data && typeof e.data === 'object' && !Array.isArray(e.data) ? e.data.role ?? 'moving' : 'moving';
@@ -87,7 +87,10 @@ export function rules(sketch: Sketch, meta: SourceMeta): DomainProblem[] {
   const add = (code: string, ids: string[], message: string) => problems.push({ code, ids, message });
   const pts = ordered.points.map(id => sketch.points.find(p => p.id === id));
   if (pts.some(p => !p)) return [{ code: 'reference', ids: ordered.points, message: 'A contour point is missing.' }];
-  const points = pts.map(p => p!);
+  const raw = pts.map(p => p!);
+  const points = raw.map((p, i) => ({ ...p, x: i === 0 && Math.abs(p.x) <= 1e-9 ? 0 : p.x,
+    y: i === raw.length - 1 && Math.abs(p.y) <= 1e-9 ? 0 : p.y }));
+  const byId = new Map(sketch.points.map(p => [p.id, p]));
   if (points[0].x !== 0) add('pole', [points[0].id], 'Place the pole exactly on the axis.');
   if (points.at(-1)!.y !== 0) add('rim', [points.at(-1)!.id], 'Place the rim exactly on the baffle.');
   if (ordered.entities.length > 256) add('patch-count', ordered.entities.map(e => e.entity.id), 'Use at most 256 patches.');
@@ -99,7 +102,8 @@ export function rules(sketch: Sketch, meta: SourceMeta): DomainProblem[] {
     if (r !== 'moving' && r !== 'rigid') add('role', [e.id], 'Choose a moving or rigid patch role.');
     if (e.kind === 'arc') {
       if (!sketch.points.some(p => p.id === e.center)) { add('circle', [e.id], 'The arc center is missing.'); return; }
-      const g = arcGeometry(sketch, e), sweep = reversed ? -g.sweep : g.sweep, start = reversed ? g.start + g.sweep : g.start;
+      const emitted = new Map([[e.center, byId.get(e.center)!], [e.start, reversed ? b : a], [e.end, reversed ? a : b]]);
+      const g = arcGeometry(sketch, e, emitted), sweep = reversed ? -g.sweep : g.sweep, start = reversed ? g.start + g.sweep : g.start;
       if (!Number.isFinite(g.radius + g.endRadius) || g.radius <= 1e-9 || Math.abs(g.radius - g.endRadius) > 1e-9 * Math.max(1, g.radius)) {
         add('circle', [e.id], 'Arc endpoints must share a nonzero circle.'); return;
       }
@@ -115,6 +119,11 @@ export function rules(sketch: Sketch, meta: SourceMeta): DomainProblem[] {
 export function lower(sketch: Sketch, meta: SourceMeta): Lowered<SourceDocument> {
   const valid = validateSketch(sketch); if (!valid.ok) return { ok: false, problems: [{ code: 'schema', ids: [], message: valid.reason }] };
   const ordered = chain(sketch, meta); if ('code' in ordered) return { ok: false, problems: [ordered] };
+  const pole = sketch.points.find(p => p.id === ordered.points[0])!, rim = sketch.points.find(p => p.id === ordered.points.at(-1))!;
+  if (Math.abs(pole.x) > 1e-9 || Math.abs(rim.y) > 1e-9) return { ok: false, problems: [
+    ...(Math.abs(pole.x) > 1e-9 ? [{ code: 'pole', ids: [pole.id], message: 'Place the pole on the axis.' }] : []),
+    ...(Math.abs(rim.y) > 1e-9 ? [{ code: 'rim', ids: [rim.id], message: 'Place the rim on the baffle.' }] : []),
+  ] };
   const points = ordered.points.map((id, i) => {
     const p = sketch.points.find(p => p.id === id)!;
     return { id, r_mm: i === 0 ? 0 : p.x, z_mm: i === ordered.points.length - 1 ? 0 : p.y };
@@ -138,16 +147,5 @@ export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Co
   const moving = result.sketch.entities.filter(e => !e.construction && role(e) === 'moving');
   for (const id of Object.keys(weights)) if (!moving.some(e => e.id === id)) delete weights[id];
   for (const e of moving) if (!Object.hasOwn(weights, e.id)) weights[e.id] = 1;
-  let endpoints = meta.endpoints;
-  if (command.kind === 'addLine' || command.kind === 'addTangentArc' || command.kind === 'addArc3') {
-    const added = result.sketch.entities.find(e => result.created.includes(e.id));
-    if (added?.kind === 'line' || added?.kind === 'arc') {
-      const start = added.kind === 'line' ? added.p1 : added.start, end = added.kind === 'line' ? added.p2 : added.end;
-      const attaches = start === endpoints.rim || result.sketch.constraints.some(c => c.kind === 'coincident'
-        && (c.a === start && c.b === endpoints.rim || c.b === start && c.a === endpoints.rim));
-      if (!sketch.entities.some(e => !e.construction)) endpoints = { pole: start, rim: end };
-      else if (attaches) endpoints = { ...endpoints, rim: end };
-    }
-  }
-  return { ...result, meta: { ...meta, weights, endpoints } };
+  return { ...result, meta: { ...meta, weights } };
 }

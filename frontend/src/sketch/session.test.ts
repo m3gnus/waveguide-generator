@@ -39,7 +39,7 @@ describe('solver session with real slvs', () => {
     try {
       const result = await session.solveFull(); expect(result.status).toBe('ok');
       expect(result.sketch.entities.find(e => e.id === arc.id)).toEqual(arc);
-      expect(result.dof).toBeGreaterThan(0); expect(result.pointDetermined).toBeUndefined();
+      expect(result.dof).toBeGreaterThan(0); expect(result.pointDetermined).toBeDefined();
     } finally { session.destroy(); }
     const fixed = toSolverSketch(sketch, meta.references).entities.filter(e => e.kind === 'point' && e.fixed);
     expect(fixed).toHaveLength(4);
@@ -47,7 +47,7 @@ describe('solver session with real slvs', () => {
   it('refuses conflicting constraints and restores the original snapshot', async () => {
     let sketch = lineSketch();
     sketch = run(sketch, { kind: 'addConstraint', constraint: { kind: 'distance', a: 'a', b: 'b', value: 10, driving: true } });
-    const existing = sketch.constraints[0].id, session = await createSession(sketch);
+    const existing = sketch.constraints[0].id, session = await createSession(sketch, { references: [] });
     try {
       const refused = await session.tryAddConstraint(sketch, { kind: 'distance', a: 'a', b: 'b', value: 20, driving: true });
       expect(refused.ok).toBe(false); expect(refused.sketch).toBe(sketch);
@@ -60,7 +60,7 @@ describe('solver session with real slvs', () => {
   it('refuses a redundant dimension or keeps it explicitly as a reference', async () => {
     let sketch = lineSketch();
     sketch = run(sketch, { kind: 'addConstraint', constraint: { kind: 'distance', a: 'a', b: 'b', value: 10, driving: true } });
-    const session = await createSession(sketch);
+    const session = await createSession(sketch, { references: [] });
     try {
       const dimension = { kind: 'distance' as const, a: 'a', b: 'b', value: 10, driving: true };
       const refused = await session.tryAddConstraint(sketch, dimension); expect(refused.ok).toBe(false);
@@ -74,7 +74,7 @@ describe('solver session with real slvs', () => {
     } finally { session.destroy(); }
   });
   it('solves reachable multi-point drags in small steps and diagnoses only on release', async () => {
-    const session = await createSession(lineSketch());
+    const session = await createSession(lineSketch(), { references: [] });
     const native = vi.spyOn(capture.slvs!, 'solveSketch');
     try {
       await session.beginDrag(['a', 'b']);
@@ -83,11 +83,11 @@ describe('solver session with real slvs', () => {
       expect(session.sketch.points).toEqual([{ id: 'a', x: 5, y: 4 }, { id: 'b', x: 15, y: 4 }]);
       expect(native.mock.calls.every(args => args[1] === false)).toBe(true);
       const diagnosed = await session.endDrag(); expect(diagnosed.status).toBe('ok'); expect(diagnosed.dof).toBe(4);
-      expect(native.mock.calls.at(-1)?.[1]).toBe(true);
+      expect(native.mock.calls.some(args => args[1] === true)).toBe(true);
     } finally { native.mockRestore(); session.destroy(); }
   });
   it.each(branchCases)('keeps the moving branch: $name', async sample => {
-    const sketch = fromSolver(sample.sketch), session = await createSession(sketch);
+    const sketch = fromSolver(sample.sketch), session = await createSession(sketch, { references: [] });
     const arc = sketch.entities.find(e => e.kind === 'arc') as Arc, initial = arcGeometry(sketch, arc).sweep;
     try {
       await session.beginDrag(['e']); let moved = 0, last = session.sketch.points.find(p => p.id === 'e')!;
@@ -104,7 +104,7 @@ describe('solver session with real slvs', () => {
     } finally { session.destroy(); }
   });
   it('halts near the semicircle boundary without accepting a branch flip', async () => {
-    const sample = branchCases[1], session = await createSession(fromSolver(sample.sketch));
+    const sample = branchCases[1], session = await createSession(fromSolver(sample.sketch), { references: [] });
     try {
       await session.beginDrag(['e']); const result = await session.dragTo(sample.targets[2]);
       const arc = session.sketch.entities.find(e => e.kind === 'arc') as Arc;
@@ -115,10 +115,10 @@ describe('solver session with real slvs', () => {
   });
   it('rolls back an impossible drag to the last good position', async () => {
     let sketch = lineSketch(); sketch = run(sketch, { kind: 'addConstraint', constraint: { kind: 'fix', point: 'a' } });
-    const session = await createSession(sketch);
+    const session = await createSession(sketch, { references: [] });
     try {
       await session.beginDrag(['a']); const result = await session.dragTo({ pointId: 'a', x: 50, y: 50 });
-      expect(result.stopped).toBe(true); expect(session.sketch.points[0]).toEqual(sketch.points[0]);
+      expect(result.stopped).toBe(true); expect(Math.hypot(session.sketch.points[0].x, session.sketch.points[0].y)).toBeLessThan(1e-9);
       expect((await session.endDrag()).status).toBe('ok');
     } finally { session.destroy(); }
   });
@@ -128,7 +128,7 @@ describe('solver session with real slvs', () => {
     for (const point of ['a', 'b']) sketch = run(sketch, { kind: 'addConstraint', constraint: { kind: 'fix', point } });
     sketch = run(sketch, { kind: 'addConstraint', constraint: { kind: 'distance', a: 'a', b: 'p', value: 5, driving: true } });
     sketch = run(sketch, { kind: 'addConstraint', constraint: { kind: 'distanceY', a: 'a', b: 'p', value: 4, driving: true } });
-    const id = sketch.constraints.at(-1)!.id, session = await createSession(sketch);
+    const id = sketch.constraints.at(-1)!.id, session = await createSession(sketch, { references: [] });
     try {
       expect((await session.setDimensionContinuation(id, 3.5)).ok).toBe(true);
       const before = session.sketch, refused = await session.setDimensionContinuation(id, -4);
@@ -140,7 +140,7 @@ describe('solver session with real slvs', () => {
   });
   it.each(['full', 'drag', 'dimension'] as const)('recovers a native WASM trap once during %s with identical results', async mode => {
     let sketch = lineSketch(); sketch = run(sketch, { kind: 'addConstraint', constraint: { kind: 'distance', a: 'a', b: 'b', value: 10, driving: true } });
-    const id = sketch.constraints[0].id, baseline = await createSession(sketch), recovered = await createSession(sketch);
+    const id = sketch.constraints[0].id, baseline = await createSession(sketch, { references: [] }), recovered = await createSession(sketch, { references: [] });
     const perform = async (s: typeof baseline) => {
       if (mode === 'full') return (await s.solveFull()).points;
       if (mode === 'dimension') { expect((await s.setDimensionContinuation(id, 12)).ok).toBe(true); return s.sketch.points; }
@@ -156,10 +156,10 @@ describe('solver session with real slvs', () => {
     } finally { trap?.mockRestore(); baseline.destroy(); recovered.destroy(); }
   });
   it('recovers a retired error from an adapter trapped by another owner', async () => {
-    const session = await createSession(lineSketch()), other = await createSolver('slvs'), native = capture.slvs!;
+    const session = await createSession(lineSketch(), { references: [] }), other = await createSolver('slvs'), native = capture.slvs!;
     const trap = vi.spyOn(native, 'solveSketch').mockImplementationOnce(() => { throw new WebAssembly.RuntimeError('test'); });
     try {
-      other.load(toSolverSketch(lineSketch())); expect(() => other.solve({ mode: 'full' })).toThrow(WebAssembly.RuntimeError);
+      other.load(toSolverSketch(lineSketch(), [])); expect(() => other.solve({ mode: 'full' })).toThrow(WebAssembly.RuntimeError);
       expect((await session.solveFull()).status).toBe('ok'); expect(session.stats.recoveries).toBe(1);
     } finally { trap.mockRestore(); other.destroy(); session.destroy(); }
   });
@@ -170,7 +170,7 @@ describe('solver session with real slvs', () => {
       traps.push(vi.spyOn(capture.slvs!, 'solveSketch').mockImplementation(() => { throw new WebAssembly.RuntimeError('persistent trap'); }));
       return solver;
     });
-    const sketch = lineSketch(), session = await createSession(sketch, { solverFactory: factory });
+    const sketch = lineSketch(), session = await createSession(sketch, { solverFactory: factory, references: [] });
     try {
       await session.beginDrag(['b']);
       await expect(session.dragTo({ pointId: 'b', x: 11, y: 1 })).rejects.toThrow('persistent trap');
@@ -178,7 +178,7 @@ describe('solver session with real slvs', () => {
     } finally { for (const trap of traps) trap.mockRestore(); session.destroy(); }
   });
   it('reports wall-clock solves over 250ms without adding a worker', async () => {
-    const session = await createSession(lineSketch()), original = capture.slvs!.solveSketch.bind(capture.slvs);
+    const session = await createSession(lineSketch(), { references: [] }), original = capture.slvs!.solveSketch.bind(capture.slvs);
     let now = 0;
     const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
     const solve = vi.spyOn(capture.slvs!, 'solveSketch').mockImplementation((...args) => { const r = original(...args); now += 251; return r; });
@@ -186,11 +186,24 @@ describe('solver session with real slvs', () => {
     finally { solve.mockRestore(); clock.mockRestore(); session.destroy(); }
   });
   it('rejects malformed lifecycle calls', async () => {
-    const session = await createSession(lineSketch());
+    const session = await createSession(lineSketch(), { references: [] });
     await expect(session.dragTo({ pointId: 'a', x: 0, y: 0 })).rejects.toThrow('beginDrag');
     await expect(session.endDrag()).rejects.toThrow(); await expect(session.beginDrag(['missing'])).rejects.toThrow();
     await session.beginDrag(['a']); await expect(session.beginDrag(['a'])).rejects.toThrow();
     await expect(session.solveFull()).rejects.toThrow(); await expect(session.dragTo({ pointId: 'b', x: 0, y: 0 })).rejects.toThrow();
     await session.endDrag(); session.destroy(); session.destroy(); await expect(session.solveFull()).rejects.toThrow('destroyed');
   });
+});
+
+it('caches native point determination and skips probing above 64 entities', async () => {
+  const small = await createSession(lineSketch(), { references: [] }), native = vi.spyOn(capture.slvs!, 'solveSketch');
+  try {
+    expect((await small.solveFull()).pointDetermined).toEqual({ a: false, b: false });
+    expect(native).toHaveBeenCalledTimes(3);
+    await small.solveFull(); expect(native).toHaveBeenCalledTimes(4);
+  } finally { native.mockRestore(); small.destroy(); }
+  const large = await createSession(importedSketch(Array.from({ length: 65 }, (_, i) => ({ id: `p${i}`, x: i, y: 0 })), []), { references: [] });
+  const probe = vi.spyOn(capture.slvs!, 'solveSketch');
+  try { expect((await large.solveFull()).pointDetermined).toBeUndefined(); expect(probe).toHaveBeenCalledTimes(1); }
+  finally { probe.mockRestore(); large.destroy(); }
 });

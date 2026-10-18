@@ -17,7 +17,7 @@ describe('immutable sketch commands', () => {
     const deleted = run(r.sketch, { kind: 'deleteEntity', id: 'l8' });
     expect(deleted.removedConstraints).toEqual(['c7']);
     expect(run(deleted.sketch, { kind: 'addPoint', x: 1, y: 2 }).created).toEqual(['p9']);
-    expect(applyCommand(deleted.sketch, { kind: 'addPoint', id: 'p6', x: 1, y: 2 })).toHaveProperty('error');
+    expect(applyCommand(deleted.sketch, { kind: 'addPoint', id: 'p6', x: 1, y: 2 } as Command)).toHaveProperty('error');
     expect(JSON.stringify(original)).toBe(snapshot);
   });
   it('supports endpoint and reference snap constraints', () => {
@@ -57,7 +57,7 @@ describe('immutable sketch commands', () => {
   it('split keeps the left identity and copies JSON while remapping curve membership', () => {
     let s = base();
     s = run(s, { kind: 'setEntityData', id: 'l4', data: { role: 'moving', extra: 0 } }).sketch;
-    for (const [id, x, y] of [['left', 2, 0], ['right', 8, 0], ['off', 7, 2]] as const) s = run(s, { kind: 'addPoint', id, x, y }).sketch;
+    for (const [id, x, y] of [['left', 2, 0], ['right', 8, 0], ['off', 7, 2]] as const) s = { ...s, points: [...s.points, { id, x, y }] };
     for (const point of ['left', 'right', 'off']) s = run(s, { kind: 'addConstraint', constraint: { kind: 'pointOnLine', point, line: 'l4' } }).sketch;
     s = run(s, { kind: 'addConstraint', constraint: { kind: 'fix', point: 'p2' } }).sketch;
     const r = run(s, { kind: 'splitAt', entity: 'l4', x: 5, y: 0 }), right = r.sketch.entities[1];
@@ -83,7 +83,7 @@ describe('immutable sketch commands', () => {
   it('remaps finite arc membership and tangency through coincident endpoints', () => {
     let s = run(emptySketch(), { kind: 'addArc3', start: { x: -1, y: 0 }, end: { x: 1, y: 0 }, through: { x: 0, y: 1 } }).sketch;
     const arc = s.entities[0]; if (arc.kind !== 'arc') throw new Error('arc');
-    for (const [id, x, y] of [['on', .6, .8], ['off', 0, 3], ['contact', 1, 0]] as const) s = run(s, { kind: 'addPoint', id, x, y }).sketch;
+    for (const [id, x, y] of [['on', .6, .8], ['off', 0, 3], ['contact', 1, 0]] as const) s = { ...s, points: [...s.points, { id, x, y }] };
     for (const point of ['on', 'off']) s = run(s, { kind: 'addConstraint', constraint: { kind: 'pointOnArc', point, arc: arc.id } }).sketch;
     s = run(s, { kind: 'addConstraint', constraint: { kind: 'coincident', a: 'contact', b: arc.end } }).sketch;
     s = run(s, { kind: 'addLine', from: 'contact', to: { x: 1, y: -2 } }).sketch;
@@ -94,7 +94,7 @@ describe('immutable sketch commands', () => {
     expect(r.sketch.constraints.at(-1)).toMatchObject({ kind: 'tangent', a: r.created[1] });
   });
   it.each<Command>([
-    { kind: 'addPoint', x: NaN, y: 0 }, { kind: 'addPoint', id: 'p1', x: 0, y: 1 },
+    { kind: 'addPoint', x: NaN, y: 0 }, { kind: 'addPoint', id: 'p1', x: 0, y: 1 } as Command,
     { kind: 'addLine', from: 'missing', to: 'p2' }, { kind: 'addLine', from: 'p1', to: 'p1' },
     { kind: 'addTangentArc', from: 'p1', to: 'p3' }, { kind: 'addTangentArc', from: 'p3', to: { x: 30, y: 0 } },
     { kind: 'addArc3', start: 'p1', end: 'p2', through: { x: 5, y: 0 } },

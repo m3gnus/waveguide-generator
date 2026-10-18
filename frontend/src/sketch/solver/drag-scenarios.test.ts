@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { writeFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { compareTrajectory, dragScenarioNames, maximum, measureDragScenario, type DragMeasurement } from './drag-scenarios';
+import { dragScenario, compareTrajectory, dragScenarioNames, maximum, measureDragScenario, type DragMeasurement } from './drag-scenarios';
 import { createSolver, solverNames, type SolverName } from './types';
 
 const nodeProcess = (globalThis as { process?: { env: Record<string, string | undefined>; version: string; platform: string; arch: string } }).process;
@@ -38,8 +38,7 @@ for (const n of [8, 24]) describe(`equivalent drag n=${n}`, () => {
       const r = results.get(name)![1]; expect(r.frames).toHaveLength(60);
       expect(r.failedFrames).toBe(0); expect(r.maxResidual).toBeLessThan(1e-5);
     });
-    // slvs fallback seeds/project all coordinates and misses the nearest cursor projection.
-    const projectionTest = name === 'slvs' ? it.fails : it;
+    const projectionTest = it;
     projectionTest(`${name}: unreachable targets project to rim locus with minimum cursor movement`, () => {
       const r = results.get(name)![1]; expect(r.frames).toHaveLength(60);
       expect(r.failedFrames).toBe(0); expect(r.maxResidual).toBeLessThan(1e-5);
@@ -52,4 +51,24 @@ for (const n of [8, 24]) describe(`equivalent drag n=${n}`, () => {
       if (name === 'planegcs') expect(maximum(Object.values(r.maxDeviationFromPlanegcs!))).toBe(0);
     });
   }
+});
+
+it('slvs: pointOnLine reachable locus drag tracks cursor within 1e-6 mm', async () => {
+  const solver = await createSolver('slvs');
+  try {
+    const sample = dragScenario(8, 'trajectory');
+    sample.sketch.entities.push({ kind: 'point', id: 'baffle-end', x: 1, y: 0, fixed: true },
+      { kind: 'line', id: 'baffle', p1: 'origin', p2: 'baffle-end' });
+    sample.sketch.constraints = sample.sketch.constraints.map(c => c.id === 'rim-baffle'
+      ? { kind: 'pointOnLine', id: c.id, point: 'rim', line: 'baffle' } : c);
+    solver.load(sample.sketch); solver.beginDrag(['rim']);
+    let error = 0;
+    for (const target of sample.targets) {
+      const r = solver.dragTo([target]); expect(r.status).toBe('ok');
+      error = Math.max(error, Math.hypot(r.points.rim.x - target.x, r.points.rim.y - target.y));
+    }
+    const output = nodeProcess?.env.SKETCH_FIX_OUTPUT;
+    if (output) writeFileSync(`${output}.point-on-line.json`, JSON.stringify({ frames: sample.targets.length, maxCursorError: error }));
+    expect(error).toBeLessThanOrEqual(1e-6); expect(solver.endDrag().status).toBe('ok');
+  } finally { solver.destroy(); }
 });

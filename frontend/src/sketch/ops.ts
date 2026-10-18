@@ -8,10 +8,9 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
   const s: Sketch = { ...sketch, points: [...sketch.points], entities: [...sketch.entities], constraints: [...sketch.constraints] };
   const created: string[] = [], removedConstraints: string[] = [];
   const used = new Set([...s.points, ...s.entities, ...s.constraints].map(e => e.id));
-  function allocate(prefix: string, imported?: string) {
-    if (imported && numericSuffix(imported) > 0 && numericSuffix(imported) < s.nextId) throw new Error('Imported numeric IDs must be ahead of nextId.');
-    let id = imported ?? `${prefix}${s.nextId++}`;
-    while (!imported && used.has(id)) id = `${prefix}${s.nextId++}`;
+  function allocate(prefix: string) {
+    let id = `${prefix}${s.nextId++}`;
+    while (used.has(id)) id = `${prefix}${s.nextId++}`;
     if (used.has(id) || !id || id.trim() !== id) throw new Error(`Duplicate or invalid ID: ${id}.`);
     s.nextId = Math.max(s.nextId, numericSuffix(id) + 1);
     if (!Number.isSafeInteger(s.nextId)) throw new Error('ID suffix exceeds the safe integer range.');
@@ -24,9 +23,9 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
     if (problem) throw new Error(problem);
     s.constraints.push({ ...constraint, id: allocate('c') });
   }
-  function addPoint(x: number, y: number, id?: string) {
+  function addPoint(x: number, y: number) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('Point coordinates must be finite.');
-    const p = { id: allocate('p', id), x, y }; s.points.push(p); return p;
+    const p = { id: allocate('p'), x, y }; s.points.push(p); return p;
   }
   function resolve(ref: PointRef): Point {
     if (typeof ref === 'string') return point(ref);
@@ -52,12 +51,13 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
     return reached.has(b);
   }
   try {
+    if ((command.kind === 'addPoint' || command.kind === 'addLine') && 'id' in command) throw new Error('Caller-supplied IDs are reserved for imports.');
     switch (command.kind) {
-      case 'addPoint': addPoint(command.x, command.y, command.id); break;
+      case 'addPoint': addPoint(command.x, command.y); break;
       case 'addLine': {
         const a = resolve(command.from), b = resolve(command.to);
         if (a.id === b.id || distance(a, b) <= 1e-12) throw new Error('A line needs distinct endpoints.');
-        s.entities.push({ kind: 'line', id: allocate('l', command.id), p1: a.id, p2: b.id }); break;
+        s.entities.push({ kind: 'line', id: allocate('l'), p1: a.id, p2: b.id }); break;
       }
       case 'addTangentArc': {
         const a = point(command.from), b = resolve(command.to);
@@ -100,7 +100,9 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
         s.points = s.points.map(p => p.id === command.id ? { ...p, x: command.x, y: command.y } : p); break;
       }
       case 'deleteEntity': {
-        const e = entity(command.id), candidates = new Set(entityPoints(e));
+        const e = entity(command.id);
+        if (e.reference) throw new Error('Reference lines cannot be deleted.');
+        const candidates = new Set(entityPoints(e));
         s.entities = s.entities.filter(e => e.id !== command.id);
         cleanConstraints(c => constraintRefs(c).includes(command.id));
         const stillUsed = new Set(s.entities.flatMap(entityPoints));
@@ -120,11 +122,23 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
         const right: Entity = e.kind === 'line' ? { ...e, id: rightId, p1: join.id } : { ...e, id: rightId, start: join.id };
         s.entities.splice(s.entities.indexOf(e), 1, left, right);
         s.constraints = s.constraints.flatMap(c => {
+          if (constraintRefs(c).includes(e.id) && ['equal', 'midpoint', 'horizontal', 'vertical', 'parallel', 'perpendicular', 'angle'].includes(c.kind)
+            || c.kind === 'distance' && [start.id, end.id].includes(c.a) && [start.id, end.id].includes(c.b)) {
+            removedConstraints.push(c.id); return [];
+          }
           if ((c.kind === 'pointOnLine' || c.kind === 'pointOnArc') && constraintRefs(c).includes(e.id)) {
             const p = point(c.point);
             const contains = (part: Entity) => part.kind === 'line' ? onLine(point(part.p1), point(part.p2), p) : part.kind === 'arc' && onArc(s, part, p);
+            const remap = c.kind === 'pointOnLine' ? { ...c, line: rightId } : { ...c, arc: rightId };
             if (contains(left)) return [c];
-            if (contains(right)) return [c.kind === 'pointOnLine' ? { ...c, line: rightId } : { ...c, arc: rightId }];
+            if (contains(right)) return [remap];
+            if (e.kind === 'line') {
+              const cross = (p.x - start.x) * (end.y - start.y) - (p.y - start.y) * (end.x - start.x);
+              if (Math.abs(cross) <= 1e-9 * distance(start, end)) return [c, { ...remap, id: allocate('c') }];
+            } else {
+              const center = point(e.center);
+              if (Math.abs(distance(center, p) - distance(center, start)) <= 1e-9 * Math.max(1, distance(center, start))) return [c];
+            }
             removedConstraints.push(c.id); return [];
           }
           // Endpoint tangencies follow the original contact, not the new cut.
@@ -138,15 +152,34 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
       }
       case 'setEntityData': case 'setConstruction': {
         entity(command.id);
+        if (command.kind === 'setConstruction' && typeof command.construction !== 'boolean') throw new Error('Construction must be boolean.');
         if (command.kind === 'setEntityData' && !isJSON(command.data)) throw new Error('Entity data must be JSON.');
         s.entities = s.entities.map(e => e.id !== command.id ? e : command.kind === 'setEntityData' ? { ...e, data: command.data } : { ...e, construction: command.construction }); break;
       }
     }
-    const result = validateSketch(s); if (!result.ok) return { error: result.reason };
     return { sketch: s, created, removedConstraints };
   } catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
 }
 
-export function importedSketch(points: Point[], entities: Entity[]): Sketch {
-  return { version: 'wg-sketch-v1', points, entities, constraints: [], nextId: 1 + Math.max(0, ...[...points, ...entities].map(e => numericSuffix(e.id))) };
+interface ImportBuilder {
+  sketch: Sketch;
+  point(x: number, y: number): string;
+  line(p1: string, p2: string, preferred?: string): string;
+  constraint(constraint: import('./model').NewConstraint): string;
+}
+export function importedSketch(points: Point[], entities: Entity[], build?: (b: ImportBuilder) => void): Sketch {
+  const sketch: Sketch = { version: 'wg-sketch-v1', points: [...points], entities: [...entities], constraints: [],
+    nextId: 1 + Math.max(0, ...[...points, ...entities].map(e => numericSuffix(e.id))) };
+  const used = new Set([...points, ...entities].map(e => e.id));
+  const allocate = (prefix: string, preferred?: string) => {
+    let id = preferred && !used.has(preferred) ? preferred : `${prefix}${sketch.nextId++}`;
+    while (used.has(id)) id = `${prefix}${sketch.nextId++}`;
+    used.add(id); sketch.nextId = Math.max(sketch.nextId, numericSuffix(id) + 1); return id;
+  };
+  build?.({ sketch,
+    point(x, y) { const id = allocate('p'); sketch.points.push({ id, x, y }); return id; },
+    line(p1, p2, preferred) { const id = allocate('l', preferred); sketch.entities.push({ kind: 'line', id, p1, p2, construction: true, reference: true }); return id; },
+    constraint(c) { const id = allocate('c'); sketch.constraints.push({ ...c, id } as Constraint); return id; },
+  });
+  return sketch;
 }
