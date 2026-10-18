@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "911a53e5bc6d024a6f6fc3746de702fdee28c4b5",
+  "commit": "5b6c7213877e5e307595d1fe123587dec08ea093",
   "path": "fusion-addins/WGLink/wglink_protocol.py",
   "sha256": "a71af9289b5c85c7e69b9174e515ca02b7efec8ecb18cdb901ff944371ee18e7",
   "note": "WGLink 0.3.0 with delivered-event acknowledgement; protocol unchanged."

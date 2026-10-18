@@ -73,3 +73,8 @@ pass `--skip-wglink`.
 The pinned source includes Fusion event receipt acknowledgement for builds that
 return false from `fireCustomEvent` after delivery. Undelivered startup work is
 cancelled within the existing startup envelope; the shared protocol is unchanged.
+
+The pinned source follows immutable WG export bundles: Fusion updates resolve the
+latest export through its locator and check the handoff's export id. Add-ins without
+the `immutableBundles` capability keep automatic Send; WG asks them to update for a
+manual Update.
