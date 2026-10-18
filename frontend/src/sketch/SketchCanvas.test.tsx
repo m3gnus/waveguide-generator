@@ -40,6 +40,33 @@ async function mount(initial = base(), diagnosis?: Diagnosis) {
 function coordinate(id: string) { const p = host.querySelector(`[data-id="${id}"]`)!; return { element: p, x: Number(p.getAttribute('cx')), y: Number(p.getAttribute('cy')) }; }
 
 describe('SketchCanvas with real slvs', () => {
+  it('opens the current arc mode with A and toggles only while an arc tool is active', async () => {
+    await mount(); await key('a');
+    expect(button('3-point arc (A)').getAttribute('aria-pressed')).toBe('true');
+    await key('a'); expect(button('Tangent arc (A)').getAttribute('aria-pressed')).toBe('true');
+    await key('Escape'); await key('a');
+    expect(button('Tangent arc (A)').getAttribute('aria-pressed')).toBe('true');
+    await key('l'); await key('a');
+    expect(button('Tangent arc (A)').getAttribute('aria-pressed')).toBe('true');
+  });
+  it('keeps a rejection tooltip through small jitter, clears after eight pixels or 1.5 seconds', async () => {
+    await mount(); await act(async () => button('3-point arc (A)').click());
+    vi.useFakeTimers();
+    try {
+      for (const [x, y] of [[100, 100], [220, 100], [160, 100]]) await pointer(svg(), 'pointerdown', x, y, { ctrlKey: true });
+      await pointer(svg(), 'pointermove', 163, 102, { ctrlKey: true });
+      expect(host.querySelector('[role="tooltip"]')?.textContent).toContain('collinear');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1499); });
+      expect(host.querySelector('[role="tooltip"]')).not.toBeNull();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(host.querySelector('[role="tooltip"]')).toBeNull();
+      await pointer(svg(), 'pointerdown', 160, 100, { ctrlKey: true });
+      expect(host.querySelector('[role="tooltip"]')).not.toBeNull();
+      await pointer(svg(), 'pointermove', 170, 100, { ctrlKey: true });
+      expect(host.querySelector('[role="tooltip"]')).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('starts with 3-point arcs and previews the chord, then the actual arc through the cursor', async () => {
     await mount();
     expect(button('3-point arc (A)')).toBeDefined();
@@ -60,7 +87,7 @@ describe('SketchCanvas with real slvs', () => {
     expect(host.querySelector('[aria-label^="Select arc"]')).not.toBeNull();
   });
   it('falls back from tangent to 3-point on empty space and explains the next pick', async () => {
-    await mount(); await key('a');
+    await mount(); await key('a'); await key('a');
     await pointer(svg(), 'pointerdown', 100, 100, { ctrlKey: true });
     expect(button('3-point arc (A)').getAttribute('aria-pressed')).toBe('true');
     expect(host.textContent).toContain('No chain end here: started a 3-point arc');
@@ -70,7 +97,7 @@ describe('SketchCanvas with real slvs', () => {
     expect(host.querySelector('path.sketch-preview')).not.toBeNull();
   });
   it('highlights open ends, rejects the pole at the cursor and previews a tangent arc', async () => {
-    await mount(); await key('a');
+    await mount(); await key('a'); await key('a');
     expect(host.querySelectorAll('.sketch-point.valid-start')).toHaveLength(1);
     expect(host.querySelector('.sketch-point.valid-start')?.getAttribute('data-id')).toBe('q');
     const p = coordinate('p');
@@ -343,6 +370,7 @@ describe('SketchCanvas with real slvs', () => {
     await act(async () => field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     expect(host.querySelector('[aria-label="Line length"]')).toBeNull();
     await key('Escape'); expect(button('Select (Esc)').getAttribute('aria-pressed')).toBe('true');
+    await key('a'); expect(button('3-point arc (A)').getAttribute('aria-pressed')).toBe('true');
     await key('a'); expect(button('Tangent arc (A)').getAttribute('aria-pressed')).toBe('true');
     await key('a'); expect(button('3-point arc (A)').getAttribute('aria-pressed')).toBe('true');
     await key('s'); expect(button('Split (S)').getAttribute('aria-pressed')).toBe('true');

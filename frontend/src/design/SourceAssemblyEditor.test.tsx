@@ -41,6 +41,30 @@ describe('shared source and passage authoring', () => {
     await act(async () => input.blur()); await settle();
   }
   const profile = { horn_config: { formula: 'OSSE', mode: 'bare', profile: { r0_mm: 7, L_mm: 130 } }, throat_radius_mm: 7, horn_length_mm: 130, mouth_radius_mm: 80 };
+  it('passes the resolved current-horn throat into the nested editor as an exact read-only limit', async () => {
+    vi.mocked(sourceEditorApi.hornProfile).mockResolvedValue(profile);
+    await mount();
+    await act(async () => button('Edit horn contour…').click()); await settle();
+    const label = host.querySelector('.sketch-limit text')!;
+    expect(label.textContent).toContain('Throat r 7.00');
+    expect(label.querySelector('title')?.textContent).toBe('Set by the horn design');
+    await enter('Patch 1 weight', '.5');
+    expect(read().horn.contour.points.at(-1)!.r_mm).toBe(7);
+  });
+  it('writes nested aperture label edits to the assembly and reflects the assembly field on reopening', async () => {
+    storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY)); await mount();
+    await act(async () => button('Edit woofer contour…').click()); await settle();
+    await act(async () => host.querySelector('.sketch-limit text')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Limit radius"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '10'); input.dispatchEvent(new Event('input', { bubbles: true })); });
+    await act(async () => host.querySelector('form[aria-label="Edit limit"]')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))); await settle();
+    expect(read().dimensions.aperture_radius_mm).toBe(10);
+    await act(async () => button('Close').click()); await settle();
+    expect(Number(field('Woofer aperture radius').value)).toBe(10);
+    await enter('Woofer aperture radius', '12');
+    await act(async () => button('Edit woofer contour…').click()); await settle();
+    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Aperture r 12.00');
+  });
   it('seeds a fresh assembly from the current design with source clearance and enclosure margins', async () => {
     vi.mocked(sourceEditorApi.hornProfile).mockResolvedValue(profile);
     const current = serializeDesign(useDesignStore.getState().design);
@@ -241,6 +265,7 @@ describe('shared source and passage authoring', () => {
     const value = structuredClone(INITIAL_ASSEMBLY); value.woofer = null;
     value.dimensions.woofer_xy_mm = [0, 0]; value.dimensions.aperture_radius_mm = 0;
     value.horn_config = { formula: 'OSSE', mode: 'bare', profile: { r0_mm: 4, L_mm: 24 } };
+    vi.mocked(sourceEditorApi.validateAssembly).mockResolvedValue({ geometry_sha256: 'g', passage_contract: null, horn_section_mm: { 'horn-wall': [[4, 0], [10, 24]] } });
     storage.setItem('', JSON.stringify(value));
     await mount();
     expect(read()).toEqual(value);
@@ -248,6 +273,8 @@ describe('shared source and passage authoring', () => {
     expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Edit woofer contour…')).toBe(false);
     await act(async () => button('Edit horn contour…').click()); await settle();
     await enter('Patch 1 weight', '-.5');
+    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('🔒 Throat r 4.00');
+    expect(read().horn.contour.points.at(-1)!.r_mm).toBe(4);
     await act(async () => button('Use contour in assembly').click()); await settle();
     expect(read().woofer).toBeNull(); expect(read().horn.drive.weights.piston).toBe(-.5);
     expect(read().horn_config).toEqual(value.horn_config);

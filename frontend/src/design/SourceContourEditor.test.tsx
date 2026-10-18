@@ -47,6 +47,105 @@ describe('source editor interactions', () => {
     const line = host.querySelector('.sketch-entity[data-id="piston"]')!, values = line.getAttribute('d')!.match(/[\d.e+-]+/g)!.map(Number);
     await pointer(line, 'pointerdown', (values[0] + values[2]) / 2, (values[1] + values[3]) / 2);
   }
+  it('renders an editable aperture limit above export and writes label edits back to the attachment', async () => {
+    await mount();
+    const label = host.querySelector('.sketch-limit text')!;
+    expect(label.textContent).toContain('Aperture r 14.00');
+    expect(host.querySelector('.sketch-limit line')!.getAttribute('x1')).toBe(host.querySelector('.sketch-limit line')!.getAttribute('x2'));
+    const selector = host.querySelector('[aria-label="Source attachment"]')!;
+    expect(selector.compareDocumentPosition(button('Apply shape')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await act(async () => label.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    await enter('Limit radius', '16');
+    await act(async () => button('Apply limit').click()); await settle();
+    expect(Number(input('Aperture radius attachment').value)).toBe(16);
+    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Aperture r 16.00');
+    await enter('Aperture radius attachment', '18'); await settle();
+    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Aperture r 18.00');
+  });
+  it('snaps a dragged woofer rim to the aperture and warns live when dragged beyond it', async () => {
+    await mount();
+    const svg = host.querySelector('[aria-label="Sketch drawing"]')!;
+    const x = Number(host.querySelector('.sketch-limit line')!.getAttribute('x1'));
+    let rim = host.querySelector('.sketch-point[data-id="rim"]')!;
+    const y = Number(rim.getAttribute('cy'));
+    await pointer(rim, 'pointerdown', Number(rim.getAttribute('cx')), y);
+    await pointer(svg, 'pointermove', x - 3, y); await settle();
+    await pointer(svg, 'pointerup'); await settle();
+    expect(readSourceDraft().contour.points.at(-1)!.r_mm).toBeCloseTo(14, 8);
+    rim = host.querySelector('.sketch-point[data-id="rim"]')!;
+    await pointer(rim, 'pointerdown', Number(rim.getAttribute('cx')), y);
+    await pointer(svg, 'pointermove', x + 30, y); await settle();
+    expect(host.querySelector('.sketch-domain-problem')?.textContent).toBe('Rim exceeds the baffle aperture');
+    await pointer(svg, 'pointerup'); await settle();
+    expect(readSourceDraft().contour.points.at(-1)!.r_mm).toBeGreaterThan(14);
+    expect(button('Export STEP + mesh bundle').disabled).toBe(false);
+  });
+  it('uses the conical mouth as the standalone horn limit', async () => {
+    await mount();
+    const selector = host.querySelector<HTMLSelectElement>('[aria-label="Source attachment"]')!;
+    await act(async () => { selector.value = 'horn'; selector.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
+    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Mouth r 20.00');
+    await enter('Point 2 radius', '21'); await settle();
+    expect(host.textContent).toContain('Rim exceeds the horn mouth');
+  });
+  it('fits a cone rim to the aperture including surround and land', async () => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await mount(); await act(async () => button('Fit to limit').click()); await settle();
+    expect(sourceEditorApi.expand).toHaveBeenCalledWith('cone', expect.objectContaining({ radius_mm: 11, surround_width_mm: 2, land_width_mm: 1 }), expect.anything());
+    expect(readSourceDraft().contour.points.at(-1)!.r_mm).toBe(14);
+    expect(Number(input('Radius preset').value)).toBe(11);
+  });
+  it('shows a read-only horn throat, holds its rim exactly, and rejects coordinate edits away from it', async () => {
+    const used = vi.fn();
+    await act(async () => root.render(<Editor initialDocument={INITIAL_SOURCE} onClose={() => {}} onDraftChange={used} limit={{ kind: 'throat', radius: 12.7, hard: true }}/>)); await settle();
+    const label = host.querySelector('.sketch-limit text')!;
+    expect(label.textContent).toContain('🔒 Throat r 12.70');
+    expect(label.querySelector('title')?.textContent).toBe('Set by the horn design');
+    await act(async () => label.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    expect(host.querySelector('[aria-label="Edit limit"]')).toBeNull();
+    expect(Number(input('Point 2 radius').value)).toBe(12.7);
+    await enter('Point 2 radius', '13'); await settle();
+    expect(Number(input('Point 2 radius').value)).toBe(12.7);
+    expect(used.mock.calls.at(-1)![0].contour.points.at(-1).r_mm).toBe(12.7);
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await act(async () => button('Fit to limit').click()); await settle();
+    expect(used.mock.calls.at(-1)![0].contour.points.at(-1).r_mm).toBe(12.7);
+    expect(input('Radius preset').disabled).toBe(true);
+    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('🔒 Throat r 12.70');
+  });
+  it('links point and patch hover and selection between the table and canvas and scrolls the row', async () => {
+    await mount();
+    const points = host.querySelector<HTMLDetailsElement>('.source-points')!;
+    expect(points.open).toBe(false);
+    expect(host.querySelector('[data-row-id="piston"]')!.textContent).toContain('Piston');
+    const row = host.querySelector<HTMLTableRowElement>('[data-row-id="piston"]')!;
+    const scrolled = vi.fn(); row.scrollIntoView = scrolled;
+    await pointer(row, 'pointerover');
+    expect(host.querySelector('.sketch-entity[data-id="piston"]')!.classList.contains('hovered')).toBe(true);
+    await pointer(row, 'pointerout');
+    const curve = host.querySelector('.sketch-entity[data-id="piston"]')!;
+    await pointer(curve, 'pointermove');
+    expect(row.classList.contains('hovered')).toBe(true);
+    await pointer(curve);
+    expect(row.getAttribute('aria-selected')).toBe('true');
+    expect(scrolled).toHaveBeenCalledWith({ block: 'nearest' });
+    await act(async () => button('Select point 2').click());
+    expect(points.open).toBe(true);
+    expect(host.querySelector('.sketch-point[data-id="rim"]')!.classList.contains('selected')).toBe(true);
+    const pointRow = host.querySelector('[data-row-id="rim"]')!;
+    await pointer(pointRow, 'pointerover');
+    expect(host.querySelector('.sketch-point[data-id="rim"]')!.classList.contains('hovered')).toBe(true);
+    await pointer(pointRow, 'pointerout');
+    await pointer(host.querySelector('.sketch-point[data-id="rim"]')!, 'pointermove');
+    expect(pointRow.classList.contains('hovered')).toBe(true);
+    const pole = host.querySelector('.sketch-point[data-id="pole"]')!;
+    await pointer(pole); await pointer(host.querySelector('[aria-label="Sketch drawing"]')!, 'pointerup'); await settle();
+    expect(host.querySelector('[data-row-id="pole"]')!.getAttribute('aria-selected')).toBe('true');
+    await act(async () => button('Select patch 1').click());
+    expect(row.getAttribute('aria-selected')).toBe('true');
+    expect(host.querySelector('.sketch-entity[data-id="piston"]')!.classList.contains('selected')).toBe(true);
+  });
+
   it('applies a parametric cone, renders seven separated named dimensions, and synchronizes both editors through continuation', async () => {
     vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
     await mount(); await act(async () => button('Apply shape').click()); await settle();
@@ -524,6 +623,7 @@ describe('source editor interactions', () => {
       const svg = host.querySelector<SVGSVGElement>('[aria-label="Sketch drawing"]')!;
       await act(async () => svg.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -2000 })));
       expect(Number(host.querySelector('.sketch-point[data-id="rim"]')!.getAttribute('cx'))).toBeGreaterThan(280);
+      await enter('Aperture radius attachment', '8'); await settle();
       await act(async () => button('Load Original').click()); await settle(); fitted();
       expect(readSourceDraft()).toEqual(INITIAL_SOURCE);
       await act(async () => button('Apply shape').click()); await settle(); fitted();

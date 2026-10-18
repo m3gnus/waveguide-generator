@@ -8,8 +8,9 @@ import { drawnSource, editPatch, editPoint, identityProblem, INITIAL_SOURCE, rem
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
 import { SketchController, type Authoring } from '../sketch/controller';
-import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, type SourceMeta } from '../sketch/adapters/sourceContour';
-import { presetDefaults as defaults, presetLabels, seedPreset } from '../sketch/adapters/sourcePreset';
+import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, withSourceLimit, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
+import { presetDefaults as defaults, presetLabels, seedPreset, fitPresetDimensions } from '../sketch/adapters/sourcePreset';
+import { displayName } from '../sketch/displayName';
 import { uniqueProblems } from '../sketch/adapter';
 import { parseSketch } from '../sketch/model';
 import type { Command } from '../sketch/commands';
@@ -52,8 +53,8 @@ export function readSourceAuthoring(document: SourceDocument): Authoring<SourceM
     if (envelope?.version !== 'wg-source-authoring-v1') return fallback;
     const parsed = parseSketch(envelope.sketch), meta = envelope.meta as SourceMeta;
     if (!parsed.ok || !meta || !meta.weights || !Object.values(meta.weights).every(Number.isFinite)
-      || !Array.isArray(meta.references) || meta.references.length !== 2
-      || !meta.references.every(r => ['axis', 'baffle'].includes(r.kind) && parsed.sketch.entities.some(e => e.id === r.id && e.reference && e.kind === 'line'))
+      || !Array.isArray(meta.references) || ![2, 3].includes(meta.references.length)
+      || !meta.references.every(r => ['axis', 'baffle', 'limit'].includes(r.kind) && parsed.sketch.entities.some(e => e.id === r.id && e.reference && e.kind === 'line'))
       || ![meta.physical_source_id, meta.rim_id, meta.channel_id].every(v => typeof v === 'string') || !['normal', 'axial'].includes(meta.motion)) return fallback;
     if (meta.preset && (!['flat', 'dome', 'cone'].includes(meta.preset.shape) || !meta.preset.dimensions
       || typeof meta.preset.dimensions !== 'object' || Array.isArray(meta.preset.dimensions)
@@ -108,11 +109,14 @@ export function SourceContourDialog() {
   return open ? createPortal(<Editor onClose={close}/>, document.body) : null;
 }
 
-export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; onDraftChange?: (document: SourceDocument) => void }) {
+export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange, limit: hostLimit, onLimitChange }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; onDraftChange?: (document: SourceDocument) => void; limit?: SourceLimit; onLimitChange?: (radius: number) => void }) {
+  const [attachment, setAttachment] = useState<SourceAttachment>({ kind: 'baffle', dimensions: { width_mm: 44, height_mm: 54, depth_mm: 12, aperture_radius_mm: 14, center_mm: [0, 0, 0] } });
+  const limit: SourceLimit = hostLimit ?? { kind: attachment.kind === 'baffle' ? 'aperture' : 'mouth', radius: Number(attachment.dimensions[attachment.kind === 'baffle' ? 'aperture_radius_mm' : 'mouth_radius_mm']) };
+  const limitRef = useRef(limit); limitRef.current = limit;
   const [draft, setDraft] = useState(() => initialDocument ? structuredClone(initialDocument) : readSourceDraft());
   const [author, setAuthor] = useState(() => {
     const next = initialDocument ? seed(draft) : readSourceAuthoring(draft);
-    return { ...next, meta: { ...next.meta, weights: movingWeights(next.sketch, next.meta.weights) } };
+    return withSourceLimit({ ...next, meta: { ...next.meta, weights: movingWeights(next.sketch, next.meta.weights) } }, limit);
   });
   const authorRef = useRef(author); authorRef.current = author;
   const [generation, setGeneration] = useState(0);
@@ -123,6 +127,15 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   const [diagnosis, setDiagnosis] = useState<Diagnosis>();
   const [fitRequest, setFitRequest] = useState(0);
   const [canvasSelection, setCanvasSelection] = useState<string[]>([]);
+  const [hoverId, setHoverId] = useState<string>();
+  const [pointsOpen, setPointsOpen] = useState(false);
+  const rows = useRef(new Map<string, HTMLTableRowElement>());
+  useEffect(() => {
+    const id = canvasSelection.at(-1) ?? hoverId;
+    if (!id) return;
+    if (author.sketch.points.some(p => p.id === id) && canvasSelection.includes(id)) setPointsOpen(true);
+    rows.current.get(id)?.scrollIntoView?.({ block: 'nearest' });
+  }, [canvasSelection, hoverId, pointsOpen]);
   const draftCallback = useRef(onDraftChange); draftCallback.current = onDraftChange;
   const controller = useRef<SketchController<SourceMeta> | undefined>(undefined);
   const [sketchReady, setSketchReady] = useState(false);
@@ -133,7 +146,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   const sketchRules = useMemo(() => rules(displayAuthor.sketch, displayAuthor.meta), [displayAuthor.sketch, displayAuthor.meta]);
   const sketchProblems = useMemo(() => uniqueProblems([...sketchRules, ...(!preview && !lowered.ok ? lowered.problems : [])]), [sketchRules, lowered, preview]);
   const committedProblemCount = useRef(sketchProblems.length);
-  if (!preview) committedProblemCount.current = sketchProblems.length;
+  if (!preview) committedProblemCount.current = sketchProblems.filter(p => p.severity !== 'warning').length;
   const hasSketchProblems = !classic && committedProblemCount.current > 0;
   const tablePoints = useMemo(() => classic ? draft.contour.points : contourPointOrder(author.sketch, author.meta).map(id => author.sketch.points.find(p => p.id === id)!).map(p => ({ id: p.id, r_mm: p.x, z_mm: p.y })), [classic, draft.contour.points, author]);
   const tablePatches: SourcePatch[] = useMemo(() => classic ? draft.contour.segments : author.sketch.entities.flatMap(e => e.construction || e.kind !== 'line' && e.kind !== 'arc' ? [] : [{
@@ -146,7 +159,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   const [view, setView] = useState(() => fit(draft.contour.points));
   const [accepted, setAccepted] = useState<{ key: string; value: SourceValidation }>();
   const [validationError, setValidationError] = useState('');
-  const [error, setError] = useState(''); const [notice, setNotice] = useState(() => newer ? 'Newer sketch data is read-only. Classic drawing edits preserve it unchanged.' : initialDocument ? '' : restorationNotice(author));
+  const [error, setError] = useState(''); const [notice, setNotice] = useState(() => newer ? 'Newer sketch data is read-only. Classic drawing edits preserve it unchanged.' : initialDocument ? '' : restorationNotice(readSourceAuthoring(draft)));
   const [busy, setBusy] = useState(false);
   const [presets, setPresets] = useState<SourcePreset[]>([]);
   const [selected, setSelected] = useState<SourcePreset>();
@@ -155,7 +168,6 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   const [dimensions, setDimensions] = useState<Record<string, number>>(() => ({ ...defaults[author.meta.preset?.shape ?? 'cone'] }));
   const [drawPoints, setDrawPoints] = useState<SourcePoint[] | null>(null);
   const [selectedPatch, setSelectedPatch] = useState(0);
-  const [attachment, setAttachment] = useState<SourceAttachment>({ kind: 'baffle', dimensions: { width_mm: 44, height_mm: 54, depth_mm: 12, aperture_radius_mm: 14, center_mm: [0, 0, 0] } });
   const [meshSize, setMeshSize] = useState(2);
   const drag = useRef<number | null>(null);
   const fitted = useRef(false);
@@ -163,7 +175,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   const close = useCallback(() => { if (!busy) onClose(); }, [busy, onClose]);
   const dialog = useModalDialogFocus<HTMLDivElement>({ open: true, onClose: close });
   const key = useMemo(() => JSON.stringify(draft), [draft]);
-  const valid = accepted?.key === key && drawPoints === null && (classic || sketchReady && !sketchPending && sketchProblems.length === 0);
+  const valid = accepted?.key === key && drawPoints === null && (classic || sketchReady && !sketchPending && sketchProblems.every(p => p.severity === 'warning'));
   const [identifiersOpen, setIdentifiersOpen] = useState(false);
   const identityIssue = identityProblem(validationError, [draft.contour.physical_source_id, draft.contour.rim_id]) || draft.drive.channel_id.trim() === '';
   useEffect(() => { if (identityIssue) setIdentifiersOpen(true); }, [identityIssue]);
@@ -172,7 +184,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   const deferredHydration = useRef(false);
   hydrateRef.current = () => {
     const envelope = newerEnvelope(); setNewer(envelope); if (envelope) setClassic(true);
-    const restored = readSourceDraft(), next = readSourceAuthoring(restored); setDraft(restored); replaceAuthor(next); setUndo([]); setSelected(undefined); setSelectedPatch(0);
+    const restored = readSourceDraft(), next = readSourceAuthoring(restored); setDraft(restored); replaceAuthor(withSourceLimit(next, limitRef.current)); setUndo([]); setSelected(undefined); setSelectedPatch(0);
     fitted.current = false; drag.current = null;
     setNotice(envelope ? 'Newer sketch data is read-only. Classic drawing edits preserve it unchanged.' : restorationNotice(next) || 'Restored source draft from saved settings.');
   };
@@ -197,7 +209,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
     }, (state, result) => {
       if (!current) return;
       setDiagnosis(result); setSketchReady(true);
-      if (opening) { opening = false; if (sameDocument(draftRef.current, { ...draftRef.current, drive: { ...draftRef.current.drive, weights: state.meta.weights } })) return; }
+      if (opening) { opening = false; const opened = lower(state.sketch, state.meta); if (opened.ok && sameDocument(draftRef.current, opened.document)) return; }
       authorRef.current = state; setAuthor(state); setPreview(undefined);
       const lowered = lower(state.sketch, state.meta); lowering.current = { state, result: lowered };
       if (lowered.ok) {
@@ -210,6 +222,18 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
     // Initialization errors are reported by queued operations as well.
     return () => { current = false; next.destroy(); controller.current = undefined; };
   }, [classic, generation]);
+  useEffect(() => {
+    if (classic || !controller.current) return;
+    const current = controller.current.current;
+    if (JSON.stringify(current.meta.limit) === JSON.stringify(limit)) return;
+    try { void controller.current.adopt(withSourceLimit(current, limit)).then(() => setFitRequest(v => v + 1)).catch(reason => setError(String(reason))); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+  }, [limit.kind, limit.radius, limit.hard, classic, generation]);
+  function editLimit(radius: number) {
+    if (limit.hard) return;
+    if (hostLimit) onLimitChange?.(radius);
+    else setAttachment(a => ({ ...a, dimensions: { ...a.dimensions, [a.kind === 'baffle' ? 'aperture_radius_mm' : 'mouth_radius_mm']: radius } }));
+  }
   const draftRef = useRef(draft); draftRef.current = draft;
   const editingIntent = useRef(false);
   function replaceAuthor(next: Authoring<SourceMeta>) {
@@ -244,9 +268,9 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
     finally { setBusy(false); }
   }
   async function adopt(value: SourceValidation, preset?: { shape: typeof shape; dimensions: Record<string, number> }) {
-    const next = preset ? seedPreset(value.document, preset.shape, preset.dimensions) : seed(value.document);
+    const next = withSourceLimit(preset ? seedPreset(value.document, preset.shape, preset.dimensions) : seed(value.document), limitRef.current);
     if (!classic && controller.current) { await controller.current.adopt(next); }
-    else { replaceAuthor(next); change(value.document); }
+    else { replaceAuthor(next); const lowered = lower(next.sketch, next.meta); change(lowered.ok ? lowered.document : value.document); }
     setFitRequest(v => v + 1); setNotice(next.meta.preset ? 'Named dimensions drive this shape.' : 'Constraints were reset for the loaded contour.');
     setView(fit(value.document.contour.points, value.meridian)); setAccepted({ key: JSON.stringify(value.document), value }); setSelectedPatch(0); setDrawPoints(null); setCanvasSelection([]);
   }
@@ -275,7 +299,8 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
     if (id && parameter) { void run(async () => { await controller.current?.dimension(id, next[parameter]); }); }
     else setDimensions(next);
   }
-  const fields = (values: Record<string, number>, write: (next: Record<string, number>) => void, suffix: string) => Object.entries(values).map(([field, value]) => <NumberField key={field} label={`${suffix === 'attachment' && attachment.kind === 'baffle' && field === 'height_mm' ? 'Baffle height' : suffix === 'attachment' && attachment.kind === 'baffle' && field === 'depth_mm' ? 'Baffle depth' : labels[field] ?? field.replace('_mm', '').replaceAll('_', ' ')} ${suffix}`} unit="mm" value={value} precision={6} displayPrecision={2} step={.1} onCommit={(v) => write({ ...values, [field]: v })}/>);
+  const nameSketch = classic ? seed(draft).sketch : author.sketch;
+  const fields = (values: Record<string, number>, write: (next: Record<string, number>) => void, suffix: string) => Object.entries(values).map(([field, value]) => <NumberField key={field} label={`${suffix === 'attachment' && attachment.kind === 'baffle' && field === 'height_mm' ? 'Baffle height' : suffix === 'attachment' && attachment.kind === 'baffle' && field === 'depth_mm' ? 'Baffle depth' : labels[field] ?? field.replace('_mm', '').replaceAll('_', ' ')} ${suffix}`} unit="mm" value={value} disabled={suffix === 'preset' && field === 'radius_mm' && !!limit.hard} precision={6} displayPrecision={2} step={.1} onCommit={(v) => write({ ...values, [field]: v })}/>);
 
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Source contour editor" className="source-editor">
     <header><div><h2>Source contour</h2><ExperimentalBadge/><p>{EXPERIMENTAL_NOTE}</p><p>Full circular source · dimensions in mm · aligned +Z</p></div><button type="button" disabled={busy} onClick={close}>Close</button></header>
@@ -287,9 +312,10 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
           <button type="button" disabled={drawPoints !== null} onClick={() => setDrawPoints([])}>Draw lines</button>
           {drawPoints !== null && <><button type="button" disabled={drawPoints.length < 2} onClick={() => { change(drawnSource(draft, drawPoints, id)); setSelectedPatch(0); setDrawPoints(null); }}>Finish at rim</button><button type="button" onClick={() => setDrawPoints(null)}>Cancel drawing</button></>}
         </div>}
-        {!classic && <SketchCanvas fitRequest={fitRequest} sketch={displayAuthor.sketch} diagnosis={diagnosis} references={author.meta.references} problems={validationError && !hasSketchProblems ? [...sketchProblems, { code: 'server', ids: [], message: validationError }] : sketchProblems} session={sketchReady && !busy ? controller.current : undefined}
+        {!classic && <SketchCanvas fitRequest={fitRequest} sketch={displayAuthor.sketch} diagnosis={diagnosis} references={displayAuthor.meta.references} problems={validationError && !hasSketchProblems ? [...sketchProblems, { code: 'server', ids: [], message: validationError }] : sketchProblems} session={sketchReady && !busy ? controller.current : undefined}
           onClassicDrawing={() => { setClassic(true); setCanvasSelection([]); }}
           entityClassName={entity => entity.data && typeof entity.data === 'object' && !Array.isArray(entity.data) && entity.data.role === 'rigid' ? 'rigid' : 'moving'}
+          hoverId={hoverId} onHoverChange={setHoverId} nameFor={id => displayName(displayAuthor.sketch, id)} onLimitChange={editLimit}
           selection={canvasSelection} onSelectionChange={ids => { setCanvasSelection(ids); const index = tablePatches.findIndex(p => ids.includes(p.id)); if (index >= 0) setSelectedPatch(index); }}
           entityStyle={entity => ({ '--sketch-patch': entity.data && typeof entity.data === 'object' && !Array.isArray(entity.data) && entity.data.role === 'rigid' ? 'var(--fg2)' : 'var(--source-moving)' } as CSSProperties)}
           problemAction={problem => {
@@ -312,11 +338,13 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
         </svg>
         </>}
         {(classic || !sketchProblems.length && !validationError) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}
-        <h3>Points</h3><div className="source-table"><table><thead><tr><th>Point ID</th><th>r mm</th><th>z mm</th><th/></tr></thead><tbody>{tablePoints.map((point, i) => <tr key={point.id}><td title={point.id}>{point.id}</td>
+        <details className="source-points" open={classic || pointsOpen} onToggle={e => setPointsOpen(e.currentTarget.open)}><summary>Points</summary><div className="source-table"><table><thead><tr><th>Point</th><th>r mm</th><th>z mm</th><th/></tr></thead><tbody>{tablePoints.map((point, i) => <tr key={point.id} ref={row => { if (row) rows.current.set(point.id, row); else rows.current.delete(point.id); }} data-row-id={point.id} aria-selected={canvasSelection.includes(point.id)} className={hoverId === point.id ? 'hovered' : ''}
+          onPointerEnter={() => setHoverId(point.id)} onPointerLeave={() => setHoverId(undefined)} onClick={() => { if (!classic) setCanvasSelection([point.id]); }}><td title={point.id}><button type="button" aria-label={`Select point ${i + 1}`} onClick={() => setCanvasSelection([point.id])}>{displayName(nameSketch, point.id)}</button></td>
           <td><NumberField label={`Point ${i + 1} radius`} value={point.r_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === 0 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, v, point.z_mm)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: v, y: state.sketch.points.find(p => p.id === point.id)!.y }))}/></td>
           <td><NumberField label={`Point ${i + 1} z`} value={point.z_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === draft.contour.points.length - 1 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, point.r_mm, v)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: state.sketch.points.find(p => p.id === point.id)!.x, y: v }))}/></td>
-          <td>{classic && i > 0 && i < draft.contour.points.length - 1 && <button type="button" aria-label={`Remove point ${i + 1}`} disabled={drawPoints !== null} onClick={() => { try { change(removePoint(draft, i)); setSelectedPatch(0); } catch (reason) { setError(String(reason)); } }}>Remove</button>}</td></tr>)}</tbody></table></div>
-        <h3>Patches</h3><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch ID</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{tablePatches.map((patch, i) => <tr key={patch.id}><td title={patch.id}><button type="button" aria-label={`Select patch ${i + 1}`} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}>{patch.id}</button></td>
+          <td>{classic && i > 0 && i < draft.contour.points.length - 1 && <button type="button" aria-label={`Remove point ${i + 1}`} disabled={drawPoints !== null} onClick={() => { try { change(removePoint(draft, i)); setSelectedPatch(0); } catch (reason) { setError(String(reason)); } }}>Remove</button>}</td></tr>)}</tbody></table></div></details>
+        <h3>Patches</h3><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{tablePatches.map((patch, i) => <tr key={patch.id} ref={row => { if (row) rows.current.set(patch.id, row); else rows.current.delete(patch.id); }} data-row-id={patch.id} aria-selected={canvasSelection.includes(patch.id)} className={hoverId === patch.id ? 'hovered' : ''}
+          onPointerEnter={() => setHoverId(patch.id)} onPointerLeave={() => setHoverId(undefined)} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}><td title={patch.id}><button type="button" aria-label={`Select patch ${i + 1}`} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}>{displayName(nameSketch, patch.id)}</button></td>
           <td>{classic && <select aria-label={`Patch ${i + 1} curve`} value={patch.kind} onChange={(e) => change(editPatch(draft, i, { kind: e.target.value as 'line' | 'arc' }))}><option value="line">Line</option><option value="arc">Arc</option></select>}{!classic && patch.kind}</td>
           <td><select aria-label={`Patch ${i + 1} role`} value={patch.role} onChange={(e) => classic ? change(editPatch(draft, i, { role: e.target.value as 'moving' | 'rigid' })) : sketchCommand({ kind: 'setEntityData', id: patch.id, data: { role: e.target.value } })}><option value="moving">Moving</option><option value="rigid">Rigid</option></select></td>
           <td>{patch.role === 'moving' ? <NumberField label={`Patch ${i + 1} weight`} value={classic ? draft.drive.weights[patch.id] : author.meta.weights[patch.id] ?? 1} precision={6} displayPrecision={3} step={.1} onCommit={(v) => { if (classic) change({ ...draft, drive: { ...draft.drive, weights: { ...draft.drive.weights, [patch.id]: v } } }); else { void controller.current?.metadata(meta => ({ ...meta, weights: { ...meta.weights, [patch.id]: v } })).catch(reason => setError(String(reason))); } }}/> : '—'}</td></tr>)}</tbody></table></div>
@@ -338,22 +366,27 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
         <label>Drive channel ID<input aria-label="Drive channel ID" value={draft.drive.channel_id} onChange={(e) => change({ ...draft, drive: { ...draft.drive, channel_id: e.target.value } })}/></label>
         </details>
         <label>Prescribed motion<select aria-label="Prescribed motion" value={draft.drive.motion} onChange={(e) => change({ ...draft, drive: { ...draft.drive, motion: e.target.value as 'normal' | 'axial' } })}><option value="normal">Normal</option><option value="axial">Axial +Z</option></select></label>
-        <h3>Start from a shape</h3><label>Shape<select aria-label="Source shape" value={shape} onChange={(e) => { const s = e.target.value as typeof shape; setShape(s); setDimensions({ ...defaults[s] }); }}><option value="flat">Flat</option><option value="dome">Dome and surround</option><option value="cone">Cone and dust cap</option></select></label>
+        <h3>Start from a shape</h3>{hostLimit ? <p>{limit.kind === 'throat' ? 'Fits into the horn design' : limit.kind === 'aperture' ? 'Fits into the woofer baffle' : 'Fits into the conical horn'}</p> : <label>Fits into<select aria-label="Source attachment" value={attachment.kind} onChange={(e) => setAttachment(e.target.value === 'baffle' ? { kind: 'baffle', dimensions: { width_mm: 44, height_mm: 54, depth_mm: 12, aperture_radius_mm: 14, center_mm: [0, 0, 0] } } : { kind: 'horn', dimensions: { mouth_radius_mm: 20, length_mm: 30, housing_radius_mm: 22, backing_depth_mm: 12 } })}><option value="baffle">Front baffle woofer</option><option value="horn">Circular conical horn</option></select></label>}<label>Shape<select aria-label="Source shape" value={shape} onChange={(e) => { const s = e.target.value as typeof shape; setShape(s); setDimensions({ ...defaults[s] }); }}><option value="flat">Flat</option><option value="dome">Dome and surround</option><option value="cone">Cone and dust cap</option></select></label>
         <div className="source-fields">{fields(presetDimensions, editPresetDimensions, 'preset')}</div><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.expand(shape, presetDimensions, draft), { shape, dimensions: presetDimensions }); setSelected(undefined); })}>Apply shape</button>
+        <p>Rim radius {((presetDimensions.radius_mm ?? 0) + (presetDimensions.surround_width_mm ?? 0) + (presetDimensions.land_width_mm ?? 0)).toFixed(2)} mm</p>
+        <button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => {
+          const fitted = fitPresetDimensions(presetDimensions, limit.radius);
+          await adopt(await sourceEditorApi.expand(shape, fitted, draft), { shape, dimensions: fitted }); setDimensions(fitted); setSelected(undefined);
+        })}>Fit to limit</button>
         <h3>Saved presets</h3><label>Preset name<input aria-label="Preset name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)}/></label><div className="source-editor-toolbar">
           <button type="button" disabled={!valid || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft); setPresets([...presets, item]); setSelected(item); setNotice('Saved new preset.'); })}>Save new preset</button>
           <button type="button" disabled={!valid || !selected || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, selected); setPresets(presets.map((p) => p.id === item.id ? item : p)); setSelected(item); setNotice('Updated preset.'); })}>Update loaded preset</button>
           <button type="button" onClick={() => void run(async () => { setPresets(await sourceEditorApi.presets()); setNotice('Preset library refreshed. Load a preset to use its latest revision.'); })}>Refresh presets</button>
         </div>
         {presets.map((preset) => <div key={preset.id} className="source-preset"><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.validate(preset.document)); setName(preset.name); setSelected(preset); })}>Load {preset.name}</button><button type="button" aria-label={`Delete preset ${preset.name}`} onClick={() => void run(async () => { await sourceEditorApi.delete(preset); setPresets(presets.filter((p) => p.id !== preset.id)); if (selected?.id === preset.id) setSelected(undefined); setNotice('Deleted preset. Current contour retained.'); })}>Delete</button></div>)}
-        <h3>Export geometry</h3><label>Attachment<select aria-label="Source attachment" value={attachment.kind} onChange={(e) => setAttachment(e.target.value === 'baffle' ? { kind: 'baffle', dimensions: { width_mm: 44, height_mm: 54, depth_mm: 12, aperture_radius_mm: 14, center_mm: [0, 0, 0] } } : { kind: 'horn', dimensions: { mouth_radius_mm: 20, length_mm: 30, housing_radius_mm: 22, backing_depth_mm: 12 } })}><option value="baffle">Front baffle woofer</option><option value="horn">Circular conical horn</option></select></label>
+        {!hostLimit && <><h3>Export geometry</h3>
         <div className="source-fields">{fields(Object.fromEntries(Object.entries(attachment.dimensions).filter((entry): entry is [string, number] => typeof entry[1] === 'number')), (next) => setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, ...next } }), 'attachment')}
           {attachment.kind === 'baffle' && ([0, 1, 2] as const).map((axis) => <NumberField key={axis} label={`Source center ${['X', 'Y', 'Z'][axis]}`} value={(attachment.dimensions.center_mm as [number, number, number])[axis]} precision={6} displayPrecision={2} unit="mm" step={.1} onCommit={(v) => { const center = [...attachment.dimensions.center_mm as [number, number, number]] as [number, number, number]; center[axis] = v; setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, center_mm: center } }); }}/>) }
           <NumberField label="Mesh size" value={meshSize} min={.001} precision={6} displayPrecision={3} unit="mm" step={.1} onCommit={setMeshSize}/>
         </div><button type="button" disabled={!valid} onClick={() => void run(async () => {
           const blob = await sourceEditorApi.export(draft, attachment, meshSize); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'native-source.zip'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000); setNotice('Exported native source bundle: STEP, mesh and hash-bound source recipe.');
         })}>Export STEP + mesh bundle</button>
-        <p>Source presets store the contour and drive. Attachment and mesh size apply to this export.</p>
+        <p>Source presets store the contour and drive. Attachment and mesh size apply to this export.</p></>}
       </aside></div>
     </fieldset>
     <footer>{onUseDocument && <button type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour in assembly</button>}{busy && <p role="status">Working…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>{onDraftChange ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours.</small></footer>

@@ -14,6 +14,12 @@ export const presetLabels: Record<string, string> = {
   cap_height_mm: 'Dust-cap height', surround_width_mm: 'Surround width', surround_depth_mm: 'Surround depth', land_width_mm: 'Rigid land width',
 };
 
+export function fitPresetDimensions(dimensions: Record<string, number>, radius: number) {
+  const next = { ...dimensions, radius_mm: radius - (dimensions.surround_width_mm ?? 0) - (dimensions.land_width_mm ?? 0) };
+  if (!(next.radius_mm > (dimensions.cap_radius_mm ?? 0))) throw new Error('Limit is too small for the dust cap, surround and land.');
+  return next;
+}
+
 /** Restate builder intent on the exact /expand document; never regenerate its contour.
  * The pinned builders deliberately make corners between every physical patch.
  */

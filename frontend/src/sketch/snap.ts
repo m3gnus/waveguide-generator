@@ -5,7 +5,7 @@ import { gridStep } from './view';
 import type { XY } from './solver/types';
 export type SnapConstraint = { kind: 'coincident' | 'horizontal' | 'vertical'; point: string } | { kind: 'pointOnLine'; line: string };
 export interface SnapResult extends XY {
-  glyph: 'endpoint' | 'center' | 'axis' | 'baffle' | 'horizontal' | 'vertical' | 'grid';
+  glyph: 'endpoint' | 'center' | 'axis' | 'baffle' | 'limit' | 'horizontal' | 'vertical' | 'grid';
   constraint?: SnapConstraint;
 }
 export function findSnap(sketch: Sketch, references: Reference[], cursorWorld: XY, pxToWorld: number,
@@ -16,13 +16,15 @@ export function findSnap(sketch: Sketch, references: Reference[], cursorWorld: X
   let heldSnap: SnapResult | undefined;
   if (previous) {
     const held = { ...previous }, c = held.constraint;
+    const limit = held.glyph === 'limit' ? references.find(r => r.kind === 'limit') : undefined;
     const point = c && 'point' in c ? sketch.points.find(p => p.id === c.point) : undefined;
-    const exists = c ? 'point' in c ? !!point && !exclude.has(c.point) : references.some(r => r.id === c.line) : true;
+    const exists = held.glyph === 'limit' ? !!limit : c ? 'point' in c ? !!point && !exclude.has(c.point) : references.some(r => r.id === c.line) : true;
+    if (limit?.kind === 'limit') held.x = limit.radius;
     if (point) {
       if (held.glyph !== 'horizontal') held.x = point.x;
       if (held.glyph !== 'vertical') held.y = point.y;
     }
-    if (held.glyph === 'axis' || held.glyph === 'vertical') held.y = cursor.y;
+    if (held.glyph === 'axis' || held.glyph === 'vertical' || held.glyph === 'limit') held.y = cursor.y;
     if (held.glyph === 'baffle' || held.glyph === 'horizontal') held.x = cursor.x;
     if (exists && distance(cursor, held) <= 12 * pxToWorld) heldSnap = held;
   }
@@ -33,6 +35,7 @@ export function findSnap(sketch: Sketch, references: Reference[], cursorWorld: X
     sketch.points.filter(p => ends.has(p.id) && !exclude.has(p.id)).map(p => ({ x: p.x, y: p.y, glyph: 'endpoint', constraint: { kind: 'coincident', point: p.id } })),
     sketch.points.filter(p => centers.has(p.id) && !exclude.has(p.id)).map(p => ({ x: p.x, y: p.y, glyph: 'center', constraint: { kind: 'coincident', point: p.id } })),
     references.filter(r => r.kind === 'axis').map(r => ({ x: 0, y: cursor.y, glyph: 'axis', constraint: { kind: 'pointOnLine', line: r.id } })),
+    references.flatMap(r => r.kind === 'limit' ? [{ x: r.radius, y: cursor.y, glyph: 'limit' as const }] : []),
     references.filter(r => r.kind === 'baffle').map(r => ({ x: cursor.x, y: 0, glyph: 'baffle', constraint: { kind: 'pointOnLine', line: r.id } })),
   ];
   const starts = new Set(geometry.flatMap(e => e.kind === 'line' ? [e.p1] : e.kind === 'arc' ? [e.start] : []));
@@ -44,7 +47,7 @@ export function findSnap(sketch: Sketch, references: Reference[], cursorWorld: X
   ]);
   const step = gridStep(1 / pxToWorld);
   candidates.push([{ x: Math.round(cursor.x / step) * step, y: Math.round(cursor.y / step) * step, glyph: 'grid' }]);
-  const priority = (p: SnapResult) => ['endpoint', 'center', 'axis', 'baffle', 'horizontal', 'grid'].indexOf(p.glyph === 'vertical' ? 'horizontal' : p.glyph);
+  const priority = (p: SnapResult) => ['endpoint', 'center', 'axis', 'limit', 'baffle', 'horizontal', 'grid'].indexOf(p.glyph === 'vertical' ? 'horizontal' : p.glyph);
   for (const group of candidates) {
     const nearest = group.filter(p => distance(cursor, p) <= 8 * pxToWorld).sort((a, b) => distance(cursor, a) - distance(cursor, b))[0];
     if (nearest) {
@@ -54,4 +57,10 @@ export function findSnap(sketch: Sketch, references: Reference[], cursorWorld: X
     }
   }
   return heldSnap ?? null;
+}
+
+/** Soft limits snap only near the rim; a further drag remains free to cross. */
+export function snapLimitTarget(references: Reference[], point: string, target: XY, tolerance: number): XY {
+  const limit = references.find(r => r.kind === 'limit' && r.point === point);
+  return limit?.kind === 'limit' && Math.abs(target.x - limit.radius) <= tolerance ? { ...target, x: limit.radius } : target;
 }

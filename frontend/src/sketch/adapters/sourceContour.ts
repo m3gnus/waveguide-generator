@@ -9,6 +9,47 @@ export interface SourceMeta {
   physical_source_id: string; rim_id: string; channel_id: string; motion: 'normal' | 'axial';
   weights: Record<string, number>; references: Reference[];
   preset?: { shape: 'flat' | 'dome' | 'cone'; dimensions: Record<string, string> };
+  limit?: SourceLimit;
+}
+export interface SourceLimit { kind: 'aperture' | 'mouth' | 'throat'; radius: number; hard?: boolean }
+
+/** Install fixed context separately from the editable contour. A throat also holds the rim. */
+export function withSourceLimit(state: { sketch: Sketch; meta: SourceMeta }, limit: SourceLimit): { sketch: Sketch; meta: SourceMeta } {
+  if (!(limit.radius > 0) || !Number.isFinite(limit.radius)) throw new Error('Limit radius must be positive and finite.');
+  let sketch = structuredClone(state.sketch);
+  const ordered = contourPointOrder(sketch, state.meta), rim = ordered.at(-1);
+  const old = state.meta.references.find(r => r.kind === 'limit');
+  let line = old && sketch.entities.find(e => e.id === old.id);
+  if (!line) {
+    const result = applyCommand(sketch, { kind: 'addLine', from: { x: limit.radius, y: 0 }, to: { x: limit.radius, y: 1 } });
+    if ('error' in result) throw new Error(result.error);
+    sketch = result.sketch;
+    line = sketch.entities.find(e => e.id === result.created.find(id => sketch.entities.some(e => e.id === id)))!;
+    line.reference = true; line.construction = true;
+  }
+  if (line.kind !== 'line') throw new Error('Expected a limit line.');
+  const referencePoints = new Set(sketch.entities.filter(e => e.reference).flatMap(entityPoints));
+  const radius = sketch.points.find(p => p.id === rim)?.x;
+  // When attaching an existing contour to a new throat, preserve its shape and circles.
+  if (limit.hard && radius && radius !== limit.radius) {
+    const scale = limit.radius / radius;
+    sketch.points = sketch.points.map(p => referencePoints.has(p.id) ? p : { ...p, x: p.x * scale, y: p.y * scale });
+    sketch.constraints = sketch.constraints.map(c => 'value' in c && c.kind !== 'angle' ? { ...c, value: c.value * scale } : c);
+  }
+  const ends = [line.p1, line.p2];
+  sketch.points = sketch.points.map(p => ends.includes(p.id) ? { ...p, x: limit.radius } : limit.hard && p.id === rim ? { ...p, x: limit.radius } : p);
+  sketch.constraints = sketch.constraints.filter(c => !(c.kind === 'pointOnLine' && c.line === line.id));
+  if (limit.hard && rim) {
+    const result = applyCommand(sketch, { kind: 'addConstraint', constraint: { kind: 'pointOnLine', point: rim, line: line.id } });
+    if ('error' in result) throw new Error(result.error);
+    sketch = result.sketch;
+    // Rim = radius + surround + land. The locked rim drives radius instead.
+    const radiusDimension = state.meta.preset?.dimensions.radius_mm;
+    sketch.constraints = sketch.constraints.map(c => c.id === radiusDimension && 'driving' in c ? { ...c, driving: false } : c);
+  }
+  const reference: Reference = { id: line.id, kind: 'limit', radius: limit.radius,
+    label: `${limit.kind[0].toUpperCase()}${limit.kind.slice(1)} r ${limit.radius.toFixed(2)}`, locked: !!limit.hard, ...(rim ? { point: rim } : {}) };
+  return { sketch, meta: { ...state.meta, limit, references: [...state.meta.references.filter(r => r.kind !== 'limit'), reference] } };
 }
 export const references: Reference[] = [{ id: 'axis', kind: 'axis' }, { id: 'baffle', kind: 'baffle' }];
 export function seed(document: SourceDocument): { sketch: Sketch; meta: SourceMeta } {
@@ -122,6 +163,16 @@ export function rules(sketch: Sketch, meta: SourceMeta): DomainProblem[] {
   const points = raw.map((p, i) => ({ ...p, x: i === 0 && Math.abs(p.x) <= 1e-9 ? 0 : p.x,
     y: i === raw.length - 1 && Math.abs(p.y) <= 1e-9 ? 0 : p.y }));
   const byId = new Map(sketch.points.map(p => [p.id, p]));
+  const limit = meta.limit, rim = points.at(-1)!;
+  if (limit?.hard && Math.abs(rim.x - limit.radius) > 1e-8) add('rim-limit', [rim.id], 'Rim must match the horn throat');
+  else if (limit && !limit.hard) {
+    const rawGap = limit.radius - rim.x, gap = Math.abs(rawGap) <= 1e-9 ? 0 : rawGap;
+    if (gap < 0 || limit.kind === 'mouth' && gap <= .1 || limit.kind === 'aperture' && gap > 0 && gap <= .1) {
+      problems.push({ code: 'rim-limit', ids: [rim.id, ordered.entities.at(-1)!.entity.id], severity: 'warning',
+        message: gap < 0 ? limit.kind === 'aperture' ? 'Rim exceeds the baffle aperture' : 'Rim exceeds the horn mouth'
+          : limit.kind === 'mouth' ? 'Horn mouth must exceed the rim by more than 0.1 mm' : 'Aperture gap must be zero or more than 0.1 mm' });
+    }
+  }
   if (points[0].x !== 0) add('pole', [points[0].id], 'Place the pole exactly on the axis.');
   if (points.at(-1)!.y !== 0) add('rim', [points.at(-1)!.id], 'Place the rim exactly on the baffle.');
   if (ordered.entities.length > 256) add('patch-count', ordered.entities.map(e => e.entity.id), 'Use at most 256 patches.');
@@ -151,13 +202,14 @@ export function lower(sketch: Sketch, meta: SourceMeta): Lowered<SourceDocument>
   const valid = validateSketch(sketch); if (!valid.ok) return { ok: false, problems: [{ code: 'schema', ids: [], message: valid.reason }] };
   const ordered = chain(sketch, meta); if ('code' in ordered) return { ok: false, problems: [ordered] };
   const pole = sketch.points.find(p => p.id === ordered.points[0])!, rim = sketch.points.find(p => p.id === ordered.points.at(-1))!;
+  if (meta.limit?.hard && Math.abs(rim.x - meta.limit.radius) > 1e-8) return { ok: false, problems: [{ code: 'rim-limit', ids: [rim.id], message: 'Rim must match the horn throat' }] };
   if (Math.abs(pole.x) > 1e-9 || Math.abs(rim.y) > 1e-9) return { ok: false, problems: [
     ...(Math.abs(pole.x) > 1e-9 ? [{ code: 'pole', ids: [pole.id], message: 'Place the pole on the axis.' }] : []),
     ...(Math.abs(rim.y) > 1e-9 ? [{ code: 'rim', ids: [rim.id], message: 'Place the rim on the baffle.' }] : []),
   ] };
   const points = ordered.points.map((id, i) => {
     const p = sketch.points.find(p => p.id === id)!;
-    return { id, r_mm: i === 0 ? 0 : p.x, z_mm: i === ordered.points.length - 1 ? 0 : p.y };
+    return { id, r_mm: i === 0 ? 0 : i === ordered.points.length - 1 && meta.limit && (meta.limit.hard || Math.abs(p.x - meta.limit.radius) <= 1e-9) ? meta.limit.radius : p.x, z_mm: i === ordered.points.length - 1 ? 0 : p.y };
   });
   const segments: SourcePatch[] = ordered.entities.map(({ entity: e, reversed }, i) => ({ id: e.id, start: points[i].id, end: points[i + 1].id,
     role: role(e) as SourcePatch['role'], kind: e.kind as SourcePatch['kind'], center_mm: e.kind === 'arc'
@@ -169,6 +221,7 @@ export function lower(sketch: Sketch, meta: SourceMeta): Lowered<SourceDocument>
 export const sourceContourAdapter: SketchAdapter<SourceDocument, SourceMeta> = { id: 'source-contour-v1', references, seed, lower, rules };
 
 export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Command) {
+  if (meta.limit?.hard && command.kind === 'removeConstraint' && sketch.constraints.some(c => c.id === command.id && c.kind === 'pointOnLine' && meta.references.some(r => r.kind === 'limit' && r.id === c.line))) return { error: 'Set by the horn design' };
   if (command.kind === 'deletePoint') {
     const adjacent = sketch.entities.filter(e => !e.reference && entityPoints(e).includes(command.id));
     if (adjacent.length === 2 && (role(adjacent[0]) !== role(adjacent[1]) || meta.weights[adjacent[0].id] !== meta.weights[adjacent[1].id])) return { error: 'Adjacent patches need the same role and literal weight to remove their join.' };

@@ -83,9 +83,10 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   const [draft, setDraft] = useState(readDraft);
   const draftRef = useRef(draft);
   const seedAllowed = useRef(true);
+  const [resolvedThroat, setResolvedThroat] = useState<{ config: string; radius: number }>();
   const [hornText, setHornText] = useState(() => JSON.stringify(draft.horn_config ?? {}, null, 2));
   const [editing, setEditing] = useState<'horn' | 'woofer' | null>(null);
-  const [accepted, setAccepted] = useState<{ key: string; value: AssemblyValidation }>();
+  const [accepted, setAccepted] = useState<{ key: string; config: string; value: AssemblyValidation }>();
   const [error, setError] = useState(''); const [validationError, setValidationError] = useState('');
   const [notice, setNotice] = useState(''); const [busy, setBusy] = useState(false);
   const key = JSON.stringify(draft); const valid = accepted?.key === key;
@@ -104,6 +105,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       // A local edit or hydrated saved draft takes precedence over this request.
       if (!current || !seedAllowed.current || draftRef.current !== initial || storage.getItem('') !== null) return;
       const seeded = seedAssembly(profile);
+      setResolvedThroat({ config: JSON.stringify(profile.horn_config), radius: profile.throat_radius_mm });
       draftRef.current = seeded; setDraft(seeded);
       setHornText(JSON.stringify(seeded.horn_config, null, 2));
     }).catch(() => { /* Unresolvable designs retain the standalone defaults. */ });
@@ -112,16 +114,26 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     let current = true; setValidationError('');
     const timer = setTimeout(() => { void sourceEditorApi.validateAssembly(draft).then((value) => {
-      if (current) setAccepted({ key, value });
+      if (current) setAccepted({ key, config: JSON.stringify(draft.horn_config), value });
     }, (reason: unknown) => { if (current) setValidationError(reason instanceof Error ? reason.message : String(reason)); }); }, 180);
     return () => { current = false; clearTimeout(timer); };
   }, [draft, key]);
   async function run(action: () => Promise<void>) { seedAllowed.current = false; setBusy(true); setError(''); setNotice(''); try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(false); } }
-  function editSource(source: 'horn' | 'woofer') { seedAllowed.current = false; setEditing(source); }
+  const throat = draft.horn_config ? resolvedThroat?.config === JSON.stringify(draft.horn_config) ? resolvedThroat.radius
+    : accepted?.config === JSON.stringify(draft.horn_config) ? accepted.value.horn_section_mm['horn-wall']?.[0]?.[0] : undefined : undefined;
+  function editSource(source: 'horn' | 'woofer') {
+    seedAllowed.current = false;
+    if (source === 'horn' && draft.horn_config && throat === undefined) { setError('Use current horn design to resolve the throat before editing its contour.'); return; }
+    setEditing(source);
+  }
   function download(blob: Blob, name: string) { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000); }
   // Publish nested edits to the assembly namespace immediately: the settings
   // owner protects genuine local changes from an in-flight hydration reply.
-  if (editing) return <Editor key={editing} initialDocument={draft[editing]!} onDraftChange={(document) => change({ ...draft, [editing]: document })} onClose={() => setEditing(null)} onUseDocument={(document) => { change({ ...draft, [editing]: document }); setEditing(null); }}/>;
+  if (editing) return <Editor key={editing} initialDocument={draft[editing]!}
+    limit={editing === 'woofer' ? { kind: 'aperture', radius: draft.dimensions.aperture_radius_mm }
+      : draft.horn_config && throat !== undefined ? { kind: 'throat', radius: throat, hard: true } : { kind: 'mouth', radius: draft.dimensions.mouth_radius_mm }}
+    onLimitChange={radius => change({ ...draftRef.current, dimensions: { ...draftRef.current.dimensions, [editing === 'woofer' ? 'aperture_radius_mm' : 'mouth_radius_mm']: radius } })}
+    onDraftChange={(document) => change({ ...draftRef.current, [editing]: document })} onClose={() => setEditing(null)} onUseDocument={(document) => { change({ ...draftRef.current, [editing]: document }); setEditing(null); }}/>;
   const dimensions = valid && draft.horn_config && accepted?.value.recipe
     ? { ...draft.dimensions, horn_length_mm: accepted.value.recipe.horn_length_mm, mouth_radius_mm: accepted.value.recipe.mouth_radius_mm }
     : draft.dimensions;
@@ -142,6 +154,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       <button type="button" onClick={() => void run(async () => {
         const profile = await sourceEditorApi.hornProfile(serializeDesign(useDesignStore.getState().design));
         setHornText(JSON.stringify(profile.horn_config, null, 2));
+        setResolvedThroat({ config: JSON.stringify(profile.horn_config), radius: profile.throat_radius_mm });
         change({ ...draft, horn_config: profile.horn_config, dimensions: { ...draft.dimensions,
           horn_length_mm: profile.horn_length_mm, mouth_radius_mm: profile.mouth_radius_mm } });
         setNotice(`Current horn profile attached. Its throat radius is ${profile.throat_radius_mm} mm; the horn contour rim must match.`);
