@@ -104,3 +104,8 @@ the other HornLab modules use AGPL-3.0-or-later. These licenses are compatible.
 The Fusion add-in (WGLink) comes from the
 AGPL-3.0-or-later [`wglink`](https://github.com/m3gnus/wglink) repository, at the
 commit recorded in [`integrations/wglink/source.json`](integrations/wglink/source.json).
+The sketch constraint solver is our WebAssembly build of SolveSpace's `libslvs` 3.2
+(GPL-3.0-or-later), vendored with its build record in
+[`frontend/vendor/slvs`](frontend/vendor/slvs/BUILD.md). The frontend also bundles the
+FreeCAD-derived `@salusoft89/planegcs` solver (LGPL-2.1-or-later). Both are compatible
+with AGPL-3.0-or-later.
