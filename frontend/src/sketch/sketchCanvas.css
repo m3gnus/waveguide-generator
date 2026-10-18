@@ -71,3 +71,5 @@
 .sketch-view-tools { flex-wrap: wrap; }
 .sketch-glyph.problem { fill: var(--amber); }
 .sketch-glyph.conflicting { fill: var(--red); }
+
+.sketch-dimension .sketch-label-hit, .sketch-dimension .sketch-glyph { cursor: grab; }

@@ -6,7 +6,10 @@ type Base = { id: string; reference?: boolean; construction?: boolean; data?: JS
 export type Line = Base & { kind: 'line'; p1: string; p2: string };
 export type Arc = Base & { kind: 'arc'; center: string; start: string; end: string; ccw: boolean };
 export type Entity = Line | Arc | (Base & { kind: 'circle' | 'ellipse' | 'bspline' });
-export type Constraint = SolverConstraint & { label?: string };
+/** Distances use a signed world-mm perpendicular offset and an unbounded fraction.
+ * Radius labels use a world angle (radians) and an offset from the arc radius. */
+export type DimensionPlacement = { offset: number; along: number } | { offset: number; angle: number };
+export type Constraint = SolverConstraint & { label?: string; placement?: DimensionPlacement };
 export type NewConstraint = Constraint extends infer C ? C extends Constraint ? Omit<C, 'id'> : never : never;
 export interface Sketch {
   version: 'wg-sketch-v1'; points: Point[]; entities: Entity[]; constraints: Constraint[]; nextId: number;
@@ -45,6 +48,11 @@ export function constraintProblem(s: Sketch, c: Constraint | NewConstraint): str
     case 'radius': valid = kind(c.arc) === 'arc'; break;
   }
   if (c.label !== undefined && typeof c.label !== 'string') return 'Constraint labels must be strings.';
+  if (c.placement !== undefined) {
+    const p = c.placement;
+    if (!('value' in c) || !object(p) || !Number.isFinite(p.offset)
+      || (c.kind === 'radius' ? !('angle' in p) || !Number.isFinite(p.angle) : !('along' in p) || !Number.isFinite(p.along))) return 'Invalid dimension placement.';
+  }
   if (!valid) return `Invalid entity kinds or references for ${c.kind}.`;
   if (['distance', 'distanceX', 'distanceY', 'angle', 'pointLineDistance', 'radius'].includes(c.kind)
     && (!('value' in c) || !Number.isFinite(c.value) || typeof c.driving !== 'boolean')) return 'Dimensions need a finite value and a driving flag.';

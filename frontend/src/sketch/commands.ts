@@ -1,4 +1,4 @@
-import type { JSONValue, NewConstraint } from './model';
+import type { DimensionPlacement, JSONValue, NewConstraint } from './model';
 import type { SnapResult } from './snap';
 
 export type PointRef = string | { x: number; y: number; snap?: SnapResult | null };
@@ -10,6 +10,7 @@ export type Command =
   | { kind: 'addConstraint'; constraint: NewConstraint }
   | { kind: 'removeConstraint'; id: string }
   | { kind: 'setDimension'; id: string; value: number }
+  | { kind: 'setDimensionPlacement'; id: string; placement?: DimensionPlacement }
   | { kind: 'setConstraintLabel'; id: string; label: string }
   | { kind: 'setEntityName'; id: string; name: string }
   | { kind: 'setDriving'; id: string; driving: boolean }

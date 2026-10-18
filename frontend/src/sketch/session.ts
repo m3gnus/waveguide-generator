@@ -15,7 +15,7 @@ export function toSolverSketch(sketch: Sketch, references: Reference[]): SolverS
     ...sketch.entities.map(e => e.kind === 'arc' ? { kind: 'arc' as const, id: e.id, center: e.center,
       start: e.ccw ? e.start : e.end, end: e.ccw ? e.end : e.start, direction: 'ccw' as const }
       : e.kind === 'line' ? { kind: 'line' as const, id: e.id, p1: e.p1, p2: e.p2 } : { kind: e.kind, id: e.id }),
-  ], constraints: sketch.constraints.map(c => ({ ...c })) };
+  ], constraints: sketch.constraints.map(({ placement, ...c }) => c) };
 }
 export interface Diagnosis extends SolveResult {
   sketch: Sketch; constraintStates: Record<string, 'ok' | 'redundant' | 'conflicting'>;

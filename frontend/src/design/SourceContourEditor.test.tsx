@@ -841,6 +841,59 @@ describe('source editor interactions', () => {
     expect(document.querySelector<HTMLInputElement>('input[aria-label="Preset name"]')!.value).toBe('Unsaved name');
     await act(async () => [...document.querySelectorAll('button')].find((b) => b.textContent === 'Close')!.click());
   });
+  it('saves a dragged dimension in the local envelope and restores it when the dialog reopens', async () => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await mount(); await act(async () => button('Apply shape').click()); await settle();
+    const before = readSourceAuthoring(readSourceDraft()), id = before.meta.preset!.dimensions.depth_mm;
+    const requests = vi.mocked(sourceEditorApi.validate).mock.calls.map(([doc]) => JSON.stringify(doc));
+    const checkPlacement = () => {
+      const boxes = [...host.querySelectorAll<SVGTextElement>('.sketch-dimension text')].map(text => {
+        const x = Number(text.getAttribute('x')), y = Number(text.getAttribute('y'));
+        const rect = text.previousElementSibling!, rx = Number(rect.getAttribute('x')), ry = Number(rect.getAttribute('y'));
+        const width = Number(rect.getAttribute('width')), height = Number(rect.getAttribute('height'));
+        if (text.parentElement!.getAttribute('transform')?.startsWith('rotate(-90')) return { x: x + ry - y, y: y - (rx - x + width), width: height, height: width };
+        return { x: rx, y: ry, width, height };
+      });
+      for (const [i, box] of boxes.entries()) for (const other of boxes.slice(i + 1)) {
+        expect(box.x + box.width <= other.x || other.x + other.width <= box.x || box.y + box.height <= other.y || other.y + other.height <= box.y).toBe(true);
+      }
+      const px = Number(host.querySelector('.sketch-point[data-id="pole"]')!.getAttribute('cx'));
+      const scale = (Number(host.querySelector('.sketch-point[data-id="cap.rim"]')!.getAttribute('cx')) - px) / 3;
+      for (const c of before.sketch.constraints) if (c.kind === 'distanceY') {
+        const xs = [c.a, c.b].map(id => px + before.sketch.points.find(p => p.id === id)!.x * scale);
+        const x = Number(host.querySelector(`[data-constraint-id="${c.id}"] text`)!.getAttribute('x'));
+        expect(x).toBeGreaterThanOrEqual(Math.min(...xs) - 40);
+        expect(x).toBeLessThanOrEqual(Math.max(...xs) + 40);
+      }
+    };
+    checkPlacement(); await act(async () => button('Names').click()); checkPlacement();
+    await act(async () => button('Names').click());
+    const label = host.querySelector<SVGTextElement>(`[data-constraint-id="${id}"] text`)!;
+    const svg = host.querySelector('[aria-label="Sketch drawing"]')!;
+    const x = Number(label.getAttribute('x')), y = Number(label.getAttribute('y'));
+    const solve = vi.spyOn(SketchSession.prototype, 'solveFull');
+    await pointer(label, 'pointerdown', x, y);
+    await pointer(svg, 'pointermove', x - 15, y + 25);
+    await pointer(svg, 'pointermove', x - 30, y + 40);
+    await pointer(svg, 'pointerup'); await settle();
+    expect(solve).not.toHaveBeenCalled();
+    const placed = readSourceAuthoring(readSourceDraft());
+    const placement = placed.sketch.constraints.find(c => c.id === id)!.placement;
+    expect(placement).toBeDefined(); expect(placement).not.toHaveProperty('angle');
+    expect(sourceAdapter.lower(placed.sketch, placed.meta)).toEqual(sourceAdapter.lower(before.sketch, before.meta));
+    const afterRequests = vi.mocked(sourceEditorApi.validate).mock.calls.map(([doc]) => JSON.stringify(doc));
+    expect(afterRequests.at(-1)).toBe(requests.at(-1));
+    expect(afterRequests.slice(requests.length).every(body => body === requests.at(-1))).toBe(true);
+    await act(async () => root.render(null)); await mount();
+    expect(readSourceAuthoring(readSourceDraft()).sketch.constraints.find(c => c.id === id)!.placement).toEqual(placement);
+    await pointer(host.querySelector(`[data-constraint-id="${id}"] text`)!);
+    await act(async () => button('Reset position').click()); await settle();
+    expect(readSourceAuthoring(readSourceDraft()).sketch.constraints.find(c => c.id === id)).not.toHaveProperty('placement');
+    await act(async () => button('Undo').click()); await settle();
+    expect(readSourceAuthoring(readSourceDraft()).sketch.constraints.find(c => c.id === id)!.placement).toEqual(placement);
+    await act(async () => button('Apply shape').click()); await settle();
+    expect(readSourceAuthoring(readSourceDraft()).sketch.constraints.every(c => c.placement === undefined)).toBe(true);
+  });
   async function rename(label: string, value: string, gesture: 'F2' | 'dblclick' = 'F2', cancel = false) {
     const cell = [...host.querySelectorAll('button')].find(b => b.getAttribute('aria-label')?.startsWith(`${label}:`))!;
     await act(async () => {

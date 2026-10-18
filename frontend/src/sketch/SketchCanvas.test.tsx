@@ -502,4 +502,66 @@ describe('SketchCanvas with real slvs', () => {
     expect(host.querySelector('.sketch-curve-name')).not.toBeNull();
   });
 
+  it('previews a dimension text drag after four pixels and commits it once, with reset, cancel and undo', async () => {
+    const initial = importedSketch([{ id: 'p', x: 0, y: 0 }, { id: 'q', x: 0, y: 10 }], [{ kind: 'line', id: 'line', p1: 'p', p2: 'q' }]);
+    initial.constraints.push({ kind: 'distanceY', id: 'depth', a: 'p', b: 'q', value: 10, driving: true });
+    await mount(initial);
+    const command = vi.spyOn(SketchController.prototype, 'command');
+    const label = () => host.querySelector<SVGTextElement>('[data-constraint-id="depth"] text')!;
+    const at = () => ({ x: Number(label().getAttribute('x')), y: Number(label().getAttribute('y')) });
+    const start = at(), path = host.querySelector('.sketch-extension-lines')!.getAttribute('d');
+    const scale = Math.abs(coordinate('p').y - coordinate('q').y) / 10;
+    await pointer(label(), 'pointerdown', start.x, start.y);
+    await pointer(svg(), 'pointermove', start.x - 3, start.y);
+    expect(at()).toEqual(start); expect(command).not.toHaveBeenCalled();
+    await pointer(svg(), 'pointermove', start.x - 4, start.y);
+    expect(at().x).toBeCloseTo(start.x - 4);
+    await pointer(svg(), 'pointermove', start.x - 30, start.y + 20);
+    expect(at().x).toBeCloseTo(start.x - 30); expect(at().y).toBeCloseTo(start.y + 20);
+    expect(host.querySelector('.sketch-extension-lines')!.getAttribute('d')).not.toBe(path);
+    expect(command).not.toHaveBeenCalled();
+    await pointer(svg(), 'pointerup');
+    expect(command).toHaveBeenCalledTimes(1);
+    expect(command.mock.calls[0][0]).toMatchObject({ kind: 'setDimensionPlacement', id: 'depth' });
+    const after: Sketch = await command.mock.results[0].value;
+    expect(after.constraints.find(c => c.id === 'depth')!.placement).toEqual({ offset: -24 / scale - 30 / scale, along: .5 - 20 / scale / 10 });
+    await key('z', { ctrlKey: true }); expect(at()).toEqual(start);
+    await key('z', { ctrlKey: true, shiftKey: true }); expect(at().x).toBeCloseTo(start.x - 30);
+    await act(async () => button('Reset position').click());
+    expect(at()).toEqual(start);
+    expect((await command.mock.results.at(-1)!.value).constraints.find((c: { id: string }) => c.id === 'depth')).not.toHaveProperty('placement');
+    command.mockClear();
+    await pointer(label(), 'pointerdown', start.x, start.y);
+    await pointer(svg(), 'pointermove', start.x - 30, start.y);
+    await key('Escape'); expect(at()).toEqual(start); expect(command).not.toHaveBeenCalled();
+    await pointer(label(), 'pointerdown', start.x, start.y);
+    await pointer(svg(), 'pointermove', start.x - 30, start.y);
+    await pointer(svg(), 'pointercancel'); expect(at()).toEqual(start); expect(command).not.toHaveBeenCalled();
+    // Crossing the measured geometry keeps the text under the pointer without a side-switch jump.
+    await pointer(label(), 'pointerdown', start.x, start.y);
+    await pointer(svg(), 'pointermove', start.x + 60, start.y);
+    expect(at().x).toBeCloseTo(start.x + 60);
+    await pointer(svg(), 'pointercancel'); expect(at()).toEqual(start); expect(command).not.toHaveBeenCalled();
+  });
+  it('selects on a click with jitter and cannot drag a dimension revealed while Dimensions is off', async () => {
+    const initial = base();
+    initial.constraints.push({ kind: 'distanceX', id: 'length', a: 'p', b: 'q', value: 10, driving: true });
+    await mount(initial);
+    const command = vi.spyOn(SketchController.prototype, 'command');
+    const label = () => host.querySelector('[data-constraint-id="length"] text')!;
+    await pointer(label(), 'pointerdown', 100, 100);
+    await pointer(svg(), 'pointermove', 102, 101); await pointer(svg(), 'pointerup');
+    expect(label().classList.contains('selected')).toBe(true); expect(command).not.toHaveBeenCalled();
+    expect(host.querySelector('[aria-label="Dimension value"]')).toBeNull();
+    await act(async () => button('Dimensions').click());
+    expect(label()).not.toBeNull();
+    const time = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    await pointer(label(), 'pointerdown', 100, 100);
+    await pointer(svg(), 'pointermove', 150, 150); await pointer(svg(), 'pointerup');
+    expect(command).not.toHaveBeenCalled();
+    time.mockReturnValue(1100);
+    await pointer(label(), 'pointerdown', 100, 100); await pointer(svg(), 'pointerup');
+    expect(host.querySelector('[aria-label="Dimension value"]')).not.toBeNull();
+  });
+
 });

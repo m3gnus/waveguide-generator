@@ -75,6 +75,14 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
         if (!s.constraints.some(c => c.id === command.id)) throw new Error(`Unknown constraint: ${command.id}.`);
         cleanConstraints(c => c.id === command.id); break;
       }
+      case 'setDimensionPlacement': {
+        const c = s.constraints.find(c => c.id === command.id);
+        if (!c || !('value' in c)) throw new Error('Expected a dimension.');
+        const { placement: previous, ...base } = c;
+        const next = { ...base, ...(command.placement === undefined ? {} : { placement: command.placement }) };
+        const problem = constraintProblem(s, next); if (problem) throw new Error(problem);
+        s.constraints = s.constraints.map(c => c.id === command.id ? next : c); break;
+      }
       case 'setConstraintLabel': {
         const c = s.constraints.find(c => c.id === command.id);
         if (!c || !('value' in c)) throw new Error('Expected a dimension.');
