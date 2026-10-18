@@ -13,6 +13,16 @@ describe('displayName', () => {
     expect(displayName(seed(expandedPreset('dome')).sketch, 'dome.rim')).toBe('Dome edge');
     expect(displayName(seed(expandedPreset('dome')).sketch, 'dome')).toBe('Dome');
   });
+  it('numbers construction lines separately with positive accessible names', () => {
+    const sketch = importedSketch([{ id: 'a', x: 0, y: 0 }, { id: 'b', x: 1, y: 0 }], [
+      { kind: 'line', id: 'one', p1: 'a', p2: 'b', construction: true },
+      { kind: 'line', id: 'physical', p1: 'a', p2: 'b' },
+      { kind: 'line', id: 'two', p1: 'a', p2: 'b', construction: true },
+    ]);
+    expect(displayName(sketch, 'one')).toBe('Construction line 1');
+    expect(displayName(sketch, 'two')).toBe('Construction line 2');
+    expect(displayName(sketch, 'physical')).toBe('Line 1');
+  });
   it('numbers imported hex and UUID geometry by kind and authoring order', () => {
     const sketch = importedSketch([
       { id: 'point.abc', x: 0, y: 0 }, { id: 'point.def', x: 1, y: 0 }, { id: '18fc-e143-0ab9', x: 2, y: 1 }, { id: 'center', x: 1, y: 1 },

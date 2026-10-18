@@ -145,6 +145,19 @@ export class SketchController<T> {
       next.sketch = state.sketch; session.destroy(); this.session = next; return state;
     }));
   }
+  /** External attachment context belongs to every undo/redo state, not sketch history. */
+  replaceContext(replace: (state: Authoring<T>) => Authoring<T>) {
+    return this.queue(async session => {
+      const current = this.current, state = replace(current);
+      const next = await createSession(state.sketch, { references: this.getReferences(state) });
+      try { this.diagnosis = await next.solveFull(); }
+      catch (e) { next.destroy(); throw e; }
+      next.sketch = state.sketch; session.destroy(); this.session = next;
+      this.history.map(snapshot => snapshot === current ? state : replace(snapshot));
+      if (this.dragStart) this.dragStart = replace(this.dragStart);
+      this.publish(this.current);
+    });
+  }
   metadata(meta: T | ((current: T) => T)) {
     return this.queue(session => this.transaction(session, 'Metadata', async () => ({ ...this.current, meta: typeof meta === 'function' ? (meta as (current: T) => T)(this.current.meta) : meta })));
   }

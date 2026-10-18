@@ -48,6 +48,72 @@ describe('source editor interactions', () => {
     const line = host.querySelector('.sketch-entity[data-id="piston"]')!, values = line.getAttribute('d')!.match(/[\d.e+-]+/g)!.map(Number);
     await pointer(line, 'pointerdown', (values[0] + values[2]) / 2, (values[1] + values[3]) / 2);
   }
+  it('fits a conical horn below the mouth clearance with no rule problems', async () => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await mount();
+    const selector = host.querySelector<HTMLSelectElement>('[aria-label="Source attachment"]')!;
+    await act(async () => { selector.value = 'horn'; selector.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
+    await act(async () => button('Fit to limit').click()); await settle();
+    const document = readSourceDraft(), author = readSourceAuthoring(document);
+    expect(document.contour.points.at(-1)!.r_mm).toBeCloseTo(20 - .1 - 1e-6, 8);
+    expect(sourceAdapter.rules(author.sketch, author.meta)).toEqual([]);
+    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Mouth r 20.00');
+    const label = host.querySelector('.sketch-limit text')!;
+    expect(label.textContent).toContain('max rim r = mouth − 0.1 mm');
+    expect(Number(label.getAttribute('x')) + label.lastChild!.textContent!.length * 6.4).toBeLessThanOrEqual(640);
+  });
+  it('snaps a dragged horn rim to the allowed maximum while leaving the line at the mouth', async () => {
+    await mount();
+    const selector = host.querySelector<HTMLSelectElement>('[aria-label="Source attachment"]')!;
+    await act(async () => { selector.value = 'horn'; selector.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
+    const svg = host.querySelector('[aria-label="Sketch drawing"]')!;
+    const lineX = Number(host.querySelector('.sketch-limit line')!.getAttribute('x1'));
+    const rim = host.querySelector('.sketch-point[data-id="rim"]')!, y = Number(rim.getAttribute('cy'));
+    await pointer(rim, 'pointerdown', Number(rim.getAttribute('cx')), y);
+    await pointer(svg, 'pointermove', lineX - 3, y); await settle();
+    await pointer(svg, 'pointerup'); await settle();
+    expect(readSourceDraft().contour.points.at(-1)!.r_mm).toBeCloseTo(20 - .1 - 1e-6, 8);
+    expect(host.querySelector('.sketch-domain-problem')).toBeNull();
+    expect(Number(host.querySelector('.sketch-limit line')!.getAttribute('x1'))).toBe(lineX);
+  });
+  it('keeps the attachment limit through Undo and Redo without adding sketch history', async () => {
+    await mount(); await enter('Patch 1 weight', '.5'); await settle();
+    await enter('Aperture radius attachment', '18'); await settle();
+    await act(async () => button('Undo').click()); await settle();
+    expect(Number(input('Aperture radius attachment').value)).toBe(18);
+    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Aperture r 18.00');
+    expect(readSourceAuthoring(readSourceDraft()).meta.limit).toEqual({ kind: 'aperture', radius: 18 });
+    expect(Number(input('Patch 1 weight').value)).toBe(1);
+    await act(async () => button('Redo').click()); await settle();
+    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Aperture r 18.00');
+    expect(Number(input('Patch 1 weight').value)).toBe(.5);
+    await act(async () => button('Undo').click()); await settle();
+    await enter('Aperture radius attachment', '19'); await settle();
+    expect(button('Redo').disabled).toBe(false);
+    await act(async () => button('Redo').click()); await settle();
+    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Aperture r 19.00');
+    expect(Number(input('Patch 1 weight').value)).toBe(.5);
+  });
+  it('shows Valid contour alongside a soft limit warning while export stays enabled', async () => {
+    await mount(); await enter('Point 2 radius', '15'); await settle();
+    expect(host.querySelector('.sketch-domain-problem')?.textContent).toBe('Rim exceeds the baffle aperture');
+    expect(button('Export STEP + mesh bundle').disabled).toBe(false);
+    expect(host.querySelector('.source-validation')?.textContent).toContain('Valid contour');
+  });
+  it('scrolls table rows on selection only, including when another entity is hovered', async () => {
+    await mount();
+    const row = host.querySelector<HTMLTableRowElement>('[data-row-id="piston"]')!;
+    const scrolled = vi.fn(); row.scrollIntoView = scrolled;
+    const curve = host.querySelector('.sketch-entity[data-id="piston"]')!;
+    await pointer(curve, 'pointermove');
+    expect(row.classList.contains('hovered')).toBe(true);
+    expect(scrolled).not.toHaveBeenCalled();
+    await pointer(curve);
+    expect(scrolled).toHaveBeenCalledWith({ block: 'nearest' });
+    scrolled.mockClear();
+    await pointer(host.querySelector('.sketch-point[data-id="rim"]')!, 'pointermove');
+    expect(scrolled).not.toHaveBeenCalled();
+  });
   it('renders an editable aperture limit above export and writes label edits back to the attachment', async () => {
     await mount();
     const label = host.querySelector('.sketch-limit text')!;

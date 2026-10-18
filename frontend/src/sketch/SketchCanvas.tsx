@@ -487,7 +487,7 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
           const x = r.kind === 'limit' ? worldToScreen(view, { x: r.radius, y: 0 }).x : view.offsetX;
           return <g key={r.id} className={r.kind === 'limit' ? 'sketch-limit' : undefined}>
             <line x1={r.kind === 'baffle' ? 0 : x} x2={r.kind === 'baffle' ? size.width : x} y1={r.kind === 'baffle' ? view.offsetY : 0} y2={r.kind === 'baffle' ? view.offsetY : size.height}/>
-            <text x={r.kind === 'baffle' ? 8 : Math.max(4, Math.min(x + 4, size.width - 150))} y={r.kind === 'baffle' ? view.offsetY - 4 : 14}
+            <text x={r.kind === 'baffle' ? 8 : Math.max(4, Math.min(x + 4, size.width - Math.max(150, r.kind === 'limit' ? r.label.length * 6.4 + 16 : 150)))} y={r.kind === 'baffle' ? view.offsetY - 4 : 14}
               role={r.kind === 'limit' && !r.locked ? 'button' : undefined} tabIndex={r.kind === 'limit' && !r.locked ? 0 : undefined}
               onPointerDown={e => { if (r.kind === 'limit') e.stopPropagation(); }}
               onDoubleClick={e => { e.stopPropagation(); if (r.kind === 'limit' && !r.locked && onLimitChange) setLimitEditing(String(r.radius)); }}

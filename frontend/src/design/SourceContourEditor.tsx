@@ -8,7 +8,7 @@ import { drawnSource, editPatch, editPoint, identityProblem, INITIAL_SOURCE, rem
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
 import { SketchController, type Authoring } from '../sketch/controller';
-import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, withSourceLimit, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
+import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, withSourceLimit, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
 import { presetDefaults as defaults, presetLabels, seedPreset, fitPresetDimensions } from '../sketch/adapters/sourcePreset';
 import { presetDimensionActive, presetDimensionProblem, presetTopologyMessage, reapplyPresetMessage } from '../sketch/adapters/sourcePresetMapping';
 import { displayName } from '../sketch/displayName';
@@ -134,11 +134,11 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const [pointsOpen, setPointsOpen] = useState(false);
   const rows = useRef(new Map<string, HTMLTableRowElement>());
   useEffect(() => {
-    const id = canvasSelection.at(-1) ?? hoverId;
+    const id = canvasSelection.at(-1);
     if (!id) return;
     if (author.sketch.points.some(p => p.id === id) && canvasSelection.includes(id)) setPointsOpen(true);
     rows.current.get(id)?.scrollIntoView?.({ block: 'nearest' });
-  }, [canvasSelection, hoverId, pointsOpen]);
+  }, [canvasSelection, pointsOpen]);
   const draftCallback = useRef(onDraftChange); draftCallback.current = onDraftChange;
   const controller = useRef<SketchController<SourceMeta> | undefined>(undefined);
   const [sketchReady, setSketchReady] = useState(false);
@@ -230,7 +230,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     if (classic || !controller.current) return;
     const current = controller.current.current;
     if (JSON.stringify(current.meta.limit) === JSON.stringify(limit)) return;
-    try { void controller.current.adopt(withSourceLimit(current, limit)).then(() => setFitRequest(v => v + 1)).catch(reason => setError(String(reason))); }
+    try { void controller.current.replaceContext(state => withSourceLimit(state, limit)).then(() => setFitRequest(v => v + 1)).catch(reason => setError(String(reason))); }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   }, [limit.kind, limit.radius, limit.hard, classic, generation]);
   function editLimit(radius: number) {
@@ -360,7 +360,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
           {(drawPoints ?? draft.contour.points).map((point, i) => <circle key={point.id} cx={xy(point)[0]} cy={xy(point)[1]} r={5} className="source-handle" onPointerDown={(event) => { if (busy || drawPoints !== null) return; event.stopPropagation(); setUndo((history) => [...history.slice(-19), structuredClone(draft)]); drag.current = i; event.currentTarget.setPointerCapture(event.pointerId); }}><title>{point.id}: r {point.r_mm}, z {point.z_mm}</title></circle>)}
         </svg>
         </>}
-        {(classic || !sketchProblems.length && !validationError) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}
+        {(classic || sketchProblems.every(p => p.severity === 'warning') && !validationError) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}
         <details className="source-points" open={classic || pointsOpen} onToggle={e => setPointsOpen(e.currentTarget.open)}><summary>Points</summary><div className="source-table"><table><thead><tr><th>Point</th><th>r mm</th><th>z mm</th><th/></tr></thead><tbody>{tablePoints.map((point, i) => <tr key={point.id} ref={row => { if (row) rows.current.set(point.id, row); else rows.current.delete(point.id); }} data-row-id={point.id} aria-selected={canvasSelection.includes(point.id)} className={hoverId === point.id ? 'hovered' : ''}
           onPointerEnter={() => setHoverId(point.id)} onPointerLeave={() => setHoverId(undefined)} onClick={() => { if (!classic) setCanvasSelection([point.id]); }}><td title={point.id}><button type="button" aria-label={`Select point ${i + 1}`} onClick={() => setCanvasSelection([point.id])}>{displayName(nameSketch, point.id)}</button></td>
           <td><NumberField label={`Point ${i + 1} radius`} value={point.r_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === 0 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, v, point.z_mm)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: v, y: state.sketch.points.find(p => p.id === point.id)!.y }))}/></td>
@@ -393,7 +393,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         <div className="source-fields">{fields(presetDimensions, editPresetDimensions, 'preset')}</div><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.expand(shape, presetDimensions, draft), { shape, dimensions: presetDimensions }); setSelected(undefined); })}>Apply shape</button>
         <p>Rim radius {((presetDimensions.radius_mm ?? 0) + (presetDimensions.surround_width_mm ?? 0) + (presetDimensions.land_width_mm ?? 0)).toFixed(2)} mm</p>
         <button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => {
-          const fitted = fitPresetDimensions(presetDimensions, limit.radius);
+          const fitted = fitPresetDimensions(presetDimensions, sourceLimitTarget(limit));
           await adopt(await sourceEditorApi.expand(shape, fitted, draft), { shape, dimensions: fitted }); setDimensions(fitted); setSelected(undefined);
         })}>Fit to limit</button>
         <h3>Saved presets</h3><label>Preset name<input aria-label="Preset name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)}/></label><div className="source-editor-toolbar">

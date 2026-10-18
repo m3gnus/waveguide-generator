@@ -1,6 +1,6 @@
 import type { SourceDocument, SourcePatch } from '../../api/sourceEditor';
 import type { DomainProblem, Lowered, Reference, SketchAdapter } from '../adapter';
-import { entityPoints, validateSketch, type Entity, type Sketch } from '../model';
+import { constraintRefs, entityPoints, validateSketch, type Entity, type Sketch } from '../model';
 import { applyCommand, importedSketch } from '../ops';
 import type { Command } from '../commands';
 import { arcGeometry } from '../geometry';
@@ -14,9 +14,23 @@ export interface SourceMeta {
 }
 export interface SourceLimit { kind: 'aperture' | 'mouth' | 'throat'; radius: number; hard?: boolean }
 
+/** The conical horn needs strictly more than 0.1 mm between its mouth and rim. */
+export function sourceLimitTarget(limit: SourceLimit): number {
+  return limit.kind === 'mouth' ? limit.radius - .1 - 1e-6 : limit.radius;
+}
+function validLimit(limit: SourceLimit): boolean { return limit.radius > 0 && Number.isFinite(limit.radius); }
+
 /** Install fixed context separately from the editable contour. A throat also holds the rim. */
 export function withSourceLimit(state: { sketch: Sketch; meta: SourceMeta }, limit: SourceLimit): { sketch: Sketch; meta: SourceMeta } {
-  if (!(limit.radius > 0) || !Number.isFinite(limit.radius)) throw new Error('Limit radius must be positive and finite.');
+  if (!validLimit(limit)) {
+    const lines = state.meta.references.filter(r => r.kind === 'limit').map(r => r.id);
+    const removed = new Set([...lines, ...state.sketch.entities.filter(e => lines.includes(e.id)).flatMap(entityPoints)]);
+    return { sketch: { ...state.sketch,
+      entities: state.sketch.entities.filter(e => !lines.includes(e.id)),
+      points: state.sketch.points.filter(p => !removed.has(p.id)),
+      constraints: state.sketch.constraints.filter(c => !constraintRefs(c).some(id => removed.has(id))),
+    }, meta: { ...state.meta, limit, references: state.meta.references.filter(r => r.kind !== 'limit') } };
+  }
   let sketch = structuredClone(state.sketch);
   const ordered = contourPointOrder(sketch, state.meta), rim = ordered.at(-1);
   const old = state.meta.references.find(r => r.kind === 'limit');
@@ -49,7 +63,8 @@ export function withSourceLimit(state: { sketch: Sketch; meta: SourceMeta }, lim
     sketch.constraints = sketch.constraints.map(c => c.id === radiusDimension && 'driving' in c ? { ...c, driving: false } : c);
   }
   const reference: Reference = { id: line.id, kind: 'limit', radius: limit.radius,
-    label: `${limit.kind[0].toUpperCase()}${limit.kind.slice(1)} r ${limit.radius.toFixed(2)}`, locked: !!limit.hard, ...(rim ? { point: rim } : {}) };
+    label: `${limit.kind[0].toUpperCase()}${limit.kind.slice(1)} r ${limit.radius.toFixed(2)}${limit.kind === 'mouth' ? ' · max rim r = mouth − 0.1 mm' : ''}`,
+    snapRadius: sourceLimitTarget(limit), locked: !!limit.hard, ...(rim ? { point: rim } : {}) };
   return { sketch, meta: { ...state.meta, limit, references: [...state.meta.references.filter(r => r.kind !== 'limit'), reference] } };
 }
 export const references: Reference[] = [{ id: 'axis', kind: 'axis' }, { id: 'baffle', kind: 'baffle' }];
@@ -157,6 +172,7 @@ export function rules(sketch: Sketch, meta: SourceMeta): DomainProblem[] {
   const valid = validateSketch(sketch); if (!valid.ok) return [{ code: 'schema', ids: [], message: valid.reason }];
   const ordered = chain(sketch, meta); if ('code' in ordered) return [ordered];
   const problems: DomainProblem[] = [];
+  if (meta.limit && !validLimit(meta.limit)) problems.push({ code: 'limit', ids: [], message: 'Limit radius must be positive' });
   const add = (code: string, ids: string[], message: string) => problems.push({ code, ids, message });
   const pts = ordered.points.map(id => sketch.points.find(p => p.id === id));
   if (pts.some(p => !p)) return [{ code: 'reference', ids: ordered.points, message: 'A contour point is missing.' }];
@@ -166,7 +182,7 @@ export function rules(sketch: Sketch, meta: SourceMeta): DomainProblem[] {
   const byId = new Map(sketch.points.map(p => [p.id, p]));
   const limit = meta.limit, rim = points.at(-1)!;
   if (limit?.hard && Math.abs(rim.x - limit.radius) > 1e-8) add('rim-limit', [rim.id], 'Rim must match the horn throat');
-  else if (limit && !limit.hard) {
+  else if (limit && validLimit(limit) && !limit.hard) {
     const rawGap = limit.radius - rim.x, gap = Math.abs(rawGap) <= 1e-9 ? 0 : rawGap;
     if (gap < 0 || limit.kind === 'mouth' && gap <= .1 || limit.kind === 'aperture' && gap > 0 && gap <= .1) {
       problems.push({ code: 'rim-limit', ids: [rim.id, ordered.entities.at(-1)!.entity.id], severity: 'warning',

@@ -19,7 +19,7 @@ export function findSnap(sketch: Sketch, references: Reference[], cursorWorld: X
     const limit = held.glyph === 'limit' ? references.find(r => r.kind === 'limit') : undefined;
     const point = c && 'point' in c ? sketch.points.find(p => p.id === c.point) : undefined;
     const exists = held.glyph === 'limit' ? !!limit : c ? 'point' in c ? !!point && !exclude.has(c.point) : references.some(r => r.id === c.line) : true;
-    if (limit?.kind === 'limit') held.x = limit.radius;
+    if (limit?.kind === 'limit') held.x = limit.snapRadius ?? limit.radius;
     if (point) {
       if (held.glyph !== 'horizontal') held.x = point.x;
       if (held.glyph !== 'vertical') held.y = point.y;
@@ -35,7 +35,7 @@ export function findSnap(sketch: Sketch, references: Reference[], cursorWorld: X
     sketch.points.filter(p => ends.has(p.id) && !exclude.has(p.id)).map(p => ({ x: p.x, y: p.y, glyph: 'endpoint', constraint: { kind: 'coincident', point: p.id } })),
     sketch.points.filter(p => centers.has(p.id) && !exclude.has(p.id)).map(p => ({ x: p.x, y: p.y, glyph: 'center', constraint: { kind: 'coincident', point: p.id } })),
     references.filter(r => r.kind === 'axis').map(r => ({ x: 0, y: cursor.y, glyph: 'axis', constraint: { kind: 'pointOnLine', line: r.id } })),
-    references.flatMap(r => r.kind === 'limit' ? [{ x: r.radius, y: cursor.y, glyph: 'limit' as const }] : []),
+    references.flatMap(r => r.kind === 'limit' ? [{ x: r.snapRadius ?? r.radius, y: cursor.y, glyph: 'limit' as const }] : []),
     references.filter(r => r.kind === 'baffle').map(r => ({ x: cursor.x, y: 0, glyph: 'baffle', constraint: { kind: 'pointOnLine', line: r.id } })),
   ];
   const starts = new Set(geometry.flatMap(e => e.kind === 'line' ? [e.p1] : e.kind === 'arc' ? [e.start] : []));
@@ -62,5 +62,7 @@ export function findSnap(sketch: Sketch, references: Reference[], cursorWorld: X
 /** Soft limits snap only near the rim; a further drag remains free to cross. */
 export function snapLimitTarget(references: Reference[], point: string, target: XY, tolerance: number): XY {
   const limit = references.find(r => r.kind === 'limit' && r.point === point);
-  return limit?.kind === 'limit' && Math.abs(target.x - limit.radius) <= tolerance ? { ...target, x: limit.radius } : target;
+  if (limit?.kind !== 'limit') return target;
+  const radius = limit.snapRadius ?? limit.radius;
+  return Math.abs(target.x - radius) <= tolerance ? { ...target, x: radius } : target;
 }

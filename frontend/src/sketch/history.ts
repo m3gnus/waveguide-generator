@@ -7,6 +7,13 @@ export class History<T = Sketch> {
   constructor(public current: T) {}
   get canUndo() { return this.past.length > 0; }
   get canRedo() { return this.future.length > 0; }
+  /** Replace external context across every snapshot without creating or discarding edits. */
+  map(replace: (snapshot: T) => T) {
+    this.current = replace(this.current);
+    this.past = this.past.map(entry => ({ ...entry, snapshot: replace(entry.snapshot) }));
+    this.future = this.future.map(entry => ({ ...entry, snapshot: replace(entry.snapshot) }));
+    if (this.transaction) this.transaction = { ...this.transaction, snapshot: replace(this.transaction.snapshot) };
+  }
   begin(label: string) {
     if (this.transaction) throw new Error('A transaction is already active.');
     this.transaction = { label, snapshot: this.current };

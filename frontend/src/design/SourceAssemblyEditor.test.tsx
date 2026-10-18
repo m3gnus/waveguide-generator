@@ -41,6 +41,29 @@ describe('shared source and passage authoring', () => {
     await act(async () => input.blur()); await settle();
   }
   const profile = { horn_config: { formula: 'OSSE', mode: 'bare', profile: { r0_mm: 7, L_mm: 130 } }, throat_radius_mm: 7, horn_length_mm: 130, mouth_radius_mm: 80 };
+  it.each([
+    ['Woofer aperture radius', 'Edit woofer contour…', 'aperture_radius_mm'],
+    ['Horn mouth radius', 'Edit horn contour…', 'mouth_radius_mm'],
+  ] as const)('rejects zero in %s and still opens the contour editor', async (label, launch, dimension) => {
+    storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY)); await mount();
+    await enter(label, '0');
+    expect(Number(field(label).getAttribute('aria-valuemin'))).toBeGreaterThan(0);
+    expect(read().dimensions[dimension]).toBe(INITIAL_ASSEMBLY.dimensions[dimension]);
+    await act(async () => button(launch).click()); await settle();
+    expect(host.querySelector('[aria-label="Source contour editor"]')).not.toBeNull();
+  });
+  it.each([
+    ['woofer', 'aperture_radius_mm', 0], ['woofer', 'aperture_radius_mm', -1],
+    ['horn', 'mouth_radius_mm', 0], ['horn', 'mouth_radius_mm', -1],
+  ] as const)('opens a saved %s with invalid %s = %s without a limit line or crash', async (source, dimension, radius) => {
+    const saved = structuredClone(INITIAL_ASSEMBLY); saved.dimensions[dimension] = radius;
+    storage.setItem('', JSON.stringify(saved)); await mount();
+    await act(async () => button(`Edit ${source} contour…`).click()); await settle();
+    expect(host.querySelector('[aria-label="Source contour editor"]')).not.toBeNull();
+    expect(host.querySelector('.sketch-limit')).toBeNull();
+    expect(host.textContent).toContain('Limit radius must be positive');
+    expect(host.querySelector('[aria-label="Sketch drawing"]')).not.toBeNull();
+  });
   it('passes the resolved current-horn throat into the nested editor as an exact read-only limit', async () => {
     vi.mocked(sourceEditorApi.hornProfile).mockResolvedValue(profile);
     await mount();
