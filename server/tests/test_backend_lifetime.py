@@ -790,3 +790,94 @@ def test_serve_reports_one_lifetime(flag, marker, expected):
     assert serve._backend_lifetime(args, environ) == expected
     # Both lifetimes nobody owns answer the installer's retire request.
     assert (expected in serve.RETIRABLE_LIFETIMES) is (expected != "attached")
+
+
+@pytest.mark.parametrize("hook", ["cad_delivery_in_flight", "cad_background_in_flight"])
+@pytest.mark.parametrize("activity", ["idle", "active", "error"])
+def test_cad_activity_hooks_hold_work(hook, activity):
+    def in_flight():
+        if activity == "error":
+            raise RuntimeError("CAD activity unavailable")
+        return activity == "active"
+
+    state = SimpleNamespace(jobs_runtime=None, **{hook: in_flight})
+    tracker = ActivityTracker(SimpleNamespace(state=state))
+    assert asyncio.run(tracker.holds_work()) is (activity != "idle")
+
+
+def test_mount_cadlink_installs_the_ingest_background_hook():
+    from fastapi import FastAPI
+
+    from server.cadlink import api
+
+    application = FastAPI()
+    api.mount_cadlink(application)
+    assert application.state.cad_background_in_flight is api.background_work_in_flight
+
+
+@pytest.mark.parametrize("work", ["capture", "viewport", "frame"])
+@pytest.mark.parametrize("outcome", ["finishes", "fails", "stalls"])
+def test_pending_ingest_background_work_holds_the_backend(tmp_path, monkeypatch, work, outcome):
+    """An ingestion's unawaited work keeps a retiring headless backend alive.
+
+    The response returns before the document capture, viewport tessellation
+    and frame survey finish; a backend that retired then could leave a partial
+    copy or no viewport. The hold is released when the work ends either way,
+    and work that stalls holds only until its cap.
+    """
+    from server.cadlink import api
+
+    started, release = threading.Event(), threading.Event()
+
+    def blocking(*_args, **_kwargs):
+        started.set()
+        assert release.wait(10)
+        if outcome == "fails":
+            # OSError is what capture reports; the others log any Exception.
+            raise OSError("work failed")
+        return None
+
+    record = {
+        "ingest_id": "ingest-1",
+        "manifest_sha256": "snapshot-1",
+        "document": {"name": "Horn", "return_state_hash": "sha256:ab"},
+        "project": {"archive_stem": "Horn"},
+    }
+    state = SimpleNamespace(
+        jobs_runtime=None,
+        workspace=SimpleNamespace(path=lambda: tmp_path),
+        cad_workspace=None,
+        cad_background_in_flight=api.background_work_in_flight,
+    )
+    tracker = ActivityTracker(SimpleNamespace(state=state))
+
+    async def scenario():
+        assert not await tracker.holds_work()
+        if work == "capture":
+            monkeypatch.setattr(api, "archive_cad_document", blocking)
+            api._schedule_cad_document_capture(state, None, tmp_path / "bundle", record)
+        elif work == "viewport":
+            monkeypatch.setattr(api, "deferred_viewport_lookup_key", lambda _record: "viewport-1")
+            monkeypatch.setattr(api, "build_deferred_viewport", blocking)
+            api._schedule_deferred_viewport(record, tmp_path)
+        else:
+            monkeypatch.setattr(api, "record_is_unlinked", lambda _record: True)
+            monkeypatch.setattr(api, "ensure_frame_suggestion", blocking)
+            api._schedule_frame_suggestion(None, record)
+        tasks = set(api._BACKGROUND_TASKS)
+        try:
+            assert len(tasks) == 1
+            assert await asyncio.wait_for(asyncio.to_thread(started.wait, 5), 6)
+            assert await tracker.holds_work()
+            if outcome == "stalls":
+                # Still running, but past its cap: it no longer holds.
+                monkeypatch.setattr(api, "_BACKGROUND_HOLD_SECONDS", 0.0)
+                assert not any(task.done() for task in tasks)
+                assert not await tracker.holds_work()
+        finally:
+            release.set()
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 5)
+        assert not await tracker.holds_work()
+
+    asyncio.run(scenario())
+    assert not api._BACKGROUND_TASKS and not api._BACKGROUND_STARTED

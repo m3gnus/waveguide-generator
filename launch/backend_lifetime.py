@@ -131,12 +131,16 @@ class ActivityTracker:
                 self.last_activity = self.clock()
 
     async def holds_work(self, manual_wait: ManualWaitCap | None = None) -> bool:
-        delivery_in_flight = getattr(self.app.state, "cad_delivery_in_flight", None)
-        if delivery_in_flight is not None:
+        # A CAD delivery pass, and work an ingestion response did not wait for
+        # (viewport, frame survey, document capture), outlive any request.
+        for hook in ("cad_delivery_in_flight", "cad_background_in_flight"):
+            in_flight = getattr(self.app.state, hook, None)
+            if in_flight is None:
+                continue
             try:
-                if delivery_in_flight():
+                if in_flight():
                     return True
-            except Exception:  # noqa: BLE001 - uncertain delivery activity owns work
+            except Exception:  # noqa: BLE001 - uncertain CAD activity owns work
                 return True
         runtime = getattr(self.app.state, "jobs_runtime", None)
         if runtime is not None:

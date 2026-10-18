@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import sqlite3
 import subprocess
+import time
 from typing import Any, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
@@ -134,12 +135,42 @@ _CAD_DOCUMENT_CAPTURES: dict[str, asyncio.Task[Any]] = {}
 #: this is generous; it is a bound against waiting forever, not an expectation.
 _CAPTURE_WAIT_SECONDS = 120.0
 
+#: How long one background task may hold a retiring headless backend. A stalled
+#: copy on a cloud-synced or network volume never returns, and must not keep the
+#: backend alive forever; abandoning it then loses only the copy, because the
+#: capture publishes atomically (``archive_cad_document``) and the viewport and
+#: frame survey are recomputed when next read.
+_BACKGROUND_HOLD_SECONDS = 600.0
+
+#: When each task in ``_BACKGROUND_TASKS`` started, for that cap.
+_BACKGROUND_STARTED: dict[asyncio.Task[Any], float] = {}
+
 
 def _spawn_background(coroutine: Any) -> asyncio.Task[Any]:
     task = asyncio.create_task(coroutine)
     _BACKGROUND_TASKS.add(task)
+    _BACKGROUND_STARTED[task] = time.monotonic()
     task.add_done_callback(_BACKGROUND_TASKS.discard)
+    task.add_done_callback(lambda finished: _BACKGROUND_STARTED.pop(finished, None))
     return task
+
+
+def background_work_in_flight() -> bool:
+    """Whether work an ingestion response did not wait for is still running.
+
+    Viewport tessellation, the frame survey and document capture outlive the
+    request that started them, so a retiring headless backend counts them
+    (``ActivityTracker.holds_work``) rather than exiting mid-copy. ``done()``
+    rather than membership: the registry is pruned by a done callback, which
+    runs one loop turn after the task has finished. Each task holds for at
+    most ``_BACKGROUND_HOLD_SECONDS``.
+    """
+
+    now = time.monotonic()
+    return any(
+        not task.done() and now - _BACKGROUND_STARTED.get(task, now) < _BACKGROUND_HOLD_SECONDS
+        for task in list(_BACKGROUND_TASKS)
+    )
 
 
 def _capture_key(return_state_hash: object) -> str:
@@ -256,7 +287,7 @@ def _schedule_deferred_viewport(
             _DEFERRED_VIEWPORTS.pop(lookup_key, None)
             _DEFERRED_VIEWPORT_WAITERS.pop(lookup_key, None)
 
-    _DEFERRED_VIEWPORTS[lookup_key] = asyncio.create_task(build())
+    _DEFERRED_VIEWPORTS[lookup_key] = _spawn_background(build())
 
 
 def _schedule_frame_suggestion(store: CadLinkStore, record: Mapping[str, Any]) -> None:
@@ -282,7 +313,7 @@ def _schedule_frame_suggestion(store: CadLinkStore, record: Mapping[str, Any]) -
         finally:
             _FRAME_SUGGESTIONS.pop(snapshot, None)
 
-    _FRAME_SUGGESTIONS[snapshot] = asyncio.create_task(survey())
+    _FRAME_SUGGESTIONS[snapshot] = _spawn_background(survey())
 
 
 class ImportedMeshRequest(BaseModel):
@@ -2056,6 +2087,8 @@ def _abandon_preparations_on_shutdown(application: FastAPI):
 
 def mount_cadlink(application: FastAPI) -> None:
     application.include_router(router)
+    # Ingestion's unawaited work holds headless retirement until it finishes.
+    application.state.cad_background_in_flight = background_work_in_flight
     application.include_router(receipts_api.router)
     application.include_router(recovery_api.router)
     from server.cadlink.fusion.fusion_return import router as return_requests_router
