@@ -750,6 +750,7 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
         "readable": True,
         "documentName": "Speaker v4",
         "documentNativeId": "fusion:doc-a",
+        "projectLineageId": None,
         "requestId": "request-a",
         "sourceCount": 1,
         "instanceCount": 1,

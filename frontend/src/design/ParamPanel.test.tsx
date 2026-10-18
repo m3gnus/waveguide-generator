@@ -3,6 +3,7 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { waitForCadProjectSettings } from '../stores/cadProjectSettings';
 import type { CadRealizedDimensions, CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
 import { sharedDelayMode } from '../results/crossoverSpec';
@@ -1181,13 +1182,22 @@ describe('ParamPanel inventory UX', () => {
   it('shows a publisher failure in the CAD mesh alert without the coordinator mounted', async () => {
     vi.useFakeTimers();
     const save = vi.fn(async () => { throw new Error('offline'); });
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => /^\/api\/models\/[^/]+\/setup$/.test(String(input))
-      ? save() : Promise.resolve(new Response('{}', { status: 404 }))));
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (/^\/api\/models\/[^/]+\/setup\?inventory=/.test(path)) {
+        return Promise.resolve(new Response(JSON.stringify({ setup: null, revision_id: null })));
+      }
+      return /^\/api\/models\/[^/]+\/setup$/.test(path)
+        ? save() : Promise.resolve(new Response('{}', { status: 404 }));
+    }));
     try {
       act(() => {
         useCadReturnStore.getState().selectBundle(cadBundle, 'wgl_settings');
-        setCadReady();
         workspaceModeStore.setMode('cad');
+      });
+      await act(async () => { expect(await waitForCadProjectSettings()).toBe(true); });
+      act(() => {
+        setCadReady();
         root.render(withQueryClient(<><CadSetupPublisher/><ParamPanel tab="simulation" /></>));
       });
       expect(cadWorkspace.getSnapshot().error).toBeNull();

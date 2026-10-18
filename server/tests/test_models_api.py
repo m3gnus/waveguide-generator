@@ -271,10 +271,10 @@ def test_a_cad_project_setup_is_recorded_for_its_return_inventory(tmp_path, monk
             assert found["revision_id"] == saved["revision_id"]
             assert found["setup"] == json.loads(store.get_setup_revision(saved["revision_id"])["setup_json"])
             # The Fusion job reads the very revision the UI inventory read shows.
-            from server.cadlink.joblane import preparation
+            from server.cadlink.joblane import preparation_inputs
             from server.jobs.cad_preparation import _load_setup
-            monkeypatch.setattr(preparation, "read_snapshot", lambda *a, **k: SimpleNamespace(manifest={"sources": inventory}))
-            monkeypatch.setattr(preparation, "snapshot_project", lambda *a: project)
+            monkeypatch.setattr(preparation_inputs, "read_snapshot", lambda *a, **k: SimpleNamespace(manifest={"sources": inventory}))
+            monkeypatch.setattr(preparation_inputs, "snapshot_project", lambda *a: project)
             loaded, revision_id = _load_setup(SimpleNamespace(store=store), None, {"retained_path": "retained"})
             assert revision_id == found["revision_id"]
             assert json.loads(setup_content(loaded)) == found["setup"]

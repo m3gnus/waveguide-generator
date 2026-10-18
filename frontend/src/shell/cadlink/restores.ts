@@ -167,12 +167,14 @@ export function observeCadProjectLoads(integration: UseCadRestoresOptions): () =
     if (event.loadSource === 'autosave-restore') return;
     if (event.loadSource === 'cad-project-switch') {
       projectOpenPending.current = true;
-      if (integration.initialChoiceOwed) integration.initialChoiceOwed.current = true;
       manualSelectionAt.current = null;
       refusedForeignReturn.current = false;
       seenReturnRevisions.current = null;
       returnListRequest.current += 1;
       useCadReturnStore.getState().selectBundle(null, null);
+      // Clearing the previous model also resets its solve options. Subscribers
+      // can still see that model during the reset, so owe the new choice after it.
+      if (integration.initialChoiceOwed) integration.initialChoiceOwed.current = true;
       importedMeshStore.beginIntent();
       importedMeshStore.clear('cad');
       setError(null);

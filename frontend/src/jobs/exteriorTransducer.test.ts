@@ -4,6 +4,8 @@ import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { buildImportedSubmission, exteriorModeBlocker, undrivenChannels } from './importedSubmission';
 import { buildCadProjectSetup } from '../shell/cadSetupPublisher';
+import { retainCadDraft, waitForCadProjectSettings } from '../stores/cadProjectSettings';
+import { workspaceModeStore } from '../stores/workspaceMode';
 
 const form = { version: 1, motion_axis: [1, 2, 3] as [number, number, number],
   re_ohm: 6, le_h: .0005, bl_n_per_a: 7, mmd_kg: .02, cms_m_per_n: .001, rms_n_s_per_m: 1.5 };
@@ -117,17 +119,22 @@ it('blocks malformed, incomplete and unsupported v2 options rather than dropping
   }
 });
 
-it('restores v2 driver options through the persisted CAD profile parser', () => {
+it('restores v2 driver options through the durable CAD draft parser', async () => {
   localStorage.clear();
+  workspaceModeStore.setImportedInput('cad');
   const bundle = { name: 'driver.wgreturn', bundlePath: 'wgreturn/driver.wgreturn', modifiedAt: '2026-08-11T00:00:00Z', readable: true,
     documentName: 'Driver', requestId: null, sourceCount: 1, instanceCount: 1,
     sources: [{ id: 's', role: 'LF', required: true, suggestedResolutionMm: 3, defaultDriveChannelId: 'd' }] };
-  useCadReturnStore.getState().selectBundle(bundle, 'driver-project');
+  const fetcher = async () => new Response(JSON.stringify({ setup: null, revision_id: null }));
+  useCadReturnStore.getState().selectBundle(bundle, 'driver-project', false, fetcher);
+  expect(await waitForCadProjectSettings()).toBe(true);
   const extended = { ...form, version: 2, power_w: 100, xmax_mm: 2, sd_m2: .0132, semi_inductance: semi,
     lumped_sealed_rear_chamber: { enabled: true, volume_m3: .01 } };
   useCadReturnStore.getState().setExteriorTransducer('d', extended);
+  expect(retainCadDraft()).not.toBeNull();
   resetCadReturnStore();
-  useCadReturnStore.getState().selectBundle(bundle, 'driver-project');
+  useCadReturnStore.getState().selectBundle(bundle, 'driver-project', false, fetcher);
+  expect(await waitForCadProjectSettings()).toBe(true);
   expect(useCadReturnStore.getState().driveChannels[0].exterior_transducer).toEqual(extended);
   localStorage.clear();
 });

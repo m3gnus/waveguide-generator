@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle } from '../api/cadlink';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { waitForCadProjectSettings } from '../stores/cadProjectSettings';
 import { resetDocumentStore } from '../stores/document';
 import { DEFAULT_SOLVE_OPTIONS, resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import sharedDefaults from '../../../shared/solve-defaults.json';
@@ -68,9 +69,11 @@ describe('WG default CAD setup parity', () => {
     ['two-way-accurate', twoWay],
     ['three-way-lf-mf-hf', lfMfHf],
     ['three-way-shared-channel', threeWay],
-  ])('an untouched rail records the backend default setup: %s', (_name, raw) => {
+  ])('an untouched rail records the backend default setup: %s', async (_name, raw) => {
     const fixture = raw as unknown as Fixture;
-    useCadReturnStore.getState().selectBundle(bundleOf(fixture), 'wgl_model');
+    useCadReturnStore.getState().selectBundle(bundleOf(fixture), 'wgl_model', false,
+      async () => new Response(JSON.stringify({ setup: null, revision_id: null })));
+    expect(await waitForCadProjectSettings()).toBe(true);
     useImportedSolveOptionsStore.setState({ engine: fixture.selection.engine, accuracy: fixture.selection.accuracy });
 
     const built = buildCadProjectSetup(
