@@ -272,7 +272,7 @@ def test_legacy_symmetry_aliases_cannot_select_a_different_cut_plane(build, symm
         build(symmetry=symmetry)
 
 
-@pytest.mark.parametrize("quadrants,mode", [(1, "xy"), (12, "x"), (14, "x"), (1234, "off")])
+@pytest.mark.parametrize("quadrants,mode", [(1, "xy"), (14, "x"), (1234, "off")])
 def test_current_wg_plane_names_select_the_intended_images(msh, quadrants, mode):
     context = SolverContext(None, (100, 1000), 3, quadrants=quadrants)
     built = adapter.build_parametric_request(msh, context)
@@ -400,3 +400,8 @@ def test_parametric_millimetres_scale_frame_area_but_not_polar_radius():
     assert scaled.channel_loading["source"].area_m2 == pytest.approx(metre.channel_loading["source"].area_m2 * 1e-6)
     for points in scaled.layout.points_m.values():
         np.testing.assert_allclose(np.linalg.norm(points - scaled.frame["origin"], axis=1), 2.)
+
+
+def test_parametric_y_only_half_is_refused_by_the_request_compiler(msh):
+    with pytest.raises(ValueError, match="qualification limit"):
+        adapter.build_parametric_request(msh, SolverContext(None, (100, 1000), 3, quadrants=12))

@@ -3871,18 +3871,24 @@ class _AdapterRegistry(_DeclaredRegistry):
         return create_engine(name) if info is not None and info.available else None
 
 
+# Admission compiles every requested source; this fixture must contain the
+# three source tags in _geometry, not just the anchor source.
 _TILTED_HALF_MESH = """$MeshFormat
 2.2 0 8
 $EndMeshFormat
 $Nodes
-3
+4
 1 0.01 0 0
 2 0 0.02 0
 3 0 0 0.03
+4 0.01 0.02 0.03
 $EndNodes
 $Elements
-1
-1 2 2 101 1 1 2 3
+4
+1 2 2 1 1 1 2 3
+2 2 2 101 2 1 2 4
+3 2 2 102 3 2 3 4
+4 2 2 103 4 1 3 4
 $EndElements
 """
 

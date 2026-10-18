@@ -113,17 +113,13 @@ def test_legacy_imports_alias_the_contract() -> None:
 
 
 def test_physical_tags_match_the_pinned_mesher() -> None:
-    from hornlab_mesher.tags import PHYSICAL_NAMES, SOURCE_TAGS, PhysicalGroup
+    from hornlab_mesher.tags import PHYSICAL_NAMES, PhysicalGroup
     from server.mesh import builder, imported
-    from server.solver import beat_imported
 
     assert builder.CANONICAL_SURFACE_TAGS == {1, 2, 3, 4, 12}
     assert builder.CANONICAL_SURFACE_TAGS <= PHYSICAL_NAMES.keys()
     assert builder.MOUTH_APERTURE_SURFACE_TAG == int(PhysicalGroup.MOUTH_APERTURE) == 12
-    assert imported.RIGID_TAG == beat_imported.RIGID_TAG == int(PhysicalGroup.RIGID_WALL) == 1
-    assert beat_imported.VELOCITY_TAG == int(PhysicalGroup.PRIMARY_SOURCE) == 2
-    assert beat_imported.VELOCITY_TAG in SOURCE_TAGS
-    assert beat_imported._MIRROR_AXES == {None: (), "yz": (0,), "yz+xz": (0, 1)}
+    assert imported.RIGID_TAG == int(PhysicalGroup.RIGID_WALL) == 1
 
 
 def test_contract_is_a_standard_library_leaf() -> None:
@@ -149,11 +145,9 @@ def guarded(name, *args, **kwargs):
     return original(name, *args, **kwargs)
 builtins.__import__ = guarded
 from server.mesh import builder, imported
-from server.solver import beat_imported
 assert builder.CANONICAL_SURFACE_TAGS == {{1, 2, 3, 4, 12}}
 assert builder.MOUTH_APERTURE_SURFACE_TAG == 12
-assert imported.RIGID_TAG == beat_imported.RIGID_TAG == 1
-assert beat_imported.VELOCITY_TAG == 2
+assert imported.RIGID_TAG == 1
 """
     completed = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert completed.returncode == 0, completed.stderr

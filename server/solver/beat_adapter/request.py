@@ -54,6 +54,49 @@ class CompiledRequest:
     surface_traces: bool
 
 
+def validate_imported_request(compiled: CompiledRequest, native_plane: str | None) -> None:
+    """Keep imported qualification limits on the request both paths compile.
+
+    Explicit axes and a rotated y-only image are expressible on the wire, but
+    have not been qualified for these CAD returns. Removing a limit requires
+    qualification, rather than changing a second preflight implementation.
+    """
+    if native_plane == "xz":
+        raise ValueError(
+            "This return is a y-only half, mirrored on y = 0. BEAT mirrors "
+            "across x = 0, or across x = 0 and y = 0, and has no y-only "
+            "mirror. Solve it with Metal, or return the model whole or cut on "
+            "x = 0 from CAD. (Compiled-request qualification limit.)")
+    frame = compiled.frame
+    rotation = np.vstack([frame["u"], frame["v"], frame["axis"]])
+    if (not np.allclose(rotation @ rotation.T, np.eye(3), atol=1e-6)
+            or np.linalg.det(rotation) <= 0):
+        raise ValueError("BEAT requires a right-handed orthonormal anchor throat frame. "
+                         "Re-ingest the CAD return, or solve it with Metal.")
+    mirrors = (0,) if native_plane == "yz" else (0, 1) if native_plane == "yz+xz" else ()
+    for index in mirrors:
+        name = "xyz"[index]
+        if not np.allclose(rotation[:, index], np.eye(3)[index], atol=1e-6):
+            raise ValueError(f"This return is mirrored on {name} = 0; its anchor frame "
+                             "would move that plane. Solve it with Metal, or return the model whole "
+                             "from CAD. (Compiled-request qualification limit.)")
+        origin = rotation @ frame["origin"]
+        if abs(float(origin[index])) > 1e-6:
+            raise ValueError(f"This return is mirrored on {name} = 0, but its observation "
+                             "origin lies off that plane. Solve it with Metal, or return the "
+                             "model whole from CAD. (Compiled-request qualification limit.)")
+    for source in compiled.bases:
+        if source.motion == "axial":
+            axis = _axis(source.axis)
+            in_frame = rotation @ axis
+            if float(np.hypot(in_frame[0], in_frame[1])) > 1e-6:
+                raise ValueError(
+                    f"Axial source tag {source.tag} moves along ({axis[0]:.4g}, "
+                    f"{axis[1]:.4g}, {axis[2]:.4g}) in the solver frame, which is "
+                    "not along the radiation axis. BEAT drives axial sources along its z axis "
+                    "only. Solve it with Metal or BEMPP. (Compiled-request qualification limit.)")
+
+
 def _axis(value: Sequence[float] | None) -> np.ndarray:
     if value is not None and any(isinstance(item, (bool, np.bool_)) for item in value):
         raise ValueError("Motion axis components must be real numbers, not booleans")
@@ -159,7 +202,7 @@ def build_request(
     if mode in {"x", "xy"}:
         axes = (0,) if mode == "x" else (0, 1)
         if any(np.min(transformed.points_m[:, axis]) < -tolerance for axis in axes):
-            raise ValueError("Mesh is outside the positive symmetry fundamental domain")
+            raise ValueError("Mesh is outside the positive symmetry fundamental domain (negative side)")
         # Match official snap_symmetry_planes before computing physical loading.
         points = transformed.points_m.copy()
         for axis in axes:
@@ -265,6 +308,12 @@ def build_parametric_request(
     context.validate()
     if context.sim_type != 2:
         raise ValueError("Exterior adapter cannot represent a coupled infinite baffle")
+    plane = PLANE_BY_QUADRANTS[context.quadrants]
+    if plane in {"xz", "xy"}:
+        raise ValueError(
+            "BEAT native symmetry supports 'yz' half and 'yz+xz' "
+            f"quarter domains; {plane!r} is not "
+            "representable by the BEAT Engine solver (compiled-request qualification limit)")
     # Existing WG frame policy includes cabinet and reduced-source corrections.
     native = native_observation_frame(context, msh_text, SimpleNamespace)
     if native is None:

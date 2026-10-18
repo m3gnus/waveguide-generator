@@ -266,8 +266,7 @@ def test_imported_production(runtime, monkeypatch, adaptive, axial, backend):
     assert len(runtime.workers) == 1
     # Independent ports retain original tags and unrotated node/face order.
     system = runtime.requests[0]["compiled_system"]
-    assert system["metadata"]["source_tags"] == ({"source-a": 101, "source-b": 102}
-        if adaptive else {"source-a": 101, "source-b": 102, "source-c": 103})
+    assert system["metadata"]["source_tags"] == {"source-a": 101, "source-b": 102, "source-c": 103}
     # Negative-facing axial sources use explicit motion axes in one solve;
     # no extra sign-group solve/subtraction takes place in WG.
     assert all("axially_reversed_source_tags" not in channel["metadata"]["beat"]
@@ -281,8 +280,7 @@ def test_imported_production(runtime, monkeypatch, adaptive, axial, backend):
     else:
         # Refinement can submit several batches per channel, but opposite
         # faces remain in the same request rather than separate sign groups.
-        assert all(set(wire["compiled_system"]["metadata"]["source_tags"].values())
-                   in ({101, 102}, {103}) for wire in runtime.requests)
+        assert all(len(wire["excitation_port_ids"]) in {1, 2} for wire in runtime.requests)
     points = system["meshes"][0]["mesh_data"]["points"]
     decoded = np.frombuffer(base64.b64decode(points["data"]), dtype="<f8").reshape(points["shape"])
     np.testing.assert_allclose(decoded[0], [.01, 0, 0] if not axial else [0, 0, 0])
@@ -593,7 +591,7 @@ def test_startup_compile_status_reaches_stages(runtime, imported):
 
 @pytest.mark.parametrize("imported", [False, True])
 @pytest.mark.parametrize("adaptive", [False, True])
-def test_compiled_topology_built_once_per_channel(runtime, monkeypatch, imported, adaptive):
+def test_compiled_topology_built_once_per_request(runtime, monkeypatch, imported, adaptive):
     from server.solver.beat_adapter import request as adapter
 
     name = "build_imported_request" if imported else "build_parametric_request"
@@ -618,7 +616,7 @@ def test_compiled_topology_built_once_per_channel(runtime, monkeypatch, imported
         beat.solve_beat_from_msh_text(
             MESH.read_text(), _context(adaptive_frequency_sampling=adaptive,
                                       num_frequencies=24 if adaptive else 3), backend="cpu")
-    assert len(builds) == (2 if imported and adaptive else 1)
+    assert len(builds) == 1
     assert all(request["compiled_system"] in [built.wire["compiled_system"] for built in builds]
                for request in runtime.requests)
 
@@ -903,3 +901,40 @@ def test_shared_basis_streams_each_channel_before_next_frequency(runtime):
     fractions = [fraction for stage, fraction in stages if stage == "frequency_solve"]
     assert fractions == sorted(fractions)
     assert fractions[-1] == 1.0
+
+
+@pytest.mark.parametrize("case", ["normal", "axial", "tilted", "xz", "missing-normal-source"])
+def test_runtime_admission_and_execution_agree_on_the_same_request(runtime, case):
+    from server.engines.registry import EngineInfo
+    from server.jobs.runtime.imported_refusals import imported_engine_verdict
+
+    request = cad._axial_request("source-a") if case in {"axial", "tilted"} else cad._request()
+    msh = cad.MESH_Z if case == "axial" else cad.MESH
+    record = cad._record(msh_text=msh, planes=["y0"] if case == "xz" else [])
+    if case == "missing-normal-source":
+        record["source_tags"]["source-c"] = 999
+    adapter = beat.BeatEngine("cpu")
+
+    class Registry:
+        async def get_engine(self, name):
+            return adapter
+
+    # Even without the registry's y-half exclusion the compiler must refuse
+    # it, so direct execution and the admission owner have the same verdict.
+    info = EngineInfo("beat-cpu", True, "ready", "test", geometry_sources=("imported",),
+                      symmetry_domains=("full", "half", "quarter"))
+    verdict = asyncio.run(imported_engine_verdict(
+        info, resolved_quadrants=12 if case == "xz" else 1234, needed_features=set(),
+        engine_registry=Registry(), imported_record=record, imported_msh_text=msh,
+        drive_channels=request.geometry.drive_channels, request=request))
+    if verdict.solves:
+        result = beat_imported.solve_imported_beat_from_msh_text(msh, request, record, backend="cpu")
+        assert result["channel_order"] == [channel.id for channel in request.geometry.drive_channels]
+        assert runtime.requests
+    else:
+        assert verdict.code == "imported_return_unsupported_by_engine"
+        with pytest.raises(beat.BeatUnavailable) as caught:
+            beat_imported.solve_imported_beat_from_msh_text(msh, request, record, backend="cpu")
+        assert str(caught.value) == verdict.reason
+        assert not runtime.requests
+    assert verdict.solves == (case in {"normal", "axial"})

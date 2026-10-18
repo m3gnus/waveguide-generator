@@ -1153,7 +1153,7 @@ async def resolve_imported_submission(
     * declare every imported feature the request uses (``imported_features``);
     * pass its adapter's own ``imported_preflight`` on the record and mesh,
       when it has one: the checks only the geometry can answer, such as
-      whether BEAT's frame rotation keeps a mirror plane where it is.
+      whether the BEAT request compiles within its qualified capabilities.
 
     * ``auto`` takes the first available engine, in ``full3d_engine_order()``,
       that declares imported geometry and passes those checks.
@@ -1341,6 +1341,7 @@ async def resolve_imported_submission(
             imported_record=imported_record,
             imported_msh_text=imported_msh_text,
             drive_channels=request.geometry.drive_channels,
+            request=request,
         )
         if verdict.solves:
             selected = name
@@ -1370,6 +1371,7 @@ async def resolve_imported_submission(
                 imported_record=imported_record,
                 imported_msh_text=imported_msh_text,
                 drive_channels=request.geometry.drive_channels,
+                request=request,
             )
             raise ImportedSolveRefusal(
                 "imported_engine_unsupported",
@@ -1484,6 +1486,7 @@ async def plan_imported_submission(
                 imported_record=imported_record,
                 imported_msh_text=imported_msh_text,
                 drive_channels=request.geometry.drive_channels,
+                request=request,
             )
         )
     engine: str | None = None

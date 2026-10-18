@@ -222,6 +222,7 @@ async def _imported_preflight_refusal(
     record: Mapping[str, Any] | None,
     msh_text: str | None,
     drive_channels: Sequence[Any] | None = None,
+    request: SolveRequest | None = None,
 ) -> str | None:
     """An adapter's own verdict on the record and mesh, when it has one.
 
@@ -229,6 +230,11 @@ async def _imported_preflight_refusal(
     engine can take an axial source depends on its resolved axis.
     """
 
+    from server.solver.beat import BeatEngine
+
+    if isinstance(adapter, BeatEngine) and record is not None and msh_text is not None:
+        return await asyncio.to_thread(adapter.imported_preflight, record, msh_text,
+                                       drive_channels=drive_channels, request=request)
     preflight = getattr(adapter, "imported_preflight", None)
     if not callable(preflight) or record is None or msh_text is None:
         return None
@@ -254,6 +260,7 @@ async def _engines_able_to_take(
     imported_record: Mapping[str, Any] | None,
     imported_msh_text: str | None,
     drive_channels: Sequence[Any] | None = None,
+    request: SolveRequest | None = None,
 ) -> list[str]:
     """The engines, other than ``exclude``, that would take this return here.
 
@@ -276,6 +283,7 @@ async def _engines_able_to_take(
             imported_record=imported_record,
             imported_msh_text=imported_msh_text,
             drive_channels=drive_channels,
+            request=request,
         )
         if verdict.solves:
             able.append(name)
@@ -438,6 +446,7 @@ async def imported_engine_verdict(
     imported_record: Mapping[str, Any] | None,
     imported_msh_text: str | None,
     drive_channels: Sequence[Any] | None = None,
+    request: SolveRequest | None = None,
 ) -> ImportedEngineVerdict:
     """One engine's verdict on one imported request: the one capability function.
 
@@ -483,7 +492,7 @@ async def imported_engine_verdict(
     # FEM dispatch validates its own compiled boundaries. Exterior-only
     # preflight cannot describe a mixed drive or an interior-only transducer.
     refusal = (None if "fem-regions" in needed_features else
-               await _imported_preflight_refusal(adapter, imported_record, imported_msh_text, drive_channels))
+               await _imported_preflight_refusal(adapter, imported_record, imported_msh_text, drive_channels, request))
     if refusal is not None:
         return ImportedEngineVerdict(
             info.name,

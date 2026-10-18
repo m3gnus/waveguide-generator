@@ -53,7 +53,6 @@ from .result_mapping import (
     build_provisional_frequency_response,
     build_solver_response,
     json_safe_native_value,
-    native_symmetry_plane,
     response_solver_log,
 )
 from .warmup import BEAT_WARMUP_STAGE_MESSAGE, beat_warmup_in_progress
@@ -272,13 +271,6 @@ def solve_beat_from_msh_text(
         stage_callback("setup", 0.0, f"Configuring BEAT Engine BEM solve ({backend})")
     announce_beat_warmup_wait(stage_callback)
 
-    plane = native_symmetry_plane(context)
-    if plane in {"xz", "xy"}:
-        raise BeatUnavailable(
-            "BEAT native symmetry supports 'yz' half and 'yz+xz' "
-            f"quarter domains; {plane!r} is not "
-            "representable by the BEAT Engine solver"
-        )
     from .beat_adapter.request import build_parametric_request
     from .official_beat import batch_request, response_config, solve_compiled, sort_official_result
 
@@ -674,6 +666,7 @@ class BeatEngine:
         record: Mapping[str, Any],
         msh_text: str,
         drive_channels: Sequence[Any] | None = None,
+        *, request: SolveRequest | None = None,
     ) -> str | None:
         """Why this engine cannot solve an ingestion record, asked at submission."""
 
@@ -683,7 +676,8 @@ class BeatEngine:
             return preflight(record, msh_text, drive_channels, backend=self.backend or "cpu")
         from .beat_imported import imported_beat_preflight
 
-        return imported_beat_preflight(record, msh_text, drive_channels)
+        return imported_beat_preflight(record, msh_text, drive_channels, request=request,
+                                       backend=self.backend or "cpu")
 
     def _imported_refusal(self, accuracy: str) -> str | None:
         # BEAT never sees accuracy, so Fast and Accurate are the same solve.

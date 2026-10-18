@@ -32,12 +32,8 @@ from server.cadlink.intake.readings import (
 from server.cadlink.store import CadLinkStore
 from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.gmsh_worker import _run_in_gmsh_session
-from server.solver.beat_imported import _drive_groups, beat_axial_signs, beat_imported_frame
-from server.solver.imported import (
-    imported_anchor_frame,
-    imported_domain_planes,
-    imported_symmetry_from_cut_planes,
-)
+from server.solver.beat_imported import compile_imported_beat
+from server.solver.imported import imported_anchor_frame
 
 import cad_frame_fixtures as fx
 from test_cadlink_wgreturn import _manifest as wgreturn_manifest
@@ -205,7 +201,7 @@ def test_an_axial_channel_follows_the_chosen_forward_axis(tmp_path: Path) -> Non
 
     Each axial source moves along its own resolved axis (its outward net area
     vector). In a +x preparation the throat's is solver +Z, which is CAD +x,
-    and the rear source's is -Z: BEAT solves them as a +z and a -z group, as it
+    and the rear source's is -Z: BEAT compiles their explicit +z and -z axes, as it
     would for the same model modelled along +z.
     """
 
@@ -219,28 +215,21 @@ def test_an_axial_channel_follows_the_chosen_forward_axis(tmp_path: Path) -> Non
     assert np.allclose(observation["axis"], [0.0, 0.0, 1.0])
     assert np.allclose(solver_from_assembly[:3, :3].T @ observation["axis"], [1.0, 0.0, 0.0], atol=1e-9)
 
-    beat = beat_imported_frame(record, beat_native_plane(record))
     tags = record["source_tags"]
     hf, lf = int(tags["hf"]), int(tags["lf"])
     channels = [{"id": "both", "source_ids": ["hf", "lf"], "motion": "axial"}]
     # Each source's own axis is its outward net area vector: the throat faces
     # solver +Z (CAD +x) and the rear source -Z, whatever the frame chosen.
-    signs, identity = beat_axial_signs(record, read_verified_import_mesh(record), channels, beat.rotation)
-    assert signs == {hf: 1.0, lf: -1.0}
-    assert identity["both"]["axial_contract"] == "per-source-axis-v2"
-    groups = _drive_groups(frozenset({hf, lf}), "axial", signs)
-    assert groups == [(1.0, frozenset({hf})), (-1.0, frozenset({lf}))]
+    compiled = compile_imported_beat(record, read_verified_import_mesh(record), channels)
+    axes = {basis.tag: basis.axis for basis in compiled.bases}
+    np.testing.assert_allclose(axes[hf], [0, 0, 1])
+    np.testing.assert_allclose(axes[lf], [0, 0, -1])
 
     # The same model modelled along +z and solved as modelled drives the same way.
     modelled_bundle, modelled_manifest = _bundle(tmp_path, "rear-facing-z", _rear_horn, "+z")
     modelled = _ingest(modelled_bundle, modelled_manifest, tmp_path / "data-z")
-    modelled_beat = beat_imported_frame(modelled, beat_native_plane(modelled))
     modelled_tags = modelled["source_tags"]
-    modelled_signs, _ = beat_axial_signs(
-        modelled, read_verified_import_mesh(modelled), channels, modelled_beat.rotation
-    )
-    assert modelled_signs == {int(modelled_tags["hf"]): 1.0, int(modelled_tags["lf"]): -1.0}
-
-
-def beat_native_plane(record: dict[str, Any]) -> str | None:
-    return imported_symmetry_from_cut_planes(imported_domain_planes(record)).native_plane
+    compiled = compile_imported_beat(modelled, read_verified_import_mesh(modelled), channels)
+    axes = {basis.tag: basis.axis for basis in compiled.bases}
+    np.testing.assert_allclose(axes[int(modelled_tags["hf"])], [0, 0, 1])
+    np.testing.assert_allclose(axes[int(modelled_tags["lf"])], [0, 0, -1])

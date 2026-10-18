@@ -1,18 +1,14 @@
 """BEAT's imported-geometry adapter, against a recording stand-in for the package.
 
-Everything here runs without Julia. The stand-in records the mesh text, the
-frame and the drive each solve is handed, so the adapter's three translations
--- the per-channel tag merge, the rigid rotation into BEAT's +z frame, and the
-reduced-domain mirrors -- are checked on exactly what BEAT would receive. The
-numerical comparison against Metal and an analytic reference is the
-qualification suite's job.
+Everything here runs without Julia. Admission and execution compile the same
+source identities, axes, channels and observation frame. Numerical comparison
+against Metal and an analytic reference belongs to qualification.
 """
 
 from __future__ import annotations
 
 import asyncio
 import math
-from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -236,31 +232,10 @@ def _run(request: SolveRequest, record: dict[str, Any], streamed: list[Any] | No
     )
 
 
-def _elements(text: str) -> dict[int, int]:
-    """Element id -> physical tag, from a solve's mesh text."""
-
-    lines = text.splitlines()
-    start = lines.index("$Elements")
-    rows = lines[start + 2 : start + 2 + int(lines[start + 1])]
-    return {int(row.split()[0]): int(row.split()[3]) for row in rows}
-
-
-def _nodes(text: str) -> np.ndarray:
-    lines = text.splitlines()
-    start = lines.index("$Nodes")
-    rows = lines[start + 2 : start + 2 + int(lines[start + 1])]
-    return np.asarray([[float(value) for value in row.split()[1:4]] for row in rows])
-
-
-def test_drive_groups_follow_the_signs_and_never_a_rounding_residue() -> None:
-    tags = frozenset({101, 102})
-    signs = {101: -1.0, 102: 1.0}
-    assert beat_imported._drive_groups(tags, "axial", signs) == [
-        (1.0, frozenset({102})),
-        (-1.0, frozenset({101})),
-    ]
-    assert beat_imported._drive_groups(tags, "normal", signs) == [(1.0, tags)]
-    assert beat_imported._drive_groups(tags, "axial", {101: 1.0, 102: 1.0}) == [(1.0, tags)]
+def test_displaced_parser_and_sign_groups_are_removed() -> None:
+    for name in ("_Gmsh22Mesh", "BeatImportedFrame", "beat_imported_frame", "beat_axial_signs",
+                 "_drive_groups", "_signed_sum", "_check_kept_side"):
+        assert not hasattr(beat_imported, name)
 
 
 def _axial_request(*source_ids: str) -> SolveRequest:
@@ -273,7 +248,7 @@ def _axial_request(*source_ids: str) -> SolveRequest:
     return _request(drive_channels=channels)
 
 
-def test_a_tilted_source_within_half_a_degree_of_z_snaps_and_beyond_it_is_refused() -> None:
+def test_a_tilted_source_within_half_a_degree_of_z_snaps_and_beyond_it_is_refused(monkeypatch) -> None:
     def cap(tilt_degrees: float) -> str:
         tilt = math.radians(tilt_degrees)
         # A triangle whose normal is tilted about y by ``tilt``.
@@ -303,6 +278,11 @@ def test_a_tilted_source_within_half_a_degree_of_z_snaps_and_beyond_it_is_refuse
         _record(msh_text=far), far, drive_channels=channels
     )
     assert refusal is not None and "tag 101" in refusal
+    from server.solver import official_beat
+    monkeypatch.setattr(official_beat, "production_statuses", lambda **_: {"cpu": {"available": True}})
+    with pytest.raises(beat.BeatUnavailable) as caught:
+        beat_imported.solve_imported_beat_from_msh_text(far, request, _record(msh_text=far), backend="cpu")
+    assert str(caught.value) == refusal
 
 
 def test_a_closed_source_cannot_be_driven_axially() -> None:
@@ -345,41 +325,42 @@ NEGATIVE_SIDE_MESH = MESH.replace("1 0.01 0 0", "1 -0.01 0 0")
     ids=["y-only-half", "tilted-mirror", "origin-off-plane", "left-handed", "negative-side"],
 )
 def test_returns_beat_cannot_solve_are_refused_with_the_reason_named(
-    planes: list[str], frame: dict[str, Any], msh_text: str, expected: str
+    planes: list[str], frame: dict[str, Any], msh_text: str, expected: str, monkeypatch
 ) -> None:
     record = _record(planes=planes, frame=frame, msh_text=msh_text)
 
     refusal = beat.BeatEngine("cpu").imported_preflight(record, msh_text)
 
     assert refusal is not None and expected in refusal
+    from server.solver import official_beat
+    monkeypatch.setattr(official_beat, "production_statuses", lambda **_: {"cpu": {"available": True}})
+    with pytest.raises(beat.BeatUnavailable) as caught:
+        beat_imported.solve_imported_beat_from_msh_text(msh_text, _request(), record, backend="cpu")
+    assert str(caught.value) == refusal
 
 
-def test_an_unused_node_on_the_negative_side_does_not_refuse_a_half() -> None:
-    """Only the nodes a triangle uses are the surface BEAT mirrors."""
+def test_an_unused_node_on_the_negative_side_has_the_compiler_verdict(monkeypatch) -> None:
+    """Admission must catch the compiler refusal, even for orphan nodes."""
 
     orphan = MESH.replace("$Nodes\n4\n", "$Nodes\n5\n").replace(
         "$EndNodes", "5 -0.05 0 0\n$EndNodes"
     )
 
-    assert (
-        beat.BeatEngine("cpu").imported_preflight(_record(planes=["x0"], msh_text=orphan), orphan)
-        is None
-    )
+    from server.solver import official_beat
+    record = _record(planes=["x0"], msh_text=orphan)
+    refusal = beat.BeatEngine("cpu").imported_preflight(record, orphan)
+    assert refusal and "negative side" in refusal
+    monkeypatch.setattr(official_beat, "production_statuses", lambda **_: {"cpu": {"available": True}})
+    with pytest.raises(beat.BeatUnavailable) as caught:
+        beat_imported.solve_imported_beat_from_msh_text(orphan, _request(), record, backend="cpu")
+    assert str(caught.value) == refusal
 
 
-def test_a_one_tag_triangle_row_is_written_with_both_tags() -> None:
-    """BEAT reads a triangle's tag only from a row carrying two tags."""
-
+def test_one_tag_triangles_retain_their_physical_identity() -> None:
     one_tag = MESH.replace("1 2 2 1 1 1 2 3", "1 2 1 1 1 2 3").replace(
-        "2 2 2 101 2 1 2 4", "2 2 1 101 1 2 4"
-    )
-
-    rows = _elements(beat_imported._Gmsh22Mesh.parse(one_tag).text(frozenset({101})))
-    text = beat_imported._Gmsh22Mesh.parse(one_tag).text(frozenset({101}))
-
-    assert rows == {1: 1, 2: 2, 3: 1, 4: 1}
-    assert "\n1 2 2 1 1 1 2 3\n" in text
-    assert "\n2 2 2 2 2 1 2 4\n" in text
+        "2 2 2 101 2 1 2 4", "2 2 1 101 1 2 4")
+    compiled = beat_imported.compile_imported_beat(_record(msh_text=one_tag), one_tag)
+    np.testing.assert_array_equal(compiled.mesh.tags, [1, 101, 102, 103])
 
 
 def test_a_full_domain_accepts_any_right_handed_anchor_frame() -> None:
@@ -431,29 +412,23 @@ def test_the_registry_declares_imported_geometry_for_every_beat_backend(
     assert engines["beat-cpu"].imported_features == ("exterior-transducers", "fem-regions")
 
 
-@pytest.mark.parametrize("parts", [((1, 3), (-1, 2)), ((-1, 3),)])
-def test_signed_sum_auxiliary_aggregation_is_only_adaptive(parts):
-    """Off preserves base's first-group averages/logs; fits need signed traces."""
 
-    groups = [
-        (
-            sign,
-            SimpleNamespace(
-                pressure_complex=np.full((2, 1, 1), value, dtype=complex),
-                impedance=np.full(2, value, dtype=complex),
-                surface_pressure_avg={2: np.full(2, value, dtype=complex)},
-                solver_log=[{"group": value}],
-                timings={"solve": value},
-            ),
-        )
-        for sign, value in parts
-    ]
-    legacy = beat_imported._signed_sum(groups)
-    adaptive = beat_imported._signed_sum(groups, adaptive=True)
-    expected = sum(sign * value for sign, value in parts)
-    np.testing.assert_array_equal(legacy.pressure_complex, expected)
-    np.testing.assert_array_equal(adaptive.pressure_complex, expected)
-    assert legacy.surface_pressure_avg is groups[0][1].surface_pressure_avg
-    assert legacy.solver_log is groups[0][1].solver_log
-    np.testing.assert_array_equal(adaptive.surface_pressure_avg[2], expected)
-    assert adaptive.solver_log == [entry for _, group in groups for entry in group.solver_log]
+
+@pytest.mark.parametrize("failure", ["missing-normal-source", "duplicate-channel", "ground", "cardioid"])
+def test_full_request_admission_and_execution_share_compiler_refusals(monkeypatch, failure):
+    from server.solver import official_beat
+    request, record = _request(), _record()
+    if failure == "missing-normal-source":
+        record["source_tags"]["source-c"] = 999
+    elif failure == "duplicate-channel":
+        request.geometry.drive_channels[1].id = request.geometry.drive_channels[0].id
+    elif failure == "ground":
+        request.options.ground_plane.enabled = True
+    else:
+        request.geometry.passive_cardioid_rear_volume_l = 10.
+    monkeypatch.setattr(official_beat, "production_statuses", lambda **_: {"cpu": {"available": True}})
+    refusal = beat.BeatEngine("cpu").imported_preflight(record, MESH, request=request)
+    assert refusal
+    with pytest.raises(beat.BeatUnavailable) as caught:
+        beat_imported.solve_imported_beat_from_msh_text(MESH, request, record, backend="cpu")
+    assert str(caught.value) == refusal
