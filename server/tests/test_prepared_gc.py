@@ -60,10 +60,12 @@ def age(cad, *ingest_ids, moment=OLD):
 
 
 def age_tree(path: Path, moment=OLD):
+    # Windows utime cannot skip links; these test trees hold none.
+    nofollow = {"follow_symlinks": False} if os.utime in os.supports_follow_symlinks else {}
     for root, directories, files in os.walk(path, topdown=False):
         for name in files + directories:
-            os.utime(Path(root) / name, (moment.timestamp(), moment.timestamp()), follow_symlinks=False)
-    os.utime(path, (moment.timestamp(), moment.timestamp()), follow_symlinks=False)
+            os.utime(Path(root) / name, (moment.timestamp(), moment.timestamp()), **nofollow)
+    os.utime(path, (moment.timestamp(), moment.timestamp()), **nofollow)
 
 
 def file_preparations(cad, tmp_path):
@@ -623,7 +625,14 @@ def test_an_ancestor_swapped_for_a_link_after_the_checks_is_refused(stores, tmp_
 def test_a_windows_reparse_point_is_a_link_without_isjunction(tmp_path, monkeypatch):
     monkeypatch.delattr(os.path, "isjunction", raising=False)
     monkeypatch.setattr(prepared_gc.os, "name", "nt")
-    # No reparse attribute to read: never assumed "not a junction".
+    real_lstat = os.lstat
+    # A stat result with no reparse attribute to read: never assumed "not a junction".
+    monkeypatch.setattr(prepared_gc.os, "lstat", lambda path: SimpleNamespace(st_mode=real_lstat(path).st_mode))
+    assert prepared_gc._is_junction(tmp_path) is True
+    # A readable attribute decides: a plain directory is not a link, a reparse point is.
+    monkeypatch.setattr(prepared_gc.os, "lstat", lambda path: SimpleNamespace(st_file_attributes=0))
+    assert prepared_gc._is_junction(tmp_path) is False
+    monkeypatch.setattr(prepared_gc.os, "lstat", lambda path: SimpleNamespace(st_file_attributes=0x400))
     assert prepared_gc._is_junction(tmp_path) is True
 
 
