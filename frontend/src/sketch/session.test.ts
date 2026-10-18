@@ -207,3 +207,25 @@ it('caches native point determination and skips probing above 64 entities', asyn
   try { expect((await large.solveFull()).pointDetermined).toBeUndefined(); expect(probe).toHaveBeenCalledTimes(1); }
   finally { probe.mockRestore(); large.destroy(); }
 });
+
+describe('drag tolerance', () => {
+  it('accepts frames within the UI tolerance and lands exactly on release', async () => {
+    const s0 = importedSketch([{ id: 'a', x: 0, y: 0 }, { id: 'b', x: 10, y: 0 }],
+      [{ kind: 'line', id: 'l', p1: 'a', p2: 'b' }] as Entity[]);
+    const fixed = applyCommand(s0, { kind: 'addConstraint', constraint: { kind: 'fix', point: 'a' } } as Command);
+    if ('error' in fixed) throw new Error(fixed.error);
+    const dimension = applyCommand(fixed.sketch, { kind: 'addConstraint', constraint: { kind: 'distance', a: 'a', b: 'b', value: 10, driving: true } } as Command);
+    if ('error' in dimension) throw new Error(dimension.error);
+    const session = await createSession(dimension.sketch, { references: [], dragTolerance: 1e-3 });
+    try {
+      await session.beginDrag(['b']);
+      const target = { pointId: 'b', x: 6, y: 8 };
+      for (let f = 1; f <= 20; f++) await session.dragTo({ pointId: 'b', x: 10 + (target.x - 10) * f / 20, y: target.y * f / 20 });
+      const frame = session.sketch.points.find(p => p.id === 'b')!;
+      expect(Math.hypot(frame.x - 6, frame.y - 8)).toBeLessThanOrEqual(2e-3);
+      expect((await session.endDrag()).status).toBe('ok');
+      const released = session.sketch.points.find(p => p.id === 'b')!;
+      expect(Math.hypot(released.x - 6, released.y - 8)).toBeLessThan(1e-6);
+    } finally { session.destroy(); }
+  });
+});

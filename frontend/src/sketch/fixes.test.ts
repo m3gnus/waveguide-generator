@@ -107,6 +107,21 @@ describe('Phase 1a review regressions', () => {
       vi.spyOn(solver, 'solve').mockImplementation(o => ({ ...solve(o), status: 'ok', [kind]: [sketch.constraints[0].id] })); return solver; } });
     try { expect((await s.tryAddConstraint(sketch, { kind: 'vertical', a: 'a', b: 'p' })).ok).toBe(true); } finally { s.destroy(); }
   });
+  it.each([
+    ['names only the existing duplicate', (old: string) => ({ redundant: [old], hasRedundancy: true })],
+    ['flags redundancy against an internal equation only', () => ({ redundant: [], hasRedundancy: true })],
+  ] as const)('a new duplicate is refused when the solver %s', async (_name, report) => {
+    const sketch = run(line(), { kind: 'addConstraint', constraint: { kind: 'distance', a: 'a', b: 'b', value: 10, driving: true } }).sketch;
+    const old = sketch.constraints[0].id;
+    let calls = 0;
+    const s = await createSession(sketch, { references: [], solverFactory: async () => { const solver = await createSolver('slvs'), solve = solver.solve.bind(solver);
+      // The first full solve is the baseline; later ones see the duplicate and report it as SolveSpace may.
+      vi.spyOn(solver, 'solve').mockImplementation(o => { const r = solve(o); return o.mode === 'full' && calls++ > 0 ? { ...r, ...report(old) } : r; }); return solver; } });
+    try {
+      calls = 0;
+      expect((await s.tryAddConstraint(sketch, { kind: 'distance', a: 'a', b: 'b', value: 10, driving: true })).ok).toBe(false);
+    } finally { s.destroy(); }
+  });
   it('P2.9 overlapping drags coalesce pending targets and resolve with covering result', async () => {
     const seen: number[] = [], s = await createSession(line(), { references: [], solverFactory: async () => { const solver = await createSolver('slvs'), drag = solver.dragTo.bind(solver);
       vi.spyOn(solver, 'dragTo').mockImplementation(ts => { seen.push(ts[0].y); return drag(ts); }); return solver; } });

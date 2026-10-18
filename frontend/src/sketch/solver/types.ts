@@ -28,11 +28,14 @@ export const constraintKinds: ConstraintKind[] = ['coincident', 'horizontal', 'v
   'distance', 'distanceX', 'distanceY', 'pointLineDistance', 'angle', 'radius'];
 export interface Sketch { entities: Entity[]; constraints: Constraint[] }
 export type DragTarget = { pointId: string } & XY;
-export interface SolveOptions { mode: 'drag' | 'full'; dragTargets?: DragTarget[] }
+/** tolerance: acceptable cursor error in mm for drag frames (default exact, about 1e-8). */
+export interface SolveOptions { mode: 'drag' | 'full'; dragTargets?: DragTarget[]; tolerance?: number }
 export interface SolveResult {
   status: 'ok' | 'failed' | 'unsupported'; points: Record<string, XY>; iterations?: number;
   pointDetermined?: Record<string, boolean>;
   dof?: number; conflicting?: string[]; redundant?: string[]; partiallyRedundant?: string[];
+  /** Full mode: the solver detected redundancy, even when it cannot attribute it to user constraints. */
+  hasRedundancy?: boolean;
   timings: { totalMs: number; updateMs: number; solveMs: number; readbackMs: number; marshalMs: number };
   /** Explains unsupported input, without inventing solver diagnostics. */
   reason?: string;
@@ -53,7 +56,7 @@ export interface SketchSolver {
   /** Build once. load() or solve() cancels an active session. */
   beginDrag(pointIds: string[]): void;
   /** Targets must name every session point exactly once. */
-  dragTo(targets: DragTarget[]): SolveResult;
+  dragTo(targets: DragTarget[], options?: { tolerance?: number }): SolveResult;
   /** Remove temporary goals and return full sketch diagnosis. */
   endDrag(): SolveResult;
   capabilities(): Capabilities;

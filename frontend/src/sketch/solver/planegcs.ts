@@ -132,7 +132,7 @@ class PlaneGCS extends Adapter {
     }
     return { status: status <= 1 ? 'ok' : 'failed', nativeStatus: status, points, updateMs, solveMs, ...(options.mode === 'full' ? {
       dof: w.gcs.dof(), conflicting: publicIds(w.get_gcs_conflicting_constraints(), ids),
-      redundant: publicIds(w.get_gcs_redundant_constraints(), ids),
+      redundant: publicIds(w.get_gcs_redundant_constraints(), ids), hasRedundancy: w.has_gcs_redundant_constraints(),
       partiallyRedundant: publicIds(w.get_gcs_partially_redundant_constraints(), ids) } : {}) };
   }
 }

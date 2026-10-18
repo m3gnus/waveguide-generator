@@ -2,6 +2,8 @@ import { branchCases, contourChain, contourChainConstrained, diagnosticCases } f
 import { SweepTracker } from './common';
 import { compareTrajectory, dragScenarioNames, measureDragScenario, residuals, maximum, type DragMeasurement } from './drag-scenarios';
 import { createSolver, solverNames, type SolverName } from './types';
+/** The sketch session accepts this cursor error on interactive frames and refines on release. */
+export const UI_DRAG_TOLERANCE_MM = 1e-3;
 export interface Distribution { p50: number; p95: number; p99: number; max: number }
 export function distribution(samples: number[]): Distribution | null {
   if (!samples.length) return null;
@@ -104,7 +106,7 @@ export async function measureRow(solver: SolverName, n: number, variant: CorpusV
       if (performance.now() >= deadline) { row.status = 'timeout'; row.reason = 'Row budget expired between frames'; break; }
       const theta = frame / (row.plannedFrames - 1) * 2 * Math.PI;
       const target = { pointId: 'rim', x: rim.x + 10 * Math.sin(theta), y: 0 };
-      const r = s.dragTo([target]); row.frames++;
+      const r = s.dragTo([target], { tolerance: UI_DRAG_TOLERANCE_MM }); row.frames++;
       const maxResidual = maximum(Object.values(residuals(sketch, r.points)));
       const valid = r.status === 'ok' && Number.isFinite(maxResidual) && maxResidual < 1e-4;
       const f: FrameSample = { frame, ...r.timings, status: r.status, nativeStatus: r.nativeStatus,

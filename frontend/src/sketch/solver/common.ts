@@ -89,14 +89,14 @@ export abstract class Adapter implements SketchSolver {
     try { this.prepareDrag(targets); }
     catch (e) { this.dragPointIds = undefined; this.invalidatePrepared(); throw e; }
   }
-  dragTo(targets: DragTarget[]): SolveResult {
+  dragTo(targets: DragTarget[], options: { tolerance?: number } = {}): SolveResult {
     this.alive();
     if (!this.dragPointIds) throw new Error('beginDrag() must precede dragTo()');
     if (targets.length !== this.dragPointIds.length || new Set(targets.map(t => t.pointId)).size !== targets.length
       || targets.some(t => !this.dragPointIds!.includes(t.pointId) || !Number.isFinite(t.x) || !Number.isFinite(t.y))) {
       throw new Error('Targets must contain each session point once, with finite coordinates');
     }
-    return this.execute({ mode: 'drag', dragTargets: targets });
+    return this.execute({ mode: 'drag', dragTargets: targets, tolerance: options.tolerance });
   }
   endDrag(): SolveResult {
     this.alive(); if (!this.dragPointIds) throw new Error('No active drag session');

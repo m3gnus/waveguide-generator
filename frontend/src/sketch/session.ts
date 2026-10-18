@@ -23,7 +23,8 @@ export interface Diagnosis extends SolveResult {
 }
 export interface SessionStats { solves: number; slowSolves: number; maxSolveMs: number; recoveries: number }
 export type SolverFactory = () => Promise<SketchSolver>;
-export interface SessionOptions { solverFactory?: SolverFactory; references: Reference[] }
+/** dragTolerance: cursor error (mm) accepted on interactive drag frames; release is exact. */
+export interface SessionOptions { solverFactory?: SolverFactory; references: Reference[]; dragTolerance?: number }
 export type DragResult = { sketch: Sketch; stopped: boolean; steps: number; result?: SolveResult; reason?: string };
 export type ConstraintAttempt = { ok: true; sketch: Sketch; id: string; diagnosis: Diagnosis }
   | { ok: false; sketch: Sketch; reason: string; conflicting: string[]; redundant: string[] };
@@ -33,12 +34,13 @@ export class SketchSession {
   readonly stats: SessionStats = { solves: 0, slowSolves: 0, maxSolveMs: 0, recoveries: 0 };
   private dragIds?: string[];
   private destroyed = false;
-  private constructor(public sketch: Sketch, private solver: SketchSolver, private factory: SolverFactory, private references: Reference[]) { this.load(); }
+  private lastTargets?: DragTarget[];
+  private constructor(public sketch: Sketch, private solver: SketchSolver, private factory: SolverFactory, private references: Reference[], private dragTolerance = 1e-3) { this.load(); }
   static async create(sketch: Sketch, options: SessionOptions) {
     if (!Array.isArray(options?.references)) throw new Error('Session requires adapter references.');
     const factory = options.solverFactory ?? (() => createSolver('slvs'));
     const solver = await factory();
-    try { return new SketchSession(sketch, solver, factory, options.references); }
+    try { return new SketchSession(sketch, solver, factory, options.references, options.dragTolerance); }
     catch (e) { solver.destroy(); throw e; }
   }
   private load() { this.solver.load(toSolverSketch(this.sketch, this.references)); }
@@ -85,11 +87,21 @@ export class SketchSession {
       this.sketch = sketch; this.load(); return { ok: false, sketch, reason, conflicting, redundant };
     };
     if ('error' in applied) return refuse(applied.error);
+    // Of mutually redundant constraints, SolveSpace may flag either one, and its choice is not
+    // stable. So the new constraint is implicated when it is flagged or when any redundancy
+    // appears that the sketch did not have before.
+    this.sketch = sketch;
+    const before = await this.solveFull(), baseline = new Set(before.redundant ?? []);
     const id = applied.created[0]; this.sketch = applied.sketch;
     const diagnosis = await this.solveFull();
     if (diagnosis.status !== 'ok' || diagnosis.conflicting?.includes(id)) return refuse(diagnosis.reason ?? 'The constraint conflicts with the sketch.', diagnosis.conflicting ?? []);
-    if (diagnosis.redundant?.includes(id)) {
-      if (options.ifRedundant !== 'reference' || !('driving' in constraint)) return refuse('The constraint is redundant.', [], diagnosis.redundant);
+    // SolveSpace can also report redundancy against an internal equation only, so use the
+    // solver's flag and the DOF as well: a constraint that removes no freedom is redundant.
+    const implicated = diagnosis.redundant?.some(r => r === id || !baseline.has(r))
+      || (diagnosis.hasRedundancy === true && before.hasRedundancy === false)
+      || (diagnosis.dof !== undefined && before.dof !== undefined && diagnosis.dof >= before.dof);
+    if (implicated) {
+      if (options.ifRedundant !== 'reference' || !('driving' in constraint)) return refuse('The constraint is redundant.', [], diagnosis.redundant?.length ? diagnosis.redundant : [id]);
       const reference = applyCommand(applied.sketch, { kind: 'setDriving', id, driving: false });
       if ('error' in reference) return refuse(reference.error);
       this.sketch = reference.sketch;
@@ -103,6 +115,7 @@ export class SketchSession {
     this.alive(); await this.dimensionWork; if (this.dragIds) throw new Error('A drag is already active.');
     if (!pointIds.length || new Set(pointIds).size !== pointIds.length || pointIds.some(id => !this.sketch.points.some(p => p.id === id))) throw new Error('Drag needs unique existing point IDs.');
     this.dragIds = [...pointIds];
+    this.lastTargets = undefined;
     try { await this.call(() => { this.load(); this.solver.beginDrag(pointIds); }, false, false); }
     catch (e) { this.dragIds = undefined; throw e; }
   }
@@ -158,20 +171,21 @@ export class SketchSession {
     return targets;
   }
   private async performDrag(target: DragTarget | DragTarget[]): Promise<DragResult> {
-    const targets = this.targets(target);
+    const targets = this.targets(target); this.lastTargets = targets;
+    const tolerance = this.dragTolerance;
     const maxStep = this.stepSize(); let steps = 0, result: SolveResult | undefined;
     while (steps < 64) {
       const from = targets.map(t => ({ pointId: t.pointId, ...this.sketch.points.find(p => p.id === t.pointId)! }));
       const remaining = Math.max(...targets.map((t, i) => distance(t, from[i])));
-      if (remaining < 1e-8) return { sketch: this.sketch, stopped: false, steps, result };
+      if (remaining <= Math.max(1e-8, tolerance)) return { sketch: this.sketch, stopped: false, steps, result };
       const before = this.sketch; let accepted = false, fraction = Math.min(1, maxStep / remaining);
       for (let half = 0; half <= 6; half++, fraction /= 2) {
         const part = targets.map((t, i) => ({ pointId: t.pointId, x: from[i].x + (t.x - from[i].x) * fraction, y: from[i].y + (t.y - from[i].y) * fraction }));
-        result = await this.call(() => this.solver.dragTo(part));
+        result = await this.call(() => this.solver.dragTo(part, { tolerance }));
         const next = this.read(result, before);
         if (result.status === 'ok' && this.guarded(before, next) && part.every((t, i) => {
           const error = distance(next.points.find(p => p.id === t.pointId)!, t);
-          return error <= 1e-6 || error <= distance(from[i], t) + 1e-12;
+          return error <= Math.max(1e-6, tolerance) || error <= distance(from[i], t) + 1e-12;
         })) { this.sketch = next; accepted = true; break; }
         await this.call(() => this.restartDrag(), false, false);
         if (this.pendingDrag) break;
@@ -181,11 +195,21 @@ export class SketchSession {
       if (!accepted) return { sketch: this.sketch, stopped: true, steps, result, reason: 'Stopped at the reachable branch boundary.' };
       if (targets.every((t, i) => distance(this.sketch.points.find(p => p.id === t.pointId)!, from[i]) < 1e-9)) break;
     }
-    const stopped = targets.some(t => distance(t, this.sketch.points.find(p => p.id === t.pointId)!) > 1e-7);
+    const stopped = targets.some(t => distance(t, this.sketch.points.find(p => p.id === t.pointId)!) > Math.max(1e-7, 2 * tolerance));
     return { sketch: this.sketch, stopped, steps, result, ...(stopped ? { reason: 'Stopped at the reachable boundary or continuation step limit.' } : {}) };
   }
   async endDrag(): Promise<Diagnosis> {
     this.alive(); await this.dragWork; if (!this.dragIds) throw new Error('No active drag.');
+    // Interactive frames accept dragTolerance; refine the release at the last target to exact.
+    if (this.lastTargets && this.dragTolerance > 1e-8) {
+      const targets = this.lastTargets, at = this.sketch;
+      const exact = await this.call(() => this.solver.dragTo(targets, { tolerance: 0 }));
+      const next = this.read(exact, at);
+      if (exact.status === 'ok' && this.guarded(at, next)) this.sketch = next;
+      // A rejected refinement must not leave its solution as the solver's seed.
+      else await this.call(() => this.restartDrag(), false, false);
+    }
+    this.lastTargets = undefined;
     const before = this.sketch;
     const result = await this.call(() => this.solver.endDrag()); this.dragIds = undefined;
     const next = this.read(result);

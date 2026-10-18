@@ -210,7 +210,7 @@ class SolveSpace extends Adapter {
         const h = this.prepared!.handles.get(target.pointId)!;
         return Math.hypot(s.getParamValue(h.param[0]) - target.x, s.getParamValue(h.param[1]) - target.y);
       }));
-      if (error <= 1e-8 || error >= lastError - 1e-10) break;
+      if (error <= Math.max(1e-8, options.tolerance ?? 0) || error >= lastError - 1e-10) break;
       lastError = error; seed(); t = performance.now(); r = s.solveSketch(group, options.mode === 'full'); solveMs += performance.now() - t;
     }
     const updateMs = performance.now() - updateStart - solveMs;
@@ -232,6 +232,6 @@ class SolveSpace extends Adapter {
       points, updateMs, solveMs, nativeStatus: r.result, ...(options.mode === 'full' ? { dof: r.dof, conflicting: [...new Set([...conflicting, ...wrongAngles.map(c => c.id)])] } : {}) };
     // With REDUNDANT_OKAY the reported handles are redundant (implied), not conflicting.
     return { status: solved(r.result) ? 'ok' : 'failed', nativeStatus: r.result, points, updateMs, solveMs,
-      ...(options.mode === 'full' ? r.result === 4 ? { dof: r.dof, conflicting: [], redundant: conflicting } : { dof: r.dof, conflicting } : {}) };
+      ...(options.mode === 'full' ? r.result === 4 ? { dof: r.dof, conflicting: [], redundant: conflicting, hasRedundancy: true } : { dof: r.dof, conflicting, hasRedundancy: false } : {}) };
   }
 }
