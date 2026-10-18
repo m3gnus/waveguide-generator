@@ -11,6 +11,7 @@ import * as sourceAdapter from '../sketch/adapters/sourceContour';
 import { expandedPreset } from '../sketch/adapters/presetTestSupport';
 import { presetDefaults, presetLabels } from '../sketch/adapters/sourcePreset';
 import { realSessionReady } from '../sketch/testSupport';
+import { SketchSession } from '../sketch/session';
 import { readFileSync } from 'node:fs';
 const tokensCss = new TextDecoder().decode(readFileSync('src/styles/tokens.css'));
 const editorCss = new TextDecoder().decode(readFileSync('src/design/sourceContourEditor.css'));
@@ -184,6 +185,85 @@ describe('source editor interactions', () => {
     // Restoring the envelope keeps the mapping and the labelled constraints.
     const shape = host.querySelector<HTMLSelectElement>('[aria-label="Source shape"]')!;
     expect(shape.value).toBe('cone'); expect(Number(input('Surround depth preset').value)).toBe(1);
+  });
+
+  it('disables surround fields and removes the crown after converting the surround to a line', async () => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await mount(); await act(async () => button('Apply shape').click()); await settle();
+    const before = readSourceAuthoring(readSourceDraft());
+    const depth = before.sketch.constraints.find(c => c.id === before.meta.preset!.dimensions.surround_depth_mm)!;
+    if (depth.kind !== 'distanceY') throw new Error('Expected surround depth');
+    await pointer(host.querySelector('.sketch-entity[data-id="surround"]')!);
+    await act(async () => button('Make line').click()); await settle();
+    expect(input('Surround depth preset').disabled).toBe(true);
+    expect(input('Surround depth preset').closest('.field-row')!.getAttribute('title')).toBe('Re-apply the shape to edit this parameter');
+    const after = readSourceAuthoring(readSourceDraft());
+    expect(after.meta.preset!.dimensions.surround_depth_mm).toBeUndefined();
+    expect(after.sketch.entities.some(e => e.id.startsWith('preset-surround-crown'))).toBe(false);
+    expect(after.sketch.points.some(p => p.id === depth.b)).toBe(false);
+    expect(host.textContent).not.toContain('Surround depth 0.60');
+    await act(async () => button('Undo').click()); await settle();
+    expect(input('Surround depth preset').disabled).toBe(false);
+    expect(readSourceAuthoring(readSourceDraft()).sketch).toEqual(before.sketch);
+  });
+
+  it.each([
+    ['Surround depth preset', 'surround_depth_mm', -.6],
+    ['Surround depth preset', 'surround_depth_mm', 0],
+    ['Surround width preset', 'surround_width_mm', 0],
+    ['Rigid land width preset', 'land_width_mm', 0],
+  ] as const)('keeps %s (%s = %s) for Apply shape without continuation', async (label, parameter, value) => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await mount(); await act(async () => button('Apply shape').click()); await settle();
+    const before = readSourceDraft(), continuation = vi.spyOn(SketchSession.prototype, 'setDimensionContinuation');
+    await enter(label, String(value)); await settle();
+    const field = input(label);
+    expect(field.closest('.field-row')!.querySelector('.field-error')?.textContent).toBe("This changes the shape's topology — use Apply shape.");
+    expect(continuation).not.toHaveBeenCalled();
+    expect(readSourceDraft()).toEqual(before);
+    expect(Number(field.value)).toBe(value);
+    await act(async () => button('Apply shape').click()); await settle();
+    expect(sourceEditorApi.expand).toHaveBeenLastCalledWith('cone', expect.objectContaining({ [parameter]: value }), expect.anything());
+    expect(host.textContent).not.toContain("This changes the shape's topology");
+    expect(Number(input(label).value)).toBe(value);
+    expect(input(label).disabled).toBe(false);
+    await act(async () => root.render(null)); await mount();
+    expect(Number(input(label).value)).toBe(value);
+    await enter(label, String(presetDefaults.cone[parameter])); await settle();
+    expect(input(label).closest('.field-row')!.querySelector('.field-error')?.textContent).toBe("This changes the shape's topology — use Apply shape.");
+    expect(continuation).not.toHaveBeenCalled();
+    await act(async () => button('Apply shape').click()); await settle();
+    expect(readSourceDraft()).toEqual(before);
+  });
+
+  it('refuses a surround sign change from the sketch before continuation', async () => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await mount(); await act(async () => button('Apply shape').click()); await settle();
+    const continuation = vi.spyOn(SketchSession.prototype, 'setDimensionContinuation');
+    const label = [...host.querySelectorAll('.sketch-dimension text')].find(e => e.lastChild?.textContent?.startsWith('Surround depth '))!;
+    await act(async () => label.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    await enter('Dimension value', '-0.6');
+    await act(async () => button('Apply dimension value').click()); await settle();
+    expect(host.querySelector('[aria-label="Edit dimension"] [role="alert"]')?.textContent).toBe("This changes the shape's topology — use Apply shape.");
+    expect(continuation).not.toHaveBeenCalled();
+  });
+
+  it('refuses a restored depth mapping whose helper no longer shares the surround centre', async () => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await mount(); await act(async () => button('Apply shape').click()); await settle();
+    const envelope = JSON.parse(storage.getItem('')!);
+    const helper = envelope.sketch.entities.find((e: { id: string }) => e.id.startsWith('preset-surround-crown'));
+    const center = envelope.sketch.points.find((p: { id: string }) => p.id === helper.center);
+    envelope.sketch.points.push({ ...center, id: 'detached-center' }); helper.center = 'detached-center';
+    await act(async () => root.render(null)); storage.setItem('', JSON.stringify(envelope)); await mount();
+    expect(input('Surround depth preset').disabled).toBe(true);
+    const continuation = vi.spyOn(SketchSession.prototype, 'setDimensionContinuation');
+    const label = [...host.querySelectorAll('.sketch-dimension text')].find(e => e.lastChild?.textContent?.startsWith('Surround depth '))!;
+    await act(async () => label.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    await enter('Dimension value', '1');
+    await act(async () => button('Apply dimension value').click()); await settle();
+    expect(host.querySelector('[aria-label="Edit dimension"] [role="alert"]')?.textContent).toBe('Re-apply the shape to edit this parameter');
+    expect(continuation).not.toHaveBeenCalled();
   });
 
   it.each(['flat', 'dome'] as const)('keeps the active %s preset fields and dimensions after reopening', async shape => {

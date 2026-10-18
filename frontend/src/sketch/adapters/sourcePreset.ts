@@ -78,5 +78,5 @@ export function seedPreset(document: SourceDocument, shape: PresetShape, dimensi
     }
     if (dimensions.land_width_mm) dimension('land_width_mm', 'distanceX', dimensions.surround_width_mm ? 'surround.rim' : rim, 'rim');
   }
-  return { sketch, meta: { ...meta, preset: { shape, dimensions: mapping } } };
+  return { sketch, meta: { ...meta, preset: { shape, dimensions: mapping, values: { ...dimensions } } } };
 }

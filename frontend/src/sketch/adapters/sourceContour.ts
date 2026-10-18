@@ -4,11 +4,12 @@ import { entityPoints, validateSketch, type Entity, type Sketch } from '../model
 import { applyCommand, importedSketch } from '../ops';
 import type { Command } from '../commands';
 import { arcGeometry } from '../geometry';
+import { presetDimensionActive } from './sourcePresetMapping';
 
 export interface SourceMeta {
   physical_source_id: string; rim_id: string; channel_id: string; motion: 'normal' | 'axial';
   weights: Record<string, number>; references: Reference[];
-  preset?: { shape: 'flat' | 'dome' | 'cone'; dimensions: Record<string, string> };
+  preset?: { shape: 'flat' | 'dome' | 'cone'; dimensions: Record<string, string>; values?: Record<string, number> };
   limit?: SourceLimit;
 }
 export interface SourceLimit { kind: 'aperture' | 'mouth' | 'throat'; radius: number; hard?: boolean }
@@ -227,6 +228,32 @@ export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Co
     if (adjacent.length === 2 && (role(adjacent[0]) !== role(adjacent[1]) || meta.weights[adjacent[0].id] !== meta.weights[adjacent[1].id])) return { error: 'Adjacent patches need the same role and literal weight to remove their join.' };
   }
   const result = applyCommand(sketch, command); if ('error' in result) return result;
+  let preset = meta.preset;
+  if (preset) {
+    // Older envelopes only stored dimension IDs. Capture their values before an edit
+    // can remove them, so intentional zero parameters differ from invalidated mappings.
+    const values = preset.values ?? Object.fromEntries(Object.entries(preset.dimensions).flatMap(([parameter, id]) => {
+      const c = sketch.constraints.find(c => c.id === id);
+      return c && 'value' in c ? [[parameter, c.value]] : [];
+    }));
+    const dimensions = { ...preset.dimensions };
+    for (const [parameter, id] of Object.entries(dimensions)) if (!presetDimensionActive(result.sketch, meta, parameter)) {
+      delete dimensions[parameter];
+      if (result.sketch.constraints.some(c => c.id === id)) {
+        result.sketch = { ...result.sketch, constraints: result.sketch.constraints.filter(c => c.id !== id) };
+        result.removedConstraints.push(id);
+      }
+    }
+    if (!dimensions.surround_depth_mm) {
+      const helpers = result.sketch.entities.filter(e => e.data && typeof e.data === 'object' && !Array.isArray(e.data) && e.data.dimensionHelper === true);
+      for (const helper of helpers) {
+        const cleaned = applyCommand(result.sketch, { kind: 'deleteEntity', id: helper.id });
+        if ('error' in cleaned) return cleaned;
+        result.sketch = cleaned.sketch; result.removedConstraints.push(...cleaned.removedConstraints);
+      }
+    }
+    preset = { ...preset, dimensions, values };
+  }
   const weights = { ...meta.weights };
   if (command.kind === 'splitAt' && Object.hasOwn(weights, command.entity)) {
     const right = result.created.find(id => result.sketch.entities.some(e => e.id === id));
@@ -235,5 +262,5 @@ export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Co
   const moving = result.sketch.entities.filter(e => !e.construction && role(e) === 'moving');
   for (const id of Object.keys(weights)) if (!moving.some(e => e.id === id)) delete weights[id];
   for (const e of moving) if (!Object.hasOwn(weights, e.id)) weights[e.id] = 1;
-  return { ...result, meta: { ...meta, weights } };
+  return { ...result, meta: { ...meta, weights, ...(preset ? { preset } : {}) } };
 }

@@ -22,7 +22,7 @@ export class SketchController<T> {
   private dragStart?: Authoring<T>;
   private pending = 0;
   private busy = false;
-  constructor(initial: Authoring<T>, private references: Reference[] | ((state: Authoring<T>) => Reference[]), private apply: Apply<T>, private changed: (state: Authoring<T>, diagnosis?: Diagnosis) => void, failed?: (reason: unknown) => void, private activity?: (busy: boolean) => void, private preview?: (state: Authoring<T>, diagnosis?: Diagnosis) => void) {
+  constructor(initial: Authoring<T>, private references: Reference[] | ((state: Authoring<T>) => Reference[]), private apply: Apply<T>, private changed: (state: Authoring<T>, diagnosis?: Diagnosis) => void, failed?: (reason: unknown) => void, private activity?: (busy: boolean) => void, private preview?: (state: Authoring<T>, diagnosis?: Diagnosis) => void, private dimensionProblem?: (state: Authoring<T>, id: string, value: number) => string | undefined) {
     this.history = new History(initial);
     this.ready = createSession(initial.sketch, { references: this.getReferences(initial) }).then(async session => {
       if (this.destroyed) { session.destroy(); return; }
@@ -129,6 +129,8 @@ export class SketchController<T> {
   }
   dimension(id: string, value: number) {
     return this.queue(session => this.transaction(session, 'Dimension', async () => {
+      const problem = this.dimensionProblem?.(this.current, id, value);
+      if (problem) throw new Error(problem);
       session.sketch = this.current.sketch;
       const result = await session.setDimensionContinuation(id, value);
       if (!result.ok) throw new Error(result.reason);

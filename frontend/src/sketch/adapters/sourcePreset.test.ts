@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { presetDefaults, presetLabels, seedPreset, type PresetShape } from './sourcePreset';
 import { expandedPreset } from './presetTestSupport';
-import { lower, rules } from './sourceContour';
+import { applySourceCommand, lower, rules } from './sourceContour';
 import { createSession } from '../session';
 import { applyCommand } from '../ops';
 import { parseSketch, toJSON } from '../model';
+import { arcGeometry } from '../geometry';
+import type { Command } from '../commands';
 
 function expectGeometry(actual: ReturnType<typeof lower>, expected: ReturnType<typeof expandedPreset>) {
   expect(actual.ok).toBe(true); if (!actual.ok) throw new Error('Lower failed');
@@ -20,6 +22,53 @@ function expectGeometry(actual: ReturnType<typeof lower>, expected: ReturnType<t
   expect(actual.document.drive).toEqual(expected.drive);
 }
 describe('named parametric presets', () => {
+  it.each(['convertEntity', 'deleteEntity', 'splitAt'] as const)('%s invalidates surround mappings and reports removed crown constraints', kind => {
+    const before = seedPreset(expandedPreset('cone'), 'cone', presetDefaults.cone);
+    const surround = before.sketch.entities.find(e => e.id === 'surround')!;
+    if (surround.kind !== 'arc') throw new Error('Expected surround arc');
+    const g = arcGeometry(before.sketch, surround), angle = g.start + g.sweep / 2;
+    const command: Command = kind === 'splitAt' ? { kind, entity: surround.id, x: g.center.x + g.radius * Math.cos(angle), y: g.center.y + g.radius * Math.sin(angle) }
+      : kind === 'convertEntity' ? { kind, id: surround.id, to: 'line' } : { kind, id: surround.id };
+    const depth = before.sketch.constraints.find(c => c.id === before.meta.preset!.dimensions.surround_depth_mm)!;
+    if (depth.kind !== 'distanceY') throw new Error('Expected depth dimension');
+    const crownConstraints = before.sketch.constraints.filter(c => 'a' in c && (c.a === depth.b || 'b' in c && c.b === depth.b));
+    const result = applySourceCommand(before.sketch, before.meta, command);
+    if ('error' in result) throw new Error(result.error);
+    expect(result.meta.preset!.dimensions.surround_depth_mm).toBeUndefined();
+    expect(result.meta.preset!.dimensions.surround_width_mm).toBeUndefined();
+    expect(result.meta.preset!.dimensions.depth_mm).toBe(before.meta.preset!.dimensions.depth_mm);
+    expect(result.sketch.entities.some(e => e.id.startsWith('preset-surround-crown'))).toBe(false);
+    expect(result.sketch.points.some(p => p.id === depth.b)).toBe(false);
+    for (const c of crownConstraints) expect(result.removedConstraints).toContain(c.id);
+    expect(result.removedConstraints).toContain(before.meta.preset!.dimensions.surround_width_mm);
+    expect(before.meta.preset!.dimensions.surround_depth_mm).toBe(depth.id);
+    expect(before.sketch.points.some(p => p.id === depth.b)).toBe(true);
+  });
+  it.each([
+    ['flat', 'piston', ['radius_mm']],
+    ['cone', 'dust-cap', ['cap_radius_mm', 'cap_height_mm']],
+    ['cone', 'land', ['land_width_mm']],
+  ] as const)('invalidates %s dimensions when %s is converted', (shape, id, parameters) => {
+    const before = seedPreset(expandedPreset(shape), shape, presetDefaults[shape]);
+    const entity = before.sketch.entities.find(e => e.id === id)!;
+    const result = applySourceCommand(before.sketch, before.meta, { kind: 'convertEntity', id, to: entity.kind === 'arc' ? 'line' : 'arc' });
+    if ('error' in result) throw new Error(result.error);
+    for (const parameter of parameters) {
+      expect(result.meta.preset!.dimensions[parameter]).toBeUndefined();
+      expect(result.removedConstraints).toContain(before.meta.preset!.dimensions[parameter]);
+    }
+  });
+
+  it('removes a deleted depth dimension and its crown without invalidating the surround width', () => {
+    const before = seedPreset(expandedPreset('cone'), 'cone', presetDefaults.cone);
+    const result = applySourceCommand(before.sketch, before.meta, { kind: 'removeConstraint', id: before.meta.preset!.dimensions.surround_depth_mm });
+    if ('error' in result) throw new Error(result.error);
+    expect(result.meta.preset!.dimensions.surround_depth_mm).toBeUndefined();
+    expect(result.sketch.entities.some(e => e.id.startsWith('preset-surround-crown'))).toBe(false);
+    const next = applySourceCommand(result.sketch, result.meta, { kind: 'setEntityData', id: 'surround', data: { role: 'moving' } });
+    if ('error' in next) throw new Error(next.error);
+    expect(next.meta.preset!.dimensions.surround_width_mm).toBe(before.meta.preset!.dimensions.surround_width_mm);
+  });
   for (const shape of ['flat', 'dome', 'cone'] as PresetShape[]) {
     it.each<Record<string, number>>([{}, { radius_mm: 12, height_mm: 4, depth_mm: 5, cap_radius_mm: 4, cap_height_mm: 1.5, surround_width_mm: 4, surround_depth_mm: .8, land_width_mm: 2 },
       { radius_mm: 15.123, height_mm: 2.3, depth_mm: 3.1, cap_radius_mm: 2.4, cap_height_mm: 1.1, surround_width_mm: 3, surround_depth_mm: -.7, land_width_mm: .75 }])(`${shape} keeps the exact expanded document and names its parameters (%j)`, async overrides => {
