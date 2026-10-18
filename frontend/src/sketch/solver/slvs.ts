@@ -117,7 +117,9 @@ class SolveSpace extends Adapter {
     };
     seed();
     let t = performance.now(), r = s.solveSketch(group, options.mode === 'full'), solveMs = performance.now() - t;
-    if (r.result !== 0 && targets.length) {
+    // SLVS_RESULT_OKAY (0) and SLVS_RESULT_REDUNDANT_OKAY (4) are both solved states.
+    const solved = (code: number) => code === 0 || code === 4;
+    if (!solved(r.result) && targets.length) {
       // Hard cursor equations can be infeasible or redundant with sketch constraints.
       // Discard the failed native seed before trying unconstrained cursor seeding.
       this.build(); seed(); t = performance.now();
@@ -132,7 +134,7 @@ class SolveSpace extends Adapter {
     }
     const conflicting = [...new Set(Array.from(r.bad ?? []).slice(0, r.nbad).flatMap(v => constraints.has(v) ? [constraints.get(v)!] : []))];
     const wrongAngles = this.sketch.constraints.filter(c => {
-      if (r.result !== 0 || c.kind !== 'angle' || !c.driving) return false;
+      if (!solved(r.result) || c.kind !== 'angle' || !c.driving) return false;
       const vector = (id: string) => { const l = entity(this.sketch, id, 'line');
         return { x: points[l.p2].x - points[l.p1].x, y: points[l.p2].y - points[l.p1].y }; };
       const a = vector(c.a), b = vector(c.b), actual = Math.atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y);
@@ -140,7 +142,8 @@ class SolveSpace extends Adapter {
     });
     if (wrongAngles.length) return { status: 'failed', reason: 'Signed angle branch guard rejected native cosine solution',
       points, updateMs, solveMs, nativeStatus: r.result, ...(options.mode === 'full' ? { dof: r.dof, conflicting: [...new Set([...conflicting, ...wrongAngles.map(c => c.id)])] } : {}) };
-    return { status: r.result === 0 ? 'ok' : 'failed', nativeStatus: r.result, points, updateMs, solveMs,
-      ...(options.mode === 'full' ? { dof: r.dof, conflicting } : {}) };
+    // With REDUNDANT_OKAY the reported handles are redundant (implied), not conflicting.
+    return { status: solved(r.result) ? 'ok' : 'failed', nativeStatus: r.result, points, updateMs, solveMs,
+      ...(options.mode === 'full' ? r.result === 4 ? { dof: r.dof, conflicting: [], redundant: conflicting } : { dof: r.dof, conflicting } : {}) };
   }
 }

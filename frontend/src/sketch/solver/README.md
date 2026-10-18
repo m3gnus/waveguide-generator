@@ -124,7 +124,7 @@ N = native, E = adapter composition/conversion or explicitly guarded branch, U =
 | radius | N | E¹⁰ | N |
 | DOF | N | N with findings¹¹ | N |
 | conflicting | E¹² | E¹² | E¹² |
-| redundant | N | U | N |
+| redundant | N | E¹³ | N |
 | partiallyRedundant | N | U | U |
 
 1. Shared/coincident endpoints: perpendicular line/radius or parallel radii; otherwise
@@ -146,11 +146,11 @@ N = native, E = adapter composition/conversion or explicitly guarded branch, U =
    on those branches. No package changes or semantic approximation hide this.
 10. Native diameter set to twice the radius.
 11. slvs duplicate horizontal reports DOF 2 instead of 3 (existing expected failure).
-    Strict valid-case assertions newly expose feasible partial redundancy and duplicated
-    triangle dimensions as `failed`. Four all-fixed unsigned-distance fixtures also
-    return `failed` despite zero residual. These six new expected failures retain `ok`
-    assertions; native bad handles classify overconstraints as failures.
+    Six other "feasible but failed" cases were an adapter bug, not a solver defect:
+    the adapter treated only `SLVS_RESULT_OKAY` (0) as solved, while slvs returns
+    `SLVS_RESULT_REDUNDANT_OKAY` (4) for solved systems with redundant constraints.
 12. Native IDs plus adapter common-circle invariant checks owned by public arc IDs.
+13. With `SLVS_RESULT_REDUNDANT_OKAY`, the bad handles are reported as redundant (implied, kept), not conflicting. No partial category.
 
 Round 3 Node cursor measurements (2026-10-18, macOS arm64, Node 20.20.2; working
 changes on the brief's 891ec98f base). Each scenario completed all 60 frames with

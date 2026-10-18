@@ -40,9 +40,7 @@ for (const name of solverNames) {
         expect(residual(sketch, sketch.constraints[0], r.points)).toBeLessThan(1e-5); });
     });
     for (const variant of ['positive-fixed', 'opposite-fixed', 'reversed-fixed', 'opposite-reversed-fixed', 'opposite', 'opposite-reversed']) {
-      // slvs rejects a satisfied equation involving only fixed-group geometry as redundant.
-      const test = name === 'slvs' && variant.includes('fixed') ? it.fails : it;
-      test(`unsigned line distance ${variant}`, () => {
+      it(`unsigned line distance ${variant}`, () => {
         const sketch = constraintCase('pointLineDistance', variant);
         return withSolver(sketch, s => { const r = s.solve({ mode: 'full' }); expect(r.status, r.reason).toBe('ok');
           expect(residual(sketch, sketch.constraints[0], r.points)).toBeLessThan(1e-6);
@@ -93,9 +91,8 @@ for (const name of solverNames) {
       });
       if (missing) it.skip(`${sample.name} DOF — ${caps.constraints[missing.kind].detail}`, run);
       // Four coordinates minus the rank-one equation y_a - y_b = 0 = 3 DOF.
-      // slvs 3.2.0 reports 2 for two copies. It also rejects feasible partial redundancy
-      // and duplicate triangle dimensions as failed. Keep valid-status and DOF assertions intact.
-      else if (name === 'slvs' && ['duplicate constraint', 'partial redundancy', 'overdimensioned triangle'].includes(sample.name)) it.fails(`${sample.name} DOF`, run);
+      // slvs 3.2.0 reports 2 for two copies. Keep the DOF assertion intact.
+      else if (name === 'slvs' && sample.name === 'duplicate constraint') it.fails(`${sample.name} DOF`, run);
       else it(`${sample.name} DOF`, run);
       if (sample.expected.conflicting.length) {
         const test = () => withSolver(sample.sketch, s => {
