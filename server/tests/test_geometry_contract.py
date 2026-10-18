@@ -83,10 +83,12 @@ def test_ath_parsing_and_fallback_are_unchanged(value, leading, normalized) -> N
 
 
 def test_legacy_imports_alias_the_contract() -> None:
-    from server.mesh import api, imported
+    from server.jobs import mesh_preview
+    from server.mesh import imported
     from server.solver import imported as solver_imported, quadrants, symmetry
 
-    assert api.CUT_PLANES_BY_QUADRANTS is geometry.CUT_PLANES_BY_QUADRANTS
+    assert mesh_preview.CUT_PLANES_BY_QUADRANTS is geometry.CUT_PLANES_BY_QUADRANTS
+
     assert quadrants._PLANE_BY_QUADRANTS is geometry.PLANE_BY_QUADRANTS
     assert quadrants.normalise_quadrants is geometry.normalise_quadrants
     assert quadrants.quadrants_leading_int is geometry.quadrants_leading_int
