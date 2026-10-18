@@ -376,7 +376,11 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
               ref={row => { if (row) rows.current.set(c.id, row); else rows.current.delete(c.id); }} aria-selected={canvasSelection.includes(c.id)} className={hoverId === c.id ? 'hovered' : ''}
               onClick={() => setCanvasSelection([c.id])} onPointerEnter={() => setHoverId(c.id)} onPointerLeave={() => setHoverId(undefined)}>
               <td title={c.id}><SketchNameCell value={dimensionName(c)} label={`Dimension ${c.id} name`} id={c.id} maxLength={40} disabled={!sketchReady}
-                onCommit={label => sketchCommand({ kind: 'setConstraintLabel', id: c.id, label })}/></td>
+                onCommit={label => sketchCommand(state => {
+                  // An empty name reverts to the default: the preset's name for a preset dimension.
+                  const parameter = Object.entries(state.meta.preset?.dimensions ?? {}).find(([, id]) => id === c.id)?.[0];
+                  return { kind: 'setConstraintLabel', id: c.id, label: label.trim() || (parameter ? presetLabels[parameter] ?? '' : '') };
+                })}/></td>
               <td><NumberField label={`Dimension ${c.id} value`} value={c.kind === 'angle' ? c.value * 180 / Math.PI : c.value} unit={c.kind === 'angle' ? '°' : 'mm'}
                 precision={9} displayPrecision={2} step={.1} disabled={!sketchReady || !c.driving} disabledReason={!c.driving ? 'Reference dimension' : undefined}
                 onCommit={value => void controller.current?.dimension(c.id, value * (c.kind === 'angle' ? Math.PI / 180 : 1)).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}/></td>

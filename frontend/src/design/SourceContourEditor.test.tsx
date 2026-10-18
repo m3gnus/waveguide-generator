@@ -908,7 +908,8 @@ describe('source editor interactions', () => {
     await rename(`Dimension ${id} name`, 'Cancelled', 'dblclick', true);
     expect(host.querySelector(`[data-row-id="${id}"]`)!.textContent).toContain('Depth');
     await rename(`Dimension ${id} name`, '  ');
-    expect(host.querySelector(`[data-row-id="${id}"]`)!.textContent).toContain('Vertical distance');
+    // An empty name reverts to the default, which for a preset dimension is the preset's name.
+    expect(host.querySelector(`[data-row-id="${id}"]`)!.textContent).toContain('Cone depth');
     const row = host.querySelector(`[data-row-id="${id}"]`)!;
     await act(async () => row.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(host.querySelector(`[data-constraint-id="${id}"] text`)!.classList.contains('selected')).toBe(true);
