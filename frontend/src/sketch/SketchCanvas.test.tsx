@@ -9,6 +9,7 @@ import type { Diagnosis } from './session';
 import { initialDiagnosis, realSessionReady } from './testSupport';
 import { readFileSync } from 'node:fs';
 import { seed } from './adapters/sourceContour';
+import { sketchViewKey } from './viewPreferences';
 import { INITIAL_SOURCE } from '../design/sourceContourEditing';
 
 let host: HTMLDivElement, root: Root;
@@ -25,6 +26,7 @@ function Harness({ initial = base(), diagnosis }: { initial?: Sketch; diagnosis?
 }
 beforeEach(async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  localStorage.removeItem(sketchViewKey);
   await realSessionReady();
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
 });
@@ -449,6 +451,55 @@ describe('SketchCanvas with real slvs', () => {
     await pointer(host.querySelector('[data-id="other"]')!, 'pointerdown', 0, 0, { altKey: true });
     expect(host.querySelectorAll('.sketch-glyph')).toHaveLength(1);
     expect(host.querySelector('[aria-label^="Dimension angle"]')).not.toBeNull();
+  });
+
+  it('shows values at rest, names on hover or selection, and sizes the hit rect to the displayed text', async () => {
+    const sketch = base();
+    sketch.constraints.push({ kind: 'distance', id: 'length', a: 'p', b: 'q', value: 10, driving: true, label: 'Long named length' });
+    await mount(sketch);
+    const label = () => host.querySelector('[data-constraint-id="length"] text')!;
+    const width = () => Number(host.querySelector('[data-constraint-id="length"] rect')!.getAttribute('width'));
+    expect(label().lastChild!.textContent).toBe('10.00 mm');
+    expect(label().getAttribute('aria-label')).toContain('Long named length');
+    expect(label().querySelector('title')!.textContent).toContain('Long named length 10.00 mm');
+    const shortWidth = width();
+    await pointer(label(), 'pointermove');
+    expect(label().lastChild!.textContent).toBe('Long named length 10.00 mm');
+    expect(label().classList.contains('selected')).toBe(true); expect(width()).toBeGreaterThan(shortWidth);
+    await pointer(svg(), 'pointermove'); expect(width()).toBe(shortWidth);
+    await pointer(label(), 'pointerdown'); await pointer(svg(), 'pointermove');
+    expect(label().lastChild!.textContent).toBe('Long named length 10.00 mm');
+    await pointer(svg(), 'pointerdown'); expect(label().lastChild!.textContent).toBe('10.00 mm');
+    await act(async () => button('Names').click());
+    expect(label().lastChild!.textContent).toBe('Long named length 10.00 mm');
+    expect(host.querySelector('.sketch-curve-name')!.textContent).toBe('Line 1');
+  });
+  it('remembers view toggles across reopen and reveals selected, conflicting and problem items in hidden categories', async () => {
+    const sketch = base();
+    sketch.constraints.push({ kind: 'distance', id: 'length', a: 'p', b: 'q', value: 10, driving: true, label: 'Length' },
+      { kind: 'horizontal', id: 'horizontal', line: 'line' });
+    const render = async (selection: string[] = [], conflict = false, problem = false) => act(async () => root.render(<SketchCanvas sketch={sketch} references={[]}
+      diagnosis={{ ...initialDiagnosis(sketch), constraintStates: conflict ? { length: 'conflicting', horizontal: 'conflicting' } : {} }}
+      problems={problem ? [{ code: 'issue', ids: ['length', 'horizontal'], message: 'Check these items' }] : []} selection={selection}/>));
+    await render();
+    expect(button('Dimensions').getAttribute('aria-pressed')).toBe('true');
+    expect(button('Names').getAttribute('aria-pressed')).toBe('false');
+    expect(button('Constraints').getAttribute('aria-pressed')).toBe('true');
+    await act(async () => { button('Dimensions').click(); button('Constraints').click(); });
+    expect(host.querySelector('[data-constraint-id="length"]')).toBeNull();
+    expect(host.querySelector('[data-constraint-id="horizontal"]')).toBeNull();
+    await render(['length']); expect(host.querySelector('[data-constraint-id="length"]')).not.toBeNull();
+    expect(host.querySelector('[data-constraint-id="length"] text')!.lastChild!.textContent).toBe('Length 10.00 mm');
+    await render([], true);
+    expect(host.querySelectorAll('[data-constraint-id]')).toHaveLength(2);
+    await render([], false, true); expect(host.querySelectorAll('[data-constraint-id]')).toHaveLength(2);
+    await act(async () => button('Names').click());
+    await act(async () => root.render(null)); await render();
+    expect(button('Dimensions').getAttribute('aria-pressed')).toBe('false');
+    expect(button('Constraints').getAttribute('aria-pressed')).toBe('false');
+    expect(button('Names').getAttribute('aria-pressed')).toBe('true');
+    expect(host.querySelectorAll('[data-constraint-id]')).toHaveLength(0);
+    expect(host.querySelector('.sketch-curve-name')).not.toBeNull();
   });
 
 });

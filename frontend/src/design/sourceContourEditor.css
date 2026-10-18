@@ -53,3 +53,6 @@
 .source-table tr[aria-selected="true"] { background: var(--raise); box-shadow: inset 3px 0 var(--acc); }
 .source-table tr.hovered { background: var(--surface-raised); outline: 1px solid var(--acc); }
 .source-points { margin: 12px 0; }
+
+.source-dimensions { margin: 12px 0; }
+.source-table td:nth-child(2) > button { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -12,6 +12,8 @@ import { coalesceTargets, select } from './tools/select';
 import { dimensionFor } from './tools/dimension';
 import { constraintFor, selectionConstraints } from './tools/constraints';
 import { dimensionHelper, dimensionLabel, dimensionLayout } from './dimensionGraphics';
+import { displayName } from './displayName';
+import { readSketchView, saveSketchView } from './viewPreferences';
 import './sketchCanvas.css';
 
 export interface CanvasSession {
@@ -77,6 +79,8 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
   const [renderFrame, setRenderFrame] = useState(0);
   const [arcMenu, setArcMenu] = useState(false);
   const [overflow, setOverflow] = useState(false);
+  const [viewOptions, setViewOptions] = useState(readSketchView);
+  const [hoveredConstraint, setHoveredConstraint] = useState<string>();
   const [arcTool, setArcTool] = useState<'tangent' | 'arc3'>('arc3');
   const [tool, setTool] = useState<Tool>('select');
   const [chain, writeChain] = useState<LineState>(lineState);
@@ -394,6 +398,7 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
     const start = perfEnabled && drag.current ? performance.now() : undefined;
     const screen = position(event), at = screenToWorld(view, screen); setCursor(at); cursorRef.current.at = at;
     const targetId = (event.target as Element).closest('[data-id]')?.getAttribute('data-id');
+    setHoveredConstraint(sketch.constraints.some(c => c.id === targetId) ? targetId! : undefined);
     setHoveredArc(arcs.some(e => e.id === targetId) ? targetId! : undefined);
     setHoveredPoint(visiblePoints.some(p => p.id === targetId) ? targetId! : undefined);
     onHoverChange?.(targetId && (sketch.entities.some(e => e.id === targetId && !e.reference) || visiblePoints.some(p => p.id === targetId)) ? targetId : undefined);
@@ -468,6 +473,9 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
         })}
       </div>
       <div className="sketch-view-tools">
+        {(['dimensions', 'names', 'constraints'] as const).map(key => <button type="button" key={key} aria-pressed={viewOptions[key]} onClick={() => {
+          setViewOptions(previous => { const next = { ...previous, [key]: !previous[key] }; saveSketchView(next); return next; });
+        }}>{key[0].toUpperCase() + key.slice(1)}</button>)}
         <button type="button" disabled={!session} onClick={() => void run(() => session!.undo())}>Undo</button><button type="button" disabled={!session} onClick={() => void run(() => session!.undo(true))}>Redo</button>
         <button type="button" title="Fit (F)" onClick={() => setView(initialView(sketch, size.width, size.height))}>Fit (F)</button>
         {onClassicDrawing && <div className="sketch-menu-anchor"><button type="button" aria-label="More sketch actions" aria-expanded={overflow} onClick={() => setOverflow(!overflow)}>⋯</button>{overflow && <div className="sketch-menu"><button type="button" onClick={onClassicDrawing}>Classic drawing</button></div>}</div>}
@@ -481,7 +489,7 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
       {convertible && <button type="button" disabled={!session} onClick={() => void run(() => session!.command({ kind: 'convertEntity', id: convertible.id, to: convertible.kind === 'line' ? 'arc' : 'line' }))}>{convertible.kind === 'line' ? 'Make arc' : 'Make line'}</button>}
       <button type="button" disabled={!session} onClick={removeSelection}>Delete selection</button>
     </div>}
-      <svg ref={svg} viewBox={`0 0 ${size.width} ${size.height}`} preserveAspectRatio="xMidYMid meet" tabIndex={0} role="application" aria-label="Sketch drawing" onPointerEnter={() => { hovered.current = true; }} onPointerLeave={() => { hovered.current = false; setHoveredArc(undefined); setHoveredPoint(undefined); onHoverChange?.(undefined); setPickReason(''); }} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={() => pointerUp()} onPointerCancel={() => pointerUp(true)} onLostPointerCapture={() => pointerUp(true)} onDoubleClick={() => { if (drawing) choose('select'); }}>
+      <svg ref={svg} viewBox={`0 0 ${size.width} ${size.height}`} preserveAspectRatio="xMidYMid meet" tabIndex={0} role="application" aria-label="Sketch drawing" onPointerEnter={() => { hovered.current = true; }} onPointerLeave={() => { hovered.current = false; setHoveredConstraint(undefined); setHoveredArc(undefined); setHoveredPoint(undefined); onHoverChange?.(undefined); setPickReason(''); }} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={() => pointerUp()} onPointerCancel={() => pointerUp(true)} onLostPointerCapture={() => pointerUp(true)} onDoubleClick={() => { if (drawing) choose('select'); }}>
         <g className="sketch-grid" aria-hidden="true">{gridX.map(x => <line key={`x${x}`} x1={worldToScreen(view, { x, y: 0 }).x} x2={worldToScreen(view, { x, y: 0 }).x} y1={0} y2={size.height}/>)}{gridY.map(y => <line key={`y${y}`} x1={0} x2={size.width} y1={worldToScreen(view, { x: 0, y }).y} y2={worldToScreen(view, { x: 0, y }).y}/>)}</g>
         <g className="sketch-references" aria-label="Fixed references">{references.map(r => {
           const x = r.kind === 'limit' ? worldToScreen(view, { x: r.radius, y: 0 }).x : view.offsetX;
@@ -500,7 +508,13 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
           let d = '';
           if (e.kind === 'line') { const a = xy(e.p1), b = xy(e.p2); d = `M${a.x},${a.y} L${b.x},${b.y}`; }
           else if (e.kind === 'arc') { const a = xy(e.start), b = xy(e.end), g = arcGeometry(sketch, e); d = `M${a.x},${a.y} A${g.radius * view.scale},${g.radius * view.scale} 0 ${Math.abs(g.sweep) > Math.PI ? 1 : 0} ${e.ccw ? 0 : 1} ${b.x},${b.y}`; }
-          return <g key={e.id} className="sketch-curve"><path data-id={e.id} d={d} className="sketch-curve-hit"/>{issues.length > 0 && <path d={d} className="sketch-problem"/>}<path data-id={e.id} d={d} tabIndex={-1} role="button" aria-label={`Select ${e.kind} ${nameFor?.(e.id) ?? e.id}`} style={entityStyle?.(e)} className={`sketch-entity ${entityClassName?.(e) ?? ''} ${status} ${hoverId === e.id ? 'hovered' : ''} ${e.construction ? 'construction' : ''} ${highlighted.has(e.id) || ids.some(id => highlighted.has(id)) ? 'selected' : ''}`}><title>{issues.map(p => p.message).join('\n') || e.id}</title></path></g>;
+          let labelAt;
+          if (viewOptions.names) {
+            if (e.kind === 'line') { const a = xy(e.p1), b = xy(e.p2); labelAt = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+            else if (e.kind === 'arc') { const g = arcGeometry(sketch, e), angle = g.start + g.sweep / 2; labelAt = worldToScreen(view, { x: g.center.x + g.radius * Math.cos(angle), y: g.center.y + g.radius * Math.sin(angle) }); }
+          }
+          const entityName = nameFor?.(e.id) ?? displayName(sketch, e.id);
+          return <g key={e.id} className="sketch-curve"><path data-id={e.id} d={d} className="sketch-curve-hit"/>{issues.length > 0 && <path d={d} className="sketch-problem"/>}<path data-id={e.id} d={d} tabIndex={-1} role="button" aria-label={`Select ${e.kind} ${nameFor?.(e.id) ?? e.id}`} style={entityStyle?.(e)} className={`sketch-entity ${entityClassName?.(e) ?? ''} ${status} ${hoverId === e.id ? 'hovered' : ''} ${e.construction ? 'construction' : ''} ${highlighted.has(e.id) || ids.some(id => highlighted.has(id)) ? 'selected' : ''}`}><title>{entityName} ({e.id}){issues.length > 0 ? ` · ${issues.map(p => p.message).join('\n')}` : ''}</title></path>{labelAt && <text data-id={e.id} x={labelAt.x} y={labelAt.y - 10} textAnchor="middle" className="sketch-curve-name sketch-glyph" aria-hidden="true">{entityName}</text>}</g>;
         })}
         {visiblePoints.map(p => { const at = xy(p.id), centre = !endpoints.has(p.id) && arcs.some(e => e.center === p.id);
           const className = `sketch-point ${color([p.id])} ${hoverId === p.id ? 'hovered' : ''} ${highlighted.has(p.id) ? 'selected' : ''} ${validStarts.has(p.id) ? 'valid-start' : ''}`;
@@ -510,12 +524,16 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
               : <circle data-id={p.id} cx={at.x} cy={at.y} r={4} tabIndex={-1} role="button" aria-label={`Select point ${nameFor?.(p.id) ?? p.id}`} className={className}><title>{p.id}: {p.x}, {p.y} mm{problems.filter(v => v.ids.includes(p.id)).map(v => ` · ${v.message}`)}</title></circle>}
           </g>; })}
         {sketch.constraints.map((c, i) => { const dimension = 'value' in c;
+          const related = new Set([c.id, ...constraintRefs(c).flatMap(id => [id, ...entityPoints(sketch.entities.find(e => e.id === id) ?? { kind: 'circle', id: '' })])]);
+          const problem = diagnosis?.constraintStates[c.id] === 'conflicting' || conflicts.includes(c.id) || problems.some(p => p.ids.some(id => related.has(id)));
+          const active = selection.includes(c.id) || hoveredConstraint === c.id || hoverId === c.id;
+          if (!(dimension ? viewOptions.dimensions : viewOptions.constraints) && !problem && !active) return null;
           const layout = dimensionLayout(sketch, c, xy, dimensionBounds, dimensionLanes.get(c.id) ?? 0);
           const at = layout?.at ?? constraintPosition(c, i);
-          const label = dimension ? dimensionLabel(c) : symbols[c.kind] ?? c.kind;
-          return <g key={c.id} data-constraint-id={c.id} className={dimension ? 'sketch-dimension' : undefined}>
+          const label = dimension ? dimensionLabel(c, viewOptions.names || active ? 'name' : 'value') : symbols[c.kind] ?? c.kind;
+          return <g key={c.id} onPointerEnter={() => setHoveredConstraint(c.id)} onPointerLeave={() => setHoveredConstraint(undefined)} data-constraint-id={c.id} className={dimension ? 'sketch-dimension' : undefined}>
             {layout && <g className="sketch-dimension-lines" aria-hidden="true"><path className="sketch-extension-lines" d={layout.path}/><path className="sketch-dimension-arrows" d={layout.arrows}/></g>}
-            <rect data-id={c.id} x={at.x - (layout ? label.length * 3.2 : 0) - 6} y={at.y - 17} width={dimension ? label.length * 6.4 + 12 : 24} height={28} className="sketch-label-hit"/><text textAnchor={layout ? 'middle' : undefined} data-id={c.id} x={at.x} y={at.y} tabIndex={-1} role="button" aria-label={`${dimension ? 'Dimension' : 'Constraint'} ${c.kind} ${c.id}${c.label ? ` ${c.label}` : ''}${diagnosis?.constraintStates[c.id] === 'redundant' ? ' implied' : ''}`} className={`sketch-glyph ${dimension && !c.driving ? 'reference' : ''} ${diagnosis?.constraintStates[c.id] ?? ''} ${conflicts.includes(c.id) ? 'conflicting' : ''} ${selection.includes(c.id) ? 'selected' : ''}`} onDoubleClick={event => { event.stopPropagation(); if (dimension) editDimension(c); }}><title>{c.kind} {c.id}{diagnosis?.constraintStates[c.id] === 'redundant' ? ' (implied)' : ''}</title>{label}</text></g>;
+            <rect data-id={c.id} x={at.x - (layout ? label.length * 3.2 : 0) - 6} y={at.y - 17} width={dimension ? label.length * 6.4 + 12 : 24} height={28} className="sketch-label-hit"/><text textAnchor={layout ? 'middle' : undefined} data-id={c.id} x={at.x} y={at.y} tabIndex={-1} role="button" aria-label={`${dimension ? 'Dimension' : 'Constraint'} ${c.kind} ${c.id}${dimension ? ` ${dimensionLabel(c, 'name')}` : c.label ? ` ${c.label}` : ''}${diagnosis?.constraintStates[c.id] === 'redundant' ? ' implied' : ''}`} className={`sketch-glyph ${dimension && !c.driving ? 'reference' : ''} ${diagnosis?.constraintStates[c.id] ?? ''} ${conflicts.includes(c.id) ? 'conflicting' : ''} ${problem ? 'problem' : ''} ${active ? 'selected' : ''}`} onDoubleClick={event => { event.stopPropagation(); if (dimension) editDimension(c); }}><title>{dimension ? dimensionLabel(c, 'name') : c.kind} {c.id}{diagnosis?.constraintStates[c.id] === 'redundant' ? ' (implied)' : ''}</title>{label}</text></g>;
         })}
         {previewPath && <path className="sketch-preview" d={previewPath}/>}
         {drawing && start && !previewPath && <line className="sketch-preview" x1={worldToScreen(view, start).x} y1={worldToScreen(view, start).y} x2={preview.x} y2={preview.y}/>}
@@ -545,6 +563,6 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
     </div>
     <div role="status" className="sketch-status"><span className={`sketch-dof ${diagnosis?.dof === 0 ? 'complete' : ''}`}>{diagnosis?.dof === 0 ? 'Fully constrained' : `${diagnosis?.dof ?? '…'} DOF`}</span>{problems.length > 0 && ` · ${problems.length} problem${problems.length === 1 ? '' : 's'}`} · x {cursor.x.toFixed(2)}, y {cursor.y.toFixed(2)} mm · Snap: {snap?.glyph ?? 'none'} · {message || arcHint}</div>
     {diagnosis && sketch.constraints.some(c => diagnosis.constraintStates[c.id] === 'redundant') && <p>Implied: {sketch.constraints.filter(c => diagnosis.constraintStates[c.id] === 'redundant').map(c => c.id).join(', ')}</p>}
-    {problems.map((problem, i) => { const action = problemAction?.(problem); return <div className="sketch-domain-problem" key={`${problem.code}${i}`}>{problem.message}{action && <button type="button" disabled={!session} onClick={() => void run(() => session!.constraint(action.constraint))}>{action.label}</button>}</div>; })}
+    {problems.map((problem, i) => { const action = problemAction?.(problem); return <div className="sketch-domain-problem" key={`${problem.code}${i}`}>{problem.message}{problem.ids.filter(id => { const data = sketch.entities.find(e => e.id === id)?.data; return data && typeof data === 'object' && !Array.isArray(data) && typeof data.name === 'string' && data.name.trim(); }).map(id => ` · ${nameFor?.(id) ?? displayName(sketch, id)}`)}{action && <button type="button" disabled={!session} onClick={() => void run(() => session!.constraint(action.constraint))}>{action.label}</button>}</div>; })}
   </div>;
 }

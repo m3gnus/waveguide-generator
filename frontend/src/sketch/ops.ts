@@ -75,6 +75,22 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
         if (!s.constraints.some(c => c.id === command.id)) throw new Error(`Unknown constraint: ${command.id}.`);
         cleanConstraints(c => c.id === command.id); break;
       }
+      case 'setConstraintLabel': {
+        const c = s.constraints.find(c => c.id === command.id);
+        if (!c || !('value' in c)) throw new Error('Expected a dimension.');
+        if (typeof command.label !== 'string' || command.label.trim().length > 40) throw new Error('Dimension names must be strings of at most 40 characters.');
+        const { label: previous, ...base } = c, label = command.label.trim();
+        s.constraints = s.constraints.map(c => c.id === command.id ? { ...base, ...(label ? { label } : {}) } : c); break;
+      }
+      case 'setEntityName': {
+        const e = entity(command.id);
+        if (e.reference) throw new Error('Reference lines cannot be changed.');
+        if (typeof command.name !== 'string' || command.name.trim().length > 60) throw new Error('Patch names must be strings of at most 60 characters.');
+        const data = e.data && typeof e.data === 'object' && !Array.isArray(e.data) ? { ...e.data } : {};
+        const name = command.name.trim();
+        if (name) data.name = name; else delete data.name;
+        s.entities = s.entities.map(v => v.id === e.id ? { ...e, data } : v); break;
+      }
       case 'setDimension': case 'setDriving': {
         const c = s.constraints.find(c => c.id === command.id);
         if (!c || !('value' in c)) throw new Error('Expected a dimension.');
@@ -187,7 +203,7 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
         if (e.reference && (command.kind === 'setEntityData' || !command.construction)) throw new Error('Reference lines cannot be changed.');
         if (command.kind === 'setConstruction' && typeof command.construction !== 'boolean') throw new Error('Construction must be boolean.');
         if (command.kind === 'setEntityData' && !isJSON(command.data)) throw new Error('Entity data must be JSON.');
-        s.entities = s.entities.map(e => e.id !== command.id ? e : command.kind === 'setEntityData' ? { ...e, data: command.data } : { ...e, construction: command.construction }); break;
+        s.entities = s.entities.map(e => e.id !== command.id ? e : command.kind === 'setEntityData' ? { ...e, data: e.data && typeof e.data === 'object' && !Array.isArray(e.data) && command.data && typeof command.data === 'object' && !Array.isArray(command.data) ? { ...e.data, ...command.data } : command.data } : { ...e, construction: command.construction }); break;
       }
     }
     const validation = validateSketch(s); if (!validation.ok) return { error: validation.reason };

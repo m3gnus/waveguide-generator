@@ -10,6 +10,7 @@ vi.mock('../api/sourceEditor', () => ({ sourceEditorApi: { validate: vi.fn(), pr
 import * as sourceAdapter from '../sketch/adapters/sourceContour';
 import { expandedPreset } from '../sketch/adapters/presetTestSupport';
 import { presetDefaults, presetLabels } from '../sketch/adapters/sourcePreset';
+import { sketchViewKey } from '../sketch/viewPreferences';
 import { realSessionReady } from '../sketch/testSupport';
 import { SketchSession } from '../sketch/session';
 import { readFileSync } from 'node:fs';
@@ -25,7 +26,7 @@ describe('source editor interactions', () => {
   beforeEach(() => {
     vi.useFakeTimers(); vi.clearAllMocks();
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    storage.removeItem('');
+    storage.removeItem(''); localStorage.removeItem(sketchViewKey);
     vi.mocked(sourceEditorApi.validate).mockImplementation(async (doc) => validation(doc));
     vi.mocked(sourceEditorApi.presets).mockResolvedValue([]);
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
@@ -213,14 +214,19 @@ describe('source editor interactions', () => {
     expect(host.querySelector('.sketch-entity[data-id="piston"]')!.classList.contains('selected')).toBe(true);
   });
 
-  it('applies a parametric cone, renders seven separated named dimensions, and synchronizes both editors through continuation', async () => {
+  it('applies a parametric cone, renders seven separated values with accessible names, and synchronizes both editors through continuation', async () => {
     vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
     await mount(); await act(async () => button('Apply shape').click()); await settle();
     expect(readSourceDraft()).toEqual(expandedPreset('cone'));
     expect(host.textContent).toContain('Fully constrained');
     const labels = [...host.querySelectorAll<SVGTextElement>('.sketch-dimension text')];
     expect(labels).toHaveLength(7);
-    for (const parameter of Object.keys(presetDefaults.cone)) expect(labels.some(label => label.lastChild?.textContent?.startsWith(presetLabels[parameter] + ' '))).toBe(true);
+    for (const parameter of Object.keys(presetDefaults.cone)) {
+      const label = labels.find(label => label.getAttribute('aria-label')?.includes(presetLabels[parameter] + ' '))!;
+      expect(label).toBeDefined();
+      expect(label.querySelector('title')?.textContent).toContain(presetLabels[parameter] + ' ');
+      expect(label.lastChild?.textContent).toMatch(/^[-\d.]+ mm$/);
+    }
     expect(host.querySelectorAll('.sketch-dimension-arrows')).toHaveLength(7);
     expect(host.querySelectorAll('.sketch-extension-lines')).toHaveLength(7);
     // The placement rule uses disjoint 24px rows in each gutter; text is 11px high.
@@ -239,7 +245,7 @@ describe('source editor interactions', () => {
     const actual = readSourceDraft();
     actual.contour.segments.forEach((segment, i) => segment.center_mm?.forEach((v, axis) => expect(v).toBeCloseTo(expected.contour.segments[i].center_mm![axis], 6)));
     expect(host.textContent).toContain('Surround depth 1.00');
-    const coneDepth = [...host.querySelectorAll('.sketch-dimension text')].find(label => label.lastChild?.textContent?.startsWith('Cone depth '))!;
+    const coneDepth = [...host.querySelectorAll('.sketch-dimension text')].find(label => label.getAttribute('aria-label')?.includes('Cone depth '))!;
     await act(async () => coneDepth.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
     await enter('Dimension value', '5');
     await act(async () => button('Apply dimension value').click()); await settle();
@@ -306,7 +312,7 @@ describe('source editor interactions', () => {
     vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
     await mount(); await act(async () => button('Apply shape').click()); await settle();
     const continuation = vi.spyOn(SketchSession.prototype, 'setDimensionContinuation');
-    const label = [...host.querySelectorAll('.sketch-dimension text')].find(e => e.lastChild?.textContent?.startsWith('Surround depth '))!;
+    const label = [...host.querySelectorAll('.sketch-dimension text')].find(e => e.getAttribute('aria-label')?.includes('Surround depth '))!;
     await act(async () => label.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
     await enter('Dimension value', '-0.6');
     await act(async () => button('Apply dimension value').click()); await settle();
@@ -324,7 +330,7 @@ describe('source editor interactions', () => {
     await act(async () => root.render(null)); storage.setItem('', JSON.stringify(envelope)); await mount();
     expect(input('Surround depth preset').disabled).toBe(true);
     const continuation = vi.spyOn(SketchSession.prototype, 'setDimensionContinuation');
-    const label = [...host.querySelectorAll('.sketch-dimension text')].find(e => e.lastChild?.textContent?.startsWith('Surround depth '))!;
+    const label = [...host.querySelectorAll('.sketch-dimension text')].find(e => e.getAttribute('aria-label')?.includes('Surround depth '))!;
     await act(async () => label.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
     await enter('Dimension value', '1');
     await act(async () => button('Apply dimension value').click()); await settle();
@@ -835,4 +841,80 @@ describe('source editor interactions', () => {
     expect(document.querySelector<HTMLInputElement>('input[aria-label="Preset name"]')!.value).toBe('Unsaved name');
     await act(async () => [...document.querySelectorAll('button')].find((b) => b.textContent === 'Close')!.click());
   });
+  async function rename(label: string, value: string, gesture: 'F2' | 'dblclick' = 'F2', cancel = false) {
+    const cell = [...host.querySelectorAll('button')].find(b => b.getAttribute('aria-label')?.startsWith(`${label}:`))!;
+    await act(async () => {
+      if (gesture === 'F2') cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true, cancelable: true }));
+      else cell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    });
+    const field = input(label);
+    expect(document.activeElement).toBe(field);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value);
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => field.dispatchEvent(new KeyboardEvent('keydown', { key: cancel ? 'Escape' : 'Enter', bubbles: true, cancelable: true })));
+    await settle();
+  }
+  it('renames patches and dimensions with F2/double-click, undoes/redoes, and restores the local envelope', async () => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await mount(); await act(async () => button('Apply shape').click()); await settle();
+    const before = readSourceAuthoring(readSourceDraft()), id = before.meta.preset!.dimensions.depth_mm;
+    const requests = vi.mocked(sourceEditorApi.validate).mock.calls.map(([doc]) => JSON.stringify(doc));
+    expect(host.querySelector<HTMLDetailsElement>('.source-dimensions')!.open).toBe(true);
+    await rename('Patch 1 name', '  Phase cap  ');
+    expect(host.querySelector('[data-row-id="dust-cap"]')!.textContent).toContain('Phase cap');
+    expect(host.querySelector('[data-row-id="dust-cap"] td[title="dust-cap"]')).not.toBeNull();
+    expect(host.querySelector('.sketch-entity[data-id="dust-cap"] title')!.textContent).toContain('Phase cap');
+    expect(host.querySelector('[aria-label="Patch 1 name: Phase cap (dust-cap)"]')).not.toBeNull();
+    await rename(`Dimension ${id} name`, '  Custom depth  ', 'dblclick');
+    expect(readSourceAuthoring(readSourceDraft()).sketch.constraints.find(c => c.id === id)).toMatchObject({ label: 'Custom depth', value: 4, driving: true });
+    expect(sourceAdapter.lower(readSourceAuthoring(readSourceDraft()).sketch, readSourceAuthoring(readSourceDraft()).meta)).toEqual(sourceAdapter.lower(before.sketch, before.meta));
+    expect(vi.mocked(sourceEditorApi.validate).mock.calls.at(-1) && JSON.stringify(vi.mocked(sourceEditorApi.validate).mock.calls.at(-1)![0])).toBe(requests.at(-1));
+    await act(async () => button('Undo').click()); await settle();
+    expect(readSourceAuthoring(readSourceDraft()).sketch.constraints.find(c => c.id === id)!.label).toBe('Cone depth');
+    await act(async () => button('Undo').click()); await settle();
+    expect(host.querySelector('[data-row-id="dust-cap"]')!.textContent).toContain('Dust cap');
+    await act(async () => button('Redo').click()); await settle();
+    await act(async () => button('Redo').click()); await settle();
+    await act(async () => button('Names').click());
+    expect(host.querySelector('.sketch-curve-name[data-id="dust-cap"]')!.textContent).toBe('Phase cap');
+    await act(async () => root.render(null)); await mount();
+    expect(host.querySelector('[data-row-id="dust-cap"]')!.textContent).toContain('Phase cap');
+    expect(host.querySelector(`[data-row-id="${id}"]`)!.textContent).toContain('Custom depth');
+    expect(button('Names').getAttribute('aria-pressed')).toBe('true');
+    const continuation = vi.spyOn(SketchSession.prototype, 'setDimensionContinuation');
+    await enter('Cone depth preset', '5'); await settle();
+    expect(continuation).toHaveBeenCalledWith(id, 5);
+    expect(readSourceAuthoring(readSourceDraft()).sketch.constraints.find(c => c.id === id)).toMatchObject({ label: 'Custom depth', value: 5, driving: true });
+    await enter(`Dimension ${id} value`, '4.5'); await settle();
+    expect(continuation).toHaveBeenLastCalledWith(id, 4.5);
+    expect(Number(input('Cone depth preset').value)).toBe(4.5);
+  });
+  it('keeps patch names through role changes, cancels with Escape, clears names, and links dimension selection in both directions', async () => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await mount(); await act(async () => button('Apply shape').click()); await settle();
+    const id = readSourceAuthoring(readSourceDraft()).meta.preset!.dimensions.depth_mm;
+    await rename('Patch 1 name', 'Phase cap');
+    const role = host.querySelector<HTMLSelectElement>('[aria-label="Patch 1 role"]')!;
+    await act(async () => { role.value = 'rigid'; role.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
+    await rename('Patch 1 name', 'New cap');
+    expect(readSourceAuthoring(readSourceDraft()).sketch.entities.find(e => e.id === 'dust-cap')!.data).toEqual({ role: 'rigid', name: 'New cap' });
+    await rename('Patch 1 name', 'Cancelled', 'dblclick', true);
+    expect(host.querySelector('[data-row-id="dust-cap"]')!.textContent).toContain('New cap');
+    await rename('Patch 1 name', '   ');
+    expect(host.querySelector('[data-row-id="dust-cap"]')!.textContent).toContain('Dust cap');
+    await rename(`Dimension ${id} name`, 'Depth', 'F2');
+    await rename(`Dimension ${id} name`, 'Cancelled', 'dblclick', true);
+    expect(host.querySelector(`[data-row-id="${id}"]`)!.textContent).toContain('Depth');
+    await rename(`Dimension ${id} name`, '  ');
+    expect(host.querySelector(`[data-row-id="${id}"]`)!.textContent).toContain('Vertical distance');
+    const row = host.querySelector(`[data-row-id="${id}"]`)!;
+    await act(async () => row.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(host.querySelector(`[data-constraint-id="${id}"] text`)!.classList.contains('selected')).toBe(true);
+    const other = host.querySelector('.sketch-dimension text')!, otherId = other.getAttribute('data-id');
+    await pointer(other);
+    expect(host.querySelector(`[data-row-id="${otherId}"]`)!.getAttribute('aria-selected')).toBe('true');
+  });
+
 });

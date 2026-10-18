@@ -4,6 +4,8 @@ import { sourceEditorApi, type SourceAttachment, type SourceDocument, type Sourc
 import { durableSettings, namespaceStorage } from '../stores/durableSettings';
 import { useModalDialogFocus } from '../shell/dialogFocus';
 import { NumberField } from './NumberField';
+import { SketchNameCell } from './SketchNameCell';
+import { dimensionName } from '../sketch/dimensionGraphics';
 import { drawnSource, editPatch, editPoint, identityProblem, INITIAL_SOURCE, removePoint } from './sourceContourEditing';
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
@@ -132,11 +134,13 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const [canvasSelection, setCanvasSelection] = useState<string[]>([]);
   const [hoverId, setHoverId] = useState<string>();
   const [pointsOpen, setPointsOpen] = useState(false);
+  const [dimensionsOpen, setDimensionsOpen] = useState(true);
   const rows = useRef(new Map<string, HTMLTableRowElement>());
   useEffect(() => {
     const id = canvasSelection.at(-1);
     if (!id) return;
     if (author.sketch.points.some(p => p.id === id) && canvasSelection.includes(id)) setPointsOpen(true);
+    if (author.sketch.constraints.some(c => c.id === id && 'value' in c)) setDimensionsOpen(true);
     rows.current.get(id)?.scrollIntoView?.({ block: 'nearest' });
   }, [canvasSelection, pointsOpen]);
   const draftCallback = useRef(onDraftChange); draftCallback.current = onDraftChange;
@@ -366,8 +370,23 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
           <td><NumberField label={`Point ${i + 1} radius`} value={point.r_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === 0 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, v, point.z_mm)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: v, y: state.sketch.points.find(p => p.id === point.id)!.y }))}/></td>
           <td><NumberField label={`Point ${i + 1} z`} value={point.z_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === draft.contour.points.length - 1 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, point.r_mm, v)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: state.sketch.points.find(p => p.id === point.id)!.x, y: v }))}/></td>
           <td>{classic && i > 0 && i < draft.contour.points.length - 1 && <button type="button" aria-label={`Remove point ${i + 1}`} disabled={drawPoints !== null} onClick={() => { try { change(removePoint(draft, i)); setSelectedPatch(0); } catch (reason) { setError(String(reason)); } }}>Remove</button>}</td></tr>)}</tbody></table></div></details>
-        <h3>Patches</h3><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{tablePatches.map((patch, i) => <tr key={patch.id} ref={row => { if (row) rows.current.set(patch.id, row); else rows.current.delete(patch.id); }} data-row-id={patch.id} aria-selected={canvasSelection.includes(patch.id)} className={hoverId === patch.id ? 'hovered' : ''}
-          onPointerEnter={() => setHoverId(patch.id)} onPointerLeave={() => setHoverId(undefined)} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}><td title={patch.id}><button type="button" aria-label={`Select patch ${i + 1}`} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}>{displayName(nameSketch, patch.id)}</button></td>
+        {!classic && <details className="source-dimensions" open={dimensionsOpen} onToggle={event => setDimensionsOpen(event.currentTarget.open)}><summary>Dimensions</summary>
+          <div className="source-table"><table aria-label="Dimensions"><thead><tr><th>Name</th><th>Value</th><th>Driving</th></tr></thead><tbody>
+            {author.sketch.constraints.filter(c => 'value' in c).map(c => 'value' in c && <tr key={c.id} data-row-id={c.id}
+              ref={row => { if (row) rows.current.set(c.id, row); else rows.current.delete(c.id); }} aria-selected={canvasSelection.includes(c.id)} className={hoverId === c.id ? 'hovered' : ''}
+              onClick={() => setCanvasSelection([c.id])} onPointerEnter={() => setHoverId(c.id)} onPointerLeave={() => setHoverId(undefined)}>
+              <td title={c.id}><SketchNameCell value={dimensionName(c)} label={`Dimension ${c.id} name`} id={c.id} maxLength={40} disabled={!sketchReady}
+                onCommit={label => sketchCommand({ kind: 'setConstraintLabel', id: c.id, label })}/></td>
+              <td><NumberField label={`Dimension ${c.id} value`} value={c.kind === 'angle' ? c.value * 180 / Math.PI : c.value} unit={c.kind === 'angle' ? '°' : 'mm'}
+                precision={9} displayPrecision={2} step={.1} disabled={!sketchReady || !c.driving} disabledReason={!c.driving ? 'Reference dimension' : undefined}
+                onCommit={value => void controller.current?.dimension(c.id, value * (c.kind === 'angle' ? Math.PI / 180 : 1)).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}/></td>
+              <td>{c.driving ? 'Driving' : 'Reference'}</td>
+            </tr>)}
+          </tbody></table></div>
+        </details>}
+        <h3>Patches</h3><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch</th><th>Name</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{tablePatches.map((patch, i) => <tr key={patch.id} ref={row => { if (row) rows.current.set(patch.id, row); else rows.current.delete(patch.id); }} data-row-id={patch.id} aria-selected={canvasSelection.includes(patch.id)} className={hoverId === patch.id ? 'hovered' : ''}
+          onPointerEnter={() => setHoverId(patch.id)} onPointerLeave={() => setHoverId(undefined)} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}><td title={patch.id}><button type="button" aria-label={`Select patch ${i + 1}`} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}>{i + 1}</button></td>
+          <td title={patch.id}>{classic ? displayName(nameSketch, patch.id) : <SketchNameCell value={displayName(nameSketch, patch.id)} label={`Patch ${i + 1} name`} id={patch.id} maxLength={60} disabled={!sketchReady} onCommit={name => sketchCommand({ kind: 'setEntityName', id: patch.id, name })}/>}</td>
           <td>{classic && <select aria-label={`Patch ${i + 1} curve`} value={patch.kind} onChange={(e) => change(editPatch(draft, i, { kind: e.target.value as 'line' | 'arc' }))}><option value="line">Line</option><option value="arc">Arc</option></select>}{!classic && patch.kind}</td>
           <td><select aria-label={`Patch ${i + 1} role`} value={patch.role} onChange={(e) => classic ? change(editPatch(draft, i, { role: e.target.value as 'moving' | 'rigid' })) : sketchCommand({ kind: 'setEntityData', id: patch.id, data: { role: e.target.value } })}><option value="moving">Moving</option><option value="rigid">Rigid</option></select></td>
           <td>{patch.role === 'moving' ? <NumberField label={`Patch ${i + 1} weight`} value={classic ? draft.drive.weights[patch.id] : author.meta.weights[patch.id] ?? 1} precision={6} displayPrecision={3} step={.1} onCommit={(v) => { if (classic) change({ ...draft, drive: { ...draft.drive, weights: { ...draft.drive.weights, [patch.id]: v } } }); else { void controller.current?.metadata(meta => ({ ...meta, weights: { ...meta.weights, [patch.id]: v } })).catch(reason => setError(String(reason))); } }}/> : '—'}</td></tr>)}</tbody></table></div>
@@ -412,6 +431,6 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         <p>Source presets store the contour and drive. Attachment and mesh size apply to this export.</p></>}
       </aside></div>
     </fieldset>
-    <footer>{onUseDocument && <button type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour in assembly</button>}{busy && <p role="status">Working…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>{onDraftChange ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours.</small></footer>
+    <footer>{onUseDocument && <button type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour in assembly</button>}{busy && <p role="status">Working…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>{onDraftChange ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours. Names are stored in the sketch only.</small></footer>
   </div></div>;
 }

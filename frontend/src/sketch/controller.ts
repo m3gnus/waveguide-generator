@@ -79,7 +79,11 @@ export class SketchController<T> {
           state = solved;
         }
       }
-      state = await this.diagnose(session, state);
+      // Names are authoring metadata. Solving them could perturb exact imported coordinates
+      // or refuse a rename on a sketch that is already in conflict.
+      const annotationsOnly = (Array.isArray(resolved) ? resolved : [resolved]).every(c => c.kind === 'setConstraintLabel' || c.kind === 'setEntityName');
+      if (annotationsOnly) session.sketch = state.sketch;
+      else state = await this.diagnose(session, state);
       if (dimensions) {
         const added = state.sketch.entities.find(e => !this.current.sketch.entities.some(old => old.id === e.id));
         if (added?.kind === 'line') {

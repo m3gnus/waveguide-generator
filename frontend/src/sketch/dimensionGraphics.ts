@@ -3,9 +3,14 @@ import { arcGeometry } from './geometry';
 import type { XY } from './solver/types';
 
 export const dimensionHelper = (e: Sketch['entities'][number]) => !!e.data && typeof e.data === 'object' && !Array.isArray(e.data) && e.data.dimensionHelper === true;
-export function dimensionLabel(c: Constraint & { value: number; driving: boolean }) {
+export function dimensionName(c: Constraint): string {
+  const names: Record<string, string> = { distance: 'Distance', distanceX: 'Horizontal distance', distanceY: 'Vertical distance',
+    radius: 'Radius', angle: 'Angle', pointLineDistance: 'Point-line distance' };
+  return c.label?.trim() || names[c.kind] || c.kind;
+}
+export function dimensionLabel(c: Constraint & { value: number; driving: boolean }, mode: 'value' | 'name' = 'value') {
   const value = (c.kind === 'angle' ? c.value * 180 / Math.PI : c.value).toFixed(2);
-  return `${c.driving ? '' : '('}${c.label ? `${c.label} ` : c.kind === 'radius' ? 'R ' : ''}${value}${c.kind === 'angle' ? '°' : ' mm'}${c.driving ? '' : ')'}`;
+  return `${c.driving ? '' : '('}${mode === 'name' ? `${dimensionName(c)} ` : ''}${c.kind === 'radius' ? 'R ' : ''}${value}${c.kind === 'angle' ? '°' : ' mm'}${c.driving ? '' : ')'}`;
 }
 export interface DimensionLayout { at: XY; path: string; arrows: string }
 /** Screen-space lanes keep named labels apart, independent of short measured spans. */

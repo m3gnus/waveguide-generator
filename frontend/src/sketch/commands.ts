@@ -10,6 +10,8 @@ export type Command =
   | { kind: 'addConstraint'; constraint: NewConstraint }
   | { kind: 'removeConstraint'; id: string }
   | { kind: 'setDimension'; id: string; value: number }
+  | { kind: 'setConstraintLabel'; id: string; label: string }
+  | { kind: 'setEntityName'; id: string; name: string }
   | { kind: 'setDriving'; id: string; driving: boolean }
   | { kind: 'movePoint'; id: string; x: number; y: number }
   | { kind: 'deleteEntity'; id: string }

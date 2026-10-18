@@ -8,8 +8,10 @@ const names: Record<string, string> = {
 
 /** Stable labels follow authoring order; identifiers remain available in tooltips. */
 export function displayName(sketch: Sketch, id: string): string {
-  if (names[id]) return names[id];
   const entity = sketch.entities.find(e => e.id === id);
+  const data = entity?.data;
+  if (data && typeof data === 'object' && !Array.isArray(data) && typeof data.name === 'string' && data.name.trim()) return data.name.trim();
+  if (names[id]) return names[id];
   if (entity) {
     if (entity.construction) {
       const index = sketch.entities.filter(e => e.construction && e.kind === entity.kind).findIndex(e => e.id === id) + 1;

@@ -98,6 +98,8 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   designDraft: 'solve-affecting',
   sourceContourDraft: 'inert',
   sourceAssemblyDraft: 'inert',
+  // Display only: which annotations the sketch canvas draws.
+  sketchView: 'inert',
 };
 
 export type UnclassifiedNamespace = Exclude<keyof typeof SETTINGS_NAMESPACE_EFFECTS, SettingsNamespace>;
