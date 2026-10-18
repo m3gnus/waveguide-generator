@@ -483,7 +483,6 @@ def _beat_section(
     native_plane: str | None,
     merged_tags: list[int] | None,
     result: Any,
-    reversed_tags: list[int] | None = None,
     precision: str = "single",
 ) -> dict[str, Any]:
     section: dict[str, Any] = {
@@ -499,10 +498,6 @@ def _beat_section(
     if merged_tags is not None:
         # The record's tags this channel drove as BEAT's one velocity tag.
         section["merged_source_tags"] = merged_tags
-    if reversed_tags:
-        # Axial tags facing back along the axis, driven outward as Metal
-        # drives them: solved as their own group and subtracted.
-        section["axially_reversed_source_tags"] = reversed_tags
     return section
 
 
@@ -1103,9 +1098,6 @@ def solve_imported_beat_from_msh_text(
                 merged_tags=sorted(channel_tags[channel.id]),
                 result=result,
                 precision=precision,
-                reversed_tags=sorted(
-                    tag for sign, group in channel_groups[channel.id] if sign < 0.0 for tag in group
-                ),
             ),
         }
         channel_response = build_solver_response(

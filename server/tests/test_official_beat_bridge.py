@@ -268,6 +268,21 @@ def test_imported_production(runtime, monkeypatch, adaptive, axial, backend):
     system = runtime.requests[0]["compiled_system"]
     assert system["metadata"]["source_tags"] == ({"source-a": 101, "source-b": 102}
         if adaptive else {"source-a": 101, "source-b": 102, "source-c": 103})
+    # Negative-facing axial sources use explicit motion axes in one solve;
+    # no extra sign-group solve/subtraction takes place in WG.
+    assert all("axially_reversed_source_tags" not in channel["metadata"]["beat"]
+               for channel in result["channels"].values())
+    if axial:
+        sources = {component["name"]: component["parameters"] for component in system["components"]}
+        assert sources["source-a"] == {"motion_profile": "rigid_translation", "motion_axis": [0., 0., -1.]}
+        assert sources["source-b"] == {"motion_profile": "rigid_translation", "motion_axis": [0., 0., 1.]}
+    if not adaptive:
+        assert len(runtime.requests) == 1
+    else:
+        # Refinement can submit several batches per channel, but opposite
+        # faces remain in the same request rather than separate sign groups.
+        assert all(set(wire["compiled_system"]["metadata"]["source_tags"].values())
+                   in ({101, 102}, {103}) for wire in runtime.requests)
     points = system["meshes"][0]["mesh_data"]["points"]
     decoded = np.frombuffer(base64.b64decode(points["data"]), dtype="<f8").reshape(points["shape"])
     np.testing.assert_allclose(decoded[0], [.01, 0, 0] if not axial else [0, 0, 0])
