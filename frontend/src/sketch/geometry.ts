@@ -1,8 +1,42 @@
-import type { Arc, Point, Sketch } from './model';
+import type { Arc, Line, Point, Sketch } from './model';
 export const tau = 2 * Math.PI;
 export const positiveAngle = (a: number) => ((a % tau) + tau) % tau;
 export const distance = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 type XY = { x: number; y: number };
+export function arcThrough(a: XY, b: XY, p: XY) {
+  if (![a.x, a.y, b.x, b.y, p.x, p.y].every(Number.isFinite)) throw new Error('Arc points must be finite.');
+  const bx = b.x - a.x, by = b.y - a.y, px = p.x - a.x, py = p.y - a.y, d = 2 * (bx * py - by * px);
+  if (Math.abs(d) <= 1e-12) throw new Error('Three-point arc is collinear.');
+  const bb = bx * bx + by * by, pp = px * px + py * py;
+  return { center: { x: a.x + (bb * py - pp * by) / d, y: a.y + (bx * pp - px * bb) / d }, ccw: d < 0 };
+}
+/** A tangent start is an open, directed chain end, including coincident aliases. */
+export function tangentIncoming(s: Sketch, id: string): Line | Arc {
+  const equivalent = new Set([id]); let changed = true;
+  while (changed) {
+    changed = false;
+    for (const c of s.constraints) if (c.kind === 'coincident' && (equivalent.has(c.a) || equivalent.has(c.b))) {
+      if (!equivalent.has(c.a) || !equivalent.has(c.b)) changed = true;
+      equivalent.add(c.a); equivalent.add(c.b);
+    }
+  }
+  const curves = s.entities.filter((e): e is Line | Arc => !e.construction && !e.reference && (e.kind === 'line' || e.kind === 'arc'));
+  const incoming = curves.filter(e => equivalent.has(e.kind === 'line' ? e.p2 : e.end));
+  if (!incoming.length) throw new Error(curves.some(e => e.kind === 'arc' && equivalent.has(e.center))
+    ? 'Arc centres cannot start a tangent arc.' : `${id === 'pole' ? 'The pole' : 'This point'} has no incoming curve. Choose an open chain end.`);
+  if (incoming.length !== 1 || curves.some(e => equivalent.has(e.kind === 'line' ? e.p1 : e.start))) throw new Error('This join is not an open chain end.');
+  return incoming[0];
+}
+export function tangentArc(s: Sketch, from: string, b: XY) {
+  const e = tangentIncoming(s, from), point = (id: string) => s.points.find(p => p.id === id)!;
+  const a = point(from), p = point(e.kind === 'line' ? e.p1 : e.center);
+  const tx = e.kind === 'line' ? a.x - p.x : (e.ccw ? -1 : 1) * (a.y - p.y);
+  const ty = e.kind === 'line' ? a.y - p.y : (e.ccw ? 1 : -1) * (a.x - p.x);
+  const dx = b.x - a.x, dy = b.y - a.y, denom = 2 * (-ty * dx + tx * dy);
+  if (Math.abs(denom) <= 1e-12 || Math.hypot(tx, ty) <= 1e-12) throw new Error('Tangent arc is degenerate.');
+  const k = (dx * dx + dy * dy) / denom;
+  return { center: { x: a.x - k * ty, y: a.y + k * tx }, ccw: k > 0, incoming: e.id };
+}
 export type Locus = { kind: 'line'; origin: XY; direction: XY }
   | { kind: 'circle'; center: XY; radius: number } | { kind: 'point'; point: XY };
 function nearestOnLocus(p: XY, locus: Locus): XY {

@@ -114,4 +114,41 @@ describe('immutable sketch commands', () => {
     const s = run(base(), { kind: 'addTangentArc', from: 'p3', to: { x: 30, y: 10 } }).sketch;
     expect(applyCommand(s, { kind: 'addConstraint', constraint: { kind: 'equal', a: 'l4', b: s.entities.at(-1)!.id } })).toMatchObject({ error: expect.stringContaining('entity kinds') });
   });
+  it('converts in place, preserves data and removes only constraints incompatible with the new kind', () => {
+    let s = base();
+    s = run(s, { kind: 'setEntityData', id: 'l4', data: { role: 'rigid', extra: [0, false] } }).sketch;
+    s = run(s, { kind: 'addConstraint', constraint: { kind: 'horizontal', line: 'l4' } }).sketch;
+    s = run(s, { kind: 'addConstraint', constraint: { kind: 'equal', a: 'l4', b: 'l5' } }).sketch;
+    s = run(s, { kind: 'addConstraint', constraint: { kind: 'distance', a: 'p1', b: 'p2', value: 10, driving: true } }).sketch;
+    const before = JSON.stringify(s), result = run(s, { kind: 'convertEntity', id: 'l4', to: 'arc' });
+    expect(result.removedConstraints).toEqual(s.constraints.slice(0, 2).map(c => c.id));
+    expect(result.sketch.constraints).toEqual(s.constraints.slice(2));
+    expect(result.sketch.entities[0]).toMatchObject({ id: 'l4', kind: 'arc', start: 'p1', end: 'p2', data: s.entities[0].data });
+    expect(result.sketch.points.slice(0, 3)).toEqual(s.points);
+    const arc = result.sketch.entities[0]; if (arc.kind !== 'arc') throw new Error('Expected arc');
+    const withRadius = run(result.sketch, { kind: 'addConstraint', constraint: { kind: 'radius', arc: arc.id, value: 10, driving: true } });
+    const line = run(withRadius.sketch, { kind: 'convertEntity', id: arc.id, to: 'line' });
+    expect(line.sketch.entities[0]).toEqual(s.entities[0]);
+    expect(line.sketch.points).toEqual(s.points);
+    expect(line.removedConstraints).toEqual(withRadius.created);
+    expect(JSON.stringify(s)).toBe(before);
+  });
+  it('keeps a converted arc centre when another entity or constraint still uses it', () => {
+    const converted = run(base(), { kind: 'convertEntity', id: 'l4', to: 'arc' }).sketch;
+    const arc = converted.entities[0]; if (arc.kind !== 'arc') throw new Error('Expected arc');
+    const shared = run(converted, { kind: 'addLine', from: arc.center, to: { x: 0, y: -20 } }).sketch;
+    const held = run(converted, { kind: 'addConstraint', constraint: { kind: 'fix', point: arc.center } }).sketch;
+    for (const s of [shared, held]) {
+      const line = run(s, { kind: 'convertEntity', id: arc.id, to: 'line' });
+      expect(line.sketch.points.find(p => p.id === arc.center)).toEqual(s.points.find(p => p.id === arc.center));
+      expect(line.removedConstraints).toEqual([]);
+    }
+  });
+  it('rejects tangent starts on an interior join, including one joined by coincidence', () => {
+    expect(applyCommand(base(), { kind: 'addTangentArc', from: 'p2', to: { x: 15, y: 4 } })).toHaveProperty('error');
+    let s = run(base(), { kind: 'addLine', from: { x: 20, y: 0 }, to: { x: 30, y: 0 } }).sketch;
+    const other = s.entities.at(-1)!; if (other.kind !== 'line') throw new Error('Expected line');
+    s = run(s, { kind: 'addConstraint', constraint: { kind: 'coincident', a: 'p3', b: other.p1 } }).sketch;
+    expect(applyCommand(s, { kind: 'addTangentArc', from: 'p3', to: { x: 25, y: 4 } })).toHaveProperty('error');
+  });
 });

@@ -12,6 +12,33 @@ function generic(sketch = base()) {
   }, () => {});
 }
 describe('authoring session transactions', () => {
+  it('converts piston in one undo step, keeps its ID and weight, and reports removed constraints', async () => {
+    const initial = seed(INITIAL_SOURCE); initial.meta.weights.piston = -.5;
+    const controller = new SketchController(initial, initial.meta.references, (s, c) => {
+      const r = applySourceCommand(s.sketch, s.meta, c); return 'error' in r ? r : { sketch: r.sketch, meta: r.meta };
+    }, () => {});
+    try {
+      await controller.constraint({ kind: 'horizontal', line: 'piston' });
+      const before = controller.current, horizontal = before.sketch.constraints.at(-1)!.id;
+      await controller.command({ kind: 'convertEntity', id: 'piston', to: 'arc' });
+      expect(controller.notice).toContain(horizontal);
+      expect(controller.current.meta.weights).toEqual({ piston: -.5 });
+      const arcState = controller.current, arc = arcState.sketch.entities.find(e => e.id === 'piston')!;
+      expect(arc.kind).toBe('arc');
+      await controller.undo(); expect(controller.current).toBe(before);
+      await controller.undo(true); expect(controller.current).toBe(arcState);
+      if (arc.kind !== 'arc') throw new Error('Expected arc');
+      const a = arcState.sketch.points.find(p => p.id === arc.start)!, c = arcState.sketch.points.find(p => p.id === arc.center)!;
+      await controller.constraint({ kind: 'radius', arc: arc.id, value: Math.hypot(a.x - c.x, a.y - c.y), driving: true });
+      const withRadius = controller.current, radius = withRadius.sketch.constraints.at(-1)!.id;
+      await controller.command({ kind: 'convertEntity', id: arc.id, to: 'line' });
+      expect(controller.notice).toContain(radius);
+      expect(controller.current.sketch.entities[0]).toEqual(initial.sketch.entities[0]);
+      expect(controller.current.meta.weights).toEqual({ piston: -.5 });
+      expect(controller.current.sketch.points.some(p => p.id === arc.center)).toBe(false);
+      await controller.undo(); expect(controller.current).toBe(withRadius);
+    } finally { controller.destroy(); }
+  });
   it('resolves queued single-coordinate edits against the state they run on', async () => {
     const controller = generic();
     try {

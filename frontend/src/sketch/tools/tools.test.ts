@@ -29,6 +29,18 @@ describe('pure sketch tools', () => {
     const p = typedTarget({ x: 2, y: 3 }, { x: 10, y: 3 }, 5, 90);
     expect(p.x).toBeCloseTo(2); expect(p.y).toBeCloseTo(8);
   });
+  it('starts a three-point arc on empty space in tangent mode and rejects invalid chain starts immediately', () => {
+    const s = importedSketch([{ id: 'pole', x: 0, y: 0 }, { id: 'join', x: 4, y: 0 }, { id: 'end', x: 8, y: 0 }], [
+      { kind: 'line', id: 'left', p1: 'pole', p2: 'join' }, { kind: 'line', id: 'right', p1: 'join', p2: 'end' },
+    ]);
+    const state = { mode: 'tangent' as const };
+    expect(placeLine(state, { x: 2, y: 3 }, null, s)).toMatchObject({ state: { mode: 'arc3', from: { x: 2, y: 3 } }, reason: expect.stringContaining('started a 3-point arc') });
+    for (const [point, reason] of [['pole', 'no incoming curve'], ['join', 'not an open chain end']]) {
+      const rejected = placeLine(state, { x: 0, y: 0 }, { x: 0, y: 0, glyph: 'endpoint', constraint: { kind: 'coincident', point } }, s);
+      expect(rejected.state).toBe(state); expect(rejected.reason).toContain(reason);
+    }
+    expect(placeLine(state, { x: 8, y: 0 }, { x: 8, y: 0, glyph: 'endpoint', constraint: { kind: 'coincident', point: 'end' } }, s).state).toEqual({ mode: 'tangent', from: 'end' });
+  });
   it('places tangent and three-point arcs through the command layer', () => {
     const result = applyCommand(emptySketch(), { kind: 'addLine', from: { x: 0, y: 0 }, to: { x: 5, y: 0 } });
     if ('error' in result) throw new Error(result.error);

@@ -17,8 +17,8 @@
 .sketch-references { stroke: var(--fg3); stroke-width: 1; stroke-dasharray: 4 4; pointer-events: none; }
 .sketch-references text { fill: var(--fg3); stroke: none; font-size: 10px; }
 .sketch-entity { fill: none; stroke: var(--sketch-patch, var(--fg)); stroke-width: 2.5; cursor: pointer; }
-.sketch-entity.under { stroke: var(--sketch-patch, var(--blue)); }
-.sketch-entity.determined { stroke: var(--sketch-patch, var(--fg)); }
+.sketch-entity.under { stroke-dasharray: 7 4; }
+.sketch-entity.determined { stroke-dasharray: none; }
 .sketch-entity.moving { stroke: var(--source-moving); }
 .sketch-entity.rigid { stroke: var(--fg2); stroke-width: 3; }
 .sketch-entity.conflicting { stroke: var(--red); }
@@ -32,12 +32,16 @@
 .sketch-point.conflicting { fill: var(--red); stroke: var(--red); }
 .sketch-handle:hover .sketch-point { stroke-width: 3; }
 .sketch-point.selected { stroke: var(--acc); stroke-width: 2.5; }
+.sketch-point.valid-start { stroke: var(--green); stroke-width: 3; }
+.sketch-arc-start { fill: none; stroke: var(--green); stroke-width: 1.5; pointer-events: none; }
+.sketch-centre { fill: none; pointer-events: none; }
 .sketch-glyph { fill: var(--fg); font-size: 11px; cursor: pointer; paint-order: stroke; stroke: var(--surface-raised); stroke-width: 3px; }
 .sketch-glyph.reference, .sketch-glyph.redundant { fill: var(--fg3); }
 .sketch-glyph.conflicting { fill: var(--red); }
 .sketch-glyph.selected { fill: var(--acc); text-decoration: underline; }
 .sketch-problem { fill: none; stroke: var(--amber); stroke-width: 7; opacity: .6; pointer-events: none; }
-.sketch-preview { stroke: var(--blue); stroke-width: 1.5; stroke-dasharray: 5 3; pointer-events: none; }
+.sketch-preview { fill: none; stroke: var(--blue); stroke-width: 1.5; stroke-dasharray: 5 3; pointer-events: none; }
+.sketch-pick-tooltip { position: absolute; z-index: 2; max-width: 240px; padding: 4px 6px; border: 1px solid var(--hair); border-radius: 4px; background: var(--surface-floating); color: var(--fg); font-size: 11px; pointer-events: none; }
 .sketch-pending { fill: var(--blue); stroke: var(--blue); pointer-events: none; }
 .sketch-pending circle { fill: none; }
 .sketch-pending text { stroke: none; font-size: 11px; }

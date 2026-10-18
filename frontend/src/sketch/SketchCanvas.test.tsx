@@ -40,6 +40,108 @@ async function mount(initial = base(), diagnosis?: Diagnosis) {
 function coordinate(id: string) { const p = host.querySelector(`[data-id="${id}"]`)!; return { element: p, x: Number(p.getAttribute('cx')), y: Number(p.getAttribute('cy')) }; }
 
 describe('SketchCanvas with real slvs', () => {
+  it('starts with 3-point arcs and previews the chord, then the actual arc through the cursor', async () => {
+    await mount();
+    expect(button('3-point arc (A)')).toBeDefined();
+    await act(async () => button('3-point arc (A)').click());
+    await pointer(svg(), 'pointerdown', 100, 100, { ctrlKey: true });
+    await pointer(svg(), 'pointermove', 220, 100, { ctrlKey: true });
+    expect(host.querySelector('line.sketch-preview')).not.toBeNull();
+    expect(host.textContent).toContain('end 2 of 3');
+    await pointer(svg(), 'pointerdown', 220, 100, { ctrlKey: true });
+    await pointer(svg(), 'pointermove', 160, 70, { ctrlKey: true });
+    const preview = host.querySelector('path.sketch-preview')!;
+    expect(preview.getAttribute('d')).toContain(' A');
+    expect(host.textContent).toContain('point on arc 3 of 3');
+    const before = preview.getAttribute('d');
+    await pointer(svg(), 'pointermove', 160, 50, { ctrlKey: true });
+    expect(host.querySelector('path.sketch-preview')?.getAttribute('d')).not.toBe(before);
+    await pointer(svg(), 'pointerdown', 160, 50, { ctrlKey: true });
+    expect(host.querySelector('[aria-label^="Select arc"]')).not.toBeNull();
+  });
+  it('falls back from tangent to 3-point on empty space and explains the next pick', async () => {
+    await mount(); await key('a');
+    await pointer(svg(), 'pointerdown', 100, 100, { ctrlKey: true });
+    expect(button('3-point arc (A)').getAttribute('aria-pressed')).toBe('true');
+    expect(host.textContent).toContain('No chain end here: started a 3-point arc');
+    expect(host.querySelector('line.sketch-preview')).not.toBeNull();
+    await pointer(svg(), 'pointerdown', 220, 100, { ctrlKey: true });
+    await pointer(svg(), 'pointermove', 160, 70, { ctrlKey: true });
+    expect(host.querySelector('path.sketch-preview')).not.toBeNull();
+  });
+  it('highlights open ends, rejects the pole at the cursor and previews a tangent arc', async () => {
+    await mount(); await key('a');
+    expect(host.querySelectorAll('.sketch-point.valid-start')).toHaveLength(1);
+    expect(host.querySelector('.sketch-point.valid-start')?.getAttribute('data-id')).toBe('q');
+    const p = coordinate('p');
+    await pointer(p.element, 'pointerdown', p.x, p.y);
+    expect(host.querySelector('[role="tooltip"]')?.textContent).toContain('no incoming curve');
+    expect(host.querySelector<HTMLElement>('[role="tooltip"]')!.style.left).not.toBe('');
+    expect(host.querySelector('.sketch-preview')).toBeNull();
+    const q = coordinate('q');
+    await pointer(q.element, 'pointerdown', q.x, q.y);
+    await pointer(svg(), 'pointermove', q.x + 40, q.y - 40, { ctrlKey: true });
+    expect(host.querySelector('[role="tooltip"]')).toBeNull();
+    expect(host.querySelector('path.sketch-preview')?.getAttribute('d')).toContain(' A');
+  });
+  it('shows a rejected collinear arc pick next to the pointer and allows a corrected pick', async () => {
+    await mount(); await act(async () => button('3-point arc (A)').click());
+    for (const [x, y] of [[100, 100], [220, 100], [160, 100]]) await pointer(svg(), 'pointerdown', x, y, { ctrlKey: true });
+    expect(host.querySelector('[role="tooltip"]')?.textContent).toContain('collinear');
+    await pointer(svg(), 'pointerdown', 160, 70, { ctrlKey: true });
+    expect(host.querySelector('[role="tooltip"]')).toBeNull();
+    expect(host.querySelector('[aria-label^="Select arc"]')).not.toBeNull();
+  });
+  it('hides centre handles and snaps at rest, revealing them on arc hover or selection', async () => {
+    const result = applyCommand(base(), { kind: 'addArc3', start: { x: 2, y: 2 }, end: { x: 8, y: 2 }, through: { x: 5, y: 4 } });
+    if ('error' in result) throw new Error(result.error);
+    const arc = result.sketch.entities.find(e => e.kind === 'arc')!;
+    if (arc.kind !== 'arc') throw new Error('Expected arc');
+    await mount(result.sketch);
+    expect(host.querySelector(`[data-id="${arc.center}"]`)).toBeNull();
+    await pointer(host.querySelector(`[data-id="${arc.id}"]`)!, 'pointermove');
+    expect(host.querySelector(`[data-id="${arc.center}"]`)).not.toBeNull();
+    const centre = coordinate(arc.center);
+    await pointer(svg(), 'pointermove', 0, 0);
+    expect(host.querySelector(`[data-id="${arc.center}"]`)).toBeNull();
+    await act(async () => button('3-point arc (A)').click());
+    await pointer(svg(), 'pointermove', centre.x, centre.y);
+    expect(host.querySelector('[aria-label="Pending center snap"]')).toBeNull();
+    await key('Escape');
+    await pointer(host.querySelector(`[data-id="${arc.id}"]`)!, 'pointerdown');
+    expect(host.querySelector('.sketch-centre')).not.toBeNull();
+    await pointer(host.querySelector(`[data-id="${arc.center}"]`)!, 'pointerdown', centre.x, centre.y);
+    await pointer(svg(), 'pointerup');
+    await pointer(svg(), 'pointermove', 0, 0);
+    expect(host.querySelector(`[data-id="${arc.center}"]`)).not.toBeNull();
+  });
+  it('keeps role stroke colours while under-constrained curves are dashed and determined curves are solid', async () => {
+    const style = document.createElement('style'); style.textContent = new TextDecoder().decode(readFileSync('src/sketch/sketchCanvas.css')); document.head.append(style);
+    const sketch = base(), diagnosis = initialDiagnosis(sketch);
+    try {
+      for (const role of ['moving', 'rigid']) {
+        await act(async () => root.render(<SketchCanvas sketch={sketch} diagnosis={diagnosis} references={[]} problems={[]} entityClassName={() => role}/>));
+        const under = getComputedStyle(host.querySelector('.sketch-entity')!);
+        expect(under.strokeDasharray).toBe('7 4');
+        expect(under.stroke).toBe(role === 'moving' ? 'var(--source-moving)' : 'var(--fg2)');
+        await act(async () => root.render(<SketchCanvas sketch={sketch} diagnosis={{ ...diagnosis, dof: 0 }} references={[]} problems={[]} entityClassName={() => role}/>));
+        expect(getComputedStyle(host.querySelector('.sketch-entity')!).strokeDasharray).toBe('none');
+      }
+    } finally { style.remove(); }
+  });
+  it('converts the selected curve in place from the contextual toolbar and undoes in one step', async () => {
+    await mount(); await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown');
+    await act(async () => button('Make arc').click());
+    expect(host.querySelector('[aria-label="Select arc line"]')).not.toBeNull();
+    expect(button('Make line')).toBeDefined();
+    await act(async () => button('Make line').click());
+    expect(host.querySelector('[aria-label="Select line line"]')).not.toBeNull();
+    expect(host.querySelector('.sketch-centre')).toBeNull();
+    await key('z', { ctrlKey: true });
+    expect(host.querySelector('[aria-label="Select arc line"]')).not.toBeNull();
+    await key('z', { ctrlKey: true });
+    expect(host.querySelector('[aria-label="Select line line"]')).not.toBeNull();
+  });
   it('renders geometry, glyphs, dimension units and status colours including the large-sketch fallback', async () => {
     let s = base(); const r = applyCommand(s, { kind: 'addConstraint', constraint: { kind: 'distance', a: 'p', b: 'q', value: 10, driving: true } });
     if ('error' in r) throw new Error(r.error); s = r.sketch;
@@ -59,7 +161,7 @@ describe('SketchCanvas with real slvs', () => {
     expect(host.querySelector('[aria-label="Dimension measurement"]')).toBeNull();
     await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown');
     const labels = () => [...host.querySelectorAll('[aria-label="Selection constraints"] button')].map(b => b.textContent);
-    expect(labels()).toEqual(['Horizontal', 'Vertical', 'Construction (X)', 'Delete selection']);
+    expect(labels()).toEqual(['Horizontal', 'Vertical', 'Construction (X)', 'Make arc', 'Delete selection']);
     expect(host.querySelector('.sketch-surface > [aria-label="Selection constraints"]')).not.toBeNull();
     await pointer(svg(), 'pointerdown');
     await pointer(coordinate('p').element, 'pointerdown'); await pointer(svg(), 'pointerup');

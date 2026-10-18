@@ -14,6 +14,7 @@ export type Command =
   | { kind: 'movePoint'; id: string; x: number; y: number }
   | { kind: 'deleteEntity'; id: string }
   | { kind: 'deletePoint'; id: string }
+  | { kind: 'convertEntity'; id: string; to: 'arc' | 'line' }
   | { kind: 'splitAt'; entity: string; x: number; y: number }
   | { kind: 'setEntityData'; id: string; data: JSONValue }
   | { kind: 'setConstruction'; id: string; construction: boolean };

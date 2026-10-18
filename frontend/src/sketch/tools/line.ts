@@ -2,16 +2,21 @@ import type { Command, PointRef } from '../commands';
 import type { Sketch } from '../model';
 import type { SnapResult } from '../snap';
 import type { XY } from '../solver/types';
+import { tangentIncoming } from '../geometry';
 
 export interface LineState { from?: PointRef; end?: PointRef; mode: 'line' | 'tangent' | 'arc3' }
 export const lineState = (): LineState => ({ mode: 'line' });
 export const cancelLine = (): LineState => lineState();
-export function placeLine(state: LineState, cursor: XY, snap: SnapResult | null): { state: LineState; command?: Command; reason?: string } {
+export function placeLine(state: LineState, cursor: XY, snap: SnapResult | null, sketch?: Sketch): { state: LineState; command?: Command; reason?: string } {
   const to = { ...cursor, snap };
   if (state.mode === 'tangent' && typeof state.from !== 'string') {
     const c = snap?.constraint;
-    return c?.kind === 'coincident' ? { state: { ...state, from: c.point } }
-      : { state, reason: 'Choose an existing chain end for a tangent arc.' };
+    if (c?.kind === 'coincident') {
+      try { if (sketch) tangentIncoming(sketch, c.point); }
+      catch (reason) { return { state, reason: reason instanceof Error ? reason.message : String(reason) }; }
+      return { state: { ...state, from: c.point } };
+    }
+    return { state: { mode: 'arc3', from: to }, reason: 'No chain end here: started a 3-point arc. Choose end 2 of 3.' };
   }
   if (!state.from) return { state: { ...state, from: to } };
   if (state.mode === 'arc3' && !state.end) return { state: { ...state, end: to } };

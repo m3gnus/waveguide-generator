@@ -1,6 +1,6 @@
 import type { Command, PointRef } from './commands';
 import { constraintProblem, constraintRefs, entityPoints, isJSON, numericSuffix, validateSketch, type Arc, type Constraint, type Entity, type Point, type Sketch } from './model';
-import { distance, onArc } from './geometry';
+import { arcThrough, distance, onArc, tangentArc } from './geometry';
 
 export type CommandResult = { sketch: Sketch; created: string[]; removedConstraints: string[] } | { error: string };
 export function applyCommand(sketch: Sketch, command: Command): CommandResult {
@@ -60,27 +60,15 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
       }
       case 'addTangentArc': {
         const a = point(command.from), b = resolve(command.to);
-        const incoming = s.entities.filter(e => !e.construction && (e.kind === 'line' ? e.p2 === a.id : e.kind === 'arc' && e.end === a.id));
-        if (incoming.length !== 1) throw new Error('Tangent arc needs exactly one incoming curve.');
-        const e = incoming[0]; let tx: number, ty: number;
-        if (e.kind === 'line') { const p = point(e.p1); tx = a.x - p.x; ty = a.y - p.y; }
-        else if (e.kind === 'arc') { const p = point(e.center); tx = (e.ccw ? -1 : 1) * (a.y - p.y); ty = (e.ccw ? 1 : -1) * (a.x - p.x); }
-        else throw new Error('Unsupported incoming curve.');
-        const dx = b.x - a.x, dy = b.y - a.y, denom = 2 * (-ty * dx + tx * dy);
-        if (Math.abs(denom) <= 1e-12 || Math.hypot(tx, ty) <= 1e-12) throw new Error('Tangent arc is degenerate.');
-        const k = (dx * dx + dy * dy) / denom, center = addPoint(a.x - k * ty, a.y + k * tx);
-        const arc: Arc = { kind: 'arc', id: allocate('a'), center: center.id, start: a.id, end: b.id, ccw: k > 0 };
-        s.entities.push(arc); addConstraint({ kind: 'tangent', a: e.id, b: arc.id } as Constraint); break;
+        const geometry = tangentArc(s, a.id, b), center = addPoint(geometry.center.x, geometry.center.y);
+        const arc: Arc = { kind: 'arc', id: allocate('a'), center: center.id, start: a.id, end: b.id, ccw: geometry.ccw };
+        s.entities.push(arc); addConstraint({ kind: 'tangent', a: geometry.incoming, b: arc.id } as Constraint); break;
       }
       case 'addArc3': {
         const a = resolve(command.start), b = resolve(command.end), p = command.through;
-        if (!Number.isFinite(p.x + p.y)) throw new Error('Through point must be finite.');
-        const bx = b.x - a.x, by = b.y - a.y, px = p.x - a.x, py = p.y - a.y, d = 2 * (bx * py - by * px);
-        if (Math.abs(d) <= 1e-12) throw new Error('Three-point arc is collinear.');
-        const bb = bx * bx + by * by, pp = px * px + py * py;
-        const center = addPoint(a.x + (bb * py - pp * by) / d, a.y + (bx * pp - px * bb) / d);
-        const arc: Arc = { kind: 'arc', id: allocate('a'), center: center.id, start: a.id, end: b.id, ccw: false };
-        arc.ccw = onArc(s, arc, p) ? false : true; s.entities.push(arc); break;
+        const geometry = arcThrough(a, b, p), center = addPoint(geometry.center.x, geometry.center.y);
+        const arc: Arc = { kind: 'arc', id: allocate('a'), center: center.id, start: a.id, end: b.id, ccw: geometry.ccw };
+        s.entities.push(arc); break;
       }
       case 'addConstraint': addConstraint(command.constraint); break;
       case 'removeConstraint': {
@@ -125,6 +113,33 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
         const deleted = new Set([...candidates].filter(id => !stillUsed.has(id)));
         s.points = s.points.filter(p => !deleted.has(p.id));
         cleanConstraints(c => constraintRefs(c).some(id => deleted.has(id))); break;
+      }
+      case 'convertEntity': {
+        const e = entity(command.id);
+        if (e.reference) throw new Error('Reference lines cannot be converted.');
+        if (e.kind !== 'line' && e.kind !== 'arc') throw new Error('Only lines and arcs can be converted.');
+        if (e.kind === command.to) break;
+        let converted: Entity;
+        if (e.kind === 'line') {
+          const { kind, p1, p2, ...base } = e, a = point(p1), b = point(p2);
+          const dx = b.x - a.x, dy = b.y - a.y, length = distance(a, b);
+          if (length <= 1e-12) throw new Error('An arc needs distinct endpoints.');
+          // Keep steep chords monotone in radius by reducing the bulge before a tangent folds.
+          const ratio = dx === 0 ? .15 : Math.min(.15, .4 * Math.tan(Math.atan2(Math.abs(dx), Math.abs(dy)) / 2));
+          const sagitta = length * ratio, radius = length * length / (8 * sagitta) + sagitta / 2;
+          const side = dy > 0 ? -1 : dy < 0 ? 1 : dx > 0 ? 1 : -1;
+          const center = addPoint((a.x + b.x) / 2 - side * dy / length * (sagitta - radius),
+            (a.y + b.y) / 2 + side * dx / length * (sagitta - radius));
+          converted = { ...base, kind: 'arc', start: p1, end: p2, center: center.id, ccw: side < 0 };
+        } else {
+          const { kind, center, start, end, ccw, ...base } = e;
+          converted = { ...base, kind: 'line', p1: start, p2: end };
+        }
+        s.entities = s.entities.map(v => v.id === e.id ? converted : v);
+        cleanConstraints(c => constraintRefs(c).includes(e.id) && !!constraintProblem(s, c));
+        if (e.kind === 'arc' && !s.entities.some(v => entityPoints(v).includes(e.center))
+          && !s.constraints.some(c => constraintRefs(c).includes(e.center))) s.points = s.points.filter(p => p.id !== e.center);
+        break;
       }
       case 'splitAt': {
         const e = entity(command.entity);

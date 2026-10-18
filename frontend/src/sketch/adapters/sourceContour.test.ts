@@ -42,6 +42,28 @@ function editorFixtures(): SourceDocument[] {
     editPatch(INITIAL_SOURCE, 0, { role: 'rigid' })];
 }
 describe('source contour exact import and lowering', () => {
+  it.each([0, -.5, .123456789])('converts piston to an arc and back with literal weight %s, lowering a valid default bulge', weight => {
+    const doc = copy(); doc.drive.weights.piston = weight;
+    const initial = seed(doc), converted = applySourceCommand(initial.sketch, initial.meta, { kind: 'convertEntity', id: 'piston', to: 'arc' });
+    if ('error' in converted) throw new Error(converted.error);
+    expect(converted.sketch.entities[0]).toMatchObject({ id: 'piston', kind: 'arc', start: 'pole', end: 'rim', data: { role: 'moving' } });
+    expect(converted.meta.weights).toEqual({ piston: weight });
+    expect(rules(converted.sketch, converted.meta)).toEqual([]);
+    const lowered = lower(converted.sketch, converted.meta);
+    expect(lowered.ok).toBe(true); if (!lowered.ok) throw new Error('Expected lowered arc');
+    expect(lowered.document.contour.segments[0]).toMatchObject({ id: 'piston', kind: 'arc', center_mm: [expect.any(Number), expect.any(Number)] });
+    expect(lowered.document.drive.weights).toEqual({ piston: weight });
+    const restored = applySourceCommand(converted.sketch, converted.meta, { kind: 'convertEntity', id: 'piston', to: 'line' });
+    if ('error' in restored) throw new Error(restored.error);
+    expect(restored.sketch.points).toEqual(initial.sketch.points);
+    expect(lower(restored.sketch, restored.meta)).toEqual({ ok: true, document: doc });
+  });
+  it.each([-100, -10, 10, 100])('reduces the default bulge on a steep chord at height %s to avoid radial folds', height => {
+    const doc = copy(); doc.contour.points[0].z_mm = height;
+    const initial = seed(doc), result = applySourceCommand(initial.sketch, initial.meta, { kind: 'convertEntity', id: 'piston', to: 'arc' });
+    if ('error' in result) throw new Error(result.error);
+    expect(rules(result.sketch, result.meta)).toEqual([]);
+  });
   it.each(editorFixtures().map((doc, i) => ({ name: `editor fixture ${i}`, doc })))('$name preserves every literal without solving', ({ doc }) => {
     const before = structuredClone(doc), { sketch, meta } = seed(doc);
     expect(validateSketch(sketch)).toEqual({ ok: true });

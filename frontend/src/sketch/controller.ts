@@ -71,7 +71,7 @@ export class SketchController<T> {
       for (const command of Array.isArray(resolved) ? resolved : [resolved]) {
         if (command.kind === 'movePoint' && state.sketch.constraints.some(c => c.kind === 'fix' && c.point === command.id)) throw new Error('Point is held by constraints; remove its fix before editing coordinates.');
         const next = this.apply(state, command); if ('error' in next) throw new Error(next.error);
-        if (['splitAt', 'deleteEntity', 'deletePoint'].includes(command.kind)) for (const c of state.sketch.constraints) if (!next.sketch.constraints.some(v => v.id === c.id)) removed.add(c.id);
+        if (['splitAt', 'deleteEntity', 'deletePoint', 'convertEntity'].includes(command.kind)) for (const c of state.sketch.constraints) if (!next.sketch.constraints.some(v => v.id === c.id)) removed.add(c.id);
         state = next;
         if (command.kind === 'movePoint') {
           const solved = await this.diagnose(session, state), p = solved.sketch.points.find(p => p.id === command.id)!;
