@@ -36,7 +36,7 @@ it('terminates each stuck worker at 30 seconds and starts no more after 300 seco
   await vi.advanceTimersByTimeAsync(270000);
   const state = await running;
   expect(workers).toHaveLength(10); expect(workers.every(w => w.terminate.mock.calls.length === 1)).toBe(true);
-  expect(state.results).toHaveLength(18); expect(state.results.every(r => r.status === 'timeout')).toBe(true);
+  expect(state.results).toHaveLength(36); expect(state.results.every(r => r.status === 'timeout')).toBe(true);
   expect(state.results[0].frames).toBe(1); expect(state.results[0].frameSamples[0].iterations).toBe(0);
-  expect(state.results.filter(r => r.reason?.includes('before this row'))).toHaveLength(8); expect(state.done).toBe(true);
+  expect(state.results.filter(r => r.reason?.includes('before this row'))).toHaveLength(26); expect(state.done).toBe(true);
 });

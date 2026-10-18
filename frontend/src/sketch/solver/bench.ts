@@ -115,7 +115,7 @@ export async function runBench(update: (state: BenchState) => void, workerFactor
       'The complete run has a 300 second wall-clock budget; unfinished rows are explicitly marked timeout.'] };
   const deadline = performance.now() + 300000;
   for (const solver of solverNames.filter(s => !filters.solver || s === filters.solver))
-    for (const n of [8, 60, 256].filter(n => !filters.n || n === filters.n))
+    for (const n of [8, 16, 24, 32, 60, 256].filter(n => !filters.n || n === filters.n))
       for (const variant of (['underconstrained', 'constrained'] as const).filter(v => !filters.variant || v === filters.variant)) {
     const remaining = deadline - performance.now();
     const row: BenchRow = { solver, n, variant, frameSamples: [], status: 'running', frames: 0, totalMs: null, failedFrames: 0, branchFlips: 0, branchCases: [] };
