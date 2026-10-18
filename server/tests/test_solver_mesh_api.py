@@ -15,6 +15,7 @@ from server.jobs.mesh_preview import mount_solver_mesh, solver_mesh_response
 from server.jobs.models import SolveOptions, SolveRequest
 from server.jobs.runtime.core import (
     EngineUnavailableError,
+    SymmetryValidationError,
     _execution_request,
     resolve_submission,
 )
@@ -124,26 +125,27 @@ def test_requested_domain_follows_the_solve_symmetry_mode(monkeypatch) -> None:
         assert half["quadrants"] == 12
         assert half["cut_planes"] == ["y0"]
 
-        # Requesting a mirror plane the geometry lacks is a 422, not a build.
-        with pytest.raises(HTTPException) as refusal:
-            await _preview_response(
-                _rosse(
-                    enclosure={
-                        "depth": 60,
-                        "space_l": 20,
-                        "space_r": 30,
-                        "space_t": 25,
-                        "space_b": 25,
-                    }
-                ),
-                "quarter",
-            )
-        assert refusal.value.status_code == 422
+        # Invalid forced symmetry previews the valid automatic domain.
+        refused = await _preview_response(
+            _rosse(
+                enclosure={
+                    "depth": 60,
+                    "space_l": 20,
+                    "space_r": 30,
+                    "space_t": 25,
+                    "space_b": 25,
+                }
+            ),
+            "quarter",
+        )
+        assert refused["quadrants"] == 12
+        assert "Forced symmetry" in refused["plan"]["refusal"]
+        assert refused["msh_text"] == STUB_MSH
 
     try:
         asyncio.run(scenario())
-        # full and half_xz stamp different quadrants: two distinct artifacts.
-        assert len(calls) == 2
+        # Full, half_xz, and the asymmetric enclosure are distinct artifacts.
+        assert len(calls) == 3
     finally:
         clear_solver_mesh_cache()
 
@@ -271,6 +273,7 @@ def test_unavailable_engine_refuses_solve_but_keeps_preview(monkeypatch, engine,
         )
         assert preview["quadrants"] == 1
         assert preview["msh_text"] == STUB_MSH
+        assert preview["plan"]["refusal"]
         if engine == "bempp":
             assert preview["plan"]["adjustments"][0]["effective_mm"] == 5
 
@@ -365,5 +368,89 @@ def test_unavailable_auto_engine_still_resolves_floor_domain(monkeypatch):
         ))
         assert preview["quadrants"] == 14
         assert preview["cut_planes"] == ["x0"]
+    finally:
+        clear_solver_mesh_cache()
+
+
+@pytest.mark.parametrize(
+    ("design_extra", "options", "reason", "quadrants"),
+    [
+        ({}, {"accuracy": "accurate", "ground_plane": {"enabled": True}}, "Accurate via BEAT cannot solve a rigid ground plane", 14),
+        ({}, {"accuracy": "accurate", "symmetry": "half_xz"}, "xz-only half domain", 12),
+        ({"simulation": {"sim_type": "infinite-baffle"}}, {"accuracy": "accurate"}, "Accurate via BEAT cannot solve a coupled infinite baffle", 1),
+        ({}, {"symmetry": "quarter", "ground_plane": {"enabled": True}}, "ground plane", 14),
+        ({"simulation": {"sim_type": "infinite-baffle"}}, {"ground_plane": {"enabled": True}}, "two different half-space boundaries", 1234),
+        ({}, {"engine": "beat-metal", "ground_plane": {"enabled": True}}, "cannot solve above a rigid ground plane", 14),
+        ({"simulation": {"sim_type": "infinite-baffle"}}, {"engine": "beat-metal"}, "cannot solve a coupled infinite baffle", 1),
+        ({"simulation": {"sim_type": "infinite-baffle"}}, {"engine": "bempp", "symmetry": "quarter"}, "requires Full symmetry", 1234),
+        ({}, {"engine": "beat-metal", "symmetry": "half_xz"}, "does not support the xz half symmetry", 12),
+    ],
+)
+def test_geometry_refusals_still_preview_mesh_and_reason(monkeypatch, design_extra, options, reason, quadrants):
+    registry = EngineRegistry(
+        detector=lambda: [EngineInfo(
+            "beat-metal", True, "test", "test", symmetry_domains=("full", "half-yz", "quarter"),
+        ), EngineInfo(
+            "bempp", True, "test", "test",
+            mountings=("free-standing", "infinite-baffle", "ground-plane"),
+        )],
+        factory=lambda name: object(),
+    )
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", _stub_worker([]))
+    clear_solver_mesh_cache()
+
+    async def scenario():
+        request = SolveRequest.model_validate({"design": _rosse(**design_extra), "options": options})
+        with pytest.raises(SymmetryValidationError) as refused:
+            await resolve_submission(request, registry)
+        assert reason in str(refused.value)
+        preview = await solver_mesh_response(
+            request.design, None, options=request.options, engine_registry=registry,
+        )
+        assert preview["msh_text"] == STUB_MSH
+        assert preview["stats"]["triangle_count"] == 4
+        assert preview["quadrants"] == quadrants
+        assert preview["plan"]["refusal"] == str(refused.value)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        clear_solver_mesh_cache()
+
+
+@pytest.mark.parametrize("path", ["/api/solve", "/api/solve/plan"])
+def test_geometry_refusal_precedes_engine_unavailability(tmp_path, path):
+    from server.jobs.api import create_jobs_router
+    from server.jobs.runtime.core import JobRuntime
+    from server.jobs.store import JobStore
+
+    runtime = JobRuntime(
+        JobStore(tmp_path / "jobs.sqlite"),
+        engine_registry=EngineRegistry(detector=lambda: []),
+    )
+    app = FastAPI()
+    app.include_router(create_jobs_router(runtime))
+    with TestClient(app) as client:
+        response = client.post(path, json={
+            "design": _rosse().model_dump(mode="json"),
+            "options": {"engine": "beat-metal", "accuracy": "accurate", "ground_plane": {"enabled": True}},
+        })
+    assert response.status_code == 422
+    assert "Accurate via BEAT cannot solve a rigid ground plane" in response.json()["detail"]
+
+
+def test_bare_native_bempp_refusal_still_previews_geometry(monkeypatch):
+    from server.tests.test_native_formulas import design_payload
+
+    design = DesignConfig.model_validate(design_payload("OSSE-AXIAL"))
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", _stub_worker([]))
+    clear_solver_mesh_cache()
+    try:
+        preview = asyncio.run(solver_mesh_response(
+            design, None, options=SolveOptions(engine="bempp"),
+            engine_registry=EngineRegistry(detector=lambda: []),
+        ))
+        assert preview["msh_text"] == STUB_MSH
+        assert "BEMPP requires a closed body" in preview["plan"]["refusal"]
     finally:
         clear_solver_mesh_cache()

@@ -759,10 +759,8 @@ async def _resolve_parametric_engine(
     engine_registry: EngineRegistry,
     resolved_quadrants: int,
     plan: dict[str, Any],
-    *,
-    require_available: bool,
-) -> tuple[SolveRequest, str]:
-    """Choose the host engine; previews can retain an unavailable selection.
+) -> tuple[SolveRequest, str, EngineUnavailableError | None]:
+    """Choose the host engine, deferring availability refusal until admission.
 
     Availability affects admission, not the geometry rules below. Still perform
     normal AUTO selection and substitution when possible so previews and solves
@@ -879,24 +877,23 @@ async def _resolve_parametric_engine(
                 f"Solve engine '{engine_name}' is unavailable. "
                 f"{reason or fallback_reason}"
             )
-    except EngineUnavailableError:
-        if require_available:
-            raise
+    except EngineUnavailableError as exc:
         engine_name = request.options.engine
         plan["engine"] = engine_name
-    return request, engine_name
+        return request, engine_name, exc
+    return request, engine_name, None
 
 
 async def resolve_submission(
     request: SolveRequest,
     engine_registry: EngineRegistry,
     *,
-    require_available_engine: bool = True,
+    preview: bool = False,
 ) -> SubmissionResolution:
     """Resolve every host-dependent parametric submission decision once.
 
-    ``require_available_engine=False`` resolves preview geometry even when this
-    host cannot admit the solve. Geometry transforms and domain rules stay here.
+    ``preview=True`` reports admission refusals in the plan while resolving the
+    geometry. The same checks run in the same order for preview and solve.
 
     This boundary deliberately stops before UUID allocation or store access so
     non-HTTP callers can ask the runtime exactly the same questions as a real
@@ -911,6 +908,15 @@ async def resolve_submission(
             "imported_submission_requires_runtime",
             "imported geometry must be prepared by JobRuntime.submit",
         )
+
+    refusal: str | None = None
+
+    def refuse(error: ValueError | EngineUnavailableError) -> None:
+        nonlocal refusal
+        if not preview:
+            raise error
+        if refusal is None:
+            refusal = str(error)
 
     _refuse_removed_solver(request)
     original_requested = request.options.engine
@@ -933,7 +939,8 @@ async def resolve_submission(
             request.options.symmetry, resolution
         )
     except ValueError as exc:
-        raise SymmetryValidationError(str(exc)) from exc
+        refuse(SymmetryValidationError(str(exc)))
+        resolved_quadrants = resolution.quadrants
     symmetry_metadata = {
         "requested": request.options.symmetry,
         "resolved_quadrants": resolved_quadrants,
@@ -952,26 +959,26 @@ async def resolve_submission(
         ),
         "eligibility_reasons": [],
     }
-    request, engine_name = await _resolve_parametric_engine(
+    request, engine_name, unavailable = await _resolve_parametric_engine(
         request, engine_registry, resolved_quadrants,
-        symmetry_metadata["solver_plan"], require_available=require_available_engine,
+        symmetry_metadata["solver_plan"],
     )
     if request.options.accuracy == "accurate":
         if resolved_quadrants == 12:
-            raise SymmetryValidationError(
+            refuse(SymmetryValidationError(
                 "Accurate via BEAT cannot solve an xz-only half domain. "
                 "Use a full or yz-half/quarter domain, or choose Fast."
-            )
+            ))
         if _requested_mounting(request) == "infinite-baffle":
-            raise SymmetryValidationError(
+            refuse(SymmetryValidationError(
                 "Accurate via BEAT cannot solve a coupled infinite baffle. "
                 "Use a free-standing mounting, or choose Fast and a compatible engine."
-            )
+            ))
         if _ground_plane_axis(request) is not None:
-            raise SymmetryValidationError(
+            refuse(SymmetryValidationError(
                 "Accurate via BEAT cannot solve a rigid ground plane in this adapter. "
                 "Turn off the ground plane, or choose Fast and a compatible engine."
-            )
+            ))
 
     if (
         _ground_plane_axis(request) is not None
@@ -983,17 +990,13 @@ async def resolve_submission(
         # restrict_for_ground_plane subtracts the ground axis's mirror plane
         # before the engine is even chosen. The user was charged roughly double
         # the mesh for a boundary the solve then discarded.
-        raise SymmetryValidationError(
+        refuse(SymmetryValidationError(
             "A coupled infinite baffle and a rigid ground plane are two "
             "different half-space boundaries and cannot be combined. The "
             "baffle already mounts the mouth in an unbounded wall; turn the "
             "ground plane off, or set the simulation type to free-standing."
-        )
-    check_engine_contract = (
-        require_available_engine
-        or await engine_registry.get_engine(engine_name) is not None
-    )
-    if check_engine_contract and _ground_plane_axis(request) is not None:
+        ))
+    if _ground_plane_axis(request) is not None:
         # Every path that picks an engine converges here, which is the point.
         # The AUTO gate above filters candidates by mounting, but it is only
         # reached when the engine is literally "auto": an explicitly selected engine skips it, and a
@@ -1012,13 +1015,13 @@ async def resolve_submission(
         }
         if engine_name not in capable:
             offer = ", ".join(sorted(capable)) if capable else "none on this host"
-            raise SymmetryValidationError(
+            refuse(SymmetryValidationError(
                 f"Solve engine '{engine_name}' cannot solve above a rigid ground "
                 f"plane; it would silently return a free-standing result. "
                 f"Engines that can: {offer}. Choose one, or turn the ground "
                 "plane off."
-            )
-    if check_engine_contract and request.design.root.simulation.sim_type == "infinite-baffle":
+            ))
+    if request.design.root.simulation.sim_type == "infinite-baffle":
         # Every path that picks an engine converges here, exactly as for the
         # ground plane above: an explicit engine skips the AUTO gate, and so do
         # a stored preference, an imported ATH SimType=1 and a retry. Refused
@@ -1033,14 +1036,13 @@ async def resolve_submission(
         listed = {info.name: info for info in await engine_registry.capabilities()}
         info = listed.get(engine_name)
         if info is not None and "infinite-baffle" not in info.mountings:
-            raise SymmetryValidationError(
+            refuse(SymmetryValidationError(
                 f"Solve engine '{engine_name}' cannot solve a coupled infinite "
                 f"baffle. Choose {_INFINITE_BAFFLE_ENGINES}, or set the "
                 "simulation type to free-standing."
-            )
+            ))
     if (
-        check_engine_contract
-        and engine_name != "dryrun"
+        engine_name != "dryrun"
         and await engine_registry.get_engine(engine_name) is not None
         and not await engine_registry.supports_symmetry(engine_name, resolved_quadrants)
     ):
@@ -1050,29 +1052,38 @@ async def resolve_submission(
             14: "the yz half",
             1: "quarter",
         }.get(resolved_quadrants, f"quadrants {resolved_quadrants}")
-        raise SymmetryValidationError(
+        refuse(SymmetryValidationError(
             f"Solve engine '{engine_name}' does not support {domain} symmetry; "
             "choose a compatible engine or change the requested symmetry"
-        )
+        ))
     if (
         engine_name == "bempp"
         and request.design.root.simulation.sim_type == "infinite-baffle"
     ):
         if request.options.symmetry != "auto" and resolved_quadrants != 1234:
-            raise SymmetryValidationError(
+            refuse(SymmetryValidationError(
                 "BEMPP coupled infinite-baffle currently requires Full symmetry; "
                 "use Auto/Full or choose Metal for half/quarter domains"
-            )
+            ))
         resolved_quadrants = 1234
         symmetry_metadata["resolved_quadrants"] = resolved_quadrants
         symmetry_metadata["solver_plan"]["symmetry_reason"] = (
             "BEMPP coupled infinite-baffle uses the validated full-domain formulation"
         )
-    request, wall_adjustment = _apply_bempp_wall_default(request, engine_name)
+    wall_adjustment = None
+    try:
+        request, wall_adjustment = _apply_bempp_wall_default(request, engine_name)
+    except SymmetryValidationError as exc:
+        refuse(exc)
     if wall_adjustment is not None:
         symmetry_metadata["solver_plan"].setdefault("adjustments", []).append(
             wall_adjustment
         )
+    # Availability is the final admission check, after geometry and contracts.
+    if unavailable is not None:
+        refuse(unavailable)
+    if refusal is not None:
+        symmetry_metadata["solver_plan"]["refusal"] = refusal
     return SubmissionResolution(
         request=request,
         engine_name=engine_name,

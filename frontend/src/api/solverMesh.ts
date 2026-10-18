@@ -1,4 +1,6 @@
-import { formatApiDetail } from '../jobs/actions';
+import { formatApiDetail, toSolveDesign } from '../jobs/actions';
+import type { DesignDocument } from '../stores/design';
+import type { SolveOptionsStore } from '../stores/solveOptions';
 import { createImportedMeshScene, type ImportedMeshScene } from '../viewport/importedMesh';
 import { parseMSH } from '../viewport/mshParser';
 import type { components } from './generated/openapi';
@@ -9,6 +11,32 @@ import type { components } from './generated/openapi';
  * (a frequency sweep, a polar setting) comes back with the same key. */
 export type SolverMeshStats = components['schemas']['SolverMeshStats'];
 export type SolverMeshResult = components['schemas']['SolverMeshResponse'];
+
+/** The resolver's engine/domain/geometry inputs, independent of sampling validation. */
+export function solverMeshOptions(state: SolveOptionsStore) {
+  return {
+    engine: state.engine,
+    accuracy: state.accuracy,
+    solver_mode: state.solverMode,
+    symmetry: state.symmetry,
+    ...(state.groundPlane.enabled ? { ground_plane: state.groundPlane } : {}),
+  };
+}
+
+/** Design sampling is consumed after meshing, just like option sampling. */
+export function solverMeshDesignKey(design: DesignDocument): string {
+  const wire = toSolveDesign(design);
+  const simulation = { ...(wire.simulation as Record<string, unknown>) };
+  delete simulation.f1;
+  delete simulation.f2;
+  delete simulation.num_frequencies;
+  return JSON.stringify({
+    ...wire,
+    simulation,
+    extra_blocks: Object.fromEntries(Object.entries(design.extra_blocks)
+      .filter(([name]) => !name.startsWith('ABEC.Polars:'))),
+  });
+}
 
 async function detail(response: Response): Promise<string> {
   try {

@@ -7,10 +7,10 @@ import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { compareSelection } from '../api/results';
 import { runContext, runMatchesContext, useRunContext, type RunContext } from '../results/runCoherence';
-import { postSymmetry, solvePlanRequestBody, toSolveDesign } from '../jobs/actions';
+import { postSymmetry, toSolveDesign } from '../jobs/actions';
 import { planAdjustmentNotice } from '../jobs/planAdjustments';
 import { useOptionalSolveControl } from '../shell/JobsCoordinator';
-import { postSolverMesh, solverMeshArtifactToken, solverMeshScene } from '../api/solverMesh';
+import { postSolverMesh, solverMeshArtifactToken, solverMeshDesignKey, solverMeshOptions, solverMeshScene } from '../api/solverMesh';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
@@ -389,6 +389,13 @@ function trackHeaderHeight(header: HTMLDivElement | null) {
   };
 }
 
+function currentSolverMeshKey(): string {
+  return JSON.stringify([
+    solverMeshDesignKey(useDesignStore.getState().design),
+    solverMeshOptions(useSolveOptionsStore.getState()),
+  ]);
+}
+
 export function Viewport() {
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   const design = useDesignStore((state) => state.design);
@@ -429,10 +436,9 @@ export function Viewport() {
   const observationHovered = useObservationStore((state) => state.hovered);
   // The observation readout follows the workspace: Imported has its own options.
   const polar = useScopedSolveOptions((state) => state.polar);
-  // Mesh resolution depends on the complete solve options as well as design.
-  const meshOptionsKey = useSolveOptionsStore((state) => {
-    try { return JSON.stringify(state.options()); } catch { return null; }
-  });
+  // resolve_submission uses only these options for engine/domain/geometry.
+  // Sampling and post-build validation cannot change the mesh.
+  const meshOptionsKey = useSolveOptionsStore((state) => JSON.stringify(solverMeshOptions(state)));
   const fieldEnabled = useFieldPlaneStore((state) => state.enabled);
   const fieldSource = useFieldPlaneStore((state) => state.source);
   const [femRendering, setFemRendering] = useState<FemFieldRendering>('smooth');
@@ -573,7 +579,11 @@ export function Viewport() {
   const [solverMeshState, setSolverMeshState] = useState<SolverMeshRefreshState>({
     building: false, stale: false, staleReason: null, error: null,
   });
-  const planAdjustments = useOptionalSolveControl()?.plan?.adjustments ?? [];
+  const solveControl = useOptionalSolveControl();
+  const retainedPlan = useRef(solveControl?.plan);
+  if (solveControl?.plan || !solveControl?.planPending) retainedPlan.current = solveControl?.plan;
+  const planAdjustments = retainedPlan.current?.adjustments ?? [];
+  const [solverMeshRefusal, setSolverMeshRefusal] = useState<string | null>(null);
   // Created once: the build reads the design, symmetry mode, and job list at
   // call time, so the latest design always wins without re-instantiating.
   const solverRefreshRef = useRef<SolverMeshRefreshController | null>(null);
@@ -583,15 +593,17 @@ export function Viewport() {
         const generation = importedMeshStore.beginIntent();
         const started = performance.now();
         try {
-          const body = solvePlanRequestBody(
-            useDesignStore.getState().design,
-            useSolveOptionsStore.getState().options(),
-          );
+          const settings = useSolveOptionsStore.getState();
+          const body = JSON.stringify({
+            design: toSolveDesign(useDesignStore.getState().design),
+            options: { ...solverMeshOptions(settings), mesh_validation_mode: settings.meshValidationMode },
+          });
           const result = await postSolverMesh(body, fetch, signal);
+          if (signal.aborted) return { ok: false, durationMs: performance.now() - started };
+          setSolverMeshRefusal(result.plan?.refusal ?? null);
           const token = solverMeshArtifactToken(result.stats.mesh_cache_key);
           const current = importedMeshStore.getSnapshot().solver;
-          // An unchanged artifact — a frequency-only edit is a server cache
-          // hit — keeps the existing scene object, so nothing re-renders.
+          // Keep the scene object when the resolved artifact is unchanged.
           if (current?.artifactToken !== token) {
             importedMeshStore.setSolver(
               solverMeshScene('Simulation mesh', result),
@@ -834,12 +846,12 @@ export function Viewport() {
   useEffect(() => {
     if (!solverViewSelected) return undefined;
     setMode('solid-wire');
-    solverRefresh.activate(useDesignStore.getState().designRevision);
+    solverRefresh.activate(currentSolverMeshKey());
     return () => solverRefresh.deactivate();
   }, [solverRefresh, solverViewSelected]);
 
-  useEffect(
-    () => subscribeRevision((event) => {
+  useEffect(() => {
+    return subscribeRevision((event) => {
       // A load replaces the document; a solver-mesh build already in flight
       // for the one it replaced is still answering a question nobody is
       // asking any more. `designChanged` alone does not stop it -- it only
@@ -852,18 +864,16 @@ export function Viewport() {
         importedMeshStore.beginIntent();
         solverRefresh.documentLoaded();
       }
-      solverRefresh.designChanged(event.revision);
-    }),
-    [solverRefresh],
-  );
+      solverRefresh.designChanged(currentSolverMeshKey());
+    });
+  }, [solverRefresh]);
 
   const previousMeshOptions = useRef(meshOptionsKey);
   useEffect(() => {
     if (previousMeshOptions.current === meshOptionsKey) return;
     previousMeshOptions.current = meshOptionsKey;
     if (solverViewSelected) importedMeshStore.beginIntent();
-    solverRefresh.documentLoaded();
-    solverRefresh.designChanged(useDesignStore.getState().designRevision);
+    solverRefresh.designChanged(currentSolverMeshKey());
   }, [meshOptionsKey, solverRefresh, solverViewSelected]);
 
   useEffect(() => {
@@ -1098,6 +1108,9 @@ export function Viewport() {
     }).map((notice) => (
       <div className="solver-plan-adjustment-note" role="note" key={notice}>{notice}</div>
     ))}
+    {solverViewSelected && solverMeshRefusal && <div className="solver-plan-adjustment-note" role="note">
+      Solve unavailable: {solverMeshRefusal}
+    </div>}
     {activeScene && geometryWarnings.length > 0 && <details className="viewport-warning" role="status">
       <summary aria-label={`${geometryWarnings.length} geometry warning${geometryWarnings.length === 1 ? '' : 's'}`}>
         <i />{geometryWarnings.length} warning{geometryWarnings.length === 1 ? '' : 's'}

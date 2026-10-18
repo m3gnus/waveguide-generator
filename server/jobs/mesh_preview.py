@@ -90,7 +90,7 @@ async def solver_mesh_response(
         resolved = await resolve_submission(
             SolveRequest.model_validate({"design": design, "options": options}),
             engine_registry,
-            require_available_engine=False,
+            preview=True,
         )
         quadrants = int(resolved.symmetry_metadata["resolved_quadrants"])
         execution = _execution_request(resolved.request, resolved_quadrants=quadrants)

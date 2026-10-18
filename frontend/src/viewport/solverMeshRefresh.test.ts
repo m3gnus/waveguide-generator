@@ -125,10 +125,10 @@ describe('SolverMeshRefreshController', () => {
     expect(h.builds).toHaveLength(3);
   });
 
-  it('raises the banner instead of auto-building after a failure', async () => {
+  it('automatically rebuilds after a failed build followed by an option fix', async () => {
     const h = harness();
     h.controller.activate(1);
-    h.builds[0]({ ok: false, durationMs: 50, error: 'mesher refused' });
+    h.builds[0]({ ok: false, durationMs: SOLVER_MESH_AUTO_BUDGET_MS + 1, error: 'mesher refused' });
     await flush();
     expect(h.controller.getState()).toMatchObject({
       stale: true, staleReason: 'build-failed', error: 'mesher refused',
@@ -136,14 +136,22 @@ describe('SolverMeshRefreshController', () => {
 
     h.controller.designChanged(2);
     vi.advanceTimersByTime(SOLVER_MESH_DEBOUNCE_MS * 4);
-    expect(h.builds).toHaveLength(1);
-    expect(h.controller.getState()).toMatchObject({ stale: true, staleReason: 'build-failed' });
-
-    h.controller.refresh();
     expect(h.builds).toHaveLength(2);
     h.builds[1](ok());
     await flush();
     expect(h.controller.getState()).toEqual({ building: false, stale: false, staleReason: null, error: null });
+  });
+
+  it('rebuilds the fix that arrived while a failing build was in flight', async () => {
+    const h = harness();
+    h.controller.activate(1);
+    h.controller.designChanged(2);
+    h.builds[0]({ ok: false, durationMs: 50, error: 'old option refused' });
+    await flush();
+    expect(h.builds).toHaveLength(2);
+    h.builds[1]({ ok: false, durationMs: 50, error: 'still invalid' });
+    await flush();
+    expect(h.builds).toHaveLength(2);
   });
 
   it('withholds builds behind the banner while a solve is running, then resumes', async () => {

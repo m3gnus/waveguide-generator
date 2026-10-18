@@ -11506,6 +11506,17 @@
           "reason": {
             "title": "Reason",
             "type": "string"
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal"
           }
         },
         "required": [

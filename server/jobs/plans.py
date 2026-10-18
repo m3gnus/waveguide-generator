@@ -48,6 +48,7 @@ class SolvePlanResponse(BaseModel):
     eligibility_reasons: list[str]
     engine_substitution: EngineSubstitution | None = None
     adjustments: list[PlanAdjustment] = []
+    refusal: str | None = None
 
 
 def solve_plan_response(resolved: SubmissionResolution) -> SolvePlanResponse:
@@ -57,6 +58,7 @@ def solve_plan_response(resolved: SubmissionResolution) -> SolvePlanResponse:
     substitution = plan.get("engine_substitution")
     return SolvePlanResponse(
         engine=resolved.engine_name,
+        refusal=plan.get("refusal"),
         formulation=plan["formulation"],
         reason=plan["reason"],
         eligibility_reasons=[str(reason) for reason in plan["eligibility_reasons"]],

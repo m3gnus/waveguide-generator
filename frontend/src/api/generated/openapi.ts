@@ -6013,6 +6013,8 @@ export interface components {
             formulation: "full-3d";
             /** Reason */
             reason: string;
+            /** Refusal */
+            refusal?: string | null;
         };
         /** SolveRequest */
         SolveRequest: {

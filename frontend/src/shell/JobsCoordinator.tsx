@@ -56,6 +56,7 @@ export interface SolveNotice {
 interface SolveControl {
   /** The coordinator's current parametric plan, also shared with dock panels. */
   plan: SolvePlan | null;
+  planPending: boolean;
   solve(): void;
   /** CAD Link mode: Solve solves the CAD model on screen. */
   cadMode: boolean;
@@ -723,6 +724,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   );
   const control = useMemo<SolveControl>(() => ({
     plan: solvePlan,
+    planPending: solvePlanPending,
     solve,
     cadMode: cadGeometryActive,
     disabled: !solveEnabled,
@@ -742,7 +744,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               : cadGeometryActive
                 ? capabilityError ?? importedUnavailable ?? 'No engine can solve imported CAD geometry here'
                 : parametricUnavailable,
-  }), [cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, notice, parametricUnavailable, planError, planPending, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, submitting]);
+  }), [cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, notice, parametricUnavailable, planError, planPending, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
 
   useEffect(() => {
     publishSolveControl(control);

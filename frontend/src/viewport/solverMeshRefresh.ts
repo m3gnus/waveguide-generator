@@ -4,8 +4,8 @@
  * rebuild, coalesced to at most one build in flight plus one pending; the
  * pending build always starts from the latest design. Auto-rebuild yields to
  * a visible "Mesh out of date" banner instead whenever rebuilding on every
- * edit would hurt: the previous build ran over budget, the previous build
- * failed, or a solve job currently owns the pipeline. A manual refresh is
+ * edit would hurt: the previous successful build ran over budget, or a solve
+ * job currently owns the pipeline. A manual refresh is
  * always allowed and is how the banner is cleared.
  */
 
@@ -44,6 +44,7 @@ export interface SolverMeshRefreshOptions {
 }
 
 const FRESH: SolverMeshRefreshState = { building: false, stale: false, staleReason: null, error: null };
+type MeshRevision = number | string;
 
 export class SolverMeshRefreshController {
   private readonly options: Required<SolverMeshRefreshOptions>;
@@ -51,8 +52,8 @@ export class SolverMeshRefreshController {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private inFlight: AbortController | null = null;
   private pending = false;
-  private latestRevision: number | null = null;
-  private builtRevision: number | null = null;
+  private latestRevision: MeshRevision | null = null;
+  private builtRevision: MeshRevision | null = null;
   /** Bumps on every document load; a build only counts as fresh within its epoch. */
   private loadEpoch = 0;
   private builtEpoch = -1;
@@ -74,7 +75,7 @@ export class SolverMeshRefreshController {
   /** The mesh view became the active viewport source. Activation is user
    * intent, so an out-of-date or failed mesh rebuilds immediately — only a
    * running solve withholds the build behind the banner. */
-  activate(revision: number): void {
+  activate(revision: MeshRevision): void {
     this.active = true;
     this.latestRevision = revision;
     if (this.builtRevision === revision && this.builtEpoch === this.loadEpoch && this.lastOutcome?.ok) {
@@ -107,7 +108,7 @@ export class SolverMeshRefreshController {
 
   /** A design mutation landed. Debounce while auto-rebuild is allowed; raise
    * the banner instead when it is not. */
-  designChanged(revision: number): void {
+  designChanged(revision: MeshRevision): void {
     if (revision === this.latestRevision) return;
     this.latestRevision = revision;
     if (!this.active) return;
@@ -153,8 +154,7 @@ export class SolverMeshRefreshController {
 
   private blockedReason(): SolverMeshStaleReason | null {
     if (this.options.isSolveActive()) return 'solve-running';
-    if (this.lastOutcome && !this.lastOutcome.ok) return 'build-failed';
-    if (this.lastOutcome && this.lastOutcome.durationMs > this.options.autoBudgetMs) return 'build-slow';
+    if (this.lastOutcome?.ok && this.lastOutcome.durationMs > this.options.autoBudgetMs) return 'build-slow';
     return null;
   }
 
@@ -183,6 +183,9 @@ export class SolverMeshRefreshController {
           staleReason: 'build-failed',
           error: outcome.error ?? 'Solver mesh build failed',
         });
+        // An edit may already have fixed the failing input while this request
+        // was in flight. Retry that newer input once, without looping on failures.
+        if (missedEdit) this.designChangedAfterFailure();
         return;
       }
       if (!missedEdit) {
@@ -197,6 +200,15 @@ export class SolverMeshRefreshController {
       this.publish(FRESH);
       this.startBuild();
     });
+  }
+
+  private designChangedAfterFailure(): void {
+    const reason = this.blockedReason();
+    if (reason !== null) {
+      this.publish({ building: false, stale: true, staleReason: reason, error: this.state.error });
+      return;
+    }
+    this.startBuild();
   }
 
   private clearTimer(): void {

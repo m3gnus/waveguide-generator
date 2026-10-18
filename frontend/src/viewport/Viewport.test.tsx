@@ -30,10 +30,10 @@ import { femFieldFixture } from './test-fixtures/femField';
 import * as canvasModule from './ViewportCanvas';
 import * as femSceneModule from './FemFieldScene';
 
-const coordinator = vi.hoisted(() => ({ plan: null as SolvePlan | null }));
+const coordinator = vi.hoisted(() => ({ plan: null as SolvePlan | null, planPending: false }));
 vi.mock('../shell/JobsCoordinator', async (original) => ({
   ...await original<typeof import('../shell/JobsCoordinator')>(),
-  useOptionalSolveControl: () => ({ plan: coordinator.plan }),
+  useOptionalSolveControl: () => ({ plan: coordinator.plan, planPending: coordinator.planPending }),
 }));
 
 const frame: DecodedFrame = {
@@ -1024,6 +1024,7 @@ describe('BEMPP wall plan-adjustment note', () => {
     resetCadReturnStore();
     workspaceModeStore.setMode('parametric');
     coordinator.plan = null;
+    coordinator.planPending = false;
     // The note is displayed only while the simulation mesh is selected.
     importedMeshStore.showSolver();
     host = document.createElement('div');
@@ -1083,6 +1084,11 @@ describe('BEMPP wall plan-adjustment note', () => {
     await act(async () => root.render(<Viewport />));
     expect(host.querySelector('.solver-plan-adjustment-note')?.textContent).toContain('5 mm');
     coordinator.plan = null;
+    coordinator.planPending = true;
+    await act(async () => root.render(<Viewport />));
+    expect(host.querySelector('.solver-plan-adjustment-note')?.textContent).toContain('5 mm');
+    coordinator.plan = solvePlanWithAdjustments([]);
+    coordinator.planPending = false;
     await act(async () => root.render(<Viewport />));
     expect(host.querySelector('.solver-plan-adjustment-note')).toBeNull();
     expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === '/api/solve/plan')).toHaveLength(0);
@@ -1094,7 +1100,7 @@ describe('BEMPP wall plan-adjustment note', () => {
   });
 });
 
-describe('solver-mesh refresh across a design load', () => {
+describe('solver-mesh refresh inputs and document loads', () => {
   let host: HTMLDivElement;
   let root: Root;
 
@@ -1127,7 +1133,7 @@ describe('solver-mesh refresh across a design load', () => {
     vi.restoreAllMocks();
   });
 
-  it('sends complete solve options and rebuilds after an option-only edit', async () => {
+  it('sends mesh-relevant solve options and rebuilds after an engine edit', async () => {
     useSolveOptionsStore.getState().updateGroundPlane({ enabled: true, axis: 'y', height_m: 1 });
     const requests: Array<{ options: { engine: string; ground_plane: { enabled: boolean } } }> = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -1148,6 +1154,71 @@ describe('solver-mesh refresh across a design load', () => {
     expect(requests).toHaveLength(2);
     expect(requests[1].options.engine).toBe('bempp');
     expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === '/api/solve/plan')).toHaveLength(0);
+  });
+
+  it.each(['slow build', 'running solve'] as const)('ignores frequency and polar edits after a %s', async (guard) => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(0);
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input) !== '/api/solver-mesh') return new Response('not found', { status: 404 });
+      if (guard === 'slow build') clock.mockReturnValue(2000);
+      return new Response(JSON.stringify(solverMeshResponse('same')), { status: 200 });
+    });
+    await act(async () => root.render(<Viewport />));
+    if (guard === 'running solve') act(() => publishJobs([{ ...completeJob('running', false), status: 'running' }]));
+    act(() => {
+      useSolveOptionsStore.getState().setFrequencySpacing('linear');
+      useSolveOptionsStore.getState().setSweep({ startHz: 400, endHz: 8000, count: 20 });
+      useSolveOptionsStore.getState().updatePolar({ angleStep: 10 });
+      useDesignStore.getState().updateField('simulation.f1', 400);
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 550)); });
+    expect(fetcher.mock.calls.filter(([url]) => String(url) === '/api/solver-mesh')).toHaveLength(1);
+    expect(host.querySelector('.solver-mesh-banner')).toBeNull();
+    act(() => importedMeshStore.showParametric());
+    act(() => useDesignStore.getState().updateField('simulation.f2', 9000));
+    await act(async () => importedMeshStore.showSolver());
+    expect(fetcher.mock.calls.filter(([url]) => String(url) === '/api/solver-mesh')).toHaveLength(1);
+    expect(host.querySelector('.solver-mesh-banner')).toBeNull();
+    act(() => useSolveOptionsStore.getState().setEngine('bempp'));
+    expect(host.querySelector('.solver-mesh-banner')?.textContent).toContain('Mesh out of date');
+    act(() => publishJobs([]));
+  });
+
+  it('previews independently of an invalid frequency list and its correction', async () => {
+    useSolveOptionsStore.getState().setFrequencyMode('list');
+    useSolveOptionsStore.getState().setFrequencyListText('unfinished');
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (String(input) !== '/api/solver-mesh') return new Response('not found', { status: 404 });
+      expect(JSON.parse(String(init?.body)).options.frequencies_hz).toBeUndefined();
+      return new Response(JSON.stringify(solverMeshResponse('same')), { status: 200 });
+    });
+    await act(async () => root.render(<Viewport />));
+    expect(importedMeshStore.getSnapshot().solver).not.toBeNull();
+    act(() => useSolveOptionsStore.getState().setFrequencyListText('100 200 400'));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 550)); });
+    expect(fetcher.mock.calls.filter(([url]) => String(url) === '/api/solver-mesh')).toHaveLength(1);
+    expect(host.querySelector('.solver-mesh-banner')).toBeNull();
+  });
+
+  it('shows the mesh with its solve-refusal note and rebuilds an option fix after a build failure', async () => {
+    let requests = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input) !== '/api/solver-mesh') return new Response('not found', { status: 404 });
+      requests += 1;
+      if (requests === 1) return new Response(JSON.stringify({ detail: 'build failed' }), { status: 422 });
+      return new Response(JSON.stringify({
+        ...solverMeshResponse('refused'),
+        plan: { refusal: 'Turn off the ground plane' },
+      }), { status: 200 });
+    });
+    await act(async () => root.render(<Viewport />));
+    expect(host.textContent).toContain('Mesh build failed');
+    act(() => useSolveOptionsStore.getState().setEngine('bempp'));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 550)); });
+    expect(requests).toBe(2);
+    expect(importedMeshStore.getSnapshot().solver).not.toBeNull();
+    expect(host.textContent).toContain('Solve unavailable: Turn off the ground plane');
+    expect(host.querySelector('.solver-mesh-banner')).toBeNull();
   });
 
   // `resetDesignStore` always rewinds the revision counter to the same value
