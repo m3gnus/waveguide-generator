@@ -61,11 +61,14 @@ export class SketchController<T> {
       const next = await edit(); this.history.update(next); this.history.commit(); this.publish(next); return next.sketch;
     } catch (e) { session.sketch = this.history.cancel().sketch; this.diagnosis = diagnosis; throw e; }
   }
-  command(commands: Command | Command[], dimensions?: { length: number; angle?: number }) {
+  /** A function is resolved against the state the queued command actually runs on, so fields
+   *  it does not change (e.g. the other coordinate of a point) are never stale. */
+  command(commands: Command | Command[] | ((state: Authoring<T>) => Command | Command[]), dimensions?: { length: number; angle?: number }) {
     return this.queue(session => this.transaction(session, 'Edit sketch', async () => {
       let state = this.current;
       const removed = new Set<string>();
-      for (const command of Array.isArray(commands) ? commands : [commands]) {
+      const resolved = typeof commands === 'function' ? commands(state) : commands;
+      for (const command of Array.isArray(resolved) ? resolved : [resolved]) {
         if (command.kind === 'movePoint' && state.sketch.constraints.some(c => c.kind === 'fix' && c.point === command.id)) throw new Error('Point is held by constraints; remove its fix before editing coordinates.');
         const next = this.apply(state, command); if ('error' in next) throw new Error(next.error);
         if (['splitAt', 'deleteEntity', 'deletePoint'].includes(command.kind)) for (const c of state.sketch.constraints) if (!next.sketch.constraints.some(v => v.id === c.id)) removed.add(c.id);

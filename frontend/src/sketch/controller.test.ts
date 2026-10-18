@@ -12,6 +12,16 @@ function generic(sketch = base()) {
   }, () => {});
 }
 describe('authoring session transactions', () => {
+  it('resolves queued single-coordinate edits against the state they run on', async () => {
+    const controller = generic();
+    try {
+      // Both edits are issued before the first finishes, as a fast Tab from r to z does.
+      const moveX = controller.command(state => ({ kind: 'movePoint', id: 'q', x: 12, y: state.sketch.points.find(p => p.id === 'q')!.y }));
+      const moveY = controller.command(state => ({ kind: 'movePoint', id: 'q', x: state.sketch.points.find(p => p.id === 'q')!.x, y: 3 }));
+      await Promise.all([moveX, moveY]);
+      expect(controller.current.sketch.points.find(p => p.id === 'q')).toMatchObject({ x: 12, y: 3 });
+    } finally { controller.destroy(); }
+  });
   it('groups typed length and absolute angle with a segment, including a generic reference baseline', async () => {
     const initial = base(), controller = generic(initial);
     try {

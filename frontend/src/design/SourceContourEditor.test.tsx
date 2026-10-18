@@ -91,6 +91,15 @@ describe('source editor interactions', () => {
     await act(async () => button('Apply shape').click());
     expect(JSON.parse(storage.getItem('')!).sketch).toEqual(sketch);
   });
+  it('keeps a newer authoring envelope untouched and uses the Classic fallback', async () => {
+    const envelope = { version: 'wg-source-authoring-v2', document: INITIAL_SOURCE, sketch: { version: 'wg-sketch-v1', future: true }, extra: { opaque: 1 } };
+    storage.setItem('', JSON.stringify(envelope));
+    await mount();
+    expect(host.querySelector('[aria-label="Sketch drawing"]')).toBeNull();
+    await enter('Point 2 radius', '12'); await settle();
+    const saved = JSON.parse(storage.getItem('')!);
+    expect(saved.version).toBe('wg-source-authoring-v2'); expect(saved.sketch).toEqual(envelope.sketch); expect(saved.extra).toEqual(envelope.extra);
+  });
   it('fix 5: persists and reopens unfinished sketches with the last valid document', async () => {
     await mount(); await deletePoleLock();
     const saved = JSON.parse(storage.getItem('')!);

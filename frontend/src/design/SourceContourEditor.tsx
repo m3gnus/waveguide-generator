@@ -68,6 +68,8 @@ export function readSourceAuthoring(document: SourceDocument): Authoring<SourceM
 function newerEnvelope(): Record<string, unknown> | undefined {
   try {
     const raw = JSON.parse(storage.getItem('') ?? 'null');
+    // Newer authoring data, either a newer envelope or a newer sketch inside a v1 envelope, is kept untouched.
+    if (typeof raw?.version === 'string' && raw.version.startsWith('wg-source-authoring-') && raw.version !== 'wg-source-authoring-v1') return raw;
     if (raw?.sketch && parseSketch(raw.sketch).ok === false && raw.sketch.version !== 'wg-sketch-v1') return raw;
   } catch { /* use the document fallback */ }
 }
@@ -167,14 +169,21 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   const identityIssue = identityProblem(validationError, [draft.contour.physical_source_id, draft.contour.rim_id]) || draft.drive.channel_id.trim() === '';
   useEffect(() => { if (identityIssue) setIdentifiersOpen(true); }, [identityIssue]);
 
-  useEffect(() => initialDocument ? undefined : durableSettings.subscribe('sourceContourDraft', () => {
-    // The settings owner only notifies adopted server state: it already protects
-    // edits made while hydration was in flight. Follow that same authority here.
-    if (editingIntent.current) return;
+  const hydrateRef = useRef<() => void>(() => {});
+  const deferredHydration = useRef(false);
+  hydrateRef.current = () => {
     const envelope = newerEnvelope(); setNewer(envelope); if (envelope) setClassic(true);
     const restored = readSourceDraft(), next = readSourceAuthoring(restored); setDraft(restored); replaceAuthor(next); setUndo([]); setSelected(undefined); setSelectedPatch(0);
     fitted.current = false; drag.current = null;
     setNotice(envelope ? 'Newer sketch data is read-only. Classic drawing edits preserve it unchanged.' : restorationNotice(next) || 'Restored source draft from saved settings.');
+  };
+  useEffect(() => initialDocument ? undefined : durableSettings.subscribe('sourceContourDraft', () => {
+    // The settings owner only notifies adopted server state: it already protects
+    // edits made while hydration was in flight. Follow that same authority here.
+    // During an edit, defer: re-reading storage when it ends is right either way, because a
+    // published edit has already replaced the stored copy and a cancelled one has not.
+    if (editingIntent.current) { deferredHydration.current = true; return; }
+    hydrateRef.current();
   }), [initialDocument]);
 
   useEffect(() => {
@@ -197,7 +206,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
       }
       if (!initialDocument) storage.setItem('', JSON.stringify({ version: 'wg-source-authoring-v1', document: lowered.ok ? lowered.document : draftRef.current, ...state, pending: !lowered.ok }));
       setNotice(next.notice ?? ''); setError('');
-    }, reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }, active => { if (current) { editingIntent.current = active; setSketchPending(active); } }, (state, result) => { if (current) { setPreview(state === authorRef.current ? undefined : state); setDiagnosis(result); } });
+    }, reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }, active => { if (current) { editingIntent.current = active; setSketchPending(active); if (!active && deferredHydration.current) { deferredHydration.current = false; hydrateRef.current(); } } }, (state, result) => { if (current) { setPreview(state === authorRef.current ? undefined : state); setDiagnosis(result); } });
     controller.current = next;
     // Initialization errors are reported by queued operations as well.
     return () => { current = false; next.destroy(); controller.current = undefined; };
@@ -208,7 +217,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
     setFitRequest(v => v + 1);
     authorRef.current = next; setAuthor(next); setPreview(undefined); setGeneration(v => v + 1); setDiagnosis(undefined); setCanvasSelection([]);
   }
-  function sketchCommand(command: Command) {
+  function sketchCommand(command: Command | ((state: Authoring<SourceMeta>) => Command)) {
     void controller.current?.command(command).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)));
   }
   useEffect(() => {
@@ -293,8 +302,8 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
         </>}
         {(classic || !sketchProblems.length && !validationError) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}
         <h3>Points</h3><div className="source-table"><table><thead><tr><th>Point ID</th><th>r mm</th><th>z mm</th><th/></tr></thead><tbody>{tablePoints.map((point, i) => <tr key={point.id}><td title={point.id}>{point.id}</td>
-          <td><NumberField label={`Point ${i + 1} radius`} value={point.r_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === 0 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, v, point.z_mm)) : sketchCommand({ kind: 'movePoint', id: point.id, x: v, y: author.sketch.points.find(p => p.id === point.id)!.y })}/></td>
-          <td><NumberField label={`Point ${i + 1} z`} value={point.z_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === draft.contour.points.length - 1 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, point.r_mm, v)) : sketchCommand({ kind: 'movePoint', id: point.id, x: author.sketch.points.find(p => p.id === point.id)!.x, y: v })}/></td>
+          <td><NumberField label={`Point ${i + 1} radius`} value={point.r_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === 0 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, v, point.z_mm)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: v, y: state.sketch.points.find(p => p.id === point.id)!.y }))}/></td>
+          <td><NumberField label={`Point ${i + 1} z`} value={point.z_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === draft.contour.points.length - 1 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, point.r_mm, v)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: state.sketch.points.find(p => p.id === point.id)!.x, y: v }))}/></td>
           <td>{classic && i > 0 && i < draft.contour.points.length - 1 && <button type="button" aria-label={`Remove point ${i + 1}`} disabled={drawPoints !== null} onClick={() => { try { change(removePoint(draft, i)); setSelectedPatch(0); } catch (reason) { setError(String(reason)); } }}>Remove</button>}</td></tr>)}</tbody></table></div>
         <h3>Patches</h3><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch ID</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{tablePatches.map((patch, i) => <tr key={patch.id}><td title={patch.id}><button type="button" aria-label={`Select patch ${i + 1}`} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}>{patch.id}</button></td>
           <td>{classic && <select aria-label={`Patch ${i + 1} curve`} value={patch.kind} onChange={(e) => change(editPatch(draft, i, { kind: e.target.value as 'line' | 'arc' }))}><option value="line">Line</option><option value="arc">Arc</option></select>}{!classic && patch.kind}</td>
