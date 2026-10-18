@@ -55,7 +55,7 @@ class SolveSpace extends Adapter {
     c.diagnostics.redundant = unsupported('solveSketch exposes bad handles, without a separate redundancy category.');
     c.diagnostics.partiallyRedundant = unsupported('No partial redundancy API.');
     c.diagnostics.conflicting.detail += ' Signed-angle guard failures name the public angle ID. SolveSpace bad handles include overconstraints; no minimal-set guarantee.';
-    c.drag = 'Seed free arc centers on the chord bisector, seed cursor coordinates and markDragged point parameters for native least-movement projection. Rebuild when dragged IDs change or on release; no hard cursor equations. Up to six native refinements reduce finite-weight cursor error. calculateFaileds:false during drag.';
+    c.drag = 'Seed free arc centers on the chord bisector, seed cursor coordinates and markDragged point parameters for native least-movement projection. Rebuild when dragged IDs change or on release; no hard cursor equations. At most six native passes refine cursor error while it falls by at least half. calculateFaileds:false during drag.';
     return c;
   }
   memoryBytes() { return (this.s as SlvsModule & { HEAPU8?: Uint8Array }).HEAPU8?.buffer.byteLength; }
@@ -175,7 +175,19 @@ class SolveSpace extends Adapter {
   }
   private runNative(options: SolveOptions): NativeResult {
     const updateStart = performance.now();
-    const targets = options.dragTargets ?? [];
+    const targets = (options.dragTargets ?? []).map(target => {
+      let x = target.x, y = target.y;
+      // Coordinate locks have no reachable cursor component along the locked axis.
+      for (const c of this.sketch.constraints) if ((c.kind === 'distanceX' || c.kind === 'distanceY') && c.driving
+        && (c.a === target.pointId || c.b === target.pointId)) {
+        const other = entity(this.sketch, c.a === target.pointId ? c.b : c.a, 'point');
+        if (other.fixed || this.sketch.constraints.some(c => c.kind === 'fix' && c.point === other.id)) {
+          const offset = c.b === target.pointId ? c.value : -c.value;
+          if (c.kind === 'distanceX') x = other.x + offset; else y = other.y + offset;
+        }
+      }
+      return { ...target, x, y };
+    });
     if (!this.dragPointIds || !this.prepared || owners.get(this.s) !== this || this.prepared.dragged !== JSON.stringify(targets.map(t => t.pointId).sort())) this.build(targets);
     const s = this.s, group = 2;
     const seed = () => {
@@ -185,6 +197,11 @@ class SolveSpace extends Adapter {
         s.setParamValue(handle.param[0], target.x); s.setParamValue(handle.param[1], target.y);
       }
     };
+    const cursorError = () => targets.length ? Math.max(...targets.map(target => {
+      const h = this.prepared!.handles.get(target.pointId)!;
+      return Math.hypot(s.getParamValue(h.param[0]) - target.x, s.getParamValue(h.param[1]) - target.y);
+    })) : 0;
+    let lastError = cursorError();
     seed();
     // Keep an unconstrained arc's other endpoint still by seeding its free center
     // on the new chord bisector. Explicit center/arc constraints stay native-owned.
@@ -204,13 +221,9 @@ class SolveSpace extends Adapter {
     let t = performance.now(), r = s.solveSketch(group, options.mode === 'full'), solveMs = performance.now() - t;
     // SLVS_RESULT_OKAY (0) and SLVS_RESULT_REDUNDANT_OKAY (4) are both solved states.
     const solved = (code: number) => code === 0 || code === 4;
-    let lastError = Infinity;
-    for (let refine = 0; targets.length && solved(r.result) && refine < 6; refine++) {
-      const error = Math.max(...targets.map(target => {
-        const h = this.prepared!.handles.get(target.pointId)!;
-        return Math.hypot(s.getParamValue(h.param[0]) - target.x, s.getParamValue(h.param[1]) - target.y);
-      }));
-      if (error <= Math.max(1e-8, options.tolerance ?? 0) || error >= lastError - 1e-10) break;
+    for (let refine = 1; targets.length && solved(r.result) && refine < 6; refine++) {
+      const error = cursorError();
+      if (error <= Math.max(1e-8, options.tolerance ?? 0) || error > lastError / 2 || error >= lastError) break;
       lastError = error; seed(); t = performance.now(); r = s.solveSketch(group, options.mode === 'full'); solveMs += performance.now() - t;
     }
     const updateMs = performance.now() - updateStart - solveMs;

@@ -4,7 +4,6 @@ import { distance, onArc } from './geometry';
 
 export type CommandResult = { sketch: Sketch; created: string[]; removedConstraints: string[] } | { error: string };
 export function applyCommand(sketch: Sketch, command: Command): CommandResult {
-  const validation = validateSketch(sketch); if (!validation.ok) return { error: validation.reason };
   const s: Sketch = { ...sketch, points: [...sketch.points], entities: [...sketch.entities], constraints: [...sketch.constraints] };
   const created: string[] = [], removedConstraints: string[] = [];
   const used = new Set([...s.points, ...s.entities, ...s.constraints].map(e => e.id));
@@ -97,6 +96,7 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
       }
       case 'movePoint': {
         point(command.id); if (!Number.isFinite(command.x) || !Number.isFinite(command.y)) throw new Error('Point coordinates must be finite.');
+        if (s.entities.some(e => e.reference && entityPoints(e).includes(command.id))) throw new Error('Reference points cannot be moved.');
         s.points = s.points.map(p => p.id === command.id ? { ...p, x: command.x, y: command.y } : p); break;
       }
       case 'deleteEntity': {
@@ -112,6 +112,7 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
       }
       case 'splitAt': {
         const e = entity(command.entity);
+        if (e.reference) throw new Error('Reference lines cannot be split.');
         if (e.kind !== 'line' && e.kind !== 'arc') throw new Error('Only lines and arcs can split.');
         const p = { x: command.x, y: command.y }, start = point(e.kind === 'line' ? e.p1 : e.start), end = point(e.kind === 'line' ? e.p2 : e.end);
         const onLine = (a: Point, b: Point, p: { x: number; y: number }) => Math.abs(distance(a, p) + distance(p, b) - distance(a, b)) <= 1e-9;
@@ -151,12 +152,14 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
         }); break;
       }
       case 'setEntityData': case 'setConstruction': {
-        entity(command.id);
+        const e = entity(command.id);
+        if (e.reference && (command.kind === 'setEntityData' || !command.construction)) throw new Error('Reference lines cannot be changed.');
         if (command.kind === 'setConstruction' && typeof command.construction !== 'boolean') throw new Error('Construction must be boolean.');
         if (command.kind === 'setEntityData' && !isJSON(command.data)) throw new Error('Entity data must be JSON.');
         s.entities = s.entities.map(e => e.id !== command.id ? e : command.kind === 'setEntityData' ? { ...e, data: command.data } : { ...e, construction: command.construction }); break;
       }
     }
+    const validation = validateSketch(s); if (!validation.ok) return { error: validation.reason };
     return { sketch: s, created, removedConstraints };
   } catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
 }

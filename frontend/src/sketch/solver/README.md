@@ -47,8 +47,10 @@ Every result splits `totalMs` into `updateMs`, `solveMs` and `readbackMs`:
 - **slvs:** cursor coordinates are written into point parameters, then `markDragged`
   supplies native weighted drag semantics. Its missing binding type is declared locally
   in the adapter; the vendored declarations are unchanged. No `dragged()` hard pins remain.
-  The native weight is finite (1/20 in the Jacobian columns), so up to six additional
-  native solves refine cursor error, stopping at 1e-8 mm or when improvement stops.
+  The native weight is finite (1/20 in the Jacobian columns), so at most six native
+  passes refine cursor error, stopping at 1e-8 mm or unless each pass halves the error.
+  Fixed-point coordinate dimensions project the corresponding cursor component before
+  seeding, including for callers using the solver directly.
   Free, unconstrained arc centers are seeded on the new chord's perpendicular bisector
   to preserve the other endpoint. Explicit arc/center constraints still go to the solver.
   `pointOnLine` uses native signed point-line distance zero: `PT_ON_LINE` creates an
@@ -68,13 +70,24 @@ consumer with none. Reference dimension values are re-measured in the immutable 
 on successful full solves and drag frames; these updates create no history entries.
 `projectToEntity` returns the nearest point on a line segment or the finite arc span.
 
+Session drags first project the cursor onto directly constraining supporting lines,
+circles or fixed points. Two loci use their nearest intersection; disjoint or more than
+two loci leave the cursor unprojected. When a step still cannot reach that target, the
+session rejects disproportionate motion of other points and halves the step. Reachable
+steps allow larger motion elsewhere, as on a hinged bar. Release refines the last
+projected target only if it was reached within the interactive tolerance. Full diagnosis,
+constraint additions, drags and dimension continuation share one operation queue.
+
 For slvs full diagnosis, `pointDetermined` compares the base DOF with the DOF after fixing
 each point at its solved position. An uncached diagnosis costs at most one additional
 native rebuild/solve per point; explicitly fixed points need no probe. The solved sketch
 (including coordinates and constraints) keys a single-entry cache. Drag frames never
 probe. Sketches with more than 64 solver entities return `undefined` instead. Probe
 build time and native solve time are included in the reported timings. The native DOF
-limitations listed below still apply.
+limitations listed below still apply. A cutoff experiment at 24 segments (85 solver
+entities, Node 20.20.2, macOS arm64) measured 354.1 ms for uncached full diagnosis with
+point probes, including 289.9 ms in native solves and 63.9 ms in updates/rebuilds. This
+exceeds the approximately 20 ms budget, so the cutoff remains 64 solver entities.
 
 ## Measurements and telemetry
 

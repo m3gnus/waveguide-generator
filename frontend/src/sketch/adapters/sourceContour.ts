@@ -60,6 +60,10 @@ function chain(sketch: Sketch, meta: SourceMeta): Chain | DomainProblem {
   const poles = tips.filter(id => locked.includes(id));
   const baffle = meta.references.find(r => r.kind === 'baffle')?.id;
   const rims = sketch.constraints.flatMap(c => c.kind === 'pointOnLine' && c.line === baffle ? [root(c.point)] : []);
+  if (!poles.length) {
+    const candidates = tips.filter(id => !rims.includes(id) && Math.abs(sketch.points.find(p => p.id === id)!.x) <= 1e-9);
+    if (candidates.length === 1) return { code: 'pole', ids: candidates, message: 'Lock the pole to the axis' };
+  }
   if (!tips.some(id => rims.includes(id) && !poles.includes(id))) return problem();
   if (poles.length !== 1) return problem();
   const result: Chain = { points: [poles[0]], entities: [] }, visited = new Set<string>();
