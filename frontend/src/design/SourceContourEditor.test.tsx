@@ -1,12 +1,18 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sourceEditorApi, type SourceDocument, type SourceValidation } from '../api/sourceEditor';
 import { durableSettings, namespaceStorage, SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { INITIAL_SOURCE } from './sourceContourEditing';
-import { Editor, readSourceDraft, SourceContourDialog, SourceContourEditor } from './SourceContourEditor';
+import { Editor, readSourceDraft, readSourceAuthoring, SourceContourDialog, SourceContourEditor } from './SourceContourEditor';
 
 vi.mock('../api/sourceEditor', () => ({ sourceEditorApi: { validate: vi.fn(), presets: vi.fn(), save: vi.fn(), delete: vi.fn(), expand: vi.fn(), split: vi.fn(), export: vi.fn() } }));
+import { realSessionReady } from '../sketch/testSupport';
+import { readFileSync } from 'node:fs';
+const tokensCss = new TextDecoder().decode(readFileSync('src/styles/tokens.css'));
+const editorCss = new TextDecoder().decode(readFileSync('src/design/sourceContourEditor.css'));
+const canvasCss = new TextDecoder().decode(readFileSync('src/sketch/sketchCanvas.css'));
+beforeAll(realSessionReady);
 const storage = namespaceStorage('sourceContourDraft');
 function validation(document: SourceDocument): SourceValidation { return { document, geometry_sha256: 'geometry', excitation_sha256: 'excitation', meridian: Object.fromEntries(document.contour.segments.map((p, i) => [p.id, document.contour.points.slice(i, i + 2).map((point) => [point.r_mm, point.z_mm])])) }; }
 
@@ -23,16 +29,82 @@ describe('source editor interactions', () => {
   afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); });
   const mount = async () => { await act(async () => root.render(<Editor onClose={() => {}}/>)); await settle(); };
   const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(200); }); };
-  const button = (text: string) => [...host.querySelectorAll('button')].find((b) => b.textContent === text)!;
+  const button = (text: string) => [...host.querySelectorAll('button')].find((b) => (b.getAttribute('aria-label') ?? b.textContent) === text)!;
   const input = (text: string) => { const direct = host.querySelector<HTMLInputElement>(`input[aria-label="${text}"]`); if (direct) return direct; const label = [...host.querySelectorAll('label')].find((l) => l.querySelector('.field-name')?.textContent === text)!; return document.getElementById(label.htmlFor) as HTMLInputElement; };
   async function enter(text: string, value: string) { await act(async () => { const field = input(text); field.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value); field.dispatchEvent(new Event('input', { bubbles: true })); }); await act(async () => input(text).blur()); }
 
+  it('keeps role classes and theme tokens in the portalled dialog in both themes', async () => {
+    const doc = structuredClone(INITIAL_SOURCE);
+    doc.contour.points.push({ id: 'land', r_mm: 10, z_mm: 0 });
+    doc.contour.segments.push({ ...doc.contour.segments[0], id: 'rigid-land', start: 'rim', end: 'land', role: 'rigid' });
+    storage.setItem('', JSON.stringify(doc));
+    await act(async () => root.render(<><SourceContourEditor/><SourceContourDialog/></>));
+    const launch = [...host.querySelectorAll('button')].find(b => b.textContent === 'Edit source contour…')!;
+    await act(async () => launch.click()); await settle();
+    try {
+      for (const theme of ['light', 'dark']) {
+        document.documentElement.dataset.theme = theme;
+        const dialog = document.body.querySelector('[aria-label="Source contour editor"]')!;
+        expect(dialog.closest('html')?.getAttribute('data-theme')).toBe(theme);
+        expect(dialog.querySelector('.sketch-entity.moving')).not.toBeNull();
+        expect(dialog.querySelector('.sketch-entity.rigid')).not.toBeNull();
+        expect(dialog.querySelector('.sketch-role')).toBeNull();
+        expect([...dialog.querySelectorAll('button')].some(b => ['Fit drawing', 'Undo edit', 'Draw lines'].includes(b.textContent ?? ''))).toBe(false);
+        expect(dialog.querySelector('[aria-label="More sketch actions"]')).not.toBeNull();
+      }
+      for (const css of [editorCss, canvasCss]) {
+        expect(css).not.toContain('--ctl-bg');
+        expect(css).toContain('var(--surface-raised)');
+        expect(css).toContain('var(--fg3)');
+      }
+      expect(editorCss).toContain('var(--ctl-grad)');
+      expect(editorCss).toContain('var(--ctl-grad-h)');
+      expect(editorCss).toContain('var(--surface-field)');
+      expect(canvasCss).toContain('.sketch-entity.moving { stroke: var(--source-moving); }');
+      expect(canvasCss).toContain('.sketch-entity.rigid { stroke: var(--fg3); }');
+      expect(tokensCss).toContain('--source-moving: #69d4ce');
+      expect(tokensCss).toContain('--source-moving: #176d68');
+    } finally {
+      delete document.documentElement.dataset.theme;
+      await act(async () => document.body.querySelector<HTMLButtonElement>('[aria-label="Source contour editor"] header button')!.click());
+    }
+  });
+  it('exposes the gate hook only with the flag and loads through authoring adoption', async () => {
+    const old = window.location.href;
+    await act(async () => root.render(<SourceContourDialog/>));
+    expect(window.__sketchTest).toBeUndefined();
+    await act(async () => root.render(null));
+    window.history.replaceState(null, '', '?sketchPerf=1');
+    try {
+      await act(async () => root.render(<SourceContourDialog/>));
+      expect(window.__sketchTest).toBeDefined();
+      let opened: Promise<void>;
+      await act(async () => { opened = window.__sketchTest!.openEditor(); });
+      await settle(); await opened!;
+      const doc = structuredClone(INITIAL_SOURCE); doc.contour.points[1].r_mm = 12;
+      let loaded: Promise<void>;
+      await act(async () => { loaded = window.__sketchTest!.loadDocument(doc); });
+      await settle();
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      await loaded!;
+      expect(readSourceDraft()).toEqual(doc);
+      expect(readSourceAuthoring(doc).sketch.constraints.map(c => c.kind)).toEqual(['pointOnLine', 'pointOnLine']);
+      const point = document.body.querySelector<SVGCircleElement>('.sketch-point[data-id="rim"]')!;
+      vi.spyOn(point, 'getBoundingClientRect').mockReturnValue({ left: 100, top: 200, width: 8, height: 8 } as DOMRect);
+      expect(window.__sketchTest!.pointScreen('rim')).toEqual({ x: 104, y: 204 });
+      expect(() => window.__sketchTest!.pointScreen('p1')).toThrow('No point handle');
+      await act(async () => document.body.querySelector<HTMLButtonElement>('[aria-label="Source contour editor"] header button')!.click());
+      await act(async () => root.render(null));
+      expect(window.__sketchTest).toBeUndefined();
+    } finally { window.history.replaceState(null, '', old); }
+  });
   it('shows concise coordinates, arc centers and weights without rounding untouched draft values', async () => {
     const doc = structuredClone(INITIAL_SOURCE);
     doc.contour.points[1].r_mm = 8.123456789;
     doc.contour.segments[0] = { ...doc.contour.segments[0], kind: 'arc', center_mm: [4.0617283945, .000123456], direction: 'ccw' };
     doc.drive.weights.piston = .123456789;
     storage.setItem('', JSON.stringify(doc)); await mount();
+    await act(async () => button('More sketch actions').click()); await act(async () => button('Classic drawing').click());
     for (const [label, displayed] of [['Point 2 radius', '8.12'], ['Arc center radius', '4.06'], ['Arc center z', '0.00'], ['Patch 1 weight', '0.123']]) {
       expect(input(label).value).toBe(displayed);
       await act(async () => input(label).focus());
@@ -48,6 +120,7 @@ describe('source editor interactions', () => {
     const doc = structuredClone(INITIAL_SOURCE);
     doc.contour.segments[0] = { ...doc.contour.segments[0], kind: 'arc', center_mm: [4, 0], direction: 'ccw' };
     storage.setItem('', JSON.stringify(doc)); await mount();
+    await act(async () => button('More sketch actions').click()); await act(async () => button('Classic drawing').click());
     await enter('Point 2 radius', '9.525'); await settle();
     await enter('Arc center radius', '6.123457'); await enter('Arc center z', '-0.000123'); await settle();
     const stored = readSourceDraft().contour;
@@ -98,11 +171,11 @@ describe('source editor interactions', () => {
     await mount(); await enter('Point 2 radius', '10'); await settle();
     expect(sourceEditorApi.validate).toHaveBeenLastCalledWith(expect.objectContaining({ contour: expect.objectContaining({ points: [{ id: 'pole', r_mm: 0, z_mm: 0 }, { id: 'rim', r_mm: 10, z_mm: 0 }] }) }));
     expect(readSourceDraft().contour.points[1].r_mm).toBe(10);
-    await act(async () => button('Undo edit').click()); await settle();
+    await act(async () => button('Undo').click()); await settle();
     expect(readSourceDraft()).toEqual(INITIAL_SOURCE);
   });
   it('keeps zero/negative weights as moving and refuses stale validation for an invalid draft', async () => {
-    await mount(); await enter('Patch 1 weight', '-0.5'); await settle();
+    await mount(); await act(async () => button('More sketch actions').click()); await act(async () => button('Classic drawing').click()); await enter('Patch 1 weight', '-0.5'); await settle();
     expect(readSourceDraft().drive.weights.piston).toBe(-.5);
     await enter('Patch 1 weight', '0'); await settle();
     expect(readSourceDraft().contour.segments[0].role).toBe('moving');
@@ -113,7 +186,7 @@ describe('source editor interactions', () => {
     expect(host.querySelector('svg path')?.getAttribute('class')).toContain('draft');
   });
   it('ignores an older accepted response after a newer draft was refused', async () => {
-    await mount(); let resolve!: (value: SourceValidation) => void;
+    await mount(); await act(async () => button('More sketch actions').click()); await act(async () => button('Classic drawing').click()); let resolve!: (value: SourceValidation) => void;
     vi.mocked(sourceEditorApi.validate).mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     await enter('Point 2 radius', '12'); await settle();
     const old = readSourceDraft();
@@ -136,7 +209,7 @@ describe('source editor interactions', () => {
     expect(sourceEditorApi.save).toHaveBeenLastCalledWith('My source', INITIAL_SOURCE, saved);
   });
   it('drawing creates explicit points and blocks export until the drawing is finished', async () => {
-    await mount(); await act(async () => button('Draw lines').click());
+    await mount(); await act(async () => button('More sketch actions').click()); await act(async () => button('Classic drawing').click()); await act(async () => button('Draw lines').click());
     expect(button('Export STEP + mesh bundle').disabled).toBe(true);
     const svg = host.querySelector('svg')!;
     vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 640, height: 260 } as DOMRect);
@@ -147,6 +220,129 @@ describe('source editor interactions', () => {
     expect(doc.contour.points).toHaveLength(3); expect(doc.contour.points[0].r_mm).toBe(0); expect(doc.contour.points[2].z_mm).toBe(0);
     expect(doc.contour.segments.every((p) => p.kind === 'line')).toBe(true);
     expect(Object.keys(doc.drive.weights)).toHaveLength(2);
+  });
+  it('persists and reopens an authoring envelope with dimensions, and reseeds on preset load', async () => {
+    const saved = { id: 'saved', revision: 'r1', name: 'Original', document: structuredClone(INITIAL_SOURCE) };
+    vi.mocked(sourceEditorApi.presets).mockResolvedValue([saved]);
+    await mount();
+    const line = host.querySelector('[data-id="piston"]')!;
+    await act(async () => button('Dimension (D)').click());
+    await act(async () => line.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))); await settle();
+    const envelope = JSON.parse(storage.getItem('')!);
+    expect(envelope.version).toBe('wg-source-authoring-v1');
+    expect(envelope.sketch.constraints).toContainEqual(expect.objectContaining({ kind: 'distance', value: 8, driving: true }));
+    expect(envelope.document).toEqual(INITIAL_SOURCE);
+    await act(async () => root.render(null)); await mount();
+    expect(host.querySelector('[aria-label^="Dimension distance"]')).not.toBeNull();
+    await act(async () => button('Load Original').click()); await settle();
+    expect(host.textContent).toContain('Constraints were reset');
+    expect(readSourceAuthoring(readSourceDraft()).sketch.constraints.map(c => c.kind)).toEqual(['pointOnLine', 'pointOnLine']);
+    await act(async () => button('Undo').click()); await settle();
+    expect(host.querySelector('[aria-label^="Dimension distance"]')).not.toBeNull();
+  });
+  it('leaves the canonical document intact and disables save and export when lowering fails', async () => {
+    await mount(); await enter('Preset name', 'Invalid sketch');
+    await act(async () => host.querySelector('[data-id="piston"]')!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })));
+    await act(async () => button('Delete selection').click()); await settle();
+    expect(readSourceDraft()).toEqual(INITIAL_SOURCE);
+    expect(host.querySelector('.sketch-status')?.textContent).toContain('1 problem');
+    expect(host.querySelectorAll('.sketch-domain-problem')).toHaveLength(1);
+    expect(host.querySelector('.source-validation')).toBeNull();
+    expect(button('Save new preset').disabled).toBe(true);
+    expect(button('Export STEP + mesh bundle').disabled).toBe(true);
+    await act(async () => button('Undo').click()); await settle();
+    expect(button('Export STEP + mesh bundle').disabled).toBe(false);
+  });
+  it.each(['pole', 'rim'] as const)('offers a %s lock after deleting the lock glyph, and keeps fixed references immutable', async endpoint => {
+    await mount();
+    const envelope = readSourceAuthoring(readSourceDraft());
+    const rimLock = envelope.sketch.constraints.find(c => c.kind === 'pointOnLine' && c.point === endpoint)!;
+    await act(async () => host.querySelector(`[data-id="${rimLock.id}"]`)!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })));
+    await act(async () => button('Delete selection').click()); await settle();
+    expect(button('Export STEP + mesh bundle').disabled).toBe(true);
+    await enter(endpoint === 'pole' ? 'Point 1 radius' : 'Point 2 z', '1'); await settle();
+    await act(async () => button(endpoint === 'pole' ? 'Lock pole to axis' : 'Lock rim to baffle').click()); await settle();
+    expect(button('Export STEP + mesh bundle').disabled).toBe(false);
+    expect(endpoint === 'pole' ? readSourceDraft().contour.points[0].r_mm : readSourceDraft().contour.points.at(-1)!.z_mm).toBe(0);
+    expect(host.querySelector('[data-id="axis"]')).toBeNull();
+    expect(host.querySelector('[data-id="baffle"]')).toBeNull();
+  });
+  it('applies a shape with a fresh sketch and restores the previous constraints with Undo', async () => {
+    vi.mocked(sourceEditorApi.expand).mockResolvedValue(validation({ ...INITIAL_SOURCE, contour: { ...INITIAL_SOURCE.contour, points: [{ id: 'pole', r_mm: 0, z_mm: 0 }, { id: 'rim', r_mm: 14, z_mm: 0 }] } }));
+    await mount();
+    await act(async () => button('Dimension (D)').click());
+    await act(async () => host.querySelector('[data-id="piston"]')!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))); await settle();
+    await act(async () => button('Apply shape').click()); await settle();
+    expect(readSourceDraft().contour.points[1].r_mm).toBe(14);
+    expect(host.querySelector('[aria-label^="Dimension distance"]')).toBeNull();
+    expect(host.textContent).toContain('Constraints were reset');
+    await act(async () => button('Undo').click()); await settle();
+    expect(readSourceDraft()).toEqual(INITIAL_SOURCE);
+    expect(host.querySelector('[aria-label^="Dimension distance"]')).not.toBeNull();
+  });
+  it('shows adapter and lowering diagnoses once per code and entity, with only a status count', async () => {
+    const doc = structuredClone(INITIAL_SOURCE);
+    doc.contour.points[0].r_mm = 1; doc.contour.points[1].z_mm = 1;
+    storage.setItem('', JSON.stringify(doc));
+    await mount();
+    const problems = [...host.querySelectorAll('.sketch-domain-problem')];
+    expect(problems).toHaveLength(2);
+    expect(problems.filter(p => p.textContent?.includes('pole'))).toHaveLength(1);
+    expect(problems.filter(p => p.textContent?.includes('rim'))).toHaveLength(1);
+    expect(host.querySelector('.sketch-status')?.textContent).toContain('2 problems');
+    expect(host.querySelector('.source-validation')).toBeNull();
+    expect(sourceEditorApi.validate).not.toHaveBeenCalled();
+  });
+  it('shows an arc-fold diagnosis once without repeating the server validation message', async () => {
+    const doc = structuredClone(INITIAL_SOURCE);
+    doc.contour.points[0].z_mm = 1; doc.contour.points[1].r_mm = 1;
+    doc.contour.segments[0] = { ...doc.contour.segments[0], kind: 'arc', center_mm: [0, 0], direction: 'ccw' };
+    storage.setItem('', JSON.stringify(doc));
+    vi.mocked(sourceEditorApi.validate).mockRejectedValue(new Error('arc folds in radius'));
+    await mount();
+    expect(host.querySelectorAll('.sketch-domain-problem')).toHaveLength(1);
+    expect(host.querySelector('.sketch-domain-problem')?.textContent).toContain('Arc must increase');
+    expect(host.querySelector('.sketch-status')?.textContent).toContain('1 problem');
+    expect(host.textContent).not.toContain('arc folds in radius');
+    expect(host.textContent).not.toContain('Sketch has problems');
+    expect(sourceEditorApi.validate).not.toHaveBeenCalled();
+  });
+  it('fits restored drafts, loaded presets and applied shapes in the measured canvas', async () => {
+    const OriginalObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe() { this.callback([{ contentRect: { width: 280, height: 360 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      const large = structuredClone(INITIAL_SOURCE); large.contour.points[1].r_mm = 1000;
+      storage.setItem('', JSON.stringify({ version: 'wg-source-authoring-v1', document: large, ...readSourceAuthoring(large) }));
+      vi.mocked(sourceEditorApi.presets).mockResolvedValue([{ id: 'saved', revision: 'r1', name: 'Original', document: INITIAL_SOURCE }]);
+      vi.mocked(sourceEditorApi.expand).mockResolvedValue(validation(large));
+      const fitted = () => {
+        const pole = host.querySelector('.sketch-point[data-id="pole"]')!, rim = host.querySelector('.sketch-point[data-id="rim"]')!;
+        expect(Number(pole.getAttribute('cx'))).toBeCloseTo(32);
+        expect(Number(rim.getAttribute('cx'))).toBeCloseTo(248);
+      };
+      await mount(); fitted();
+      const svg = host.querySelector<SVGSVGElement>('[aria-label="Sketch drawing"]')!;
+      await act(async () => svg.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -2000 })));
+      expect(Number(host.querySelector('.sketch-point[data-id="rim"]')!.getAttribute('cx'))).toBeGreaterThan(280);
+      await act(async () => button('Load Original').click()); await settle(); fitted();
+      expect(readSourceDraft()).toEqual(INITIAL_SOURCE);
+      await act(async () => button('Apply shape').click()); await settle(); fitted();
+      expect(readSourceDraft()).toEqual(large);
+      await act(async () => root.render(null)); await mount(); fitted();
+    } finally { globalThis.ResizeObserver = OriginalObserver; }
+  });
+  it('falls back to the canonical document for unknown envelopes or mismatching sketches', async () => {
+    const document = structuredClone(INITIAL_SOURCE); document.contour.points[1].r_mm = 12;
+    storage.setItem('', JSON.stringify({ version: 'future', document, sketch: { version: 'future' } }));
+    expect(readSourceDraft()).toEqual(document);
+    expect(readSourceAuthoring(document).sketch.points.find(p => p.id === 'rim')!.x).toBe(12);
+    const authoring = readSourceAuthoring(INITIAL_SOURCE);
+    storage.setItem('', JSON.stringify({ version: 'wg-source-authoring-v1', document, ...authoring }));
+    expect(readSourceAuthoring(document).sketch.points.find(p => p.id === 'rim')!.x).toBe(12);
   });
   it('recovers malformed cached drafts without crashing', () => {
     storage.setItem('', JSON.stringify({ contour: { points: [] } }));
@@ -181,7 +377,7 @@ describe('source editor interactions', () => {
     doc.contour.segments[0] = { ...doc.contour.segments[0], kind: 'arc', center_mm: [4, 0], direction: 'ccw' };
     storage.setItem('', JSON.stringify(doc));
     vi.mocked(sourceEditorApi.validate).mockImplementation(async (document) => ({ ...validation(document), meridian: { piston: Array.from({ length: 65 }, (_, i) => { const t = Math.PI + i / 64 * Math.PI; return [4 + 4 * Math.cos(t), 4 * Math.sin(t)]; }) } }));
-    await mount(); await act(async () => button('Fit drawing').click());
+    await mount(); await act(async () => button('More sketch actions').click()); await act(async () => button('Classic drawing').click()); await act(async () => button('Fit drawing').click());
     const values = [...host.querySelector('svg path')!.getAttribute('d')!.matchAll(/[ML]([\d.e+-]+),([\d.e+-]+)/g)];
     expect(values).toHaveLength(65);
     expect(values.every((v) => Number(v[1]) >= 0 && Number(v[1]) <= 640 && Number(v[2]) >= 0 && Number(v[2]) <= 260)).toBe(true);

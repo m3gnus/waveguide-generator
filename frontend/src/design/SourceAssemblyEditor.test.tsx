@@ -1,12 +1,15 @@
 import { act } from 'react';
 import { readFileSync } from 'node:fs';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sourceEditorApi, type SourceAssemblyDocument } from '../api/sourceEditor';
 import { durableSettings, namespaceStorage, SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { serializeDesign, useDesignStore } from '../stores/design';
 import { prepareNativeAssembly } from './nativeAssemblyPreparation';
 import { AssemblyEditor, INITIAL_ASSEMBLY, parseAssemblyDraft } from './SourceAssemblyEditor';
+
+import { realSessionReady } from '../sketch/testSupport';
+beforeAll(realSessionReady);
 
 vi.mock('../api/sourceEditor', () => ({ sourceEditorApi:{ validateAssembly:vi.fn(), hornProfile:vi.fn(), ingestAssembly:vi.fn(), exportAssembly:vi.fn(), validate:vi.fn(), presets:vi.fn() } }));
 vi.mock('./nativeAssemblyPreparation', () => ({ prepareNativeAssembly:vi.fn() }));

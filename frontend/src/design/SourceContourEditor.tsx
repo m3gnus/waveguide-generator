@@ -1,11 +1,20 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type PointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type PointerEvent, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { sourceEditorApi, type SourceAttachment, type SourceDocument, type SourcePoint, type SourcePreset, type SourceValidation } from '../api/sourceEditor';
+import { sourceEditorApi, type SourceAttachment, type SourceDocument, type SourcePatch, type SourcePoint, type SourcePreset, type SourceValidation } from '../api/sourceEditor';
 import { durableSettings, namespaceStorage } from '../stores/durableSettings';
 import { useModalDialogFocus } from '../shell/dialogFocus';
 import { NumberField } from './NumberField';
 import { drawnSource, editPatch, editPoint, identityProblem, INITIAL_SOURCE, removePoint } from './sourceContourEditing';
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
+import { SketchCanvas } from '../sketch/SketchCanvas';
+import { SketchController, type Authoring } from '../sketch/controller';
+import { applySourceCommand, lower, rules, seed, type SourceMeta } from '../sketch/adapters/sourceContour';
+import { uniqueProblems } from '../sketch/adapter';
+import { parseSketch } from '../sketch/model';
+import type { Command } from '../sketch/commands';
+import type { Diagnosis } from '../sketch/session';
+import { arcGeometry } from '../sketch/geometry';
+import { installSketchTest, registerSketchLoader, sketchPerfEnabled } from './sketchTestHarness';
 import './sourceContourEditor.css';
 
 const storage = namespaceStorage('sourceContourDraft');
@@ -21,7 +30,8 @@ export function readSourceDraft(): SourceDocument {
   try {
     const raw = storage.getItem('');
     if (!raw) return structuredClone(INITIAL_SOURCE);
-    const value = JSON.parse(raw) as SourceDocument;
+    const parsed = JSON.parse(raw);
+    const value = (parsed.document ?? parsed) as SourceDocument;
     const c = value.contour; const d = value.drive;
     if (c.version !== 1 || typeof c.physical_source_id !== 'string' || typeof c.rim_id !== 'string'
       || !Array.isArray(c.points) || c.points.length < 2 || c.points.length > 257
@@ -32,6 +42,33 @@ export function readSourceDraft(): SourceDocument {
       || !d.weights || typeof d.weights !== 'object' || Array.isArray(d.weights) || !Object.values(d.weights).every(Number.isFinite)) throw new Error('Invalid draft');
     return value;
   } catch { return structuredClone(INITIAL_SOURCE); }
+}
+
+function sameDocument(a: SourceDocument, b: SourceDocument) {
+  const canonical = (value: unknown): string => JSON.stringify(value, (_, v: unknown) => v && typeof v === 'object' && !Array.isArray(v)
+    ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v);
+  return canonical(a) === canonical(b);
+}
+export function readSourceAuthoring(document: SourceDocument): Authoring<SourceMeta> {
+  const fallback = seed(document);
+  try {
+    const envelope = JSON.parse(storage.getItem('') ?? 'null');
+    if (envelope?.version !== 'wg-source-authoring-v1') return fallback;
+    const parsed = parseSketch(envelope.sketch), meta = envelope.meta as SourceMeta;
+    if (!parsed.ok || !meta || !meta.weights || !Object.values(meta.weights).every(Number.isFinite)
+      || !Array.isArray(meta.references) || meta.references.length !== 2
+      || !meta.references.every(r => ['axis', 'baffle'].includes(r.kind) && parsed.sketch.entities.some(e => e.id === r.id && e.reference && e.kind === 'line'))
+      || ![meta.physical_source_id, meta.rim_id, meta.channel_id].every(v => typeof v === 'string') || !['normal', 'axial'].includes(meta.motion)) return fallback;
+    const lowered = lower(parsed.sketch, meta);
+    return lowered.ok && sameDocument(lowered.document, document) ? { sketch: parsed.sketch, meta } : fallback;
+  } catch { return fallback; }
+}
+
+function restorationNotice(author: Authoring<SourceMeta>): string {
+  try {
+    const raw = JSON.parse(storage.getItem('') ?? 'null');
+    return raw?.sketch && JSON.stringify(raw.sketch) !== JSON.stringify(author.sketch) ? 'Constraints were not restored; using the document contour.' : '';
+  } catch { return ''; }
 }
 
 type View = { r: number; low: number; high: number };
@@ -58,16 +95,40 @@ export function SourceContourEditor({ row = false }: { row?: boolean } = {}) {
 export function SourceContourDialog() {
   const open = useSyncExternalStore(visibility.subscribe, visibility.getSnapshot, visibility.getSnapshot);
   const close = useCallback(() => visibility.set(false), []);
+  useEffect(() => installSketchTest(() => visibility.set(true)), []);
   return open ? createPortal(<Editor onClose={close}/>, document.body) : null;
 }
 
 export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; onDraftChange?: (document: SourceDocument) => void }) {
   const [draft, setDraft] = useState(() => initialDocument ? structuredClone(initialDocument) : readSourceDraft());
+  const [author, setAuthor] = useState(() => initialDocument ? seed(draft) : readSourceAuthoring(draft));
+  const authorRef = useRef(author); authorRef.current = author;
+  const [generation, setGeneration] = useState(0);
+  const [classic, setClassic] = useState(false);
+  const [diagnosis, setDiagnosis] = useState<Diagnosis>();
+  const [fitRequest, setFitRequest] = useState(0);
+  const [canvasSelection, setCanvasSelection] = useState<string[]>([]);
+  const draftCallback = useRef(onDraftChange); draftCallback.current = onDraftChange;
+  const controller = useRef<SketchController<SourceMeta> | undefined>(undefined);
+  const [sketchReady, setSketchReady] = useState(false);
+  const [sketchPending, setSketchPending] = useState(false);
+
+  const lowered = lower(author.sketch, author.meta);
+  const sketchProblems = uniqueProblems([...rules(author.sketch, author.meta), ...(!lowered.ok ? lowered.problems : [])]);
+  const hasSketchProblems = !classic && sketchProblems.length > 0;
+  const endpointIds = new Set(author.sketch.entities.filter(e => !e.construction).flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : e.kind === 'arc' ? [e.start, e.end] : []));
+  const tablePoints = classic ? draft.contour.points : author.sketch.points.filter(p => endpointIds.has(p.id)).map(p => ({ id: p.id, r_mm: p.x, z_mm: p.y }));
+  const tablePatches: SourcePatch[] = classic ? draft.contour.segments : author.sketch.entities.flatMap(e => e.construction || e.kind !== 'line' && e.kind !== 'arc' ? [] : [{
+    id: e.id, kind: e.kind, start: e.kind === 'line' ? e.p1 : e.start, end: e.kind === 'line' ? e.p2 : e.end,
+    center_mm: e.kind === 'arc' ? [author.sketch.points.find(p => p.id === e.center)!.x, author.sketch.points.find(p => p.id === e.center)!.y] : null,
+    direction: e.kind === 'arc' && !e.ccw ? 'cw' : 'ccw',
+    role: e.data && typeof e.data === 'object' && !Array.isArray(e.data) && e.data.role === 'rigid' ? 'rigid' : 'moving',
+  }]);
   const [undo, setUndo] = useState<SourceDocument[]>([]);
   const [view, setView] = useState(() => fit(draft.contour.points));
   const [accepted, setAccepted] = useState<{ key: string; value: SourceValidation }>();
   const [validationError, setValidationError] = useState('');
-  const [error, setError] = useState(''); const [notice, setNotice] = useState('');
+  const [error, setError] = useState(''); const [notice, setNotice] = useState(() => initialDocument ? '' : restorationNotice(author));
   const [busy, setBusy] = useState(false);
   const [presets, setPresets] = useState<SourcePreset[]>([]);
   const [selected, setSelected] = useState<SourcePreset>();
@@ -84,7 +145,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   const close = useCallback(() => { if (!busy) onClose(); }, [busy, onClose]);
   const dialog = useModalDialogFocus<HTMLDivElement>({ open: true, onClose: close });
   const key = JSON.stringify(draft);
-  const valid = accepted?.key === key && drawPoints === null;
+  const valid = accepted?.key === key && drawPoints === null && (classic || sketchReady && !sketchPending && sketchProblems.length === 0);
   const [identifiersOpen, setIdentifiersOpen] = useState(false);
   const identityIssue = identityProblem(validationError, [draft.contour.physical_source_id, draft.contour.rim_id]) || draft.drive.channel_id.trim() === '';
   useEffect(() => { if (identityIssue) setIdentifiersOpen(true); }, [identityIssue]);
@@ -92,31 +153,86 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   useEffect(() => initialDocument ? undefined : durableSettings.subscribe('sourceContourDraft', () => {
     // The settings owner only notifies adopted server state: it already protects
     // edits made while hydration was in flight. Follow that same authority here.
-    setDraft(readSourceDraft()); setUndo([]); setSelected(undefined); setSelectedPatch(0);
+    const restored = readSourceDraft(), next = readSourceAuthoring(restored); setDraft(restored); replaceAuthor(next); setUndo([]); setSelected(undefined); setSelectedPatch(0);
     fitted.current = false; drag.current = null;
-    setNotice('Restored source draft from saved settings.');
+    setNotice(restorationNotice(next) || 'Restored source draft from saved settings.');
   }), [initialDocument]);
 
   useEffect(() => {
+    if (classic) return;
+    let current = true;
+    const initial = authorRef.current;
+    let opening = true;
+    setSketchReady(false);
+    const next = new SketchController(initial, state => state.meta.references, (state, command) => {
+      const result = applySourceCommand(state.sketch, state.meta, command);
+      return 'error' in result ? result : { sketch: result.sketch, meta: result.meta };
+    }, (state, result) => {
+      if (!current) return;
+      setDiagnosis(result); setSketchReady(true);
+      if (opening) { opening = false; return; }
+      authorRef.current = state; setAuthor(state);
+      const lowered = lower(state.sketch, state.meta);
+      if (lowered.ok) {
+        setDraft(lowered.document); draftCallback.current?.(lowered.document);
+      }
+      if (!initialDocument) storage.setItem('', JSON.stringify({ version: 'wg-source-authoring-v1', document: lowered.ok ? lowered.document : draftRef.current, ...state }));
+      setNotice(next.notice ?? ''); setError('');
+    }, reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }, active => { if (current) { setSketchPending(active); if (active) rememberEditIntent(); } });
+    controller.current = next;
+    // Initialization errors are reported by queued operations as well.
+    return () => { current = false; next.destroy(); controller.current = undefined; };
+  }, [classic, generation]);
+  const draftRef = useRef(draft); draftRef.current = draft;
+  function replaceAuthor(next: Authoring<SourceMeta>) {
+    setFitRequest(v => v + 1);
+    authorRef.current = next; setAuthor(next); setGeneration(v => v + 1); setDiagnosis(undefined); setCanvasSelection([]);
+  }
+  function rememberEditIntent() {
+    if (!initialDocument) storage.setItem('', JSON.stringify({ version: 'wg-source-authoring-v1', document: draftRef.current, ...authorRef.current }));
+  }
+  function sketchCommand(command: Command) {
+    void controller.current?.command(command).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)));
+  }
+  useEffect(() => {
     let current = true;
     setValidationError('');
+    if (hasSketchProblems) return;
     const timer = setTimeout(() => {
       void sourceEditorApi.validate(draft).then((value) => { if (current) { setAccepted({ key, value }); if (!fitted.current && drag.current === null) { setView(fit(value.document.contour.points, value.meridian)); fitted.current = true; } } }, (reason: unknown) => { if (current) setValidationError(reason instanceof Error ? reason.message : String(reason)); });
     }, 180);
     return () => { current = false; clearTimeout(timer); };
-  }, [draft, key]);
+  }, [draft, key, hasSketchProblems]);
   useEffect(() => { let current = true; void sourceEditorApi.presets().then((items) => { if (current) setPresets(items); }, (reason: unknown) => { if (current) setError(String(reason)); }); return () => { current = false; }; }, []);
 
   function change(next: SourceDocument, recordUndo = true) {
+    if (!classic && recordUndo && controller.current) {
+      const meta = { ...authorRef.current.meta, physical_source_id: next.contour.physical_source_id, rim_id: next.contour.rim_id,
+        channel_id: next.drive.channel_id, motion: next.drive.motion, weights: { ...next.drive.weights } };
+      void controller.current.metadata(meta).catch(reason => setError(String(reason))); return;
+    }
     if (recordUndo) setUndo((history) => [...history.slice(-19), structuredClone(draft)]);
-    setDraft(next); if (!initialDocument) storage.setItem('', JSON.stringify(next)); onDraftChange?.(next); setNotice(''); setError('');
+    setDraft(next); if (!initialDocument) storage.setItem('', JSON.stringify({ version: 'wg-source-authoring-v1', document: next, ...(classic ? seed(next) : authorRef.current) })); onDraftChange?.(next); setNotice(''); setError('');
   }
   async function run(action: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
     try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   }
-  function adopt(value: SourceValidation) { change(value.document); setView(fit(value.document.contour.points, value.meridian)); setAccepted({ key: JSON.stringify(value.document), value }); setSelectedPatch(0); setDrawPoints(null); }
+  async function adopt(value: SourceValidation) {
+    const next = seed(value.document);
+    if (!classic && controller.current) { await controller.current.adopt(next); }
+    else { replaceAuthor(next); change(value.document); }
+    setFitRequest(v => v + 1); setNotice('Constraints were reset for the loaded contour.');
+    setView(fit(value.document.contour.points, value.meridian)); setAccepted({ key: JSON.stringify(value.document), value }); setSelectedPatch(0); setDrawPoints(null); setCanvasSelection([]);
+  }
+
+  const loadForTest = useRef(adopt); loadForTest.current = adopt;
+  useEffect(() => {
+    if (!sketchReady || classic || !sketchPerfEnabled()) return;
+    return registerSketchLoader(async document => { await loadForTest.current(await sourceEditorApi.validate(document)); });
+  }, [sketchReady, classic]);
+
   function coordinates(event: PointerEvent): [number, number] {
     const rect = svg.current!.getBoundingClientRect();
     return [Math.max(0, ((event.clientX - rect.left) / rect.width * 640 - 30) / 580 * view.r), view.high - ((event.clientY - rect.top) / rect.height * 260 - 20) / 210 * (view.high - view.low)];
@@ -127,12 +243,26 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
 
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Source contour editor" className="source-editor">
     <header><div><h2>Source contour</h2><ExperimentalBadge/><p>{EXPERIMENTAL_NOTE}</p><p>Full circular source · dimensions in mm · aligned +Z</p></div><button type="button" disabled={busy} onClick={close}>Close</button></header>
-    <fieldset disabled={busy}>
+    <fieldset disabled={busy || !classic && sketchPending}>
       <div className="source-editor-columns"><div>
-        <div className="source-editor-toolbar"><button type="button" onClick={() => setView(fit(draft.contour.points, valid ? accepted!.value.meridian : {}))}>Fit drawing</button><button type="button" disabled={!undo.length || drawPoints !== null} onClick={() => { const previous = undo.at(-1)!; setUndo(undo.slice(0, -1)); change(previous, false); }}>Undo edit</button>
+        {classic && <div className="source-editor-toolbar">
+          <button type="button" onClick={() => setView(fit(draft.contour.points, valid ? accepted!.value.meridian : {}))}>Fit drawing</button>
+          <button type="button" disabled={!undo.length || drawPoints !== null} onClick={() => { const previous = undo.at(-1)!; setUndo(undo.slice(0, -1)); change(previous, false); }}>Undo edit</button>
           <button type="button" disabled={drawPoints !== null} onClick={() => setDrawPoints([])}>Draw lines</button>
           {drawPoints !== null && <><button type="button" disabled={drawPoints.length < 2} onClick={() => { change(drawnSource(draft, drawPoints, id)); setSelectedPatch(0); setDrawPoints(null); }}>Finish at rim</button><button type="button" onClick={() => setDrawPoints(null)}>Cancel drawing</button></>}
-        </div>
+        </div>}
+        {!classic && <SketchCanvas fitRequest={fitRequest} sketch={author.sketch} diagnosis={diagnosis} references={author.meta.references} problems={validationError && !hasSketchProblems ? [...sketchProblems, { code: 'server', ids: [], message: validationError }] : sketchProblems} session={sketchReady && !busy ? controller.current : undefined}
+          onClassicDrawing={() => { setClassic(true); setCanvasSelection([]); }}
+          entityClassName={entity => entity.data && typeof entity.data === 'object' && !Array.isArray(entity.data) && entity.data.role === 'rigid' ? 'rigid' : 'moving'}
+          selection={canvasSelection} onSelectionChange={ids => { setCanvasSelection(ids); const index = tablePatches.findIndex(p => ids.includes(p.id)); if (index >= 0) setSelectedPatch(index); }}
+          entityStyle={entity => ({ '--sketch-patch': entity.data && typeof entity.data === 'object' && !Array.isArray(entity.data) && entity.data.role === 'rigid' ? 'var(--fg3)' : 'var(--source-moving)' } as CSSProperties)}
+          problemAction={problem => {
+            if (problem.code !== 'pole' && problem.code !== 'rim') return;
+            const reference = author.meta.references.find(r => r.kind === (problem.code === 'pole' ? 'axis' : 'baffle')), point = problem.ids[0];
+            if (!reference || !point || author.sketch.constraints.some(c => c.kind === 'pointOnLine' && c.point === point && c.line === reference.id)) return;
+            return { label: problem.code === 'pole' ? 'Lock pole to axis' : 'Lock rim to baffle', constraint: { kind: 'pointOnLine', point, line: reference.id } };
+          }}/>}
+        {classic && <>
         <p>{drawPoints !== null ? 'Click the pole, then points in increasing radius. Finish places the last point on z=0.' : 'Drag a point or select a patch. The table edits the same contour; corners remain explicit.'}</p>
         <svg ref={svg} viewBox="0 0 640 260" preserveAspectRatio="none" aria-label="Source meridian drawing" className="source-meridian"
           onPointerDown={(event) => { if (busy || drawPoints === null || drawPoints.length >= 257) return; const [r, z] = coordinates(event); if (drawPoints.length && r <= drawPoints.at(-1)!.r_mm) { setError('Draw in strictly increasing radius.'); return; } setError(''); setDrawPoints([...drawPoints, { id: id(), r_mm: drawPoints.length ? r : 0, z_mm: z }]); }}
@@ -144,21 +274,27 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
           {drawPoints === null ? draft.contour.segments.map((patch, i) => <path key={patch.id} d={path(valid ? accepted!.value.meridian[patch.id] : draft.contour.points.slice(i, i + 2).map((p) => [p.r_mm, p.z_mm]))} className={`${patch.role} ${valid ? '' : 'draft'} ${i === selectedPatch ? 'selected' : ''}`} onPointerDown={(event) => { event.stopPropagation(); setSelectedPatch(i); }}/>) : <path d={path(drawPoints.map((p) => [p.r_mm, p.z_mm]))} className="moving draft"/>}
           {(drawPoints ?? draft.contour.points).map((point, i) => <circle key={point.id} cx={xy(point)[0]} cy={xy(point)[1]} r={5} className="source-handle" onPointerDown={(event) => { if (busy || drawPoints !== null) return; event.stopPropagation(); setUndo((history) => [...history.slice(-19), structuredClone(draft)]); drag.current = i; event.currentTarget.setPointerCapture(event.pointerId); }}><title>{point.id}: r {point.r_mm}, z {point.z_mm}</title></circle>)}
         </svg>
-        <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>
-        <h3>Points</h3><div className="source-table"><table><thead><tr><th>Point ID</th><th>r mm</th><th>z mm</th><th/></tr></thead><tbody>{draft.contour.points.map((point, i) => <tr key={point.id}><td title={point.id}>{point.id}</td>
-          <td><NumberField label={`Point ${i + 1} radius`} value={point.r_mm} precision={9} displayPrecision={2} step={.1} disabled={i === 0 || drawPoints !== null} onCommit={(v) => change(editPoint(draft, i, v, point.z_mm))}/></td>
-          <td><NumberField label={`Point ${i + 1} z`} value={point.z_mm} precision={9} displayPrecision={2} step={.1} disabled={i === draft.contour.points.length - 1 || drawPoints !== null} onCommit={(v) => change(editPoint(draft, i, point.r_mm, v))}/></td>
-          <td>{i > 0 && i < draft.contour.points.length - 1 && <button type="button" aria-label={`Remove point ${i + 1}`} disabled={drawPoints !== null} onClick={() => { try { change(removePoint(draft, i)); setSelectedPatch(0); } catch (reason) { setError(String(reason)); } }}>Remove</button>}</td></tr>)}</tbody></table></div>
-        <h3>Patches</h3><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch ID</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{draft.contour.segments.map((patch, i) => <tr key={patch.id} onClick={() => setSelectedPatch(i)}><td title={patch.id}>{patch.id}</td>
-          <td><select aria-label={`Patch ${i + 1} curve`} value={patch.kind} onChange={(e) => change(editPatch(draft, i, { kind: e.target.value as 'line' | 'arc' }))}><option value="line">Line</option><option value="arc">Arc</option></select></td>
-          <td><select aria-label={`Patch ${i + 1} role`} value={patch.role} onChange={(e) => change(editPatch(draft, i, { role: e.target.value as 'moving' | 'rigid' }))}><option value="moving">Moving</option><option value="rigid">Rigid</option></select></td>
-          <td>{patch.role === 'moving' ? <NumberField label={`Patch ${i + 1} weight`} value={draft.drive.weights[patch.id]} precision={6} displayPrecision={3} step={.1} onCommit={(v) => change({ ...draft, drive: { ...draft.drive, weights: { ...draft.drive.weights, [patch.id]: v } } })}/> : '—'}</td></tr>)}</tbody></table></div>
-        {draft.contour.segments[selectedPatch]?.kind === 'arc' && <div className="source-fields">
+        </>}
+        {(classic || !sketchProblems.length && !validationError) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}
+        <h3>Points</h3><div className="source-table"><table><thead><tr><th>Point ID</th><th>r mm</th><th>z mm</th><th/></tr></thead><tbody>{tablePoints.map((point, i) => <tr key={point.id}><td title={point.id}>{point.id}</td>
+          <td><NumberField label={`Point ${i + 1} radius`} value={point.r_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === 0 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, v, point.z_mm)) : sketchCommand({ kind: 'movePoint', id: point.id, x: v, y: author.sketch.points.find(p => p.id === point.id)!.y })}/></td>
+          <td><NumberField label={`Point ${i + 1} z`} value={point.z_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === draft.contour.points.length - 1 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, point.r_mm, v)) : sketchCommand({ kind: 'movePoint', id: point.id, x: author.sketch.points.find(p => p.id === point.id)!.x, y: v })}/></td>
+          <td>{classic && i > 0 && i < draft.contour.points.length - 1 && <button type="button" aria-label={`Remove point ${i + 1}`} disabled={drawPoints !== null} onClick={() => { try { change(removePoint(draft, i)); setSelectedPatch(0); } catch (reason) { setError(String(reason)); } }}>Remove</button>}</td></tr>)}</tbody></table></div>
+        <h3>Patches</h3><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch ID</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{tablePatches.map((patch, i) => <tr key={patch.id}><td title={patch.id}><button type="button" aria-label={`Select patch ${i + 1}`} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}>{patch.id}</button></td>
+          <td>{classic && <select aria-label={`Patch ${i + 1} curve`} value={patch.kind} onChange={(e) => change(editPatch(draft, i, { kind: e.target.value as 'line' | 'arc' }))}><option value="line">Line</option><option value="arc">Arc</option></select>}{!classic && patch.kind}</td>
+          <td><select aria-label={`Patch ${i + 1} role`} value={patch.role} onChange={(e) => classic ? change(editPatch(draft, i, { role: e.target.value as 'moving' | 'rigid' })) : sketchCommand({ kind: 'setEntityData', id: patch.id, data: { role: e.target.value } })}><option value="moving">Moving</option><option value="rigid">Rigid</option></select></td>
+          <td>{patch.role === 'moving' ? <NumberField label={`Patch ${i + 1} weight`} value={classic ? draft.drive.weights[patch.id] : author.meta.weights[patch.id] ?? 1} precision={6} displayPrecision={3} step={.1} onCommit={(v) => { if (classic) change({ ...draft, drive: { ...draft.drive, weights: { ...draft.drive.weights, [patch.id]: v } } }); else { void controller.current?.metadata({ ...authorRef.current.meta, weights: { ...authorRef.current.meta.weights, [patch.id]: v } }).catch(reason => setError(String(reason))); } }}/> : '—'}</td></tr>)}</tbody></table></div>
+        {classic && draft.contour.segments[selectedPatch]?.kind === 'arc' && <div className="source-fields">
           <NumberField label="Arc center radius" unit="mm" precision={9} displayPrecision={2} step={.1} value={draft.contour.segments[selectedPatch].center_mm![0]} onCommit={(v) => change(editPatch(draft, selectedPatch, { center_mm: [v, draft.contour.segments[selectedPatch].center_mm![1]] }))}/>
           <NumberField label="Arc center z" unit="mm" precision={9} displayPrecision={2} step={.1} value={draft.contour.segments[selectedPatch].center_mm![1]} onCommit={(v) => change(editPatch(draft, selectedPatch, { center_mm: [draft.contour.segments[selectedPatch].center_mm![0], v] }))}/>
           <label>Arc direction<select aria-label="Arc direction" value={draft.contour.segments[selectedPatch].direction} onChange={(e) => change(editPatch(draft, selectedPatch, { direction: e.target.value as 'cw' | 'ccw' }))}><option value="cw">Clockwise</option><option value="ccw">Counterclockwise</option></select></label>
         </div>}
-        <button type="button" disabled={!valid || draft.contour.segments.length >= 256} onClick={() => void run(async () => adopt(await sourceEditorApi.split(draft, selectedPatch)))}>Split selected patch at midpoint</button>
+        <button type="button" disabled={!valid || tablePatches.length >= 256} onClick={() => {
+          if (classic) { void run(async () => await adopt(await sourceEditorApi.split(draft, selectedPatch))); return; }
+          const e = author.sketch.entities.find(e => e.id === tablePatches[selectedPatch]?.id);
+          if (e?.kind === 'line') { const a = author.sketch.points.find(p => p.id === e.p1)!, b = author.sketch.points.find(p => p.id === e.p2)!; sketchCommand({ kind: 'splitAt', entity: e.id, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }); }
+          if (e?.kind === 'arc') { const g = arcGeometry(author.sketch, e), angle = g.start + g.sweep / 2; sketchCommand({ kind: 'splitAt', entity: e.id, x: g.center.x + g.radius * Math.cos(angle), y: g.center.y + g.radius * Math.sin(angle) }); }
+        }}>Split selected patch at midpoint</button>
       </div><aside>
         <h3>Motion</h3>
         <details className="source-identifiers" open={identifiersOpen} onToggle={(e) => setIdentifiersOpen(e.currentTarget.open)}><summary>Identifiers</summary>
@@ -167,13 +303,13 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
         </details>
         <label>Prescribed motion<select aria-label="Prescribed motion" value={draft.drive.motion} onChange={(e) => change({ ...draft, drive: { ...draft.drive, motion: e.target.value as 'normal' | 'axial' } })}><option value="normal">Normal</option><option value="axial">Axial +Z</option></select></label>
         <h3>Start from a shape</h3><label>Shape<select aria-label="Source shape" value={shape} onChange={(e) => { const s = e.target.value as typeof shape; setShape(s); setDimensions({ ...defaults[s] }); }}><option value="flat">Flat</option><option value="dome">Dome and surround</option><option value="cone">Cone and dust cap</option></select></label>
-        <div className="source-fields">{fields(dimensions, setDimensions, 'preset')}</div><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { adopt(await sourceEditorApi.expand(shape, dimensions, draft)); setSelected(undefined); })}>Apply shape</button>
+        <div className="source-fields">{fields(dimensions, setDimensions, 'preset')}</div><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.expand(shape, dimensions, draft)); setSelected(undefined); })}>Apply shape</button>
         <h3>Saved presets</h3><label>Preset name<input aria-label="Preset name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)}/></label><div className="source-editor-toolbar">
           <button type="button" disabled={!valid || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft); setPresets([...presets, item]); setSelected(item); setNotice('Saved new preset.'); })}>Save new preset</button>
           <button type="button" disabled={!valid || !selected || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, selected); setPresets(presets.map((p) => p.id === item.id ? item : p)); setSelected(item); setNotice('Updated preset.'); })}>Update loaded preset</button>
           <button type="button" onClick={() => void run(async () => { setPresets(await sourceEditorApi.presets()); setNotice('Preset library refreshed. Load a preset to use its latest revision.'); })}>Refresh presets</button>
         </div>
-        {presets.map((preset) => <div key={preset.id} className="source-preset"><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { adopt(await sourceEditorApi.validate(preset.document)); setName(preset.name); setSelected(preset); })}>Load {preset.name}</button><button type="button" aria-label={`Delete preset ${preset.name}`} onClick={() => void run(async () => { await sourceEditorApi.delete(preset); setPresets(presets.filter((p) => p.id !== preset.id)); if (selected?.id === preset.id) setSelected(undefined); setNotice('Deleted preset. Current contour retained.'); })}>Delete</button></div>)}
+        {presets.map((preset) => <div key={preset.id} className="source-preset"><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.validate(preset.document)); setName(preset.name); setSelected(preset); })}>Load {preset.name}</button><button type="button" aria-label={`Delete preset ${preset.name}`} onClick={() => void run(async () => { await sourceEditorApi.delete(preset); setPresets(presets.filter((p) => p.id !== preset.id)); if (selected?.id === preset.id) setSelected(undefined); setNotice('Deleted preset. Current contour retained.'); })}>Delete</button></div>)}
         <h3>Export geometry</h3><label>Attachment<select aria-label="Source attachment" value={attachment.kind} onChange={(e) => setAttachment(e.target.value === 'baffle' ? { kind: 'baffle', dimensions: { width_mm: 44, height_mm: 54, depth_mm: 12, aperture_radius_mm: 14, center_mm: [0, 0, 0] } } : { kind: 'horn', dimensions: { mouth_radius_mm: 20, length_mm: 30, housing_radius_mm: 22, backing_depth_mm: 12 } })}><option value="baffle">Front baffle woofer</option><option value="horn">Circular conical horn</option></select></label>
         <div className="source-fields">{fields(Object.fromEntries(Object.entries(attachment.dimensions).filter((entry): entry is [string, number] => typeof entry[1] === 'number')), (next) => setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, ...next } }), 'attachment')}
           {attachment.kind === 'baffle' && ([0, 1, 2] as const).map((axis) => <NumberField key={axis} label={`Source center ${['X', 'Y', 'Z'][axis]}`} value={(attachment.dimensions.center_mm as [number, number, number])[axis]} precision={6} displayPrecision={2} unit="mm" step={.1} onCommit={(v) => { const center = [...attachment.dimensions.center_mm as [number, number, number]] as [number, number, number]; center[axis] = v; setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, center_mm: center } }); }}/>) }

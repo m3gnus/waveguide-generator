@@ -11,6 +11,7 @@
   --violet: rgb(var(--violet-rgb));
   --amber: rgb(var(--amber-rgb));
   --green: rgb(var(--green-rgb));
+  --source-moving: #69d4ce;
   --red: rgb(var(--red-rgb));
   --acc-2: #bd7a5f;
   /* The accent at text weight on its own tinted ground. In dark the accent is
@@ -196,6 +197,7 @@
 }
 
 [data-theme="light"] {
+  --source-moving: #176d68;
   color-scheme: light;
   --acc-rgb: 165, 57, 27;
   --blue-rgb: 56, 93, 184;

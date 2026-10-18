@@ -61,10 +61,14 @@ function chain(sketch: Sketch, meta: SourceMeta): Chain | DomainProblem {
   const baffle = meta.references.find(r => r.kind === 'baffle')?.id;
   const rims = sketch.constraints.flatMap(c => c.kind === 'pointOnLine' && c.line === baffle ? [root(c.point)] : []);
   if (!poles.length) {
-    const candidates = tips.filter(id => !rims.includes(id) && Math.abs(sketch.points.find(p => p.id === id)!.x) <= 1e-9);
+    const candidates = tips.filter(id => !rims.includes(id) && (!locked.length && rims.length > 0 || Math.abs(sketch.points.find(p => p.id === id)!.x) <= 1e-9));
     if (candidates.length === 1) return { code: 'pole', ids: candidates, message: 'Lock the pole to the axis' };
   }
-  if (!tips.some(id => rims.includes(id) && !poles.includes(id))) return problem();
+  if (!tips.some(id => rims.includes(id) && !poles.includes(id))) {
+    const candidates = tips.filter(id => !poles.includes(id) && (poles.length > 0 || Math.abs(sketch.points.find(p => p.id === id)!.y) <= 1e-9));
+    if (candidates.length === 1) return { code: 'rim', ids: candidates, message: 'Lock the rim to the baffle' };
+    return problem();
+  }
   if (poles.length !== 1) return problem();
   const result: Chain = { points: [poles[0]], entities: [] }, visited = new Set<string>();
   let cursor = poles[0];
@@ -142,6 +146,10 @@ export function lower(sketch: Sketch, meta: SourceMeta): Lowered<SourceDocument>
 export const sourceContourAdapter: SketchAdapter<SourceDocument, SourceMeta> = { id: 'source-contour-v1', references, seed, lower, rules };
 
 export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Command) {
+  if (command.kind === 'deletePoint') {
+    const adjacent = sketch.entities.filter(e => !e.reference && entityPoints(e).includes(command.id));
+    if (adjacent.length === 2 && (role(adjacent[0]) !== role(adjacent[1]) || meta.weights[adjacent[0].id] !== meta.weights[adjacent[1].id])) return { error: 'Adjacent patches need the same role and literal weight to remove their join.' };
+  }
   const result = applyCommand(sketch, command); if ('error' in result) return result;
   const weights = { ...meta.weights };
   if (command.kind === 'splitAt' && Object.hasOwn(weights, command.entity)) {

@@ -1,15 +1,16 @@
 .source-editor-launch { display: grid; gap: 6px; padding: 12px; border-bottom: 1px solid var(--hair); }
 .source-editor-launch small { color: var(--fg3); }
 .source-editor-backdrop { position: fixed; inset: 0; z-index: 1200; background: #0009; display: grid; place-items: center; padding: 20px; }
-.source-editor { width: min(1120px, 96vw); max-height: 94vh; overflow: auto; background: var(--bg, #171a20); color: var(--fg, #e5e7eb); border: 1px solid var(--hair, #454a53); border-radius: 10px; box-shadow: 0 12px 60px #0008; padding: 18px; font-size: 13px; }
+.source-editor { width: min(1120px, 96vw); max-height: 94vh; overflow: auto; background: var(--surface-panel); color: var(--fg); border: 1px solid var(--border-control); border-radius: 10px; box-shadow: 0 12px 60px #0008; padding: 18px; font-size: 13px; }
 .source-editor header { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
 .source-editor h2 { font-size: 20px; margin: 0; }
 .source-editor h3 { margin: 20px 0 8px; font-size: 14px; }
-.source-editor p { color: var(--fg3, #aaa); margin: 6px 0 10px; }
+.source-editor p { color: var(--fg3); margin: 6px 0 10px; }
 .source-editor fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
-.source-editor button, .source-editor select, .source-editor input { font: inherit; color: inherit; background: var(--ctl-bg, #252a33); border: 1px solid var(--hair, #454a53); border-radius: 4px; padding: 5px 8px; }
-.source-editor button { cursor: pointer; }
-.source-editor :is(button, input, select):focus-visible { outline: 2px solid var(--blue, #6f9dff); outline-offset: 2px; }
+.source-editor button, .source-editor select, .source-editor input { font: inherit; color: inherit; background: var(--surface-field); border: 1px solid var(--border-control); border-radius: 4px; padding: 5px 8px; }
+.source-editor button { cursor: pointer; background: var(--ctl-grad); }
+.source-editor button:hover:enabled { background: var(--ctl-grad-h); }
+.source-editor :is(button, input, select):focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .source-editor button:disabled { opacity: .45; cursor: default; }
 .source-editor input { width: 100%; min-width: 75px; box-sizing: border-box; }
 .source-editor label { display: grid; gap: 4px; margin-bottom: 8px; }
@@ -34,18 +35,18 @@
 .source-table td:first-child { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-table .field-row { display: block; min-width: 100px; }
 .source-table .field-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.source-meridian { width: 100%; height: 260px; background: #0d1117; border: 1px solid var(--hair); border-radius: 6px; touch-action: none; }
-.source-meridian text { fill: #9ca3af; font-size: 11px; }
-.source-axis { stroke: #4b5563; stroke-width: 1; }
+.source-meridian { width: 100%; height: 260px; background: var(--surface-raised); border: 1px solid var(--hair); border-radius: 6px; touch-action: none; }
+.source-meridian text { fill: var(--fg3); font-size: 11px; }
+.source-axis { stroke: var(--fg3); stroke-width: 1; }
 .source-meridian path { fill: none; stroke-width: 3; cursor: pointer; }
-.source-meridian .moving { stroke: #69d4ce; }
-.source-meridian .rigid { stroke: #a4aabd; }
-.source-meridian .selected { stroke-width: 5; }
+.source-meridian .moving { stroke: var(--source-moving); }
+.source-meridian .rigid { stroke: var(--fg3); }
+.source-meridian .selected { stroke: var(--acc); stroke-width: 5; }
 .source-meridian .draft { stroke-dasharray: 5 4; }
-.source-handle { fill: #f0f4fa; stroke: #10151f; stroke-width: 2; cursor: grab; }
-.source-validation { margin-top: 6px; color: #ffbf80; }
-.source-validation.valid { color: #69d4ce; }
+.source-handle { fill: var(--fg); stroke: var(--surface-raised); stroke-width: 2; cursor: grab; }
+.source-validation { margin-top: 6px; color: var(--amber); }
+.source-validation.valid { color: var(--source-moving); }
 .source-editor footer { border-top: 1px solid var(--hair); margin-top: 16px; padding-top: 10px; }
-.source-editor [role="alert"] { color: #ffbf80; }
+.source-editor [role="alert"] { color: var(--amber); }
 @media (max-width: 800px) { .source-editor-columns { grid-template-columns: 1fr; } .source-editor aside { border: 0; padding: 0; } }
 .assembly-preview { width: 100%; height: 260px; display: block; }

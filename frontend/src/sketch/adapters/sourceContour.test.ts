@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { SourceDocument, SourcePatch, SourcePoint } from '../../api/sourceEditor';
 import { drawnSource, editPatch, editPoint, INITIAL_SOURCE, removePoint } from '../../design/sourceContourEditing';
 import { applyCommand } from '../ops';
+import { uniqueProblems } from '../adapter';
 import { validateSketch } from '../model';
 import { applySourceCommand, lower, rules, seed } from './sourceContour';
 
@@ -63,6 +64,12 @@ describe('source contour exact import and lowering', () => {
     const { sketch, meta } = seed(doc), before = JSON.stringify(sketch);
     expect(lower(sketch, meta)).toEqual({ ok: true, document: doc }); expect(Object.is(meta.weights[doc.contour.segments[0].id], -0)).toBe(true);
     expect(JSON.stringify(sketch)).toBe(before); expect(meta.references.every(r => !['axis', 'baffle'].includes(r.id))).toBe(true);
+  });
+  it('deduplicates diagnoses by code and entities while keeping separate entities and codes', () => {
+    const a = { code: 'fold', ids: ['a', 'b'], message: 'First wording' };
+    const b = { code: 'fold', ids: ['other'], message: 'Other entity' };
+    const c = { code: 'circle', ids: ['a', 'b'], message: 'Other code' };
+    expect(uniqueProblems([a, { ...a, ids: ['b', 'a'], message: 'Second wording' }, b, c])).toEqual([a, b, c]);
   });
   it('orders by connected topology, excludes construction geometry and handles reversed edges', () => {
     const doc = shape('cone'), { sketch, meta } = seed(doc);

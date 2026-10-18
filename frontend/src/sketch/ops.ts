@@ -99,6 +99,22 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
         if (s.entities.some(e => e.reference && entityPoints(e).includes(command.id))) throw new Error('Reference points cannot be moved.');
         s.points = s.points.map(p => p.id === command.id ? { ...p, x: command.x, y: command.y } : p); break;
       }
+      case 'deletePoint': {
+        point(command.id);
+        const adjacent = s.entities.filter(e => entityPoints(e).includes(command.id));
+        if (adjacent.some(e => e.reference)) throw new Error('Reference points cannot be deleted.');
+        if (adjacent.length) {
+          const [left, right] = adjacent;
+          if (adjacent.length !== 2 || left.kind !== 'line' || right.kind !== 'line') throw new Error('Remove an interior point between two lines, or select a curve to delete it.');
+          if (!!left.construction !== !!right.construction) throw new Error('Adjacent lines need matching construction flags.');
+          const far = right.p1 === command.id ? right.p2 : right.p1;
+          if (far === left.p1 || far === left.p2) throw new Error('Removing this point would collapse the chain.');
+          s.entities = s.entities.filter(e => e.id !== right.id).map(e => e.id === left.id
+            ? { ...left, p1: left.p1 === command.id ? far : left.p1, p2: left.p2 === command.id ? far : left.p2 } : e);
+          cleanConstraints(c => constraintRefs(c).includes(right.id) || constraintRefs(c).includes(command.id));
+        } else cleanConstraints(c => constraintRefs(c).includes(command.id));
+        s.points = s.points.filter(p => p.id !== command.id); break;
+      }
       case 'deleteEntity': {
         const e = entity(command.id);
         if (e.reference) throw new Error('Reference lines cannot be deleted.');

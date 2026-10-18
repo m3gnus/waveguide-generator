@@ -1,9 +1,12 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { beforeEach, afterEach, it, expect, vi } from 'vitest';
+import { beforeAll, beforeEach, afterEach, it, expect, vi } from 'vitest';
 import { sourceEditorApi, type SourceAssemblyDocument } from '../api/sourceEditor';
 import { durableSettings, SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { AssemblyEditor, INITIAL_ASSEMBLY, parseAssemblyDraft } from './SourceAssemblyEditor';
+
+import { realSessionReady } from '../sketch/testSupport';
+beforeAll(realSessionReady);
 
 vi.mock('../api/sourceEditor', () => ({ sourceEditorApi: { validateAssembly: vi.fn(), validate: vi.fn(), presets: vi.fn() } }));
 vi.mock('./nativeAssemblyPreparation', () => ({ prepareNativeAssembly: vi.fn() }));
@@ -66,7 +69,7 @@ it.each(['horn', 'woofer'] as const)('preserves nested %s edits, undo and subseq
   expect(Number(weightInput().value)).toBe(-.25);
   expect(button('Use contour in assembly').disabled).toBe(false);
   expect(read().dimensions.width_mm).toBe(INITIAL_ASSEMBLY.dimensions.width_mm);
-  await act(async () => button('Undo edit').click()); await settle();
+  await act(async () => button('Undo').click()); await settle();
   expect(Number(weightInput().value)).toBe(1);
   await editWeight('-.5');
   await act(async () => button('Use contour in assembly').click()); await settle();

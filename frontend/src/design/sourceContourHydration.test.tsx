@@ -1,12 +1,14 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { beforeEach, afterEach, it, expect, vi } from 'vitest';
+import { beforeEach, beforeAll, afterEach, it, expect, vi } from 'vitest';
 import { sourceEditorApi, type SourceDocument, type SourceValidation } from '../api/sourceEditor';
 import { durableSettings, SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { INITIAL_SOURCE } from './sourceContourEditing';
 import { Editor, readSourceDraft } from './SourceContourEditor';
 
 vi.mock('../api/sourceEditor', () => ({ sourceEditorApi: { validate: vi.fn(), presets: vi.fn(), save: vi.fn(), delete: vi.fn(), expand: vi.fn(), split: vi.fn(), export: vi.fn() } }));
+import { realSessionReady } from '../sketch/testSupport';
+beforeAll(realSessionReady);
 let host: HTMLDivElement; let root: Root;
 function validation(document: SourceDocument): SourceValidation { return { document, geometry_sha256: 'g', excitation_sha256: 'e', meridian: Object.fromEntries(document.contour.segments.map((p, i) => [p.id, document.contour.points.slice(i, i + 2).map((point) => [point.r_mm, point.z_mm])])) }; }
 beforeEach(() => {
@@ -40,12 +42,12 @@ it('restores a server reply after the startup timeout and uploads the restored i
   expect(Number(radiusInput().value)).toBe(24); expect(host.querySelector<HTMLInputElement>('input[aria-label="Physical source ID"]')!.value).toBe('remote-source');
   await editRadius(); await settle(); await act(async () => { await vi.advanceTimersByTimeAsync(500); });
   expect(readSourceDraft().contour.physical_source_id).toBe('remote-source');
-  expect(pending.uploads.some((u) => u.url === '/api/settings/sourceContourDraft' && JSON.parse(JSON.parse(String(u.body))).contour.physical_source_id === 'remote-source')).toBe(true);
+  expect(pending.uploads.some((u) => u.url === '/api/settings/sourceContourDraft' && JSON.parse(JSON.parse(String(u.body))).document.contour.physical_source_id === 'remote-source')).toBe(true);
 });
 
 it('keeps genuine source edits made while the server hydration reply is in flight', async () => {
   const pending = await deferredHydration(); await editRadius(); await pending.reply(); await settle(); await act(async () => { await vi.advanceTimersByTimeAsync(500); });
   expect(Number(radiusInput().value)).toBe(10); expect(readSourceDraft().contour.physical_source_id).toBe('diaphragm');
-  const writes = pending.uploads.filter((u) => u.url === '/api/settings/sourceContourDraft').map((u) => JSON.parse(JSON.parse(String(u.body))) as SourceDocument);
+  const writes = pending.uploads.filter((u) => u.url === '/api/settings/sourceContourDraft').map((u) => JSON.parse(JSON.parse(String(u.body))).document as SourceDocument);
   expect(writes.length).toBeGreaterThan(0); expect(writes.every((doc) => doc.contour.points[1].r_mm === 10 && doc.contour.physical_source_id === 'diaphragm')).toBe(true);
 });

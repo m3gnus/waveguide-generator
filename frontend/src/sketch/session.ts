@@ -244,10 +244,8 @@ export class SketchSession {
       const from = targets.map(t => ({ pointId: t.pointId, ...this.sketch.points.find(p => p.id === t.pointId)! }));
       const remaining = Math.max(...targets.map((t, i) => distance(t, from[i])));
       if (remaining <= Math.max(1e-8, tolerance)) {
-        const fixed = this.referencePoints();
-        for (const c of this.sketch.constraints) if (c.kind === 'fix') fixed.add(c.point);
-        const stopped = requested.some((t, i) => fixed.has(t.pointId) && distance(t, targets[i]) > tolerance);
-        return { sketch: this.sketch, stopped, steps, result };
+        const stopped = requested.some((t, i) => distance(t, targets[i]) > tolerance);
+        return { sketch: this.sketch, stopped, steps, result, ...(stopped ? { reason: 'Cursor is outside the reachable locus.' } : {}) };
       }
       const before = this.sketch; let accepted = false, fraction = Math.min(1, maxStep / remaining);
       for (let half = 0; half <= 6; half++, fraction /= 2) {
@@ -283,7 +281,7 @@ export class SketchSession {
       if (!accepted) return { sketch: this.sketch, stopped: true, steps, result, reason: 'Stopped at the reachable branch boundary.' };
       if (targets.every((t, i) => distance(this.sketch.points.find(p => p.id === t.pointId)!, from[i]) < 1e-9)) break;
     }
-    const stopped = targets.some(t => distance(t, this.sketch.points.find(p => p.id === t.pointId)!) > Math.max(1e-7, 2 * tolerance));
+    const stopped = requested.some(t => distance(t, this.sketch.points.find(p => p.id === t.pointId)!) > Math.max(1e-7, 2 * tolerance));
     return { sketch: this.sketch, stopped, steps, result, ...(stopped ? { reason: 'Stopped at the reachable boundary or continuation step limit.' } : {}) };
   }
   async endDrag(): Promise<Diagnosis> {

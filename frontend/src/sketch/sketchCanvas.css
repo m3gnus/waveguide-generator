@@ -1,0 +1,58 @@
+.sketch-canvas { min-width: 0; }
+.sketch-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; overflow: visible; }
+.sketch-tool-segment, .sketch-view-tools, .sketch-context { display: flex; align-items: center; gap: 4px; }
+.sketch-tool-segment { gap: 0; }
+.sketch-tool-segment > button { border-radius: 0; margin-right: -1px; }
+.sketch-toolbar button, .sketch-context button { font-size: 11px; white-space: nowrap; }
+.sketch-toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.sketch-toolbar button > svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.sketch-toolbar button[aria-pressed="true"] { border-color: var(--blue); color: var(--blue); background: var(--surface-raised); position: relative; }
+.sketch-menu-anchor { position: relative; }
+.sketch-menu { position: absolute; top: 100%; right: 0; z-index: 2; display: grid; gap: 4px; padding: 6px; background: var(--surface-floating); border: 1px solid var(--border-control); box-shadow: var(--float-sh); }
+.sketch-context { flex-wrap: wrap; margin: 6px 0; padding: 4px; border: 1px solid var(--hair); border-radius: 4px; background: var(--surface-raised); }
+.sketch-surface { position: relative; height: 360px; min-height: 220px; resize: vertical; overflow: hidden; border: 1px solid var(--hair); border-radius: 6px; background: var(--surface-raised); }
+.sketch-selection-context { position: absolute; top: 8px; left: 8px; z-index: 1; margin: 0; max-width: calc(100% - 24px); }
+.sketch-surface svg { display: block; width: 100%; height: 100%; touch-action: none; outline-offset: -3px; }
+.sketch-grid { stroke: var(--hair); stroke-width: .5; opacity: .45; pointer-events: none; }
+.sketch-references { stroke: var(--fg3); stroke-width: 1; pointer-events: none; }
+.sketch-references text { fill: var(--fg3); stroke: none; font-size: 10px; }
+.sketch-entity { fill: none; stroke: var(--sketch-patch, var(--fg)); stroke-width: 2.5; cursor: pointer; }
+.sketch-entity.under { stroke: var(--sketch-patch, var(--blue)); }
+.sketch-entity.determined { stroke: var(--sketch-patch, var(--fg)); }
+.sketch-entity.moving { stroke: var(--source-moving); }
+.sketch-entity.rigid { stroke: var(--fg3); }
+.sketch-entity.conflicting { stroke: var(--red); }
+.sketch-entity.construction { stroke-dasharray: 6 4; }
+.sketch-curve-hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }
+.sketch-point-hit { fill: transparent; pointer-events: all; cursor: grab; }
+.sketch-curve:hover .sketch-entity { stroke-width: 4; }
+.sketch-entity.selected { stroke: var(--acc); stroke-width: 4; }
+.sketch-point { fill: var(--surface-raised); stroke: var(--blue); stroke-width: 1.5; cursor: grab; }
+.sketch-point.determined { fill: var(--fg); stroke: var(--fg); }
+.sketch-point.conflicting { fill: var(--red); stroke: var(--red); }
+.sketch-handle:hover .sketch-point { stroke-width: 3; }
+.sketch-point.selected { stroke: var(--acc); stroke-width: 2.5; }
+.sketch-glyph { fill: var(--fg); font-size: 11px; cursor: pointer; paint-order: stroke; stroke: var(--surface-raised); stroke-width: 3px; }
+.sketch-glyph.reference, .sketch-glyph.redundant { fill: var(--fg3); }
+.sketch-glyph.conflicting { fill: var(--red); }
+.sketch-glyph.selected { fill: var(--acc); text-decoration: underline; }
+.sketch-problem { fill: none; stroke: var(--amber); stroke-width: 7; opacity: .6; pointer-events: none; }
+.sketch-preview { stroke: var(--blue); stroke-width: 1.5; stroke-dasharray: 5 3; pointer-events: none; }
+.sketch-pending { fill: var(--blue); stroke: var(--blue); pointer-events: none; }
+.sketch-pending circle { fill: none; }
+.sketch-pending text { stroke: none; font-size: 11px; }
+.sketch-status { margin-top: 6px; color: var(--fg3); font-size: 11px; min-height: 32px; }
+.sketch-dof { display: inline-block; border: 1px solid var(--border-control); border-radius: 4px; padding: 2px 4px; color: var(--blue); }
+.sketch-dof.complete { color: var(--green); }
+.sketch-domain-problem { color: var(--amber); margin: 4px 0; }
+.sketch-domain-problem button { margin-left: 8px; }
+.sketch-inline { position: absolute; top: 12px; left: 12px; width: 150px; background: var(--surface-floating); padding: 8px; border: 1px solid var(--hair); border-radius: 4px; font-size: 11px; }
+.sketch-inline input { min-width: 0; }
+.sketch-entity:focus-visible, .sketch-point:focus-visible, .sketch-glyph:focus-visible { outline: 2px solid var(--blue); }
+.sketch-dimension-kind { display: flex; align-items: center; gap: 4px; margin: 0; font-size: 11px; }
+.source-editor .sketch-dimension-kind { display: flex; margin: 0; }
+@media (max-width: 1100px) { .sketch-toolbar { gap: 4px; } .sketch-toolbar button { padding: 5px 4px; } }
+@media (max-width: 600px) { .sketch-tool-label { display: none; } }
+
+.sketch-dimension-context { position: absolute; top: 8px; right: 8px; z-index: 1; margin: 0; }
+.sketch-label-hit { fill: transparent; pointer-events: all; cursor: pointer; }

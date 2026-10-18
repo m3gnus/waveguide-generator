@@ -13,6 +13,7 @@ export type Command =
   | { kind: 'setDriving'; id: string; driving: boolean }
   | { kind: 'movePoint'; id: string; x: number; y: number }
   | { kind: 'deleteEntity'; id: string }
+  | { kind: 'deletePoint'; id: string }
   | { kind: 'splitAt'; entity: string; x: number; y: number }
   | { kind: 'setEntityData'; id: string; data: JSONValue }
   | { kind: 'setConstruction'; id: string; construction: boolean };
