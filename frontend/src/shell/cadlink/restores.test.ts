@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore } from '../../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../../stores/cadReturn';
 import { readLastModel, rememberLastModel } from '../../stores/lastModel';
+import { waitForCadProjectSettings, retainCadDraft } from '../../stores/cadProjectSettings';
 import { DurableSettings } from '../../stores/durableSettings';
 import { resetDesignStore } from '../../stores/design';
 import { resetDocumentStore } from '../../stores/document';
@@ -58,6 +59,7 @@ it('restores the coupled BEAT model without legacy driver conversion', async () 
 
 
 beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(async () => json({ setup: null })));
   localStorage.clear(); resetDesignStore(); resetDocumentStore(); resetCadReturnStore();
   resetSolveOptionsStore(); preferencesStore.resetForTests(); importedMeshStore.clear();
   workspaceModeStore.setImportedInput('cad'); resetImportedModelStore();
@@ -311,7 +313,8 @@ it.each(['manual selection', 'listing arrival'] as const)(
       kind: 'cd' as const, z_ohm: 8, xo_min_hz: null, base: { re_ohm: 5 } };
     const state = useCadReturnStore.getState();
     state.selectBundle(bundle, 'wgl_project');
-    state.setChannelDriverPreset('drive-hf', preset);
+    await waitForCadProjectSettings();
+    state.setChannelDriverPreset('drive-hf', preset); retainCadDraft();
     const pending = deferred<Response>();
     const ingestPending = deferred<Response>();
     const status = vi.fn();
@@ -326,16 +329,18 @@ it.each(['manual selection', 'listing arrival'] as const)(
     const autoIngestSelected = () => { ingest = actions.ingestSelected(); };
     const actions = createCadArrivalActions({
       rereadDrivers: () => { void reread(); }, autoIngestSelected, showIngestedMesh: async () => undefined,
-    }, (() => ingestPending.promise) as typeof fetch);
+    }, (async input => String(input).includes('/setup?') ? json({ setup: null }) : ingestPending.promise) as typeof fetch);
     if (caller === 'manual selection') {
       actions.selectBundleAs(bundle, 'wgl_project');
     } else {
       await createCadReturnArrivalReader({
         refreshChannelDriverBases: reread, autoIngestSelected,
-      }, (async () => json({ cadFolderConfigured: true,
+      }, (async input => String(input).includes('/setup?') ? json({ setup: null }) : json({ cadFolderConfigured: true,
         items: [{ ...bundle, modifiedAt: new Date().toISOString() }] })) as typeof fetch)
         .refresh({ autoOpenNew: true });
     }
+    await waitForCadProjectSettings();
+    await Promise.resolve();
     pending.resolve(json({ spec: { re_ohm: 7 }, xo_min_hz: 1200 }));
     expect(await refresh).toEqual(['drive-hf']);
     expect(useCadReturnStore.getState().channelDrivers['drive-hf'].preset?.base.re_ohm).toBe(7);
@@ -344,15 +349,17 @@ it.each(['manual selection', 'listing arrival'] as const)(
   },
 );
 
-it('an archive restore leaves the project profile intact', async () => {
+it('an archive restore leaves the project draft intact', async () => {
   const state = useCadReturnStore.getState(); state.selectBundle(bundle, 'wgl_project');
-  state.setDriveVoltage(5);
-  const profile = localStorage.getItem('waveguide-v2-g3-cad-solve-profiles');
+  await waitForCadProjectSettings();
+  state.setDriveVoltage(5); retainCadDraft();
+  const profile = localStorage.getItem('wg2.cad.setup.drafts.v1');
   expect(profile).not.toBeNull();
   expect(await restoreCadJobModel(job(), {}, archiveFetcher)).toBe(true);
   expect(useCadReturnStore.getState().driveVoltageV).toBe(8);
-  expect(localStorage.getItem('waveguide-v2-g3-cad-solve-profiles')).toBe(profile);
+  expect(localStorage.getItem('wg2.cad.setup.drafts.v1')).toBe(profile);
   resetCadReturnStore(); useCadReturnStore.getState().selectBundle(bundle, 'wgl_project');
+  await waitForCadProjectSettings();
   expect(useCadReturnStore.getState().driveVoltageV).toBe(5);
 });
 

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+vi.mock('./cadProjectSettings', async original => ({ ...await original<typeof import('./cadProjectSettings')>(), loadCadProjectSettings: () => Promise.resolve(true) }));
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import {
   blockingFindingWire,
@@ -23,16 +24,12 @@ import {
   expandLegacy,
   relinkPairs,
   withChannel,
-  withDelayMode,
-  withGainMode,
   withPair,
 } from '../results/crossoverSpec';
 import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { resetDocumentStore, useDocumentStore } from './document';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { workspaceModeStore } from './workspaceMode';
-
-const solveProfileStorageKey = 'waveguide-v2-g3-cad-solve-profiles';
 
 const bundle: CadReturnBundle = {
   name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', modifiedAt: '2026-08-11T00:00:00Z', readable: true,
@@ -69,42 +66,6 @@ describe('CAD return store', () => {
     resetCadReturnStore();
   });
 
-  it('saves and restores the shared accuracy choice in a CAD project profile', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 3,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
-    const saved = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
-    expect(saved.profiles[0].solveSelection).toEqual({ accuracy: 'accurate', engine: 'auto' });
-    resetCadReturnStore();
-    resetSolveOptionsStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useImportedSolveOptionsStore.getState()).toMatchObject({ accuracy: 'accurate', engine: 'auto' });
-  });
-
-  it('files a file mesh\'s engine choice under no CAD project', () => {
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
-    useCadReturnStore.getState().setExteriorOnly(true);
-    const before = localStorage.getItem(solveProfileStorageKey);
-    workspaceModeStore.setImportedInput('file');
-    useImportedSolveOptionsStore.getState().setEngine('bempp');
-    expect(localStorage.getItem(solveProfileStorageKey)).toBe(before);
-    workspaceModeStore.setImportedInput('cad');
-    expect(useImportedSolveOptionsStore.getState().engine).toBe('auto');
-  });
-
-  it('opens a project with its own saved selection over a fresh copy, not leftovers', () => {
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
-    useCadReturnStore.getState().setExteriorOnly(true);
-    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
-    useImportedSolveOptionsStore.getState().updatePolar({ distance: 9 });
-    useCadReturnStore.getState().selectBundle(null, null);
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
-    expect(useImportedSolveOptionsStore.getState()).toMatchObject({
-      accuracy: 'accurate', polar: { distance: useSolveOptionsStore.getState().polar.distance } });
-  });
-
   it('drops the previous project\'s CAD options when another project is selected with a file on screen', () => {
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
     useCadReturnStore.getState().setExteriorOnly(true);
@@ -129,25 +90,6 @@ describe('CAD return store', () => {
     const store = useCadReturnStore.getState();
     store.applyIngest({ ...record(), project: project('wgl_other') }, store.beginIngestIntent());
     expect(useImportedSolveOptionsStore.getState()).toMatchObject({ frequencyMode: 'list', polar: { distance: 9 } });
-  });
-
-  it('loads a CAD profile saved before accuracy existed as Fast', () => {
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
-    useCadReturnStore.getState().setExteriorOnly(true);
-    const saved = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
-    delete saved.profiles[0].solveSelection.accuracy;
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(saved));
-    resetCadReturnStore();
-    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
-    expect(useImportedSolveOptionsStore.getState()).toMatchObject({ accuracy: 'fast', engine: 'auto' });
-
-    delete saved.profiles[0].solveSelection;
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(saved));
-    resetCadReturnStore();
-    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
-    expect(useImportedSolveOptionsStore.getState().accuracy).toBe('fast');
   });
 
   it('initializes complete sizes and one default channel per source', () => {
@@ -325,194 +267,6 @@ describe('CAD return store', () => {
     expect(state.combineEnabled).toBeNull();
   });
 
-  it('refuses ingestion evidence smuggled into a stored profile', () => {
-    // The persisted payload is machine-local and user-writable, so the restore
-    // path — not just the save path — has to guarantee that ingest state and
-    // evidence never come back from storage.
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().setSourceSize('source-hf', 2.25);
-
-    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
-    Object.assign(raw.profiles[0].settings, {
-      ingestRecord: { ingest_id: 'wgi_forged' },
-      needsIngest: false,
-      ingestedBundleIdentity: 'forged',
-      areaDriftOverrides: ['source-hf'],
-    });
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-
-    const state = useCadReturnStore.getState();
-    expect(state.sourceSizesMm['source-hf']).toBe(2.25);
-    expect(state.ingestRecord).toBeNull();
-    expect(state.needsIngest).toBe(true);
-    expect(state.ingestedBundleIdentity).toBeNull();
-    expect(state.areaDriftOverrides).toEqual([]);
-  });
-
-  it('carries the cardioid form across sessions and tolerates a profile written before it existed', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    const store = useCadReturnStore.getState();
-    store.selectBundle(bundle);
-    store.setPassiveCardioid({
-      enabled: true, rearVolumeL: 6, portLengthMm: 25, modelPortAreaM2: 0.05,
-      bemPortAreaM2: 0.0094, foamResistancePaSM3: 10_000, coupled: true,
-    });
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().passiveCardioid).toMatchObject({
-      enabled: true, rearVolumeL: 6, coupled: true, invertPort: true, portAreaSource: 'user',
-    });
-
-    // A profile from before this section shipped carries no key at all. Losing
-    // every stored mesh size over a feature nobody used would be the worse
-    // answer, so the missing form starts at its defaults instead.
-    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
-    delete raw.profiles[0].settings.passiveCardioid;
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().passiveCardioid).toMatchObject({ enabled: false, rearVolumeL: null });
-    expect(useCadReturnStore.getState().sourceSizesMm).toEqual(
-      Object.fromEntries(bundle.sources.map((source) => [source.id, source.suggestedResolutionMm])),
-    );
-  });
-
-  it('restores a compatible persisted solve profile across sessions', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 3,
-    }, 'current');
-    const store = useCadReturnStore.getState();
-    store.selectBundle(bundle);
-    store.applyIngest(record(), store.beginIngestIntent());
-    store.setSourceSize('source-mf', 6.5);
-    store.setSourceSize('source-hf', 2.25);
-    store.setRigidSize(9.5);
-    store.setTransition(4.5);
-    // The crossover is set while both bands still have a channel: a spec names
-    // its members, so it cannot be edited once one of them is skipped away.
-    store.setCombineEnabled(true);
-    store.setCombineCrossover('drive-mf→drive-hf', 1_350);
-    store.updateCombineSpec((spec) => withDelayMode(withGainMode(spec, 'manual'), 'manual'));
-    store.setSkipped('source-hf', true);
-    store.setChannelMotion('drive-mf', 'axial');
-    store.setExteriorOnly(true);
-    store.setChannelDriverField('drive-mf', 'sd_cm2', 135);
-    store.setDriveVoltage(4);
-    store.setSweep({ frequencyStartHz: 300, frequencyEndHz: 12_000, frequencyCount: 31 });
-    store.setAreaDriftOverride('source-mf', true);
-    store.flagAreaDrift('source-mf');
-    store.markIngestStale('Exact-ingest evidence must stay session-local.');
-
-    resetCadReturnStore();
-    const compatible = {
-      ...bundle,
-      modifiedAt: '2026-08-12T00:00:00Z',
-      sources: [...bundle.sources].reverse().map((source) => ({ ...source, suggestedResolutionMm: 20 })),
-    };
-    expect(useCadReturnStore.getState().selectArrivedBundle(compatible)).toBe('carried');
-
-    const restored = useCadReturnStore.getState();
-    expect(restored).toMatchObject({
-      sourceSizesMm: { 'source-mf': 6.5, 'source-hf': 2.25 },
-      rigidSizeMm: 9.5,
-      transitionMm: 4.5,
-      skippedSourceIds: ['source-hf'],
-      driveChannels: [{ id: 'drive-mf', source_ids: ['source-mf'], motion: 'axial' }],
-      exteriorOnly: true,
-      combineEnabled: true,
-      combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [1_350], false, false),
-      channelDrivers: { 'drive-mf': { fields: { sd_cm2: 135 } } },
-      driveVoltageV: 4,
-      frequencyStartHz: 300,
-      frequencyEndHz: 12_000,
-      frequencyCount: 31,
-      ingestRecord: null,
-      areaDriftOverrides: [],
-      areaDriftSourceIds: [],
-      needsIngest: true,
-      ingestedBundleIdentity: null,
-      ingestStaleReason: null,
-    });
-  });
-
-  it('rejects a persisted profile when the source inventory is incompatible', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 3,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().setRigidSize(12);
-    useCadReturnStore.getState().setCombineEnabled(true);
-
-    resetCadReturnStore();
-    const incompatible = {
-      ...bundle,
-      sources: bundle.sources.map((source) => source.id === 'source-hf'
-        ? { ...source, role: 'LF', suggestedResolutionMm: 5 }
-        : source),
-    };
-    expect(useCadReturnStore.getState().selectArrivedBundle(incompatible)).toBe('reset');
-    expect(useCadReturnStore.getState()).toMatchObject({
-      sourceSizesMm: { 'source-mf': 8, 'source-hf': 5 },
-      rigidSizeMm: 8,
-      transitionMm: 8,
-      combineEnabled: null,
-    });
-  });
-
-  it.each([
-    ['corrupt JSON', '{not-json'],
-    ['partial profile', JSON.stringify({ version: 1, profiles: [{}] })],
-    ['wrong version', JSON.stringify({ version: 99, profiles: [] })],
-  ])('drops a %s payload without applying it', (_label, raw) => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 3,
-    }, 'current');
-    localStorage.setItem(solveProfileStorageKey, raw);
-
-    expect(() => useCadReturnStore.getState().selectBundle(bundle)).not.toThrow();
-    expect(useCadReturnStore.getState()).toMatchObject({
-      sourceSizesMm: { 'source-mf': 8, 'source-hf': 3 },
-      rigidSizeMm: 8,
-      exteriorOnly: false,
-    });
-    expect(localStorage.getItem(solveProfileStorageKey)).toBeNull();
-  });
-
-  it('keeps the 20 most recently used profiles', () => {
-    for (let index = 0; index < 20; index += 1) {
-      useDocumentStore.getState().setCadLink({
-        designId: `wgd_${index}`, lineageId: `wgl_${index}`, baseEditVersion: 1,
-      }, 'current');
-      useCadReturnStore.getState().selectBundle(bundle);
-      useCadReturnStore.getState().setDriveVoltage(3 + index);
-    }
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_0', lineageId: 'wgl_0', baseEditVersion: 2,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_20', lineageId: 'wgl_20', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().setDriveVoltage(23);
-
-    const stored = JSON.parse(localStorage.getItem(solveProfileStorageKey) ?? '{}') as {
-      profiles: Array<{ owner: string }>;
-    };
-    expect(stored.profiles).toHaveLength(20);
-    expect(stored.profiles.map(({ owner }) => owner)).toContain('design:wgd_0:wgl_0');
-    expect(stored.profiles.map(({ owner }) => owner)).not.toContain('design:wgd_1:wgl_1');
-  });
-
   it('marks a refreshed changed listing stale while preserving sizing edits', () => {
     useCadReturnStore.getState().selectBundle(bundle);
     useCadReturnStore.getState().applyIngest(record(), useCadReturnStore.getState().beginIngestIntent());
@@ -674,86 +428,6 @@ describe('combined output', () => {
     expect(combineChain(useCadReturnStore.getState())[0].hz).toBe(1_450);
   });
 
-  it('migrates a version 2 profile crossover map into one spec override', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().setCombineEnabled(true);
-
-    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
-    // Versions 1 to 3 were design-owned and stated the identity the owner is
-    // rebuilt from, so a fixture claiming to be one has to state it too.
-    raw.version = 2;
-    raw.profiles[0].designId = 'wgd_speaker';
-    raw.profiles[0].lineageId = 'wgl_speaker';
-    delete raw.profiles[0].settings.combineSpec;
-    raw.profiles[0].settings.combineCrossoversHz = { 'drive-mf→drive-hf': 1_350 };
-    raw.profiles[0].settings.combineLevelMatch = false;
-    raw.profiles[0].settings.combineAlign = null;
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().combineSpec)
-      .toEqual(expandLegacy(['drive-mf', 'drive-hf'], [1_350], false, true));
-  });
-
-  it('migrates an untouched version 2 profile to no override at all', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().setCombineEnabled(true);
-
-    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
-    // Versions 1 to 3 were design-owned and stated the identity the owner is
-    // rebuilt from, so a fixture claiming to be one has to state it too.
-    raw.version = 2;
-    raw.profiles[0].designId = 'wgd_speaker';
-    raw.profiles[0].lineageId = 'wgl_speaker';
-    delete raw.profiles[0].settings.combineSpec;
-    raw.profiles[0].settings.combineCrossoversHz = {};
-    raw.profiles[0].settings.combineLevelMatch = null;
-    raw.profiles[0].settings.combineAlign = null;
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().combineSpec).toBeNull();
-    expect(combineChain(useCadReturnStore.getState())[0].hz).toBe(1_000);
-  });
-
-  it('restores a profile written before the combined output defaulted on as no choice', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().setCombineEnabled(false);
-
-    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
-    raw.version = 1;
-    raw.profiles[0].settings.combineEnabled = false;
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().combineEnabled).toBeNull();
-    expect(combineEnabledEffective(useCadReturnStore.getState())).toBe(true);
-  });
-
-  it('restores an explicit off from a current profile', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().setCombineEnabled(false);
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().combineEnabled).toBe(false);
-    expect(combineEnabledEffective(useCadReturnStore.getState())).toBe(false);
-  });
 });
 
 const PRESET: DriverPreset = {
@@ -900,59 +574,6 @@ describe('a channel driver picked from the library', () => {
     expect(useCadReturnStore.getState().channelDrivers['drive-hf'].fields).toEqual({ count: 2, rear_volume_l: 1.5 });
   });
 
-  it('carries the preset across sessions and reads a pre-picker profile as hand entry', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    // The link has to be in place before the profile is written.
-    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', PRESET);
-    useCadReturnStore.getState().setChannelDriverField('drive-hf', 'xmax_mm', 1.2);
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().channelDrivers['drive-hf']).toEqual({
-      fields: { xmax_mm: 1.2 }, preset: PRESET,
-    });
-
-    // A profile written before drivers could be picked carries no preset key
-    // at all. Its hand-typed fields are still the whole driver.
-    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
-    delete raw.profiles[0].settings.channelDrivers['drive-hf'].preset;
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().channelDrivers['drive-hf']).toEqual({
-      fields: { xmax_mm: 1.2 }, preset: null,
-    });
-  });
-
-  it('ignores the legacy enabled flag: a stored driver is driven because it is there', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', PRESET);
-
-    // A profile stored before "present = driven" carries an `enabled` flag.
-    // Presence decides now, so even a driver deliberately switched off comes
-    // back driven -- the accepted cost of removing the switch.
-    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
-    raw.profiles[0].settings.channelDrivers['drive-hf'].enabled = false;
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    const form = useCadReturnStore.getState().channelDrivers['drive-hf'];
-    expect(form).toEqual({ fields: {}, preset: PRESET });
-    expect(channelDriverPresent(form)).toBe(true);
-
-    // The flag is ignored, not unvalidated: a non-boolean still rejects the
-    // stored drivers with the same strictness as every other field.
-    raw.profiles[0].settings.channelDrivers['drive-hf'].enabled = 'yes';
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().channelDrivers['drive-hf']).toBeUndefined();
-  });
-
   it('counts a driver present only by its own numbers, never the installation fields', () => {
     // Count and rear volume describe the channel and survive a Clear, so they
     // must not make a cleared channel look driven.
@@ -963,46 +584,6 @@ describe('a channel driver picked from the library', () => {
     expect(channelDriverPresent({ fields: {}, preset: PRESET })).toBe(true);
   });
 
-  it('tolerates a stored preset saved before xo_min_hz existed, and rejects a malformed one', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', PRESET);
-
-    // A preset stored before this field existed carries no `xo_min_hz` key at
-    // all; that migrates to null rather than dropping the preset.
-    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
-    delete raw.profiles[0].settings.channelDrivers['drive-hf'].preset.xo_min_hz;
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].preset).toEqual({ ...PRESET, xo_min_hz: null });
-
-    // A present but malformed value still fails the whole profile, like every
-    // other field parsed here.
-    raw.profiles[0].settings.channelDrivers['drive-hf'].preset.xo_min_hz = 'soon';
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().channelDrivers).toEqual({});
-  });
-
-  it('refuses a malformed stored preset rather than restoring half of one', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', PRESET);
-    useCadReturnStore.getState().setRigidSize(9.5);
-
-    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
-    raw.profiles[0].settings.channelDrivers['drive-hf'].preset.source = 'somewhere-else';
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().channelDrivers).toEqual({});
-    expect(useCadReturnStore.getState().rigidSizeMm).toBe(8);
-  });
 });
 
 describe('the CAD project owns its solve settings', () => {
@@ -1018,27 +599,6 @@ describe('the CAD project owns its solve settings', () => {
     resetCadReturnStore();
   });
 
-  it('keeps a project\'s drivers when the open design is a different one', () => {
-    // A project that exists only in CAD has no design identity of its own, so
-    // its settings used to be filed under whichever parametric design happened
-    // to be open -- and were gone as soon as another one was.
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_unrelated', lineageId: 'wgl_unrelated', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
-    useCadReturnStore.getState().setChannelDriverPreset('drive-mf', PRESET_12RS430);
-
-    // Another design is opened, and the same project's return comes back.
-    resetCadReturnStore();
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_other', lineageId: 'wgl_other', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
-
-    expect(useCadReturnStore.getState().channelDrivers['drive-mf'].preset)
-      .toMatchObject({ id: 'Faital Pro::12RS430::8' });
-  });
-
   it('does not hand one project\'s drivers to another', () => {
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
     useCadReturnStore.getState().setChannelDriverPreset('drive-mf', PRESET_12RS430);
@@ -1049,89 +609,12 @@ describe('the CAD project owns its solve settings', () => {
     expect(useCadReturnStore.getState().channelDrivers).toEqual({});
   });
 
-  it('saves a driver picked while an archived run is on screen', () => {
-    // A recalled run's bundle is not readable, which used to mean nothing done
-    // on it was kept -- including picking the driver you recalled it to change.
-    useCadReturnStore.setState({
-      selectedBundle: { ...bundle, readable: false, bundlePath: '' },
-      ingestRecord: record(),
-      projectLineageId: 'wgl_party',
-      driveChannels: [{ id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' }],
-      needsIngest: false,
-    });
-    useCadReturnStore.getState().setChannelDriverPreset('drive-mf', PRESET_12RS430);
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
-
-    expect(useCadReturnStore.getState().channelDrivers['drive-mf'].preset)
-      .toMatchObject({ label: 'Faital Pro 12RS430' });
-  });
-
-
   /** Reload, or any first selection: nothing knows which CAD project the open
    * design belongs to until the ingestion states it, so the selection files the
    * settings under the design. Saving them under the project the ingestion then
    * names would put whatever that selection produced -- usually the defaults a
    * restore under the wrong owner left behind -- over the project's own saved
    * setup. */
-  it('adopts the project the ingestion names instead of filing the open design’s settings over it', () => {
-    // What this project was last solved with.
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
-    useCadReturnStore.getState().setDriveVoltage(8);
-    useCadReturnStore.getState().setChannelDriverPreset('drive-mf', PRESET_12RS430);
-
-    // A reload: the design is open and linked, the return is selected, and no
-    // ingestion has named the project yet.
-    resetCadReturnStore();
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_party', lineageId: 'wgl_party', baseEditVersion: 4,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().driveVoltageV).toBe(2.83);
-
-    const store = useCadReturnStore.getState();
-    store.applyIngest(
-      { ...record(), project: project('wgl_party') },
-      store.beginIngestIntent(),
-    );
-    expect(useCadReturnStore.getState().driveVoltageV).toBe(8);
-    expect(useCadReturnStore.getState().channelDrivers['drive-mf'].preset)
-      .toMatchObject({ id: 'Faital Pro::12RS430::8' });
-
-    // And the durable profile still says 8 V, rather than the 2.83 V the
-    // selection was holding when the ingestion arrived.
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
-    expect(useCadReturnStore.getState().driveVoltageV).toBe(8);
-  });
-
-  it('keeps a project’s saved setup when the ingested return has a different inventory', () => {
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
-    useCadReturnStore.getState().setDriveVoltage(8);
-
-    resetCadReturnStore();
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_party', lineageId: 'wgl_party', baseEditVersion: 4,
-    }, 'current');
-    const smaller = { ...bundle, sources: [bundle.sources[0]], sourceCount: 1 };
-    useCadReturnStore.getState().selectBundle(smaller);
-    useCadReturnStore.getState().setDriveVoltage(5);
-    const store = useCadReturnStore.getState();
-    store.applyIngest({
-      ...record(),
-      project: project('wgl_party'),
-      mesh_sizes: { rigid_size_mm: 8, transition_mm: 8, source_size_mm: { 'source-mf': 8 } },
-    }, store.beginIngestIntent());
-
-    // No compatible profile to adopt, so the settings this return was actually
-    // prepared with stand -- and the project's own two-source profile, filed
-    // under its own inventory, is left exactly as it was.
-    expect(useCadReturnStore.getState().driveVoltageV).toBe(5);
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
-    expect(useCadReturnStore.getState().driveVoltageV).toBe(8);
-  });
 
   it('survives a document rename, which is not a new project', () => {
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');

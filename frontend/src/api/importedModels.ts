@@ -1,3 +1,4 @@
+import type { CadSourceInventoryEntry } from './cadOperations';
 import { formatApiDetail } from '../jobs/actions';
 import type { ImportedSetup } from '../jobs/importedSetup';
 
@@ -85,3 +86,9 @@ export const readImportedModel = (modelId: string, preparedId: string | null, fe
   Promise<{ model: ImportedModelSummary; latest_prepared: PreparedSummary | null; prepared?: PreparedSummary; original_available: boolean }> =>
   read(`/api/models/${encodeURIComponent(modelId)}${preparedId ? `?prepared_id=${encodeURIComponent(preparedId)}` : ''}`,
     fetcher, 'This model');
+
+/** A CAD return can read its setup before its mesh is prepared. Same inventory key as reopen. */
+export const readCadInventorySetup = (modelId: string, inventory: CadSourceInventoryEntry[], fetcher: typeof fetch = fetch):
+  Promise<{ setup: ImportedSetup | null; revision_id?: string | null }> =>
+  read(`/api/models/${encodeURIComponent(modelId)}/setup?inventory=${encodeURIComponent(JSON.stringify(inventory))}`,
+    fetcher, 'This model’s settings');

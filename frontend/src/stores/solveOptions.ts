@@ -535,7 +535,7 @@ export function importedOptionsSnapshot(): ImportedOptionsSnapshot {
  * Put a recorded solve's options (the wire shape) into the imported instance.
  * Fields the record does not state keep the instance's current value.
  */
-export function applyWireOptionsToImportedSolveOptions(options: Partial<SolveOptions>): void {
+export function importedOptionsFromWire(options: Partial<SolveOptions>, state: ImportedOptionsSnapshot): ImportedOptionsSnapshot {
   const explicit = Array.isArray(options.frequencies_hz) && options.frequencies_hz.length > 0
     ? options.frequencies_hz
     : null;
@@ -549,7 +549,8 @@ export function applyWireOptionsToImportedSolveOptions(options: Partial<SolveOpt
     sweepEndHz: explicit?.at(-1) ?? (Array.isArray(range) && Number.isFinite(range[1]) ? range[1] : undefined),
     sweepCount: explicit?.length ?? (typeof count === 'number' && Number.isFinite(count) ? count : undefined),
   };
-  useImportedSolveOptionsStore.setState((state) => ({
+  return {
+    ...state,
     sweepStartHz: sweep.sweepStartHz ?? state.sweepStartHz,
     sweepEndHz: sweep.sweepEndHz ?? state.sweepEndHz,
     sweepCount: sweep.sweepCount ?? state.sweepCount,
@@ -569,7 +570,11 @@ export function applyWireOptionsToImportedSolveOptions(options: Partial<SolveOpt
     frequencyMode: explicit ? 'list' : 'range',
     frequencyListText: explicit ? explicit.join('\n') : '',
     polar: polar ?? state.polar,
-  }));
+  };
+}
+
+export function applyWireOptionsToImportedSolveOptions(options: Partial<SolveOptions>): void {
+  seedImportedSolveOptions(importedOptionsFromWire(options, importedOptionsSnapshot()));
 }
 
 /** One-way copy of the current parametric options into the imported instance. */

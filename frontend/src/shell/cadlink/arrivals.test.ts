@@ -121,6 +121,7 @@ describe('selection actions without the coordinator', () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input); const body = JSON.parse(String(init?.body ?? '{}'));
       requests.push({ path, body });
+      if (path.includes('/setup?inventory=')) return json({ setup: null });
       if (path.endsWith('/onshape/return')) return json({ bundle: { ...bundle, bundlePath: 'onshape.wgreturn' }, ingest: record });
       if (path.endsWith('/ingest')) return json({ ...record, ingest_id: 'wgi_rebuilt' });
       return new Response(mesh);

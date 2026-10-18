@@ -49,6 +49,8 @@ export const SETTINGS_NAMESPACES = {
   crossoverGainUnit: 'wg2.crossover.gain-unit.v1',
   paramHelp: 'wg-param-help-visible',
   paramSections: 'wg-param-sections',
+  cadSetupDrafts: 'wg2.cad.setup.drafts.v1',
+  /** Migration only; never write new profiles. */
   cadSolveProfiles: 'waveguide-v2-g3-cad-solve-profiles',
   driverLibrary: 'waveguide-v2-g3-driver-library',
   designDraft: 'wg2.autosave.v1',

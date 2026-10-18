@@ -1,3 +1,4 @@
+import { waitForCadProjectSettings, retainCadDraft } from '../../stores/cadProjectSettings';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord, CadReturnIngestRequest } from '../../api/cadlink';
 import { createCadReceiptsStore, type CadReceipt } from '../../stores/cadReceipts';
@@ -38,6 +39,7 @@ function ingestion(request: CadReturnIngestRequest): CadReturnIngestRecord {
 }
 function serving(items = [bundle], configured = true, hash = 'sha256:m') {
   return vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (String(url).includes('/setup?inventory=')) return new Response(JSON.stringify({ setup: null }));
     if (String(url) === '/api/cadlink/returns') return new Response(JSON.stringify({ items, cadFolderConfigured: configured }));
     if (String(url) === '/api/cadlink/ingest') {
       const request = JSON.parse(String(init?.body)) as CadReturnIngestRequest;
@@ -109,7 +111,7 @@ describe('receipt-keyed Send display', () => {
     expect(importedMeshStore.getSnapshot().showing).toBe('cad');
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     expect(display.showIngestedMesh).toHaveBeenCalledTimes(1);
-    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/cadlink/returns', '/api/cadlink/ingest']);
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/cadlink/returns', expect.stringContaining('/setup?inventory='), '/api/cadlink/ingest']);
     const reloaded = createCadReceiptsStore(sessionStorage, () => NOW);
     const next = createReceiptDisplay(display, reloaded, fetcher);
     await next(receipt());
@@ -125,7 +127,7 @@ describe('receipt-keyed Send display', () => {
     const fetcher = serving();
     const action = createReceiptDisplay(display, store, fetcher);
     await Promise.all([action(receipt()), action(receipt())]);
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
     expect(display.showIngestedMesh).toHaveBeenCalledOnce();
   });
 
@@ -173,11 +175,12 @@ describe('receipt-keyed Send display', () => {
   });
 
   it('carries mesh, driver, channel and solve settings for a compatible project arrival through cadReturn', async () => {
-    useCadReturnStore.getState().selectArrivedBundle(bundle, 'project-a');
+    useCadReturnStore.getState().selectArrivedBundle(bundle, 'project-a', serving());
+    await waitForCadProjectSettings();
     const state = useCadReturnStore.getState();
     state.setRigidSize(17); state.setSourceSize('hf', 6); state.setDriveVoltage(4);
     state.setSweep({ frequencyStartHz: 80, frequencyEndHz: 9000, frequencyCount: 42 });
-    state.setChannelDriverField('drive-hf', 're_ohm', 5);
+    state.setChannelDriverField('drive-hf', 're_ohm', 5); retainCadDraft();
     const before = useCadReturnStore.getState();
     const fetcher = serving([{ ...bundle, bundlePath: 'wgreturn/new.wgreturn' }]);
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
@@ -186,7 +189,7 @@ describe('receipt-keyed Send display', () => {
     expect(held.rigidSizeMm).toBe(17); expect(held.sourceSizesMm.hf).toBe(6); expect(held.driveVoltageV).toBe(4);
     expect(held.frequencyCount).toBe(42); expect(held.channelDrivers).toEqual(before.channelDrivers);
     expect(held.driveChannels).toEqual(before.driveChannels);
-    const request = JSON.parse(String(fetcher.mock.calls[1][1]?.body));
+    const request = JSON.parse(String(fetcher.mock.calls.find(([url]) => String(url) === '/api/cadlink/ingest')![1]?.body));
     expect(request.mesh.rigidSizeMm).toBe(17); expect(request.mesh.sourceSizeMm.hf).toBe(6);
   });
 
@@ -347,7 +350,7 @@ describe('receipt display review regressions', () => {
     const action = createReceiptDisplay(display, store, fetcher);
     await expect(action(receipt())).resolves.toBe(true);
     await action(receipt());
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
     expect(store.getState().feedback['send:1'].message).toContain('invalid mesh');
   });
 

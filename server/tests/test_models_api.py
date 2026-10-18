@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import quote
 
 from fastapi import FastAPI
 import pytest
@@ -242,7 +243,7 @@ def test_a_restored_file_is_prepared_again_from_its_retained_original(tmp_path):
     asyncio.run(scenario())
 
 
-def test_a_cad_project_setup_is_recorded_for_its_return_inventory(tmp_path):
+def test_a_cad_project_setup_is_recorded_for_its_return_inventory(tmp_path, monkeypatch):
     async def scenario():
         store = CadLinkStore.for_data_dir(tmp_path)
         app, runtime = app_for(tmp_path, store)
@@ -262,6 +263,23 @@ def test_a_cad_project_setup_is_recorded_for_its_return_inventory(tmp_path):
             assert store.get_setup_revision(saved["revision_id"])["setup_json"] == setup_content(
                 validate_setup(setup)
             )
+            query = quote(json.dumps(inventory))
+            found = await call(app, "GET", f"/api/models/{project}/setup?inventory={query}")
+            assert found["revision_id"] == saved["revision_id"]
+            assert found["setup"] == json.loads(store.get_setup_revision(saved["revision_id"])["setup_json"])
+            # The Fusion job reads the very revision the UI inventory read shows.
+            from server.cadlink.joblane import preparation
+            from server.jobs.cad_preparation import _load_setup
+            monkeypatch.setattr(preparation, "read_snapshot", lambda *a, **k: SimpleNamespace(manifest={"sources": inventory}))
+            monkeypatch.setattr(preparation, "snapshot_project", lambda *a: project)
+            loaded, revision_id = _load_setup(SimpleNamespace(store=store), None, {"retained_path": "retained"})
+            assert revision_id == found["revision_id"]
+            assert json.loads(setup_content(loaded)) == found["setup"]
+            other = quote(json.dumps([{**inventory[0], "role": "LF"}]))
+            assert (await call(app, "GET", f"/api/models/{project}/setup?inventory={other}"))["setup"] is None
+            for invalid in ("not-json", "[]", json.dumps(inventory * 2)):
+                await call(app, "GET", f"/api/models/{project}/setup?inventory={quote(invalid)}", expected=422)
+            await call(app, "GET", f"/api/models/{project}/setup?inventory={query}&prepared_id=wgi_x", expected=422)
             # A file always names its prepared mesh; both at once is refused.
             await call(app, "PUT", "/api/models/mesh-file:sha256:x/setup",
                        {"inventory": inventory, "setup": setup}, expected=422)
@@ -358,3 +376,17 @@ def test_a_prepared_mesh_names_its_model_and_a_damaged_record_is_not_a_refused_m
             store.close()
 
     asyncio.run(scenario())
+
+
+def test_return_listing_resolves_the_same_project_as_fusion_before_preparation(tmp_path, monkeypatch):
+    from server.cadlink import api
+    store = CadLinkStore.for_data_dir(tmp_path)
+    project = store.claim_cad_document_lineage("urn:fusion:box", "Box")
+    manifest = {"document": {"native_id": "urn:fusion:box"}, "sources": []}
+    monkeypatch.setattr(api, "return_inventory", lambda root: [({"readable": True}, manifest, root)])
+    try:
+        assert api._return_listing(tmp_path, store)[0]["projectLineageId"] == project
+        manifest["document"]["native_id"] = "urn:fusion:new"
+        assert api._return_listing(tmp_path, store)[0]["projectLineageId"] is None
+    finally:
+        store.close()

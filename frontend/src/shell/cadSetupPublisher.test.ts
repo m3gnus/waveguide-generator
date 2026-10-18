@@ -1,3 +1,4 @@
+vi.mock('../stores/cadProjectSettings', async original => ({ ...await original<typeof import('../stores/cadProjectSettings')>(), loadCadProjectSettings: () => Promise.resolve(true) }));
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -77,7 +78,7 @@ function ingested(lineageId: string): CadReturnIngestRecord {
 }
 
 /** What an ingestion does to the store: it files the settings under the
- * project it states, and saves them as that project's profile. */
+ * project it states. */
 function ingest(lineageId: string): void {
   const store = useCadReturnStore.getState();
   expect(store.applyIngest(ingested(lineageId), store.beginIngestIntent())).toBe(true);
@@ -206,14 +207,14 @@ describe('CAD setup publisher', () => {
     stop();
   });
 
-  it('never records a first-time model’s defaults, though its ingestion saved them as a profile', async () => {
+  it('never records a first-time model’s defaults on ingestion or selection', async () => {
     vi.useFakeTimers();
     const { fetcher, to } = recorder();
     const stop = startCadSetupPublisher({ fetcher, debounceMs: 500 });
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
     ingest('wgl_speaker');
     await vi.advanceTimersByTimeAsync(2_000);
-    // Selected again: a profile exists now, but nobody chose it.
+    // Selected again: nobody chose any settings.
     useCadReturnStore.getState().selectBundle(null, null);
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
     ingest('wgl_speaker');

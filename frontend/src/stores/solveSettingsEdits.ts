@@ -10,6 +10,13 @@
 export interface SolveSettingsEdit { source?: string; control?: string }
 type Listener = (edit?: SolveSettingsEdit) => void;
 
+type EditGate = (source: string | undefined, apply: () => unknown) => boolean;
+const gates = new Set<EditGate>();
+/** A model read may hold controls until its baseline is known. */
+export function gateSolveSettingsEdits(gate: EditGate): () => void {
+  gates.add(gate);
+  return () => { gates.delete(gate); };
+}
 const listeners = new Set<Listener>();
 
 export function noteSolveSettingsEdit(edit?: SolveSettingsEdit): void {
@@ -36,10 +43,14 @@ export function withEditSignals<S extends object>(
   for (const name of setters) {
     const setter = state[name] as unknown as (...args: unknown[]) => unknown;
     announced[name] = ((...args: unknown[]) => {
-      const before = get();
-      const result = setter(...args);
-      if (get() !== before) noteSolveSettingsEdit({ source, control: String(name) });
-      return result;
+      const apply = () => {
+        const before = get();
+        const result = setter(...args);
+        if (get() !== before) noteSolveSettingsEdit({ source, control: String(name) });
+        return result;
+      };
+      if ([...gates].some(gate => gate(source, apply))) return;
+      return apply();
     }) as unknown as S[keyof S];
   }
   return announced;

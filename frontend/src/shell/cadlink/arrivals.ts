@@ -1,3 +1,4 @@
+import { waitForCadProjectSettings } from '../../stores/cadProjectSettings';
 import { currentDocumentLoad, isCurrentDocumentLoad } from '../../stores/design';
 import { returnOnshapeToWg } from '../../api/onshape';
 import { useCadPreparationStore } from '../../stores/cadPreparation';
@@ -190,9 +191,9 @@ export async function refreshCadReturnArrivals(
     let continuity: 'initial' | 'carried' | 'reset' = 'initial';
     if (opened && !projectMismatch && !heldForManualPick) {
       continuity = arrived
-        ? useCadReturnStore.getState().selectArrivedBundle(arrived, destination)
-        : (useCadReturnStore.getState().selectBundle(opened, destination, true), 'initial');
-      void refreshChannelDriverBases().catch(() => undefined);
+        ? useCadReturnStore.getState().selectArrivedBundle(arrived, destination, fetcher)
+        : (useCadReturnStore.getState().selectBundle(opened, destination, true, fetcher), 'initial');
+      void waitForCadProjectSettings().then(ok => ok ? refreshChannelDriverBases() : undefined).catch(() => undefined);
       importedMeshStore.beginIntent();
       initialChoiceOwed.current = false;
     }
@@ -295,6 +296,7 @@ export function createCadArrivalActions(
     autoIngestSelected, rereadDrivers,
     fusionInstanceId, onshapeInstanceId, showIngestedMesh } = adapter;
   const ingestSelected = async (): Promise<CadReturnIngestRecord> => {
+    if (useCadReturnStore.getState().projectLineageId && !await waitForCadProjectSettings()) throw new Error('Model settings could not be loaded. Select the return again.');
     const current = useCadReturnStore.getState();
     if (!current.selectedBundle) throw new Error('Select a CAD return before preparing a simulation.');
     if (current.selectedBundle.bundleOrigin === 'native') throw new Error('Edit the native source assembly and prepare it again.');
@@ -418,8 +420,8 @@ export function createCadArrivalActions(
       manualSelectionAt.current = Date.now();
       workspaceModeStore.setImportedInput('cad');
     }
-    useCadReturnStore.getState().selectBundle(bundle, projectLineageId, automatic);
-    rereadDrivers();
+    useCadReturnStore.getState().selectBundle(bundle, projectLineageId, automatic, fetcher);
+    void waitForCadProjectSettings().then(ok => { if (ok) rereadDrivers(); });
     importedMeshStore.beginIntent();
     activateWorkspace();
     autoIngestSelected();
@@ -474,7 +476,7 @@ export function createCadArrivalActions(
       };
       const state = useCadReturnStore.getState();
       // Same-inventory Onshape iterations keep the user's solve setup too.
-      state.selectArrivedBundle(bundle);
+      state.selectArrivedBundle(bundle, result.ingest.project?.lineage_id, fetcher);
       ingestGeneration = state.beginIngestIntent();
       if (!useCadReturnStore.getState().applyIngest(result.ingest, ingestGeneration)) {
         setStatus('Discarded the Onshape return because the selected design changed.');

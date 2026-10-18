@@ -1,3 +1,4 @@
+import { retainCadDraft, clearCadDraft, subscribeCadDraftRestores } from '../stores/cadProjectSettings';
 import { useEffect } from 'react';
 import { CadLinkApiError } from '../api/cadlink';
 import { create } from 'zustand';
@@ -71,6 +72,7 @@ export function buildCadProjectSetup(
   lineageId: string | null = projectLineage(state),
 ): CadProjectSetup | null {
   const bundle = state.selectedBundle;
+  if (state.setupLoading) return null;
   if (bundle?.bundleOrigin === 'native') return null;
   if (!bundle || !bundle.sources.length || !lineageId) return null;
   if (incompleteDriverChannels(state).length || exteriorModeBlocker(state, solveStore)) return null;
@@ -146,7 +148,9 @@ export function startCadSetupPublisher(
   const onSaveState = options.onSaveState ?? (() => undefined);
   let selection = selectionKey(useCadReturnStore.getState());
   let published: string | null = null;
-  let pending: CadProjectSetup | null = null;
+  type PendingSetup = { project: CadProjectSetup; draft: ReturnType<typeof retainCadDraft> };
+  let pending: PendingSetup | null = null;
+  const journals = new Map<string, NonNullable<ReturnType<typeof retainCadDraft>>>();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let failed = false;
   let solverFailed = false;
@@ -166,31 +170,44 @@ export function startCadSetupPublisher(
   let retrying: { next: CadProjectSetup; key: string; attempt: number; timer: ReturnType<typeof setTimeout> } | null = null;
   let stopped = false;
 
+  let writeInFlight = false;
+  const writes: Array<() => void> = [];
   const send = (next: CadProjectSetup, key: string, attempt: number, keepalive: boolean) => {
     retrying = null;
-    putProjectSetup(next, fetcher, { keepalive }).then(() => {
-      if (failed && published === key) { failed = false; reportSaveState(); }
-    }, () => {
-      // A newer edit has taken over: it is what needs recording now.
-      if (published !== key) return;
-      if (attempt < retryDelays.length && !stopped) {
-        const wait = setTimeout(() => send(next, key, attempt + 1, false), retryDelays[attempt]);
-        retrying = { next, key, attempt: attempt + 1, timer: wait };
-        return;
-      }
-      published = null;
-      if (!failed) { failed = true; reportSaveState(); }
-    });
+    const journal = journals.get(key);
+    const run = () => {
+      writeInFlight = true;
+      void putProjectSetup(next, fetcher, { keepalive }).then(() => {
+        if (journal) { clearCadDraft(journal.key, journal.raw); journals.delete(key); }
+        if (failed && published === key) { failed = false; reportSaveState(); }
+      }, () => {
+        // A newer edit has taken over: it is what needs recording now.
+        if (published !== key) return;
+        if (attempt < retryDelays.length && !stopped) {
+          const wait = setTimeout(() => send(next, key, attempt + 1, false), retryDelays[attempt]);
+          retrying = { next, key, attempt: attempt + 1, timer: wait };
+          return;
+        }
+        published = null;
+        if (!failed) { failed = true; reportSaveState(); }
+      }).finally(() => {
+        writeInFlight = false;
+        writes.shift()?.();
+      });
+    };
+    if (writeInFlight) writes.push(run);
+    else run();
   };
 
   const flush = (keepalive = false) => {
     if (timer !== null) clearTimeout(timer);
     timer = null;
-    const next = pending;
+    const queued = pending;
     pending = null;
-    if (!next) return;
+    if (!queued) return;
+    const next = queued.project;
     const key = JSON.stringify(next);
-    if (key === published) return;
+    if (queued.draft) journals.set(key, queued.draft);
     if (retrying) clearTimeout(retrying.timer);
     retrying = null;
     published = key;
@@ -208,16 +225,24 @@ export function startCadSetupPublisher(
   };
   const onVisibility = () => { if (document.visibilityState === 'hidden') leave(); };
 
-  const schedule = (next: CadProjectSetup) => {
-    pending = next;
+  const schedule = (next: CadProjectSetup, draft: ReturnType<typeof retainCadDraft>) => {
+    pending = { project: next, draft };
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(() => flush(), debounceMs);
   };
 
   const onEdit = () => {
-    if (!cadInputActive()) return;
+    if (!cadInputActive() || useCadReturnStore.getState().setupLoading) return;
+    const draft = retainCadDraft();
     const built = buildCadProjectSetup();
-    if (built) schedule(built);
+    if (built) schedule(built, draft);
+    else {
+      // An incomplete successor supersedes a valid edit still waiting to send.
+      if (timer !== null) clearTimeout(timer);
+      timer = null; pending = null;
+      if (retrying) clearTimeout(retrying.timer);
+      retrying = null; published = null;
+    }
   };
 
   // An edit still waiting belongs to the project it was made in.
@@ -281,7 +306,8 @@ export function startCadSetupPublisher(
   };
 
   const unsubscribers = [
-    subscribeSolveSettingsEdits(onEdit),
+    subscribeSolveSettingsEdits(edit => { if (edit?.source !== 'solveOptions' && edit?.source !== 'meshImport') onEdit(); }),
+    subscribeCadDraftRestores(onEdit),
     useCadReturnStore.subscribe(onSelection),
     useImportedSolveOptionsStore.subscribe(observeSolverSelection),
   ];

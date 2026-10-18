@@ -11,8 +11,8 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { subscribeSolveSettingsEdits } from './solveSettingsEdits';
 import {
   importedOptionsSnapshot, seedImportedSolveOptions, seedImportedSolveOptionsForFile,
-  seedImportedSolveOptionsFromParametric, useImportedSolveOptionsStore,
-  type ImportedOptionsSnapshot, type SolveAccuracy,
+  seedImportedSolveOptionsFromParametric,
+  type ImportedOptionsSnapshot,
 } from './solveOptions';
 import { clearLastModel, migrateLastModel, noteLastModelFailure, readLastModel, rememberLastModel, type LastModel } from './lastModel';
 import { workspaceModeStore } from './workspaceMode';
@@ -111,6 +111,8 @@ export interface ImportedViewOpen {
   fail(message: string): void;
 }
 export interface ImportedView {
+  /** An unsolved model can still have an editable durable draft. */
+  hasDraft?(modelId: string): boolean;
   begin(context: { generation: number; source: ImportedSource; display: ImportedDisplay; fetcher: typeof fetch }): ImportedViewOpen;
 }
 
@@ -309,7 +311,8 @@ export async function reopenLastModel(fetcher: typeof fetch = fetch, options: Re
     const read = await readImportedModel(pointer.model_id, null, reachable);
     if (!read.latest_prepared) { clearLastModel(pointer); return false; }
     // The CAD view shows a model by its stored setup; one never solved has none.
-    if (pointer.input === 'cad' && !(await readImportedSetup(pointer.model_id, read.latest_prepared.ingest_id, reachable)).setup) {
+    if (pointer.input === 'cad' && !(await readImportedSetup(pointer.model_id, read.latest_prepared.ingest_id, reachable)).setup
+      && !views.cad?.hasDraft?.(pointer.model_id)) {
       if (!stillEmpty() || !options.openUnsolved) return false;
       const shown = await options.openUnsolved(pointer, read.latest_prepared);
       if (shown) rememberLastModel(pointer);
@@ -419,33 +422,21 @@ workspaceModeStore.subscribe(() => {
     : emptyState(next));
 });
 
-/**
- * The engine and accuracy the CAD input has chosen, wherever its options are
- * held right now: live while CAD is on screen, else parked. Null when CAD has
- * none, so a file mesh's choice is never filed as CAD's.
- */
-export function cadSolveSelection(): { accuracy: SolveAccuracy; engine: string } | null {
-  if (workspaceModeStore.getSnapshot().importedInput === 'cad') {
-    const { accuracy, engine } = useImportedSolveOptionsStore.getState();
-    return { accuracy, engine };
-  }
-  const options = parked.cad?.options;
-  return options ? { accuracy: options.accuracy, engine: options.engine } : null;
+/** All CAD options, including while a file occupies the shared rail. */
+export function cadOptionsSnapshot(): ImportedOptionsSnapshot | null {
+  return workspaceModeStore.getSnapshot().importedInput === 'cad'
+    ? importedOptionsSnapshot() : parked.cad?.options ?? null;
 }
 
-/** Write a CAD selection to the live options, or to CAD's parked options while a file is on screen. */
-export function applyCadSolveSelection(selection: { accuracy?: SolveAccuracy; engine?: string }): void {
-  if (workspaceModeStore.getSnapshot().importedInput === 'cad') {
-    useImportedSolveOptionsStore.setState({ accuracy: 'fast', ...selection });
-  } else if (parked.cad?.options) {
-    parked.cad = { ...parked.cad, options: { ...parked.cad.options, accuracy: 'fast', ...selection } as ImportedOptionsSnapshot };
-  }
+export function applyCadOptions(options: ImportedOptionsSnapshot): void {
+  if (workspaceModeStore.getSnapshot().importedInput === 'cad') seedImportedSolveOptions(options);
+  else parked.cad = { state: parked.cad?.state ?? null, options: structuredClone(options) };
 }
 
 /**
  * Another CAD selection was made while a file is on screen: CAD's parked model
  * and options belong to the previous one, so they go. Switching back then
- * seeds a fresh copy, the new project's profile applies on top, and an
+ * seeds a fresh copy, the new project's setup applies on top, and an
  * arrival of the new selection fills the CAD model again.
  */
 export function discardParkedCadModel(): void {
@@ -458,7 +449,7 @@ export function resetParkedImportedOptions(): void {
   activeInput = workspaceModeStore.getSnapshot().importedInput;
 }
 
-/** Something other than an edit replaced this input's options (a new selection's profile): the opened setup ends. */
+/** Something other than an edit replaced this input's options (a new selection's setup): the opened setup ends. */
 export function endOpenedSetup(input: ImportedInput): void {
   if (workspaceModeStore.getSnapshot().importedInput === input) {
     const state = useImportedModelStore.getState();

@@ -349,10 +349,33 @@ reproduces, because the driver library has no revisions.
   operation waits (`engine_cannot_solve_return`, or `engine_unavailable` when the engine is not on this host) with the capable engines named, and nothing
   switches engines silently. Opening a historical run restores its recorded engine and
   accuracy with the setup revision it was made from (see "Opening a run's workspace");
-  it does not read today's driver library or project profile. Changing a setup control
+  it does not read today's driver library or model draft. Changing a setup control
   explicitly starts a new draft.
 
 ## Project setups
+
+Model reopen, return selection, and arrival read the same server model setup for the
+source inventory. The return listing resolves `projectLineageId` from the manifest
+using Fusion's project lookup; the open parametric design is never a fallback owner.
+Before preparation, `GET /api/models/{lineage}/setup?inventory=<JSON>` uses the same
+inventory key as the retained-mesh read with `prepared_id`.
+
+The rail is an in-memory draft. `cadSetupPublisher` journals user edits in durable
+settings `cadSetupDrafts`, keyed by model and inventory, including incomplete driver,
+polar, and preparation edits. Only a successful valid setup publication clears the
+matching journal; an older acknowledgement cannot clear a newer edit. This reuses
+the existing durable settings transport instead of introducing another database field
+or API writer. A failed publication resumes from its journal when the model opens.
+Controls edited during a setup read apply after its baseline arrives. Late settings
+hydration restores an unedited model's draft too. Archived runs retain their immutable
+revision and never overlay the current model draft.
+
+The old v1–v4 `cadSolveProfiles` namespace migrates once into the draft journal and is
+deleted. Legacy drafts apply only if that model has no server setup for the inventory;
+valid ones publish through the same publisher. Versions 1–3 only recorded a design
+lineage, sometimes the unrelated design open when a CAD-only project was edited.
+Those entries retain their recorded lineage; there is no provenance for safely
+assigning them to a different CAD document. New profiles and MRU lists are not written.
 
 A solve Fusion sends for project B is prepared from B's own setup, while the editor keeps
 whatever project is open. Nothing on the backend reads the live UI:
@@ -897,7 +920,7 @@ under `frontend/src/` unless they start with `server/`.
 | 18 | Solve captures the snapshot and settings on screen before any await, under the right project | *job* (press captured into `POST /api/models/{id}/solve`) | `shell/JobsCoordinator.tsx` captures the clicked snapshot/settings before any await and names its model; the server records them under that model and refuses a mismatched one (`model_mismatch`) | `JobsCoordinator.mutex.test.tsx :: uses the clicked settings while the fresh Advanced plan is pending`; `:: keeps the snapshot and settings captured at the press across the frame read`; `test_model_solve.py :: test_refusals_of_the_press_itself` |
 | 19 | Solve confirms the axis actually shown and reports a frame changed elsewhere | *job* (axis passed explicitly) | Ingest-keyed `stores/cadSolverFrame.ts`; `shell/JobsCoordinator.tsx` sends the axis shown (`frame_axis`) and `server/jobs/model_solve.py` confirms it with the press | `cadSolverFrame.test.ts`; `M1bSolveCard.test.tsx :: never solves along an axis the card did not show…` |
 | 20 | Only deliberate settings edits publish a project setup, with retries and correct-project flushing | *re-homed* (not tied to a job) | `shell/cadSetupPublisher.ts :: CadSetupPublisher` mounted in Shell, settings stores and its own save-feedback store | `cadSetupPublisher.test.ts` deliberate edits, retries and correct-project flushing; `ParamPanel.test.tsx` publisher failure feedback |
-| 21 | A compatible arrival keeps the project's solve settings; a changed inventory resets them | none | `stores/cadReturn.ts` project/inventory profiles via `shell/cadlink/arrivals.ts` and `shell/cadlink/receiptDisplay.ts` | `arrivals.test.ts :: keeps settings for a compatible arrival and resets a changed inventory`; `receiptDisplay.test.ts` shared continuity tests; `cadReturn.test.ts` |
+| 21 | A compatible arrival keeps the project's solve settings; a changed inventory resets them | none | `stores/cadProjectSettings.ts` model/inventory setup reads and drafts via `shell/cadlink/arrivals.ts` and `shell/cadlink/receiptDisplay.ts` | `arrivals.test.ts :: keeps settings for a compatible arrival and resets a changed inventory`; `receiptDisplay.test.ts` shared continuity tests; `cadReturn.test.ts` |
 | 22 | A return for another project never replaces the parametric design or its undo history | none | `shell/cadlink/arrivals.ts`, `shell/cadlink/restores.ts`, `shell/cadlink/receiptDisplay.ts` design-identity fences | `arrivals.test.ts :: refuses a foreign arrival without replacing design or undo history`; `receiptDisplay.test.ts` foreign project and undo tests |
 | 23 | Imported mode reopens the last model of the input in use (`lastModel`: one durable pointer per input, migrated once from the saved mesh setup and remembered CAD project keys) through `openImported({kind:'model'})`, at start and when the person switches into an empty Imported view; once per pointer per session, never forcing the mode or the input, and standing down for a refused foreign return or a pending `?job=` link; a gone model (404, `model_not_found`, `prepared_unavailable`, 409, 422) clears its pointer at once, any other failure is shown once and clears it only after two starts in a row fail (offline starts do not count); a CAD model never solved shows its newest return on defaults, selected and ingested by the workspace owners | none | `stores/importedModel.ts` `reopenLastModel`, `stores/lastModel.ts`, `shell/cadlink/restores.ts` `observeLastModel` | `importedModel.test.ts` last model, `restores.test.ts` last-model reopen, `CadWorkspaceOwners.test.ts`, `meshImport.test.ts` pointer migration, `workspaceMode.test.ts` |
 | 24 | Opening an archived CAD run restores its ingest and setup; a late restore never overtakes a newer pick; prepared-mesh collection never removes the mesh a run names | `GET /api/runs/{id}/workspace` (model, prepared mesh, setup revision) | `stores/importedModel.ts` `openImported`, `shell/cadlink/restores.ts` CAD rail view, `stores/cadReturn.ts` archive fencing, `server/mesh/prepared_gc.py` | `restores.test.ts` standalone archived ingest/setup/sweep restore and newer-selection fences; `importedModel.test.ts`; `test_runs_workspace.py`; `test_prepared_gc.py :: test_each_keep_reason_keeps_its_mesh` |
@@ -1027,7 +1050,7 @@ mark it ready. Pending or failed opening blocks Solve; newer intent supersedes a
 remaining awaits. Failed, cancelled and result-pruned imported runs can open retained
 inputs independently of parametric-design or result availability; missing inputs
 report the server's refusal. Existing retry, admission, runtime and archive owners remain shared.
-Archived restore preserves the saved setup and project profile
+Archived restore preserves the saved setup and model draft
 without marking the record as settled by current preparation, keeping recalled
 runs ineligible for automatic solved-model adoption. Manual picks fence an older
 ingest result without adding an abort; a later ingest still aborts its predecessor.

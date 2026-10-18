@@ -192,6 +192,14 @@ describe('CadLinkPanel', () => {
     });
   };
 
+  it('shows that model settings are loading before preparation', async () => {
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    act(() => useCadReturnStore.setState({ setupLoading: true }));
+    expect(host.textContent).toContain('Loading model settings…');
+    act(() => useCadReturnStore.setState({ setupLoading: false }));
+    expect(host.textContent).not.toContain('Loading model settings…');
+  });
+
   it('lists a blocking finding for understanding without gating the solve', async () => {
     await renderAndSelect();
     await clickIngest();

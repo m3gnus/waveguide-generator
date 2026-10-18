@@ -9133,6 +9133,7 @@ export interface operations {
         parameters: {
             query?: {
                 prepared_id?: string | null;
+                inventory?: string | null;
             };
             header?: never;
             path: {

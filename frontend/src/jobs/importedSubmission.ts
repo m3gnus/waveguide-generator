@@ -103,6 +103,7 @@ export function importedSubmissionBlocker(
   ));
   const directivityError = polarValidationError(solveStore.polar);
   if (directivityError) return directivityError;
+  if (state.setupLoading) return 'Wait for the model settings to finish loading.';
   if (!state.ingestRecord) return 'Ingest a CAD return before solving.';
   if (state.ingestRecord.evidence_unverified) return 'The retained return manifest cannot be verified; re-ingest this return before solving.';
   if (state.needsIngest) return state.ingestStaleReason ?? 'Sizing or source selection changed. Re-ingest before solving.';

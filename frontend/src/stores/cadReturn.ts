@@ -1,13 +1,12 @@
-import { prefillExteriorDriver, parseExteriorTransducer, type ExteriorTransducerForm } from './exteriorTransducer';
+import { prefillExteriorDriver, type ExteriorTransducerForm } from './exteriorTransducer';
 import { create } from 'zustand';
-import { subscribeSolveSettingsEdits, withEditSignals } from './solveSettingsEdits';
+import { withEditSignals } from './solveSettingsEdits';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import type { DriverKind } from '../api/drivers';
 import {
   cloneSpec,
   expandLegacy,
   pairsOf,
-  parseSpec,
   toWire,
   withPair,
   type CrossoverSpec,
@@ -15,9 +14,9 @@ import {
   type FilterFamily,
 } from '../results/crossoverSpec';
 import { useDocumentStore } from './document';
-import { namespaceStorage } from './durableSettings';
-import { seedImportedSolveOptionsFromParametric, type SolveAccuracy } from './solveOptions';
-import { applyCadSolveSelection, cadSolveSelection, discardParkedCadModel, endOpenedSetup, openImported, useImportedModelStore } from './importedModel';
+import type { CadSourceInventoryEntry as SourceInventoryEntry } from '../api/cadOperations';import { seedImportedSolveOptionsFromParametric } from './solveOptions';
+import { loadCadProjectSettings, resetCadProjectSettingsLoad } from './cadProjectSettings';
+import { discardParkedCadModel, endOpenedSetup, openImported } from './importedModel';
 import { workspaceModeStore } from './workspaceMode';
 import {
   DEFAULT_CROSSOVER,
@@ -97,6 +96,8 @@ export interface DriverBaseUpdate {
 }
 
 export interface ChannelDriverForm {
+  /** Reopened setup values include absence: library refresh must not add physics. */
+  frozen?: boolean;
   /** Overrides on top of `preset.base`; the whole driver when there is none. */
   fields: Partial<Record<DriverFieldKey, number>>;
   preset: DriverPreset | null;
@@ -164,7 +165,7 @@ export const PASSIVE_CARDIOID_DEFAULTS: PassiveCardioidForm = {
   coupled: false,
 };
 
-interface CadReturnState {
+export interface CadReturnState {
   selectedBundle: CadReturnBundle | null;
   ingestRecord: CadReturnIngestRecord | null;
   sourceSizesMm: Record<string, number>;
@@ -200,6 +201,7 @@ interface CadReturnState {
   frequencyStartHz: number;
   frequencyEndHz: number;
   frequencyCount: number;
+  setupLoading: boolean;
   needsIngest: boolean;
   ingestedBundleIdentity: string | null;
   ingestStaleReason: string | null;
@@ -219,17 +221,17 @@ interface CadReturnState {
   /** Whether the record held is the one the newest intent applied: no ingest,
    * selection or edit has superseded it since, and none is in flight. */
   isIngestSettled: () => boolean;
-  selectBundle: (bundle: CadReturnBundle | null, projectLineageId?: string | null, automatic?: boolean) => void;
+  selectBundle: (bundle: CadReturnBundle | null, projectLineageId?: string | null, automatic?: boolean, fetcher?: typeof fetch) => void;
   /** Select a newly arrived return. When it correlates with the current
    * selection — same source inventory by id, role, and required flag — the
    * user's mesh sizes, channel mapping, drivers, combine, and sweep survive.
    * `initial` means there was no current or saved setup, while `reset` means
    * an existing setup fell back to defaults. */
-  selectArrivedBundle: (bundle: CadReturnBundle, projectLineageId?: string | null) => 'initial' | 'carried' | 'reset';
+  selectArrivedBundle: (bundle: CadReturnBundle, projectLineageId?: string | null, fetcher?: typeof fetch) => 'initial' | 'carried' | 'reset';
   refreshSelectedBundle: (bundle: CadReturnBundle | null) => void;
   markIngestStale: (reason: string) => void;
   applyIngest: (record: CadReturnIngestRecord, generation: number) => boolean;
-  /** Restore an immutable job model without writing over a project's saved profile
+  /** Restore an immutable job model without writing over a project's saved setup
    * or marking it as settled by current preparation. */
   restoreIngest: (record: CadReturnIngestRecord, generation: number, restored: Partial<CadReturnState>) => boolean;
   setSourceSize: (sourceId: string, value: number) => void;
@@ -274,57 +276,6 @@ interface CadReturnState {
   setPassiveCardioid: (patch: Partial<PassiveCardioidForm>) => void;
   setSweep: (update: Partial<Pick<CadReturnState, 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>>) => void;
 }
-
-const solveProfileStorage = namespaceStorage('cadSolveProfiles');
-const SOLVE_PROFILE_STORAGE_VERSION = 4;
-/**
- * Version 1 stored the combined output as a plain boolean whose `false` was
- * the old default rather than a decision. The combined output now defaults on
- * for a multi-driver return, so a version 1 `false` is restored as "no choice
- * yet" — otherwise every profile written before this change would silently
- * keep the combined output off while the rail says it is on by default.
- */
-const LEGACY_SOLVE_PROFILE_VERSION = 1;
-/**
- * Versions 1 and 2 stored the crossover as a sparse `combineCrossoversHz` map
- * plus `combineLevelMatch` and `combineAlign`. Version 3 stores one spec
- * override instead; `combineSpecFromLegacy` is the one place that converts.
- */
-const LEGACY_COMBINE_FIELD_VERSIONS = new Set([1, 2]);
-/**
- * Versions 1 to 3 filed a profile under the open design's identity. For a
- * project that only exists in CAD that identity belongs to whatever design
- * happened to be open -- so the drivers picked for a Fusion document were
- * stored against an unrelated parametric design and were gone the moment
- * another one was opened. Version 4 files it under the project instead, and
- * migrates an older entry to the design owner it already had.
- */
-const LEGACY_DESIGN_OWNED_VERSIONS = new Set([1, 2, 3]);
-const SUPPORTED_SOLVE_PROFILE_VERSIONS = new Set([1, 2, 3, 4]);
-const MAX_SOLVE_PROFILES = 20;
-
-type PersistedSolveSettings = Pick<CadReturnState,
-  'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds' | 'driveChannels'
-  | 'exteriorOnly' | 'exteriorOnlyRegionIds' | 'combineEnabled' | 'combineSpec'
-  | 'channelDrivers' | 'passiveCardioid' | 'driveVoltageV' | 'maxDriveVoltageV'
-  | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
-
-interface SourceInventoryEntry {
-  id: string;
-  role: string;
-  required: boolean;
-}
-
-interface StoredSolveProfile {
-  key: string;
-  /** See `solveProfileOwner`: which project's settings these are. */
-  owner: string;
-  inventory: SourceInventoryEntry[];
-  settings: PersistedSolveSettings;
-  solveSelection?: { accuracy?: SolveAccuracy; engine: string };
-}
-
-let selectedSolveProfileKey: string | null = null;
 
 function initialFromBundle(bundle: CadReturnBundle | null) {
   const sources = bundle?.readable ? bundle.sources : [];
@@ -395,12 +346,12 @@ function bundleChangeReason(previous: CadReturnBundle, current: CadReturnBundle 
   return 'The return bundle was modified after this ingestion.';
 }
 
-interface SourceInventoryCarrier {
+export interface SourceInventoryCarrier {
   readable: boolean;
   sources: readonly SourceInventoryEntry[];
 }
 
-function sourceInventorySignature(bundle: SourceInventoryCarrier): string {
+export function sourceInventorySignature(bundle: SourceInventoryCarrier): string {
   return JSON.stringify(
     bundle.sources
       .map(({ id, role, required }) => ({ id, role, required }))
@@ -417,454 +368,16 @@ function compatibleSourceInventory(previous: SourceInventoryCarrier, next: Sourc
     && sourceInventorySignature(previous) === sourceInventorySignature(next);
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function finiteNumberRecord(value: unknown): Record<string, number> | null {
-  if (!isObject(value)) return null;
-  const entries = Object.entries(value);
-  if (entries.some(([key, item]) => !key || typeof item !== 'number' || !Number.isFinite(item))) return null;
-  return Object.fromEntries(entries) as Record<string, number>;
-}
-
-function stringArray(value: unknown): string[] | null {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) return null;
-  return [...value];
-}
-
-function parseInventory(value: unknown): SourceInventoryEntry[] | null {
-  if (!Array.isArray(value)) return null;
-  const inventory = value.flatMap((item): SourceInventoryEntry[] => (
-    isObject(item)
-      && typeof item.id === 'string' && item.id.length > 0
-      && typeof item.role === 'string'
-      && typeof item.required === 'boolean'
-      ? [{ id: item.id, role: item.role, required: item.required }]
-      : []
-  ));
-  if (inventory.length !== value.length || new Set(inventory.map(({ id }) => id)).size !== inventory.length) return null;
-  return inventory;
-}
-
-function parseDriveChannels(value: unknown, inventory: SourceInventoryEntry[], skippedSourceIds: string[]): CadDriveChannel[] | null {
-  if (!Array.isArray(value)) return null;
-  const sourceIds = new Set(inventory.map(({ id }) => id));
-  const skipped = new Set(skippedSourceIds);
-  const assigned = new Set<string>();
-  const channels = value.flatMap((item): CadDriveChannel[] => {
-    if (!isObject(item) || typeof item.id !== 'string' || !item.id
-      || (item.motion !== 'normal' && item.motion !== 'axial')) return [];
-    const ids = stringArray(item.source_ids);
-    if (!ids?.length || ids.some((id) => !sourceIds.has(id) || skipped.has(id) || assigned.has(id))) return [];
-    ids.forEach((id) => assigned.add(id));
-    return [{ id: item.id, source_ids: ids, motion: item.motion,
-      ...(item.exterior_transducer !== undefined ? { exterior_transducer: parseExteriorTransducer(item.exterior_transducer) } : {}) }];
-  });
-  return channels.length === value.length ? channels : null;
-}
-
-function parseDriverFields(value: unknown): Partial<Record<DriverFieldKey, number>> | null {
-  if (!isObject(value)) return null;
-  const fields: Partial<Record<DriverFieldKey, number>> = {};
-  for (const [field, fieldValue] of Object.entries(value)) {
-    if (!DRIVER_FIELD_KEYS.includes(field as DriverFieldKey)
-      || typeof fieldValue !== 'number' || !Number.isFinite(fieldValue)) return null;
-    fields[field as DriverFieldKey] = fieldValue;
-  }
-  return fields;
-}
-
-/**
- * A stored preset, or `null` for a profile written before drivers were picked.
- *
- * Absence is the migration: every profile saved before the picker existed
- * carries hand-typed `fields` and no preset, and those numbers are still the
- * whole driver. Anything present is parsed strictly, as everywhere else here.
- */
-function parseDriverPreset(value: unknown): DriverPreset | null | undefined {
-  if (value === undefined || value === null) return null;
-  if (!isObject(value)) return undefined;
-  const { id, label, source, kind, z_ohm: z, xo_min_hz: xoMin } = value;
-  if (typeof id !== 'string' || !id || typeof label !== 'string' || !label) return undefined;
-  if (source !== 'database' && source !== 'mine' && source !== 'manual') return undefined;
-  if (kind !== 'lf' && kind !== 'cd' && kind !== 'unknown') return undefined;
-  if (z !== null && (typeof z !== 'number' || !Number.isFinite(z))) return undefined;
-  // Absent is the migration: a preset stored before this field existed. A
-  // present value is parsed strictly, same as every other field here.
-  if (xoMin !== undefined && xoMin !== null && (typeof xoMin !== 'number' || !Number.isFinite(xoMin))) return undefined;
-  const base = parseDriverFields(value.base);
-  if (!base) return undefined;
-  return { id, label, source, kind, z_ohm: z, xo_min_hz: typeof xoMin === 'number' ? xoMin : null, base };
-}
-
-function parseChannelDrivers(value: unknown): Record<string, ChannelDriverForm> | null {
-  if (!isObject(value)) return null;
-  const drivers: Record<string, ChannelDriverForm> = {};
-  for (const [channelId, item] of Object.entries(value)) {
-    if (!channelId || !isObject(item)) return null;
-    // Migration: forms stored before "present = driven" carried an `enabled`
-    // flag. Its value is deliberately ignored — presence of a preset or T/S
-    // fields is what drives a channel now, so a stored driver that was
-    // switched off comes back driven. A present flag still has to be a
-    // boolean, same strictness as every other field here.
-    if (item.enabled !== undefined && typeof item.enabled !== 'boolean') return null;
-    const fields = parseDriverFields(item.fields);
-    const preset = parseDriverPreset(item.preset);
-    if (!fields || preset === undefined) return null;
-    drivers[channelId] = { fields, preset };
-  }
-  return drivers;
-}
-
-/**
- * A stored cardioid form, or the defaults when the profile predates the field.
- *
- * Absence is tolerated where every neighbouring parse is strict: profiles
- * written before this section existed carry no key, and dropping every stored
- * mesh size and driver over a feature the user has not used would be a worse
- * answer than starting that one section off. Anything present is still parsed
- * strictly, and a malformed form fails the whole profile as usual.
- */
-function parsePassiveCardioid(value: unknown): PassiveCardioidForm | null | undefined {
-  if (value === undefined) return { ...PASSIVE_CARDIOID_DEFAULTS };
-  if (!isObject(value)) return null;
-  if (typeof value.enabled !== 'boolean'
-    || typeof value.invertPort !== 'boolean'
-    || typeof value.coupled !== 'boolean'
-    || (value.portAreaSource !== 'user' && value.portAreaSource !== 'bem_aperture')) return null;
-  const numbers: Partial<Record<PassiveCardioidNumberField, number | null>> = {};
-  for (const field of PASSIVE_CARDIOID_NUMBER_FIELDS) {
-    const item = value[field];
-    if (item === null || item === undefined) { numbers[field] = null; continue; }
-    if (typeof item !== 'number' || !Number.isFinite(item)) return null;
-    numbers[field] = item;
-  }
-  return normalizePassiveCardioid({
-    enabled: value.enabled,
-    rearVolumeL: numbers.rearVolumeL ?? null,
-    portLengthMm: numbers.portLengthMm ?? null,
-    modelPortAreaM2: numbers.modelPortAreaM2 ?? null,
-    bemPortAreaM2: numbers.bemPortAreaM2 ?? null,
-    portAreaSource: value.portAreaSource,
-    foamResistancePaSM3: numbers.foamResistancePaSM3 ?? null,
-    invertPort: value.invertPort,
-    coupled: value.coupled,
-  });
-}
-
-/**
- * Convert a version 1/2 profile's crossover fields into one spec override.
- *
- * The old fields were sparse: only the pairs the user actually typed were
- * stored, and the two booleans were nullable "no choice yet". A profile that
- * touched none of them therefore migrates to `null` — no override — rather
- * than to a spec that would freeze today's defaults into stored state.
- */
-function combineSpecFromLegacy(
-  settings: Omit<PersistedSolveSettings, 'combineSpec'>,
-  sources: readonly RoleSource[],
-  crossoversHz: Record<string, number>,
-  levelMatch: boolean | null,
-  align: boolean | null,
-): CrossoverSpec | null {
-  const touched = Object.keys(crossoversHz).length > 0 || levelMatch !== null || align !== null;
-  if (!touched) return null;
-  const pairs = chainDefaults(settings.driveChannels, sources, settings.frequencyStartHz, settings.frequencyEndHz);
-  if (pairs.length < 1) return null;
-  return expandLegacy(
-    memberOrder(settings.driveChannels, sources),
-    pairs.map((pair) => crossoversHz[pair.key] ?? pair.defaultOrFallbackHz),
-    levelMatch ?? combineLevelMatchDefault(settings),
-    align ?? true,
-  );
-}
-
-function parseSolveSettings(
-  value: unknown,
-  inventory: SourceInventoryEntry[],
-  version: number,
-): PersistedSolveSettings | null {
-  if (!isObject(value)) return null;
-  const legacyCombineFields = LEGACY_COMBINE_FIELD_VERSIONS.has(version);
-  const sourceSizesMm = finiteNumberRecord(value.sourceSizesMm);
-  const combineCrossoversHz = legacyCombineFields ? finiteNumberRecord(value.combineCrossoversHz) : {};
-  const skippedSourceIds = stringArray(value.skippedSourceIds);
-  const channelDrivers = parseChannelDrivers(value.channelDrivers);
-  const passiveCardioid = parsePassiveCardioid(value.passiveCardioid);
-  if (!sourceSizesMm || !combineCrossoversHz || !skippedSourceIds || !channelDrivers
-    || !passiveCardioid) return null;
-  const inventoryIds = new Set(inventory.map(({ id }) => id));
-  if (Object.keys(sourceSizesMm).some((id) => !inventoryIds.has(id))
-    || skippedSourceIds.some((id) => !inventoryIds.has(id))
-    || new Set(skippedSourceIds).size !== skippedSourceIds.length) return null;
-  const driveChannels = parseDriveChannels(value.driveChannels, inventory, skippedSourceIds);
-  if (!driveChannels) return null;
-  const legacyLevelMatch = legacyCombineFields ? value.combineLevelMatch ?? null : null;
-  const legacyAlign = legacyCombineFields ? value.combineAlign ?? null : null;
-  if (typeof value.rigidSizeMm !== 'number' || !Number.isFinite(value.rigidSizeMm)
-    || typeof value.transitionMm !== 'number' || !Number.isFinite(value.transitionMm)
-    || typeof value.exteriorOnly !== 'boolean'
-    || (value.combineEnabled !== null && typeof value.combineEnabled !== 'boolean')
-    || (legacyLevelMatch !== null && typeof legacyLevelMatch !== 'boolean')
-    || (legacyAlign !== null && typeof legacyAlign !== 'boolean')
-    || typeof value.driveVoltageV !== 'number' || !Number.isFinite(value.driveVoltageV)
-    || typeof value.frequencyStartHz !== 'number' || !Number.isFinite(value.frequencyStartHz)
-    || typeof value.frequencyEndHz !== 'number' || !Number.isFinite(value.frequencyEndHz)
-    || typeof value.frequencyCount !== 'number' || !Number.isFinite(value.frequencyCount)) return null;
-  const settings = {
-    sourceSizesMm,
-    rigidSizeMm: value.rigidSizeMm,
-    transitionMm: value.transitionMm,
-    skippedSourceIds,
-    driveChannels,
-    exteriorOnly: value.exteriorOnly,
-    exteriorOnlyRegionIds: stringArray(value.exteriorOnlyRegionIds) ?? null,
-    combineEnabled: value.combineEnabled,
-    channelDrivers,
-    passiveCardioid,
-    driveVoltageV: value.driveVoltageV,
-    // Absent is a profile stored before an amplifier could be stated, which
-    // means the drivers were the only ceiling -- exactly what null says.
-    maxDriveVoltageV: typeof value.maxDriveVoltageV === 'number'
-      && Number.isFinite(value.maxDriveVoltageV) && value.maxDriveVoltageV > 0
-      ? value.maxDriveVoltageV
-      : null,
-    frequencyStartHz: value.frequencyStartHz,
-    frequencyEndHz: value.frequencyEndHz,
-    frequencyCount: value.frequencyCount,
-  };
-  if (legacyCombineFields) {
-    return {
-      ...settings,
-      combineSpec: combineSpecFromLegacy(settings, inventory, combineCrossoversHz, legacyLevelMatch, legacyAlign),
-    };
-  }
-  // An absent key is "no override", the same as a stored null; a present but
-  // malformed one fails the whole profile, as every other field here does.
-  if (value.combineSpec !== null && value.combineSpec !== undefined && !parseSpec(value.combineSpec)) return null;
-  return { ...settings, combineSpec: parseSpec(value.combineSpec ?? null) };
-}
-
-/**
- * Whose settings these are: one CAD project, or one parametric design.
- *
- * The CAD project's lineage owns them wherever there is one. It is the only
- * identity that survives what a project actually does -- a Fusion rename, a
- * new return, a new ingestion -- and for a project that exists only in CAD it
- * is the *only* identity it has: the document store's is whatever design
- * happened to be open, which is how a Fusion document's drivers came to be
- * filed under an unrelated parametric design. A design-first project with no
- * CAD project behind it keeps the design identity it always had.
- */
-function solveProfileOwner(projectLineageId: string | null): string | null {
-  if (projectLineageId) return `cad:${projectLineageId}`;
-  const identity = useDocumentStore.getState().identity;
-  return identity?.designId && identity.lineageId
-    ? `design:${identity.designId}:${identity.lineageId}`
-    : null;
-}
-
-/**
- * The project a newly selected bundle belongs to.
- *
- * Callers that know it say so -- the project switcher and the reopen-on-load
- * both resolve the project before they select its return. The rest keep the
- * one the workspace is already on, which is right for a new return of the
- * project already open, and is corrected by `applyIngest` the moment the
- * ingestion states the project itself.
- */
-function resolvedProjectLineage(state: CadReturnState, projectLineageId?: string | null): string | null {
+function resolvedProjectLineage(state: CadReturnState, bundle: CadReturnBundle | null, projectLineageId?: string | null): string | null {
   if (projectLineageId !== undefined) return projectLineageId;
-  return state.ingestRecord?.project?.lineage_id ?? state.projectLineageId;
+  if (bundle?.projectLineageId !== undefined) return bundle.projectLineageId;
+  const document = useDocumentStore.getState().identity;
+  if (document && bundle?.designIds?.includes(document.designId)) return document.lineageId;
+  const previous = state.selectedBundle;
+  const same = previous && bundle && (previous.documentNativeId && bundle.documentNativeId
+    ? previous.documentNativeId === bundle.documentNativeId : previous.bundlePath === bundle.bundlePath);
+  return same ? state.ingestRecord?.project?.lineage_id ?? state.projectLineageId : null;
 }
-
-function solveProfileKey(owner: string, inventory: SourceInventoryCarrier): string {
-  return JSON.stringify([owner, sourceInventorySignature(inventory)]);
-}
-
-function dropStoredSolveProfiles(): void {
-  try { solveProfileStorage.removeItem('cadSolveProfiles'); } catch { /* persistence is best effort */ }
-}
-
-function readStoredSolveProfiles(): StoredSolveProfile[] {
-  try {
-    const raw = solveProfileStorage.getItem('cadSolveProfiles');
-    if (raw === null) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!isObject(parsed)
-      || typeof parsed.version !== 'number'
-      || !SUPPORTED_SOLVE_PROFILE_VERSIONS.has(parsed.version)
-      || !Array.isArray(parsed.profiles) || parsed.profiles.length > MAX_SOLVE_PROFILES) {
-      dropStoredSolveProfiles();
-      return [];
-    }
-    const version = parsed.version;
-    const legacyCombineChoice = version === LEGACY_SOLVE_PROFILE_VERSION;
-    const designOwned = LEGACY_DESIGN_OWNED_VERSIONS.has(version);
-    const profiles: StoredSolveProfile[] = [];
-    for (const value of parsed.profiles) {
-      // A migrated entry is re-keyed rather than re-validated against the key
-      // its own version wrote: the owner is the thing that changed.
-      const owner = designOwned
-        ? (typeof value.designId === 'string' && value.designId
-          && typeof value.lineageId === 'string' && value.lineageId
-          ? `design:${value.designId}:${value.lineageId}`
-          : null)
-        : (isObject(value) && typeof value.owner === 'string' && value.owner ? value.owner : null);
-      if (!isObject(value) || typeof value.key !== 'string' || !owner) {
-        dropStoredSolveProfiles();
-        return [];
-      }
-      const inventory = parseInventory(value.inventory);
-      const settings = inventory ? parseSolveSettings(value.settings, inventory, version) : null;
-      if (!inventory || !settings) {
-        dropStoredSolveProfiles();
-        return [];
-      }
-      const key = solveProfileKey(owner, { readable: true, sources: inventory });
-      if (!designOwned && value.key !== key) {
-        dropStoredSolveProfiles();
-        return [];
-      }
-      profiles.push({
-        key,
-        owner,
-        inventory,
-        settings: legacyCombineChoice && settings.combineEnabled === false
-          ? { ...settings, combineEnabled: null }
-          : settings,
-        ...(isObject(value.solveSelection)
-          && typeof value.solveSelection.engine === 'string'
-          ? { solveSelection: {
-              accuracy: value.solveSelection.accuracy === 'accurate' ? 'accurate' as const : 'fast' as const,
-              engine: value.solveSelection.engine,
-            } }
-          : {}),
-      });
-    }
-    if (new Set(profiles.map(({ key }) => key)).size !== profiles.length) {
-      dropStoredSolveProfiles();
-      return [];
-    }
-    return profiles;
-  } catch {
-    dropStoredSolveProfiles();
-    return [];
-  }
-}
-
-function writeStoredSolveProfiles(profiles: StoredSolveProfile[]): void {
-  try {
-    solveProfileStorage.setItem('cadSolveProfiles', JSON.stringify({
-      version: SOLVE_PROFILE_STORAGE_VERSION,
-      profiles: profiles.slice(0, MAX_SOLVE_PROFILES),
-    }));
-  } catch { /* persistence is best effort */ }
-}
-
-function currentSolveProfileKey(bundle: CadReturnBundle, projectLineageId: string | null): string | null {
-  const owner = solveProfileOwner(projectLineageId);
-  return owner ? solveProfileKey(owner, bundle) : null;
-}
-
-function hasSolveProfileForCurrentOwner(projectLineageId: string | null): boolean {
-  const owner = solveProfileOwner(projectLineageId);
-  return owner !== null && readStoredSolveProfiles().some((profile) => profile.owner === owner);
-}
-
-function persistedSolveSettings(state: CadReturnState): PersistedSolveSettings {
-  return {
-    sourceSizesMm: { ...state.sourceSizesMm },
-    rigidSizeMm: state.rigidSizeMm,
-    transitionMm: state.transitionMm,
-    skippedSourceIds: [...state.skippedSourceIds],
-    driveChannels: state.driveChannels.map((channel) => ({ ...channel, source_ids: [...channel.source_ids] })),
-    exteriorOnly: state.exteriorOnly,
-    exteriorOnlyRegionIds: state.exteriorOnlyRegionIds,
-    combineEnabled: state.combineEnabled,
-    combineSpec: state.combineSpec ? cloneSpec(state.combineSpec) : null,
-    channelDrivers: Object.fromEntries(Object.entries(state.channelDrivers).map(([channelId, form]) => [
-      channelId,
-      {
-        fields: { ...form.fields },
-        preset: form.preset ? { ...form.preset, base: { ...form.preset.base } } : null,
-      },
-    ])),
-    passiveCardioid: { ...state.passiveCardioid },
-    driveVoltageV: state.driveVoltageV,
-    maxDriveVoltageV: state.maxDriveVoltageV,
-    frequencyStartHz: state.frequencyStartHz,
-    frequencyEndHz: state.frequencyEndHz,
-    frequencyCount: state.frequencyCount,
-  };
-}
-
-function saveSolveProfile(state: CadReturnState): void {
-  const bundle = state.selectedBundle;
-  const owner = solveProfileOwner(state.projectLineageId);
-  // Readability is not the test -- a run recalled from the archive is not
-  // readable and its settings are still this project's, which is the whole of
-  // "I updated the drivers while looking at an old run". An inventory is: a
-  // bundle that could not be read states no sources, and filing that would
-  // overwrite the project's settings with an empty model.
-  if (!bundle || !owner || !bundle.sources.length) return;
-  // A file mesh's engine and accuracy are not this CAD project's choice.
-  const solveSelection = cadSolveSelection();
-  if (!solveSelection) return;
-  const inventory = bundle.sources.map(({ id, role, required }) => ({ id, role, required }));
-  const key = solveProfileKey(owner, bundle);
-  const profile: StoredSolveProfile = {
-    key,
-    owner,
-    inventory,
-    settings: persistedSolveSettings(state),
-    solveSelection,
-  };
-  writeStoredSolveProfiles([profile, ...readStoredSolveProfiles().filter((item) => item.key !== key)]);
-  selectedSolveProfileKey = key;
-}
-
-
-/**
- * How a profile restore treats the imported options:
- * - `select`: a project is being opened. Start from a one-way copy of the
- *   parametric options, then apply the profile's selection if it has one, so
- *   nothing left over from a file or another project survives.
- * - `adopt`: the owner became known late. A profile replaces the options as in
- *   `select`; with none, what is on screen is left alone.
- * - `resume`: CAD input came back on screen. Its own options were restored;
- *   only the profile's selection is applied.
- */
-function restoreSolveProfile(bundle: CadReturnBundle, projectLineageId: string | null,
-  how: 'select' | 'adopt' | 'resume' = 'select'): PersistedSolveSettings | null {
-  const key = currentSolveProfileKey(bundle, projectLineageId);
-  const profiles = key ? readStoredSolveProfiles() : [];
-  const index = profiles.findIndex((profile) => profile.key === key);
-  const profile = index < 0 ? undefined : profiles[index];
-  // Options are only ever written while CAD input is on screen; a file mesh's
-  // are its own.
-  const cadActive = workspaceModeStore.getSnapshot().importedInput === 'cad';
-  // Selecting a project with a file on screen: the saved CAD options are the
-  // previous project's, so none of them may carry over.
-  if (how === 'select' && !cadActive) discardParkedCadModel();
-  // A selection, or a profile adopted for a newly known owner, replaces the
-  // options on screen: the setup a model was opened with no longer is them.
-  if (how !== 'resume' && cadActive) endOpenedSetup('cad');
-  if (!profile || !compatibleSourceInventory({ readable: true, sources: profile.inventory }, bundle)) {
-    // No saved setup for this project: open with a one-way copy of the
-    // parametric options, made once here and never written back.
-    if (how === 'select' && cadActive) seedImportedSolveOptionsFromParametric();
-    return null;
-  }
-  if (cadActive) {
-    if (how !== 'resume') seedImportedSolveOptionsFromParametric();
-    applyCadSolveSelection(profile.solveSelection ?? {});
-  }
-  if (index > 0) writeStoredSolveProfiles([profile, ...profiles.filter((_, itemIndex) => itemIndex !== index)]);
-  return profile.settings;
-}
-
 
 // This token deliberately lives outside Zustand state: advancing intent must
 // reject a late network result without manufacturing a render by itself. Every
@@ -1028,6 +541,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   frequencyStartHz: DEFAULT_SWEEP.startHz,
   frequencyEndHz: DEFAULT_SWEEP.endHz,
   frequencyCount: DEFAULT_SWEEP.points,
+  setupLoading: false,
   needsIngest: true,
   ingestedBundleIdentity: null,
   ingestStaleReason: null,
@@ -1040,13 +554,15 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   isCurrentModelChoice: (generation) => generation === modelChoiceGeneration,
   isCurrentIngestIntent: (generation) => generation === ingestIntentGeneration,
   isIngestSettled: () => get().ingestRecord !== null && appliedIngestGeneration === ingestIntentGeneration,
-  selectBundle: (selectedBundle, projectLineageId, automatic = false) => {
+  selectBundle: (selectedBundle, projectLineageId, automatic = false, fetcher) => {
     if (!automatic) supersedeSelectionIntent();
     else selectionIntentGeneration += 1;
     supersedeIngestIntent();
-    const project = resolvedProjectLineage(get(), projectLineageId);
-    const restored = selectedBundle ? restoreSolveProfile(selectedBundle, project) : null;
-    selectedSolveProfileKey = selectedBundle ? currentSolveProfileKey(selectedBundle, project) : null;
+    const project = resolvedProjectLineage(get(), selectedBundle, projectLineageId);
+    if (workspaceModeStore.getSnapshot().importedInput === 'cad') {
+      endOpenedSetup('cad');
+      seedImportedSolveOptionsFromParametric();
+    } else discardParkedCadModel();
     set({
       selectedBundle,
       projectLineageId: project,
@@ -1062,25 +578,28 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       frequencyStartHz: DEFAULT_SWEEP.startHz,
       frequencyEndHz: DEFAULT_SWEEP.endHz,
       frequencyCount: DEFAULT_SWEEP.points,
-      ...(restored ?? {}),
       ingestRecord: null,
       areaDriftOverrides: [],
       areaDriftSourceIds: [],
+      setupLoading: false,
       needsIngest: true,
       ingestedBundleIdentity: null,
       ingestStaleReason: null,
     });
+    if (selectedBundle) void loadCadProjectSettings(fetcher);
+    else resetCadProjectSettingsLoad();
   },
-  selectArrivedBundle: (bundle, projectLineageId) => {
+  selectArrivedBundle: (bundle, projectLineageId, fetcher) => {
     selectionIntentGeneration += 1;
     const previous = get().selectedBundle;
-    const project = resolvedProjectLineage(get(), projectLineageId);
-    const nextProfileKey = currentSolveProfileKey(bundle, project);
+    const project = resolvedProjectLineage(get(), bundle, projectLineageId);
     if (!previous || !compatibleSourceInventory(previous, bundle)
-      || selectedSolveProfileKey !== nextProfileKey) {
+      || get().projectLineageId !== project) {
       supersedeIngestIntent();
-      const restored = restoreSolveProfile(bundle, project);
-      selectedSolveProfileKey = nextProfileKey;
+      if (workspaceModeStore.getSnapshot().importedInput === 'cad') {
+        endOpenedSetup('cad');
+        seedImportedSolveOptionsFromParametric();
+      } else discardParkedCadModel();
       set({
         selectedBundle: bundle,
         projectLineageId: project,
@@ -1096,16 +615,16 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
         frequencyStartHz: DEFAULT_SWEEP.startHz,
         frequencyEndHz: DEFAULT_SWEEP.endHz,
         frequencyCount: DEFAULT_SWEEP.points,
-        ...(restored ?? {}),
         ingestRecord: null,
         areaDriftOverrides: [],
         areaDriftSourceIds: [],
+        setupLoading: false,
         needsIngest: true,
         ingestedBundleIdentity: null,
         ingestStaleReason: null,
       });
-      if (restored) return 'carried';
-      return previous || hasSolveProfileForCurrentOwner(project) ? 'reset' : 'initial';
+      void loadCadProjectSettings(fetcher);
+      return previous ? 'reset' : 'initial';
     }
     supersedeIngestIntent();
     set((state) => ({
@@ -1115,10 +634,12 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       ingestRecord: null,
       areaDriftOverrides: [],
       areaDriftSourceIds: [],
+      setupLoading: false,
       needsIngest: true,
       ingestedBundleIdentity: null,
       ingestStaleReason: null,
     }));
+    void loadCadProjectSettings(fetcher);
     return 'carried';
   },
   refreshSelectedBundle: (selectedBundle) => {
@@ -1169,7 +690,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       ...(restored.exteriorOnly === true && restored.exteriorOnlyRegionIds === undefined
         ? { exteriorOnlyRegionIds: femRegionIds(ingestRecord) } : {}),
     };
-    set({ ...restored, exteriorOnlyRegionIds: choice.exteriorOnlyRegionIds,
+    set({ ...restored, setupLoading: false, exteriorOnlyRegionIds: choice.exteriorOnlyRegionIds,
       ingestRecord, ...currentExteriorChoice(choice, ingestRecord) });
     return true;
   },
@@ -1182,31 +703,13 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
     // to, so it is the authority on where these settings are filed -- whatever
     // the selection had to assume before it existed.
     const project = ingestRecord.project?.lineage_id ?? current.projectLineageId;
-    // Discovering a different owner means the settings on screen were restored
-    // for somebody else -- or not restored at all. Filing them here would
-    // overwrite this project's own saved profile with another project's setup,
-    // or with the defaults a failed restore left behind, and no geometry gate
-    // can see it: the geometry really does belong to this project, only the
-    // solve settings do not. So the destination's own compatible profile is
-    // loaded instead, and only what the ingestion itself states -- the mesh
-    // sizes and the skipped sources -- overrides it.
-    const adopted = solveProfileOwner(project) !== solveProfileOwner(current.projectLineageId)
-      && current.selectedBundle
-      ? restoreSolveProfile(current.selectedBundle, project, 'adopt')
-      : null;
-    const channels = (adopted?.driveChannels ?? current.driveChannels).flatMap((channel) => {
+    const channels = current.driveChannels.flatMap((channel) => {
       const source_ids = channel.source_ids.filter((id) => !skipped.has(id));
       return source_ids.length ? [{ ...channel, source_ids }] : [];
     });
     set({
-      ...(adopted ? {
-        ...adopted,
-        // A skipped source can take a whole channel with it; a driver form only
-        // survives on a channel that still exists and can still carry one.
-        channelDrivers: driversForChannels(adopted.channelDrivers, channels),
-      } : {}),
       ingestRecord,
-      ...currentExteriorChoice(adopted ?? current, ingestRecord),
+      ...currentExteriorChoice(current, ingestRecord),
       projectLineageId: project,
       sourceSizesMm: { ...ingestRecord.mesh_sizes.source_size_mm },
       rigidSizeMm: ingestRecord.mesh_sizes.rigid_size_mm,
@@ -1221,28 +724,22 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       ingestedBundleIdentity: current.selectedBundle ? bundleIdentity(current.selectedBundle) : null,
       ingestStaleReason: null,
     });
-    if (current.selectedBundle) {
-      selectedSolveProfileKey = currentSolveProfileKey(current.selectedBundle, project);
-    }
-    saveSolveProfile(get());
     // An arrival is the CAD input's model now; nothing is restored with it.
     void openImported({ kind: 'cad', record: ingestRecord });
+    if (project !== current.projectLineageId) void loadCadProjectSettings();
     return true;
   },
   setSourceSize: (sourceId, value) => {
     supersedeIngestIntent();
     set((state) => ({ sourceSizesMm: { ...state.sourceSizesMm, [sourceId]: value }, needsIngest: true }));
-    saveSolveProfile(get());
   },
   setRigidSize: (rigidSizeMm) => {
     supersedeIngestIntent();
     set({ rigidSizeMm, needsIngest: true });
-    saveSolveProfile(get());
   },
   setTransition: (transitionMm) => {
     supersedeIngestIntent();
     set({ transitionMm, needsIngest: true });
-    saveSolveProfile(get());
   },
   setSkipped: (sourceId, skipped) => {
     supersedeIngestIntent();
@@ -1268,7 +765,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
         needsIngest: true,
       };
     });
-    saveSolveProfile(get());
   },
   setSourceChannel: (sourceId, channelId) => {
     // A mechanical coordinate cannot silently become another source group.
@@ -1289,7 +785,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       });
       return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
     });
-    saveSolveProfile(get());
   },
   setExteriorTransducer: (channelId, form) => {
     set((state) => {
@@ -1301,14 +796,12 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       });
       return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
     });
-    saveSolveProfile(get());
   },
   setChannelMotion: (channelId, motion) => {
     set((state) => {
       const driveChannels = state.driveChannels.map((channel) => channel.id === channelId && !channel.exterior_transducer ? { ...channel, motion } : channel);
       return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
     });
-    saveSolveProfile(get());
   },
   setAreaDriftOverride: (sourceId, enabled) => {
     supersedeIngestIntent();
@@ -1322,16 +815,14 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   flagAreaDrift: (sourceId) => set((state) => ({ areaDriftSourceIds: [...new Set([...state.areaDriftSourceIds, sourceId])] })),
   setExteriorOnly: (exteriorOnly) => {
     set({ exteriorOnly, exteriorOnlyRegionIds: exteriorOnly ? femRegionIds(get().ingestRecord) : null });
-    saveSolveProfile(get());
   },
-  setCombineEnabled: (combineEnabled) => { set({ combineEnabled }); saveSolveProfile(get()); },
-  setCombineSpec: (combineSpec) => { set({ combineSpec }); saveSolveProfile(get()); },
+  setCombineEnabled: (combineEnabled) => { set({ combineEnabled }); },
+  setCombineSpec: (combineSpec) => { set({ combineSpec }); },
   updateCombineSpec: (edit) => {
     set((state) => {
       const current = combineSpecEffective(state);
       return current ? { combineSpec: edit(current) } : {};
     });
-    saveSolveProfile(get());
   },
   setCombineCrossover: (pairKey, hz) => {
     useCadReturnStore.getState().updateCombineSpec((spec) => withPair(spec, pairKey, { hz }));
@@ -1343,7 +834,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
         ? { combineSpec: cloneSpec(spec) }
         : {};
     });
-    saveSolveProfile(get());
   },
   setChannelDriverField: (channelId, field, value) => {
     set((state) => {
@@ -1355,7 +845,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       else fields[field] = value;
       return { channelDrivers: { ...state.channelDrivers, [channelId]: { ...current, fields } } };
     });
-    saveSolveProfile(get());
   },
   setChannelDriverPreset: (channelId, preset, keepOverrides = false) => {
     set((state) => {
@@ -1364,11 +853,10 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       return {
         channelDrivers: {
           ...state.channelDrivers,
-          [channelId]: { ...current, preset, fields: kept },
+          [channelId]: { ...current, ...(current.frozen ? { frozen: false } : {}), preset, fields: kept },
         },
       };
     });
-    saveSolveProfile(get());
   },
   /**
    * Re-read the picked drivers' own numbers from the library.
@@ -1402,7 +890,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       }
       return changed.length ? { channelDrivers } : {};
     });
-    if (changed.length) saveSolveProfile(get());
     return changed;
   },
   clearChannelDriverOverrides: (channelId) => {
@@ -1412,22 +899,19 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       return {
         channelDrivers: {
           ...state.channelDrivers,
-          [channelId]: { ...current, fields: retainedInstallationFields(current.fields) },
+          [channelId]: { ...current, ...(current.frozen ? { frozen: false } : {}), fields: retainedInstallationFields(current.fields) },
         },
       };
     });
-    saveSolveProfile(get());
   },
-  setDriveVoltage: (driveVoltageV) => { set({ driveVoltageV }); saveSolveProfile(get()); },
+  setDriveVoltage: (driveVoltageV) => { set({ driveVoltageV }); },
   setMaxDriveVoltage: (maxDriveVoltageV) => {
     set({ maxDriveVoltageV: maxDriveVoltageV && maxDriveVoltageV > 0 ? maxDriveVoltageV : null });
-    saveSolveProfile(get());
   },
   setPassiveCardioid: (patch) => {
     set((state) => ({ passiveCardioid: normalizePassiveCardioid({ ...state.passiveCardioid, ...patch }) }));
-    saveSolveProfile(get());
   },
-  setSweep: (update) => { set(update); saveSolveProfile(get()); },
+  setSweep: (update) => { set(update); },
 }, CAD_RETURN_EDITS));
 
 /** Only WG's own installation inputs survive a driver change or a reset. */
@@ -1442,7 +926,7 @@ function retainedInstallationFields(
 /** The driver as it will be submitted: the preset's numbers under the edits. */
 export function driverValues(form: ChannelDriverForm | undefined): Partial<Record<DriverFieldKey, number>> {
   if (!form) return {};
-  return { ...(form.preset?.base ?? {}), ...form.fields };
+  return form.frozen ? { ...form.fields } : { ...(form.preset?.base ?? {}), ...form.fields };
 }
 
 /**
@@ -1762,10 +1246,10 @@ export function combineDefaultHz(
   return lowerRole && upperRole ? ROLE_DEFAULT_HZ[`${lowerRole}→${upperRole}`] : undefined;
 }
 
-/** The band-carrying sources a chain is ordered by. The stored solve profile
+/** The band-carrying sources a chain is ordered by. The editable setup
  * carries the same two fields under another name, which is why the chain
  * helpers below take this shape rather than a whole bundle. */
-interface RoleSource {
+export interface RoleSource {
   id: string;
   role: string;
 }
@@ -1786,7 +1270,7 @@ function memberRole(
     .sort((a, b) => ROLE_BAND_RANK[a] - ROLE_BAND_RANK[b])[0];
 }
 
-function memberOrder(channels: readonly CadDriveChannel[], sources: readonly RoleSource[]): string[] {
+export function memberOrder(channels: readonly CadDriveChannel[], sources: readonly RoleSource[]): string[] {
   return [...channels]
     .map((channel, index) => {
       const ranks = channel.source_ids
@@ -1813,7 +1297,7 @@ interface ChainDefault {
 /** The pairs and the frequency each one holds before the user touches it. This
  * is the base the spec override sits on: role defaults where the roles say
  * one, a log-spaced in-sweep frequency where they do not. */
-function chainDefaults(
+export function chainDefaults(
   channels: readonly CadDriveChannel[],
   sources: readonly RoleSource[],
   frequencyStartHz: number,
@@ -1973,34 +1457,10 @@ export function blockingFindingWire(record: CadReturnIngestRecord): string[] {
   return blockingFindings(record).map((finding) => `${record.report_sha256}:${finding.id}`);
 }
 
-// The shared accuracy/backend controls live outside the CAD return store.
-// Save a project's choice when a person edits either control, rather than
-// waiting for an unrelated mesh or driver edit to persist its profile.
-subscribeSolveSettingsEdits((edit) => {
-  // Parametric edits and file-mesh edits are not this CAD project's settings.
-  if (edit?.source === 'solveOptions' || workspaceModeStore.getSnapshot().importedInput !== 'cad') return;
-  saveSolveProfile(useCadReturnStore.getState());
-});
-
-// CAD input came back on screen: its options were restored with it, and the
-// selected project's saved engine and accuracy apply on top.
-let lastImportedInput = workspaceModeStore.getSnapshot().importedInput;
-workspaceModeStore.subscribe(() => {
-  const next = workspaceModeStore.getSnapshot().importedInput;
-  if (next === lastImportedInput) return;
-  lastImportedInput = next;
-  const { selectedBundle, projectLineageId } = useCadReturnStore.getState();
-  // A model that came back with the setup it was opened with keeps that
-  // setup's engine and accuracy: the profile is not applied over it.
-  const opened = useImportedModelStore.getState();
-  if (opened.input === 'cad' && opened.setup) return;
-  if (next === 'cad' && selectedBundle) restoreSolveProfile(selectedBundle, projectLineageId, 'resume');
-});
-
 export function resetCadReturnStore(): void {
   supersedeSelectionIntent();
   supersedeIngestIntent();
-  selectedSolveProfileKey = null;
+  resetCadProjectSettingsLoad();
   useCadReturnStore.setState({
     selectedBundle: null,
     ingestRecord: null,
@@ -2018,6 +1478,7 @@ export function resetCadReturnStore(): void {
     frequencyStartHz: DEFAULT_SWEEP.startHz,
     frequencyEndHz: DEFAULT_SWEEP.endHz,
     frequencyCount: DEFAULT_SWEEP.points,
+    setupLoading: false,
     needsIngest: true,
     ingestedBundleIdentity: null,
     ingestStaleReason: null,

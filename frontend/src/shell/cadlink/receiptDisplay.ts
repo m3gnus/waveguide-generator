@@ -1,3 +1,4 @@
+import { waitForCadProjectSettings } from '../../stores/cadProjectSettings';
 import { CadLinkApiError, ingestReturn, listReturns } from '../../api/cadlink';
 import { useCadReturnStore } from '../../stores/cadReturn';
 import { useCadPreparationStore } from '../../stores/cadPreparation';
@@ -122,7 +123,9 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       const pickedAt = display.manualSelectionAt?.();
       if ((pickedAt != null && pickedAt > sentAt) || (display.automaticSelectionAt?.() ?? 0) > sentAt) return superseded();
       // One settings-retention policy, owned by cadReturn (S5-4).
-      useCadReturnStore.getState().selectArrivedBundle(bundle, receipt.project_id);
+      useCadReturnStore.getState().selectArrivedBundle(bundle, receipt.project_id, transport);
+      if (!await waitForCadProjectSettings()) throw new Error('Could not load model settings. Retry the Send.');
+      if (!current()) return superseded();
       const selected = useCadReturnStore.getState();
       generation = selected.beginIngestIntent();
       baselineViewport = importedMeshStore.beginIntent();

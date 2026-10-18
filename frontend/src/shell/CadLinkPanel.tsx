@@ -871,6 +871,7 @@ export function CadLinkPanel() {
         The round trip still works for building and exporting geometry, and the
         parametric workspace still solves here.
       </div>}
+      {state.setupLoading && <div className="cad-alert cad-alert-notice" role="status">Loading model settings…</div>}
       {state.ingestStaleReason && <div className="cad-alert cad-alert-notice" role="status">{state.ingestStaleReason} Prepare the model again before solving.</div>}
       {viewportNotice && <div className="cad-alert cad-alert-notice" role="status">{viewportNotice}</div>}
       {/* Beside the button that starts the solve, not only in the rail where

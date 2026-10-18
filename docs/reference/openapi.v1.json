@@ -16191,6 +16191,23 @@
               ],
               "title": "Prepared Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "inventory",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Inventory"
+            }
           }
         ],
         "responses": {

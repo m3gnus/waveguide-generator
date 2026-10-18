@@ -33,6 +33,8 @@ export interface CadReturnInstanceSummary {
 export type CadReturnBundleOrigin = 'wglink' | 'onshape' | 'native';
 
 export interface CadReturnBundle {
+  /** Resolved by the server from the manifest, never the open editor. Null for a new document. */
+  projectLineageId?: string | null;
   name: string;
   bundlePath: string;
   bundleOrigin?: CadReturnBundleOrigin;

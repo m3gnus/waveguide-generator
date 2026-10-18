@@ -94,6 +94,7 @@ from server.cadlink.joblane.project_setup import SOLVER_SELECTION
 from server.cadlink.joblane.setup import setup_content, setup_digest, validate_setup
 from server.cadlink.interpretation.solver_frame import record_is_unlinked
 from server.cadlink.intake.readings import ensure_frame_suggestion
+from server.cadlink.intake.readings import snapshot_project
 from server.cadlink.intake.returns_folder import return_inventory, selected_workspace_root
 from .store import CadLinkStore
 from server.cadlink.intake import receipts_api
@@ -468,8 +469,11 @@ def _realized_dimensions_payload(
     return {"state": payload_state, **base, "parameters": parameters}
 
 
-def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
-    return [item for item, _manifest, _path in return_inventory(workspace_root)]
+def _return_listing(workspace_root: Path, store: CadLinkStore) -> list[dict[str, Any]]:
+    return [
+        {**item, "projectLineageId": snapshot_project(store, manifest) if manifest else None}
+        for item, manifest, _path in return_inventory(workspace_root)
+    ]
 
 
 def _manifest_matches_return(
@@ -540,7 +544,7 @@ async def list_returns(request: Request) -> dict[str, Any]:
         return {"items": [], "cadFolderConfigured": False, "coordination": coordination}
     workspace_root = selected.resolve()
     return {
-        "items": await asyncio.to_thread(_return_listing, workspace_root),
+        "items": await asyncio.to_thread(_return_listing, workspace_root, request.app.state.cadlink_store),
         "cadFolderConfigured": True,
         "coordination": coordination,
     }

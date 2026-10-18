@@ -1,24 +1,14 @@
-import { parseExteriorTransducer } from '../../stores/exteriorTransducer';
 import type { MutableRefObject } from 'react';
-import { CadLinkApiError, getIngest, listReturns, type CadReturnBundle, type CadReturnIngestRecord } from '../../api/cadlink';
-import type { CadSetup } from '../../api/jobsSocket';
+import { CadLinkApiError, getIngest, listReturns, type CadReturnBundle } from '../../api/cadlink';
 import { getDriver } from '../../api/drivers';
-import { fromResult, parseWire } from '../../results/crossoverSpec';
 import {
-  DRIVER_FIELD_KEYS,
   bundleIdentity,
-  PASSIVE_CARDIOID_DEFAULTS,
   driverBaseFromSpec,
   useCadReturnStore,
-  type CadDriveChannel,
-  type ChannelDriverForm,
   type DriverBaseUpdate,
-  type DriverPreset,
-  type PassiveCardioidForm,
 } from '../../stores/cadReturn';
 import { currentDocumentLoad, isCurrentDocumentLoad, subscribeRevision } from '../../stores/design';
 import { useDriverLibraryStore } from '../../stores/driverLibrary';
-import { applyWireOptionsToImportedSolveOptions } from '../../stores/solveOptions';
 import { durableSettings } from '../../stores/durableSettings';
 import type { LastModel } from '../../stores/lastModel';
 import { preferencesStore } from '../../prefs/preferences';
@@ -28,141 +18,11 @@ import { cadProjectName, listCadProjects, newestReturnForProject } from '../../a
 import { enterCadWorkspace, type RefreshOptions } from './arrivals';
 import { showIngestedMeshInViewport } from './artifactLoader';
 import { isCurrentOpen, registerImportedView, reopenLastModel, type ImportedView } from '../../stores/importedModel';
-import type { ImportedSetup } from '../../jobs/importedSetup';
-
-type CadHistorySetup = Pick<ReturnType<typeof useCadReturnStore.getState>,
-  'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds'
-  | 'driveChannels' | 'exteriorOnly' | 'combineEnabled' | 'combineSpec'
-  | 'channelDrivers' | 'passiveCardioid'
-  | 'driveVoltageV' | 'maxDriveVoltageV'
-  | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
-
-function object(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function finite(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function finiteRecord(value: unknown): Record<string, number> | null {
-  const record = object(value);
-  if (!record) return null;
-  const entries = Object.entries(record);
-  if (entries.some(([key, item]) => !key || finite(item) === null)) return null;
-  return Object.fromEntries(entries) as Record<string, number>;
-}
-
-function savedDriveChannels(setup: CadSetup | null | undefined, record: CadReturnIngestRecord): CadDriveChannel[] {
-  const knownSources = new Set(record.sources.map((source) => source.id));
-  const raw = setup?.drive_channels;
-  if (!Array.isArray(raw) || raw.length === 0) return [];
-  const assigned = new Set<string>();
-  const channels = raw.flatMap((channel): CadDriveChannel[] => {
-    if (!channel || typeof channel.id !== 'string' || !channel.id.trim()
-      || !Array.isArray(channel.source_ids) || channel.source_ids.length === 0
-      || (channel.motion !== undefined && channel.motion !== 'normal' && channel.motion !== 'axial')
-      || channel.source_ids.some((id) => (
-        typeof id !== 'string' || !knownSources.has(id) || assigned.has(id)
-      ))) return [];
-    channel.source_ids.forEach((id) => assigned.add(id));
-    return [{ id: channel.id, source_ids: [...channel.source_ids], motion: channel.motion ?? 'normal',
-      ...(channel.exterior_transducer !== undefined ? { exterior_transducer: parseExteriorTransducer(channel.exterior_transducer) } : {}) }];
-  });
-  return channels.length === raw.length ? channels : [];
-}
-
-function savedChannelDrivers(
-  setup: CadSetup | null | undefined,
-  channels: CadDriveChannel[],
-): Record<string, ChannelDriverForm> {
-  const rawById = new Map((setup?.drive_channels ?? []).map((channel) => [channel.id, channel]));
-  return Object.fromEntries(channels.flatMap((channel): Array<[string, ChannelDriverForm]> => {
-    const driver = object(rawById.get(channel.id)?.driver);
-    if (!driver) return [];
-    const fields = Object.fromEntries(DRIVER_FIELD_KEYS.flatMap((key) => {
-      const value = finite(driver[key]);
-      return value === null ? [] : [[key, value]];
-    }));
-    const label = typeof driver.label === 'string' && driver.label.trim() ? driver.label.trim() : null;
-    const preset: DriverPreset | null = label
-      ? { id: `manual:${channel.id}`, label, source: 'manual', kind: 'unknown', z_ohm: null, xo_min_hz: null, base: fields }
-      : null;
-    return [[channel.id, { fields: preset ? {} : fields, preset }]];
-  }));
-}
-
-function savedPassiveCardioid(setup: CadSetup | null | undefined): PassiveCardioidForm {
-  const rearVolumeL = finite(setup?.passive_cardioid_rear_volume_l);
-  if (rearVolumeL === null) return { ...PASSIVE_CARDIOID_DEFAULTS };
-  const portAreaSource = setup?.port_area_source === 'bem_aperture' ? 'bem_aperture' : 'user';
-  return {
-    enabled: true,
-    rearVolumeL,
-    portLengthMm: finite(setup?.passive_cardioid_port_length_mm),
-    modelPortAreaM2: finite(setup?.model_port_area_m2),
-    bemPortAreaM2: finite(setup?.bem_port_area_m2),
-    portAreaSource,
-    foamResistancePaSM3: finite(setup?.passive_cardioid_foam_resistance_pa_s_m3),
-    invertPort: setup?.passive_cardioid_invert_port !== false,
-    coupled: setup?.passive_cardioid_coupled === true,
-  };
-}
-
-/** Translate a setup (a run's or a model's) into the editable CAD rail. */
-export function cadHistorySetup(saved: ImportedSetup, record: CadReturnIngestRecord): CadHistorySetup {
-  const setup = saved.geometry as unknown as CadSetup;
-  const options = saved.options as unknown as Record<string, unknown>;
-  const mesh = object(setup?.mesh);
-  const channels = savedDriveChannels(setup, record);
-  const skippedSourceIds = Array.isArray(setup?.skipped_source_ids)
-    && setup.skipped_source_ids.every((id) => typeof id === 'string')
-    ? [...setup.skipped_source_ids]
-    : [...record.skipped_source_ids];
-  const fallbackChannels = (() => {
-    const skipped = new Set(skippedSourceIds);
-    const grouped = new Map<string, CadDriveChannel>();
-    record.sources.filter((source) => !skipped.has(source.id)).forEach((source) => {
-      const channel = grouped.get(source.default_drive_channel_id) ?? {
-        id: source.default_drive_channel_id,
-        source_ids: [],
-        motion: 'normal' as const,
-      };
-      channel.source_ids.push(source.id);
-      grouped.set(channel.id, channel);
-    });
-    return [...grouped.values()];
-  })();
-  const driveChannels = channels.length ? channels : fallbackChannels;
-  const combine = object(setup?.combine);
-  const combineSpec = parseWire(combine) ?? fromResult(combine ?? undefined);
-  const validCombine = combineSpec !== null;
-  const explicitFrequencies = Array.isArray(options.frequencies_hz)
-    ? (options.frequencies_hz as unknown[]).filter((value): value is number => finite(value) !== null)
-    : [];
-  const range = options.frequency_range;
-  const fallbackRange = Array.isArray(range) && range.length === 2 ? range.map(Number) : [200, 20_000];
-  const sourceSizes = finiteRecord(mesh?.source_size_mm) ?? { ...record.mesh_sizes.source_size_mm };
-  return {
-    sourceSizesMm: sourceSizes,
-    rigidSizeMm: finite(mesh?.rigid_size_mm) ?? record.mesh_sizes.rigid_size_mm,
-    transitionMm: finite(mesh?.transition_mm) ?? record.mesh_sizes.transition_mm,
-    skippedSourceIds,
-    driveChannels,
-    exteriorOnly: typeof setup?.exterior_only === 'boolean' ? setup.exterior_only : false,
-    combineEnabled: setup ? validCombine : null,
-    combineSpec,
-    channelDrivers: savedChannelDrivers(setup, driveChannels),
-    passiveCardioid: savedPassiveCardioid(setup),
-    driveVoltageV: finite(setup?.drive_voltage_v) ?? 2.83,
-    maxDriveVoltageV: finite(setup?.max_drive_voltage_v) ?? null,
-    frequencyStartHz: explicitFrequencies[0] ?? fallbackRange[0],
-    frequencyEndHz: explicitFrequencies.at(-1) ?? fallbackRange[1],
-    frequencyCount: explicitFrequencies.length || Number(options.num_frequencies) || 1,
-  };
-}
+import { restoreCadProjectSettings, resetCadProjectSettingsLoad, hasCadDraftForModel } from '../../stores/cadProjectSettings';
+import { cadHistorySetup } from '../../stores/cadSetupRestore';
+import { seedImportedSolveOptionsFromParametric } from '../../stores/solveOptions';
+import { DEFAULT_SWEEP } from '../../stores/solveDefaults';
+export { cadHistorySetup } from '../../stores/cadSetupRestore';
 
 export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch): Promise<string[]> {
   const owner = useCadReturnStore.getState();
@@ -203,6 +63,7 @@ export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch): 
  * project is the model the server named, never one guessed from what is open.
  */
 export const cadImportedView: ImportedView = {
+  hasDraft: hasCadDraftForModel,
   begin({ generation, source, display, fetcher }) {
     const job = source.kind === 'run' ? source.job : null;
     const displayName = job ? job.cad_source?.document_name || job.label || `run #${job.run_number}` : 'this model';
@@ -213,6 +74,7 @@ export const cadImportedView: ImportedView = {
     const showIngestedMesh = display.showIngestedMesh ?? showIngestedMeshInViewport;
     enter();
     reportViewportNotice(null);
+    resetCadProjectSettingsLoad();
     useCadReturnStore.getState().beginSelectionIntent();
     const selection = useCadReturnStore.getState().beginIngestIntent();
     const documentLoad = currentDocumentLoad();
@@ -227,7 +89,7 @@ export const cadImportedView: ImportedView = {
     return {
       current,
       async fill(opened) {
-        if (!opened.setup) throw new Error('This run’s settings are no longer retained. Select the run again.');
+        if (!opened.setup && source.kind !== 'model') throw new Error('This run’s settings are no longer retained. Select the run again.');
         const record = await getIngest(opened.prepared.ingest_id, fetcher).catch((reason: unknown) => {
           throw reason instanceof CadLinkApiError && reason.status === 404
             ? new Error('The archived CAD ingestion and mesh artifacts are no longer available.') : reason;
@@ -248,7 +110,9 @@ export const cadImportedView: ImportedView = {
         const project = opened.modelId !== 'unfiled' ? opened.modelId : record.project?.lineage_id ?? null;
         useCadReturnStore.getState().restoreIngest(record, selection, {
           selectedBundle: bundle, ingestRecord: record, projectLineageId: project,
-          ...cadHistorySetup(opened.setup, record),
+          ...(!opened.setup ? cadHistorySetup({ geometry: {}, options: {
+            frequency_range: [DEFAULT_SWEEP.startHz, DEFAULT_SWEEP.endHz], num_frequencies: DEFAULT_SWEEP.points,
+          } } as never, record) : {}),
           areaDriftOverrides: [],
           areaDriftSourceIds: [...new Set((record.role_findings ?? [])
             .filter(finding => String(finding.kind).includes('area-drift')).map(finding => String(finding.source_id)))],
@@ -256,7 +120,9 @@ export const cadImportedView: ImportedView = {
         });
         // The model's options go to the imported instance only; the persisted
         // parametric store is never written by an imported flow.
-        applyWireOptionsToImportedSolveOptions(opened.setup.options);
+        if (!opened.setup) seedImportedSolveOptionsFromParametric();
+        const draft = restoreCadProjectSettings(opened.setup, record, source.kind === 'model');
+        if (draft) { opened.setup = null; opened.revisionId = null; }
         await showIngestedMesh(record, name, reportViewportNotice, fetcher, generation);
         if (!current()) return null;
         if (importedMeshStore.getSnapshot().cad?.ingestId !== record.ingest_id) return null;

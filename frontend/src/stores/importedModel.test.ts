@@ -5,7 +5,7 @@ import type { RegisteredMesh } from '../api/meshImport';
 import { record as cadRecord } from '../shell/cadlink/selection.fixtures';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import {
-  applyCadSolveSelection, cadSolveSelection, discardParkedCadModel, importedModelBlocker, openImported,
+  applyCadOptions, cadOptionsSnapshot, discardParkedCadModel, importedModelBlocker, openImported,
   reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore,
 } from './importedModel';
 import { migrateLastModel, readLastModel, rememberLastModel } from './lastModel';
@@ -196,8 +196,8 @@ describe('each input keeps its open model', () => {
     await openImported({ kind: 'run', job: run() }, vi.fn<typeof fetch>(async () => json(workspace())));
     expect(useImportedModelStore.getState().input).toBe('file');
     // CAD's selection, while the file is on screen, is its parked one.
-    expect(cadSolveSelection()).toEqual({ engine: 'beat-cpu', accuracy: 'fast' });
-    applyCadSolveSelection({ engine: 'beat-metal' });
+    expect(cadOptionsSnapshot()).toMatchObject({ engine: 'beat-cpu', accuracy: 'fast' });
+    applyCadOptions({ ...cadOptionsSnapshot()!, engine: 'beat-metal', accuracy: 'fast' });
     expect(useImportedSolveOptionsStore.getState().engine).toBe('metal'); // the file's own
     workspaceModeStore.setImportedInput('cad');
     expect(useImportedModelStore.getState()).toMatchObject({ input: 'cad', modelId: 'wgl_speaker', phase: 'ready' });
@@ -220,9 +220,9 @@ describe('each input keeps its open model', () => {
     await openImported({ kind: 'cad', record: { ...cadRecord, model_id: 'wgl_old' } });
     useImportedSolveOptionsStore.setState({ engine: 'beat-cpu' });
     workspaceModeStore.setImportedInput('file');
-    expect(cadSolveSelection()).toMatchObject({ engine: 'beat-cpu' });
+    expect(cadOptionsSnapshot()).toMatchObject({ engine: 'beat-cpu' });
     discardParkedCadModel();
-    expect(cadSolveSelection()).toBeNull();
+    expect(cadOptionsSnapshot()).toBeNull();
     useSolveOptionsStore.setState({ engine: 'bempp' });
     workspaceModeStore.setImportedInput('cad');
     // Seeded afresh from the parametric options, and the old model is gone.

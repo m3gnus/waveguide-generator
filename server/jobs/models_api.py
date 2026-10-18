@@ -21,7 +21,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, FastAPI, Query
 from fastapi.responses import JSONResponse
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter, model_validator
 
 from server.cadlink.identity import mint_id, utc_now
 from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING
@@ -408,8 +408,12 @@ def _setup_inventory(store: Any, model_id: str, prepared_id: str | None) -> tupl
     return inventory_sha256(record.get("sources") or []), record
 
 
-def read_setup(store: Any, model_id: str, prepared_id: str | None) -> dict[str, Any]:
-    inventory, _record = _setup_inventory(store, model_id, prepared_id)
+def read_setup(
+    store: Any, model_id: str, prepared_id: str | None, sources: list[SourceInventoryItem] | None = None,
+) -> dict[str, Any]:
+    inventory = inventory_sha256([item.model_dump() for item in sources]) if sources is not None else (
+        _setup_inventory(store, model_id, prepared_id)[0]
+    )
     row = store.get_model_setup(model_id, inventory)
     revision = store.get_setup_revision(row["revision_id"]) if row else None
     return {
@@ -517,10 +521,23 @@ def mount_models_api(application: FastAPI) -> None:
         return await read(read_model, store, model_id, prepared_id)
 
     @router.get("/{model_id}/setup", responses=readable)
-    async def get_setup(model_id: str, prepared_id: str | None = Query(default=None)) -> Any:
+    async def get_setup(
+        model_id: str, prepared_id: str | None = Query(default=None),
+        inventory: str | None = Query(default=None, max_length=100_000),
+    ) -> Any:
         """The setup saved for this model and the sources of a prepared mesh."""
 
-        return await read(read_setup, store, model_id, prepared_id)
+        if inventory is None:
+            return await read(read_setup, store, model_id, prepared_id)
+        if prepared_id is not None or model_id.startswith(FILE_MODEL_PREFIX):
+            return _refusal(422, "setup_refused", "A CAD inventory read names no prepared mesh.")
+        try:
+            sources = TypeAdapter(list[SourceInventoryItem]).validate_json(inventory)
+            if not sources or len({item.id for item in sources}) != len(sources):
+                raise ValueError("A source inventory must be nonempty with unique ids.")
+        except ValueError as exc:
+            return _refusal(422, "setup_refused", str(exc))
+        return await read(read_setup, store, model_id, None, sources)
 
     @router.put("/{model_id}/setup", responses=refused)
     async def put_setup(model_id: str, body: ModelSetupWrite) -> Any:
