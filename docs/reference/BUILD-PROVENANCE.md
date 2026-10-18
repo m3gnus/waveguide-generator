@@ -6,24 +6,16 @@ current plans. GitHub's `actions/attest` action obtains a short-lived Sigstore
 certificate through the Actions OIDC token; it does not require a purchased
 certificate or a repository secret.
 
-The RC build, the release workflow and the manual Beta proposal (when
-activated) attest their own files immediately after the build and before
-uploading them. One attestation may contain several subjects, so an installer
-is bound to the update archive and manifest produced by the same job. A later
-job only downloads those already-attested files; it never creates a new build
-claim for an old download. The release's publish job has no attestation
-permission and never attests: it publishes files the build jobs already
-attested. An attestation describes origin and build provenance; it is not a
-CPU qualification result, and the RC's CPU qualification steps stay after the
-upload as before.
+The RC build and the manual Beta proposal (when activated) attest their own
+files immediately after building and before uploading them. The release
+workflow promotes the qualified RC artifacts; it never builds or attests.
+An attestation describes origin and build provenance, not CPU qualification.
+Promotion also requires the complete source run, including installed gates and
+protected signing, to have succeeded.
 
 | Workflow | Job | Subjects |
 |---|---|---|
 | `rc-build.yml` | `spa` | SPA archive |
-| | `macos-bundle` | DMG, update-app ZIP, update-app manifest |
-| | `windows-bundle` | setup EXE |
-| | `linux-bundle` | tarball |
-| `release.yml` | `spa` | SPA archive |
 | | `macos-bundle` | DMG, update-app ZIP, update-app manifest, macOS runtime ZIP |
 | | `windows-bundle` | setup EXE, portable ZIP, Windows runtime ZIP |
 | | `linux-bundle` | tarball, Linux runtime ZIP |
@@ -34,8 +26,7 @@ failed them never carries a build claim.
 
 The attestation action is pinned to the immutable `actions/attest` v4.2.1
 commit `508db95dd578ae2727ebd6217d5ba78e4fbda05d`. The action's binary
-attestation needs these job permissions, and only the four build jobs of each
-workflow receive them:
+attestation needs these job permissions, and only the four RC build jobs receive them:
 
 ```yaml
 permissions:
@@ -44,11 +35,9 @@ permissions:
   attestations: write
 ```
 
-A job-level block replaces the workflow-level one rather than adding to it, so
-`release.yml`'s build jobs also restate its workflow-level `actions: read`,
-which the SPA job's CI check needs. The publish job keeps `contents: write`
-alone. `artifact-metadata: write` is for linked registry storage records and is
-not needed for these file subjects.
+The promotion job has `contents: write` and `actions: read` to read the source
+run and its artifacts. It has no OIDC or attestation write permission and uses
+no signing key. `artifact-metadata: write` is not needed for these subjects.
 
 Releases and RCs built before this workflow change carry no attestation, and
 verifying one fails.
@@ -69,13 +58,10 @@ check in its identity job.
   Only the RC's SPA job resolves the input; every later job checks out
   `github.sha`, so a push to the branch or to `main` during the run cannot
   split one RC across two commits.
-- **Release:** phase 2 of `release.sh` dispatches `release.yml` on `main` with
-  the release commit, which passes while that commit is still main's tip. If
-  `main` has moved on in between, the run fails before building or tagging
-  anything, so no version is spent. To build it anyway, dispatch from a branch
-  whose tip is the release commit. Creating that branch is a push, so it needs
-  the release owner's go-ahead; the release guard still requires the commit to
-  be on `main`.
+- **Release:** prepare the versioned source on main, dispatch the signed RC
+  build on its full SHA, and promote that successful run id. `release.yml`
+  verifies the matching source SHA and each payload's attestation, including
+  the selected run and attempt. See [RELEASING.md](../RELEASING.md).
 
 ## Verify an RC installer
 
@@ -137,7 +123,8 @@ The user-facing release carries the three installers, `SHA256SUMS` and
 `SHA256SUMS.sig`. The SPA archive and the portable Windows ZIP are on its
 `-updates` companion release. The canonical app archive, its manifest and the
 runtime ZIPs remain attested build artifacts but are not published. Every
-published asset is verified the same way, with `release.yml` as the signer workflow and the release commit — the
+published payload is verified the same way (SHA256SUMS and its signature use
+Ed25519 verification, and the SPA sidecar is checked against its payload), with `rc-build.yml` as the signer workflow and the release commit — the
 commit the annotated tag points at — as the source digest:
 
 ```bash
@@ -147,7 +134,7 @@ ASSET=Waveguide.Generator-VERSION-windows-x86_64-setup.exe
 
 gh attestation verify "$ASSET" \
   --repo m3gnus/waveguide-generator \
-  --signer-workflow m3gnus/waveguide-generator/.github/workflows/release.yml \
+  --signer-workflow m3gnus/waveguide-generator/.github/workflows/rc-build.yml \
   --source-digest "$SOURCE"
 ```
 

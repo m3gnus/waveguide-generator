@@ -25,24 +25,60 @@ release candidate (below), `--set X.Y.Z` sets an exact version, and `--check`
 proves every copy agrees. CI's drift job runs `--check`, and so does
 `server/tests/test_version_consistency.py`.
 
-Releases are two deliberate commands, and **the tag is created last, by CI**:
+Version preparation and publication are deliberate phases, with a qualified
+candidate build between them. **The tag is created last, by CI**:
 
 ```bash
-../hornlab-policy/release.sh waveguide-generator patch   # bump, commit, push main, wait for CI
-../hornlab-policy/release.sh waveguide-generator publish # build, validate, tag, publish
+../hornlab-policy/release.sh waveguide-generator patch
+# After phase 1 has pushed the versioned commit to main:
+gh workflow run rc-build.yml --ref main -f sha=<full-release-sha> -f sign_candidate=true
+# Approve update-signing, wait for that exact run to succeed, then promote it:
+../hornlab-policy/release.sh waveguide-generator publish --source-run-id <qualified-run-id>
 ```
 
-Phase 1 stops once CI is green on the exact release commit; nothing is tagged
-and no version is spent. Phase 2 dispatches
-`.github/workflows/release.yml` against that **commit**, which **refuses to run
-when `shared/version.json` does not move forward past every published tag, the
-commit is not reachable from `origin/main`, or `ci.yml`, which the workflow
-runs on that exact commit before building anything, fails** — a build that
-misreports itself is worse than a failed release.
+Phase 1 prepares the version; nothing is tagged
+and no version is spent. `rc-build.yml` is the only builder: it runs `ci.yml` on
+the exact source commit, builds the SPA and platform bundles, checks app-layer
+identity, and runs installed BEAT CPU and Quit gates on all three platforms
+plus Windows setup gates. Its protected signing job runs only after all these
+jobs succeed. Stable, alpha, beta and RC versions use this same route; build
+stamps remain refused.
+
+Phase 2 dispatches `.github/workflows/release.yml` with the full source SHA and
+that **explicit qualified run id**. It builds and signs nothing. It refuses a
+version that does not move forward past published tags or a commit outside
+`origin/main`, and requires the dispatch source to equal the release SHA on
+`main`. It checks the source run through GitHub's API: the same repository,
+`rc-build.yml`, manual dispatch on `main`, matching SHA, completed success,
+and successful platform builds and protected signing job.
+
+The publisher downloads the source run's complete signing inputs and signed
+candidate, validates every checksum, version, source identity and runtime
+identity, and verifies the unchanged Ed25519 signature against compiled keys.
+It verifies every payload's GitHub attestation with repository, RC workflow,
+source SHA and `main` constraints, and requires its verified invocation to
+match the selected run **and attempt**. Missing/expired artifacts, missing
+attestations and mixed attempts fail closed. Rerun the entire signed candidate
+as a fresh run if necessary; promotion never rebuilds a missing artifact.
+The run is checked again before staging, so a concurrent rerun is refused.
+Promotions are serialized across source commits. A retry may reuse a published
+companion only if its source tag, exact inventory, sizes and GitHub SHA-256
+digests match the staged candidate. It is then left untouched; a differing
+companion or draft inventory is refused before publication. An orphan companion
+tag is also refused rather than reused or moved automatically.
+
+The policy repository owns `release.sh`. The proposed companion change adds
+`--source-run-id` and recognizes this promotion route instead of waiting for
+push CI on main. Until that change lands, use the equivalent deliberate dispatch:
+
+```bash
+gh workflow run release.yml --ref main -f sha=<full-release-sha> -f source_run_id=<qualified-run-id>
+```
 
 The SPA job builds `update-spa-<version>.tar.gz`. Each platform builds its
-full installer; Windows also builds the portable ZIP. The canonical app archive
-and manifest remain internal build artifacts for cross-platform identity checks.
+full installer; Windows also builds the portable ZIP. The canonical app archive,
+identity manifest and runtime archives remain internal attested artifacts.
+All published payloads come from the qualified run without byte changes.
 
 The publisher validates the exact inventory and every checksum, then splits it
 across **two releases**. The user-facing `v<version>` carries the three full
@@ -82,15 +118,17 @@ in-app update path — against a version number that has not been spent. Publish
 one when the change touches packaging, the app layer, the updater, or anything
 cross-platform; a pure solver or UI change does not need one
 (the workspace `GIT-WORKFLOW.md` §4). `rc`, `beta` and `alpha` are levels like any other, so
-the sequence is the same two commands each time:
+the same preparation and promotion phases apply each time. Between each pair,
+dispatch the signed RC build above on the new full SHA and record its successful
+run id:
 
 ```bash
 ../hornlab-policy/release.sh waveguide-generator rc       # 0.3.1      -> 0.3.2-rc.1
-../hornlab-policy/release.sh waveguide-generator publish
+../hornlab-policy/release.sh waveguide-generator publish --source-run-id <qualified-run-id>
 ../hornlab-policy/release.sh waveguide-generator rc       # 0.3.2-rc.1 -> 0.3.2-rc.2
-../hornlab-policy/release.sh waveguide-generator publish
+../hornlab-policy/release.sh waveguide-generator publish --source-run-id <qualified-run-id>
 ../hornlab-policy/release.sh waveguide-generator patch    # 0.3.2-rc.2 -> 0.3.2   (the release)
-../hornlab-policy/release.sh waveguide-generator publish
+../hornlab-policy/release.sh waveguide-generator publish --source-run-id <qualified-run-id>
 ```
 
 **`patch` on a candidate removes the label and keeps the core numbers.** That is
@@ -166,12 +204,13 @@ identity manifest, three runtime archives, SPA, and checksum sidecars.
 The optional signing job uses the existing protected `update-signing`
 Environment and its reviewer gate. It validates the complete inventory, source
 identity, runtime closure and checksums before signing four unchanged subjects:
-the three installers and the Windows portable archive, as in the release
-pipeline. The SPA, app and runtime archives are checked but not signed. The signature is
+the three installers and the Windows portable archive, as in the published release
+contract. The SPA, app and runtime archives are checked but not signed. The signature is
 verified against the active compiled key before `rc-signed-candidate` is uploaded. The compact `rc-signed-manifest`
 artifact also provides the signature, manifest and exact installer sizes/digests,
 so a platform rehearsal can download only its own installer.
 This workflow creates no tag or GitHub release and has no publisher job.
+Only a successful signed run is eligible for promotion by `release.yml`.
 The signatures authenticate updates; they do not provide Apple Developer ID
 notarization or a Windows code-signing certificate.
 
@@ -183,3 +222,10 @@ metadata must expose exactly three installers plus `SHA256SUMS` and
 Actions artifact URLs are not accepted installer URLs. Keep signature, version,
 checksum and same-origin verification enabled. This exercises a private update,
 not production channel discovery. Publication remains a separate owner decision.
+
+Promotion permissions: the release publish job retains `contents: write` and
+adds only `actions: read` to read the selected run, jobs and artifacts. The
+workflow-level `actions: read` already existed. The removed release build and
+sign jobs no longer need their former permissions or signing secret; RC job
+permissions, Environment and secrets are unchanged. Attestations cover the
+portable ZIP and runtime archives as well as the existing RC subjects.

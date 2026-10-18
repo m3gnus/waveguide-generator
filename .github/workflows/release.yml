@@ -1,141 +1,53 @@
 name: Release
 
-# Build every release component BEFORE the version is spent. The tag does not
-# exist when this workflow starts: the final job validates the exact asset
-# inventory and checksums, uploads them to a draft, and only then creates the
-# annotated tag and publishes.
-#
-# This ordering is the whole point. A tag push used to trigger this workflow, so
-# the version was committed to before anything was known to build. Two failures
-# of a gate that had never run permanently spent v0.2.5 and v0.2.6, because
-# GIT-WORKFLOW.md section 4 keeps published tags immutable. With the tag created
-# last, a failed build costs nothing and the same version is retried.
-#
-# Nothing is built until the qualify job has passed. It runs the whole of
-# ci.yml, which a same-repository call runs at this run's own commit,
-# github.sha; the SPA job needs it, and every later job needs the SPA job. It
-# replaced a lookup of a push-triggered ci.yml run on the release commit, which
-# no longer exists for main: push CI runs only on dev.
-#
-# Every action is pinned to an immutable commit, with the release it belonged to
-# in a trailing comment. A major tag such as `@v4` moves, so a workflow that
-# names one does not describe the code that ran: the inputs of a release build
-# would be whatever those tags pointed at on the day. `scripts/tests/
-# test_release_workflow.py` fails this file if a floating reference reappears,
-# and rc-build.yml carries the same pins so a hand-tested candidate is built by
-# the same actions as the release.
-#
-# What is still not pinned, stated rather than glossed over: the hosted runner
-# images (`ubuntu-latest`, `macos-latest`, `windows-latest`, `ubuntu-24.04`)
-# are rebuilt weekly by GitHub and carry no addressable identity a workflow can
-# name. Four tools are pinned on top of them -- uv, the CPython standalone
-# build, Node, Inno Setup -- and that is the list, not a summary of everything
-# the build touches: the shell, tar, git, hdiutil, codesign, the system Python
-# and the platform toolchains all arrive with the image at whatever version it
-# carries that week. So this is meaningful drift reduction, and it is not a
-# reproducible or authenticated toolchain; neither claim should be made from it.
-#
-# Each build job gives the exact files it produced a free GitHub/Sigstore
-# keyless build-provenance attestation, after building them and before
-# uploading them. Each also fails before building if the checked-out release
-# commit is not github.sha, the tip of main this run was dispatched on: the
-# attestation records github.sha as its source digest, so that check is what
-# makes it name the release commit. The publish job never attests; it only
-# publishes files the build jobs already attested. Provenance is not operating
-# system signing and does not make the updater enforce signatures. See
-# docs/reference/BUILD-PROVENANCE.md.
-
+# Promote only the exact bytes from a successful, signed rc-build run on main.
+# No builds or signing here: installed qualification and approval live there.
+# Verify the source, complete inventory, checksums, signatures and same-run
+# provenance before either release is written. Create the release tag last.
 on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "Release commit on main to build, tag and publish"
+        description: "Full release commit on main to tag and publish"
         required: true
+      source_run_id:
+        description: "Successful signed rc-build run qualifying these exact bytes"
+        required: true
+
+# Serialize across SHAs as well: two commits can declare the same version.
+concurrency:
+  group: release-promotion
+  cancel-in-progress: false
 
 permissions:
   actions: read
   contents: read
 
 jobs:
-  qualify:
-    name: Qualify the release commit
-    # Read-only on purpose: ci.yml needs nothing more, and a called workflow's
-    # token can hold no more than the calling job grants it.
-    uses: ./.github/workflows/ci.yml
-    permissions:
-      contents: read
-
-  spa:
-    name: Build the SPA
+  publish:
+    name: Verify and promote the qualified candidate
     runs-on: ubuntu-latest
-    # Source qualification first. Every later job needs this one, so nothing is
-    # built, attested or published unless ci.yml passed on this commit.
-    needs: qualify
-    # A job-level block replaces the workflow's, so the two workflow-level
-    # permissions are restated here and in each build job. actions: read served
-    # the CI-run lookup the qualify job replaced; dropping it is a permissions
-    # change of its own. Only the attestation adds id-token and attestations.
     permissions:
       actions: read
-      contents: read
-      id-token: write
-      attestations: write
-    outputs:
-      tag: ${{ steps.release_guard.outputs.tag }}
-      version: ${{ steps.release_guard.outputs.version }}
-      # "true" when shared/version.json declares a SemVer pre-release label, and
-      # it is the publish job's `prerelease:` flag. GIT-WORKFLOW.md section 4:
-      # the flag is what hides a build from the stable channel, so it has to be
-      # derived from the version rather than remembered by whoever dispatched.
-      prerelease: ${{ steps.release_guard.outputs.prerelease }}
+      contents: write
+    env:
+      RELEASE_SHA: ${{ inputs.sha }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           ref: ${{ inputs.sha }}
 
-      - name: Verify the candidate matches the workflow source
+      - name: Verify the immutable dispatch source
         env:
           WORKFLOW_SHA: ${{ github.sha }}
-        shell: bash
         run: |
           set -euo pipefail
-          resolved="$(git rev-parse HEAD)"
-          test "$resolved" = "$WORKFLOW_SHA" \
-            || { echo "Dispatch ref does not resolve to inputs.sha: $WORKFLOW_SHA vs $resolved" >&2; exit 1; }
-          echo "Candidate $resolved matches the dispatch source."
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "20.20.2"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: The Node the release was built with must be the pinned one
-        # Drift detection, and only that. setup-node performs no digest check on
-        # the archive it fetches from nodejs.org -- verified by reading its
-        # distribution sources at the commit pinned above, which contain no
-        # checksum code. This step does not close that: a substituted binary can
-        # print any version it likes, so a version match is not authentication
-        # of the bytes. What it does catch is the drift this pin exists for -- a
-        # runner tool cache that answers a version spec differently, or a pin
-        # that silently widens -- at the build rather than inside an artifact
-        # nobody can date afterwards.
-        #
-        # Authenticating the Node download is possible and is NOT implemented
-        # here: it would mean fetching the archive in this workflow and checking
-        # it against a digest pinned in this repository. That is a real change
-        # with its own review, not something this step should be read as having
-        # done.
-        run: |
-          set -euo pipefail
-          expected="v20.20.2"
-          actual="$(node --version)"
-          if [ "$actual" != "$expected" ]; then
-            echo "Expected Node $expected, got $actual" >&2
-            exit 1
-          fi
-          echo "Node $actual"
+          test "$GITHUB_REF" = refs/heads/main
+          test "$RELEASE_SHA" = "$WORKFLOW_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
 
       - name: The version must be unreleased and the commit must be on main
         id: release_guard
@@ -160,7 +72,7 @@ jobs:
           fi
           git fetch --tags --force origin
           if git rev-parse --verify --quiet "refs/tags/$tag^{}" >/dev/null; then
-            echo "$tag already exists. A version is never rebuilt; bump instead." >&2
+            echo "$tag already exists. A published version is immutable; bump instead." >&2
             exit 1
           fi
           # Semantic versions only move forward, including past the tags that
@@ -245,662 +157,74 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "release_commit=$release_commit" >> "$GITHUB_OUTPUT"
 
-      - name: Build the SPA
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run build
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "UPDATES_TAG=$tag-updates" >> "$GITHUB_ENV"
 
-      - name: Package and verify the SPA
+      - name: Require a successful signed candidate run on this source
         run: |
           set -euo pipefail
-          # spa_archive_name returns the COMPLETE filename, extension included.
-          # The line this replaced held a stem and let the shell append .tar.gz,
-          # and keeping that habit produced update-spa-<version>.tar.gz.tar.gz --
-          # which the macOS job then could not find. Use the name as given.
-          archive="$(python -c 'import sys; from shared import release_assets; print(release_assets.spa_archive_name(sys.argv[1]))' "${{ env.version }}")"
-          tar -czf "$archive" -C frontend dist
-          sha256sum "$archive" > "$archive.sha256"
-          echo "artifact=$archive" >> "$GITHUB_ENV"
-          tar -tzf "$archive" | sed -n '1,5p'
-          # Do not use grep -q: closing the pipe early turns tar's success into
-          # SIGPIPE under pipefail.
-          tar -tzf "$archive" | grep -Fx "dist/index.html"
+          python3 scripts/promote_candidate.py check-run --repository "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" --expected-sha "$RELEASE_SHA" --out build/source-run.json
 
-      - name: Attest the exact SPA archive before transfer
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
-        with:
-          subject-path: ${{ env.artifact }}
-
-      - name: Share the SPA with bundle and publisher jobs
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: release-spa
-          path: |
-            ${{ env.artifact }}
-            ${{ env.artifact }}.sha256
-          if-no-files-found: error
-
-  macos-bundle:
-    name: Build the macOS standalone app
-    runs-on: macos-latest
-    needs: spa
-    permissions:
-      actions: read
-      contents: read
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: ${{ inputs.sha }}
-
-      - name: Verify the candidate matches the workflow source
-        env:
-          WORKFLOW_SHA: ${{ github.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          resolved="$(git rev-parse HEAD)"
-          test "$resolved" = "$WORKFLOW_SHA" \
-            || { echo "Dispatch ref does not resolve to inputs.sha: $WORKFLOW_SHA vs $resolved" >&2; exit 1; }
-          echo "Candidate $resolved matches the dispatch source."
-
-      - name: Install pinned uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.11.2"
-
-      - name: Download the verified SPA inputs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: release-spa
-          path: build/spa
-
-      - name: Build and verify the standalone app
-        run: |
-          set -euo pipefail
-          version="$(uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
-          spa="build/spa/update-spa-$version.tar.gz"
-          test -f "$spa"
-          test -f "$spa.sha256"
-          uv run --no-project --python 3.13.12 scripts/build_bundle.py --spa "$spa" --output build/bundle
-
-      - name: Attest the exact macOS installer, update and runtime subjects before transfer
-        # This job's local outputs, in one attestation, so the installer is
-        # bound to the canonical app archive and manifest built beside it. The SPA was
-        # attested by the SPA job and is deliberately not re-attested after
-        # download. Payloads only: the .sha256 sidecars are not subjects.
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
-        with:
-          subject-path: |
-            build/bundle/Waveguide.Generator-*-macos-arm64.dmg
-            build/bundle/update-app-*.zip
-            build/bundle/update-app-*.manifest.json
-            build/bundle/update-runtime-macos-arm64-*.zip
-
-      - name: Share the canonical platform-neutral app layer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: standalone-app-layer
-          path: |
-            build/bundle/update-app-*.zip
-            build/bundle/update-app-*.zip.sha256
-            build/bundle/update-app-*.manifest.json
-          if-no-files-found: error
-
-      - name: Share the complete macOS release asset set
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: standalone-macos-assets
-          path: |
-            build/bundle/Waveguide.Generator-*-macos-arm64.dmg
-            build/bundle/Waveguide.Generator-*-macos-arm64.dmg.sha256
-          if-no-files-found: error
-
-  windows-bundle:
-    name: Build the Windows standalone app
-    runs-on: windows-latest
-    # The macOS job produces the canonical app archive. Waiting for it lets
-    # Windows prove that its independently materialized Git blobs are exact.
-    needs: [spa, macos-bundle]
-    permissions:
-      actions: read
-      contents: read
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: ${{ inputs.sha }}
-
-      - name: Verify the candidate matches the workflow source
-        env:
-          WORKFLOW_SHA: ${{ github.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          resolved="$(git rev-parse HEAD)"
-          test "$resolved" = "$WORKFLOW_SHA" \
-            || { echo "Dispatch ref does not resolve to inputs.sha: $WORKFLOW_SHA vs $resolved" >&2; exit 1; }
-          echo "Candidate $resolved matches the dispatch source."
-
-      - name: Install pinned uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.11.2"
-
-      - name: Download the verified SPA inputs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: release-spa
-          path: build/spa
-
-      - name: Download the macOS-built app layer
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: standalone-app-layer
-          path: build/app-reference
-
-      - name: Install the pinned Inno Setup
-        shell: pwsh
-        # Not part of the windows runner image, unlike most of what this job
-        # uses. Pinned like uv and the actions above so a compiler update cannot
-        # arrive unannounced in a release build; if the pin ever goes missing the
-        # failure is loud and the fix is this one line.
-        run: |
-          $ErrorActionPreference = "Stop"
-          choco install innosetup --version=6.7.1 -y --no-progress
-          if ($LASTEXITCODE -ne 0) {
-            throw "Chocolatey Inno Setup install exited $LASTEXITCODE"
-          }
-          # The helper uses bounded Program Files paths and the compiler's own
-          # engine-version output while compiling a valid probe script.
-          $iscc = & ./scripts/ci/verify_inno_setup.ps1
-          "WG2_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Build and verify the standalone app
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $version = uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])'
-          $spa = "build/spa/update-spa-$version.tar.gz"
-          if (-not (Test-Path -LiteralPath $spa) -or -not (Test-Path -LiteralPath "$spa.sha256")) {
-            throw "The verified SPA inputs are missing."
-          }
-          uv run --no-project --python 3.13.12 python scripts/build_bundle.py --platform windows --spa $spa --output build/bundle
-
-      - name: Assert both platforms built the same app layer
-        shell: pwsh
-        # The archives themselves are compressed and need not match byte for
-        # byte; what must match is the content, which the manifest's treeSha256
-        # covers - every path, its executable bit and its bytes. Comparing the
-        # digest rather than the ZIP is what lets the layer stay compressed
-        # without weakening the guarantee.
-        run: |
-          $ErrorActionPreference = "Stop"
-          $local = @(Get-ChildItem -File build/bundle/update-app-*.manifest.json)
-          $reference = @(Get-ChildItem -File build/app-reference/update-app-*.manifest.json)
-          if ($local.Count -ne 1 -or $reference.Count -ne 1) {
-            throw "Expected exactly one local and one macOS-built app manifest."
-          }
-          $localTree = (Get-Content -Raw $local[0] | ConvertFrom-Json).treeSha256
-          $referenceTree = (Get-Content -Raw $reference[0] | ConvertFrom-Json).treeSha256
-          if (-not $localTree -or -not $referenceTree) {
-            throw "An app manifest carries no treeSha256; the builder did not write one."
-          }
-          if ($localTree -ne $referenceTree) {
-            throw "Windows and macOS app layers differ: $localTree != $referenceTree"
-          }
-          Write-Host "Cross-platform app layer treeSha256: $localTree"
-
-      - name: Run setup-driven Windows installer gates
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $setups = @(Get-ChildItem -File build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe)
-          if ($setups.Count -ne 1) {
-            throw "Expected exactly one Windows setup executable, found $($setups.Count)."
-          }
-          & ./installers/windows/gates.ps1 -Setup $setups[0].FullName
-
-      - name: Attest the exact Windows installer, portable and runtime archives before transfer
-        # The SPA and canonical app layer were produced and attested by other
-        # jobs; only the local Windows outputs are subjects here. After the
-        # installer gates, so a setup that failed them is never attested.
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
-        with:
-          subject-path: |
-            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe
-            build/bundle/Waveguide.Generator-*-windows-x86_64.zip
-            build/bundle/update-runtime-windows-x86_64-*.zip
-
-      - name: Share the complete Windows release asset set
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: standalone-windows-assets
-          path: |
-            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe
-            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe.sha256
-            build/bundle/Waveguide.Generator-*-windows-x86_64.zip
-            build/bundle/Waveguide.Generator-*-windows-x86_64.zip.sha256
-          if-no-files-found: error
-
-  linux-bundle:
-    name: Build the Linux standalone app
-    # Pinned to the distribution this build claims to support rather than
-    # ubuntu-latest, so the glibc the runtime links against cannot move under a
-    # release without someone deciding to move it. That claim is narrow on
-    # purpose: one distribution, one architecture, and no promise about Linux
-    # in general -- see docs/DEVELOPMENT.md.
-    runs-on: ubuntu-24.04
-    # Same reason as the Windows job: the macOS job produces the canonical app
-    # archive, so waiting for it lets this one prove its independently
-    # materialized Git blobs are exact.
-    needs: [spa, macos-bundle]
-    permissions:
-      actions: read
-      contents: read
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: ${{ inputs.sha }}
-
-      - name: Verify the candidate matches the workflow source
-        env:
-          WORKFLOW_SHA: ${{ github.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          resolved="$(git rev-parse HEAD)"
-          test "$resolved" = "$WORKFLOW_SHA" \
-            || { echo "Dispatch ref does not resolve to inputs.sha: $WORKFLOW_SHA vs $resolved" >&2; exit 1; }
-          echo "Candidate $resolved matches the dispatch source."
-
-      - name: Install pinned uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.11.2"
-
-      - name: Download the verified SPA inputs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: release-spa
-          path: build/spa
-
-      - name: Download the macOS-built app layer
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: standalone-app-layer
-          path: build/app-reference
-
-      - name: Build and verify the standalone app
-        run: |
-          set -euo pipefail
-          version="$(uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
-          spa="build/spa/update-spa-$version.tar.gz"
-          test -f "$spa"
-          test -f "$spa.sha256"
-          uv run --no-project --python 3.13.12 python scripts/build_bundle.py --platform linux --spa "$spa" --output build/bundle
-
-      - name: Assert this platform built the same app layer
-        # The digest, not the archive: same rule as the Windows job, and the
-        # third platform has to meet it, so all three installers ship the same
-        # application tree.
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import glob
-          import json
-
-          local = glob.glob("build/bundle/update-app-*.manifest.json")
-          reference = glob.glob("build/app-reference/update-app-*.manifest.json")
-          if len(local) != 1 or len(reference) != 1:
-              raise SystemExit("Expected exactly one local and one macOS-built app manifest.")
-          trees = [json.load(open(path))["treeSha256"] for path in (local[0], reference[0])]
-          if not all(trees):
-              raise SystemExit("An app manifest carries no treeSha256; the builder did not write one.")
-          if trees[0] != trees[1]:
-              raise SystemExit(f"Linux and macOS app layers differ: {trees[0]} != {trees[1]}")
-          print(f"Cross-platform app layer treeSha256: {trees[0]}")
-          PY
-
-      - name: Attest the exact Linux installer and runtime archive before transfer
-        # The SPA and canonical app layer were produced and attested by other
-        # jobs; only the local Linux outputs are subjects here.
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
-        with:
-          subject-path: |
-            build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz
-            build/bundle/update-runtime-linux-x86_64-*.zip
-
-      - name: Share the complete Linux release asset set
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: standalone-linux-assets
-          path: |
-            build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz
-            build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz.sha256
-          if-no-files-found: error
-
-  sign:
-    name: Sign the release manifest
-    runs-on: ubuntu-latest
-    needs: [spa, macos-bundle, windows-bundle, linux-bundle]
-    # The Environment is the gate: it holds the Ed25519 private key as the
-    # secret UPDATE_SIGNING_KEY and requires a reviewer, so a workflow edit
-    # alone cannot sign. Create it as described in
-    # docs/reference/UPDATE-SIGNING.md. This job fails, and so does the release,
-    # if the secret is absent.
-    environment: update-signing
-    permissions:
-      contents: read
-    env:
-      RELEASE_TAG: ${{ needs.spa.outputs.tag }}
-      UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: ${{ inputs.sha }}
-
-      - name: Refuse to run without the signing key
-        run: |
-          set -euo pipefail
-          if [ -z "$UPDATE_SIGNING_KEY" ]; then
-            echo "The update-signing Environment has no UPDATE_SIGNING_KEY secret." >&2
-            echo "Create it first: docs/reference/UPDATE-SIGNING.md" >&2
-            exit 1
-          fi
-
-      - name: Download macOS assets
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: standalone-macos-assets
-          path: build/sign-inputs/macos
-
-      - name: Download Windows assets
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: standalone-windows-assets
-          path: build/sign-inputs/windows
-
-      - name: Download Linux assets
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: standalone-linux-assets
-          path: build/sign-inputs/linux
-
-      - name: Write and sign SHA256SUMS, then verify it
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          import shutil
-          import subprocess
-          import sys
-
-          from shared import release_assets
-
-          version = json.loads(Path("shared/version.json").read_text(encoding="utf-8"))["version"]
-          root = Path("build/sign-inputs")
-          out = Path("build/signed")
-          out.mkdir(parents=True)
-          staged = Path("build/sign-files")
-          staged.mkdir()
-          files = []
-          names = set(release_assets.user_download_names(version))
-          # The portable Windows ZIP is the only signed asset beyond the three
-          # installers. The SPA archive has its own sidecar and is not a subject.
-          names.add(release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version))
-          for name in sorted(names):
-              found = [path for path in root.rglob(name) if path.is_file()]
-              if len(found) != 1:
-                  raise SystemExit(f"Expected exactly one {name}, found {found}")
-              files.append(shutil.copy2(found[0], staged / name))
-
-          subprocess.run(
-              [sys.executable, "scripts/release_manifest.py", "write",
-               "--tag", os.environ["RELEASE_TAG"], "--out", str(out / "SHA256SUMS"), *map(str, files)],
-              check=True,
-          )
-          PY
-          umask 077
-          key="$RUNNER_TEMP/update-signing.pem"
-          trap 'rm -f "$key"' EXIT
-          printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key"
-          openssl pkey -in "$key" -noout
-          # The last 32 bytes of the DER public key are the raw Ed25519 key.
-          pub="$(openssl pkey -in "$key" -pubout -outform DER | tail -c 32 | od -An -v -tx1 | tr -d ' \n')"
-          # New signatures require the active key, which must also be accepted.
-          python3 scripts/release_manifest.py pubkey-matches "$pub"
-          openssl pkeyutl -sign -inkey "$key" -rawin \
-            -in build/signed/SHA256SUMS -out build/signed/SHA256SUMS.sig
-          # Verify against the compiled accepted keys the application will use.
-          python3 scripts/release_manifest.py verify --tag "$RELEASE_TAG" \
-            --manifest build/signed/SHA256SUMS --sig build/signed/SHA256SUMS.sig \
-            --dir build/sign-files
-          echo "Signed $(wc -l < build/signed/SHA256SUMS) manifest lines for $RELEASE_TAG."
-
-      - name: Upload the signed manifest
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: release-signed-manifest
-          path: |
-            build/signed/SHA256SUMS
-            build/signed/SHA256SUMS.sig
-          if-no-files-found: error
-
-  publish:
-    name: Validate and publish the complete release
-    runs-on: ubuntu-latest
-    needs: [spa, macos-bundle, windows-bundle, linux-bundle, sign]
-    permissions:
-      contents: write
-    env:
-      RELEASE_TAG: ${{ needs.spa.outputs.tag }}
-      UPDATES_TAG: ${{ needs.spa.outputs.tag }}-updates
-      RELEASE_SHA: ${{ inputs.sha }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          fetch-depth: 0
-          ref: ${{ inputs.sha }}
-
-      - name: Download SPA assets
+      - name: Download qualified spa artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-spa
           path: build/publish-inputs/spa
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download macOS assets
+      - name: Download qualified macos artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: standalone-macos-assets
+          name: rc-macos-sign-inputs
           path: build/publish-inputs/macos
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download Windows assets
+      - name: Download qualified windows artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: standalone-windows-assets
+          name: rc-windows-sign-inputs
           path: build/publish-inputs/windows
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download Linux assets
+      - name: Download qualified linux artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: standalone-linux-assets
+          name: rc-linux-sign-inputs
           path: build/publish-inputs/linux
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download the signed manifest
+      - name: Download qualified signed artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-signed-manifest
-          path: build/signed-manifest
+          name: rc-signed-candidate
+          path: build/signed-candidate
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Validate the exact inventory and every checksum
-        run: |
-          python - <<'PY'
-          from __future__ import annotations
-
-          import hashlib
-          import json
-          from pathlib import Path
-          import re
-          import shutil
-
-          from shared import release_assets
-          from shared.safe_names import collision_key, validate_relative_name
-
-          root = Path("build/publish-inputs")
-          destination = Path("build/release-assets")
-          destination.mkdir()
-          machinery = Path("build/update-assets")
-          machinery.mkdir()
-          version = json.loads(Path("shared/version.json").read_text(encoding="utf-8"))["version"]
-          specs = (
-              ("spa", re.escape(release_assets.spa_archive_name(version))),
-              ("macos", re.escape(release_assets.installer_name(release_assets.MACOS_PLATFORM, version))),
-              ("windows", re.escape(release_assets.windows_setup_name(version))),
-              ("windows", re.escape(release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version))),
-              ("linux", re.escape(release_assets.installer_name(release_assets.LINUX_PLATFORM, version))),
-          )
-          expected_paths: set[Path] = set()
-          public_keys: set[str] = set()
-          for directory_name, pattern in specs:
-              directory = root / directory_name
-              matches = [
-                  path
-                  for path in directory.iterdir()
-                  if path.is_file() and re.fullmatch(pattern, path.name)
-              ]
-              if len(matches) != 1:
-                  raise SystemExit(
-                      f"Expected exactly one {pattern!r} in {directory}, found {matches}"
-                  )
-              asset = matches[0]
-              sidecar = asset.with_name(asset.name + ".sha256")
-              if not sidecar.is_file():
-                  raise SystemExit(f"Missing checksum sidecar for {asset.name}")
-              name = validate_relative_name(asset.name, what="release asset")
-              key = collision_key(name)
-              if key in public_keys:
-                  raise SystemExit(f"Release asset name collides: {name}")
-              public_keys.add(key)
-              digest = hashlib.sha256(asset.read_bytes()).hexdigest()
-              expected_line = f"{digest}  {asset.name}\n"
-              if sidecar.read_text(encoding="ascii") != expected_line:
-                  raise SystemExit(f"Invalid checksum sidecar for {asset.name}")
-              expected_paths.update((asset, sidecar))
-              # Two destinations: the release page a person lands on holds
-              # exactly one file per platform; the SPA archive and portable
-              # Windows .zip go to
-              # the companion pre-release. Splitting here rather than at upload
-              # time keeps one inventory check over both sets.
-              target = (
-                  destination
-                  if release_assets.is_user_download(name, version)
-                  else machinery
-              )
-              # The sidecar is built and verified above; that is what proves the
-              # artifact is what the builder thinks it is. Only the SPA's is
-              # published. GitHub serves a per-asset digest and the updater reads
-              # that, but scripts/fetch_spa.py fetches by URL for source installs
-              # and never touches the releases API, so it still needs the file.
-              keeps_sidecar = asset.name == release_assets.spa_archive_name(version)
-              shutil.copy2(asset, target / asset.name)
-              if keeps_sidecar:
-                  shutil.copy2(sidecar, target / sidecar.name)
-
-          actual_paths = {path for path in root.rglob("*") if path.is_file()}
-          if actual_paths != expected_paths:
-              missing = sorted(str(path) for path in expected_paths - actual_paths)
-              extra = sorted(str(path) for path in actual_paths - expected_paths)
-              raise SystemExit(f"Release inventory mismatch; missing={missing}, extra={extra}")
-          downloads = sorted(path.name for path in destination.iterdir())
-          layers = sorted(path.name for path in machinery.iterdir())
-          # One file per asset, plus the single surviving sidecar -- not pairs.
-          # Every asset lands in exactly one half now that the 0.3.1 update
-          # bridge is gone, so this is a partition and the sum is exact.
-          if len(downloads) + len(layers) != len(specs) + 1:
-              raise SystemExit(
-                  f"Release staging did not produce exactly {len(specs)} assets and "
-                  f"one sidecar; downloads={downloads}, layers={layers}"
-              )
-          spa_sidecar = release_assets.checksum_name(
-              release_assets.spa_archive_name(version)
-          )
-          stray_sidecars = sorted(
-              name
-              for name in downloads + layers
-              if name.endswith(".sha256") and name != spa_sidecar
-          )
-          if stray_sidecars:
-              raise SystemExit(
-                  f"Unexpected checksum sidecars staged for publication: {stray_sidecars}"
-              )
-          # The split is asserted as an exact set, not assumed and not counted.
-          # Counting would pass a release that staged the right number of files
-          # into the wrong halves, and the failure mode of that is the one this
-          # whole change exists to avoid: an updater pointed at a release with
-          # nothing on it, or a user pointed at a page of machinery.
-          wanted_downloads = sorted(release_assets.user_download_names(version))
-          if downloads != wanted_downloads:
-              strays = sorted(set(downloads) - set(wanted_downloads))
-              missing_downloads = sorted(set(wanted_downloads) - set(downloads))
-              raise SystemExit(
-                  "The user-facing release must hold exactly "
-                  f"{wanted_downloads}; unexpected={strays}, "
-                  f"missing={missing_downloads}"
-              )
-          hidden = sorted(
-              name for name in layers if release_assets.is_user_download(name, version)
-          )
-          if hidden:
-              raise SystemExit(
-                  f"Downloads hidden on the companion release: {hidden}"
-              )
-          if not downloads or not layers:
-              raise SystemExit(
-                  f"Release split is empty on one side; downloads={downloads}, "
-                  f"layers={layers}"
-              )
-          print(
-              f"Validated {len(specs)} release assets and one SPA sidecar: "
-              f"{len(downloads)} on the user-facing release, "
-              f"{len(layers)} on the companion pre-release."
-          )
-          PY
-
-      - name: Verify the signed manifest against every staged installable layer
-        # The compiled accepted keys, so a manifest the
-        # application could not verify never ships. Then it joins the
-        # user-facing release beside the installers it covers.
+      - name: Verify digests, signatures and same-run attestations before staging
         run: |
           set -euo pipefail
-          mkdir build/verify-signed
-          cp build/release-assets/* build/update-assets/* build/verify-signed/
-          python3 scripts/release_manifest.py verify --tag "$RELEASE_TAG" \
-            --manifest build/signed-manifest/SHA256SUMS \
-            --sig build/signed-manifest/SHA256SUMS.sig \
-            --dir build/verify-signed
-          cp build/signed-manifest/SHA256SUMS build/signed-manifest/SHA256SUMS.sig build/release-assets/
+          python3 scripts/promote_candidate.py stage --repository "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" --expected-sha "$RELEASE_SHA" \
+            --version "${{ steps.release_guard.outputs.version }}" --source-run build/source-run.json \
+            --root build/publish-inputs --signed build/signed-candidate \
+            --downloads build/release-assets --updates build/update-assets
 
-      - name: Refuse to overwrite a published release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify existing releases before any publication
+        id: publication
         run: |
           set -euo pipefail
-          if state="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
-            if [ "$state" != "true" ]; then
-              echo "Release $RELEASE_TAG is already public; refusing a non-atomic mutation." >&2
-              exit 1
-            fi
-          fi
+          python3 scripts/promote_candidate.py check-publication --repository "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" --expected-sha "$RELEASE_SHA" \
+            --downloads build/release-assets --updates build/update-assets --out "$GITHUB_OUTPUT"
 
       - name: Publish supporting assets as a companion pre-release
+        if: ${{ steps.publication.outputs.companion_exists == 'false' }}
         # Published BEFORE the user-facing release, so the SPA archive the
         # signed manifest names exists by the time anything can look. Flagged as a pre-release so it
         # is never "Latest" and is demoted in the releases list; the assets stay
@@ -912,7 +236,7 @@ jobs:
           target_commitish: ${{ inputs.sha }}
           prerelease: true
           draft: false
-          overwrite_files: true
+          overwrite_files: false
           files: build/update-assets/*
           fail_on_unmatched_files: true
           name: "Supporting assets for ${{ env.RELEASE_TAG }}"
@@ -926,7 +250,7 @@ jobs:
 
             One file here is a real download, kept off the install page because it
             is the harder path and not the one to offer first:
-            `Waveguide.Generator-${{ needs.spa.outputs.version }}-windows-x86_64.zip`
+            `Waveguide.Generator-${{ steps.release_guard.outputs.version }}-windows-x86_64.zip`
             is the portable Windows folder, for people who want a copy they can
             move rather than an install. Unblock the .zip **before** extracting it,
             and extract to a short path such as `C:\wg`.
@@ -947,7 +271,7 @@ jobs:
           # `prerelease: true` because it carries machinery rather than a
           # release. Asserting "prerelease: true appears in this file" only ever
           # proved the companion was hidden, which is why this half was missing.
-          prerelease: ${{ needs.spa.outputs.prerelease }}
+          prerelease: ${{ steps.release_guard.outputs.prerelease }}
           overwrite_files: true
           files: build/release-assets/*
           fail_on_unmatched_files: true
@@ -958,9 +282,9 @@ jobs:
 
             | Platform | File |
             |---|---|
-            | macOS (Apple silicon) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-macos-arm64.dmg` |
-            | Windows (x86-64) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-windows-x86_64-setup.exe` |
-            | Linux (Ubuntu 24.04 LTS, x86-64) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-linux-x86_64.tar.gz` |
+            | macOS (Apple silicon) | `Waveguide.Generator-${{ steps.release_guard.outputs.version }}-macos-arm64.dmg` |
+            | Windows (x86-64) | `Waveguide.Generator-${{ steps.release_guard.outputs.version }}-windows-x86_64-setup.exe` |
+            | Linux (Ubuntu 24.04 LTS, x86-64) | `Waveguide.Generator-${{ steps.release_guard.outputs.version }}-linux-x86_64.tar.gz` |
 
             **macOS: drag the app out of the disk image to Applications, then open it.**
             macOS refuses it with "Apple could not verify ... is free of malware" -
@@ -1049,8 +373,7 @@ jobs:
 
       - name: Create the annotated tag now that every asset exists
         # This is the step that spends the version, and it is deliberately the
-        # last thing before publication. Everything that can fail - all three
-        # builds, the cross-platform app-layer digest, the inventory and every
+        # last thing before publication. Everything that can fail - the source run, provenance, inventory and every
         # checksum - has already succeeded. A draft release does not create a
         # git ref, so an earlier failure leaves the version untouched and the
         # same number is retried.

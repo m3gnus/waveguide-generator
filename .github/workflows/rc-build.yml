@@ -1,20 +1,17 @@
 name: RC build
 
-# Build the installers WITHOUT spending anything: no tag, no draft, no
-# release, no version bump — artifacts only. Exists for the hand-test gate in
-# hornlab-policy/PLAN.md step 5: the maintainer tries a DMG and a Windows installer
-# built from a release candidate before the version is pinned. The jobs are
-# the release.yml bundle jobs minus the release guard and the publish job;
-# assets are named by shared/version.json as it stands, so an RC built before
-# phase 1 carries the previous version string — that is expected.
+# The sole release builder. Build and qualify installed artifacts without a tag
+# or release. For promotion, prepare the version first, then dispatch on main
+# with its full SHA and sign_candidate=true. Stable and release prerelease
+# versions use the same installed gates and protected signing approval.
+# Unsigned branch builds remain available for development hand tests.
 #
 # Every action is pinned to an immutable commit, with the release it belonged to
 # in a trailing comment. A major tag such as `@v4` moves, so a workflow that
 # names one does not describe the code that ran: the inputs of a release build
 # would be whatever those tags pointed at on the day. `scripts/tests/
 # test_release_workflow.py` fails this file if a floating reference reappears,
-# and rc-build.yml carries the same pins so a hand-tested candidate is built by
-# the same actions as the release.
+# and release.yml promotes these outputs without rebuilding them.
 #
 # What is still not pinned, stated rather than glossed over: the hosted runner
 # images (`ubuntu-latest`, `macos-latest`, `windows-latest`, `ubuntu-24.04`)
@@ -200,6 +197,7 @@ jobs:
             build/bundle/Waveguide.Generator-*-macos-arm64.dmg
             build/bundle/update-app-*.zip
             build/bundle/update-app-*.manifest.json
+            build/bundle/update-runtime-macos-*.zip
       - name: Share the canonical platform-neutral app layer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -455,7 +453,10 @@ jobs:
         # installer gates, so a setup that failed them is never attested.
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
-          subject-path: build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe
+          subject-path: |
+            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe
+            build/bundle/Waveguide.Generator-*-windows-x86_64.zip
+            build/bundle/update-runtime-windows-*.zip
       - name: Share the Windows RC assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -703,11 +704,13 @@ jobs:
           print(f"Cross-platform app layer treeSha256: {trees[0]}")
           PY
       - name: Attest the exact Linux installer before transfer
-        # The SPA and canonical app layer were produced by other jobs. Only the
-        # tarball built here is a subject of this job's attestation.
+        # The SPA and canonical app layer were produced by other jobs. Attest
+        # only this job's local installer and runtime outputs.
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
-          subject-path: build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz
+          subject-path: |
+            build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz
+            build/bundle/update-runtime-linux-*.zip
       - name: Share the Linux RC assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -862,13 +865,13 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           python3 - <<'PY'
           import json, os, re
-          from shared.release_assets import release_prerelease
+          from shared.release_assets import VERSION_RE, is_build_stamp
           sha = os.environ['INPUT_SHA']
           if re.fullmatch(r'[0-9a-f]{40}', sha) is None:
               raise SystemExit('Signing requires the exact full source SHA.')
           version = json.load(open('shared/version.json'))['version']
-          if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version) is None or release_prerelease(version):
-              raise SystemExit('Signing requires a versioned stable candidate.')
+          if VERSION_RE.fullmatch(version) is None or is_build_stamp(version):
+              raise SystemExit('Signing requires a stable or release prerelease version.')
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write(f'CANDIDATE_VERSION={version}\nRELEASE_TAG=v{version}\n')
           PY

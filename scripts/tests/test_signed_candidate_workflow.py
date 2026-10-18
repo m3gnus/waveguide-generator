@@ -54,8 +54,11 @@ def test_signer_keeps_production_verification_and_immutable_subjects():
     ('a' * 40, '0.3.6', True),
     ('a' * 8, '0.3.6', False),
     ('A' * 40, '0.3.6', False),
-    ('a' * 40, '0.3.6-rc.1', False),
+    ('a' * 40, '0.3.6-rc.1', True),
+    ('a' * 40, '0.3.6-beta.2', True),
+    ('a' * 40, '0.3.6-alpha', True),
     ('a' * 40, '0.3.6-main.1', False),
+    ('a' * 40, '0.3.6+build', False),
 ])
 def test_actual_guard_refuses_abbreviations_and_nonrelease_versions(tmp_path, sha, version, passed):
     step = WORKFLOW['jobs']['sign-candidate']['steps'][1]['run']
@@ -69,7 +72,7 @@ def test_actual_guard_refuses_abbreviations_and_nonrelease_versions(tmp_path, sh
                             text=True, capture_output=True)
     assert (result.returncode == 0) is passed, result.stderr
     if passed:
-        assert output.read_text() == 'CANDIDATE_VERSION=0.3.6\nRELEASE_TAG=v0.3.6\n'
+        assert output.read_text() == f'CANDIDATE_VERSION={version}\nRELEASE_TAG=v{version}\n'
     else:
         assert not output.exists()
 
@@ -103,3 +106,18 @@ def test_windows_failed_setup_retains_diagnostics_without_becoming_candidate():
     downloads = {s.get('with', {}).get('name') for s in signer['steps'] if 'download-artifact@' in s.get('uses', '')}
     assert 'rc-windows-sign-inputs' in downloads
     assert not {'rc-windows-setup-failure', 'rc-windows-installer-gates'} & downloads
+
+
+def test_all_internal_and_published_payloads_have_builder_provenance():
+    expected = {
+        'macos-bundle': ['*-macos-arm64.dmg', 'update-app-*.zip', 'update-app-*.manifest.json',
+                         'update-runtime-macos-*.zip'],
+        'windows-bundle': ['*-windows-x86_64-setup.exe', '*-windows-x86_64.zip',
+                           'update-runtime-windows-*.zip'],
+        'linux-bundle': ['*-linux-x86_64.tar.gz', 'update-runtime-linux-*.zip'],
+    }
+    for name, subjects in expected.items():
+        attest = next(s for s in WORKFLOW['jobs'][name]['steps'] if 'actions/attest@' in s.get('uses', ''))
+        assert all(subject in attest['with']['subject-path'] for subject in subjects)
+        assert WORKFLOW['jobs'][name]['permissions'] == {
+            'contents': 'read', 'id-token': 'write', 'attestations': 'write'}

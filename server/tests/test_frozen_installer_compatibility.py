@@ -3,7 +3,7 @@
 Those clients find an update with their own ``installer_checker`` code. This
 runs that code, extracted from the release tags, against a release shaped the
 way this checkout's ``release.yml`` publishes one: the manifest comes from the
-workflow's own signing step, and the public release holds exactly the three
+qualified candidate's signing stage, and the public release holds exactly the three
 installers plus ``SHA256SUMS`` and ``SHA256SUMS.sig``. No ``update-app`` or
 ``update-runtime`` layer exists any more; the released checkers must not need one.
 """
@@ -25,39 +25,21 @@ from shared import release_assets
 RELEASE_ROOT = "https://github.com/m3gnus/waveguide-generator/releases/download"
 
 
-def _workflow_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: str) -> bytes:
-    """Run the release workflow's signing-inventory code over every built asset."""
-    jobs = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"))["jobs"]
-    run = next(step["run"] for step in jobs["sign"]["steps"]
-               if step.get("name") == "Write and sign SHA256SUMS, then verify it")
-    code = run.split("python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
-    work = tmp_path / "sign"
-    (work / "shared").mkdir(parents=True)
-    (work / "shared" / "version.json").write_text(json.dumps({"version": version}))
-    # Everything the build jobs hand the signer, including the SPA's sidecar.
-    built = {
-        "spa": [release_assets.spa_archive_name(version), release_assets.checksum_name(release_assets.spa_archive_name(version))],
-        "macos": [release_assets.installer_name(release_assets.MACOS_PLATFORM, version)],
-        "windows": [release_assets.windows_setup_name(version),
-                    release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version)],
-        "linux": [release_assets.installer_name(release_assets.LINUX_PLATFORM, version)],
-    }
-    for job, names in built.items():
-        (work / "build/sign-inputs" / job).mkdir(parents=True)
-        for name in names:
-            (work / "build/sign-inputs" / job / name).write_bytes(name.encode())
-
-    def write_manifest(command, **kwargs):
-        Path(command[6]).write_bytes(manifest.build_manifest(command[4], [Path(path) for path in command[7:]]))
-
-    with monkeypatch.context() as patch:
-        patch.chdir(work)
-        patch.setenv("RELEASE_TAG", "v" + version)
-        patch.setattr(subprocess, "run", write_manifest)
-        exec(compile(code, "release signing inventory", "exec"), {})
-    data = (work / "build/signed/SHA256SUMS").read_bytes()
+def _workflow_manifest(tmp_path: Path, version: str) -> bytes:
+    """Run the sole candidate signer's real inventory stage over all build outputs."""
+    from scripts.tests.candidate_fixtures import SOURCE_SHA, make_inputs
+    jobs = yaml.safe_load((ROOT / ".github/workflows/rc-build.yml").read_text())["jobs"]
+    signer = jobs["sign-candidate"]
+    assert "scripts/candidate_manifest.py stage" in json.dumps(signer)
+    root = make_inputs(tmp_path / "inputs", version)
+    out = tmp_path / "sign"
+    subprocess.run([sys.executable, "-S", str(ROOT / "scripts/candidate_manifest.py"), "stage",
+                    "--version", version, "--expected-sha", SOURCE_SHA,
+                    "--root", str(root), "--out", str(out)], check=True, capture_output=True)
+    data = (out / "SHA256SUMS").read_bytes()
     _, entries = manifest.parse_manifest(data)
-    assert not any(name.startswith(("update-app-", "update-runtime-")) for name in entries)
+    assert set(entries) == set(release_assets.user_download_names(version)) | {
+        release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version)}
     return data
 
 
@@ -104,7 +86,7 @@ print("ok")
 @pytest.mark.parametrize("version,channel", [("0.3.6", "stable"), ("0.3.6-rc.1", "beta")])
 def test_released_checkers_accept_full_installer_only_release(tmp_path, monkeypatch, tag, version, channel):
     frozen = extract_release(tag, tmp_path / "released")
-    sums = _workflow_manifest(tmp_path, monkeypatch, version)
+    sums = _workflow_manifest(tmp_path, version)
     files = {name: name.encode() for name in release_assets.user_download_names(version)}
     files["SHA256SUMS"], files["SHA256SUMS.sig"] = sums, _sign(SEED, sums)
     _, entries = manifest.parse_manifest(sums)

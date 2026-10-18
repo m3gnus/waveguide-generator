@@ -55,8 +55,8 @@ def _verify_runtime_identity(path: Path, platform: str, runtime_id: str) -> None
         raise ValueError(f"Runtime archive identity does not match app and platform: {path.name}")
 
 
-def stage(version: str, root: Path, out: Path, expected_sha: str) -> None:
-    """Refuse incomplete or altered inputs before creating a fresh output."""
+def validate(version: str, root: Path, expected_sha: str) -> dict[str, Path]:
+    """Refuse incomplete or altered inputs and return every payload by name."""
     if not release_assets.VERSION_RE.fullmatch(version):
         raise ValueError("Invalid candidate version")
     if not re.fullmatch(r"[0-9a-f]{40}", expected_sha):
@@ -113,13 +113,11 @@ def stage(version: str, root: Path, out: Path, expected_sha: str) -> None:
                          f"unexpected={sorted(inventory.keys() - expected)}")
 
     manifest = _load()
-    digests = {}
     for directory, name in sorted(assets):
         digest = manifest.sha256_file(inventory[(directory, name)])
         sidecar = inventory[(directory, release_assets.checksum_name(name))]
         if sidecar.read_text(encoding="ascii") != f"{digest}  {name}\n":
             raise ValueError(f"Invalid checksum sidecar for {name}")
-        digests[name] = digest
 
     for directory, platform in (("macos", release_assets.MACOS_PLATFORM),
                                 ("windows", release_assets.WINDOWS_PLATFORM),
@@ -127,17 +125,24 @@ def stage(version: str, root: Path, out: Path, expected_sha: str) -> None:
         name = release_assets.runtime_layer_name(platform, runtime_id)
         _verify_runtime_identity(inventory[(directory, name)], platform, runtime_id)
 
+    return {name: inventory[(directory, name)] for directory, name in sorted(assets)}
+
+
+def stage(version: str, root: Path, out: Path, expected_sha: str) -> None:
+    """Refuse incomplete or altered inputs before creating a fresh output."""
+    assets = validate(version, root, expected_sha)
+    manifest = _load()
     # Never merge a new candidate into stale output from another run.
     out.mkdir(parents=True, exist_ok=False)
     subjects = set(release_assets.user_download_names(version))
     subjects.add(release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version))
     signed = []
-    for directory, name in sorted(assets):
+    for name, source in assets.items():
         if name not in subjects:
             continue
         destination = out / name
-        shutil.copyfile(inventory[(directory, name)], destination)
-        manifest.verify_file(digests, name, destination)
+        shutil.copyfile(source, destination)
+        manifest.verify_file({name: manifest.sha256_file(source)}, name, destination)
         signed.append(destination)
     data = manifest.build_manifest(f"v{version}", signed)
     tag, entries = manifest.parse_manifest(data)
