@@ -1,8 +1,6 @@
 """CAD solve scenarios on the production jobs backend.
 
-The operations backend was retired at S4-F1. Mechanism-specific old scenarios
-remain marked with the replacement job test until Stage 5 removes them; no
-scenario executes the old lifecycle. Ledger and retention tests execute once.
+The jobs runtime owns every solve. Ledger and retention tests execute once.
 """
 
 from __future__ import annotations
@@ -31,12 +29,6 @@ from server.jobs.runtime import JobConflictError, JobRuntime, _CadLanePort, _Com
 from server.jobs.store import JobStore
 
 BACKENDS = ("jobs",)
-
-
-def old_only(why: str, replacement: str):
-    """Skip a scenario on the jobs backend, saying why and which test replaces it."""
-
-    return pytest.mark.old_only(why=why, replacement=replacement)
 
 
 backend_free = pytest.mark.backend_free
@@ -569,7 +561,7 @@ class JobsHarness(Harness):
             return job_id
         self.runtime.accept_cad_solve = accepted
         try:
-            started = await run_delivery_pass(self.context(), spawn=lambda *_args: None, running=running)
+            started = await run_delivery_pass(self.context(), running=running)
             for op in started:
                 job = self.jobs_store.latest_cad_job(op)
                 if job:
@@ -657,9 +649,6 @@ def backend_fixture(request: pytest.FixtureRequest, tmp_path: Path):
     """The ``harness`` fixture body: one backend per parameter, honouring the markers."""
 
     backend = request.param
-    marker = request.node.get_closest_marker("old_only")
-    if marker is not None and backend == "jobs":
-        pytest.skip(f"operations mechanism ({marker.kwargs['why']}); job test: {marker.kwargs['replacement']}")
     harness = make_harness(tmp_path, backend)
     try:
         yield harness
@@ -676,7 +665,6 @@ __all__ = [
     "backend_fixture",
     "backend_free",
     "make_harness",
-    "old_only",
 ]
 
 

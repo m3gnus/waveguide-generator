@@ -620,7 +620,7 @@ def test_unfiled_is_reserved(tmp_path) -> None:
 
 
 def test_the_lane_never_remembers_defaults_under_the_reserved_unfiled_id(tmp_path) -> None:
-    from server.cadlink.joblane.preparation import _remember_default_setup
+    from server.cadlink.joblane.preparation_inputs import _remember_default_setup
 
     store = CadLinkStore(tmp_path / "cadlink.db")
     manifest = {"sources": [{"id": "source-hf", "role": "HF", "required": True}]}

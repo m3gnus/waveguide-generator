@@ -1,10 +1,9 @@
-"""Both snapshot-binding call sites reset exclusions for a changed FEM set.
+"""Job snapshot binding resets exclusions for a changed FEM set.
 
 Both bind through the composition every solve of a model shares
 (``compose_solve_request``).
 
-The retired operation lane's binding is exercised directly without reviving its
-lifecycle; the active job lane also has an end-to-end preparation regression.
+The job lane also has an end-to-end preparation regression.
 """
 from __future__ import annotations
 
@@ -18,15 +17,12 @@ from server.cadlink.joblane.project_setup import compose_solve_request
 from server.cadlink.joblane.setup import validate_setup
 
 
-@pytest.mark.parametrize("lane", ["operations", "jobs"])
 @pytest.mark.parametrize("excluded", [None, ["old"], ["current"]])
-def test_snapshot_binding_supplies_current_regions(lane, excluded):
-    from server.cadlink.joblane import preparation
+def test_snapshot_binding_supplies_current_regions(excluded):
     from server.jobs import cad_preparation
     from server.tests.test_cad_preparation import _setup
 
-    module = preparation if lane == "operations" else cad_preparation
-    tree = ast.parse(inspect.getsource(module))
+    tree = ast.parse(inspect.getsource(cad_preparation))
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
              and isinstance(node.func, ast.Name) and node.func.id == "compose_solve_request"]
     assert len(calls) == 1

@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 import sqlite3
 import subprocess
-from typing import Any, Awaitable, Literal, Mapping
+from typing import Any, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
@@ -85,7 +85,6 @@ from .operations import CANCELLED, KINDS, PREPARE_AND_SOLVE, STATES, TERMINAL_ST
 from server.cadlink.joblane.preparation import (
     PreparationContext,
     operation_summary,
-    recover_operations,
     DeliveryPassReporter,
     settle_received_snapshots,
     submission_key,
@@ -1630,7 +1629,6 @@ def _preparation_context(state: Any, *, workspace_root: Any = _UNRESOLVED) -> Pr
         store=state.cadlink_store,
         data_dir=Path(state.data_dir),
         workspace_root=workspace_root,
-        submit=runtime.submit if runtime is not None else None,
         job_for_submission=job_for_submission if job_store is not None else None,
         publish=publish,
         # A submission-key conflict is not among them: that key already made
@@ -1643,13 +1641,13 @@ def _preparation_context(state: Any, *, workspace_root: Any = _UNRESOLVED) -> Pr
         ),
         submission_blocked=restart.refusal if restart is not None else None,
         refuse=refuse,
-        runtime=runtime if hasattr(runtime, "accept_cad_solve") else None,
+        runtime=runtime,
         job_store=job_store,
     )
 
 
 def _operation_detail(store: CadLinkStore, row: Mapping[str, Any], ctx: Any = None) -> dict[str, Any]:
-    if ctx is not None and ctx.runtime is not None and row["kind"] == PREPARE_AND_SOLVE:
+    if ctx is not None and row["kind"] == PREPARE_AND_SOLVE:
         return operation_detail(ctx, row)
     detail = operation_summary(row)
     approvals = json.loads(row["approvals_json"]) if row.get("approvals_json") else []
@@ -1715,8 +1713,7 @@ async def list_cad_operations(
     """Unfinished operations, deriving solve state from their authoritative jobs."""
 
     ctx = _preparation_context(request.app.state)
-    if ctx.runtime is not None:
-        await ctx.runtime.start()
+    await ctx.runtime.start()
     def load() -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for kind in KINDS:
@@ -1752,8 +1749,6 @@ async def accept_manual_solve(state: Any, operation_id: str, ingest_id: str) -> 
             create_manual_solve, state.cadlink_store, Path(state.data_dir), operation_id, ingest_id,
         )
     ctx = _preparation_context(state)
-    if ctx.runtime is None:
-        raise RuntimeError("CAD solves cannot be accepted without the jobs runtime")
     await accept_operation_solve(ctx, operation_id, manual=True)
     job_id = await asyncio.to_thread(ctx.job_store.job_for_submission_key, submission_key(operation_id))
     if job_id is None:
@@ -1768,8 +1763,7 @@ async def get_cad_operation(operation_id: str, request: Request) -> dict[str, An
     if row is None:
         raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
     ctx = _preparation_context(request.app.state)
-    if ctx.runtime is not None:
-        await ctx.runtime.start()
+    await ctx.runtime.start()
     return await asyncio.to_thread(_operation_detail, store, row, ctx)
 
 
@@ -1911,11 +1905,10 @@ def _deliver_solve_commands(application: FastAPI):
                 CAD_DELIVERY_ENV,
             )
             return
-        running: set[str] = set()
-        # A pass in progress, or an operation it started, is work a retiring
-        # headless backend must wait for (``launch/backend_lifetime.py``).
+        # A pass in progress holds headless retirement; the jobs runtime
+        # separately tracks preparation and execution.
         pass_active = [False]
-        state.cad_delivery_in_flight = lambda: pass_active[0] or bool(running)
+        state.cad_delivery_in_flight = lambda: pass_active[0]
 
         def announce() -> None:
             # The consumer's state changed in a way the user sees: pushed on
@@ -1924,12 +1917,6 @@ def _deliver_solve_commands(application: FastAPI):
             events = getattr(getattr(state, "jobs_runtime", None), "events", None)
             if events is not None:
                 events.publish({"v": 1, "kind": "cadDeliveryStatus", "status": status.snapshot()})
-
-        def spawn(operation_id: str, coroutine: Awaitable[Any]) -> None:
-            task = asyncio.ensure_future(coroutine)
-            running.add(operation_id)
-            task.add_done_callback(lambda _done: running.discard(operation_id))
-            _track(state, task)
 
         async def deliver() -> None:
             failures = 0
@@ -1980,8 +1967,6 @@ def _deliver_solve_commands(application: FastAPI):
                         notes.clear()
                         one_pass = asyncio.ensure_future(run_delivery_pass(
                             _preparation_context(state, workspace_root=workspace_root),
-                            spawn=spawn,
-                            running=running,
                             note=notes.append,
                         ))
                         try:
@@ -2037,11 +2022,8 @@ def _recover_on_startup(application: FastAPI):
         state = application.state
         try:
             ctx = _preparation_context(state)
-            if ctx.runtime is not None:
-                changed = await sweep_pending_solves(ctx)
-                await asyncio.to_thread(settle_received_snapshots, ctx)
-            else:
-                changed = await asyncio.to_thread(recover_operations, ctx)
+            changed = await sweep_pending_solves(ctx)
+            await asyncio.to_thread(settle_received_snapshots, ctx)
         except Exception:  # noqa: BLE001 - recovery must never stop the app starting
             logger.warning("Could not recover CAD operations at startup.", exc_info=True)
             return
@@ -2057,8 +2039,8 @@ def _abandon_preparations_on_shutdown(application: FastAPI):
         if delivery is not None:
             delivery.cancel()
             await asyncio.gather(delivery, return_exceptions=True)
-        # A preparation still running is abandoned, not waited for: the next
-        # start takes its operation over, and it waits as interrupted.
+        # Cancel CAD event forwarding. The jobs runtime owns preparation
+        # shutdown and recovery.
         running = list(getattr(application.state, "cad_preparations", None) or ())
         for task in running:
             task.cancel()

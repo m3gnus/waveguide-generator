@@ -21,7 +21,6 @@ from typing import Any
 import pytest
 
 from server.cadlink.identity import design_hash
-from server.cadlink.joblane.preparation import PreparationInput, prepare_operation
 from server.cadlink.joblane.project_setup import (
     inventory_sha256,
     widen_polar_to_derivation,
@@ -32,7 +31,7 @@ from server.cadlink.wgreturn import read_wgreturn
 from server.design.schema import DesignConfig
 from server.design.textcfg import serialize
 
-from cad_backends import Harness, backend_fixture, backend_free, old_only
+from cad_backends import Harness, backend_fixture, backend_free
 from test_cad_preparation import _accept, _manifest, _setup
 
 
@@ -589,27 +588,6 @@ def test_the_loop_skips_what_it_already_started(harness: Harness) -> None:
     assert harness.row("cmd-b")["state"] == "received"
 
 
-@old_only(
-    "the user's claim between the loop's listing and its start, by generation",
-    "S4-F1 (the loop's acceptance is idempotent by key: test_job_cad_lane.py::test_accepting_the_same_delivery_twice_is_the_job_it_made)",
-)
-def test_the_loop_never_takes_over_the_users_own_attempt(harness: Harness) -> None:
-    b_design, b_lineage = _project(harness, 60.0)
-    _record_setup(harness, b_lineage, _setup())
-    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
-    _accept(harness.store, "cmd-b", bundle_path, manifest)
-    listed = int(harness.row("cmd-b")["attempt_generation"])
-    # The user's Solve now claims it between the loop's listing and its start.
-    users = harness.store.claim("cmd-b", listed)
-
-    summary = asyncio.run(prepare_operation(
-        harness.context(), "cmd-b", PreparationInput(), expected_generation=listed
-    ))
-
-    assert summary["attemptGeneration"] == users
-    assert harness.ingest.calls == [] and harness.submitted == []
-
-
 def test_without_a_wglink_folder_nothing_is_collected(harness: Harness) -> None:
     b_design, b_lineage = _project(harness, 60.0)
     bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
@@ -673,29 +651,6 @@ def test_the_routes_take_only_well_formed_settings(harness: Harness) -> None:
         SolverSelectionRequest.model_validate({"engine": "   "})
     assert SolverSelectionRequest.model_validate({"engine": " Metal "}).engine == "metal"
     assert _put_setup(harness, "wgl_1", {"geometry": {}}, SOURCES)[0] == 422
-
-
-@old_only("the operations delivery loop lifecycle", "test_job_cad_lane.py::test_a_job_accepted_while_a_restart_is_approved_waits_untouched")
-def test_the_delivery_loop_runs_only_when_enabled_and_stops_at_shutdown(
-    harness: Harness, monkeypatch
-) -> None:
-    from server.cadlink.api import _abandon_preparations_on_shutdown, _deliver_solve_commands
-
-    app = SimpleNamespace(state=SimpleNamespace(
-        cadlink_store=harness.store, data_dir=str(harness.data_dir), jobs_runtime=None,
-        cad_workspace=None, update_restart=None,
-    ))
-
-    async def lifecycle() -> Any:
-        await _deliver_solve_commands(app)()
-        started = getattr(app.state, "cad_delivery_task", None)
-        await _abandon_preparations_on_shutdown(app)()
-        return started
-
-    assert asyncio.run(lifecycle()) is None  # the suite turns it off
-    monkeypatch.setenv("WG2_CAD_DELIVERY", "1")
-    task = asyncio.run(lifecycle())
-    assert task is not None and task.cancelled()
 
 
 def test_a_waiver_on_project_a_does_not_carry_to_project_b(harness: Harness) -> None:
@@ -831,75 +786,6 @@ def _failing(times: int, error: BaseException, then: Any) -> Any:
     return call
 
 
-@pytest.mark.parametrize("failure", ["wglink-folder", "store"])
-@old_only(
-    "the app's delivery loop, mounted on the operations (api._deliver_solve_commands)",
-    "S4-F1 (that loop is repointed at accept_cad_solve there; the ledger's collection it wraps is unchanged)",
-)
-def test_a_delivery_pass_that_fails_once_still_delivers_and_prepares(
-    harness: Harness, monkeypatch, caplog, failure: str
-) -> None:
-    import logging
-    import sqlite3
-
-    from server.cadlink import api
-    from server.cadlink.store import CadLinkStore
-
-    b_design, b_lineage = _project(harness, 60.0)
-    _record_setup(harness, b_lineage, _setup())
-    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
-    requests = _deliver(harness, "cmd-b", bundle_path, manifest)
-    if failure == "wglink-folder":
-        monkeypatch.setattr(
-            api, "selected_workspace_root",
-            _failing(1, OSError("the WGLink folder's drive is not mounted"), api.selected_workspace_root),
-        )
-    else:
-        # After the claim, before the operation is stored: the next pass finishes the claim.
-        monkeypatch.setattr(
-            CadLinkStore, "accept_operation",
-            _failing(1, sqlite3.OperationalError("database is locked"), CadLinkStore.accept_operation),
-        )
-
-    with caplog.at_level(logging.WARNING, logger="server.cadlink.api"):
-        _run_delivery_loop(harness, monkeypatch, _solved(harness, "cmd-b"))
-
-    row = harness.row("cmd-b")
-    assert (row["state"], row["job_id"], row["reason"]) == ("accepted", "job-1", None)
-    assert len(harness.submitted) == 1
-    assert list(requests.iterdir()) == []
-    failures = [r for r in caplog.records if r.getMessage() == "Delivering CAD solve commands failed."]
-    assert len(failures) == 1
-
-
-@old_only(
-    "the app's delivery loop, mounted on the operations (api._deliver_solve_commands)",
-    "S4-F1 (that loop is repointed at accept_cad_solve there; the ledger's collection it wraps is unchanged)",
-)
-def test_a_persisting_delivery_failure_is_logged_once_not_every_pass(
-    harness: Harness, monkeypatch, caplog
-) -> None:
-    import logging
-
-    from server.cadlink import api
-
-    b_design, b_lineage = _project(harness, 60.0)
-    _record_setup(harness, b_lineage, _setup())
-    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
-    _deliver(harness, "cmd-b", bundle_path, manifest)
-    monkeypatch.setattr(
-        api, "selected_workspace_root",
-        _failing(6, OSError("the WGLink folder's drive is not mounted"), api.selected_workspace_root),
-    )
-
-    with caplog.at_level(logging.WARNING, logger="server.cadlink.api"):
-        _run_delivery_loop(harness, monkeypatch, _solved(harness, "cmd-b"))
-
-    failures = [r for r in caplog.records if r.getMessage() == "Delivering CAD solve commands failed."]
-    assert len(failures) == 1
-    assert harness.row("cmd-b")["state"] == "accepted"
-
-
 def test_a_waiting_claim_holds_its_operation_when_a_pass_stops_early(harness: Harness) -> None:
     from server.cadlink.intake.solve_command import record_outcome
 
@@ -979,23 +865,6 @@ def test_a_solve_parked_by_an_update_restart_proceeds_when_the_restart_is_called
 
     summary = harness.summary("cmd-b")
     assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
-
-
-@old_only(
-    "the operation is queued again as received, and the loop needs a WGLink folder to start it",
-    "test_job_cad_lane.py::test_a_solve_the_restart_held_is_taken_up_again_when_the_latch_comes_down",
-)
-def test_a_solve_the_update_restart_held_is_queued_again_without_a_wglink_folder(
-    harness: Harness,
-) -> None:
-    _parked_by_the_latch(harness)
-    shutil.rmtree(harness.workspace)  # no WGLink folder selected, or its drive is gone
-    harness.blocked = None  # the restart was called off
-
-    _pass(harness)
-
-    # Received again, like any operation the loop prepares once a folder is there.
-    assert harness.row("cmd-b")["state"] == "received"
 
 
 def test_a_solve_now_an_update_restart_overtakes_waits_for_it_and_then_runs(

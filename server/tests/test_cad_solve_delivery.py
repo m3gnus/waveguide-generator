@@ -574,50 +574,6 @@ def test_an_older_addins_repeat_of_a_held_command_does_not_end_it(
     assert _waiting(store) == ["cmd-1"]
 
 
-def _one_pass(ctx: PreparationContext) -> list[str]:
-    """One pass of the backend's delivery loop, waiting for what it started."""
-
-    async def one_pass() -> list[str]:
-        started: list[asyncio.Future[Any]] = []
-        ids = await run_delivery_pass(
-            ctx,
-            spawn=lambda _operation_id, coroutine: started.append(asyncio.ensure_future(coroutine)),
-        )
-        await asyncio.gather(*started)
-        return ids
-
-    return asyncio.run(one_pass())
-
-
-def test_a_command_whose_job_already_exists_is_reconciled_not_prepared_again(
-    data_dir, workspace, store
-) -> None:
-    """The parked-command 409 (WP-14's compatibility edge), closed at the source.
-
-    A job was created under ``cad-solve:<commandId>`` -- by an earlier attempt,
-    or by the browser of a build before the backend owned solves -- and its
-    report never arrived: a lost acknowledgement, a reload, an upgrade. The
-    job is the command's outcome: the delivery loop records it before it
-    prepares anything, and never submits the command again.
-    """
-
-    bundle_path, manifest = _bundle(workspace)
-    _file(data_dir, "cmd-1", bundle_path, manifest)
-    jobs = {"cad-solve:cmd-1": "job-7"}
-    ctx = PreparationContext(
-        store=store, data_dir=data_dir, workspace_root=workspace.resolve(),
-        job_for_submission=jobs.get,
-    )
-
-    assert _one_pass(ctx) == ["cmd-1"]
-
-    row = store.get_operation("cmd-1")
-    assert (row["state"], row["job_id"]) == ("accepted", "job-7")
-    # Nothing is started again, and a later record of the same job agrees.
-    assert _one_pass(ctx) == []
-    assert _finish(store, "cmd-1", "job-7")["state"] == "accepted"
-
-
 def test_a_command_with_no_job_under_its_key_is_left_to_prepare(
     data_dir, workspace, store
 ) -> None:
@@ -626,7 +582,7 @@ def test_a_command_with_no_job_under_its_key_is_left_to_prepare(
     assert _poll(data_dir, store) is None
     ctx = PreparationContext(
         store=store, data_dir=data_dir, workspace_root=workspace.resolve(),
-        job_for_submission={}.get,
+        job_for_submission={}.get, runtime=SimpleNamespace(),
     )
 
     assert reconcile_with_jobs(ctx, "cmd-1") is None
@@ -641,6 +597,7 @@ def test_the_delivery_loop_reconciles_through_the_real_jobs_store(
 
     from server.cadlink.api import _preparation_context
     from server.jobs.store import JobStore
+    from server.jobs.runtime import JobRuntime
 
     bundle_path, manifest = _bundle(workspace)
     _file(data_dir, "cmd-1", bundle_path, manifest)
@@ -657,28 +614,26 @@ def test_the_delivery_loop_reconciles_through_the_real_jobs_store(
         request_sha256="a" * 64,
         initial_event=("queued", {}),
     )
+    runtime = JobRuntime(jobs, cadlink_store=store)
+    runtime._ensure_scheduler = lambda: None
     state = SimpleNamespace(
         data_dir=str(data_dir),
         cadlink_store=store,
         cad_workspace=SimpleNamespace(selected_path=lambda: workspace),
-        jobs_runtime=SimpleNamespace(store=jobs, submit=None),
+        jobs_runtime=runtime,
         update_restart=None,
     )
 
-    async def one_pass() -> list[str]:
-        started: list[asyncio.Future[Any]] = []
-        ids = await run_delivery_pass(
-            _preparation_context(state),
-            spawn=lambda _operation_id, coroutine: started.append(asyncio.ensure_future(coroutine)),
-        )
-        await asyncio.gather(*started)
-        return ids
+    async def check() -> None:
+        try:
+            assert await run_delivery_pass(_preparation_context(state)) == ["cmd-1"]
+            row = store.get_operation("cmd-1")
+            assert (row["state"], row["job_id"]) == ("accepted", "job-7")
+            assert await run_delivery_pass(_preparation_context(state)) == []
+        finally:
+            await runtime.shutdown()
 
-    assert asyncio.run(one_pass()) == ["cmd-1"]
-
-    row = store.get_operation("cmd-1")
-    assert (row["state"], row["job_id"]) == ("accepted", "job-7")
-    assert asyncio.run(one_pass()) == []
+    asyncio.run(check())
 
 
 # --- Why a pass started nothing -------------------------------------------
@@ -697,19 +652,28 @@ def _noted_pass(context, **kwargs) -> tuple[list[str], list[str | None]]:
     """One pass, with the reason it started nothing."""
 
     notes: list[str | None] = []
-    started = asyncio.run(
-        run_delivery_pass(
-            context,
-            spawn=lambda _operation_id, coroutine: coroutine.close(),
-            note=notes.append,
-            **kwargs,
-        )
-    )
+    async def one_pass():
+        try:
+            return await run_delivery_pass(context, note=notes.append, **kwargs)
+        finally:
+            await context.runtime.shutdown()
+
+    started = asyncio.run(one_pass())
     return started, notes
 
 
 def _context(data_dir, store, workspace, *, blocked: str | None = None) -> PreparationContext:
+    from server.jobs.runtime import JobRuntime
+    from server.jobs.store import JobStore
+
+    runtime = JobRuntime(JobStore(data_dir / "jobs.db"), cadlink_store=store)
+    runtime._ensure_scheduler = lambda: None
+    from server.jobs.cad_preparation import CadPreparationHost
+    runtime.configure_cad_preparation(CadPreparationHost(
+        store=store, data_dir=data_dir, workspace_root=lambda: workspace,
+    ))
     return PreparationContext(
+        runtime=runtime, job_store=runtime.store,
         store=store,
         data_dir=data_dir,
         workspace_root=workspace.resolve() if workspace is not None else None,

@@ -15,7 +15,6 @@ from typing import Any
 import pytest
 
 from server.cadlink.intake import readings
-from server.cadlink.joblane import preparation
 from server.jobs import cad_preparation as job_preparation
 from server.jobs.cad_intent import intent_of
 from server.cadlink.interpretation.frame_infer import ALGORITHM_VERSION
@@ -30,7 +29,7 @@ from server.cadlink.intake.readings import (
 
 from server.cadlink.intake import ingest as ingest_module
 
-from cad_backends import BACKENDS, Harness, backend_fixture, old_only
+from cad_backends import BACKENDS, Harness, backend_fixture
 from test_cad_preparation import _accept
 from test_cad_preparation_solver_frame import (
     Recording,
@@ -73,7 +72,6 @@ def _verdict(monkeypatch: pytest.MonkeyPatch, *, status: str, axis: str | None) 
             str(record["ingest_id"]),
         )
 
-    monkeypatch.setattr(preparation, "ensure_frame_suggestion", survey)
     monkeypatch.setattr(job_preparation, "ensure_frame_suggestion", survey)
     return surveyed
 
@@ -223,47 +221,6 @@ def _record_meshed_in(harness, record: dict[str, Any], axis: str) -> dict[str, A
     return changed
 
 
-@old_only("operation attempt stage instrumentation", "test_the_jobs_second_mesh_is_bounded_when_the_two_sides_disagree")
-def test_the_second_mesh_is_made_at_most_once_even_if_the_two_sides_disagree(real, monkeypatch) -> None:
-    """A drift between the manifest side and the record side must not loop."""
-
-    harness, mesher = real
-    _verdict(monkeypatch, status="automatic", axis="+x")
-    # The record side keeps naming an axis nothing is ever meshed in.
-    monkeypatch.setattr(preparation, "record_automatic_axis", lambda store, record: "-y")
-    # The gate reads the same record side, so it refuses the +x mesh too.
-    monkeypatch.setattr(readings, "record_automatic_axis", lambda store, record: "-y")
-    stages: list[str] = []
-    real_advance = preparation._advance
-
-    def advance(ctx, operation_id, generation, **fields):
-        if fields.get("stage"):
-            stages.append(fields["stage"])
-        return real_advance(ctx, operation_id, generation, **fields)
-
-    monkeypatch.setattr(preparation, "_advance", advance)
-    passes: list[bool] = []
-    real_prepare = preparation._prepare_sync
-
-    def counted(*args, **kwargs):
-        passes.append(bool(kwargs.get("automatic_retry")))
-        return real_prepare(*args, **kwargs)
-
-    monkeypatch.setattr(preparation, "_prepare_sync", counted)
-    step = b"STEP authored"
-    _received(harness, "authored", _authored(step), step)
-
-    summary = _prepare(harness)
-
-    assert passes == [False, True]
-    assert len(mesher.calls) <= 2
-    # The bound ends at the frame gate, never at an accepted solve.
-    assert _waiting_for_frame(summary), summary
-    assert harness.submitted == []
-    # A stage only moves forward: validating is entered once.
-    assert stages.count("validating") == 1
-
-
 def test_the_jobs_second_mesh_is_bounded_when_the_two_sides_disagree(tmp_path, monkeypatch) -> None:
     """The job lane's M1e second pass stops even if the record keeps disagreeing."""
 
@@ -302,27 +259,3 @@ def test_the_jobs_second_mesh_is_bounded_when_the_two_sides_disagree(tmp_path, m
         assert sum(event["payload"].get("stage") == "validating" for event in events) == 1
     finally:
         harness.close()
-
-
-@old_only("operation summary reads its bound job", "test_a_confident_never_confirmed_solve_solves_along_the_automatic_axis")
-def test_the_operations_automatic_axis_is_derived_from_the_jobs_own_record(real, monkeypatch) -> None:
-    """One read: were the frame confirmed meanwhile, both say so, never one each."""
-
-    from server.cadlink.joblane import preparation as prep
-
-    harness, _mesher = real
-    _verdict(monkeypatch, status="automatic", axis="+x")
-    step = b"STEP authored"
-    _received(harness, "authored", _authored(step), step)
-    waiting = _prepare(harness, submit=False)
-    record = _record(harness, waiting)
-    # The rule still says automatic (a stale first read) while a confirmation
-    # exists by the time the record is collected.
-    confirm_frame(harness.store, record, "+x")
-    monkeypatch.setattr(prep, "record_solved_frame_provenance", lambda *_a: "automatic")
-
-    summary = _prepare(harness)
-
-    assert summary["state"] == "accepted", summary
-    assert harness.provenance[-1]["frame"]["provenance"] in {"chosen", "suggested"}
-    assert summary["frameAxisAutomatic"] is None

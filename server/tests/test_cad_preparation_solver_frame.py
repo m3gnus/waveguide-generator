@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -21,12 +20,12 @@ from typing import Any
 import pytest
 
 from server.cadlink.intake import ingest as ingest_module
-from server.cadlink.joblane import preparation
-from server.cadlink.joblane.preparation import PreparationInput, prepare_operation
-from server.cadlink.interpretation.solver_frame import CONTRACT
+from server.cadlink.joblane import preparation_inputs as preparation
+from server.cadlink.joblane.preparation import operation_summary
+from server.cadlink.interpretation.solver_frame import CONTRACT, resolution_identity
 from server.cadlink.intake.readings import confirm_frame
 
-from cad_backends import Harness, backend_fixture, old_only
+from cad_backends import Harness, backend_fixture
 from test_cad_preparation import _accept, _manifest, _revision, _setup
 from test_cad_preparation_design_gate import MesherStandIn
 
@@ -78,12 +77,6 @@ def real(request, tmp_path, monkeypatch):
     monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", mesher)
     yield harness, mesher
     backend.close()
-
-
-def _context(harness: Harness):
-    """The operations backend's context with the production ingest (operations-only scenarios)."""
-
-    return dataclasses.replace(harness.context(), ingest=ingest_module.ingest_bundle)
 
 
 def _prepare(harness: Harness, operation_id: str = "cmd-1", **kwargs: Any) -> dict[str, Any]:
@@ -299,49 +292,6 @@ def test_an_automatic_continuation_after_the_update_restart_keeps_the_axis_shown
     assert harness.submitted == []
 
 
-@old_only(
-    "an attempt claim and the axis written before it",
-    "test_job_cad_lane.py::test_a_job_keeps_the_axis_its_press_showed_across_a_restart_and_solve_again",
-)
-def test_a_press_the_restart_overtakes_before_its_claim_keeps_its_axis(real) -> None:
-    """The same, for any caller of prepare_operation: kept before the early return."""
-
-    harness, _mesher = real
-    step = b"STEP authored"
-    _received(harness, "authored", _authored(step), step)
-    harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
-
-    summary = asyncio.run(prepare_operation(
-        _context(harness), "cmd-1", PreparationInput(expected_frame_axis="+z"), expected_generation=0,
-    ))
-
-    assert (summary["state"], summary["attemptGeneration"]) == ("received", 0)
-    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+z"
-
-
-@old_only(
-    "presses replacing the axis of one operation; a job's press is a new job",
-    "test_job_cad_lane.py::test_a_job_keeps_the_axis_its_press_showed_across_a_restart_and_solve_again",
-)
-def test_a_genuinely_newer_press_replaces_the_axis(real) -> None:
-    """The control: presses in order, the later one wins -- also when the
-    first was only admitted (held by the update restart, still received)."""
-
-    harness, _mesher = real
-    step = b"STEP authored"
-    _received(harness, "authored", _authored(step), step)
-    harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
-    asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput(expected_frame_axis="+z")))
-    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+z"
-    asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput(expected_frame_axis="-y")))
-    assert harness.store.get_operation("cmd-1")["frame_axis"] == "-y"
-    harness.blocked = None
-    _prepare(harness, expected_frame_axis="+x")
-    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+x"
-    _prepare(harness, expected_frame_axis="-x")
-    assert harness.store.get_operation("cmd-1")["frame_axis"] == "-x"
-
-
 def test_the_axis_shown_holds_across_retries_and_a_restart_until_a_press_names_another(real) -> None:
     harness, _mesher = real
     step = b"STEP authored"
@@ -429,17 +379,13 @@ def test_a_preparation_resumes_only_in_the_same_complete_frame_not_the_same_axis
     z_up, y_up = record(None), record("+y")
     assert z_up["normalisation"]["solver_frame"]["up"] == "+z"
     assert y_up["normalisation"]["solver_frame"]["up"] == "+y"
-    same = preparation.resolution_identity(resolution(None))
-    other = preparation.resolution_identity(resolution("+y"))
+    same = resolution_identity(resolution(None))
+    other = resolution_identity(resolution("+y"))
     assert same["axis"] == other["axis"] == "+x" and same != other
-    def resume_by_row(store, row, *args):
-        return preparation._resumable(store, row, *args)
-
     def resume_by_record(store, _row, *args):
         return preparation.resumable_record(store, store.get_preparation("wgp_1"), *args)
 
-    for resume in (resume_by_row, resume_by_record):
-        _resumes_only_in_the_same_frame(resume, row, z_up, y_up, same, other)
+    _resumes_only_in_the_same_frame(resume_by_record, row, z_up, y_up, same, other)
 
 
 def _resumes_only_in_the_same_frame(resume, row, z_up, y_up, same, other) -> None:
@@ -601,7 +547,7 @@ def test_a_file_delivery_reaches_the_frame_gate(tmp_path, monkeypatch) -> None:
                 job["id"], setup_revision_id=revision, submit=submit,
             )
             await run_cad_preparation(runtime._cad_port, runtime._cad_host, job_id)
-            return preparation.operation_summary(context.store.get_operation("op-1"), runtime.store)
+            return operation_summary(context.store.get_operation("op-1"), runtime.store)
 
         waiting = asyncio.run(prepare(True))
         assert _waiting_for_frame(waiting), waiting

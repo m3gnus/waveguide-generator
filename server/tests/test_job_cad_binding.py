@@ -7,9 +7,8 @@ These tests are about that one write: it is all or nothing, it is decided agains
 and it hands out run numbers that have no gaps. They run the real submission checks
 (``JobRuntime._compose_job``) on a complete ingestion record.
 
-The scenarios of the operations backend that these replace are named on the
-``old_only`` marks of ``test_cad_preparation.py`` (a bound request left behind by a
-crash, a job created and its answer lost, a dismissal racing the submission).
+They cover a crash before binding, a job created with its answer lost, and a
+stop racing submission.
 """
 
 from __future__ import annotations

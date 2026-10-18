@@ -38,25 +38,18 @@ class Wg:
         from server.cadlink.api import _preparation_context
         from server.cadlink.intake.returns_folder import selected_workspace_root
 
-        spawned: list[str] = []
-
-        def spawn(operation_id: str, coroutine) -> None:
-            spawned.append(operation_id)
-            coroutine.close()  # started, not run: the start is what is counted
-
         async def one() -> list[str]:
             ctx = _preparation_context(
                 self.app.state, workspace_root=selected_workspace_root(self.app.state)
             )
             return await job_shims.run_delivery_pass(
-                ctx, spawn=spawn, running=frozenset(running or ())
+                ctx, running=frozenset(running or ())
             )
 
         started = asyncio.run(one())
         # File acceptance creates its job before acknowledging. Count each job
         # seen by these intake scenarios once; the production pass itself starts
         # no second lifecycle and no operation coroutine is spawned.
-        assert spawned == []
         jobs = self.app.state.jobs_runtime.store
         for row in self.store.list_operations(kind=PREPARE_AND_SOLVE):
             job_id = row.get("job_id")

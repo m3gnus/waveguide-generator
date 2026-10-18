@@ -15,7 +15,7 @@ import time
 import weakref
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, cad_of
@@ -36,17 +36,15 @@ from server.cadlink.joblane.preparation import (
     PreparationInput,
     _publish,
     _restart_pending,
-    _submission_refusal_reason,
     logger as _delivery_logger,
     operation_summary,
-    prepare_operation,
     record_job_acceptance,
-    requeue_restart_parked,
     retain_operation_snapshot,
     settle_received_snapshots,
     settle_snapshot_operation,
     submission_key,
 )
+from server.cadlink.joblane.preparation_inputs import _submission_refusal_reason
 from server.cadlink.intake.solve_command import collect_solve_deliveries, waiting_claim_operation_ids
 from server.cadlink.intake.readings import frame_provenance, record_solved_frame_provenance
 
@@ -319,89 +317,17 @@ def operation_detail(ctx: Any, row: Mapping[str, Any]) -> dict[str, Any]:
 async def run_delivery_pass(
     ctx: PreparationContext,
     *,
-    spawn: Callable[[str, Awaitable[Any]], object],
     running: set[str] | frozenset[str] = frozenset(),
     note: Callable[[str | None], None] | None = None,
 ) -> list[str]:
-    """Collect Fusion's solve commands, and start preparing each new one.
+    """Retain and admit Fusion commands, then schedule their jobs.
 
-    The backend is the one consumer of solve commands (CAD-OPERATIONS.md,
-    "Delivery"): each is retained, recorded and acknowledged, then prepared
-    from its project's setup and submitted. Only an operation no attempt has
-    touched (``received``) is started, so one waiting for the user is never
-    retried unasked; ``running`` names the ones already started. One whose
-    delivery is kept because its return cannot be read yet is started once the
-    return is retained, or once the delivery is given up. Without a WGLink
-    folder nothing is collected, because nothing could be retained. While an
-    update restart is approved the pass does nothing at all: no preparation
-    starts, and delivered files stay on disk for after the restart. Once the
-    latch is down, the solves it held at submission are queued again first,
-    with or without a WGLink folder. Received snapshots nobody is delivering
-    are settled first (``settle_received_snapshots``). Persisted file claims
-    still awaiting retention hold their operation. Returns what the pass started.
+    File acknowledgement follows durable job admission. A held return waits
+    for retention; refused jobs are never retried by this pass. Received
+    snapshots are settled without preparation. Without a WGLink folder or
+    while an update restart is approved, the pass reports why it is stopped.
     """
 
-    if ctx.runtime is not None:
-        return await _job_delivery_pass(ctx, running=running, note=note)
-
-    def _note(reason: str | None) -> None:
-        # Exactly once per pass, and outside every handler that swallows: a
-        # pass that starts nothing must say whether that is idleness or a
-        # stopped consumer. The two are otherwise identical from outside, and
-        # this loop runs about 86 000 times a day.
-        if note is not None:
-            note(reason)
-
-    blocked = _restart_pending(ctx)
-    if blocked:
-        _note(blocked)
-        return []
-    await asyncio.to_thread(requeue_restart_parked, ctx)
-    if ctx.workspace_root is None:
-        _note(NO_WORKSPACE_REASON)
-        return []
-    await asyncio.to_thread(settle_received_snapshots, ctx)
-    held: set[str] = set()
-    await asyncio.to_thread(
-        collect_solve_deliveries,
-        ctx.data_dir,
-        ctx.store,
-        # A snapshot is settled as it is retained before file acknowledgement.
-        # Other kinds are retained before job admission.
-        retain=lambda operation_id: settle_snapshot_operation(
-            ctx.store, ctx.data_dir, ctx.workspace_root, operation_id
-        ),
-        held=held,
-        publish=lambda row: _publish(ctx, row),
-        refuse=ctx.refuse,
-    )
-    blocked = _restart_pending(ctx)
-    if blocked:
-        # Approved while this pass collected: nothing starts.
-        _note(blocked)
-        return []
-    rows = await asyncio.to_thread(
-        ctx.store.list_operations,
-        kind=PREPARE_AND_SOLVE, states={RECEIVED}, oldest_first=True, limit=100,
-    )
-    started: list[str] = []
-    for row in rows:
-        operation_id = str(row["operation_id"])
-        if row.get("legacy") or operation_id in running or operation_id in held:
-            continue
-        started.append(operation_id)
-        spawn(
-            operation_id,
-            prepare_operation(
-                ctx, operation_id, PreparationInput(),
-                expected_generation=int(row["attempt_generation"]),
-            ),
-        )
-    _note(None)
-    return started
-
-
-async def _job_delivery_pass(ctx: PreparationContext, *, running: Any, note: Any) -> list[str]:
     blocked = _restart_pending(ctx)
     if blocked or ctx.workspace_root is None:
         if note:

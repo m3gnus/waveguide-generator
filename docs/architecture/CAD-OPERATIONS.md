@@ -45,7 +45,7 @@ and exact-id return waiter on reconnect.
   consumes solve requests, and owns stored frame/domain readings and receipt routers.
 - `interpretation/` contains pure frame inference, domain decisions and cut recovery.
   Its functions accept no store or preparation context and import only leaf contracts.
-- `joblane/` owns setup revisions, operation preparation, job admission and delivery status.
+- `joblane/` owns setup revisions, preparation inputs, job admission and delivery status.
 - `fusion/` owns the WGLink file channel: delivery, heartbeat status, outcomes,
   return requests, recovery notices and add-in pin reconciliation.
 
@@ -364,10 +364,10 @@ whatever project is open. Nothing on the backend reads the live UI:
   Solve of the CAD model in WG records the setup it solved with the same way. The solver selection is
   recorded too (`PUT /api/cadlink/solver-selection`, `{engine}`), but only to seed a
   first-time model's setup (WG's defaults, below).
-- **The operation keeps its settings.** The revision an attempt selects is recorded on the
-  operation before it meshes, so it survives a preparation that fails. A follow-up that
+- **The job keeps its settings.** The revision a preparation selects is recorded on the
+  job before it meshes, so it survives a preparation that fails. A follow-up that
   names no revision -- a frame confirmation, an approval, a retry -- continues with the
-  revision the operation holds, or its last preparation's, so approvals given on that
+  revision the job holds, or its last preparation's, so approvals given on that
   preparation still apply. A named revision always wins: an action that chooses settings
   ("Use these settings and solve", a new engine after `engine_unavailable` or `engine_cannot_solve_return`) sends one.
 - **Resolved from the snapshot.** A preparation of an operation that has never had a setup
@@ -647,8 +647,7 @@ nothing is ever filed under it, and no setup can be recorded for it.
 
 - **A file model** is solved directly: the setup is composed into the request by
   `compose_solve_request` (`server/cadlink/joblane/project_setup.py`), the same
-  composition and checks both CAD preparations use (the job lane's bind and the
-  operation preparation's `_submit`), and submitted under
+  composition and checks the CAD job preparation lane uses, and submitted under
   `model-solve:<client_request_id>`. Unreviewed blocking findings are refused
   before anything is created.
 - **A CAD model** goes through the preparation lane, as a Fusion "Solve in WG"
@@ -764,8 +763,9 @@ no inadmissible solve is queued and no old processing row is stranded.
 
 The job/key commits before ledger acceptance, so a crash between databases is
 recovered through the same key. Only this acceptance join remains; there is no
-operation-owned preparation or submission reconciliation in production. The
-old preparation implementation and unused solve columns stay until Stage 5.
+operation-owned preparation or fallback executor. CAD preparation contexts require
+the jobs runtime; app assembly installs it before mounting CAD routes and recovery.
+The solve columns remain for legacy ledger migration.
 
 Received snapshots are retained and settled by the ledger, never prepared.
 The delivery loop still reports a missing folder, restart latch, failed or hung
@@ -790,7 +790,8 @@ in `task_metadata.cad`, next to `task_metadata.imported_geometry`. It is written
 job is created and never changed. The operation row stays the acceptance ledger; a run
 is described from the job even after that row is gone. `SolveRequest` is unchanged: the
 record travels through the keyword-only `cad_provenance` argument of
-`JobRuntime.submit` (`server/cadlink/joblane/preparation.py`, `_cad_provenance`), not through
+`JobRuntime.submit` during ledger migration, and through job binding for new solves
+(`server/cadlink/joblane/preparation_inputs.py`, `cad_provenance_record`), rather than
 the wire request, and a direct submission carries none.
 
 | Field | Meaning |
@@ -1066,8 +1067,7 @@ switched production intake and operation shims to that lane.
 idempotently under `cad-solve:<operationId>` with the delivery's digest as the request hash
 (the same command again is the job it made; the same key for another return is a
 `SubmissionConflictError`). A separate lane, two solves at a time and independent of the
-solve scheduler, prepares it (`server/jobs/cad_preparation.py`). The lane is the operation's
-`_prepare_sync` moved, with its reasons and words unchanged:
+solve scheduler, prepares it (`server/jobs/cad_preparation.py`):
 
     claim -> retain -> setup -> ingest (mesh) -> frame and domain -> findings -> compose -> bind
 

@@ -28,8 +28,6 @@ from server.tests.test_cad_preparation import _write_return
 from server.tests.cad_file_harness import _snapshot_digest, wg
 
 
-
-
 def _snapshot_request(bundle_path: str, manifest: str) -> dict[str, Any]:
     return fixture(V4_SNAPSHOT, bundlePath=bundle_path, manifestSha256=manifest)
 
@@ -60,10 +58,6 @@ def test_file_then_file_is_one_operation(tmp_path: Path, make) -> None:
         # test_cad_inbox_restart.py runs the start to its job and counts it.
         assert started == ([request["operationId"]] if request["kind"] == PREPARE_AND_SOLVE else [])
         assert app.run_pass(running=set(started)) == []
-
-
-
-
 
 
 def test_a_v4_snapshot_file_is_settled_as_it_is_taken(tmp_path: Path) -> None:
@@ -128,7 +122,7 @@ def test_a_pass_pushes_arrivals_and_keeps_refusals_for_the_panel(tmp_path: Path)
         events.publish = pushed.append
         try:
             ctx = _preparation_context(application.state, workspace_root=workspace.resolve())
-            await job_shims.run_delivery_pass(ctx, spawn=lambda _id, coroutine: coroutine.close())
+            await job_shims.run_delivery_pass(ctx)
             await asyncio.sleep(0)  # the pushes are scheduled onto this loop
             return await get_delivery_status(SimpleNamespace(app=application))
         finally:

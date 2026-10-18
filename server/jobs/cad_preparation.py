@@ -4,8 +4,7 @@ Stage 4 of the CAD Link simplification (docs/architecture/CAD-OPERATIONS.md,
 "A CAD solve is a job") makes the job the one lifecycle of a CAD solve. WG
 accepts a solve by creating a job in status ``preparing`` that holds a typed
 :class:`CadSolveIntent` instead of a ``SolveRequest``. The preparation lane
-(``JobRuntime``) then does what ``server/cadlink/joblane/preparation.py`` does for an
-operation today, and this module is that work, moved rather than rewritten:
+(``JobRuntime``) owns preparation through this module:
 
     retain -> setup -> ingest (mesh) -> frame and domain -> findings -> compose
 
@@ -26,8 +25,7 @@ generation, ``stage`` or ``bind_request`` of a ``cad_operations`` row:
 What the setup revision, the ingestions and the frame and domain tables hold is
 unchanged: they are per-project memory, and the job refers to them.
 
-Nothing calls this yet (S4-E2); the delivery pass and the routes switch to it in
-S4-F1.
+Delivery and manual solve routes admit jobs through this same lane.
 """
 
 from __future__ import annotations
@@ -62,9 +60,9 @@ from server.cadlink.operations import (
     STAGE_SUBMITTED,
     STAGE_VALIDATING,
 )
-from server.cadlink.joblane.preparation import (
+from server.cadlink.joblane.preparation_inputs import (
     DAMAGED_COPY_MESSAGE,
-    PreparationContext,
+    SnapshotContext,
     SnapshotUnavailable,
     _DefaultsUnavailable,
     _copy_is_whole,
@@ -398,7 +396,7 @@ def prepare_job_sync(
     *,
     automatic_retry: bool = False,
 ) -> tuple[str, Any]:
-    """The blocking half: retain, mesh, record. ``server.cadlink.joblane.preparation._prepare_sync``.
+    """The blocking half: retain, mesh and record the job preparation.
 
     Returns ``("done", None)`` when the job was refused, and
     ``("bind", (request, revision_id, preparation))`` when a request is ready.
@@ -406,18 +404,15 @@ def prepare_job_sync(
     ``automatic_retry`` marks the one second pass made to mesh along WG's
     confident automatic axis: it never starts another.
 
-    The logic is the operation's, step for step, with the same reasons and
-    words. What is gone: the bound-request recovery branch (binding is one
-    transaction now), and every generation check (a stop ends the job, and the
-    next write finds it ended).
+    Binding is one transaction. A stop ends the job, and the next progress
+    write finds it ended.
     """
 
     store = host.store
-    context = PreparationContext(
+    context = SnapshotContext(
         store=store,
         data_dir=host.data_dir,
         workspace_root=host.workspace_root(),
-        ingest=host.ingest,
     )
     ledger = _retention_row(store, intent, run.cad)
     expected_frame_axis = intent.frame_axis

@@ -410,7 +410,7 @@ def _job_request(record: dict[str, Any]) -> Any:
 
 
 def test_preview_plan_preparation_and_job_consume_the_same_decision(tmp_path: Path) -> None:
-    from server.cadlink.joblane import preparation
+    from server.cadlink.joblane import preparation_inputs as preparation
     from server.cadlink.intake.readings import confirm_frame
     from server.jobs.runtime import JobRuntime
     from server.jobs.store import JobStore
@@ -434,16 +434,15 @@ def test_preview_plan_preparation_and_job_consume_the_same_decision(tmp_path: Pa
     assert outcomes["metal"] == "metal"
 
     # The preparation resumes this record, and only while its decision holds.
-    row = {"preparation_id": "wgp_1"}
     identity = record_plan_identity(record)
     stored = json.loads(json.dumps(record))
-    assert preparation._resumable(
-        _PreparedStore(stored), row, "wgs_1", "sha256:s", "semantics", None, identity
+    assert preparation.resumable_record(
+        _PreparedStore(stored), _PreparedStore(stored).get_preparation("wgp_1"), "wgs_1", "sha256:s", "semantics", None, identity
     ) == stored
     drifted = copy.deepcopy(stored)
     drifted["domain_decision"]["solver_domain"]["planes"] = ["x0"]
-    assert preparation._resumable(
-        _PreparedStore(drifted), row, "wgs_1", "sha256:s", "semantics", None, identity
+    assert preparation.resumable_record(
+        _PreparedStore(drifted), _PreparedStore(drifted).get_preparation("wgp_1"), "wgs_1", "sha256:s", "semantics", None, identity
     ) is None
 
     # The job records the very summary the plan showed.
@@ -740,7 +739,7 @@ def _pair(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
 def test_swapped_left_and_right_source_tags_are_refused_at_every_entry_point(tmp_path: Path) -> None:
     """Review finding 1: the decision binds which tag is which source identity."""
 
-    from server.cadlink.joblane import preparation
+    from server.cadlink.joblane import preparation_inputs as preparation
     from server.jobs.runtime import JobRuntime, _imported_request_refusal
     from server.jobs.store import JobStore
     from test_cad_preparation_solver_frame import _PreparedStore
@@ -759,8 +758,8 @@ def test_swapped_left_and_right_source_tags_are_refused_at_every_entry_point(tmp
     assert _solve_verdicts_quiet(swapped) == dd.MISMATCH_CODE
     assert _imported_request_refusal(_job_request(record), swapped)[0] == dd.MISMATCH_CODE
     # Preparation reuse.
-    assert preparation._resumable(
-        _PreparedStore(swapped), {"preparation_id": "wgp_1"}, "wgs_1", "sha256:s", "semantics",
+    assert preparation.resumable_record(
+        _PreparedStore(swapped), _PreparedStore(swapped).get_preparation("wgp_1"), "wgs_1", "sha256:s", "semantics",
         None, record_plan_identity(record),
     ) is None
     # A real submission of the stored, swapped record.

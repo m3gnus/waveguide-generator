@@ -15,7 +15,7 @@ import pytest
 
 from server.cadlink import api
 from server.cadlink.intake import ingest as ingest_module
-from server.cadlink.joblane import preparation as preparation_module
+from server.cadlink.joblane import preparation_inputs
 from server.cadlink.intake.ingest import retain_snapshot
 from server.cadlink.joblane.manual_solve import OperationConflict, SnapshotNotRetained, UnknownIngest
 from server.cadlink.joblane.preparation import operation_summary
@@ -229,7 +229,7 @@ def test_a_manual_solve_whose_only_copy_is_damaged_waits_rather_than_rejects(
 
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
     assert "bundlePath" not in summary["message"]
-    assert summary["message"] == preparation_module.DAMAGED_COPY_MESSAGE
+    assert summary["message"] == preparation_inputs.DAMAGED_COPY_MESSAGE
     assert harness.ingest.calls == [] and harness.submitted == []
 
 

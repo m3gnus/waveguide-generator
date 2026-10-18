@@ -9,6 +9,7 @@ import pytest
 from server.app import create_app
 from server.cadlink.fusion import addin_update
 from server.cadlink.joblane import preparation
+from server.cadlink import api as cadlink_api
 from server.cadlink.intake import solve_command
 from server.cadlink.api import post_reconcile_cad_operation
 from server.cadlink.fusion.fusion_delivery import capabilities
@@ -165,7 +166,7 @@ def test_snapshot_file_retains_before_ack_and_replays_without_preparing(tmp_path
     def no_ingest(*args, **kwargs):
         raise AssertionError("a received snapshot must never be ingested")
 
-    monkeypatch.setattr(preparation, "ingest_bundle", no_ingest)
+    monkeypatch.setattr(cadlink_api, "ingest_bundle", no_ingest)
     with wg(tmp_path) as app:
         bundle_path, manifest = _write_return(app.workspace)
         body = fixture(V4_SNAPSHOT, bundlePath=bundle_path, manifestSha256=manifest)

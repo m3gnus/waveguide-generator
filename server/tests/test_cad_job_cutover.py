@@ -147,7 +147,7 @@ def test_an_acceptance_acknowledgement_names_the_durable_preparing_job(h):
     _deliver_file(h, bundle, manifest)
     h.runtime._ensure_prep_lane = lambda: None
     from server.cadlink.joblane.job_shims import run_delivery_pass
-    assert h._loop.run(run_delivery_pass(h.context(), spawn=lambda *_args: None)) == ["cmd-1"]
+    assert h._loop.run(run_delivery_pass(h.context())) == ["cmd-1"]
     ack = json.loads((h.data_dir / "ipc" / "wglink" / SOLVE_ACKS_DIRECTORY / "cmd-1.json").read_text())
     job = h.jobs_store.latest_cad_job("cmd-1")
     assert ack["jobId"] == job["id"]
@@ -382,7 +382,7 @@ def test_interrupted_manual_intake_waits_for_its_first_prepare(h, recovery):
     if recovery == "startup":
         h._loop.run(sweep_pending_solves(h.context()))
     else:
-        h._loop.run(run_delivery_pass(h.context(), spawn=lambda *_args: None))
+        h._loop.run(run_delivery_pass(h.context()))
     job = h.jobs_store.latest_cad_job("manual-1")
     assert job["status"] == "preparing" and job["started_at"] is None
     assert cad_of(job)["manual_waiting"] is True
@@ -463,7 +463,7 @@ def test_each_row_is_isolated_and_code_failures_are_retried_with_bounded_backoff
         return await real(ctx, op, **kwargs)
     monkeypatch.setattr(job_shims, "accept_operation_solve", broken)
     def run():
-        return h._loop.run(sweep_pending_solves(h.context()) if recovery == "startup" else run_delivery_pass(h.context(), spawn=lambda *_: None))
+        return h._loop.run(sweep_pending_solves(h.context()) if recovery == "startup" else run_delivery_pass(h.context()))
     run()
     assert h.jobs_store.latest_cad_job("cmd-1") and h.jobs_store.latest_cad_job("cmd-3")
     assert h.jobs_store.latest_cad_job("cmd-2") is None
@@ -503,7 +503,7 @@ def test_startup_keeps_a_persisted_claim_until_its_file_bound_then_lane_refuses(
     assert h.row()["state"] == "received" and h.jobs_store.latest_cad_job("cmd-1") is None
     monkeypatch.setattr(solve_command, "RETENTION_PASSES", 1)
     async def expired():
-        await run_delivery_pass(h.context(), spawn=lambda *_: None)
+        await run_delivery_pass(h.context())
         await h.runtime.wait_cad_preparations()
         detail = operation_summary(h.row(), h.jobs_store)
         assert detail["reason"] == "preparation_failed" and detail["message"]
@@ -516,7 +516,8 @@ def test_prepare_of_manual_solve_with_missing_copy_keeps_damaged_copy_remedy(h):
     import shutil
     from server.cadlink.joblane.manual_solve import create_manual_solve
     from server.cadlink.intake.ingest import retained_snapshot_path
-    from server.cadlink.joblane.preparation import retain_operation_snapshot, DAMAGED_COPY_MESSAGE
+    from server.cadlink.joblane.preparation import retain_operation_snapshot
+    from server.cadlink.joblane.preparation_inputs import DAMAGED_COPY_MESSAGE
     from server.cadlink.joblane.job_shims import accept_operation_solve
     _received(h)
     retain_operation_snapshot(h.store, h.data_dir, h.workspace, "cmd-1")
@@ -548,7 +549,7 @@ def test_failed_admission_stays_unconfirmed_until_a_durable_decision(h, monkeypa
     monkeypatch.setattr(solve_command, "ACK_FAILURE_PASSES", 2)
     ack = h.data_dir / "ipc" / "wglink" / solve_command.SOLVE_ACKS_DIRECTORY / "cmd-1.json"
     def run():
-        return h._loop.run(run_delivery_pass(h.context(), spawn=lambda *_: None))
+        return h._loop.run(run_delivery_pass(h.context()))
     for attempt in range(1, 6):
         if attempt > 1:
             h.runtime._cad_admission_retries["cmd-1"] = (attempt - 1, 0)
@@ -605,7 +606,7 @@ def test_same_pass_sweep_respects_admission_hold_without_backoff(h, monkeypatch,
     monkeypatch.setattr(h.runtime, "accept_cad_solve", broken)
 
     def run():
-        return h._loop.run(job_shims.run_delivery_pass(h.context(), spawn=lambda *_: None))
+        return h._loop.run(job_shims.run_delivery_pass(h.context()))
 
     real_read = solve_command._read_payload
     if already_waiting:
@@ -658,9 +659,9 @@ def test_delivery_pass_retries_failed_startup_migrations(h, monkeypatch, state):
     assert h.row()["state"] == state
     monkeypatch.setattr(h.runtime, "accept_cad_solve", real)
     # No hot retry before the deadline.
-    assert h._loop.run(run_delivery_pass(h.context(), spawn=lambda *_: None)) == []
+    assert h._loop.run(run_delivery_pass(h.context())) == []
     h.runtime._cad_admission_retries["cmd-1"] = (1, 0)
-    assert h._loop.run(run_delivery_pass(h.context(), spawn=lambda *_: None)) == ["cmd-1"]
+    assert h._loop.run(run_delivery_pass(h.context())) == ["cmd-1"]
     assert h.row()["state"] == "accepted" and h.row()["job_id"]
 
 
@@ -788,7 +789,7 @@ def test_f2_acceptance_joins_copy_the_jobs_defaults_and_automatic_axis(h, monkey
         monkeypatch.setattr(job_shims, "accept_operation_solve", interrupted_join)
         h._loop.run(job_shims.accept_operation_solve_isolated(ctx, "cmd-1"))
     else:
-        h._loop.run(run_delivery_pass(ctx, spawn=lambda *_args: None))
+        h._loop.run(run_delivery_pass(ctx))
     outcome = json.loads(h.row()["outcome_json"] or "{}")
     assert "cad_state" in h.runtime._serialize_job(h.jobs_store.get_job_row(job_id))
     assert outcome.get("setup_defaults", False) == (origin == "wg_defaults")
@@ -853,7 +854,7 @@ def test_missing_return_after_bound_is_visibly_refused(h, press, state):
             detail = (await compat_prepare(_request(h).app.state, "cmd-1", wait=True))["operation"]
         else:
             if state == "received":
-                await run_delivery_pass(h.context(), spawn=lambda *_: None)
+                await run_delivery_pass(h.context())
             else:
                 await sweep_pending_solves(h.context())
             await h.runtime.wait_cad_preparations()
@@ -927,3 +928,10 @@ def test_review_compatibility_details_fill_a_partial_historical_job_record(h):
     assert detail["preparation"]["reportSha256"] == ingest["report_sha256"]
     assert detail["setupRevisionId"] == revision
     assert detail["approvals"] == [{"preparation_id": prep_id, "finding_id": "review-1"}]
+
+
+def test_preparation_context_requires_the_jobs_runtime(tmp_path):
+    from server.cadlink.joblane.preparation import PreparationContext
+
+    with pytest.raises(RuntimeError, match="CAD preparation requires the jobs runtime"):
+        PreparationContext(store=None, data_dir=tmp_path, workspace_root=None, runtime=None)

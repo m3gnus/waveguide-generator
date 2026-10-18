@@ -88,8 +88,7 @@ def compose_solve_request(
 
     Shared by the WG Solve of a model (``server/jobs/model_solve.py``), the
     job-owned preparation of a Fusion "Solve in WG" (``server/jobs/
-    cad_preparation.py``) and the operation preparation (``preparation.
-    _prepare_sync``, which feeds ``_submit``): the setup bound to the prepared
+    cad_preparation.py``): the setup bound to the prepared
     mesh's identity, the polar grid never narrower than the ingestion derived
     (the runtime refuses that), and the excitation judged against the domain.
     Raises ``ValueError`` -- ``ExcitationRefused`` for the excitation -- with
