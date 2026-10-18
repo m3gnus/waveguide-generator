@@ -1,0 +1,152 @@
+import type { Command, PointRef } from './commands';
+import { constraintProblem, constraintRefs, entityPoints, isJSON, numericSuffix, validateSketch, type Arc, type Constraint, type Entity, type Point, type Sketch } from './model';
+import { distance, onArc } from './geometry';
+
+export type CommandResult = { sketch: Sketch; created: string[]; removedConstraints: string[] } | { error: string };
+export function applyCommand(sketch: Sketch, command: Command): CommandResult {
+  const validation = validateSketch(sketch); if (!validation.ok) return { error: validation.reason };
+  const s: Sketch = { ...sketch, points: [...sketch.points], entities: [...sketch.entities], constraints: [...sketch.constraints] };
+  const created: string[] = [], removedConstraints: string[] = [];
+  const used = new Set([...s.points, ...s.entities, ...s.constraints].map(e => e.id));
+  function allocate(prefix: string, imported?: string) {
+    if (imported && numericSuffix(imported) > 0 && numericSuffix(imported) < s.nextId) throw new Error('Imported numeric IDs must be ahead of nextId.');
+    let id = imported ?? `${prefix}${s.nextId++}`;
+    while (!imported && used.has(id)) id = `${prefix}${s.nextId++}`;
+    if (used.has(id) || !id || id.trim() !== id) throw new Error(`Duplicate or invalid ID: ${id}.`);
+    s.nextId = Math.max(s.nextId, numericSuffix(id) + 1);
+    if (!Number.isSafeInteger(s.nextId)) throw new Error('ID suffix exceeds the safe integer range.');
+    used.add(id); created.push(id); return id;
+  }
+  function point(id: string) { const p = s.points.find(p => p.id === id); if (!p) throw new Error(`Unknown point: ${id}.`); return p; }
+  function entity(id: string) { const e = s.entities.find(e => e.id === id); if (!e) throw new Error(`Unknown entity: ${id}.`); return e; }
+  function addConstraint(c: Omit<Constraint, 'id'>) {
+    const constraint = c as Constraint, problem = constraintProblem(s, constraint);
+    if (problem) throw new Error(problem);
+    s.constraints.push({ ...constraint, id: allocate('c') });
+  }
+  function addPoint(x: number, y: number, id?: string) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('Point coordinates must be finite.');
+    const p = { id: allocate('p', id), x, y }; s.points.push(p); return p;
+  }
+  function resolve(ref: PointRef): Point {
+    if (typeof ref === 'string') return point(ref);
+    const p = addPoint(ref.snap?.x ?? ref.x, ref.snap?.y ?? ref.y), c = ref.snap?.constraint;
+    if (c) {
+      if (c.kind === 'coincident' || c.kind === 'horizontal' || c.kind === 'vertical') addConstraint({ kind: c.kind, a: p.id, b: c.point } as Constraint);
+      else if ('line' in c) addConstraint({ kind: 'pointOnLine', point: p.id, line: c.line } as Constraint);
+    }
+    return p;
+  }
+  function cleanConstraints(remove: (c: Constraint) => boolean) {
+    s.constraints = s.constraints.filter(c => { if (!remove(c)) return true; removedConstraints.push(c.id); return false; });
+  }
+  function equivalent(a: string, b: string) {
+    const reached = new Set([a]); let changed = true;
+    while (changed) {
+      changed = false;
+      for (const c of s.constraints) if (c.kind === 'coincident') {
+        if (reached.has(c.a) && !reached.has(c.b)) { reached.add(c.b); changed = true; }
+        if (reached.has(c.b) && !reached.has(c.a)) { reached.add(c.a); changed = true; }
+      }
+    }
+    return reached.has(b);
+  }
+  try {
+    switch (command.kind) {
+      case 'addPoint': addPoint(command.x, command.y, command.id); break;
+      case 'addLine': {
+        const a = resolve(command.from), b = resolve(command.to);
+        if (a.id === b.id || distance(a, b) <= 1e-12) throw new Error('A line needs distinct endpoints.');
+        s.entities.push({ kind: 'line', id: allocate('l', command.id), p1: a.id, p2: b.id }); break;
+      }
+      case 'addTangentArc': {
+        const a = point(command.from), b = resolve(command.to);
+        const incoming = s.entities.filter(e => !e.construction && (e.kind === 'line' ? e.p2 === a.id : e.kind === 'arc' && e.end === a.id));
+        if (incoming.length !== 1) throw new Error('Tangent arc needs exactly one incoming curve.');
+        const e = incoming[0]; let tx: number, ty: number;
+        if (e.kind === 'line') { const p = point(e.p1); tx = a.x - p.x; ty = a.y - p.y; }
+        else if (e.kind === 'arc') { const p = point(e.center); tx = (e.ccw ? -1 : 1) * (a.y - p.y); ty = (e.ccw ? 1 : -1) * (a.x - p.x); }
+        else throw new Error('Unsupported incoming curve.');
+        const dx = b.x - a.x, dy = b.y - a.y, denom = 2 * (-ty * dx + tx * dy);
+        if (Math.abs(denom) <= 1e-12 || Math.hypot(tx, ty) <= 1e-12) throw new Error('Tangent arc is degenerate.');
+        const k = (dx * dx + dy * dy) / denom, center = addPoint(a.x - k * ty, a.y + k * tx);
+        const arc: Arc = { kind: 'arc', id: allocate('a'), center: center.id, start: a.id, end: b.id, ccw: k > 0 };
+        s.entities.push(arc); addConstraint({ kind: 'tangent', a: e.id, b: arc.id } as Constraint); break;
+      }
+      case 'addArc3': {
+        const a = resolve(command.start), b = resolve(command.end), p = command.through;
+        if (!Number.isFinite(p.x + p.y)) throw new Error('Through point must be finite.');
+        const bx = b.x - a.x, by = b.y - a.y, px = p.x - a.x, py = p.y - a.y, d = 2 * (bx * py - by * px);
+        if (Math.abs(d) <= 1e-12) throw new Error('Three-point arc is collinear.');
+        const bb = bx * bx + by * by, pp = px * px + py * py;
+        const center = addPoint(a.x + (bb * py - pp * by) / d, a.y + (bx * pp - px * bb) / d);
+        const arc: Arc = { kind: 'arc', id: allocate('a'), center: center.id, start: a.id, end: b.id, ccw: false };
+        arc.ccw = onArc(s, arc, p) ? false : true; s.entities.push(arc); break;
+      }
+      case 'addConstraint': addConstraint(command.constraint); break;
+      case 'removeConstraint': {
+        if (!s.constraints.some(c => c.id === command.id)) throw new Error(`Unknown constraint: ${command.id}.`);
+        cleanConstraints(c => c.id === command.id); break;
+      }
+      case 'setDimension': case 'setDriving': {
+        const c = s.constraints.find(c => c.id === command.id);
+        if (!c || !('value' in c)) throw new Error('Expected a dimension.');
+        const next = command.kind === 'setDimension' ? { ...c, value: command.value } : { ...c, driving: command.driving };
+        const problem = constraintProblem(s, next); if (problem) throw new Error(problem);
+        s.constraints = s.constraints.map(c => c.id === command.id ? next : c); break;
+      }
+      case 'movePoint': {
+        point(command.id); if (!Number.isFinite(command.x) || !Number.isFinite(command.y)) throw new Error('Point coordinates must be finite.');
+        s.points = s.points.map(p => p.id === command.id ? { ...p, x: command.x, y: command.y } : p); break;
+      }
+      case 'deleteEntity': {
+        const e = entity(command.id), candidates = new Set(entityPoints(e));
+        s.entities = s.entities.filter(e => e.id !== command.id);
+        cleanConstraints(c => constraintRefs(c).includes(command.id));
+        const stillUsed = new Set(s.entities.flatMap(entityPoints));
+        const deleted = new Set([...candidates].filter(id => !stillUsed.has(id)));
+        s.points = s.points.filter(p => !deleted.has(p.id));
+        cleanConstraints(c => constraintRefs(c).some(id => deleted.has(id))); break;
+      }
+      case 'splitAt': {
+        const e = entity(command.entity);
+        if (e.kind !== 'line' && e.kind !== 'arc') throw new Error('Only lines and arcs can split.');
+        const p = { x: command.x, y: command.y }, start = point(e.kind === 'line' ? e.p1 : e.start), end = point(e.kind === 'line' ? e.p2 : e.end);
+        const onLine = (a: Point, b: Point, p: { x: number; y: number }) => Math.abs(distance(a, p) + distance(p, b) - distance(a, b)) <= 1e-9;
+        if (!Number.isFinite(p.x + p.y) || distance(start, p) <= 1e-9 || distance(end, p) <= 1e-9
+          || (e.kind === 'line' ? !onLine(start, end, p) : !onArc(s, e, p, true))) throw new Error('Split point must be inside the curve.');
+        const join = addPoint(p.x, p.y), rightId = allocate(e.kind === 'line' ? 'l' : 'a');
+        const left: Entity = e.kind === 'line' ? { ...e, p2: join.id } : { ...e, end: join.id };
+        const right: Entity = e.kind === 'line' ? { ...e, id: rightId, p1: join.id } : { ...e, id: rightId, start: join.id };
+        s.entities.splice(s.entities.indexOf(e), 1, left, right);
+        s.constraints = s.constraints.flatMap(c => {
+          if ((c.kind === 'pointOnLine' || c.kind === 'pointOnArc') && constraintRefs(c).includes(e.id)) {
+            const p = point(c.point);
+            const contains = (part: Entity) => part.kind === 'line' ? onLine(point(part.p1), point(part.p2), p) : part.kind === 'arc' && onArc(s, part, p);
+            if (contains(left)) return [c];
+            if (contains(right)) return [c.kind === 'pointOnLine' ? { ...c, line: rightId } : { ...c, arc: rightId }];
+            removedConstraints.push(c.id); return [];
+          }
+          // Endpoint tangencies follow the original contact, not the new cut.
+          if (c.kind === 'tangent' && (c.a === e.id || c.b === e.id)) {
+            const other = entity(c.a === e.id ? c.b : c.a);
+            const ends = other.kind === 'line' ? [other.p1, other.p2] : other.kind === 'arc' ? [other.start, other.end] : [];
+            if (ends.some(p => equivalent(p, end.id))) return [{ ...c, a: c.a === e.id ? rightId : c.a, b: c.b === e.id ? rightId : c.b }];
+          }
+          return [c];
+        }); break;
+      }
+      case 'setEntityData': case 'setConstruction': {
+        entity(command.id);
+        if (command.kind === 'setEntityData' && !isJSON(command.data)) throw new Error('Entity data must be JSON.');
+        s.entities = s.entities.map(e => e.id !== command.id ? e : command.kind === 'setEntityData' ? { ...e, data: command.data } : { ...e, construction: command.construction }); break;
+      }
+    }
+    const result = validateSketch(s); if (!result.ok) return { error: result.reason };
+    return { sketch: s, created, removedConstraints };
+  } catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
+}
+
+export function importedSketch(points: Point[], entities: Entity[]): Sketch {
+  return { version: 'wg-sketch-v1', points, entities, constraints: [], nextId: 1 + Math.max(0, ...[...points, ...entities].map(e => numericSuffix(e.id))) };
+}
