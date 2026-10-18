@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { athPolarOverrides } from './athPolars';
-import { DurableSettings, cadDraftNamespace, SETTINGS_NAMESPACES } from './durableSettings';
+import { DurableSettings, SETTINGS_NAMESPACES } from './durableSettings';
+import { CAD_DRAFTS_NAMESPACE, journalKey, mergeCadDrafts } from './cadDraftJournal';
 import {
   resetSolveOptionsStore,
   restorePolarUiFromAthBlocks,
@@ -80,7 +81,7 @@ function settingsBackend({
       namespaces.delete(namespace);
       deleted.add(namespace);
     } else {
-      namespaces.set(namespace, value);
+      namespaces.set(namespace, namespace === CAD_DRAFTS_NAMESPACE ? JSON.stringify(mergeCadDrafts(namespaces.get(namespace), value)) : value);
       deleted.delete(namespace);
     }
     if (writer !== null && seq !== null) accepted.set(namespace, { writer, seq });
@@ -592,17 +593,67 @@ describe('durable settings', () => {
 });
 
 
-it('keeps two windows’ model draft keys independent through writes, hydration and deletion', async () => {
+const draftEntry = (updatedAt: number, value: string | null) => ({
+  draft: value === null ? null : { value }, baseRevisionId: null, updatedAt,
+});
+it('merges two windows per entry, including pending edits and clears, without namespace tombstones', async () => {
   const backend = settingsBackend();
   const first = new DurableSettings({ storage: null, fetcher: backend.fetcher, writeDelayMs: () => 0 });
-  const second = new DurableSettings({ storage: null, fetcher: backend.fetcher, writeDelayMs: () => 0 });
-  const a = cadDraftNamespace('wgl_a'); const b = cadDraftNamespace('unclaimed:urn:fusion:other');
+  const second = new DurableSettings({ storage: null, fetcher: backend.fetcher, writeDelayMs: () => 100_000 });
+  const a = journalKey('wgl_a', 'inventory'); const b = journalKey('wgl_b', 'inventory');
   await first.hydrate(); await second.hydrate();
-  first.set(a, 'draft a'); second.set(b, 'draft b'); await tick();
-  first.set(a, 'new a'); await tick();
-  const reopened = new DurableSettings({ storage: null, fetcher: backend.fetcher });
-  await reopened.hydrate();
-  expect(reopened.get(a)).toBe('new a'); expect(reopened.get(b)).toBe('draft b');
-  first.set(a, null); await tick(); await reopened.hydrate();
-  expect(reopened.get(a)).toBeNull(); expect(reopened.get(b)).toBe('draft b');
+  first.set(CAD_DRAFTS_NAMESPACE, JSON.stringify({ [a]: draftEntry(1, 'a'), [b]: draftEntry(1, 'b') })); await tick();
+  second.set(CAD_DRAFTS_NAMESPACE, JSON.stringify({ [a]: draftEntry(2, 'new a') }));
+  await second.hydrate();
+  expect(JSON.parse(second.get(CAD_DRAFTS_NAMESPACE)!)).toEqual({ [a]: draftEntry(2, 'new a'), [b]: draftEntry(1, 'b') });
+  second.flush(); await tick();
+  // A stale blob cannot erase B or overwrite the newer A.
+  first.set(CAD_DRAFTS_NAMESPACE, JSON.stringify({ [a]: draftEntry(1, 'stale a'), [b]: draftEntry(3, 'new b') })); await tick();
+  await first.hydrate();
+  expect(JSON.parse(first.get(CAD_DRAFTS_NAMESPACE)!)).toEqual({ [a]: draftEntry(2, 'new a'), [b]: draftEntry(3, 'new b') });
+  first.set(CAD_DRAFTS_NAMESPACE, JSON.stringify({ [a]: draftEntry(4, null) })); await tick(); await second.hydrate();
+  expect(JSON.parse(second.get(CAD_DRAFTS_NAMESPACE)!)).toEqual({ [a]: draftEntry(4, null), [b]: draftEntry(3, 'new b') });
+  expect([...backend.namespaces.keys()]).toEqual([CAD_DRAFTS_NAMESPACE]);
+  expect(backend.deleted.size).toBe(0);
+  expect(backend.calls.every(call => call.method === 'PUT')).toBe(true);
+  second.flush(); await tick();
+});
+
+it('migrates both legacy browser journals once and retains sources until v2 uploads', async () => {
+  localStorage.clear();
+  const path = `unclaimed:/${'long-path/'.repeat(1000)}`;
+  const oldNamespace = `cadSetupDraft_${btoa(path).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')}`;
+  const oldKey = `wg2.${oldNamespace}`;
+  const perModel = JSON.stringify({ [JSON.stringify([path, 'inventory'])]: {
+    settings: { driveVoltageV: 7 }, baseRevisionId: 'revision', updatedAt: 10,
+  } });
+  const shared = JSON.stringify({ bad: null, [JSON.stringify(['other', 'inventory'])]: {
+    settings: { driveVoltageV: 9 },
+  } });
+  localStorage.setItem(oldKey, perModel);
+  localStorage.setItem(SETTINGS_NAMESPACES.cadSetupDrafts, shared);
+  let offline = true;
+  const backend = settingsBackend();
+  const settings = new DurableSettings({ fetcher: async (input, init) => {
+    if (offline && init?.method) throw new Error('offline');
+    return backend.fetcher(input, init);
+  }, writeDelayMs: () => 0 });
+  settings.migrateCadDraftCache(); await tick();
+  expect(localStorage.getItem(oldKey)).toBe(perModel);
+  expect(localStorage.getItem(SETTINGS_NAMESPACES.cadSetupDrafts)).toBe(shared);
+  const entries = JSON.parse(settings.get(CAD_DRAFTS_NAMESPACE)!);
+  expect(entries[journalKey(path, 'inventory')]).toMatchObject({ baseRevisionId: 'revision', updatedAt: 10, draft: { settings: { driveVoltageV: 7 } } });
+  expect(entries[journalKey('other', 'inventory')]).toMatchObject({ baseRevisionId: null, draft: { legacy: true } });
+  offline = false; await settings.hydrate(); await tick();
+  expect(localStorage.getItem(oldKey)).toBeNull();
+  expect(localStorage.getItem(SETTINGS_NAMESPACES.cadSetupDrafts)).toBeNull();
+  expect(backend.deleted).toEqual(new Set(['cadSetupDrafts']));
+  const retired = backend.calls.filter(call => call.method === 'DELETE').length;
+  await settings.hydrate(); await tick();
+  expect(backend.calls.filter(call => call.method === 'DELETE')).toHaveLength(retired);
+  expect([...backend.namespaces.keys()]).toEqual([CAD_DRAFTS_NAMESPACE]);
+});
+
+it('uses the same UTF-8 model hash as the server migration', () => {
+  expect(journalKey('unclaimed:/café/模型', 'inventory').split('_')[0]).toBe('910fab8999de293c');
 });

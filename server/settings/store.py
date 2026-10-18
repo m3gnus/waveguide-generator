@@ -10,7 +10,8 @@ is the authority and the browser copy is only a cache for first paint.
 
 Namespace payloads are stored opaquely.  The frontend already owns the schema,
 its validation, and its migrations; duplicating that here would create a second
-definition to keep in step for no gain.  What this module does own is the
+definition to keep in step for no gain. The bounded CAD draft journal is the
+exception: its merge must be atomic across windows. What this module also owns is the
 envelope, the size ceilings, the atomic write, and two pieces of state the
 browser cannot hold on its own:
 
@@ -47,6 +48,7 @@ import tempfile
 from typing import Any
 
 from server.platform.paths import data_paths
+from server.settings import cad_drafts
 
 
 logger = logging.getLogger(__name__)
@@ -84,9 +86,7 @@ class StaleWriteError(SettingsError):
 
 
 def valid_namespace(name: str) -> bool:
-    return bool(NAMESPACE_PATTERN.fullmatch(name)) or bool(
-        re.fullmatch(r"cadSetupDraft_[A-Za-z0-9_-]{1,4096}", name)
-    )
+    return bool(NAMESPACE_PATTERN.fullmatch(name))
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -168,7 +168,9 @@ class SettingsStore:
         if not isinstance(payload, dict):
             return
         namespaces = payload.get("namespaces")
+        migrated_sources: list[str] = []
         if isinstance(namespaces, dict):
+            namespaces, migrated_sources = cad_drafts.migrate(namespaces)
             self._namespaces = {
                 name: value for name, value in namespaces.items() if valid_namespace(str(name))
             }
@@ -181,6 +183,15 @@ class SettingsStore:
                 for name in dict.fromkeys(str(entry) for entry in deleted)
                 if valid_namespace(name) and name not in self._namespaces
             ][-MAX_DELETED:]
+        if migrated_sources:
+            self._deleted = list(dict.fromkeys([*self._deleted, *filter(valid_namespace, migrated_sources)]))[-MAX_DELETED:]
+            try:
+                _write_json_atomic(self.settings_path, {
+                    "schemaVersion": SCHEMA_VERSION, "namespaces": self._namespaces, "deleted": self._deleted,
+                })
+            except OSError as exc:
+                self._load_error = exc
+                self._loaded = False
 
     def _ensure_loaded(self) -> None:
         if not self._loaded:
@@ -254,13 +265,16 @@ class SettingsStore:
         self._ensure_loaded()
         self._ensure_writable()
         self._reject_stale(namespace, writer, sequence)
+        if namespace == cad_drafts.NAMESPACE:
+            value = cad_drafts.merge(self._namespaces.get(namespace), value)
         try:
             encoded = json.dumps(value)
         except (TypeError, ValueError) as exc:
             raise SettingsError(f"Settings for {namespace!r} are not JSON-serialisable: {exc}") from exc
-        if len(encoded.encode("utf-8")) > MAX_NAMESPACE_BYTES:
+        namespace_limit = MAX_TOTAL_BYTES if namespace == cad_drafts.NAMESPACE else MAX_NAMESPACE_BYTES
+        if len(encoded.encode("utf-8")) > namespace_limit:
             raise SettingsError(
-                f"Settings for {namespace!r} exceed {MAX_NAMESPACE_BYTES} bytes."
+                f"Settings for {namespace!r} exceed {namespace_limit} bytes."
             )
         if namespace not in self._namespaces and len(self._namespaces) >= MAX_NAMESPACES:
             raise SettingsError(f"At most {MAX_NAMESPACES} settings namespaces are supported.")

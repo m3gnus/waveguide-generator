@@ -87,6 +87,7 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   paramHelp: 'inert',
   paramSections: 'inert',
   cadSetupDrafts: 'inert',
+  cadSetupDrafts_v2: 'inert',
   cadSolveProfiles: 'inert',
   // Saved drivers are a catalogue, not a setting: nothing solves differently
   // until one is picked, and picking one is a rail edit of its own.

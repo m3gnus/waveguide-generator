@@ -360,10 +360,81 @@ def test_driver_library_namespace_round_trips(tmp_path: Path) -> None:
     assert store_for(tmp_path).get("driverLibrary") == payload
 
 
-def test_model_draft_namespaces_support_encoded_unclaimed_document_ids(tmp_path: Path) -> None:
+
+def draft_key(model: str) -> str:
+    from server.settings.cad_drafts import draft_hash
+    return f"{draft_hash(model)}_{draft_hash('inventory')}"
+
+
+def draft_entry(timestamp: int, value="draft", base="revision"):
+    return {"draft": None if value is None else {"value": value}, "updatedAt": timestamp, "baseRevisionId": base}
+
+
+def test_cad_journal_merges_each_key_and_keeps_newer_clears_across_windows(tmp_path):
     store = store_for(tmp_path)
-    namespace = "cadSetupDraft_" + "a" * 300
-    store.put(namespace, "draft")
-    assert store_for(tmp_path).get(namespace) == "draft"
-    with pytest.raises(SettingsError):
-        store.put("cadSetupDraft_../escape", "draft")
+    namespace = "cadSetupDrafts_v2"
+    a, b = draft_key("a"), draft_key("b")
+    store.put(namespace, json.dumps({a: draft_entry(1), b: draft_entry(2)}), writer="a", sequence=1)
+    store.put(namespace, json.dumps({a: draft_entry(3, "new")}), writer="b", sequence=1)
+    store.put(namespace, json.dumps({a: draft_entry(1), b: draft_entry(4, None)}), writer="a", sequence=2)
+    store.put(namespace, json.dumps({b: draft_entry(2)}), writer="b", sequence=2)
+    assert json.loads(store_for(tmp_path).get(namespace)) == {a: draft_entry(3, "new"), b: draft_entry(4, None)}
+    assert store.deleted() == []
+
+
+def test_cad_journal_bounds_25_models_and_each_entry(tmp_path):
+    store = store_for(tmp_path)
+    namespace = "cadSetupDrafts_v2"
+    for i in range(25):
+        store.put(namespace, json.dumps({draft_key(str(i)): draft_entry(i, "x" * 32_000)}))
+    entries = json.loads(store.get(namespace))
+    assert len(entries) == 20
+    assert set(entries) == {draft_key(str(i)) for i in range(5, 25)}
+    # The map may exceed the ordinary 256 KB namespace ceiling, but each entry is bounded.
+    assert len(store.get(namespace)) > MAX_NAMESPACE_BYTES
+    store.put(namespace, json.dumps({draft_key("huge"): draft_entry(100, "x" * 65_536)}))
+    assert json.loads(store.get(namespace)) == entries
+
+
+def test_publishing_cad_drafts_does_not_churn_namespace_tombstones(tmp_path):
+    store = store_for(tmp_path)
+    retired = ["cadSolveProfiles", "cadProject", "designDraft"]
+    for name in retired:
+        store.delete(name)
+    for i in range(100):
+        key = draft_key(str(i))
+        store.put("cadSetupDrafts_v2", json.dumps({key: draft_entry(i * 2)}))
+        store.put("cadSetupDrafts_v2", json.dumps({key: draft_entry(i * 2 + 1, None)}))
+    assert list(store.all()) == ["cadSetupDrafts_v2"]
+    assert store_for(tmp_path).deleted() == retired
+
+
+def test_migrates_both_cad_journals_once_before_filtering_legacy_names(tmp_path):
+    from server.settings.cad_drafts import draft_hash
+
+    model = "unclaimed:/" + "long/" * 1500
+    key = json.dumps([model, "inventory"])
+    old_name = "cadSetupDraft_" + "a" * 5000
+    shared_key = json.dumps(["shared", "inventory"])
+    expected_key = f"{draft_hash(model)}_{draft_hash('inventory')}"
+    original = {"schemaVersion": SCHEMA_VERSION, "namespaces": {
+        old_name: json.dumps({key: {"settings": {"driveVoltageV": 7}, "baseRevisionId": "base", "updatedAt": 10}}),
+        "cadSetupDrafts": json.dumps({shared_key: {"settings": {"driveVoltageV": 9}}}),
+        "theme": "dark",
+    }, "deleted": ["designDraft"]}
+    path = tmp_path / "ui_settings.json"
+    path.write_text(json.dumps(original))
+    store = store_for(tmp_path)
+    entries = json.loads(store.get("cadSetupDrafts_v2"))
+    assert len(entries) == 2
+    assert entries[expected_key] == {"draft": {"settings": {"driveVoltageV": 7}}, "baseRevisionId": "base", "updatedAt": 10}
+    shared = f"{draft_hash('shared')}_{draft_hash('inventory')}"
+    assert entries[shared]["draft"]["legacy"] is True
+    assert entries[shared]["baseRevisionId"] is None
+    assert set(store.all()) == {"theme", "cadSetupDrafts_v2"}
+    assert store.deleted() == ["designDraft", "cadSetupDrafts"]
+    # The invalid legacy name is removed atomically, without relaxing validation or adding an unusable tombstone.
+    persisted = path.read_bytes()
+    assert old_name not in json.loads(persisted)["namespaces"]
+    assert store_for(tmp_path).envelope() == store.envelope()
+    assert path.read_bytes() == persisted

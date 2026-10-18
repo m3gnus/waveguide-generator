@@ -11,6 +11,7 @@ derives which saved setup applies from the prepared mesh's source inventory.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 import hashlib
 import json
 import os
@@ -46,6 +47,8 @@ from server.mesh.integrity import mesh_integrity_report
 from server.mesh.prepared_gc import prepared_mesh_use
 from server.platform.staging import publish_staging_directory
 from server.workspace.archive import archive_folder_slug
+
+MAX_ACCEPTED_SETUP_WRITES = 512
 
 Axis = Literal["+x", "-x", "+y", "-y", "+z", "-z"]
 
@@ -430,7 +433,7 @@ def mount_models_api(application: FastAPI) -> None:
     # Pagehide sends immediately. Refuse an older request from that same page
     # if its successor already committed; clients without headers keep working.
     setup_writes = asyncio.Lock()
-    accepted_setup_writes: dict[tuple[str, str, str], int] = {}
+    accepted_setup_writes: OrderedDict[tuple[str, str, str], int] = OrderedDict()
     refused = {
         404: {"model": ErrorEnvelope, "description": "Unknown model or prepared mesh"},
         409: {"model": ErrorEnvelope, "description": "Restart pending, mismatched or unavailable mesh"},
@@ -614,6 +617,9 @@ def mount_models_api(application: FastAPI) -> None:
             revision = await asyncio.to_thread(record_setup)
             if writer:
                 accepted_setup_writes[key] = sequence
+                accepted_setup_writes.move_to_end(key)
+                while len(accepted_setup_writes) > MAX_ACCEPTED_SETUP_WRITES:
+                    accepted_setup_writes.popitem(last=False)
         return {
             "revision_id": revision["revision_id"],
             "content_sha256": revision["content_sha256"],

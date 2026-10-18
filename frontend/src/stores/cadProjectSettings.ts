@@ -6,7 +6,8 @@ import type { ImportedSetup } from '../jobs/importedSetup';
 import { cadHistorySetup } from './cadSetupRestore';
 import { useCadReturnStore, sourceInventorySignature } from './cadReturn';
 import { useCadPreparationStore } from './cadPreparation';
-import { cadDraftNamespace, durableSettings } from './durableSettings';
+import { durableSettings, type SettingsNamespace } from './durableSettings';
+import { CAD_DRAFTS_NAMESPACE, cadDraftHash, journalKey, mergeCadDrafts, type CadDraftJournal } from './cadDraftJournal';
 import { applyCadOptions, cadOptionsSnapshot, endOpenedSetup } from './importedModel';
 import { readLegacySolveProfiles, parseSolveSettings, type PersistedSolveSettings } from './legacyCadProfiles';
 import { defaultSolveOptions, importedOptionsFromWire, normalizePersistedSolveOptions, type ImportedOptionsSnapshot } from './solveOptions';
@@ -25,31 +26,28 @@ const fields = ['sourceSizesMm', 'rigidSizeMm', 'transitionMm', 'skippedSourceId
   'exteriorOnly', 'exteriorOnlyRegionIds', 'combineEnabled', 'combineSpec', 'channelDrivers',
   'passiveCardioid', 'driveVoltageV', 'maxDriveVoltageV', 'frequencyStartHz', 'frequencyEndHz', 'frequencyCount'] as const;
 const baseRevisions = new Map<string, string | null>();
+function journal(): CadDraftJournal {
+  durableSettings.migrateCadDraftCache();
+  return mergeCadDrafts(durableSettings.get(CAD_DRAFTS_NAMESPACE));
+}
 function drafts(): Record<string, CadDraft> {
-  const all: Record<string, CadDraft> = {};
-  for (const namespace of durableSettings.draftNamespaces()) {
-    try {
-      for (const [key, draft] of Object.entries(JSON.parse(durableSettings.get(namespace) ?? '{}'))) {
-        const owner = JSON.parse(key)?.[0];
-        if (typeof owner === 'string' && cadDraftNamespace(owner) === namespace && draft && typeof draft === 'object') all[key] = draft as CadDraft;
-      }
-    } catch { /* discard corrupt cache */ }
-  }
-  return all;
+  return Object.fromEntries(Object.entries(journal()).filter(([, entry]) => entry.draft !== null)
+    .map(([key, entry]) => [key, { baseRevisionId: entry.baseRevisionId, updatedAt: entry.updatedAt, ...entry.draft } as unknown as CadDraft]));
 }
 function writeDrafts(next: Record<string, CadDraft>): void {
-  const groups = new Map<ReturnType<typeof cadDraftNamespace>, Record<string, CadDraft>>();
-  const entries = Object.entries(next).sort((a, b) => (b[1].updatedAt ?? 0) - (a[1].updatedAt ?? 0)).slice(0, 20);
-  for (const [key, draft] of entries) {
-    const namespace = cadDraftNamespace(JSON.parse(key)[0]);
-    const group = groups.get(namespace) ?? {};
-    group[key] = draft; groups.set(namespace, group);
+  const all = journal();
+  for (const key of new Set([...Object.keys(all), ...Object.keys(next)])) {
+    const value = next[key];
+    const previous = all[key];
+    const { baseRevisionId = null, updatedAt = 0, ...draft } = value ?? {};
+    if ((!value && previous?.draft === null)
+      || (value && JSON.stringify(previous) === JSON.stringify({ draft, baseRevisionId, updatedAt }))) continue;
+    all[key] = { draft: value ? draft : null, baseRevisionId: value ? baseRevisionId : previous?.baseRevisionId ?? null,
+      updatedAt: Math.max(Date.now(), updatedAt, (previous?.updatedAt ?? -1) + 1) };
   }
-  for (const namespace of new Set([...durableSettings.draftNamespaces(), ...groups.keys()])) {
-    const group = groups.get(namespace);
-    const raw = group ? JSON.stringify(group) : null;
-    if (raw !== durableSettings.get(namespace)) durableSettings.set(namespace, raw);
-  }
+  // Empty journals and per-entry clear markers stay in this one namespace.
+  const raw = JSON.stringify(mergeCadDrafts(all));
+  if (raw !== durableSettings.get(CAD_DRAFTS_NAMESPACE)) durableSettings.set(CAD_DRAFTS_NAMESPACE, raw);
 }
 /** Before the first prepare the return itself is the owner, never the open design. */
 function unclaimedOwner(): string | null {
@@ -57,7 +55,7 @@ function unclaimedOwner(): string | null {
   return bundle ? `unclaimed:${bundle.documentNativeId || bundle.bundlePath}` : null;
 }
 export function cadDraftKey(model: string, sources: CadSourceInventoryEntry[]): string {
-  return JSON.stringify([model, sourceInventorySignature({ readable: true, sources })]);
+  return journalKey(model, sourceInventorySignature({ readable: true, sources }));
 }
 export function currentCadDraftKey(): string | null {
   const state = useCadReturnStore.getState();
@@ -72,7 +70,7 @@ export function retainCadDraft(): { key: string; raw: string } | null {
   if (!key || !options) return null;
   const state = useCadReturnStore.getState();
   const draft: CadDraft = structuredClone({
-    baseRevisionId: baseRevisions.get(key) ?? null, updatedAt: Date.now(),
+    baseRevisionId: baseRevisions.get(key) ?? null, updatedAt: Math.max(Date.now(), (journal()[key]?.updatedAt ?? -1) + 1),
     settings: Object.fromEntries(fields.map(field => [field, state[field]])) as PersistedSolveSettings,
     options,
     preparation: { symmetryMode: useCadPreparationStore.getState().symmetryMode, areaDriftOverrides: state.areaDriftOverrides },
@@ -89,7 +87,7 @@ export function clearCadDraft(key: string, raw: string, revisionId: string | nul
   const current = next[key];
   if (!current) return;
   // A successful predecessor is now the base of a newer incomplete edit too.
-  if (JSON.stringify({ ...current, baseRevisionId: previous.baseRevisionId }) !== raw) {
+  if (JSON.stringify({ ...current, baseRevisionId: previous.baseRevisionId, updatedAt: previous.updatedAt }) !== raw) {
     if (current.baseRevisionId === previous.baseRevisionId || current.baseRevisionId === acknowledgedBase) {
       current.baseRevisionId = revisionId; writeDrafts(next);
     }
@@ -102,10 +100,8 @@ export function clearCadDraft(key: string, raw: string, revisionId: string | nul
 /** Move every old entry once; no MRU and no legacy key writes remain. */
 export async function migrateCadProfiles(fetcher: typeof fetch = fetch): Promise<void> {
   const raw = durableSettings.get('cadSolveProfiles');
-  const shared = durableSettings.get('cadSetupDrafts');
   const legacy = readLegacySolveProfiles();
   const additions: Record<string, CadDraft> = {};
-  // The shared K3 journal has neither base revisions nor verified legacy provenance.
   let verificationFailed = false;
   for (const profile of legacy) {
     const cadOwned = profile.owner.startsWith('cad:');
@@ -131,16 +127,13 @@ export async function migrateCadProfiles(fetcher: typeof fetch = fetch): Promise
   }
   const next = { ...additions, ...drafts() };
   if (Object.keys(additions).length) writeDrafts(next);
-  const destinations = durableSettings.draftNamespaces();
+  const destinations: SettingsNamespace[] = [CAD_DRAFTS_NAMESPACE];
   // Separate namespace writes cannot be atomic: acknowledge destinations before retiring the source.
   if (raw !== null && !verificationFailed) void durableSettings.retireAfterUpload('cadSolveProfiles', destinations, raw);
-  if (shared !== null) void durableSettings.retireAfterUpload('cadSetupDrafts', destinations, shared);
 }
 export async function hasCadDraftForModel(model: string, fetcher: typeof fetch = fetch): Promise<boolean> {
   await migrateCadProfiles(fetcher);
-  return Object.keys(drafts()).some(key => {
-    try { return JSON.parse(key)[0] === model; } catch { return false; }
-  });
+  return Object.keys(drafts()).some(key => key.startsWith(`${cadDraftHash(model)}_`));
 }
 const restoredListeners = new Set<() => void>();
 export function subscribeCadDraftRestores(listener: () => void): () => void {
@@ -236,7 +229,7 @@ export function observeCadDraftHydration(settings: Pick<typeof durableSettings, 
   const refresh = () => {
     if (allowLateDraft && restoredAtEdit === edits && currentCadDraftKey()) void loadCadProjectSettings();
   };
-  const stops = [settings.subscribe('cadSetupDrafts', refresh), settings.subscribe('cadSolveProfiles', refresh)];
+  const stops = [settings.subscribe(CAD_DRAFTS_NAMESPACE, refresh), settings.subscribe('cadSolveProfiles', refresh)];
   return () => stops.forEach(stop => stop());
 }
 observeCadDraftHydration();
@@ -271,7 +264,7 @@ export function loadCadProjectSettings(fetcher: typeof fetch = fetch): Promise<b
     && useCadReturnStore.getState().projectLineageId === model;
   loading = (async () => {
     try {
-      if (durableSettings.get('cadSolveProfiles') !== null || durableSettings.get('cadSetupDrafts') !== null) await migrateCadProfiles(fetcher);
+      if (durableSettings.get('cadSolveProfiles') !== null) await migrateCadProfiles(fetcher);
       const saved = await readCadInventorySetup(model, bundle.sources.map(({ id, role, required }) => ({ id, role, required })), fetcher);
       if (!current()) return useCadReturnStore.getState().isCurrentSelectionIntent(selection);
       const held = useCadReturnStore.getState();

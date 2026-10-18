@@ -426,3 +426,41 @@ def test_pagehide_setup_cannot_be_overwritten_by_an_older_write(tmp_path):
             await runtime.shutdown()
             store.close()
     asyncio.run(scenario())
+
+
+def test_setup_write_ordering_evicts_the_oldest_writer(tmp_path, monkeypatch):
+    from server.jobs import models_api
+
+    monkeypatch.setattr(models_api, "MAX_ACCEPTED_SETUP_WRITES", 3)
+
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        project = store.claim_cad_document_lineage("urn:fusion:bounded", "Bounded")
+
+        async def write(writer, sequence):
+            async def with_headers(scope, receive, send):
+                scope = {**scope, "headers": [*scope["headers"],
+                    (b"x-wg-setup-writer", writer.encode()),
+                    (b"x-wg-setup-seq", str(sequence).encode())]}
+                await app(scope, receive, send)
+            status, _ = await _request(with_headers, "PUT", f"/api/models/{project}/setup", body={
+                "inventory": [{"id": "hf", "role": "HF", "required": True}],
+                "setup": {"geometry": {"drive_channels": [{"id": "hf", "source_ids": ["hf"]}]},
+                          "options": {"engine": "metal", "frequency_range": [100, 1000], "num_frequencies": 23}},
+            })
+            return status
+
+        try:
+            for writer in ("oldest", "active", "third"):
+                assert await write(writer, 2) == 200
+            assert await write("oldest", 3) == 200  # Refresh its LRU position.
+            assert await write("fourth", 2) == 200
+            assert await write("oldest", 2) == 409
+            assert await write("active", 1) == 200  # Only the least recent writer was evicted.
+            assert await write("fourth", 1) == 409
+        finally:
+            await runtime.shutdown()
+            store.close()
+
+    asyncio.run(scenario())

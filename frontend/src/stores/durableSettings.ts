@@ -17,7 +17,7 @@
  *
  * Values are opaque strings -- exactly the strings that used to be stored
  * locally. Each store keeps its own schema, validation, and migrations; this
- * module deliberately understands none of them.
+ * module delegates the CAD journal's per-entry merge to cadDraftJournal.
  *
  * Two parts of the server contract exist because the browser cannot decide
  * them alone. Each write carries this instance's identity and a sequence
@@ -29,6 +29,8 @@
  * look like, and this browser's stale copy must be republished in the second
  * case and dropped in the first.
  */
+
+import { CAD_DRAFTS_NAMESPACE, mergeCadDrafts, migrateCadDrafts } from './cadDraftJournal';
 
 /** Namespace -> the `localStorage` key it has always used. */
 export const SETTINGS_NAMESPACES = {
@@ -50,6 +52,7 @@ export const SETTINGS_NAMESPACES = {
   paramHelp: 'wg-param-help-visible',
   paramSections: 'wg-param-sections',
   cadSetupDrafts: 'wg2.cad.setup.drafts.v1',
+  cadSetupDrafts_v2: 'wg2.cad.setup.drafts.v2',
   /** Migration only; never write new profiles. */
   cadSolveProfiles: 'waveguide-v2-g3-cad-solve-profiles',
   driverLibrary: 'waveguide-v2-g3-driver-library',
@@ -58,16 +61,8 @@ export const SETTINGS_NAMESPACES = {
   sourceAssemblyDraft: 'wg2.source-assembly-draft.v1',
 } as const;
 
-export type SettingsNamespace = keyof typeof SETTINGS_NAMESPACES | `cadSetupDraft_${string}`;
-const DRAFT_PREFIX = 'cadSetupDraft_';
-function storageKey(namespace: SettingsNamespace): string {
-  return namespace.startsWith(DRAFT_PREFIX) ? `wg2.${namespace}` : SETTINGS_NAMESPACES[namespace as keyof typeof SETTINGS_NAMESPACES];
-}
-/** A separate server key per model prevents cross-window read/modify/write loss. */
-export function cadDraftNamespace(model: string): SettingsNamespace {
-  const bytes = new TextEncoder().encode(model);
-  return `cadSetupDraft_${btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')}`;
-}
+export type SettingsNamespace = keyof typeof SETTINGS_NAMESPACES;
+function storageKey(namespace: SettingsNamespace): string { return SETTINGS_NAMESPACES[namespace]; }
 
 /** The design draft changes on every edit; the rest change when a user acts. */
 const WRITE_DELAY_MS: Partial<Record<SettingsNamespace, number>> = { designDraft: 1_500 };
@@ -151,16 +146,32 @@ export class DurableSettings {
     return this.memory.get(namespace) ?? null;
   }
 
-  /** Known per-model keys from hydration, cache, or edits in this page. */
-  draftNamespaces(): SettingsNamespace[] {
-    const names = new Set<SettingsNamespace>([...this.memory.keys()].filter(name => name.startsWith(DRAFT_PREFIX)));
+  private readonly migratedDraftCaches = new Map<string, string>();
+  /** Browser-only legacy copies migrate too; retain them until v2 is acknowledged. */
+  migrateCadDraftCache(): void {
     try {
+      const sources = new Map<string, string>();
       for (let i = 0; this.storage && i < this.storage.length; i += 1) {
         const key = this.storage.key(i);
-        if (key?.startsWith(`wg2.${DRAFT_PREFIX}`) && !key.endsWith(LOCAL_NEWER_SUFFIX)) names.add(key.slice(4) as SettingsNamespace);
+        if (key && (key === SETTINGS_NAMESPACES.cadSetupDrafts || key.startsWith('wg2.cadSetupDraft_'))
+          && !key.endsWith(LOCAL_NEWER_SUFFIX)) {
+          const raw = this.storage.getItem(key);
+          if (raw !== null && this.migratedDraftCaches.get(key) !== raw) sources.set(key, raw);
+        }
       }
-    } catch { /* memory remains available */ }
-    return [...names].filter(name => this.get(name) !== null);
+      const shared = this.get('cadSetupDrafts');
+      if (shared !== null && this.migratedDraftCaches.get(SETTINGS_NAMESPACES.cadSetupDrafts) !== shared)
+        sources.set(SETTINGS_NAMESPACES.cadSetupDrafts, shared);
+      if (!sources.size) return;
+      const merged = mergeCadDrafts(...[...sources.values()].map(migrateCadDrafts), this.get(CAD_DRAFTS_NAMESPACE));
+      if (sources.has(SETTINGS_NAMESPACES.cadSetupDrafts)) {
+        const timer = this.timers.get('cadSetupDrafts');
+        if (timer !== undefined) clearTimeout(timer);
+        this.timers.delete('cadSetupDrafts');
+      }
+      sources.forEach((raw, key) => this.migratedDraftCaches.set(key, raw));
+      this.set(CAD_DRAFTS_NAMESPACE, JSON.stringify(merged));
+    } catch { /* unavailable browser storage has no legacy cache to migrate */ }
   }
 
   /** Persist destinations before deleting a migration source. Failure retains it for retry. */
@@ -169,15 +180,20 @@ export class DurableSettings {
       const timer = this.timers.get(namespace);
       if (timer !== undefined) clearTimeout(timer);
       this.timers.delete(namespace);
-      await this.upload(namespace, false);
-      if (this.isLocalNewer(namespace)) return;
+      let before: string | null;
+      do {
+        before = this.get(namespace);
+        await this.upload(namespace, false);
+        if (!this.isLocalNewer(namespace)) break;
+        if (before === this.get(namespace)) return;
+      } while (this.isLocalNewer(namespace));
     }
     if (this.get(source) === raw) this.set(source, null);
   }
 
   /** Record a change locally, then push it to the server in the background. */
   set(namespace: SettingsNamespace, raw: string | null): void {
-    this.writeCache(namespace, raw);
+    this.writeCache(namespace, namespace === CAD_DRAFTS_NAMESPACE ? JSON.stringify(mergeCadDrafts(raw)) : raw);
     this.scheduleUpload(namespace);
   }
 
@@ -198,8 +214,9 @@ export class DurableSettings {
     // cap bounds how long startup waits, not the request itself: a slow answer
     // is still applied when it lands, so a sluggish backend costs a moment of
     // cached settings rather than a whole session of them.
+    this.migrateCadDraftCache();
     const cachedAtRequest = new Map<SettingsNamespace, string | null>();
-    for (const namespace of [...Object.keys(SETTINGS_NAMESPACES) as SettingsNamespace[], ...this.draftNamespaces()]) {
+    for (const namespace of Object.keys(SETTINGS_NAMESPACES) as SettingsNamespace[]) {
       cachedAtRequest.set(namespace, this.get(namespace));
     }
     const request = (async () => {
@@ -229,9 +246,18 @@ export class DurableSettings {
       (Array.isArray(envelope?.deleted) ? envelope.deleted : [])
         .filter((name): name is string => typeof name === 'string'),
     );
-    const names = new Set<SettingsNamespace>([...cachedAtRequest.keys(), ...Object.keys(stored).filter(name => name.startsWith(DRAFT_PREFIX)) as SettingsNamespace[], ...[...deleted].filter(name => name.startsWith(DRAFT_PREFIX)) as SettingsNamespace[]]);
+    const names = cachedAtRequest.keys();
     for (const namespace of names) {
       const local = this.get(namespace);
+      if (namespace === CAD_DRAFTS_NAMESPACE && envelope) {
+        const remote = stored[namespace];
+        if (local === null && typeof remote !== 'string') continue;
+        const merged = JSON.stringify(mergeCadDrafts(remote, local));
+        if (local !== merged) { this.writeCache(namespace, merged); this.notify(namespace, merged); }
+        if (merged !== remote) this.scheduleUpload(namespace, 0);
+        else if (this.isLocalNewer(namespace)) this.scheduleUpload(namespace, 0);
+        continue;
+      }
       // A prior publish failed or has not completed. This marker is stored next
       // to the cache so it survives a restart: an older server answer may not
       // replace the only newer copy, and hydration is the retry opportunity.
@@ -286,7 +312,7 @@ export class DurableSettings {
   }
 
   private notify(namespace: SettingsNamespace, raw: string | null): void {
-    const listeners = [...this.listeners.get(namespace) ?? [], ...(namespace.startsWith(DRAFT_PREFIX) ? this.listeners.get('cadSetupDrafts') ?? [] : [])];
+    const listeners = this.listeners.get(namespace) ?? [];
     for (const listener of listeners) {
       try { listener(raw); } catch { /* one bad subscriber must not stop the rest */ }
     }
@@ -337,6 +363,7 @@ export class DurableSettings {
       // Read at send time, not at schedule time, so the newest value wins even
       // when several changes collapsed into this one request.
       const raw = this.get(namespace);
+      const migrationSources = namespace === CAD_DRAFTS_NAMESPACE ? new Map(this.migratedDraftCaches) : new Map<string, string>();
       const sequence = ++this.writeSequence;
       this.outstanding.set(namespace, (this.outstanding.get(namespace) ?? 0) + 1);
       try {
@@ -355,7 +382,25 @@ export class DurableSettings {
         // overtook, and one without it commits in arrival order, so the last
         // acceptance is the last commit either way. Non-OK responses are
         // failed writes and say nothing about what is stored.
-        if (response.ok) this.acknowledged.set(namespace, raw);
+        if (response.ok) {
+          this.acknowledged.set(namespace, raw);
+          if (namespace === CAD_DRAFTS_NAMESPACE) {
+            const envelope = await response.json() as SettingsEnvelope;
+            const remote = envelope.namespaces?.[namespace];
+            if (typeof remote === 'string') {
+              const merged = JSON.stringify(mergeCadDrafts(remote, this.get(namespace)));
+              if (merged !== this.get(namespace)) { this.writeCache(namespace, merged); this.notify(namespace, merged); }
+              this.acknowledged.set(namespace, remote);
+            }
+            for (const [key, value] of migrationSources) {
+              if (this.migratedDraftCaches.get(key) !== value || this.storage?.getItem(key) !== value) continue;
+              this.storage?.removeItem(key);
+              this.storage?.removeItem(`${key}${LOCAL_NEWER_SUFFIX}`);
+              this.migratedDraftCaches.delete(key);
+              if (key === SETTINGS_NAMESPACES.cadSetupDrafts) this.set('cadSetupDrafts', null);
+            }
+          }
+        }
       } catch { /* the cache still holds it; the next change or hydration retries */ }
       finally {
         const left = (this.outstanding.get(namespace) ?? 1) - 1;
