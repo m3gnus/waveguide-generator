@@ -253,11 +253,28 @@ export class SketchSession {
       for (let half = 0; half <= 6; half++, fraction /= 2) {
         const part = this.projectTargets(targets.map((t, i) => ({ pointId: t.pointId, x: from[i].x + (t.x - from[i].x) * fraction, y: from[i].y + (t.y - from[i].y) * fraction })));
         result = await this.call(() => this.solver.dragTo(part, { tolerance }));
-        const next = this.read(result, before);
+        let next = this.read(result, before);
+        // An unreachable target leaves a residual that the solver spreads into other points,
+        // even when no direct locus exists to project onto. Restart from the step's start and
+        // drag to where the point actually got: that target is reachable, so nothing spreads.
+        if (result.status === 'ok' && part.some(t => distance(next.points.find(p => p.id === t.pointId)!, t) > tolerance)) {
+          const reached = part.map(t => ({ pointId: t.pointId, x: next.points.find(p => p.id === t.pointId)!.x, y: next.points.find(p => p.id === t.pointId)!.y }));
+          this.sketch = before; await this.call(() => this.restartDrag(), false, false);
+          const second = await this.call(() => this.solver.dragTo(reached, { tolerance }));
+          if (second.status === 'ok') { result = second; next = this.read(second, before); }
+        }
         if (result.status === 'ok' && this.guarded(before, next) && this.driftGuard(before, next, part, tolerance) && part.every((t, i) => {
           const error = distance(next.points.find(p => p.id === t.pointId)!, t);
           return error <= Math.max(1e-6, tolerance) || error <= distance(from[i], t) + 1e-12;
-        })) { this.sketch = next; accepted = true; break; }
+        })) {
+          // At the reachable boundary a step no longer moves the dragged point; accepting such
+          // micro-steps repeatedly lets tiny solver adjustments accumulate. Stop there instead.
+          if (part.every(t => distance(next.points.find(p => p.id === t.pointId)!, before.points.find(p => p.id === t.pointId)!) <= tolerance / 2)) {
+            this.sketch = before; await this.call(() => this.restartDrag(), false, false);
+            return { sketch: this.sketch, stopped: true, steps: steps + 1, result, reason: 'Stopped at the reachable boundary.' };
+          }
+          this.sketch = next; accepted = true; break;
+        }
         await this.call(() => this.restartDrag(), false, false);
         if (this.pendingDrag) break;
       }
