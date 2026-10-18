@@ -673,6 +673,7 @@ def read_fusion_status(
         "statusTtlSeconds": FUSION_STATUS_TTL.total_seconds(),
         "observationPolicy": None,
         "addinInboxTransfer": False,
+        "immutableBundles": False,
     }
     payload, transport = heartbeat if heartbeat is not None else select_heartbeat(workspace_root, checked_at)
     # A future timestamp is not trusted either (``FUSION_STATUS_MAX_SKEW``).
@@ -711,6 +712,7 @@ def read_fusion_status(
         "updatedAt": updated_at.isoformat().replace("+00:00", "Z"),
         "observationPolicy": observation_policy(payload),
         "addinInboxTransfer": addin_declares_inbox_transfer(payload),
+        "immutableBundles": type(payload.get("immutableBundles")) is int and payload["immutableBundles"] >= 1,
     }
     delivery = addin_delivery_version(payload)
     base["addinDeliveryVersion"] = delivery

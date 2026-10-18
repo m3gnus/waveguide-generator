@@ -27,7 +27,6 @@ from server.cadlink.identity import SaveIdentity, design_hash
 from server.cadlink.intake.ingest import IngestRefusal
 from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
-from server.mesh.gmsh_worker import run_on_gmsh_worker
 
 from .adapter import (
     OnshapeAdapter,
@@ -500,7 +499,7 @@ async def send(
         baseName=payload.base_name,
         identity=payload.identity,
     )
-    export = await run_on_gmsh_worker(
+    export = await asyncio.to_thread(
         _export_wglink_sync,
         export_request,
         store,
@@ -514,10 +513,18 @@ async def send(
     design_id = str(identity.get("designId") or "")
     lineage_id = str(identity.get("lineageId") or "")
     if not design_id:
-        raise HTTPException(
-            status_code=409,
-            detail="The export did not commit a design identity, so it cannot be linked to an Onshape document.",
-        )
+        # An idempotent retry may name an older export after its design head
+        # advanced. It intentionally omits an editor identity, but the immutable
+        # registry row still identifies the exact artifact sent to Onshape.
+        row = store.get_export(str(export.get("exportId") or ""))
+        design_id = str((row or {}).get("design_id") or "")
+        design = store.get_design(design_id) if design_id else None
+        lineage_id = str((design or {}).get("lineage_id") or "")
+        if not design_id:
+            raise HTTPException(
+                status_code=409,
+                detail="The export did not commit a design identity, so it cannot be linked to an Onshape document.",
+            )
     document_name = _base_name(payload.base_name)
     try:
         pushed = await asyncio.to_thread(

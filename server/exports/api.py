@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import ctypes
-import hashlib
 import json
 import logging
-import os
 from pathlib import Path
 import re
-import shutil
-import threading
+import sqlite3
 from typing import Any, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request
@@ -21,22 +17,20 @@ from pydantic import BaseModel, ConfigDict, Field
 from server.cadlink.identity import CadLink, SaveIdentity, design_hash
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES
 from server.cadlink.store import CadLinkStore
-from server.design.conventions import artifact_conventions
 from server.design.schema import DesignConfig
 from server.design.textcfg import serialize
-from server.mesh.gmsh_worker import run_on_gmsh_worker
+from server.mesh.child import run_mesh_build
 from server.platform.paths import app_root
-from server.platform.staging import publish_staging_directory
-from server.preview.translate import design_to_mesher_config
-from server.workspace.api import WorkspaceState, _path_segments, _portable_path_key
+from server.workspace.api import WorkspaceState
 
 from .cad_launch import focus_cad
 from server.cadlink.fusion.fusion_status import ADDIN_OUTDATED_MESSAGE, read_fusion_status
 
-from .cad_handoff import UPDATE_TARGET_REQUIRED, publish_fusion_handoff
+from .cad_handoff import UPDATE_TARGET_REQUIRED
 from .core import _refuse_ath_step, build_profiles, build_step, build_step_solid, build_stl
-from .geometry_identity import geometry_hash as _geometry_hash
-from .geometry_identity import mesher_version as _mesher_version
+from .wglink_geometry import build_bundle
+from .wglink_publication import (BUNDLE_LAYOUT, PublicationConflict, bundle_products,
+    row_facts, publish_bundle, finish_publication, recover_publications, recover_reserved_export)
 
 
 logger = logging.getLogger(__name__)
@@ -68,7 +62,6 @@ router = APIRouter(prefix="/api/export", tags=["exports"])
 _UNSAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
 _UNSAFE_SLUG = re.compile(r"[^a-z0-9_]+")
 _KNOWN_DESIGN_EXTENSIONS = frozenset({".cfg", ".txt", ".mwg"})
-_BUNDLE_SUFFIX = ".wglink"
 _THROAT_PARAMETER = "_throat_dia"
 
 
@@ -136,28 +129,6 @@ def _instance_slug(store: CadLinkStore, lineage_id: str, design_name: str) -> st
     return str(recorded.get("parameter_slug") or slug)
 
 
-def _lineage_bundle_stem(
-    store: CadLinkStore, lineage_id: str, design_name: str
-) -> str:
-    """The bundle folder a lineage already owns, or its current name if none.
-
-    A renamed design used to strand its old ``.wglink`` folder and leave the
-    Fusion document's stored bundle path pointing into it. Following the
-    lineage keeps updating one folder in place; the readable name it earned on
-    its first export is the one that stays.
-    """
-
-    recorded = store.get_lineage_cad_names(lineage_id) or {}
-    stem = str(recorded.get("bundle_stem") or "")
-    if stem:
-        return stem
-    previous = store.find_latest_export_for_lineage(lineage_id)
-    stored_path = str((previous or {}).get("bundle_path") or "")
-    if stored_path.endswith(_BUNDLE_SUFFIX):
-        return Path(stored_path).name[: -len(_BUNDLE_SUFFIX)]
-    return design_name
-
-
 #: The size at which a geometry export says how big it is.
 #:
 #: Not a limit and not a gate. A STEP file is about 97% ``CARTESIAN_POINT``
@@ -222,7 +193,7 @@ def _headers(
 def _export_error(exc: Exception) -> HTTPException:
     if isinstance(exc, (ValueError, TypeError)):
         return HTTPException(status_code=422, detail=str(exc))
-    if isinstance(exc, (ImportError, RuntimeError)):
+    if isinstance(exc, (ImportError, RuntimeError, sqlite3.OperationalError)):
         return HTTPException(status_code=503, detail=str(exc))
     return HTTPException(status_code=500, detail=f"Export failed: {exc}")
 
@@ -232,144 +203,7 @@ def _app_version() -> str:
     return str(json.loads(version_path.read_text(encoding="utf-8"))["version"])
 
 
-def _exchange_directories(first: Path, second: Path) -> None:
-    """Exchange two directory entries, atomically where the OS can.
-
-    POSIX systems swap without a reader-visible gap (renamex_np on macOS,
-    renameat2 elsewhere). Windows has no directory-exchange syscall reachable
-    from Python, so it falls back to a three-rename swap with the same
-    postcondition -- the old bundle ends up at ``first`` for the caller to
-    remove -- and a sub-millisecond window in which the destination name does
-    not exist. ``ctypes.CDLL(None)`` is the POSIX handle to libc and raises on
-    Windows, which is why the platform check comes first.
-    """
-
-    if os.name != "posix":
-        aside = second.with_name(second.name + f".swap-{os.getpid()}")
-        os.rename(second, aside)
-        try:
-            os.rename(first, second)
-        except OSError:
-            os.rename(aside, second)  # restore the live bundle before failing
-            raise
-        os.rename(aside, first)
-        return
-
-    libc = ctypes.CDLL(None, use_errno=True)
-    encoded_first = os.fsencode(first)
-    encoded_second = os.fsencode(second)
-    if hasattr(libc, "renamex_np"):
-        renamex_np = libc.renamex_np
-        renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
-        renamex_np.restype = ctypes.c_int
-        result = renamex_np(encoded_first, encoded_second, 0x00000002)  # RENAME_SWAP
-    elif hasattr(libc, "renameat2"):
-        renameat2 = libc.renameat2
-        renameat2.argtypes = [
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        ]
-        renameat2.restype = ctypes.c_int
-        result = renameat2(-100, encoded_first, -100, encoded_second, 0x00000002)
-    else:
-        raise OSError("atomic directory exchange is unavailable on this platform")
-    if result != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error), str(first), str(second))
-
-
-# Resolving a bundle name and publishing under it has to be one step.
-# `_bundle_destination` decides a name is free by reading the wglink folder, so
-# two exports that want the same readable name both see it free until one of
-# them lands. The registry lock used to span the whole build and serialized
-# this by accident; since the build moved outside that lock, only this short
-# claim needs to be serialized. Process-wide because the wglink folder is
-# reached through one server process.
-_BUNDLE_NAME_LOCK = threading.Lock()
-
-
-def _replace_bundle(staged: Path, destination: Path) -> None:
-    """Publish a complete bundle atomically for readers of the live path."""
-
-    if not destination.exists() and not destination.is_symlink():
-        os.replace(staged, destination)
-        return
-    if destination.is_symlink() or not destination.is_dir():
-        raise ValueError(f"CAD-link destination is not a bundle directory: {destination}")
-    _exchange_directories(staged, destination)
-    shutil.rmtree(staged, ignore_errors=True)
-
-
-def _bundle_destination(
-    wglink_root: Path, bundle_stem: str, design_id: str
-) -> Path:
-    """Resolve a stable portable name without overwriting another design.
-
-    A fresh/unsaved document has no filename, so every such document asks for
-    ``waveguide.wglink``.  Refusing the second one made Send to CAD fail before
-    it ever reached the Fusion launcher.  Keep the readable name for the first
-    owner and give later owners a deterministic design-id suffix; subsequent
-    exports of either design then keep updating their own bundle in place.
-    """
-
-    def available(filename: str) -> Path | None:
-        requested_key = _portable_path_key([filename])
-        for existing in wglink_root.iterdir():
-            if _portable_path_key([existing.name]) != requested_key:
-                continue
-            if existing.name != filename:
-                raise ValueError(
-                    "CAD-link bundle name collides with an existing portable "
-                    f"name: {existing.name}"
-                )
-            if existing.is_symlink() or not existing.is_dir():
-                raise ValueError(
-                    "CAD-link bundle name conflicts with an existing workspace "
-                    f"entry: {existing.name}"
-                )
-            try:
-                manifest = json.loads(
-                    (existing / "wglink.json").read_text(encoding="utf-8")
-                )
-                existing_design_id = str(
-                    (manifest.get("design") or {}).get("id") or ""
-                )
-            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-                raise ValueError(
-                    "CAD-link bundle name conflicts with an unreadable existing "
-                    f"bundle: {existing.name}"
-                ) from exc
-            return existing if existing_design_id == design_id else None
-        return wglink_root / filename
-
-    requested = f"{bundle_stem}{_BUNDLE_SUFFIX}"
-    destination = available(requested)
-    if destination is not None:
-        return destination
-
-    # Eight hex digits are ample for the ordinary case.  Trying longer slices
-    # keeps the rule deterministic even under a deliberately constructed hash
-    # prefix collision.  Trim a maximal user stem so the filename remains a
-    # valid 255-byte portable component after adding the suffix and extension.
-    digest = hashlib.sha256(design_id.encode("utf-8")).hexdigest()
-    stem = bundle_stem[:239].rstrip("._-") or "waveguide"
-    for length in (8, 12, 16, 32, 64):
-        candidate = f"{stem}-{digest[:length]}{_BUNDLE_SUFFIX}"
-        destination = available(candidate)
-        if destination is not None:
-            return destination
-
-    raise ValueError("Could not allocate a unique CAD-link bundle name.")
-
-
 class _ExportIdentityConflict(Exception):
-    pass
-
-
-class _BundleNameConflict(Exception):
     pass
 
 
@@ -482,7 +316,7 @@ def _wglink_response(
         artifact_hash = str(
             ((manifest.get("files") or {}).get("waveguide.step") or {}).get("sha256") or ""
         )
-    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status_code=409,
             detail="The original CAD-link bundle is no longer available. Export it again.",
@@ -497,6 +331,11 @@ def _wglink_response(
             status_code=409,
             detail="The original CAD-link bundle was replaced or changed. Export it again.",
         )
+    if bundle_path.name == f'{row["export_id"]}.wglink':
+        try:
+            bundle_products(bundle_path, row_facts(row))
+        except PublicationConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     payload: dict[str, Any] = {
         "bundlePath": str(bundle_path),
         "bundleId": row["bundle_id"],
@@ -506,6 +345,8 @@ def _wglink_response(
         "geometryHash": row["geometry_hash"],
         "artifactSha256": row["artifact_sha256"],
     }
+    if bundle_path.name == f'{row["export_id"]}.wglink':
+        payload["bundleLayout"] = BUNDLE_LAYOUT
     if identity is not None:
         payload["identity"] = {
             "designId": identity.design_id,
@@ -526,6 +367,7 @@ def _export_wglink_sync(
     workspace_root: Path,
     idempotency_key: str,
     unavailable_detail: str = UNAVAILABLE_WORKSPACE,
+    handoff: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """Build one identity-bearing bundle under ``workspace_root/wglink``.
 
@@ -543,9 +385,6 @@ def _export_wglink_sync(
     if request.design.formula in NATIVE_FORMULAS:
         raise HTTPException(status_code=422, detail=f"{request.design.formula} cannot be sent to CAD Link: native recipe transport is not supported. Export STEP instead.")
 
-    from hornlab_mesher import WgLinkIdentity, WgLinkSourceInterface, write_wglink
-    from hornlab_mesher.config_builder import resolve_geometry
-
     try:
         _refuse_ath_step(request.design)
     except ValueError as exc:
@@ -556,26 +395,28 @@ def _export_wglink_sync(
     wglink_root = (workspace_root / "wglink").resolve()
     if workspace_root != wglink_root and workspace_root not in wglink_root.parents:
         raise HTTPException(status_code=422, detail="CAD-link destination resolves outside the selected workspace")
-    retry = store.find_export_by_idempotency_key(idempotency_key)
+    try:
+        retry = store.find_export_by_idempotency_key(idempotency_key) or recover_reserved_export(store, idempotency_key)
+    except PublicationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if retry is not None:
-        return _wglink_response(retry, _identity_for_export(store, retry))
+        if design_hash(request.design) != retry["design_hash"] or (
+            request.identity is not None and request.identity.design_id != retry["design_id"]
+        ):
+            raise HTTPException(status_code=409, detail="Idempotency key names a different CAD export identity.")
+        result = _wglink_response(retry, _identity_for_export(store, retry))
+        published = _finish_publication(store, retry)
+        if published is not None:
+            result["cadHandoffRequestId"] = published.request_id
+        return result
 
     design_name = _base_name(request.base_name)
-    try:
-        _path_segments(f"{design_name}.wglink", "CAD-link bundle name")
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
     current_design_hash = design_hash(request.design)
     identity = _commit_design_for_export(
         store, request.identity, request.design, current_design_hash, design_name
     )
     instance_slug = _instance_slug(store, identity.lineage_id, design_name)
-    bundle_stem = _lineage_bundle_stem(store, identity.lineage_id, design_name)
 
-    config = design_to_mesher_config(request.design)
-    resolved = resolve_geometry(config)
-    mesher_version = _mesher_version()
-    geometry_hash = _geometry_hash(resolved.geometry, mesher_version)
     try:
         wglink_root.mkdir(exist_ok=True)
     except OSError as exc:
@@ -591,98 +432,14 @@ def _export_wglink_sync(
                 "The design changed while the CAD export was starting. "
                 "Send it to CAD again."
             )
-        # Fail before the geometry work when the name is already unusable; the
-        # binding claim happens under the lock once the bundle is staged.
-        try:
-            _bundle_destination(wglink_root, bundle_stem, identity.design_id)
-        except ValueError as exc:
-            raise _BundleNameConflict(str(exc)) from exc
-        temporary_root = publish_staging_directory(wglink_root, ".wg2-wglink-")
-        staged = temporary_root / "bundle.wglink"
-        bundle_identity = WgLinkIdentity(
-            bundle={"id": facts["bundleId"], "created_at": facts["createdAt"]},
-            generator={
-                "app": "waveguide-generator",
-                "app_version": _app_version(),
-                "mesher_version": mesher_version,
-                "datum_schema": 1,
-            },
-            design={
-                "id": facts["designId"],
-                "lineage_id": identity.lineage_id,
-                "edit_version": facts["editVersion"],
-                "design_hash": facts["designHash"],
-                "name": design_name,
-                "formula": request.design.root.formula.lower(),
-                # The STEP and point grid are the realized geometry; this is
-                # the exact WG config that produced them. WGLink persists the
-                # snapshot with the managed Fusion instance so future updates,
-                # audits, and round trips do not have to reverse-engineer a
-                # formula from the body or from the smaller CAD parameter set.
-                "config": request.design.model_dump(mode="json", by_alias=True),
-                "build_mode": resolved.mode,
-            },
-            export={
-                "id": facts["exportId"],
-                "sequence": facts["sequence"],
-                "parent_export_id": facts["parentExportId"],
-                "geometry_hash": geometry_hash,
-                "domain": "full",
-                "open_throat": True,
-            },
-        )
-        try:
-            product = write_wglink(
-                resolved.geometry,
-                staged,
-                identity=bundle_identity,
-                instance_slug=instance_slug,
-                open_throat=True,
-                # The current design schema owns exactly one horn throat. Give
-                # it an explicit acoustic identity at export time so the
-                # return leg never guesses HF from anonymous CAD geometry.
-                interface_sources=[
-                    WgLinkSourceInterface(
-                        id="source-hf",
-                        role="HF",
-                        required=True,
-                        default_drive_channel_id="drive-hf",
-                        patch_policy="single-connected",
-                        expected_connected_components=1,
-                        suggested_resolution_mm=float(
-                            resolved.density.throat_res_mm
-                        ),
-                    )
-                ],
-            )
-            # Optional top-level metadata is additive under WGLink 1.x, so this
-            # does not require a wglink_version or required_features change.
-            manifest = {
-                **product.manifest,
-                "conventions": artifact_conventions(),
-            }
-            product.manifest_path.write_text(
-                json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
-                encoding="utf-8",
-            )
-            manifest_json = product.manifest_path.read_text(encoding="utf-8")
-            artifact_sha256 = str(manifest["files"]["waveguide.step"]["sha256"])
-            with _BUNDLE_NAME_LOCK:
-                try:
-                    destination = _bundle_destination(
-                        wglink_root, bundle_stem, identity.design_id
-                    )
-                except ValueError as exc:
-                    raise _BundleNameConflict(str(exc)) from exc
-                _replace_bundle(staged, destination)
-            return {
-                "manifest_json": manifest_json,
-                "geometry_hash": geometry_hash,
-                "artifact_sha256": artifact_sha256,
-                "bundle_path": str(destination),
-            }
-        finally:
-            shutil.rmtree(temporary_root, ignore_errors=True)
+        def write(staged: Path) -> None:
+            # Only the child builds geometry. Publication and SQLite stay in
+            # this parent thread; child failure cannot publish partial bytes.
+            asyncio.run(run_mesh_build(build_bundle,
+                request.design.model_dump(mode="json"), str(staged), dict(facts),
+                identity.lineage_id, design_name, instance_slug, _app_version()))
+
+        return publish_bundle(store, wglink_root, facts, write, handoff=handoff)
 
     try:
         row = store.allocate_export(
@@ -692,23 +449,29 @@ def _export_wglink_sync(
         )
     except _ExportIdentityConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except _BundleNameConflict as exc:
+    except PublicationConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:
         raise _export_error(exc) from exc
 
-    # Only now is the folder that survived disambiguation known, so the lineage
-    # claims the name it actually got rather than the one it asked for.
-    written = str(row.get("bundle_path") or "")
-    if written.endswith(_BUNDLE_SUFFIX):
-        store.record_lineage_cad_names(
-            identity.lineage_id,
-            bundle_stem=Path(written).name[: -len(_BUNDLE_SUFFIX)],
-        )
+    result = _wglink_response(row, identity)
+    published = _finish_publication(store, row)
+    if published is not None:
+        result["cadHandoffRequestId"] = published.request_id
+        if published.withdrawn:
+            result["cadHandoffSuperseded"] = list(published.withdrawn)
+    return result
 
-    return _wglink_response(row, identity)
+
+def _finish_publication(store: CadLinkStore, row: Mapping[str, Any]) -> Any:
+    try:
+        return finish_publication(store, row)
+    except PublicationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (OSError, ValueError, TypeError, sqlite3.OperationalError) as exc:
+        raise HTTPException(status_code=503, detail="CAD-link publication is incomplete. Retry this Send.") from exc
 
 
 @router.post("/step")
@@ -804,41 +567,23 @@ async def export_wglink(
             detail="No WGLink folder has been selected. Choose one in Settings → CAD Link first.",
         )
     store: CadLinkStore = request.app.state.cadlink_store
-    result = await run_on_gmsh_worker(
+    result = await asyncio.to_thread(
         _export_wglink_sync,
         payload,
         store,
         selected.resolve(),
         idempotency_key,
+        handoff={"dataDir": str(request.app.state.data_dir),
+                 "documentId": payload.expected_fusion_document_id,
+                 "instanceId": payload.expected_fusion_instance_id,
+                 "returnStateHash": payload.expected_fusion_return_state_hash},
     )
-    # The marker is written before Fusion is raised so a cold-started add-in
-    # can consume the exact export that caused the launch.  Like window focus,
-    # this is delivery metadata: a failure must not invalidate the completed,
-    # durable bundle.
-    try:
-        published = await asyncio.to_thread(
-            publish_fusion_handoff,
-            Path(request.app.state.data_dir),
-            selected.resolve(),
-            store,
-            result,
-            expected_document_id=payload.expected_fusion_document_id,
-            expected_instance_id=payload.expected_fusion_instance_id,
-            expected_return_state_hash=payload.expected_fusion_return_state_hash,
-        )
-        result["cadHandoff"] = "published"
-        result["cadHandoffRequestId"] = published.request_id
-        if published.withdrawn:
-            # An unstarted update of the same link that this one replaced.
-            result["cadHandoffSuperseded"] = list(published.withdrawn)
-        waiting = await asyncio.to_thread(
-            _handoff_waiting_notice, Path(request.app.state.data_dir)
-        )
-        if waiting is not None:
-            result["cadHandoffWaiting"] = waiting
-    except (OSError, TypeError, ValueError) as exc:
-        logger.warning("Could not publish the Fusion handoff: %s", exc)
-        result["cadHandoff"] = "failed"
+    # Publication intent was persisted before building; startup/retry recovers
+    # every boundary before this courtesy focus operation.
+    result["cadHandoff"] = "published"
+    waiting = await asyncio.to_thread(_handoff_waiting_notice, Path(request.app.state.data_dir))
+    if waiting is not None:
+        result["cadHandoffWaiting"] = waiting
     # The bundle is already on disk and the response is already earned, so
     # raising Fusion is strictly a courtesy: it runs off the request thread and
     # its outcome only reaches the log.
@@ -862,6 +607,11 @@ def _handoff_waiting_notice(data_dir: Path) -> str | None:
 
 def mount_exports(application: FastAPI) -> None:
     application.include_router(router)
+
+    async def recover_on_startup() -> None:
+        await asyncio.to_thread(recover_publications, application.state.cadlink_store)
+
+    application.router.add_event_handler("startup", recover_on_startup)
 
 
 __all__ = ["ExportRequest", "WgLinkExportRequest", "mount_exports", "router"]

@@ -876,7 +876,8 @@ def test_return_exports_the_linked_part_studio_and_ingests_it(
         return tmp_path / "Demo Horn.wgreturn", {"ingest_id": "wgi_1"}
 
     monkeypatch.setattr(onshape_api, "OnshapeAdapter", Adapter)
-    monkeypatch.setattr(onshape_api, "run_on_gmsh_worker", on_worker)
+    from server.mesh import gmsh_worker
+    monkeypatch.setattr(gmsh_worker, "run_on_gmsh_worker", on_worker)
     monkeypatch.setattr(onshape_api, "write_and_ingest_return", write_and_ingest)
     transport = FakeTransport()
     transport.route("GET", "/users/sessioninfo", 200, {"id": "ACC", "name": "Tester"})
@@ -893,3 +894,36 @@ def test_return_exports_the_linked_part_studio_and_ingests_it(
         "write_and_ingest_return",
     ]
     assert calls[0][1] == ("DID", "WID", "PART")
+
+
+def test_send_uses_immutable_publisher_and_pushes_exact_retry_path(tmp_path, monkeypatch, in_process_mesher):
+    from test_wglink_export import _install_fake_write
+    writes = _install_fake_write(monkeypatch)
+    store = _store(tmp_path)
+    saved = _saved(store, _design())
+    identity = saved["identity"]
+    payload = onshape_api.OnshapeSendRequest.model_validate({
+        "design": _design().model_dump(mode="json"), "designRevision": 1,
+        "baseName": "demo-horn.cfg", "identity": {
+            "designId": identity.design_id, "lineageId": identity.lineage_id,
+            "baseEditVersion": identity.edit_version}})
+    monkeypatch.setattr(onshape_api, "_client", lambda _: object())
+    pushed = []
+
+    def push(*args, **kwargs):
+        pushed.append(kwargs["bundle_path"])
+        return {"documentId": "DID"}
+
+    monkeypatch.setattr(onshape_api, "_push", push)
+    request = _request(store, tmp_path)
+    a = asyncio.run(onshape_api.send(payload, request, "A"))
+    newer = payload.model_copy(update={"design": _design(coverage=46.0)})
+    b = asyncio.run(onshape_api.send(newer, request, "B"))
+    retry = asyncio.run(onshape_api.send(payload, request, "A"))
+    assert pushed == [a["bundlePath"], b["bundlePath"], a["bundlePath"]]
+    assert retry["exportId"] == a["exportId"]
+    assert "identity" not in retry
+    assert a["bundlePath"] != b["bundlePath"]
+    locator = Path(b["bundlePath"]).parent / f'{identity.design_id}.latest.json'
+    assert json.loads(locator.read_text())["exportId"] == b["exportId"]
+    assert len(writes) == 2

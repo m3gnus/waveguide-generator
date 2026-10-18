@@ -2670,6 +2670,18 @@ class CadLinkStore:
             "from": from_data,
         }
 
+    def publication_exports(self) -> list[dict[str, Any]]:
+        """Registered artifacts, retained indefinitely for retries/offline links."""
+        self.initialize()
+        with self._lock:
+            return [dict(row) for row in self._connect().execute("SELECT * FROM exports")]
+
+    def publication_reservation_for_key(self, key: str) -> dict[str, Any] | None:
+        return self._read_one("SELECT * FROM export_reservations WHERE idempotency_key = ?", (key,))
+
+    def publication_reservation(self, export_id: str) -> dict[str, Any] | None:
+        return self._read_one("SELECT * FROM export_reservations WHERE export_id = ?", (export_id,))
+
     def allocate_export(
         self,
         *,

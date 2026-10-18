@@ -220,6 +220,8 @@ export interface FusionCadStatus {
   observationPolicy?: 'command' | 'continuous' | 'unknown' | null;
   /** The add-in sends Send and Solve through WG's request inbox. */
   addinInboxTransfer?: boolean;
+  /** The connected add-in follows design locators for manual Update. */
+  immutableBundles?: boolean;
   staleDetectionExplanation: string | null;
   /** The delivery version the add-in reports; below WG's, the state is `addin_outdated`. */
   addinDeliveryVersion?: number | null;

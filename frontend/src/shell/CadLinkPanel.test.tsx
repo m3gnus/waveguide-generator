@@ -126,6 +126,28 @@ describe('CadLinkPanel', () => {
   });
   afterEach(() => { act(() => root.unmount()); importedMeshStore.clear();  workspaceModeStore.setMode('parametric'); vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); host.remove(); });
 
+  it.each([true, false, undefined])('shows the manual Update upgrade notice for capability %s', async (immutableBundles) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/api/capabilities')) return json({ engines: [], femRegions: true });
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json({ ...currentFusion, immutableBundles });
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
+      return json(record);
+    }));
+    await act(async () => { root.render(<CadLinkTestSurface/>); });
+    await vi.waitFor(() => expect(cadWorkspace.getSnapshot().fusionStatus?.running).toBe(true));
+    const message = 'Update the Fusion add-in to let manual Update follow newer exports.';
+    expect(host.textContent?.includes(message)).toBe(immutableBundles !== true);
+    if (immutableBundles !== true) {
+      expect(host.textContent).toContain('Choose Install add-in here, then restart Fusion. Automatic Send still works.');
+      const install = Array.from(host.querySelectorAll('button')).find((button) => button.textContent === 'Install add-in');
+      expect(install).toBeDefined();
+      expect(host.textContent?.split(message)).toHaveLength(2);
+    }
+  });
+
   it('offers install and repair before any signal or selected folder', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);

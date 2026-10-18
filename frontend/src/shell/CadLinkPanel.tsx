@@ -759,6 +759,9 @@ export function CadLinkPanel() {
         {installingAddin ? 'Installing…' : 'Install add-in'}
       </button>
       {addinNotice && <span role="status">{addinNotice}</span>}
+      {fusionStatus?.running && fusionStatus.immutableBundles !== true && <span role="status">
+        Update the Fusion add-in to let manual Update follow newer exports. Choose Install add-in here, then restart Fusion. Automatic Send still works.
+      </span>}
     </div>}
 
     {/* 2 · CAD Link: is CAD in sync with WG? One card, both directions. */}

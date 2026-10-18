@@ -492,6 +492,7 @@ def test_status_endpoint_hashes_the_design_and_reports_wglink_folder_setup(
         "statusTtlSeconds": 20.0,
         "observationPolicy": None,
         "addinInboxTransfer": False,
+        "immutableBundles": False,
         "realizedDimensions": {
             "state": "link_unavailable",
             "instanceId": None,
@@ -1333,3 +1334,16 @@ def test_link_name_missing_keeps_older_addins_compatible(tmp_path: Path) -> None
     assert status["link"]["linkName"] is None
     assert status["matchingLinks"][0]["linkName"] is None
     assert status["state"] == "current"
+
+
+@pytest.mark.parametrize("capability, expected", [(1, True), (None, False), (0, False), (True, False), ("1", False)])
+def test_immutable_bundle_capability_does_not_gate_automatic_delivery(tmp_path, capability, expected):
+    marker = _write_status(tmp_path)
+    payload = json.loads(marker.read_text())
+    if capability is not None:
+        payload["immutableBundles"] = capability
+    marker.write_text(json.dumps(payload))
+    status = read_fusion_status(tmp_path, current_design_hash="", current_formula="OSSE", design_id=None, now=NOW)
+    assert status["immutableBundles"] is expected
+    assert status["running"] is True
+    assert status["state"] != "addin_outdated"

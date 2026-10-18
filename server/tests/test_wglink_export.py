@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import HTTPException
+
 from hornlab_mesher import read_wglink
 import pytest
 
@@ -16,6 +18,8 @@ from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
 from server.design.textcfg import serialize
 from server.exports import api
+
+pytestmark = pytest.mark.usefixtures("in_process_mesher")
 
 
 def _design() -> DesignConfig:
@@ -63,7 +67,7 @@ def _install_fake_write(monkeypatch) -> list[object]:
         writes.append({"geometry": geometry, "kwargs": kwargs})
         target = Path(output_path)
         target.mkdir()
-        step_hash = "sha256:" + "a" * 64
+        step_hash = "sha256:" + hashlib.sha256(b"STEP").hexdigest()
         manifest = {
             "wglink_version": "1.0",
             "bundle": dict(identity.bundle or {}),
@@ -132,7 +136,7 @@ def test_the_cad_bundle_is_built_without_the_export_sizing_planners(
 
     row = api._export_wglink_sync(_request(saved), store, workspace, "no-planner")
 
-    assert row["artifactSha256"] == "sha256:" + "a" * 64
+    assert row["artifactSha256"] == "sha256:" + hashlib.sha256(b"STEP").hexdigest()
     manifest = json.loads((Path(row["bundlePath"]) / "wglink.json").read_text())
     assert manifest["files"]["waveguide.step"]["sha256"]
     # Nothing in the bundle response or its manifest carries a sizing warning,
@@ -170,10 +174,11 @@ def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
         filename="demo-horn.cfg",
         snapshot_builder=lambda identity: serialize(design, cadlink=identity),
     )
-    with pytest.raises(HTTPException, match="replaced or changed") as stale_retry:
-        api._export_wglink_sync(_request(saved), store, workspace, "attempt-1")
+    stale_retry = api._export_wglink_sync(_request(saved), store, workspace, "attempt-1")
 
-    assert stale_retry.value.status_code == 409
+    assert stale_retry["exportId"] == first["exportId"]
+    locator = json.loads((workspace / "wglink" / f'{first["identity"]["designId"]}.latest.json').read_text())
+    assert locator["exportId"] == second["exportId"]
     assert retry == retry_from_other_workspace == first
     assert len(writes) == 2
     source = writes[0]["kwargs"]["interface_sources"][0]
@@ -183,13 +188,13 @@ def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
     assert source.suggested_resolution_mm == pytest.approx(4.0)
     assert first["sequence"] == 1
     assert second["sequence"] == 2
-    assert first["bundlePath"] == str(workspace / "wglink" / "demo_horn.wglink")
+    assert first["bundlePath"] == str(workspace / "wglink" / f'{first["exportId"]}.wglink')
     assert first["designHash"] == design_hash(design)
     assert first["geometryHash"].startswith("sha256:")
-    assert first["artifactSha256"] == "sha256:" + "a" * 64
+    assert first["artifactSha256"] == "sha256:" + hashlib.sha256(b"STEP").hexdigest()
     manifest = json.loads((Path(first["bundlePath"]) / "wglink.json").read_text())
     assert read_wglink(first["bundlePath"], verify_checksums=False) == manifest
-    assert manifest["bundle"]["id"] == second["bundleId"]
+    assert manifest["bundle"]["id"] == first["bundleId"]
     assert manifest["wglink_version"] == "1.0"
     assert manifest["conventions"] == {
         "frame": {
@@ -212,10 +217,10 @@ def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
     assert manifest["export"] == {
         "domain": "full",
         "geometry_hash": first["geometryHash"],
-        "id": second["exportId"],
+        "id": first["exportId"],
         "open_throat": True,
-        "parent_export_id": first["exportId"],
-        "sequence": 2,
+        "parent_export_id": None,
+        "sequence": 1,
     }
 
 
@@ -292,7 +297,7 @@ def test_wglink_export_reuses_commit_left_by_failed_export(
         "hornlab_mesher.config_builder.resolve_geometry", fail_once
     )
 
-    with pytest.raises(RuntimeError, match="simulated geometry failure"):
+    with pytest.raises(HTTPException, match="simulated geometry failure"):
         api._export_wglink_sync(request, store, workspace, "failed-attempt")
 
     original_identity = saved["identity"]
@@ -422,7 +427,7 @@ def _parameter_names(result: dict[str, object]) -> list[str]:
     return [str(entry["name"]) for entry in manifest["parameters"]]
 
 
-def test_parameter_namespace_and_bundle_folder_survive_a_rename(
+def test_parameter_namespace_survives_a_rename_with_new_bundle(
     monkeypatch, tmp_path: Path,
 ) -> None:
     """Save As must not move the namespace Fusion's expressions reference.
@@ -451,17 +456,15 @@ def test_parameter_namespace_and_bundle_folder_survive_a_rename(
     assert _parameter_names(first) == _parameter_names(renamed) == [
         "wg_demo_horn_throat_dia"
     ]
-    assert first["bundlePath"] == renamed["bundlePath"] == str(
-        workspace / "wglink" / "demo_horn.wglink"
-    )
-    assert list((workspace / "wglink").iterdir()) == [Path(str(first["bundlePath"]))]
+    assert first["bundlePath"] != renamed["bundlePath"]
+    assert Path(first["bundlePath"]).is_dir()
+    assert Path(renamed["bundlePath"]).name == f'{renamed["exportId"]}.wglink'
     # Only the namespace is frozen; the readable name still follows the file.
     manifest = json.loads((Path(str(renamed["bundlePath"])) / "wglink.json").read_text())
     assert manifest["design"]["name"] == "tritonia"
     names = store.get_lineage_cad_names(str(renamed["identity"]["lineageId"]))
     assert names is not None
     assert names["parameter_slug"] == "demo_horn"
-    assert names["bundle_stem"] == "demo_horn"
 
 
 def test_stale_copy_cannot_silently_fork_the_linked_cad_project(
@@ -546,7 +549,7 @@ def test_a_lineage_linked_before_the_registry_recovers_its_namespace(
     )
 
     assert _parameter_names(renamed) == ["wg_demo_horn_throat_dia"]
-    assert renamed["bundlePath"] == first["bundlePath"]
+    assert renamed["bundlePath"] != first["bundlePath"]
     names = store.get_lineage_cad_names(str(renamed["identity"]["lineageId"]))
     assert names is not None
     assert names["parameter_slug"] == "demo_horn"
@@ -593,115 +596,6 @@ def test_wglink_export_refuses_a_stale_identity_and_adopts_an_unknown_one(
     }
 
 
-def test_replace_bundle_uses_atomic_exchange_when_live_bundle_exists(
-    monkeypatch, tmp_path: Path,
-) -> None:
-    staged = tmp_path / "staged.wglink"
-    destination = tmp_path / "live.wglink"
-    staged.mkdir()
-    destination.mkdir()
-    (staged / "value").write_text("new")
-    (destination / "value").write_text("old")
-    exchanged: list[tuple[Path, Path]] = []
-    real_exchange = api._exchange_directories
-
-    def observed_exchange(first: Path, second: Path) -> None:
-        assert first.is_dir()
-        assert second.is_dir()
-        exchanged.append((first, second))
-        real_exchange(first, second)
-
-    monkeypatch.setattr(api, "_exchange_directories", observed_exchange)
-    api._replace_bundle(staged, destination)
-
-    assert exchanged == [(staged, destination)]
-    assert (destination / "value").read_text() == "new"
-    assert not staged.exists()
-
-
-def test_exchange_directories_windows_fallback_swaps_and_restores(
-    monkeypatch, tmp_path: Path,
-) -> None:
-    """The non-POSIX path must have the same postcondition as the swap.
-
-    CI's first windows-latest run died on ctypes.CDLL(None) -- the POSIX libc
-    handle -- inside this function. The fallback swaps via an aside rename and
-    leaves the OLD bundle at ``first`` for the caller to remove, and restores
-    the live bundle if the second rename fails.
-    """
-    monkeypatch.setattr(api.os, "name", "nt")
-    first = tmp_path / "staged.wglink"
-    second = tmp_path / "live.wglink"
-    first.mkdir()
-    second.mkdir()
-    (first / "value").write_text("new")
-    (second / "value").write_text("old")
-
-    api._exchange_directories(first, second)
-    assert (second / "value").read_text() == "new"
-    assert (first / "value").read_text() == "old"
-
-    # Failure between the renames restores the live bundle.
-    real_rename = api.os.rename
-    calls = {"n": 0}
-
-    def failing_rename(src, dst):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            raise OSError("simulated failure installing the staged bundle")
-        real_rename(src, dst)
-
-    monkeypatch.setattr(api.os, "rename", failing_rename)
-    with pytest.raises(OSError, match="simulated failure"):
-        api._exchange_directories(first, second)
-    assert (second / "value").read_text() == "new"
-    assert first.exists()
-
-
-def test_bundle_name_rejects_casefold_and_disambiguates_an_owned_name(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "wglink"
-    root.mkdir()
-    existing = root / "Horn.wglink"
-    existing.mkdir()
-    (existing / "wglink.json").write_text(json.dumps({"design": {"id": "wgd_other"}}))
-
-    with pytest.raises(ValueError, match="portable name"):
-        api._bundle_destination(root, "horn", "wgd_requested")
-
-    existing.rename(root / "waveguide.wglink")
-    assert api._base_name("\N{ANGSTROM SIGN}") == "waveguide"
-    assert api._base_name("\N{COLLISION SYMBOL}") == "waveguide"
-    destination = api._bundle_destination(
-        root, api._base_name("\N{COLLISION SYMBOL}"), "wgd_requested"
-    )
-    assert destination.parent == root
-    assert destination.name.startswith("waveguide-")
-    assert destination.name.endswith(".wglink")
-    assert destination != existing
-
-    destination.mkdir()
-    (destination / "wglink.json").write_text(
-        json.dumps({"design": {"id": "wgd_requested"}})
-    )
-    assert (
-        api._bundle_destination(root, "waveguide", "wgd_requested")
-        == destination
-    )
-
-
-def test_bundle_base_name_cannot_escape_workspace(tmp_path: Path) -> None:
-    root = tmp_path / "workspace" / "wglink"
-    root.mkdir(parents=True)
-    name = api._base_name("../../outside.cfg")
-    destination = api._bundle_destination(root, name, "wgd_requested")
-
-    assert name == "outside"
-    assert destination == root / "outside.wglink"
-    assert root in destination.parents
-
-
 def test_concurrent_designs_cannot_claim_the_same_bundle_name(
     monkeypatch, tmp_path: Path,
 ) -> None:
@@ -714,7 +608,7 @@ def test_concurrent_designs_cannot_claim_the_same_bundle_name(
     def fake_write(_geometry, output_path, *, identity, **_kwargs):
         target = Path(output_path)
         target.mkdir()
-        step_hash = "sha256:" + "b" * 64
+        step_hash = "sha256:" + hashlib.sha256(b"STEP").hexdigest()
         manifest = {
             "bundle": dict(identity.bundle or {}),
             "design": dict(identity.design or {}),

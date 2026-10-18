@@ -101,6 +101,8 @@ def publish_fusion_handoff(
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z"),
     }
+    if result.get("bundleLayout") == "immutable-v1":
+        payload["bundleLayout"] = "immutable-v1"
     if destination is not None:
         payload["destination"] = destination
 
@@ -130,6 +132,7 @@ def publish_fusion_handoff(
         )
         if result == "conflict":
             raise ValueError(f"Fusion request id {request_id!r} names another operation.")
+        store.make_durable()
         return row, result
 
     def publication_failed(receipt: object, _exc: BaseException) -> None:

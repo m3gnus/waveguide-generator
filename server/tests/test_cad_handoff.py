@@ -174,3 +174,16 @@ def test_a_published_handoff_logs_its_request_and_export(tmp_path: Path, caplog)
         for record in caplog.records
         if record.name == "server.exports.cad_handoff"
     )
+
+
+def test_immutable_handoff_keeps_exact_export_and_adds_layout(tmp_path):
+    workspace = tmp_path / "workspace"
+    bundle = workspace / "wglink" / "wge_original.wglink"
+    bundle.mkdir(parents=True)
+    result = {**_result(bundle), "bundleLayout": "immutable-v1"}
+    published = publish_fusion_handoff(tmp_path / "data", workspace,
+        CadLinkStore(tmp_path / "cadlink.db"), result)
+    payload = json.loads(published.path.read_text())
+    assert payload["bundleLayout"] == "immutable-v1"
+    assert payload["bundlePath"] == str(bundle)
+    assert payload["exportId"] == result["exportId"]
