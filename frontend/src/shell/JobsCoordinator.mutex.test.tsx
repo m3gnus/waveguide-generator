@@ -42,6 +42,8 @@ import { SolveActions } from './TopBar';
 import { CrossoverAdvanced } from '../design/CrossoverAdvanced';
 import { expandLegacy } from '../results/crossoverSpec';
 import { JobsPanel } from './JobsPanel';
+import { ResultsPanel } from './ResultsPanel';
+import { solveAttention } from './solveAttention';
 
 const mocks = vi.hoisted(() => ({
   planSolveDesign: vi.fn(),
@@ -1420,10 +1422,29 @@ describe('solve invocation mutex', () => {
     expect(solve.title).toMatch(/Directivity|directivity/);
   });
 
+  it.each(['error', 'complete'] as const)('follows the retry child of a %s parent without reselecting the parent', async (status) => {
+    const parent = { ...failedJob(), status, has_results: status === 'complete' };
+    const pinned = { ...failedJob(), id: 'pinned', status: 'complete' as const, has_results: true };
+    const child = { ...failedJob(), id: 'retry-child', parent_job_id: parent.id, status: 'queued' as const };
+    const bindRun = vi.spyOn(solveAttention, 'bindRun');
+    vi.spyOn(jobsSocket, 'retryJob').mockResolvedValue(child.id);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
+    publishJobs([child, parent, pinned]);
+    compareSelection.setPrimary(pinned.id);
+    await act(async () => { root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>); });
+
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().retry(parent.id); });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: pinned.id, awaiting: child.id });
+    expect(bindRun).toHaveBeenCalledWith(child.id);
+
+    await act(async () => { publishJobs([{ ...child, status: 'complete', has_results: true }, parent, pinned]); });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: child.id, awaiting: null });
+  });
+
   it('guards two fast retries routed through the coordinator bridge', async () => {
     // A retry replays the stored run on the server rather than resubmitting the
     // design from the browser, so the guarded call here is retryJob.
-    const pending = deferred<void>();
+    const pending = deferred<string>();
     const retryJob = vi.spyOn(jobsSocket, 'retryJob').mockReturnValue(pending.promise);
     publishJobs([failedJob()]);
     await act(async () => { root.render(<JobsCoordinator><JobsPanel/></JobsCoordinator>); });
@@ -1441,7 +1462,7 @@ describe('solve invocation mutex', () => {
     expect(retryJob).toHaveBeenCalledWith('failed-job');
     expect(mocks.submitDesign).not.toHaveBeenCalled();
     await act(async () => {
-      pending.resolve();
+      pending.resolve('retry-child');
       await pending.promise;
       await Promise.resolve();
     });

@@ -222,12 +222,12 @@ describe('jobs websocket state machine', () => {
   it('uses the faithful retry endpoint and refreshes the run list', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) =>
       String(input).includes('/retry')
-        ? json({ id: 'child' })
+        ? json({ job_id: 'child' })
         : json({ items: [job({ id: 'child', parent_job_id: 'job-1' })], total: 1 }),
     );
     const manager = new JobsSocketManager(() => new MockSocket(), fetcher, 'ws://test/ws/jobs');
 
-    await manager.retryJob('job-1');
+    await expect(manager.retryJob('job-1')).resolves.toBe('child');
 
     expect(fetcher).toHaveBeenNthCalledWith(1, '/api/jobs/job-1/retry', { method: 'POST' });
     expect(fetcher).toHaveBeenNthCalledWith(2, '/api/jobs?limit=200&offset=0', { signal: expect.any(AbortSignal) });
