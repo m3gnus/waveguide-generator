@@ -6,8 +6,9 @@ Audience: sketcher implementers and reviewers.
 vendored in `frontend/vendor/slvs/` (see its `BUILD.md`). The planegcs adapter stays as the
 second implementation of this contract. ACS was evaluated and removed. The drag gate is a
 median frame under 8 ms and p99 under 33 ms at 24 segments, with rendering included.
-Our build fixes libslvs's per-solve memory leak; each adapter owns its module instance,
-so `destroy()` plus `createSolver('slvs')` recovers a clean heap, including after a trap. The Phase 0 bake-off evidence is kept outside the repository.
+Our build fixes libslvs's per-solve memory leak. Adapters share one module instance
+(each instance reserves a large address-space block, so per-adapter instances exhaust it);
+a WASM trap retires the instance and the next `createSolver('slvs')` gets a fresh one. The Phase 0 bake-off evidence is kept outside the repository.
 ACS rows and columns below are historical Phase 0 measurements; the adapter no longer exists.
 
 `types.ts` exposes lazy `createSolver(name)`, `load`, `solve`, `beginDrag`, `dragTo`,

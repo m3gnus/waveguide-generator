@@ -8,7 +8,7 @@ import { branchCases, constraintCase, contourChainConstrained, diagnosticCases, 
 const capture = vi.hoisted(() => ({ slvs: undefined as SlvsModule | undefined }));
 vi.mock('slvs', async importOriginal => {
   const actual = await importOriginal<typeof import('slvs')>();
-  return { ...actual, default: async () => { capture.slvs = await actual.default(); return capture.slvs; } };
+  return { ...actual, default: async (...args: unknown[]) => { capture.slvs = await (actual.default as (...a: unknown[]) => ReturnType<typeof actual.default>)(...args); return capture.slvs; } };
 });
 
 for (const name of solverNames) describe(`${name} drag session`, () => {
@@ -102,3 +102,18 @@ it('slvs reports its heap and does not grow it across drag frames or rebuilds', 
     expect(s.memoryBytes()).toBe(before);
   } finally { s.destroy(); }
 }, 20000);
+
+it('slvs adapters share one instance until a trap retires it', async () => {
+  const a = await createSolver('slvs'), first = capture.slvs!;
+  const b = await createSolver('slvs'); expect(capture.slvs).toBe(first);
+  const trap = vi.spyOn(first, 'solveSketch').mockImplementation(() => { throw new WebAssembly.RuntimeError('unreachable'); });
+  try {
+    a.load(diagnosticCases[0].sketch);
+    expect(() => a.solve({ mode: 'full' })).toThrow(WebAssembly.RuntimeError);
+  } finally { trap.mockRestore(); a.destroy(); b.destroy(); }
+  const c = await createSolver('slvs');
+  try {
+    expect(capture.slvs).not.toBe(first);
+    c.load(diagnosticCases[0].sketch); expect(c.solve({ mode: 'full' }).status).toBe('ok');
+  } finally { c.destroy(); }
+});

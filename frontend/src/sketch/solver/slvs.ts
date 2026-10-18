@@ -2,8 +2,10 @@ import type { Entity as SEntity, SlvsModule } from 'slvs';
 import { Adapter, capabilities, emulated, entity, equivalent, pointsOf, unsupported, type NativeResult } from './common';
 import { Unsupported, type DragTarget, type SolveOptions, type Sketch } from './types';
 import { wasmInput } from './wasm';
-// Each adapter owns a fresh module instance, so destroy() plus create() always recovers a
-// clean heap, including after a WASM trap. The wasm is compiled once; instantiation is cheap.
+// Adapters share one module instance: each instance reserves a large block of address
+// space for its growable memory, so creating one per adapter exhausts the browser's
+// reservation long before GC frees them. A trap retires the instance, and the next
+// create() gets a fresh one compiled from the cached wasm module.
 let compiled: Promise<WebAssembly.Module> | undefined;
 function wasmModule() {
   return compiled ??= (async () => {
@@ -13,16 +15,24 @@ function wasmModule() {
   })();
 }
 type Instantiate = (imports: WebAssembly.Imports, done: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void) => object;
-export async function create() {
+async function instantiate(): Promise<SlvsModule> {
   const [{ default: factory }, wasm] = await Promise.all([import('slvs'), wasmModule()]);
+  let fail!: (reason: unknown) => void;
+  const failed = new Promise<never>((_, reject) => { fail = reject; });
   const instantiateWasm: Instantiate = (imports, done) => {
-    void WebAssembly.instantiate(wasm, imports).then(instance => done(instance, wasm));
+    WebAssembly.instantiate(wasm, imports).then(instance => done(instance, wasm), fail);
     return {};
   };
-  return new SolveSpace(await (factory as (options: { instantiateWasm: Instantiate }) => Promise<SlvsModule>)({ instantiateWasm }));
+  return Promise.race([(factory as (options: { instantiateWasm: Instantiate }) => Promise<SlvsModule>)({ instantiateWasm }), failed]);
 }
-// libslvs keeps one global sketch per module instance. Adapters sharing a module
-// (only possible via direct construction) rebuild when another one solved in between.
+let current: Promise<SlvsModule> | undefined, live: SlvsModule | undefined;
+export async function create() {
+  current ??= instantiate().then(m => (live = m), e => { current = undefined; throw e; });
+  return new SolveSpace(await current);
+}
+function retire(s: SlvsModule) { if (live === s) { live = undefined; current = undefined; } }
+// libslvs keeps one global sketch per module instance. Adapters sharing a module rebuild
+// when another one solved in between.
 const owners = new WeakMap<SlvsModule, SolveSpace>();
 class SolveSpace extends Adapter {
   constructor(private s: SlvsModule) { super(); }
@@ -55,7 +65,11 @@ class SolveSpace extends Adapter {
   }
   private prepared?: { pinned: boolean; handles: Map<string, SEntity>; constraints: Map<number, string> };
   protected invalidatePrepared() { this.prepared = undefined; }
-  protected prepareDrag(targets: DragTarget[]) { this.build(targets); }
+  protected prepareDrag(targets: DragTarget[]) { this.native(() => this.build(targets)); }
+  /** A trap leaves the instance unusable: retire it so the next createSolver() recovers. */
+  private native<T>(call: () => T): T {
+    try { return call(); } catch (e) { if (e instanceof WebAssembly.RuntimeError) retire(this.s); throw e; }
+  }
   protected release() { if (owners.get(this.s) === this) { this.s.clearSketch(); owners.delete(this.s); } }
   private build(targets: DragTarget[] = []) {
     const s = this.s; owners.delete(s); s.clearSketch();
@@ -119,7 +133,8 @@ class SolveSpace extends Adapter {
     for (const target of targets) if (!entity(this.sketch, target.pointId, 'point').fixed) s.dragged(group, h(target.pointId), wp);
     this.prepared = { pinned: targets.length > 0, handles, constraints }; owners.set(s, this);
   }
-  protected run(options: SolveOptions): NativeResult {
+  protected run(options: SolveOptions): NativeResult { return this.native(() => this.runNative(options)); }
+  private runNative(options: SolveOptions): NativeResult {
     const updateStart = performance.now();
     const targets = options.dragTargets ?? [];
     if (!this.dragPointIds || !this.prepared || owners.get(this.s) !== this || (targets.length && !this.prepared.pinned)) this.build(targets);
