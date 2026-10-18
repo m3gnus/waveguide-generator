@@ -9,7 +9,6 @@ millisecond-scale numpy recombination instead of a re-solve.
 
 from __future__ import annotations
 
-import time
 from types import SimpleNamespace
 from typing import Any, Mapping
 
@@ -147,7 +146,7 @@ def recombine_stored_results(
         quadrants=quadrants,
         config_motion=config_motion,
         config=config,
-        start_time=time.time(),
+        start_time=None,
         sound_speed_m_per_s=sound_speed,
         backend_metadata=stored_metadata,
     )

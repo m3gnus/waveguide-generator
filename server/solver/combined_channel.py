@@ -14,6 +14,7 @@ validity or output limits and is not routed here yet.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
@@ -43,7 +44,7 @@ def package_combined_channel(
     quadrants: int,
     config_motion: str,
     config: Any,
-    start_time: float,
+    start_time: float | None,
     sound_speed_m_per_s: float,
     backend_metadata: Callable[[Any], Mapping[str, Any]],
 ) -> dict[str, Any]:
@@ -51,7 +52,7 @@ def package_combined_channel(
 
     ``spec`` is the request's ``ChannelCombineSpec``, ``drive_channels`` its
     ``DriveChannel`` list and ``request`` the ``SolveRequest``; they are typed
-    loosely because the solver layer does not import ``server.jobs``.
+    loosely so this module does not import ``server.jobs``.
 
     ``results_by_id`` holds the member results ``combine_drive_channels``
     reads (live solver results or deserialized bases). ``member_channels``
@@ -123,7 +124,9 @@ def package_combined_channel(
         result=combined_result,
         config=config,
         context=context,
-        start_time=start_time,
+        # ``None`` times only the response build, as recombine always has: the
+        # live solves pass their solve's start instead.
+        start_time=time.time() if start_time is None else start_time,
         metadata=metadata,
         sound_speed_m_per_s=sound_speed_m_per_s,
     )
