@@ -559,8 +559,8 @@ def test_failed_admission_stays_unconfirmed_until_a_durable_decision(h, monkeypa
     summary = operation_summary(h.row(), h.jobs_store)
     assert summary["reason"] == "admission_retrying"
     assert "admission storage unavailable" in summary["message"]
-    # Beyond both former delivery bounds, backoff keeps the claim and emits
-    # no answer. The pending sweep must not bypass this hold in the same pass.
+    # Beyond both former delivery bounds, a pass during backoff keeps the
+    # claim, emits no answer and makes no further admission attempt.
     assert run() == []
     assert not ack.exists()
     assert list(inbox.glob(solve_command.CLAIM_PREFIX + "*"))
@@ -584,6 +584,59 @@ def test_failed_admission_stays_unconfirmed_until_a_durable_decision(h, monkeypa
     assert run() == []
     assert h.jobs_store.list_jobs()[1] == (1 if decision == "accepted" else 0)
     assert json.loads(ack.read_text())["outcome"] == decision
+
+
+@pytest.mark.parametrize("already_waiting", [False, True])
+def test_same_pass_sweep_respects_admission_hold_without_backoff(h, monkeypatch, already_waiting):
+    from server.cadlink.intake import solve_command
+    from server.cadlink.joblane import job_shims
+    from test_cad_preparation import _deliver_file
+
+    bundle, manifest = _received(h)
+    inbox = _deliver_file(h, bundle, manifest)
+    h.runtime._ensure_prep_lane = lambda: None
+    real_accept = h.runtime.accept_cad_solve
+    attempts = []
+
+    async def broken(*args, **kwargs):
+        attempts.append(True)
+        raise sqlite3.OperationalError("admission storage unavailable")
+
+    monkeypatch.setattr(h.runtime, "accept_cad_solve", broken)
+
+    def run():
+        return h._loop.run(job_shims.run_delivery_pass(h.context(), spawn=lambda *_: None))
+
+    real_read = solve_command._read_payload
+    if already_waiting:
+        assert run() == []
+        # This pass cannot read the existing claim. Its admission hold must
+        # still reach the sweep, even without another admission attempt.
+        monkeypatch.setattr(solve_command, "_read_payload", lambda *_args, **_kwargs:
+                            solve_command._Unreadable(OSError("claim temporarily unreadable")))
+
+    real_collect = job_shims.collect_solve_deliveries
+
+    def collect_then_clear_backoff(*args, **kwargs):
+        result = real_collect(*args, **kwargs)
+        assert h.runtime._cad_admission_retries.pop("cmd-1")[0] == 1
+        monkeypatch.setattr(h.runtime, "accept_cad_solve", real_accept)
+        return result
+
+    monkeypatch.setattr(job_shims, "collect_solve_deliveries", collect_then_clear_backoff)
+    assert run() == []
+    assert len(attempts) == 1
+    assert h.jobs_store.latest_cad_job("cmd-1") is None
+    assert h.row()["state"] == "received"
+    assert list(inbox.glob(solve_command.CLAIM_PREFIX + "*"))
+    ack = h.data_dir / "ipc" / "wglink" / solve_command.SOLVE_ACKS_DIRECTORY / "cmd-1.json"
+    assert not ack.exists()
+
+    monkeypatch.setattr(job_shims, "collect_solve_deliveries", real_collect)
+    monkeypatch.setattr(solve_command, "_read_payload", real_read)
+    assert run() == ["cmd-1"]
+    assert json.loads(ack.read_text())["outcome"] == "accepted"
+    assert not list(inbox.glob(solve_command.CLAIM_PREFIX + "*"))
 
 
 @pytest.mark.parametrize("state", ["processing", "needs_user_input", "cancel_requested"])

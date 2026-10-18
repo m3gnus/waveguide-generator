@@ -254,7 +254,7 @@ def bad_delivery(tmp_path):
 
 def reset_collector(monkeypatch):
     from server.cadlink.intake import solve_command as commands
-    for name in ('_refused_claims', '_unreadable_reported'):
+    for name in ('_refused_claims', '_conflict_refusals', '_unreadable_reported'):
         monkeypatch.setattr(commands, name, set())
     for name in ('_pending_refusal_acks', '_ack_failures', '_admission_waits', '_unreadable_waits', '_retention_waits'):
         monkeypatch.setattr(commands, name, {})
@@ -327,24 +327,23 @@ def test_interrupted_refusal_replays_original_after_restart_and_distinct_same_sl
         reopened.close()
 
 
-def test_admission_ack_failures_do_not_evict_intake_log(store, tmp_path, monkeypatch):
+def test_pending_admission_preserves_intake_log_without_publishing_an_answer(store, tmp_path, monkeypatch):
     commands = reset_collector(monkeypatch)
     data, inbox = bad_delivery(tmp_path)
     (inbox / 'bad.json').write_text(json.dumps({'schemaVersion': 3, 'target': 'waveguide-generator',
         'commandId': 'solve', 'operationId': 'solve', 'returnId': 'wgr_1', 'bundlePath': 'wgreturn/model.wgreturn',
         'manifestSha256': 'sha256:' + 'a' * 64, 'requestedAt': '2026-10-11T12:00:00Z'}))
     monkeypatch.setattr(commands, 'RETENTION_PASSES', 1)
-    monkeypatch.setattr(commands, 'write_acknowledgement', lambda *a, **k: False)
+    acknowledgements = []
+    monkeypatch.setattr(commands, 'write_acknowledgement', lambda *a, **k: acknowledgements.append(a) or False)
     for i in range(19):
         record_refusal(store, {'at': '2026-10-11T12:00:00Z', 'file': f'prior-{i}', 'operationId': None, 'reason': 'invalid'})
+    before = receipt_page(store)
     pushed = []
-    for i in range(25):
-        monkeypatch.setattr(commands, 'utc_now', lambda i=i: f'2026-10-11T12:00:{i:02d}Z')
+    for _ in range(25):
         collect_solve_deliveries(data, store, accept_solve=lambda _: False, refuse=pushed.append)
-    rows = receipt_page(store)['receipts']
-    assert len(rows) == 20
-    assert sum(r['send_id'] == 'solve' for r in rows) == 1
-    assert pushed == [pushed[0]] * 25
+    assert receipt_page(store) == before
+    assert not pushed and not acknowledgements
     assert len(list(inbox.iterdir())) == 1
 
 

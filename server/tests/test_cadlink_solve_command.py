@@ -332,9 +332,23 @@ def test_an_outcome_carrying_a_different_request_is_refused_and_writes_nothing(
     assert _raw(data_dir, "cmd-1") == before
 
 
-def test_delivery_refuses_a_conflicting_file_and_leaves_the_operation(
-    tmp_path, data_dir, store
+@pytest.mark.parametrize("admission_pending", [False, True])
+def test_delivery_reports_a_conflict_once_and_holds_its_claim_until_settlement(
+    tmp_path, data_dir, store, monkeypatch, admission_pending
 ) -> None:
+    from server.cadlink import receipts
+    from server.cadlink.intake import solve_command
+    from server.cadlink.joblane.delivery_status import DeliveryStatus
+
+    status = DeliveryStatus()
+    recorded = []
+    real_record = receipts.record_refusal
+
+    def record(*args, **kwargs):
+        recorded.append(kwargs["claim_id"])
+        return real_record(*args, **kwargs)
+
+    monkeypatch.setattr(receipts, "record_refusal", record)
     workspace = tmp_path / "workspace"
     stored_manifest = _write_bundle(workspace)
     _accept_as_delivered(store, data_dir, stored_manifest)
@@ -346,10 +360,27 @@ def test_delivery_refuses_a_conflicting_file_and_leaves_the_operation(
 
     # The conflict is reported, but the claim waits for the held operation
     # to settle. Its unfinished admission cannot be answered with a refusal.
-    assert collect_solve_deliveries(data_dir, store) is None
-    assert _held(data_dir) is not None
+    for _ in range(solve_command.RETENTION_PASSES + 2):
+        assert collect_solve_deliveries(
+            data_dir, store, refuse=status.refused,
+            accept_solve=(lambda _: False) if admission_pending else None,
+        ) is None
+        assert _held(data_dir) is not None
+    assert len(recorded) == 1
+    assert len(status.snapshot()["recentRefusals"]) == 1
+    assert len(receipts.receipt_page(store)["receipts"]) == 1
     assert _raw(data_dir, "cmd-1") == before
     assert _waiting(store) == ["cmd-1"]
+
+    record_outcome(store, "cmd-1", state="refused", reason="The original request is invalid.")
+    assert collect_solve_deliveries(data_dir, store, refuse=status.refused) is not None
+    assert _held(data_dir) is None
+    assert len(recorded) == len(status.snapshot()["recentRefusals"]) == 1
+
+    # A new copy of the same conflict is a separate delivery and is reported.
+    _write_command(data_dir, "wgreturn/speaker.wgreturn", "sha256:" + "b" * 64)
+    assert collect_solve_deliveries(data_dir, store, refuse=status.refused) is not None
+    assert len(recorded) == len(status.snapshot()["recentRefusals"]) == 2
 
 
 def test_delivery_never_replays_an_outcome_to_a_different_request(
@@ -426,8 +457,8 @@ def test_a_long_command_id_still_round_trips(tmp_path, data_dir, store) -> None:
         store, long_id, state="accepted", job_id="job-1", command=_held(data_dir)
     )
     assert entry["jobId"] == "job-1"
-    # The pass consumed the file; Fusion delivering the command again gets
-    # the recorded outcome back.
+    # The claim is still held; after settlement, both it and a redelivery
+    # receive the recorded outcome.
     _write_command(data_dir, "wgreturn/speaker.wgreturn", digest, command_id=long_id)
     assert collect_solve_deliveries(data_dir, store)["outcome"] == entry
 

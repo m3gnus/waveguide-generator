@@ -57,11 +57,11 @@ def store(data_dir):
 
 @pytest.fixture(autouse=True)
 def _fresh_state():
-    for name in ("_retention_waits", "_admission_waits", "_unreadable_waits", "_refused_claims", "_pending_refusal_acks", "_ack_failures"):
+    for name in ("_retention_waits", "_admission_waits", "_unreadable_waits", "_refused_claims", "_conflict_refusals", "_pending_refusal_acks", "_ack_failures"):
         getattr(solve_command, name).clear()
     solve_command._last_ack_prune = 0.0
     yield
-    for name in ("_retention_waits", "_admission_waits", "_unreadable_waits", "_refused_claims", "_pending_refusal_acks", "_ack_failures"):
+    for name in ("_retention_waits", "_admission_waits", "_unreadable_waits", "_refused_claims", "_conflict_refusals", "_pending_refusal_acks", "_ack_failures"):
         getattr(solve_command, name).clear()
 
 

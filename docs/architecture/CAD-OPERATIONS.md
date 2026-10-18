@@ -153,7 +153,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | Delivery | Result |
 | --- | --- |
 | Same operation ID, same digest | `recovered`: the existing operation, with whatever it has already recorded |
-| Same operation ID, different digest or kind | `conflict`: the delivery is rejected. The stored operation is untouched, and its result is not the answer to this delivery. |
+| Same operation ID, different digest or kind | `conflict`: the delivery is refused once. The stored operation is untouched. A copy naming an unfinished solve stays claimed until that operation's admission settles; its acknowledgement speaks for the stored operation. |
 | Different operation ID, identical inputs | A separate, explicit request |
 
 - **"Restartable"** means accepted work is recovered after the WG backend restarts. It
@@ -1741,8 +1741,9 @@ later files wait for the next pass.
   answer replays it), an older add-in's command, or a different request under an ID whose
   operation is finished or is not a solve (the answer refuses it). The file is removed
   and the refusal is logged. No client receives the answer.
-- **A different request under the ID of an unfinished solve** is refused and removed as
-  well, and the refusal is logged. It does not end the operation holding the ID.
+- **A different request under the ID of an unfinished solve** is refused and reported
+  once. Its copy stays claimed until the held operation's admission settles. The
+  acknowledgement speaks for that operation; the conflict does not end it.
 - **Nothing is handed out.** The loop starts each operation no attempt has touched, oldest
   first. A command that waits on the user stays waiting, and a later request never takes
   its place. This is not "latest wins".

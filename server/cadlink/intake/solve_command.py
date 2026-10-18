@@ -93,6 +93,9 @@ _unreadable_waits: dict[str, tuple[str, int]] = {}
 # Claims already refused (or reported unreadable) whose file is still there, by
 # claim name: reported once; afterwards only the delete is retried, quietly.
 _refused_claims: set[str] = set()
+# Conflicts already reported whose claims still await the stored operation's
+# outcome. Unlike refused claims, these must not be deleted before it settles.
+_conflict_refusals: set[str] = set()
 _unreadable_reported: set[str] = set()
 # Refused claims whose acknowledgement file could not be written yet, by claim
 # name: (command id, reason). The delete waits for the acknowledgement.
@@ -996,8 +999,7 @@ def _file_answer(command: PendingSolveCommand, accepted: DeliveryAnswer) -> dict
     refusal = _delivery_conflict(row, digest) if result == "conflict" else None
     if refusal is not None:
         # The stored operation is untouched and its result is not this
-        # delivery's answer. The refusal is logged whatever is answered.
-        logger.warning("Refused solve command %r: %s", command.command_id, refusal["reason"])
+        # delivery's answer. Collection reports the refusal once per claim.
         if row["kind"] == PREPARE_AND_SOLVE and row["state"] not in TERMINAL_STATES:
             # A client takes an answer under a command id as that command's
             # end. While the operation holding the id is an unfinished solve,
@@ -1207,6 +1209,7 @@ def collect_solve_deliveries(
         for name in set(_unreadable_waits) - present:
             del _unreadable_waits[name]
         _refused_claims.intersection_update(present)
+        _conflict_refusals.intersection_update(present)
         _unreadable_reported.intersection_update(present)
         for name in set(_pending_refusal_acks) - present:
             del _pending_refusal_acks[name]
@@ -1318,22 +1321,20 @@ def collect_solve_deliveries(
                 # and is recovered or refused as any other.
                 answer = _refuse_outdated(store, command)
                 tell(store.get_operation(command.command_id))
-                conflict_reason = None
             else:
                 accepted = accept_delivery(
                     store, DeliveredItem.from_command(command), retain=retain
                 )
                 tell(accepted.row)
-                conflict_reason = None
-                if accepted.result == "conflict":
+                if accepted.result == "conflict" and claim.name not in _conflict_refusals:
                     conflict = _delivery_conflict(accepted.row, accepted.digest)
                     conflict_reason = (
                         conflict["reason"] if conflict is not None
                         else "This id already names a request that is still running; this copy was not taken."
                     )
-                    if claim.name not in _ack_failures:
-                        # Reported once, not again while only its acknowledgement waits.
-                        refused(inbox_refusal(payload, delivery.path.name, conflict_reason), claim.name)
+                    refused(inbox_refusal(payload, delivery.path.name, conflict_reason), claim.name)
+                    _conflict_refusals.add(claim.name)
+                    logger.warning("Refused solve command %r: %s", command.command_id, conflict_reason)
                 answer = _file_answer(command, accepted)
                 if (
                     accepted.retention == RETAIN_TRANSIENT
