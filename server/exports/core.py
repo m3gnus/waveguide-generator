@@ -33,7 +33,7 @@ from server.exports.sizing import (
 from server.exports.sizing import _point_grid
 from server.mesh.builder import _solver_mesher_config, _triangles_and_tags
 from server.mesh.child import run_mesh_build
-from server.mesh.gmsh_worker import _preserve_native_windows_path, run_on_gmsh_worker
+from server.mesh.gmsh_worker import _preserve_native_windows_path
 from server.platform.temp_session import spawned_directory_root, temporary_directory_root
 from server.preview.translate import design_to_mesher_config
 
@@ -778,7 +778,7 @@ async def build_step(design: DesignConfig) -> StepSurfaceResult:
     ``test_public_builders_return_their_result_objects`` pins the shape.
     """
 
-    return await run_on_gmsh_worker(_build_step_sync, design.model_dump(mode="json"))
+    return await run_mesh_build(_build_step_sync, design.model_dump(mode="json"))
 
 
 def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
@@ -838,7 +838,7 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     ) as handle:
         step_path = Path(handle.name)
     try:
-        # Public callers run this on the Gmsh worker. Keep the synchronous
+        # Public callers run this in the mesher child. Keep the synchronous
         # helper safe as well: contract tests and maintenance tools call it
         # directly, allowing the pinned mesher to own a native session.
         with _preserve_native_windows_path():
@@ -864,7 +864,7 @@ async def build_step_solid(design: DesignConfig) -> StepSolidResult:
     the mesher falls back to a surface body for those.
     """
 
-    return await run_on_gmsh_worker(
+    return await run_mesh_build(
         _build_step_solid_sync, design.model_dump(mode="json")
     )
 

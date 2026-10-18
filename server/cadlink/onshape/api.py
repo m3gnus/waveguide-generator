@@ -632,7 +632,9 @@ async def return_to_wg(
         step_bytes = await asyncio.to_thread(
             adapter.download_external_data, str(link["document_id"]), foreign_id
         )
-        bundle_path, record = await run_on_gmsh_worker(
+        # Inspection and ingestion own disposable native children already.
+        # Do not open a parent Gmsh session while waiting for those children.
+        bundle_path, record = await asyncio.to_thread(
             write_and_ingest_return,
             step_bytes,
             link=link,

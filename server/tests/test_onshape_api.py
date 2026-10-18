@@ -869,7 +869,7 @@ def test_return_exports_the_linked_part_studio_and_ingests_it(
             return b"STEP"
 
     async def on_worker(function, *args, **kwargs):
-        return function(*args, **kwargs)
+        pytest.fail("Onshape return must not open an in-process Gmsh session")
 
     def write_and_ingest(step_bytes, *, link, export_row, store, data_dir):
         calls.append(("write_and_ingest_return", (step_bytes, link["document_id"])))
