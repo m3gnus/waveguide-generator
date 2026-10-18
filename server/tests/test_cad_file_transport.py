@@ -342,14 +342,11 @@ def test_legacy_hidden_handoff_is_never_delivered_at_startup(tmp_path, state):
         directory.mkdir()
         hidden = directory / '.hidden-request.json.live-old-claim.tmp'
         hidden.write_text(json.dumps({'schemaVersion': 3, 'requestId': 'hidden-request', 'operationId': 'hidden-request'}))
-        from server.cadlink.fusion.fusion_outcomes import settle_unpublished_handoffs
-
-        settle_unpublished_handoffs(store, ipc_folder(tmp_path))
         recovered = recover_staged_fusion_requests(tmp_path, lookup_operation=store.get_operation)
         assert recovered == ()
         assert not (directory / 'hidden-request.json').exists()
         assert not hidden.exists()
-        assert store.get_operation('hidden-request')['state'] == ('cancelled' if state == 'received' else state)
+        assert store.get_operation('hidden-request')['state'] == state
     finally:
         store.close()
 
@@ -495,38 +492,3 @@ def test_returns_retains_constant_off_policy_for_frontend_clients(tmp_path, monk
         assert asyncio.run(list_returns(SimpleNamespace(app=app)))['coordination'] == 'off'
     finally:
         app.state.cadlink_store.close()
-
-
-@pytest.mark.parametrize('evidence', ['missing', 'staged', 'visible', 'file_claim', 'store_claim'])
-def test_startup_cancels_only_unpublished_unclaimed_handoffs(tmp_path, evidence):
-    app = create_app(data_dir=tmp_path)
-    store = app.state.cadlink_store
-    operation_id = 'crash-before-file'
-    _accept(store, operation_id)
-    directory = ipc_folder(tmp_path, create=True) / '.fusion-handoffs'
-    directory.mkdir(exist_ok=True)
-    if evidence != 'missing':
-        name = {
-            'staged': f'.{operation_id}.json.staged.tmp',
-            'visible': f'{operation_id}.json',
-            'file_claim': f'.wglink-claim-{operation_id}-claim.json',
-            'store_claim': 'unused',
-        }[evidence]
-        if evidence == 'store_claim':
-            store.claim(operation_id, 0)
-        else:
-            (directory / name).write_text(json.dumps({
-                'schemaVersion': 3, 'requestId': operation_id, 'operationId': operation_id,
-            }))
-    store.make_durable()
-    handler = next(h for h in app.router.on_startup if h.__name__ == 'advertise_fusion_delivery_on_startup')
-    try:
-        asyncio.run(handler())
-        row = store.get_operation(operation_id)
-        if evidence in {'missing', 'staged'}:
-            assert (row['state'], row['reason']) == ('cancelled', 'publication_failed')
-            assert not list(directory.iterdir())
-        else:
-            assert row['state'] == ('processing' if evidence == 'store_claim' else 'received')
-    finally:
-        store.close()

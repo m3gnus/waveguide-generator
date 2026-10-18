@@ -416,9 +416,11 @@ def test_windows_access_denied_is_retried_then_replaced(monkeypatch, tmp_path):
     assert json.loads(path.read_text()) == {"sequence": 2}
 
 
-def test_crash_between_accept_and_file_is_cancelled_before_live_retry(monkeypatch, tmp_path):
+def test_recovery_after_a_crash_between_accept_and_file_publishes_nothing(monkeypatch, tmp_path):
+    """Startup never delivers a handoff. The accepted row is left as it was:
+    cancelling it without positive evidence of non-delivery could cancel one
+    the add-in already ran while WG was down (see post-0.3.6 backlog)."""
     from server.cadlink.fusion import fusion_delivery
-    from server.cadlink.fusion.fusion_outcomes import settle_unpublished_handoffs
     from server.cadlink.ipc import ipc_folder
 
     class Crash(BaseException):
@@ -443,10 +445,8 @@ def test_crash_between_accept_and_file_is_cancelled_before_live_retry(monkeypatc
     monkeypatch.setattr(fusion_delivery.os, "replace", replace)
     recovered = CadLinkStore(store.db_path)
     assert publication.recover_publications(recovered) == []
-    assert settle_unpublished_handoffs(recovered, ipc_folder(data)) == 1
-    assert recovered.get_operation(old_id)["reason"] == "publication_failed"
-    retry = api._export_wglink_sync(_request(saved), recovered, workspace, "A")
-    assert retry["cadHandoff"] == "published"
-    assert retry["cadHandoffRequestId"] != old_id
-    assert retry["exportId"] == row["export_id"]
+    handoffs = ipc_folder(data) / ".fusion-handoffs"
+    assert not (handoffs / f"{old_id}.json").exists()
+    assert recovered.get_operation(old_id)["state"] == "received"
+    # Recovery did not rebuild the bundle either.
     assert len(writes) == 1

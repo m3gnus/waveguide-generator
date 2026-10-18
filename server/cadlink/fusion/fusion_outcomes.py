@@ -401,44 +401,6 @@ def settle_from_heartbeat(
 LEGACY_LIVE_CLAIM_MAX_AGE = timedelta(minutes=30)
 
 
-def settle_unpublished_handoffs(store: CadLinkStore, ipc: Path) -> int:
-    """Cancel accepted handoffs that never became visible before a restart.
-
-    Hidden staging is not delivery. Only a live Send may publish that intent;
-    an existing request or add-in claim remains authoritative.
-    """
-    from .fusion_delivery import HANDOFFS
-
-    directory = ipc / HANDOFFS.directory
-    try:
-        names = {path.name for path in directory.iterdir()}
-    except FileNotFoundError:
-        names = set()
-    except OSError:
-        return 0  # Unreadable evidence is not an absent request.
-    store.initialize()
-    with store._lock:
-        rows = [dict(row) for row in store._connect().execute(
-            "SELECT * FROM cad_operations WHERE kind IN (?, ?) "
-            "AND state = ? AND claim_json IS NULL",
-            (INSERT_LINK, UPDATE_LINK, RECEIVED),
-        ).fetchall()]
-    changed = 0
-    for row in rows:
-        operation_id = row["operation_id"]
-        if f"{operation_id}.json" in names or any(
-            name.startswith(f".wglink-claim-{operation_id}-") and name.endswith(".json")
-            for name in names
-        ):
-            continue
-        changed += _record(store, row, CANCELLED, reason="publication_failed", outcome={
-            "message": "The Fusion handoff was interrupted before its request file was published."
-        }) is not None
-    if changed:
-        store.make_durable()
-    return changed
-
-
 def settle_abandoned_live_claims(
     store: CadLinkStore, *, now: datetime | None = None,
     only_operation_id: str | None = None,
@@ -593,4 +555,4 @@ def settle_abandoned_file_returns(
 
 __all__ = ["ADAPTER_OUTCOMES", "FUSION_KINDS", "LEGACY_LIVE_CLAIM_MAX_AGE",
            "adapter_outcome", "settle_from_heartbeat", "settle_abandoned_live_claims",
-           "settle_abandoned_file_returns", "settle_return_from_file", "settle_unpublished_handoffs"]
+           "settle_abandoned_file_returns", "settle_return_from_file"]

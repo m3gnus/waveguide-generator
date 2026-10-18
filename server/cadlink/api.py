@@ -56,7 +56,7 @@ from server.cadlink.fusion.fusion_status import (
 from server.cadlink.fusion.fusion_status import heartbeat_now, select_heartbeat, settleable_heartbeat
 from server.cadlink.fusion.fusion_outcomes import (
     FUSION_KINDS, settle_from_heartbeat, settle_abandoned_live_claims,
-    settle_abandoned_file_returns, settle_unpublished_handoffs,
+    settle_abandoned_file_returns,
 )
 from server.cadlink.fusion.fusion_delivery import (
     advertise_fusion_delivery,
@@ -2128,11 +2128,6 @@ def mount_cadlink(application: FastAPI) -> None:
                 heartbeat,
                 ipc_folder(Path(application.state.data_dir)),
             )
-        await asyncio.to_thread(
-            settle_unpublished_handoffs,
-            application.state.cadlink_store,
-            ipc_folder(Path(application.state.data_dir)),
-        )
         await asyncio.to_thread(settle_abandoned_live_claims, application.state.cadlink_store)
         await asyncio.to_thread(settle_abandoned_file_returns, application.state.cadlink_store,
                                 ipc_folder(Path(application.state.data_dir)),
