@@ -4,7 +4,7 @@ import { Component, memo, useEffect, useLayoutEffect, useMemo, useRef, useState,
 import { Box3, CanvasTexture, MathUtils, OrthographicCamera, PerspectiveCamera, Plane, Vector3 } from 'three';
 import { readChartTokens } from '../results/EChart';
 import type { CameraProjection, ViewerPreferences } from '../viewerprefs/viewerPreferences';
-import { calculateCameraFit, clippingRange, presetDirection, viewDirection, zoomedOrthographicValue, type CameraDirection } from './cameraMath';
+import { calculateCameraFit, clippingRange, framingRadius, presetDirection, viewDirection, zoomedOrthographicValue, type CameraDirection } from './cameraMath';
 import { DemandRenderScheduler, installViewportTestHook } from './demandRender';
 import { FieldPlane } from './FieldPlane';
 import { ObservationOverlay } from './ObservationOverlay';
@@ -88,8 +88,7 @@ const BOUNDS_CONTINUITY_RATIO = 2;
  * out of view.
  */
 export function boundsAreDiscontinuous(applied: Box3, next: Box3): boolean {
-  const radius = (box: Box3) => Math.max(box.min.distanceTo(box.max) / 2, 0.5);
-  const ratio = radius(next) / radius(applied);
+  const ratio = framingRadius(next) / framingRadius(applied);
   if (ratio > BOUNDS_CONTINUITY_RATIO || ratio < 1 / BOUNDS_CONTINUITY_RATIO) return true;
   return !applied.intersectsBox(next);
 }
@@ -356,7 +355,7 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     (minZ + maxZ) / 2,
   ), [maxX, maxY, maxZ, minX, minY, minZ]);
   const boundsRadius = useMemo(
-    () => Math.max(Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2, 0.5),
+    () => framingRadius(new Box3(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ))),
     [maxX, maxY, maxZ, minX, minY, minZ],
   );
   const requestedPreset = request.preset;

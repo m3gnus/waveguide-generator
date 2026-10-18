@@ -31,9 +31,26 @@ export function viewDirection(view: CameraView): Vector3 {
   return direction.lengthSq() === 0 ? presetDirection('front') : direction.normalize();
 }
 
+/**
+ * The bounding-sphere radius a camera frames, in scene units.
+ *
+ * Scenes are not all in one unit: parametric previews are millimetres, while
+ * imported and CAD meshes are metres. An absolute floor (this used to be 0.5)
+ * is half a millimetre in one and half a metre in the other, so a 70 mm
+ * imported box was framed as if it were a metre across and sat as a speck in
+ * the middle of the view. The floor therefore only guards a degenerate
+ * (single-point) box, and scales with where that point is so it stays well
+ * above float32 position resolution.
+ */
+export function framingRadius(bounds: Box3): number {
+  const halfDiagonal = bounds.min.distanceTo(bounds.max) / 2;
+  const magnitude = Math.max(...bounds.min.toArray().map(Math.abs), ...bounds.max.toArray().map(Math.abs));
+  return Math.max(halfDiagonal, magnitude * 1e-3, 1e-6);
+}
+
 export function orthographicExtents(radius: number, aspect: number, padding = 1.2): Pick<CameraFit, 'left' | 'right' | 'top' | 'bottom'> {
   const safeAspect = Math.max(aspect, 0.01);
-  const halfHeight = Math.max(radius, 0.5) * padding * Math.max(1, 1 / safeAspect);
+  const halfHeight = Math.max(radius, 1e-6) * padding * Math.max(1, 1 / safeAspect);
   const halfWidth = halfHeight * safeAspect;
   return { left: -halfWidth, right: halfWidth, top: halfHeight, bottom: -halfHeight };
 }
@@ -46,7 +63,7 @@ export function calculateCameraFit(
   verticalFovDegrees = 34,
 ): CameraFit {
   const center = bounds.getCenter(new Vector3());
-  const radius = Math.max(bounds.getSize(new Vector3()).length() / 2, 0.5);
+  const radius = framingRadius(bounds);
   const verticalHalfFov = MathUtils.degToRad(verticalFovDegrees / 2);
   const horizontalHalfFov = Math.atan(Math.tan(verticalHalfFov) * Math.max(aspect, 0.01));
   const limitingHalfFov = Math.max(0.01, Math.min(verticalHalfFov, horizontalHalfFov));
@@ -76,8 +93,8 @@ export function calculateCameraFit(
  * the camera has moved close to.
  */
 export function clippingRange(distance: number, radius: number): Pick<CameraFit, 'near' | 'far'> {
-  const safeDistance = Math.max(distance, 1e-6);
-  const near = Math.max(safeDistance - radius * 1.5, safeDistance * 0.005, 1e-4);
+  const safeDistance = Math.max(distance, radius * 1e-3, 1e-9);
+  const near = Math.max(safeDistance - radius * 1.5, safeDistance * 0.005);
   return { near, far: Math.max(near * 10, safeDistance + radius * 4) };
 }
 

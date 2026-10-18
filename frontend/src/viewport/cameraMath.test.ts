@@ -1,6 +1,6 @@
-import { Box3, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
-import { calculateCameraFit, clippingRange, orthographicExtents, zoomedOrthographicValue } from './cameraMath';
+import { Box3, MathUtils, Vector3 } from 'three';
+import { calculateCameraFit, clippingRange, framingRadius, orthographicExtents, zoomedOrthographicValue } from './cameraMath';
 
 describe('depth clipping range', () => {
   it('brackets the model instead of spanning the universe', () => {
@@ -55,5 +55,55 @@ describe('orthographic camera math', () => {
   it('zooms orthographic cameras in and out symmetrically', () => {
     expect(zoomedOrthographicValue(1, 'in')).toBe(1.25);
     expect(zoomedOrthographicValue(1.25, 'out')).toBe(1);
+  });
+});
+
+// Imported and CAD meshes are in metres, parametric previews in millimetres.
+// A 0.5-unit radius floor framed the 2026-10-18 restored FEM run -- a ported
+// box 42 x 42 x 71 mm, i.e. 0.042 x 0.042 x 0.071 scene units -- as if it
+// were a metre across, so it sat as a speck the user could not frame.
+describe('framing is independent of scene units and model size', () => {
+  const portedBoxMetres = new Box3(new Vector3(-0.001, -0.001, -0.001), new Vector3(0.041, 0.041, 0.07));
+  const trueRadius = (box: Box3) => box.min.distanceTo(box.max) / 2;
+  const scaled = (box: Box3, k: number) => new Box3(box.min.clone().multiplyScalar(k), box.max.clone().multiplyScalar(k));
+
+  /** Fraction of the limiting viewport half-extent the bounding sphere covers. */
+  function perspectiveFill(bounds: Box3, aspect: number): number {
+    const fit = calculateCameraFit(bounds, 'three-quarter', 'perspective', aspect);
+    const distance = fit.position.distanceTo(fit.center);
+    const halfFov = MathUtils.degToRad(34 / 2);
+    const limiting = Math.min(halfFov, Math.atan(Math.tan(halfFov) * aspect));
+    return Math.asin(trueRadius(bounds) / distance) / limiting;
+  }
+
+  it.each([1e-3, 1, 1e3])('fills the view with the restored ported box at scale %s', (k) => {
+    const bounds = scaled(portedBoxMetres, k);
+    const fill = perspectiveFill(bounds, 16 / 9);
+    expect(fill).toBeGreaterThan(0.6);
+    expect(fill).toBeLessThan(1);
+    const fit = calculateCameraFit(bounds, 'front', 'perspective', 16 / 9);
+    expect(fit.center.toArray()).toEqual(bounds.getCenter(new Vector3()).toArray());
+    // The whole model sits between the depth planes.
+    expect(fit.near).toBeLessThan(fit.position.distanceTo(fit.center) - trueRadius(bounds));
+    expect(fit.far).toBeGreaterThan(fit.position.distanceTo(fit.center) + trueRadius(bounds));
+  });
+
+  it('frames a metres model and its millimetre twin identically', () => {
+    const metres = calculateCameraFit(portedBoxMetres, 'three-quarter', 'orthographic', 1.5);
+    const millimetres = calculateCameraFit(scaled(portedBoxMetres, 1000), 'three-quarter', 'orthographic', 1.5);
+    for (const key of ['near', 'far', 'left', 'right', 'top', 'bottom'] as const) {
+      expect(millimetres[key]).toBeCloseTo(metres[key] * 1000, 6);
+    }
+    expect(millimetres.position.distanceTo(metres.position.clone().multiplyScalar(1000))).toBeLessThan(1e-9);
+    // The orthographic window hugs the model rather than a 0.5-unit sphere.
+    expect(metres.top).toBeLessThan(0.1);
+  });
+
+  it('still frames a degenerate single-point box', () => {
+    const point = new Box3(new Vector3(0.02, 0.02, 0.07), new Vector3(0.02, 0.02, 0.07));
+    const fit = calculateCameraFit(point, 'front', 'perspective', 1);
+    expect(fit.position.distanceTo(fit.center)).toBeGreaterThan(0);
+    expect(fit.near).toBeGreaterThan(0);
+    expect(fit.far).toBeGreaterThan(fit.near);
   });
 });

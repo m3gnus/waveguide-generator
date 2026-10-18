@@ -137,6 +137,16 @@ describe('cameraFitDisposition', () => {
       )).toBe('apply');
     });
 
+    // Both are imported metres scenes well under the old 0.5-unit radius
+    // floor, which made every such pair look the same size and kept the
+    // first one's framing for the second.
+    it('reframes between two small imported models of different size', () => {
+      const portedBox = box([-0.001, -0.001, -0.001], [0.041, 0.041, 0.07]);
+      const tweeterPlate = box([0, 0, 0], [0.006, 0.006, 0.004]);
+      expect(boundsAreDiscontinuous(portedBox, tweeterPlate)).toBe(true);
+      expect(boundsAreDiscontinuous(tweeterPlate, portedBox)).toBe(true);
+    });
+
     it('keeps recording ordinary geometry edits in place', () => {
       const nudged = box([-110, -105, 0], [104, 100, 230]);
       expect(boundsAreDiscontinuous(fitted, nudged)).toBe(false);
