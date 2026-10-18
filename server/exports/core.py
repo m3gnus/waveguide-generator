@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import logging
 import math
 from pathlib import Path
-import re
 import struct
 import tempfile
 from typing import TYPE_CHECKING, Any, Mapping
@@ -251,29 +250,6 @@ def _declare_step_schema() -> None:
     gmsh.option.setString("Geometry.OCCSTEPSchemaIdentifier", STEP_SCHEMA_IDENTIFIER)
 
 
-# ISO 10303-21 wants file_description before file_name; OpenCASCADE 7.7 and
-# later write them the other way round, so every gmsh from 4.12 on emits a
-# header that strict readers (CATIA) reject -- they take the product structure
-# and drop the shapes. hornlab_mesher.cad.normalise_step_header does the same
-# job for the solid export; this narrower swap is kept local because the mesher
-# is version-pinned and the header OCC hands us here is always these three
-# statements. Fold the two together at the next mesher pin bump.
-_HEADER_SWAP = re.compile(
-    r"(?P<name>FILE_NAME\s*\(.*?\);)(?P<gap>\s*)(?P<description>FILE_DESCRIPTION\s*\(.*?\);)",
-    re.DOTALL,
-)
-
-
-def _normalise_step_header(step_text: str) -> str:
-    header, separator, rest = step_text.partition("ENDSEC;")
-    if not separator:
-        return step_text
-    fixed, swapped = _HEADER_SWAP.subn(
-        lambda match: match["description"] + match["gap"] + match["name"], header, count=1
-    )
-    return fixed + separator + rest if swapped else step_text
-
-
 def _assert_step(step_text: str, *, require_bspline: bool = True) -> None:
     required = (
         "ISO-10303-21",
@@ -298,6 +274,7 @@ def _assert_step(step_text: str, *, require_bspline: bool = True) -> None:
 
 def _write_step(inner_points: np.ndarray) -> str:
     import gmsh
+    from hornlab_mesher.cad import normalise_step_header
 
     initialized_here = False
     step_path: Path | None = None
@@ -346,7 +323,7 @@ def _write_step(inner_points: np.ndarray) -> str:
         ) as handle:
             step_path = Path(handle.name)
         gmsh.write(str(step_path))
-        text = _normalise_step_header(
+        text = normalise_step_header(
             step_path.read_text(encoding="utf-8", errors="replace")
         )
         _assert_step(text)
@@ -734,7 +711,7 @@ def _native_step(design: DesignConfig) -> StepSolidResult:
         path = Path(folder) / "geometry.step"
         with _preserve_native_windows_path():
             _, info = write_step_from_config(design_to_mesher_config(design), path)
-        text = _normalise_step_header(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
     # Exact revolutions, circles and planar source faces need no spline surface.
     _assert_step(text, require_bspline=False)
     return StepSolidResult(step_text=text, cad_info=info)
@@ -843,12 +820,7 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
         # directly, allowing the pinned mesher to own a native session.
         with _preserve_native_windows_path():
             _, cad_info = write_step_from_config(config, step_path)
-        # Normalised here as well as in the mesher: the mesher is version-pinned,
-        # and a pin that predates its own header fix would otherwise hand CATIA
-        # a file it cannot read.
-        text = _normalise_step_header(
-            step_path.read_text(encoding="utf-8", errors="replace")
-        )
+        text = step_path.read_text(encoding="utf-8", errors="replace")
     finally:
         step_path.unlink(missing_ok=True)
     _assert_step(text)
