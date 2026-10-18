@@ -1,9 +1,10 @@
 """Recompute a completed job's combined channel from persisted bases.
 
-The solve-time combine (``server/solver/metal.py``) and this module produce
+The solve-time combine and this module package the channel through the same
+``package_combined_channel`` step (``combined_channel.py``), so they produce
 contract-identical channels; this one trades the live solver state for the
-``simulation_channel_bases`` NPZ, so changing a crossover after the solve is
-a millisecond-scale numpy recombination instead of a re-solve.
+``simulation_channel_bases`` NPZ, so changing a crossover after the solve is a
+millisecond-scale numpy recombination instead of a re-solve.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ import time
 from types import SimpleNamespace
 from typing import Any, Mapping
 
-from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.jobs.models import (
     ChannelCombineSpec,
     ImportedGeometrySource,
@@ -20,17 +20,10 @@ from server.jobs.models import (
 )
 
 from .acoustics import solver_sound_speed_m_per_s
-from .combine import combine_drive_channels, deserialize_channel_bases
-from .driver_limits import MemberLimits, member_limits_from_channel
-from .context import SolverContext
+from .combine import deserialize_channel_bases
+from .combined_channel import package_combined_channel
 from .errors import RecombineError
 from .power_qualification import annotate_results
-from .result_mapping import build_solver_response
-
-
-_IMPEDANCE_OMITTED = (
-    "combined channel: member drives differ; no single impedance exists"
-)
 
 
 def recombine_stored_results(
@@ -75,22 +68,6 @@ def recombine_stored_results(
     envelope_metadata = results.get("metadata")
     envelope_metadata = envelope_metadata if isinstance(envelope_metadata, Mapping) else {}
     validity = envelope_metadata.get("per_source_frequency_validity")
-    validity = validity if isinstance(validity, Mapping) else {}
-    channels_by_id = {channel.id: channel for channel in geometry.drive_channels}
-    member_validity_hz: dict[str, float] = {}
-    for member in spec.members:
-        channel = channels_by_id.get(member)
-        if channel is None:
-            continue
-        limits = [
-            float(item["effective_max_valid_frequency_hz"])
-            for source_id in channel.source_ids
-            if isinstance(item := validity.get(source_id), Mapping)
-            and item.get("effective_max_valid_frequency_hz") is not None
-        ]
-        if limits:
-            member_validity_hz[member] = min(limits)
-
     member_roles: dict[str, str | None] = {}
     for member in spec.members:
         stored = channels.get(member)
@@ -99,37 +76,10 @@ def recombine_stored_results(
             stored_metadata.get("role") if isinstance(stored_metadata, Mapping) else None
         )
 
-    # Maximum output is read from the stored member channels, not recomputed:
-    # a recombine changes the crossover, never the drivers or the voltage they
-    # were solved at, so the excursion and impedance the solve wrote still hold.
-    member_limits: dict[str, MemberLimits] = {}
-    for member in spec.members:
-        limits = member_limits_from_channel(
-            channels.get(member),
-            frequencies_hz=frequencies,
-            max_voltage_v=geometry.max_drive_voltage_v,
-        )
-        if limits is not None:
-            member_limits[member] = limits
-
-    resolved = spec.resolved()
-    combined_result, combine_payload = combine_drive_channels(
-        bundle["results_by_id"],
-        members=list(spec.members),
-        channels=resolved["channels"],
-        reference=resolved["reference"],
-        member_validity_hz=member_validity_hz,
-        member_roles=member_roles,
-        member_limits=member_limits,
-    )
-
     motions = {channel.motion for channel in geometry.drive_channels}
     config_motion = next(iter(motions)) if len(motions) == 1 else "normal"
     quadrants_raw = member_metadata.get("quadrants")
     quadrants = int(quadrants_raw) if isinstance(quadrants_raw, (int, float)) else 1234
-    context = SolverContext.from_imported_request(
-        request, quadrants=quadrants, source_motion=config_motion
-    )
     observation = member_metadata.get("observation")
     observation = observation if isinstance(observation, Mapping) else {}
     distance_raw = observation.get("requested_distance_m")
@@ -146,58 +96,63 @@ def recombine_stored_results(
             sphere_grid=object() if bundle["has_balloon"] else None,
         )
     )
-
-    source_ids = [
-        source_id
-        for member in spec.members
-        for source_id in (
-            channels_by_id[member].source_ids if member in channels_by_id else []
-        )
-    ]
-    metadata: dict[str, Any] = {
-        "solver_backend": member_metadata.get("solver_backend", "metal"),
-        "solver_mode": member_metadata.get("solver_mode", "full_3d"),
-        "geometry_type": "imported",
-        "drive_channel_id": spec.id,
-        "derived_from_channels": list(spec.members),
-        "source_ids": source_ids,
-        "engine": member_metadata.get("engine", "hornlab-metal-bem"),
-        "phase_time_convention": PHASE_TIME_CONVENTION,
-        "combine": combine_payload,
-        "recombined": True,
-        "performance": {},
-    }
-    # These describe the solve that produced the bases, including the runtime's
-    # per-channel enrichment. Recombination cannot reconstruct its frame/config.
-    for copied in (
-        "device_interface", "mesh_validation", "metal", "beat", "bempp",
-        "solver_engine", "observation_frame_basis", "solve_execution", "cad_identity",
-    ):
-        value = member_metadata.get(copied)
-        if isinstance(value, Mapping):
-            metadata[copied] = dict(value)
-    # Live combined builders omit fields describing just one member's drive.
-    for backend, member_fields in (
-        ("beat", ("merged_source_tags", "axially_reversed_source_tags", "solver_log")),
-        ("bempp", ("velocity_source_tags", "source_motion", "solver_log")),
-    ):
-        for field in member_fields:
-            if backend in metadata:
-                metadata[backend].pop(field, None)
-
-    response = build_solver_response(
-        result=combined_result,
-        config=config,
-        context=context,
-        start_time=time.time(),
-        metadata=metadata,
-        sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_metal_bem"),
+    # The solve recorded the c its engine ran at; a member channel solved by
+    # BEAT or BEMPP must not be renormalized against Metal's constant.
+    speed_raw = observation.get("sound_speed_m_per_s")
+    sound_speed = (
+        float(speed_raw)
+        if isinstance(speed_raw, (int, float))
+        else solver_sound_speed_m_per_s("hornlab_metal_bem")
     )
-    response.pop("impedance", None)
-    response["metadata"]["impedance_omitted"] = _IMPEDANCE_OMITTED
+
+    def stored_metadata(_combined_result: Any) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "solver_backend": member_metadata.get("solver_backend", "metal"),
+            "solver_mode": member_metadata.get("solver_mode", "full_3d"),
+            "engine": member_metadata.get("engine", "hornlab-metal-bem"),
+            "recombined": True,
+            "performance": {},
+        }
+        # These describe the solve that produced the bases, including the
+        # runtime's per-channel enrichment. Recombination cannot reconstruct
+        # its frame/config.
+        for copied in (
+            "device_interface", "mesh_validation", "metal", "beat", "bempp",
+            "solver_engine", "observation_frame_basis", "solve_execution", "cad_identity",
+        ):
+            value = member_metadata.get(copied)
+            if isinstance(value, Mapping):
+                metadata[copied] = dict(value)
+        # Live combined builders omit fields describing just one member's drive.
+        for backend, member_fields in (
+            ("metal", ("solver_log",)),
+            ("beat", ("merged_source_tags", "axially_reversed_source_tags", "solver_log")),
+            ("bempp", ("velocity_source_tags", "source_motion", "solver_log")),
+        ):
+            for field in member_fields:
+                if backend in metadata:
+                    metadata[backend].pop(field, None)
+        return metadata
+
+    channels[spec.id] = package_combined_channel(
+        spec=spec,
+        drive_channels=geometry.drive_channels,
+        results_by_id=bundle["results_by_id"],
+        member_channels=channels,
+        per_source_validity=validity if isinstance(validity, Mapping) else {},
+        member_roles=member_roles,
+        max_drive_voltage_v=geometry.max_drive_voltage_v,
+        frequencies_hz=frequencies,
+        request=request,
+        quadrants=quadrants,
+        config_motion=config_motion,
+        config=config,
+        start_time=time.time(),
+        sound_speed_m_per_s=sound_speed,
+        backend_metadata=stored_metadata,
+    )
 
     updated = dict(results)
-    channels[spec.id] = response
     updated["channels"] = channels
     order = [str(name) for name in results.get("channel_order") or []]
     if spec.id not in order:

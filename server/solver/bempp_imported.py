@@ -52,9 +52,9 @@ from .bempp import (
     PREFERRED_ASSEMBLY_BACKEND,
     BemppUnavailable,
 )
-from .combine import combine_drive_channels, serialize_channel_bases
+from .combine import serialize_channel_bases
+from .combined_channel import package_combined_channel
 from .context import SolverContext
-from .driver_limits import MemberLimits, member_limits_from_channel
 from .field_traces_store import (
     BEMPP_FIELD_TRACE_BACKEND,
     build_field_trace_artifact,
@@ -185,92 +185,50 @@ def _combined_channel_response(
 
     spec = geometry.combine
     assert spec is not None
-    channels_by_id = {channel.id: channel for channel in geometry.drive_channels}
-    member_validity_hz: dict[str, float] = {}
-    for member in spec.members:
-        limits = [
-            float(item["effective_max_valid_frequency_hz"])
-            for source_id in channels_by_id[member].source_ids
-            if isinstance(item := per_source_validity.get(source_id), Mapping)
-            and item.get("effective_max_valid_frequency_hz") is not None
-        ]
-        if limits:
-            member_validity_hz[member] = min(limits)
-    frequencies_hz = np.asarray(
-        sorted_results[spec.members[0]].frequencies_hz, dtype=np.float64
-    ).reshape(-1)
-    member_limits: dict[str, MemberLimits] = {}
-    for member in spec.members:
-        limits = member_limits_from_channel(
-            member_channels.get(member),
-            frequencies_hz=frequencies_hz,
-            max_voltage_v=geometry.max_drive_voltage_v,
-        )
-        if limits is not None:
-            member_limits[member] = limits
 
-    resolved = spec.resolved()
-    combined_result, combine_payload = combine_drive_channels(
-        sorted_results,
-        members=list(spec.members),
-        channels=resolved["channels"],
-        reference=resolved["reference"],
-        member_validity_hz=member_validity_hz,
+    def bempp_metadata(combined_result: Any) -> dict[str, Any]:
+        return {
+            "solver_backend": "bempp",
+            "device_interface": {
+                "selected": f"bempp-cl-{backend}",
+                f"bempp-cl-{backend}": dict(status),
+            },
+            "engine": "hornlab-bempp-bem",
+            "mesh_validation": {
+                "mode": request.options.mesh_validation_mode,
+                "backend": "hornlab-bempp-bem",
+            },
+            "performance": {"total_time_seconds": time.time() - started},
+            "observation_frame_basis": dict(frame_basis),
+            "bempp": _bempp_section(
+                backend=backend,
+                native_plane=native_plane,
+                config=config,
+                tags=None,
+                motion=None,
+                result=combined_result,
+            ),
+        }
+
+    return package_combined_channel(
+        spec=spec,
+        drive_channels=geometry.drive_channels,
+        results_by_id=sorted_results,
+        member_channels=member_channels,
+        per_source_validity=per_source_validity,
         member_roles={
-            member: channel_identity.get(member, {}).get("role")
-            for member in spec.members
+            member: channel_identity.get(member, {}).get("role") for member in spec.members
         },
-        member_limits=member_limits,
-    )
-    metadata = {
-        "solver_backend": "bempp",
-        "solver_mode": "full_3d",
-        "geometry_type": "imported",
-        "drive_channel_id": spec.id,
-        "derived_from_channels": list(spec.members),
-        "source_ids": [
-            source_id
-            for member in spec.members
-            for source_id in channels_by_id[member].source_ids
-        ],
-        "device_interface": {
-            "selected": f"bempp-cl-{backend}",
-            f"bempp-cl-{backend}": dict(status),
-        },
-        "engine": "hornlab-bempp-bem",
-        "phase_time_convention": PHASE_TIME_CONVENTION,
-        "combine": combine_payload,
-        "mesh_validation": {
-            "mode": request.options.mesh_validation_mode,
-            "backend": "hornlab-bempp-bem",
-        },
-        "performance": {"total_time_seconds": time.time() - started},
-        "observation_frame_basis": dict(frame_basis),
-        "bempp": _bempp_section(
-            backend=backend,
-            native_plane=native_plane,
-            config=config,
-            tags=None,
-            motion=None,
-            result=combined_result,
-        ),
-    }
-    context = SolverContext.from_imported_request(
-        request, quadrants=quadrants, source_motion=config_motion
-    )
-    response = build_solver_response(
-        result=combined_result,
+        max_drive_voltage_v=geometry.max_drive_voltage_v,
+        frequencies_hz=sorted_results[spec.members[0]].frequencies_hz,
+        request=request,
+        quadrants=quadrants,
+        config_motion=config_motion,
         config=config,
-        context=context,
         start_time=started,
-        metadata=metadata,
         sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_bempp_bem"),
+        backend_metadata=bempp_metadata,
     )
-    response.pop("impedance", None)
-    response["metadata"]["impedance_omitted"] = (
-        "combined channel: member drives differ; no single impedance exists"
-    )
-    return response
 
 
 def _solve_config(config_kwargs: dict[str, Any]) -> Any:

@@ -53,8 +53,12 @@ def test_recombine_preserves_solve_metadata(backend, engine, existing):
     member_metadata = {
         **deepcopy(shared), "solver_backend": backend, "engine": engine,
         "role": "LF", "drive_channel_id": "low", "source_ids": ["source-low"],
+        # A c no backend constant uses, so a fallback to Metal's would show.
+        "observation": {"requested_distance_m": 2., "observation_origin": "throat",
+                        "sound_speed_m_per_s": 340.5},
     }
     member_fields = {
+        "metal": {"solver_log": ["member log"]},
         "beat": {"merged_source_tags": [101], "axially_reversed_source_tags": [101],
                  "solver_log": ["member log"]},
         "bempp": {"velocity_source_tags": [101], "source_motion": "normal",
@@ -81,5 +85,7 @@ def test_recombine_preserves_solve_metadata(backend, engine, existing):
     assert "role" not in combined["metadata"]
     assert combined["metadata"]["combine"]["crossovers_hz"] == [500.]
     assert "impedance" not in combined
+    # The combined channel is normalized at the c its members were solved at.
+    assert combined["metadata"]["observation"]["sound_speed_m_per_s"] == 340.5
     assert updated["channel_order"] == ["low", "high", "combined"]
     assert results == original

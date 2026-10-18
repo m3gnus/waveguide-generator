@@ -34,8 +34,8 @@ from server.platform.temp_session import temporary_directory_root
 from server.preview.translate import has_closed_outer_body
 
 from .acoustics import solver_sound_speed_m_per_s
-from .combine import combine_drive_channels, serialize_channel_bases
-from .driver_limits import MemberLimits, member_limits_from_channel
+from .combine import serialize_channel_bases
+from .combined_channel import package_combined_channel
 from .driver_lem import (
     hornlab_driver,
     one_way_peak_excursion_mm,
@@ -1458,95 +1458,48 @@ def _combined_channel_response(
 
     spec = geometry.combine
     assert spec is not None
-    channels_by_id = {channel.id: channel for channel in geometry.drive_channels}
-    member_validity_hz: dict[str, float] = {}
-    for member in spec.members:
-        limits = [
-            float(item["effective_max_valid_frequency_hz"])
-            for source_id in channels_by_id[member].source_ids
-            if isinstance(item := per_source_validity.get(source_id), Mapping)
-            and item.get("effective_max_valid_frequency_hz") is not None
-        ]
-        if limits:
-            member_validity_hz[member] = min(limits)
 
-    # The channels were built a moment ago and hold the driver model each
-    # member was solved with, so the maximum-output ceilings come from the same
-    # arrays the excursion and impedance charts draw -- no second LEM pass.
-    frequencies_hz = np.asarray(
-        sorted_results[spec.members[0]].frequencies_hz, dtype=np.float64
-    ).reshape(-1)
-    member_limits: dict[str, MemberLimits] = {}
-    for member in spec.members:
-        limits = member_limits_from_channel(
-            member_channels.get(member),
-            frequencies_hz=frequencies_hz,
-            max_voltage_v=geometry.max_drive_voltage_v,
-        )
-        if limits is not None:
-            member_limits[member] = limits
+    def metal_metadata(combined_result: Any) -> dict[str, Any]:
+        return {
+            "solver_backend": "metal",
+            "device_interface": {"selected": "metal", "metal": dict(status)},
+            "engine": "hornlab-metal-bem",
+            "mesh_validation": {
+                "mode": request.options.mesh_validation_mode,
+                "backend": "hornlab-metal-bem",
+            },
+            "performance": {"total_time_seconds": time.time() - started},
+            "metal": {
+                "solver_mode": "full_3d",
+                "native_symmetry_plane": kwargs["native_symmetry_plane"],
+                "native_check_open_edges": kwargs["native_check_open_edges"],
+                "formulation": kwargs["formulation"],
+                "complex_k_shift": kwargs["complex_k_shift"],
+                "solver_log": json_safe_native_value(
+                    response_solver_log(getattr(combined_result, "solver_log", []))
+                ),
+            },
+        }
 
-    resolved = spec.resolved()
-    combined_result, combine_payload = combine_drive_channels(
-        sorted_results,
-        members=list(spec.members),
-        channels=resolved["channels"],
-        reference=resolved["reference"],
-        member_validity_hz=member_validity_hz,
+    return package_combined_channel(
+        spec=spec,
+        drive_channels=geometry.drive_channels,
+        results_by_id=sorted_results,
+        member_channels=member_channels,
+        per_source_validity=per_source_validity,
         member_roles={
-            member: channel_identity.get(member, {}).get("role")
-            for member in spec.members
+            member: channel_identity.get(member, {}).get("role") for member in spec.members
         },
-        member_limits=member_limits,
-    )
-    source_ids = [
-        source_id
-        for member in spec.members
-        for source_id in channels_by_id[member].source_ids
-    ]
-    metadata = {
-        "solver_backend": "metal",
-        "solver_mode": "full_3d",
-        "geometry_type": "imported",
-        "drive_channel_id": spec.id,
-        "derived_from_channels": list(spec.members),
-        "source_ids": source_ids,
-        "device_interface": {"selected": "metal", "metal": dict(status)},
-        "engine": "hornlab-metal-bem",
-        "phase_time_convention": "exp(+ikr)",
-        "combine": combine_payload,
-        "mesh_validation": {
-            "mode": request.options.mesh_validation_mode,
-            "backend": "hornlab-metal-bem",
-        },
-        "performance": {"total_time_seconds": time.time() - started},
-        "metal": {
-            "solver_mode": "full_3d",
-            "native_symmetry_plane": kwargs["native_symmetry_plane"],
-            "native_check_open_edges": kwargs["native_check_open_edges"],
-            "formulation": kwargs["formulation"],
-            "complex_k_shift": kwargs["complex_k_shift"],
-            "solver_log": json_safe_native_value(
-                response_solver_log(getattr(combined_result, "solver_log", []))
-            ),
-        },
-    }
-    context = SolverContext.from_imported_request(
-        request, quadrants=quadrants, source_motion=config_motion
-    )
-    response = build_solver_response(
-        result=combined_result,
+        max_drive_voltage_v=geometry.max_drive_voltage_v,
+        frequencies_hz=sorted_results[spec.members[0]].frequencies_hz,
+        request=request,
+        quadrants=quadrants,
+        config_motion=config_motion,
         config=config,
-        context=context,
         start_time=started,
-        metadata=metadata,
         sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_metal_bem"),
+        backend_metadata=metal_metadata,
     )
-    response.pop("impedance", None)
-    response["metadata"]["impedance_omitted"] = (
-        "combined channel: member drives differ; no single impedance exists"
-    )
-    return response
 
 
 def solve_imported_metal_from_msh_text(
