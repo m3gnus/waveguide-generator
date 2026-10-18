@@ -155,6 +155,10 @@ a release workflow. Pushes to other branches and pull requests run nothing.
 
 Run a subset with the launcher, not with a hand-built `pytest` line:
 
+In a fresh worktree, build the frontend first (`cd frontend && npm ci && npx vite build`).
+Tests that mount the real app serve `frontend/dist` and fail without it; they say so in
+their error message.
+
 ```bash
 .venv/bin/python scripts/run_tests.py server/tests/test_design_*.py -q
 .venv/bin/python scripts/run_tests.py server/tests/test_x.py::test_one -x
