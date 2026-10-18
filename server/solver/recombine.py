@@ -167,10 +167,23 @@ def recombine_stored_results(
         "recombined": True,
         "performance": {},
     }
-    for copied in ("device_interface", "mesh_validation", "metal"):
+    # These describe the solve that produced the bases, including the runtime's
+    # per-channel enrichment. Recombination cannot reconstruct its frame/config.
+    for copied in (
+        "device_interface", "mesh_validation", "metal", "beat", "bempp",
+        "solver_engine", "observation_frame_basis", "solve_execution", "cad_identity",
+    ):
         value = member_metadata.get(copied)
         if isinstance(value, Mapping):
             metadata[copied] = dict(value)
+    # Live combined builders omit fields describing just one member's drive.
+    for backend, member_fields in (
+        ("beat", ("merged_source_tags", "axially_reversed_source_tags")),
+        ("bempp", ("velocity_source_tags", "source_motion")),
+    ):
+        for field in member_fields:
+            if backend in metadata:
+                metadata[backend].pop(field, None)
 
     response = build_solver_response(
         result=combined_result,
