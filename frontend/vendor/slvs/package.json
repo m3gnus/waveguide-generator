@@ -1,2 +1,2 @@
-{ "name": "slvs", "version": "3.2.0-hornlab.1", "license": "GPL-3.0-or-later", "type": "module",
+{ "name": "slvs", "version": "3.2.0-hornlab.2", "license": "GPL-3.0-or-later", "type": "module",
   "main": "slvs.js", "types": "slvs.d.ts", "exports": { ".": { "types": "./slvs.d.ts", "default": "./slvs.js" }, "./slvs.wasm": "./slvs.wasm" } }

@@ -15,6 +15,7 @@ for (const name of solverNames) describe(`${name} drag session`, () => {
   it('updates goals without rebuilding; release removes goals and diagnoses', async () => {
     const s = await createSolver(name);
     const push = vi.spyOn(GcsWrapper.prototype, 'push_primitives_and_params');
+    if (name === 'slvs') expect(capture.slvs).toBeDefined();
     const clear = capture.slvs && vi.spyOn(capture.slvs, 'clearSketch');
     try {
       s.load(diagnosticCases[0].sketch); s.beginDrag(['a', 'b']);
@@ -86,3 +87,18 @@ it('slvs preserves the loaded unsigned-distance side through cursor fallback and
     expect(s.endDrag().points.p.y).toBeCloseTo(-3, 6);
   } finally { s.destroy(); }
 });
+
+it('slvs reports its heap and does not grow it across drag frames or rebuilds', async () => {
+  const s = await createSolver('slvs'), sample = contourChainConstrained(8);
+  const rim = sample.sketch.entities.find(e => e.kind === 'point' && e.id === 'rim') as { x: number };
+  try {
+    s.load(sample.sketch); s.beginDrag(['rim']);
+    for (let f = 0; f < 200; f++) s.dragTo([{ pointId: 'rim', x: rim.x + Math.sin(f / 20), y: 0 }]);
+    const before = s.memoryBytes(); expect(before).toBeGreaterThan(0);
+    // The unpatched libslvs leaked ~11.5 KiB per drag frame and more per rebuild (vendor/slvs/BUILD.md).
+    for (let f = 0; f < 1500; f++) s.dragTo([{ pointId: 'rim', x: rim.x + Math.sin(f / 20), y: 0 }]);
+    s.endDrag();
+    for (let i = 0; i < 200; i++) { s.load(sample.sketch); s.solve({ mode: 'full' }); }
+    expect(s.memoryBytes()).toBe(before);
+  } finally { s.destroy(); }
+}, 20000);

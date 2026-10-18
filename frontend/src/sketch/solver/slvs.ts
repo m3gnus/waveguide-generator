@@ -1,13 +1,29 @@
 import type { Entity as SEntity, SlvsModule } from 'slvs';
 import { Adapter, capabilities, emulated, entity, equivalent, pointsOf, unsupported, type NativeResult } from './common';
 import { Unsupported, type DragTarget, type SolveOptions, type Sketch } from './types';
-let modulePromise: Promise<SlvsModule> | undefined;
-export async function create() {
-  modulePromise ??= import('slvs').then(m => m.default());
-  return new SolveSpace(await modulePromise);
+import { wasmInput } from './wasm';
+// Each adapter owns a fresh module instance, so destroy() plus create() always recovers a
+// clean heap, including after a WASM trap. The wasm is compiled once; instantiation is cheap.
+let compiled: Promise<WebAssembly.Module> | undefined;
+function wasmModule() {
+  return compiled ??= (async () => {
+    const { default: url } = await import('slvs/slvs.wasm?url');
+    const input = await wasmInput(url);
+    return WebAssembly.compile(typeof input === 'string' ? await (await fetch(input)).arrayBuffer() : input as Uint8Array<ArrayBuffer>);
+  })();
 }
-// libslvs owns one global sketch. An interleaving instance invalidates the handle cache.
-let owner: SolveSpace | undefined;
+type Instantiate = (imports: WebAssembly.Imports, done: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void) => object;
+export async function create() {
+  const [{ default: factory }, wasm] = await Promise.all([import('slvs'), wasmModule()]);
+  const instantiateWasm: Instantiate = (imports, done) => {
+    void WebAssembly.instantiate(wasm, imports).then(instance => done(instance, wasm));
+    return {};
+  };
+  return new SolveSpace(await (factory as (options: { instantiateWasm: Instantiate }) => Promise<SlvsModule>)({ instantiateWasm }));
+}
+// libslvs keeps one global sketch per module instance. Adapters sharing a module
+// (only possible via direct construction) rebuild when another one solved in between.
+const owners = new WeakMap<SlvsModule, SolveSpace>();
 class SolveSpace extends Adapter {
   constructor(private s: SlvsModule) { super(); }
   capabilities() {
@@ -40,9 +56,9 @@ class SolveSpace extends Adapter {
   private prepared?: { pinned: boolean; handles: Map<string, SEntity>; constraints: Map<number, string> };
   protected invalidatePrepared() { this.prepared = undefined; }
   protected prepareDrag(targets: DragTarget[]) { this.build(targets); }
-  protected release() { if (owner === this) { this.s.clearSketch(); owner = undefined; } }
+  protected release() { if (owners.get(this.s) === this) { this.s.clearSketch(); owners.delete(this.s); } }
   private build(targets: DragTarget[] = []) {
-    const s = this.s; owner = undefined; s.clearSketch();
+    const s = this.s; owners.delete(s); s.clearSketch();
     const wp = s.addBase2D(1), normal = s.addNormal3D(1, 1, 0, 0, 0), group = 2;
     const handles = new Map<string, SEntity>(), constraints = new Map<number, string>();
     const h = (id: string) => { const value = handles.get(id); if (!value) throw new Error(`Unknown entity: ${id}`); return value; };
@@ -101,12 +117,12 @@ class SolveSpace extends Adapter {
       }
     }
     for (const target of targets) if (!entity(this.sketch, target.pointId, 'point').fixed) s.dragged(group, h(target.pointId), wp);
-    this.prepared = { pinned: targets.length > 0, handles, constraints }; owner = this;
+    this.prepared = { pinned: targets.length > 0, handles, constraints }; owners.set(s, this);
   }
   protected run(options: SolveOptions): NativeResult {
     const updateStart = performance.now();
     const targets = options.dragTargets ?? [];
-    if (!this.dragPointIds || !this.prepared || owner !== this || (targets.length && !this.prepared.pinned)) this.build(targets);
+    if (!this.dragPointIds || !this.prepared || owners.get(this.s) !== this || (targets.length && !this.prepared.pinned)) this.build(targets);
     const s = this.s, group = 2;
     const seed = () => {
       for (const target of targets) {

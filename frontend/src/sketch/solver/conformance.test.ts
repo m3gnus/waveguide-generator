@@ -89,8 +89,12 @@ for (const name of solverNames) {
       });
       if (missing) it.skip(`${sample.name} DOF — ${caps.constraints[missing.kind].detail}`, run);
       // Four coordinates minus the rank-one equation y_a - y_b = 0 = 3 DOF.
-      // slvs 3.2.0 reports 2 for two copies. Keep the DOF assertion intact.
-      else if (name === 'slvs' && sample.name === 'duplicate constraint') it.fails(`${sample.name} DOF`, run);
+      // slvs 3.2.0 reports 2 for two copies. Keep the DOF assertion intact, but check status separately
+      // so that only the known DOF defect is expected to fail.
+      else if (name === 'slvs' && sample.name === 'duplicate constraint') {
+        it.fails(`${sample.name} DOF`, run);
+        it(`${sample.name} status`, () => withSolver(sample.sketch, s => { expect(s.solve({ mode: 'full' }).status).toBe('ok'); }));
+      }
       else it(`${sample.name} DOF`, run);
       if (sample.expected.conflicting.length) {
         const test = () => withSolver(sample.sketch, s => {

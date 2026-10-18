@@ -1,0 +1,61 @@
+diff --git a/src/slvs/CMakeLists.txt b/src/slvs/CMakeLists.txt
+index d931f8fa..dc9ea0f6 100644
+--- a/src/slvs/CMakeLists.txt
++++ b/src/slvs/CMakeLists.txt
+@@ -50,9 +50,10 @@ if(EMSCRIPTEN)
+     target_link_options(slvs-wasm PRIVATE
+         "SHELL:-s MODULARIZE=1"
+         "SHELL:-s EXPORT_NAME=solvespace"
+-        "SHELL:-s SINGLE_FILE=1"
+-        "SHELL:-s INITIAL_MEMORY=512MB"
+-        "SHELL:-s ALLOW_MEMORY_GROWTH"
++        "SHELL:-s EXPORT_ES6=1"
++        "SHELL:-s INITIAL_MEMORY=16MB"
++        "SHELL:-s ALLOW_MEMORY_GROWTH=1"
++        "SHELL:-s EXPORTED_RUNTIME_METHODS=['HEAPU8']"
+         -O3
+         -flto
+         --closure 1)
+diff --git a/src/slvs/lib.cpp b/src/slvs/lib.cpp
+index 56c7c242..391d1ec3 100644
+--- a/src/slvs/lib.cpp
++++ b/src/slvs/lib.cpp
+@@ -949,27 +949,18 @@ Slvs_SolveResult Slvs_SolveSketch(uint32_t shg, Slvs_hConstraint **bad = nullptr
+     }
+     sr.result = 0;
+     switch(status) {
+-        case SolveResult::OKAY: {
+-            sr.result = SLVS_RESULT_OKAY;
+-            return sr;
+-        }
+-        case SolveResult::DIDNT_CONVERGE: {
+-            sr.result = SLVS_RESULT_DIDNT_CONVERGE;
+-            return sr;
+-        }
+-        case SolveResult::REDUNDANT_DIDNT_CONVERGE: {
+-            sr.result = SLVS_RESULT_INCONSISTENT;
+-            return sr;
+-        }
+-        case SolveResult::REDUNDANT_OKAY: {
+-            sr.result = SLVS_RESULT_REDUNDANT_OKAY;
+-            return sr;
+-        }
+-        case SolveResult::TOO_MANY_UNKNOWNS: {
+-            sr.result = SLVS_RESULT_TOO_MANY_UNKNOWNS;
+-            return sr;
+-        }
++        case SolveResult::OKAY:                     sr.result = SLVS_RESULT_OKAY; break;
++        case SolveResult::DIDNT_CONVERGE:           sr.result = SLVS_RESULT_DIDNT_CONVERGE; break;
++        case SolveResult::REDUNDANT_DIDNT_CONVERGE: sr.result = SLVS_RESULT_INCONSISTENT; break;
++        case SolveResult::REDUNDANT_OKAY:           sr.result = SLVS_RESULT_REDUNDANT_OKAY; break;
++        case SolveResult::TOO_MANY_UNKNOWNS:        sr.result = SLVS_RESULT_TOO_MANY_UNKNOWNS; break;
+     }
++    // Release per-solve memory, as Slvs_Solve does: the bad-constraint list, the system's
++    // equation lists, and the temporary arena holding the generated expression trees.
++    // Persistent state (SK.param/entity/constraint and dragged) is untouched.
++    badList.Clear();
++    SYS.Clear();
++    Platform::FreeAllTemporary();
+     return sr;
+ }
+ 

@@ -4,7 +4,7 @@
 #   stripped (default): adds -g0 at link -> no DWARF, full post-link wasm-opt; output slvs/
 #   dwarf: upstream's RelWithDebInfo link as-is (DWARF kept, limited wasm-opt); output slvs/with-dwarf/
 # Expects src/solvespace = solvespace v3.2 (27b6a080c8b669421bd4d444650c3b8eddec5687) with
-# submodules extlib/mimalloc and extlib/eigen initialised and slvs/slvs-wasm-packaging.patch applied.
+# submodules extlib/mimalloc and extlib/eigen initialised and slvs/slvs-hornlab.patch applied.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VARIANT="${1:-stripped}"
