@@ -24,6 +24,25 @@ runtime = runtime_fixture
 FRAME = {"origin": [0., 0., 0.], "axis": [0., 0., 1.], "u": [1., 0., 0.], "v": [0., 1., 0.]}
 
 
+async def run_coupled_port(store, job_id, request, record, stage_cb, result_cb=None, symmetry_metadata=None):
+    from server.jobs.runtime import JobRuntime
+    from server.solver.base import run_full3d_solver_port
+    from server.solver.beat import BeatEngine, beat_engine_backend
+
+    outcome = await run_full3d_solver_port(
+        BeatEngine(beat_engine_backend(request.options.engine)), request,
+        cancel_cb=lambda: None, stage_cb=stage_cb, result_cb=result_cb,
+        imported_record={**record, "_execution_metadata": {
+            **store.get_job_row(job_id)["task_metadata"],
+            "resolved_quadrants": (symmetry_metadata or {}).get("resolved_quadrants"),
+        }},
+    )
+    runner = JobRuntime(store)
+    await runner._persist_coupled_fields(job_id, outcome)
+    await runner._flush_runtime_update(job_id, forget=True)
+    return outcome
+
+
 def region_input(region_id="air", channel="fem", *, interface=False):
     points = np.array([[0., 0., 0.], [10., 0., 0.], [0., 10., 0.], [0., 0., 10.]])
     faces = np.array([[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]])
@@ -188,7 +207,6 @@ def test_node_layout_for_multiple_regions():
 
 def test_envelope_validates_and_contains_fem_only_drive():
     from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
-    from server.jobs.runtime import JobRuntime
     from server.tests.test_imported_jobs import _request
 
     request = compiled()
@@ -198,6 +216,8 @@ def test_envelope_validates_and_contains_fem_only_drive():
     response = coupled_envelope(map_coupled_sweep(events(request), request), request,
         context=context, geometry=job_request.geometry, record={},
         config=bridge.response_config(request, context), started=time.time())
+    from server.jobs.runtime import JobRuntime
+
     enriched = JobRuntime._with_request_metadata(response, job_request)
     envelope = RESULT_ENVELOPE_ADAPTER.validate_python(enriched)
     assert envelope.result_contract_version == 2
@@ -410,7 +430,8 @@ def test_sidecar_cleanup_and_rated_retention(tmp_path, operation):
 
 @pytest.mark.parametrize("engine_choice", ["auto", "beat-cpu", "beat-metal", "beat-cuda", "beat-rocm"])
 @pytest.mark.parametrize("voltage", [False, True])
-def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runtime, monkeypatch, tmp_path, voltage, engine_choice):
+@pytest.mark.parametrize("field_failure", [None, "storage", "preparation", "worker"])
+def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runtime, monkeypatch, tmp_path, voltage, engine_choice, field_failure):
     import asyncio
     from dataclasses import replace
     from server.engines.registry import EngineInfo
@@ -430,6 +451,12 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
     built = compiled(fem_channel="exterior", backend=backend, precision=precision,
                      **({"transducers": {"exterior": driver()}} if voltage else {}))
     built = replace(built, wire={**built.wire, "frequencies_hz": [100., 500., 1000.]})
+    if field_failure == "worker":
+        runtime.fail = True
+        built.wire["compiled_system"].setdefault("metadata", {})["fem_execution_reroute"] = {
+            "reason": "fixture compiled reroute", "requested_backend": backend,
+            "backend": backend, "precision": precision,
+        }
     def build(*args, **kwargs):
         assert kwargs["resolved_quadrants"] == 1234
         assert kwargs["backend"] == backend
@@ -458,9 +485,16 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
     monkeypatch.setattr(np, "savez_compressed", pack)
     monkeypatch.setattr(combine, "serialize_channel_bases", serialize)
     exterior_runs = []
-    class Engine:
-        name = f"beat-{backend}"
+    from server.solver.beat import BeatEngine
+    port_runs = []
+    class Engine(BeatEngine):
+        def imported_preflight(self, *args, **kwargs):
+            return None  # This fixture exercises execution, not exterior admission.
+
         async def run(self, request, **kwargs):
+            port_runs.append(request.geometry.exterior_only)
+            if not request.geometry.exterior_only:
+                return await super().run(request, **kwargs)
             exterior_runs.append(request.geometry.exterior_only)
             return EngineRunResult(_result_envelope("multi_channel"))
     class Registry:
@@ -469,7 +503,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
                                    imported_features=("fem-regions", "exterior-transducers"), symmetry_domains=("full",))
                          for name in {"beat-cpu", f"beat-{backend}"})
         async def get_engine(self, name):
-            return Engine()
+            return Engine(backend)
     async def scenario():
         nonlocal loop_thread
         loop_thread = threading.get_ident()
@@ -479,6 +513,20 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
             "symmetry": {"cut_planes": []},
         }, mesh_text=MESH)
         job_runtime.engine_registry = Registry()
+        partials = []
+        accept = job_runtime._accept_partial_result
+        def accept_partial(job_id, index, result):
+            assert job_runtime.store.get_job_row(job_id)["status"] == "running"
+            partials.append((index, result))
+            accept(job_id, index, result)
+        monkeypatch.setattr(job_runtime, "_accept_partial_result", accept_partial)
+        if field_failure in {"storage", "preparation"}:
+            def fail(*args, **kwargs):
+                raise OSError("No space left on device")
+            if field_failure == "storage":
+                monkeypatch.setattr(job_runtime.store, "store_fem_field_arrays", fail)
+            else:
+                monkeypatch.setattr("server.solver.beat_adapter.artifacts.fem_field_arrays", fail)
         request = _request(ingest_id, drive_channels=[{"id": "exterior", "source_ids": ["source-a", "source-b", "source-c"]}])
         if voltage:
             request.geometry.drive_channels[0].exterior_transducer = driver()
@@ -488,8 +536,19 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
             first = await job_runtime.submit(request)
             await job_runtime.wait_idle()
             row = job_runtime.store.get_job_row(first)
+            if field_failure == "worker":
+                assert row["status"] == "error"
+                assert "assembly failed" in row["error_message"]
+                assert row["task_metadata"]["fem_execution"] == {
+                    "engine": f"beat-{backend}", "backend": backend, "precision": precision,
+                }
+                if engine_choice != "auto":
+                    assert row["task_metadata"]["fem_execution_reroute"]["reason"] == "fixture compiled reroute"
+                assert port_runs == [False]
+                assert not partials
+                assert job_runtime.store.get_fem_field(first) is None
+                return
             assert row["status"] == "complete", row["error_message"]
-            assert row["task_metadata"]["has_fem_field_artifact"]
             assert row["task_metadata"]["fem_execution"] == {
                 "engine": f"beat-{backend}", "backend": backend, "precision": precision}
             assert runtime.requests[0]["solver_options"]["bem_backend"] == backend
@@ -498,6 +557,28 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
                 assert row["task_metadata"]["fem_execution_reroute"]["requested_engine"] == "auto"
             envelope = RESULT_ENVELOPE_ADAPTER.validate_python(job_runtime.store.get_results(first))
             assert envelope.channel_order == ["exterior"]
+            assert [index for index, _ in partials] == [0, 1, 2]
+            saved = job_runtime.store.get_results(first)
+            for index, partial in partials:
+                channel = partial["channels"]["exterior"]
+                assert partial["frequencies"] == [saved["frequencies"][index]]
+                for key in ("spl", "phase_degrees"):
+                    np.testing.assert_allclose(channel["spl_on_axis"][key],
+                                               saved["channels"]["exterior"]["spl_on_axis"][key][index:index+1])
+                assert "impedance" not in channel
+            assert port_runs == [False]
+            if field_failure:
+                assert not row["task_metadata"]["has_fem_field_artifact"]
+                assert not row["task_metadata"]["has_bem_traces_artifact"]
+                assert row["task_metadata"]["plane_scopes"] == []
+                assert row["task_metadata"]["unavailable_reason"] == "artifact_persistence_failed"
+                assert "FEM field persistence failed" in job_runtime.store.get_job_log(first)
+                assert "FEM field persistence failed" in saved["metadata"]["warnings"][-1]
+                # Even voltage-driven response diagnostics are fully persisted.
+                assert ("impedance" in saved["channels"]["exterior"]) == voltage
+                assert job_runtime.store.get_fem_field(first) is None
+                return
+            assert row["task_metadata"]["has_fem_field_artifact"]
             with np.load(BytesIO(job_runtime.store.get_fem_field(first)), allow_pickle=False) as field:
                 assert "experimental" not in field.files
                 assert field["schema"].item() == "wg-fem-field-store-v2"
@@ -509,6 +590,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
                 assert field["pressure"].shape == (3, 1, 4)
                 np.testing.assert_array_equal(field["tetrahedra_0"], [[0, 1, 2, 3]])
             assert not exterior_runs
+            assert port_runs == [False]
             override = request.model_copy(deep=True)
             override.geometry.exterior_only = True
             if voltage and engine_choice in {"auto", "beat-cuda", "beat-rocm"}:
@@ -524,7 +606,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
             assert job_runtime.store.get_fem_field(second) is None
             assert exterior_runs == [True]
             assert len(runtime.requests) == 1
-            assert worker_operations == (["field-npz", "field-npz"] if voltage else ["field-npz", "field-npz", "basis", "basis-npz"])
+            assert worker_operations == (["field-npz", "field-npz"] if voltage else ["basis", "basis-npz", "field-npz", "field-npz"])
         finally:
             await job_runtime.shutdown()
     asyncio.run(scenario())
@@ -1107,7 +1189,6 @@ def test_coupled_float32_accepts_shortest_json_scalars_and_preserves_requested_a
 def test_interior_execution_records_reroute_and_uses_cpu_worker(runtime, monkeypatch, tmp_path, backend, already_rerouted):
     import asyncio
     from server.jobs.models import DriveChannel
-    from server.jobs.runtime import JobRuntime
     from server.jobs.store import JobStore
     from server.solver.beat_adapter import coupled_request
     from server.tests.test_fem_electrodynamic import driver
@@ -1141,10 +1222,9 @@ def test_interior_execution_records_reroute_and_uses_cpu_worker(runtime, monkeyp
             "fem_execution_reroute": {"requested_engine": f"beat-{backend}", "engine": "beat-cpu",
                                       "backend": "cpu", "precision": "float64",
                                       "reason": "Interior-only FEM uses CPU float64"}})
-    self = SimpleNamespace(store=store, _check_cancelled=lambda *a: None)
     stages = []
-    outcome = asyncio.run(JobRuntime._run_coupled_regions(
-        self, "interior", request, record, lambda *args: stages.append(args)))
+    outcome = asyncio.run(run_coupled_port(
+        store, "interior", request, record, lambda *args: stages.append(args)))
     assert acquired == ["cpu"]
     assert store.get_job_row("interior")["task_metadata"]["fem_execution"] == {
         "engine": "beat-cpu", "backend": "cpu", "precision": "float64"}
@@ -1292,7 +1372,6 @@ def test_planner_keeps_beat_cpu_and_metal_selectable_for_auto_exterior_drivers(m
 @pytest.mark.parametrize("failure", ["cap", "disk_full", "size", "invalid", "other", "owner"])
 def test_unavailable_bem_retention_keeps_completed_coupled_solve(runtime, monkeypatch, tmp_path, failure, caplog):
     import asyncio
-    from server.jobs.runtime import JobRuntime
     from server.jobs.store import JobStore
     from server.solver.beat_adapter import coupled_request
     from server.tests.test_imported_jobs import _request
@@ -1326,12 +1405,11 @@ def test_unavailable_bem_retention_keeps_completed_coupled_solve(runtime, monkey
     request = _request("wgi_" + "0" * 26)
     request.geometry.drive_channels = [DriveChannel(id="fem", source_ids=[], exterior_transducer=driver(), motion="axial")]
     request.options.engine = "beat-cpu"
-    self = SimpleNamespace(store=store, _check_cancelled=lambda *a: None)
     from server.tests.test_fem_termination import _closed_domain
     record = {"domain_interpretation": _closed_domain(), "fem_regions": [r.record for r in built.regions],
               "coupled_exterior": {"physical_names": {"source": {"kind": "moving", "drive_channel_id": "exterior"}}}}
     try:
-        outcome = asyncio.run(JobRuntime._run_coupled_regions(self, "field", request, record, lambda *a: None))
+        outcome = asyncio.run(run_coupled_port(store, "field", request, record, lambda *a: None))
         assert outcome.results
         assert store.get_fem_field("field") is not None
         payload = store.load_fem_field("field")
@@ -1344,6 +1422,8 @@ def test_unavailable_bem_retention_keeps_completed_coupled_solve(runtime, monkey
         metadata = store.get_job_row("field")["task_metadata"]
         assert metadata["plane_scopes"] == ["interior"]
         assert metadata["fem_plane_unavailable_reason"] == reason
+        assert reason in outcome.results["metadata"]["warnings"]
+        assert reason in store.get_job_log("field")
         assert not metadata.get("has_bem_traces_artifact")
         if failure != "owner":
             assert ("256 MiB" if failure == "cap" else "Could not retain") in caplog.text

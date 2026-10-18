@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 
 from server.jobs.api import create_jobs_router, FemPlaneRequest
-from server.jobs.bem_traces import check_trace_size, trace_arrays
+from server.jobs.bem_traces import check_trace_size
+from server.solver.beat_adapter.artifacts import trace_arrays
 from server.jobs.coupled_field import evaluate_coupled_plane, sample_interior, inside_bodies
 from server.jobs.fem_field import FemFieldCorrupt
 from server.jobs.runtime import JobRuntime

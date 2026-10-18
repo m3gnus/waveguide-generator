@@ -20,6 +20,7 @@ CancelCallback = Callable[[], None]
 StageCallback = Callable[[str, float, str], None]
 ArtifactCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 ResultCallback = Callable[[int, dict[str, Any]], None]
+ExecutionMetadataCallback = Callable[[Mapping[str, Any]], Awaitable[None]]
 
 # Registration marker rather than engine-name matching: a future engine can
 # happen to use a BEAT-like name without implementing this exact run contract.
@@ -43,16 +44,24 @@ class EngineRunResult:
     # Full-3D backend-native surface traces, retained per unsynthesized channel.
     field_traces: FieldTraceArtifact | None = None
     field_trace_unavailable_reason: str | None = None
+    # Deferred lossless arrays: compression/preparation and publication share
+    # the runtime's optional-field failure policy, outside native execution.
+    fem_field_arrays: Callable[[], Mapping[str, Any]] | None = None
+    bem_trace_arrays: Callable[[], Mapping[str, Any] | None] | None = None
+    fem_plane_unavailable_reason: str | None = None
+    execution_metadata: dict[str, Any] | None = None
 
 
 class Full3DSolverPort(Protocol):
-    """HornLab-facing contact point for an independently implemented BEM engine.
+    """HornLab-facing contact point for an independently implemented solver.
 
-    BEAT and Metal share this application boundary, not a native worker API.
+    BEAT, Metal and BEMPP share this application boundary, not a native worker API.
     The optional imported record is rejected by engines that only accept
     parametric geometry. Callback ownership stays with the job runner: a port
     must check cancellation before expensive phases, emit progress and partial
-    results when available, and return an ``EngineRunResult``.
+    results when available, and return an ``EngineRunResult``. The optional async
+    execution metadata callback records compiled backend decisions before native
+    execution, including when that execution later fails or is cancelled.
     """
 
     name: str
@@ -67,6 +76,7 @@ class Full3DSolverPort(Protocol):
         artifact_cb: ArtifactCallback | None = None,
         result_cb: ResultCallback | None = None,
         imported_record: Mapping[str, Any] | None = None,
+        execution_metadata_cb: ExecutionMetadataCallback | None = None,
     ) -> EngineRunResult: ...
 
 
@@ -85,8 +95,9 @@ async def run_full3d_solver_port(
     artifact_cb: ArtifactCallback | None = None,
     result_cb: ResultCallback | None = None,
     imported_record: Mapping[str, Any] | None = None,
+    execution_metadata_cb: ExecutionMetadataCallback | None = None,
 ) -> EngineRunResult:
-    """Invoke a BEM port without native-protocol or signature introspection."""
+    """Invoke a solver port without native-protocol or signature introspection."""
 
     outcome = await engine.run(
         request,
@@ -95,6 +106,7 @@ async def run_full3d_solver_port(
         artifact_cb=artifact_cb,
         result_cb=result_cb,
         imported_record=imported_record,
+        execution_metadata_cb=execution_metadata_cb,
     )
     if not isinstance(outcome, EngineRunResult):
         raise TypeError(f"{engine.name} returned no normalized EngineRunResult")
@@ -105,6 +117,7 @@ __all__ = [
     "ArtifactCallback",
     "CancelCallback",
     "EngineRunResult",
+    "ExecutionMetadataCallback",
     "FULL3D_SOLVER_PORT_MARKER",
     "Full3DSolverPort",
     "is_full3d_solver_port",

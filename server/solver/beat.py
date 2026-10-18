@@ -28,6 +28,7 @@ from .base import (
     ArtifactCallback,
     CancelCallback,
     EngineRunResult,
+    ExecutionMetadataCallback,
     FULL3D_SOLVER_PORT_MARKER,
     ResultCallback,
     StageCallback,
@@ -492,11 +493,19 @@ class BeatEngine:
         artifact_cb: ArtifactCallback | None = None,
         result_cb: ResultCallback | None = None,
         imported_record: Mapping[str, Any] | None = None,
+        execution_metadata_cb: ExecutionMetadataCallback | None = None,
     ) -> EngineRunResult:
         if request.options.ground_plane.enabled:
             raise BeatUnavailable(
                 "The HornLab BEAT adapter cannot apply a rigid ground plane; "
                 "select a ground-plane-capable engine."
+            )
+        if (isinstance(request.geometry, ImportedGeometrySource) and imported_record
+                and imported_record.get("fem_regions") and not request.geometry.exterior_only):
+            return await self._run_coupled(
+                request, imported_record, cancel_cb=cancel_cb,
+                stage_cb=stage_cb, result_cb=result_cb,
+                execution_metadata_cb=execution_metadata_cb,
             )
         if isinstance(request.geometry, ImportedGeometrySource):
             return await self._run_imported(
@@ -545,6 +554,119 @@ class BeatEngine:
             mesh_stats=mesh["stats"],
             field_traces=field_traces,
             field_trace_unavailable_reason=field_trace_reason,
+        )
+
+    async def _run_coupled(self, request, record, *, cancel_cb, stage_cb, result_cb, execution_metadata_cb):
+        """Compile and execute FEM behind the same port as exterior BEAT."""
+        from server.solver.context import SolverContext
+        from server.solver.frequency_sweep import canonical_frequencies
+        from server.solver.combine import serialize_channel_bases
+        from server.solver.beat_adapter.coupled_request import build_imported_coupled_request
+        from server.solver.beat_adapter.results import coupled_envelope
+        from server.solver.official_beat import solve_coupled_compiled, response_config
+
+        backend = self.backend or BEAT_CPU_BACKEND
+        cancel_cb()
+        execution_metadata = record.get("_execution_metadata") or {}
+        plan = execution_metadata.get("solver_plan") or {}
+        precision = "float64" if plan.get("requested") in {"auto", "beat"} else None
+        from server.solver.imported import imported_symmetry_from_cut_planes, imported_domain_planes
+
+        symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
+        context = SolverContext.from_imported_request(request, quadrants=symmetry.quadrants, source_motion="normal")
+        started = time.time()
+        compiled = await asyncio.to_thread(
+            build_imported_coupled_request, record, request.geometry, context,
+            frequencies_hz=canonical_frequencies(context),
+            resolved_quadrants=execution_metadata.get("resolved_quadrants"),
+            backend=backend, precision=precision)
+        cancel_cb()
+        options = compiled.wire["solver_options"]
+        execution = {"engine": f"beat-{options['bem_backend']}",
+                     "backend": options["bem_backend"], "precision": options["precision"]}
+        reroute = (execution_metadata.get("fem_execution_reroute")
+                   or compiled.wire["compiled_system"].get("metadata", {}).get("fem_execution_reroute"))
+        if plan.get("fallback_reason"):
+            reroute = {"requested_engine": plan["requested"], **execution,
+                       "reason": plan["fallback_reason"]}
+        if reroute and plan.get("requested"):
+            reroute = {**reroute, "requested_engine": plan["requested"]}
+            requested_backend = beat_engine_backend(plan["requested"])
+            if requested_backend:
+                reroute["requested_backend"] = requested_backend
+        metadata = {"fem_execution": execution}
+        if reroute:
+            compiled.wire["compiled_system"].setdefault("metadata", {})["fem_execution_reroute"] = reroute
+            metadata["fem_execution_reroute"] = reroute
+        if execution_metadata_cb is not None:
+            await execution_metadata_cb(metadata)
+        cancel_cb()
+        stage_cb("setup", .4, f"Configuring FEM ({execution['backend']}, {execution['precision']})"
+                 + (f"; {reroute['reason']}" if reroute else ""))
+        config = response_config(compiled, context)
+
+        def partial_result(index, frequency, row):
+            cancel_cb()
+            if not all(f"pressure:{plane}" in row for plane in compiled.layout.planes):
+                return True  # Interior-only solves have no exterior observations.
+            import numpy as np
+
+            ports = compiled.wire["excitation_port_ids"]
+            channels = {}
+            for name, members in compiled.channel_ports.items():
+                port_index = ports.index(members[0])
+                pressure = np.stack([row[f"pressure:{p}"][port_index] for p in compiled.layout.planes])
+                with np.errstate(divide="ignore"):
+                    spl = 20 * np.log10(np.abs(pressure) / 20e-6)
+                response = build_provisional_frequency_response(
+                    index=index, frequency_hz=frequency,
+                    entry={"observation_angles_deg": compiled.layout.angles_deg,
+                           "observation_planes": list(compiled.layout.planes),
+                           "observation_spl_db": spl, "observation_pressure_complex": pressure},
+                    config=config, context=context, backend="beat",
+                    sound_speed_m_per_s=compiled.regions[0].record["medium"]["sound_speed_m_per_s"],
+                )
+                response.pop("impedance", None)
+                response.setdefault("metadata", {}).update({
+                    "drive_channel_id": name,
+                    "pressure_normalization": ("voltage_rms" if compiled.drive_normalization[name] == "voltage_rms"
+                                               else "unit_acceleration_m_per_s2"),
+                })
+                channels[name] = response
+            result_cb(index, {
+                "result_kind": "multi_channel", "result_contract_version": 2,
+                "channels": channels, "channel_order": list(compiled.channel_ports),
+                "frequencies": [float(frequency)],
+                "metadata": {"geometry_type": "imported", "provisional": {
+                    "completed_frequency_count": index + 1,
+                    "expected_frequency_count": len(compiled.wire["frequencies_hz"]),
+                }},
+            })
+            return True
+
+        sweep = await asyncio.to_thread(
+            solve_coupled_compiled, compiled,
+            cancellation_callback=cancel_cb,
+            on_frequency_result=partial_result if result_cb is not None else None,
+            status_callback=lambda message: stage_cb("solve", .45, message),
+            progress_callback=lambda i, total, freq: stage_cb(
+                "solve", .45 + .4 * (i + 1) / total, f"Solving FEM at {freq:g} Hz"))
+        cancel_cb()
+        results = coupled_envelope(sweep, compiled, context=context, geometry=request.geometry,
+                                   record=record, config=config, started=started)
+
+        from .beat_adapter.artifacts import fem_field_arrays, trace_arrays
+
+        cancel_cb()
+        return EngineRunResult(
+            results=results,
+            channel_bases=(None if "voltage_rms" in compiled.drive_normalization.values()
+                           else await asyncio.to_thread(serialize_channel_bases, sweep.channels)),
+            field_trace_unavailable_reason="coupled_exterior_traces_unavailable",
+            fem_field_arrays=lambda: fem_field_arrays(compiled, sweep, record),
+            bem_trace_arrays=lambda: trace_arrays(compiled, sweep),
+            fem_plane_unavailable_reason=compiled.plane_unavailable_reason,
+            execution_metadata=metadata,
         )
 
     def imported_preflight(

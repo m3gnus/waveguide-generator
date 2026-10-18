@@ -1410,6 +1410,7 @@ def test_a_queued_unlinked_job_runs_in_its_own_frame_after_a_later_confirmation(
             stage_cb: Any,
             imported_record: dict[str, Any],
             artifact_cb: Any = None,
+            **_port_kwargs,
         ) -> EngineRunResult:
             seen.append(imported_record["normalisation"])
             if len(seen) == 1:
@@ -2226,6 +2227,7 @@ def test_execution_uses_job_mesh_after_import_cache_is_deleted(tmp_path: Path) -
             stage_cb: Any,
             imported_record: dict[str, Any],
             artifact_cb: Any = None,
+            **_port_kwargs,
         ) -> EngineRunResult:
             assert imported_record["_execution_mesh_source"] == "job-artifact"
             assert imported_record["_execution_msh_text"].startswith("$MeshFormat")
@@ -5071,9 +5073,8 @@ def test_imported_geometry_wait_is_off_loop_cancellable_and_holds_no_lane(monkey
     asyncio.run(exercise())
 
 
-@pytest.mark.parametrize('entrypoint', ['_run_job', '_run_coupled_regions'])
 @pytest.mark.parametrize('cancel_task', [False, True], ids=['job-stop', 'task-cancel'])
-def test_job_geometry_recheck_is_off_loop_and_cancellable(monkeypatch, tmp_path, entrypoint, cancel_task):
+def test_job_geometry_recheck_is_off_loop_and_cancellable(monkeypatch, tmp_path, cancel_task):
     import threading
     import time
     from server.jobs.runtime import core
@@ -5123,10 +5124,7 @@ def test_job_geometry_recheck_is_off_loop_and_cancellable(monkeypatch, tmp_path,
         task = None
         try:
             async with permit.solve():
-                if entrypoint == '_run_job':
-                    coroutine = runtime._run_job('geometry-check', runtime.store.get_job_row('geometry-check'))
-                else:
-                    coroutine = runtime._run_coupled_regions('geometry-check', request, record, lambda *a: None)
+                coroutine = runtime._run_job('geometry-check', runtime.store.get_job_row('geometry-check'))
                 task = asyncio.create_task(coroutine)
                 async with asyncio.timeout(.5):
                     while not started.is_set():
@@ -5142,12 +5140,8 @@ def test_job_geometry_recheck_is_off_loop_and_cancellable(monkeypatch, tmp_path,
                         await asyncio.wait_for(task, .5)
                 else:
                     assert (await runtime.stop('geometry-check'))['status'] == 'cancelling'
-                    if entrypoint == '_run_job':
-                        await asyncio.wait_for(task, .5)
-                        assert runtime.store.get_job_row('geometry-check')['status'] == 'cancelled'
-                    else:
-                        with pytest.raises(core._CancelledAtCheckpoint):
-                            await asyncio.wait_for(task, .5)
+                    await asyncio.wait_for(task, .5)
+                    assert runtime.store.get_job_row('geometry-check')['status'] == 'cancelled'
                 assert ended.is_set()
         finally:
             if task is not None:

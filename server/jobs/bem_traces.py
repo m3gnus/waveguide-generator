@@ -1,7 +1,6 @@
 """Bounded coupled P1/DP0 traces in their solved mesh and channel ordering."""
 from __future__ import annotations
 
-import base64
 import zipfile
 from pathlib import Path
 
@@ -11,27 +10,6 @@ from server.contracts.conventions import SOLVER_TIME_CONVENTION
 from server.jobs.fem_field import FemFieldCorrupt, FemFieldInvalidSelection, _pressure_slice
 from server.solver.beat_adapter.mesh import SurfaceMesh
 from server.solver.beat_adapter.trace_retention import MAX_BEM_TRACE_BYTES, check_trace_size as check_trace_size
-
-
-def trace_arrays(request, sweep) -> dict | None:
-    if sweep.bem_pressure is None:
-        return None
-    resource = next(m for m in request.wire["compiled_system"]["meshes"] if m["purpose"] == "bem_surface")
-    mesh = resource["mesh_data"]
-    def unpack(value):
-        return np.frombuffer(base64.b64decode(value["data"]), dtype=value["dtype"]).reshape(value["shape"])
-    medium = next(r for r in request.wire["compiled_system"]["regions"] if r["kind"] == "unbounded_air")
-    return {"schema": np.asarray("wg-bem-traces-v1"),
-            "phasor_convention": np.asarray(SOLVER_TIME_CONVENTION),
-            "frequencies_hz": next(iter(sweep.channels.values())).frequencies_hz,
-            "channel_ids": np.asarray(list(request.channel_ports)),
-            "points_m": unpack(mesh["points"]),
-            "triangles": unpack(mesh["cells"][0]["connectivity"]),
-            "pressure": sweep.bem_pressure, "neumann": sweep.bem_neumann,
-            "sound_speed_m_per_s": np.asarray(medium["sound_speed_m_per_s"]),
-            "density_kg_per_m3": np.asarray(medium["density_kg_per_m3"]),
-            "image_rotation": np.eye(3) if request.image_rotation is None else request.image_rotation,
-            "symmetry": np.asarray(request.wire["solver_options"]["symmetry"])}
 
 
 def load_bem_traces(path: Path, frequency: float, channel: str):

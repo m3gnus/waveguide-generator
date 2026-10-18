@@ -6,7 +6,6 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -287,7 +286,7 @@ def test_a_malformed_stored_wall_adjustment_still_logs_the_policy_value(
 class _CompletingBempp:
     name = "bempp"
 
-    async def run(self, request: SolveRequest, *, cancel_cb: Any, stage_cb: Any) -> Any:
+    async def run(self, request: SolveRequest, *, cancel_cb: Any, stage_cb: Any, **_port_kwargs) -> Any:
         cancel_cb()
         return EngineRunResult(
             results={
@@ -741,6 +740,7 @@ def test_shutdown_waits_for_threaded_solver_cancellation_checkpoint(
                 *,
                 cancel_cb: Any,
                 stage_cb: Any,
+                **_port_kwargs,
             ) -> Any:
                 del stage_cb
 
@@ -749,7 +749,7 @@ def test_shutdown_waits_for_threaded_solver_cancellation_checkpoint(
                     try:
                         while not release_solver.wait(timeout=0.01):
                             cancel_cb()
-                        return SimpleNamespace(
+                        return EngineRunResult(
                             results={"metadata": {}},
                             msh_text=None,
                             mesh_stats=None,
@@ -911,7 +911,7 @@ def test_a_stop_budget_bounds_the_checkpoint_wait_and_the_next_start_reads_the_q
             name = "never-checkpoints"
 
             async def run(
-                self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any
+                self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any, **_port_kwargs
             ) -> Any:
                 del cancel_cb, stage_cb
 
@@ -919,7 +919,7 @@ def test_a_stop_budget_bounds_the_checkpoint_wait_and_the_next_start_reads_the_q
                     # A native call with no cancellation point, like an OCC build.
                     solve_started.set()
                     release_solver.wait(30)
-                    return SimpleNamespace(
+                    return EngineRunResult(
                         results={"metadata": {}}, msh_text=None, mesh_stats=None
                     )
 
@@ -984,7 +984,7 @@ def test_a_job_queued_at_quit_is_not_started_by_the_shutdown(tmp_path: Path) -> 
             name = "checkpoint"
 
             async def run(
-                self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any
+                self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any, **_port_kwargs
             ) -> Any:
                 del stage_cb
 
@@ -994,7 +994,7 @@ def test_a_job_queued_at_quit_is_not_started_by_the_shutdown(tmp_path: Path) -> 
                     for _ in range(500):
                         cancel_cb()
                         time.sleep(0.01)
-                    return SimpleNamespace(
+                    return EngineRunResult(
                         results={"metadata": {}}, msh_text=None, mesh_stats=None
                     )
 
@@ -1843,7 +1843,7 @@ def test_no_queued_job_starts_once_a_stop_has_begun(tmp_path: Path) -> None:
             name = "held"
 
             async def run(
-                self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any
+                self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any, **_port_kwargs
             ) -> Any:
                 del stage_cb, cancel_cb
 
@@ -1851,7 +1851,7 @@ def test_no_queued_job_starts_once_a_stop_has_begun(tmp_path: Path) -> None:
                     solves_started.append(1)
                     first_started.set()
                     release.wait(30)
-                    return SimpleNamespace(
+                    return EngineRunResult(
                         results={"metadata": {}}, msh_text=None, mesh_stats=None
                     )
 
@@ -1904,14 +1904,14 @@ def test_a_job_that_starts_as_the_stop_begins_marks_itself(tmp_path: Path) -> No
             name = "held"
 
             async def run(
-                self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any
+                self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any, **_port_kwargs
             ) -> Any:
                 del stage_cb, cancel_cb
 
                 def solve() -> Any:
                     started.set()
                     release.wait(30)
-                    return SimpleNamespace(
+                    return EngineRunResult(
                         results={"metadata": {}}, msh_text=None, mesh_stats=None
                     )
 
@@ -2045,7 +2045,7 @@ class _BareEOFEngine:
 
     name = "bempp"
 
-    async def run(self, request: SolveRequest, *, cancel_cb: Any, stage_cb: Any) -> Any:
+    async def run(self, request: SolveRequest, *, cancel_cb: Any, stage_cb: Any, **_port_kwargs) -> Any:
         raise EOFError
 
 
@@ -2108,7 +2108,7 @@ def test_stalled_solver_fails_without_starting_queued_job_or_late_callbacks(tmp_
         class StalledEngine:
             name = "stalled"
 
-            async def run(self, request, *, cancel_cb, stage_cb, result_cb):
+            async def run(self, request, *, cancel_cb, stage_cb, result_cb, **_port_kwargs):
                 def native():
                     starts.append(1)
                     entered.set()
@@ -2161,7 +2161,7 @@ def test_cached_cancel_waits_for_durable_intent_and_preserves_stop_reason(tmp_pa
 
         class CheckpointEngine:
             name = "checkpoint"
-            async def run(self, request, *, cancel_cb, stage_cb):
+            async def run(self, request, *, cancel_cb, stage_cb, **_port_kwargs):
                 def native():
                     entered.set()
                     assert release.wait(5)
@@ -2219,3 +2219,45 @@ def test_native_quarantine_survives_runtime_recreation(tmp_path):
             asyncio.run(second.metal_permit.acquire_solve())
     finally:
         store.close()
+
+
+def test_bempp_runtime_dispatch_uses_the_port_without_signature_inspection(tmp_path):
+    from server.solver.base import is_full3d_solver_port
+    from server.solver.bempp import BemppEngine
+
+    calls = []
+
+    class Run:
+        @property
+        def __signature__(self):
+            raise AssertionError("Runtime must not inspect the adapter signature")
+
+        async def __call__(self, request, *, cancel_cb, stage_cb, artifact_cb,
+                           result_cb, imported_record, execution_metadata_cb):
+            assert imported_record is None
+            assert callable(artifact_cb) and callable(result_cb) and callable(execution_metadata_cb)
+            calls.append("port")
+            return await _CompletingBempp().run(request, cancel_cb=cancel_cb, stage_cb=stage_cb)
+
+    class Engine(BemppEngine):
+        run = Run()
+
+    async def scenario():
+        engine = Engine()
+        assert is_full3d_solver_port(engine)
+        runtime = JobRuntime(
+            JobStore(tmp_path / "bempp-port.db"),
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+                factory=lambda _: engine,
+            ),
+        )
+        try:
+            job_id = await runtime.submit(_bare_request(engine="bempp", wall=5))
+            await runtime.wait_idle()
+            assert runtime.store.get_job_row(job_id)["status"] == "complete"
+            assert calls == ["port"]
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())

@@ -35,6 +35,8 @@ from .base import (
     ArtifactCallback,
     CancelCallback,
     EngineRunResult,
+    ExecutionMetadataCallback,
+    FULL3D_SOLVER_PORT_MARKER,
     ResultCallback,
     StageCallback,
 )
@@ -1044,6 +1046,7 @@ def solve_bempp_from_msh_text(
 
 
 class BemppEngine:
+    solver_port_marker = FULL3D_SOLVER_PORT_MARKER
     name = "bempp"
 
     def imported_preflight(
@@ -1068,6 +1071,7 @@ class BemppEngine:
         artifact_cb: ArtifactCallback | None = None,
         result_cb: ResultCallback | None = None,
         imported_record: Mapping[str, Any] | None = None,
+        execution_metadata_cb: ExecutionMetadataCallback | None = None,
     ) -> EngineRunResult:
         if isinstance(request.geometry, ImportedGeometrySource):
             return await self._run_imported(

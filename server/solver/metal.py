@@ -45,6 +45,7 @@ from .base import (
     ArtifactCallback,
     CancelCallback,
     EngineRunResult,
+    ExecutionMetadataCallback,
     FULL3D_SOLVER_PORT_MARKER,
     ResultCallback,
     StageCallback,
@@ -2274,6 +2275,7 @@ class MetalEngine:
         artifact_cb: ArtifactCallback | None = None,
         result_cb: ResultCallback | None = None,
         imported_record: Mapping[str, Any] | None = None,
+        execution_metadata_cb: ExecutionMetadataCallback | None = None,
     ) -> EngineRunResult:
         if request.options.ground_plane.enabled:
             raise MetalUnavailable(

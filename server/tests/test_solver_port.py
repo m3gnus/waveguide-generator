@@ -1,4 +1,4 @@
-"""The shared HornLab-facing BEAT/Metal contact points."""
+"""The shared HornLab-facing BEAT/Metal/BEMPP contact points."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from server.solver import beat, metal
+from server.solver import beat, metal, bempp
 from server.solver.base import (
     EngineRunResult,
     is_full3d_solver_port,
@@ -28,15 +28,16 @@ def _context(**overrides) -> SolverContext:
     return SolverContext(**values)
 
 
-def test_beat_and_metal_expose_the_same_run_contact_points() -> None:
+def test_all_full3d_engines_expose_the_same_run_contact_points() -> None:
     beat_params = inspect.signature(beat.BeatEngine.run).parameters
     metal_params = inspect.signature(metal.MetalEngine.run).parameters
-    assert tuple(beat_params) == tuple(metal_params)
+    assert tuple(beat_params) == tuple(metal_params) == tuple(inspect.signature(bempp.BemppEngine.run).parameters)
     assert {"cancel_cb", "stage_cb", "artifact_cb", "result_cb", "imported_record"} <= set(
         beat_params
     )
     assert is_full3d_solver_port(beat.BeatEngine("cpu"))
     assert is_full3d_solver_port(metal.MetalEngine())
+    assert is_full3d_solver_port(bempp.BemppEngine())
     # Naming alone must not opt an unrelated adapter into the port.
     assert not is_full3d_solver_port(SimpleNamespace(name="beat-experimental"))
 
@@ -53,11 +54,15 @@ def test_port_forwards_lifecycle_callbacks_and_normalized_result() -> None:
             kwargs["cancel_cb"]()
             kwargs["stage_cb"]("frequency_solve", 0.5, "halfway")
             kwargs["result_cb"](0, {"frequency_hz": 500.0})
+            await kwargs["execution_metadata_cb"]({"backend": "fixture"})
             await kwargs["artifact_cb"]("$MeshFormat", {"triangle_count": 1})
             return EngineRunResult(results={"metadata": {"solver_backend": "metal"}})
 
     async def artifact(msh, stats):
         calls.append(("artifact", msh, stats))
+
+    async def execution_metadata(metadata):
+        calls.append(("execution", metadata))
 
     marker = object()
     result = asyncio.run(
@@ -69,6 +74,7 @@ def test_port_forwards_lifecycle_callbacks_and_normalized_result() -> None:
             result_cb=lambda *args: calls.append(("result", *args)),
             artifact_cb=artifact,
             imported_record={"mesh": "verified"},
+            execution_metadata_cb=execution_metadata,
         )
     )
     assert result.results["metadata"]["solver_backend"] == "metal"
@@ -76,6 +82,7 @@ def test_port_forwards_lifecycle_callbacks_and_normalized_result() -> None:
         ("cancel",),
         ("stage", "frequency_solve", 0.5, "halfway"),
         ("result", 0, {"frequency_hz": 500.0}),
+        ("execution", {"backend": "fixture"}),
         ("artifact", "$MeshFormat", {"triangle_count": 1}),
     ]
 

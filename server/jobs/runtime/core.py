@@ -17,7 +17,6 @@ import copy
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 import importlib.metadata
-import inspect
 import json
 import math
 import os
@@ -92,7 +91,7 @@ from server.solver.field_plane import FieldPlaneEvaluation, FieldPlaneService
 from server.solver.polar_arc import effective_polar_config, effective_polar_grid
 from server.solver.formulation import bem_formulation
 from server.solver.metal_permit import MetalPermit, process_metal_permit
-from server.solver.base import is_full3d_solver_port, run_full3d_solver_port
+from server.solver.base import run_full3d_solver_port
 from server.solver.watchdog import watch_native_operation, stall_timeout_seconds
 
 from . import logger
@@ -3999,98 +3998,58 @@ class JobRuntime:
         except Exception:
             logger.exception("Could not persist final logs for cancelled job %s", job_id)
 
-    async def _run_coupled_regions(self, job_id, request, record, stage_cb, symmetry_metadata=None):
-        """Run declared air automatically; the ordinary job lifecycle owns persistence."""
-        import numpy as np
-        from server.solver.base import EngineRunResult
-        from server.solver.context import SolverContext
-        from server.solver.frequency_sweep import canonical_frequencies
-        from server.solver.combine import serialize_channel_bases
-        from server.solver.beat_adapter.coupled_request import build_imported_coupled_request
-        from server.solver.beat_adapter.results import coupled_envelope
-        from server.solver.official_beat import solve_coupled_compiled, response_config
+    async def _record_field_persistence_failure(self, job_id, metadata, warning):
+        """One failure policy for optional ordinary and coupled plane data."""
+        metadata.update({
+            "field_plane_available": False, "field_trace_bytes": None,
+            "unavailable_reason": "artifact_persistence_failed",
+        })
+        await self._record_field_warning(job_id, metadata, warning)
 
-        refusal = await _imported_request_refusal_async(
-            request, record, cancel_check=lambda: self._check_cancelled(job_id))
+    async def _record_field_warning(self, job_id, metadata, warning):
+        warnings = metadata.setdefault("warnings", [])
+        warnings.append(warning)
+        metadata["warning_count"] = len(warnings)
+        await self._append_log(job_id, warning)
+
+    async def _persist_coupled_fields(self, job_id, outcome):
+        """Retain optional plane data without invalidating the acoustic result.
+
+        coupled_envelope has already mapped the validated sweep, including port
+        and transducer responses. Only plane replay reads these sidecars.
+        """
+        if outcome.execution_metadata:
+            self.store.mutate_job_metadata(job_id, outcome.execution_metadata)
+        if outcome.fem_field_arrays is None:
+            return
         self._check_cancelled(job_id)
-        if refusal:
-            raise ImportedSolveRefusal(*refusal)
-        from server.solver.beat import beat_engine_backend
-
-        backend = beat_engine_backend(request.options.engine)
-        if backend is None:
-            raise ImportedSolveRefusal("fem_backend_unsupported", "FEM regions require official BEAT")
-        plan = self.store.get_job_row(job_id)["task_metadata"].get("solver_plan", {})
-        precision = "float64" if plan.get("requested") in {"auto", "beat"} else None
-        from server.solver.imported import imported_symmetry_from_cut_planes, imported_domain_planes
-
-        symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
-        context = SolverContext.from_imported_request(request, quadrants=symmetry.quadrants, source_motion="normal")
-        started = time.time()
-        compiled = await asyncio.to_thread(
-            build_imported_coupled_request, record, request.geometry, context,
-            frequencies_hz=canonical_frequencies(context),
-            resolved_quadrants=(symmetry_metadata or {}).get("resolved_quadrants"),
-            backend=backend, precision=precision)
-        self._check_cancelled(job_id)
-        options = compiled.wire["solver_options"]
-        execution = {"engine": f"beat-{options['bem_backend']}",
-                     "backend": options["bem_backend"], "precision": options["precision"]}
-        reroute = (self.store.get_job_row(job_id)["task_metadata"].get("fem_execution_reroute")
-                   or compiled.wire["compiled_system"].get("metadata", {}).get("fem_execution_reroute"))
-        if plan.get("fallback_reason"):
-            reroute = {"requested_engine": plan["requested"], **execution,
-                       "reason": plan["fallback_reason"]}
-        if reroute and plan.get("requested"):
-            reroute = {**reroute, "requested_engine": plan["requested"]}
-            requested_backend = beat_engine_backend(plan["requested"])
-            if requested_backend:
-                reroute["requested_backend"] = requested_backend
-        metadata = {"fem_execution": execution}
-        if reroute:
-            compiled.wire["compiled_system"].setdefault("metadata", {})["fem_execution_reroute"] = reroute
-            metadata["fem_execution_reroute"] = reroute
-        self.store.mutate_job_metadata(job_id, metadata)
-        stage_cb("setup", .4, f"Configuring FEM ({execution['backend']}, {execution['precision']})"
-                 + (f"; {reroute['reason']}" if reroute else ""))
-        sweep = await asyncio.to_thread(
-            solve_coupled_compiled, compiled,
-            cancellation_callback=lambda: self._check_cancelled(job_id),
-            status_callback=lambda message: stage_cb("solve", .45, message),
-            progress_callback=lambda i, total, freq: stage_cb(
-                "solve", .45 + .4 * (i + 1) / total, f"Solving FEM at {freq:g} Hz"))
-        self._check_cancelled(job_id)
-        results = coupled_envelope(sweep, compiled, context=context, geometry=request.geometry,
-                                   record=record, config=response_config(compiled, context), started=started)
-
-        def pack_and_publish():
-            arrays = {"schema": np.asarray("wg-fem-field-store-v2"),
-                      "phasor_convention": np.asarray(compiled.wire["solver_options"]["phasor_convention"]),
-                      "drive_normalization": np.asarray(list(compiled.drive_normalization.values())),
-                      "frequencies_hz": next(iter(sweep.channels.values())).frequencies_hz,
-                      "channel_ids": np.asarray(list(compiled.channel_ports)),
-                      "region_ids": np.asarray([r.domain.region_id for r in compiled.regions]),
-                      "pressure": sweep.nodal_pressure,
-                      "symmetry_planes": np.asarray(imported_domain_planes(record), dtype="U2")}
-            voltage = compiled.wire["solver_options"].get("transducer_reference_voltage_v")
-            if voltage is not None:
-                arrays["transducer_reference_voltage_v"] = np.asarray(voltage)
-            for index, region in enumerate(compiled.regions):
-                arrays[f"points_mm_{index}"] = region.domain.points_mm
-                arrays[f"tetrahedra_{index}"] = region.domain.tetrahedra
-                names = list(region.domain.surfaces)
-                arrays[f"surface_names_{index}"] = np.asarray(names)
-                for j, name in enumerate(names):
-                    arrays[f"surface_triangles_{index}_{j}"] = region.domain.surfaces[name]
+        try:
+            def publish_fem():
+                return self.store.store_fem_field_arrays(job_id, outcome.fem_field_arrays())
+            retained = await asyncio.to_thread(publish_fem)
+        except Exception as exc:
+            logger.warning("FEM field persistence failed for job %s: %s", job_id, exc)
+            # Match ordinary field-trace retention: preserve solved acoustics,
+            # disable planes, and record why both in the result and job log.
+            warning = "FEM field persistence failed; planes are unavailable. Re-solve to retain field data."
+            await self._record_field_persistence_failure(
+                job_id, outcome.results.setdefault("metadata", {}), warning,
+            )
+            self.store.mutate_job_metadata(job_id, {
+                "has_fem_field_artifact": False, "fem_field_artifact_bytes": None,
+                "has_bem_traces_artifact": False, "bem_traces_artifact_bytes": None,
+                "fem_plane_unavailable_reason": warning, "plane_scopes": [],
+            })
+            return
+        if not retained:
             self._check_cancelled(job_id)
-            arrays["density_kg_per_m3"] = np.asarray(compiled.regions[0].record["medium"]["density_kg_per_m3"])
-            self.store.store_fem_field_arrays(job_id, arrays)
-            from server.jobs.bem_traces import trace_arrays
+            raise JobNotFoundError(job_id)
 
-            reason = compiled.plane_unavailable_reason
+        def publish_bem():
+            reason = outcome.fem_plane_unavailable_reason
             self._check_cancelled(job_id)
             try:
-                traces = trace_arrays(compiled, sweep)
+                traces = outcome.bem_trace_arrays() if outcome.bem_trace_arrays else None
                 if traces is not None:
                     if not self.store.store_bem_trace_arrays(job_id, traces):
                         reason = "Exterior and combined planes unavailable: retained FEM field changed or was removed before BEM trace publication. Re-solve to retain matching traces."
@@ -4110,12 +4069,11 @@ class JobRuntime:
                                                        "has_bem_traces_artifact": False,
                                                        "bem_traces_artifact_bytes": None,
                                                        "plane_scopes": ["interior"]})
-            return (None if "voltage_rms" in compiled.drive_normalization.values()
-                    else serialize_channel_bases(sweep.channels))
+            return reason
 
-        channel_bases = await asyncio.to_thread(pack_and_publish)
-        return EngineRunResult(results=results, channel_bases=channel_bases,
-                               field_trace_unavailable_reason="coupled_exterior_traces_unavailable")
+        reason = await asyncio.to_thread(publish_bem)
+        if reason:
+            await self._record_field_warning(job_id, outcome.results.setdefault("metadata", {}), reason)
 
     async def _run_real_engine(
         self,
@@ -4212,39 +4170,35 @@ class JobRuntime:
             else:
                 artifact_persisted = True
 
+        async def execution_metadata_callback(metadata):
+            self._check_cancelled(job_id)
+            self.store.mutate_job_metadata(job_id, metadata)
+
         try:
             solve_started = time.perf_counter()
+            if imported_record is not None:
+                # Ephemeral execution context, like _execution_msh_text;
+                # never written back into the ingestion record or settings.
+                task_metadata = self.store.get_job_row(job_id)["task_metadata"]
+                imported_record = {
+                    **imported_record,
+                    "_execution_metadata": {
+                        "solver_plan": task_metadata.get("solver_plan"),
+                        "fem_execution_reroute": task_metadata.get("fem_execution_reroute"),
+                        "resolved_quadrants": (symmetry_metadata or {}).get("resolved_quadrants"),
+                    },
+                }
             async def invoke():
-                if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
-                    return await self._run_coupled_regions(
-                        job_id, request, imported_record, stage_callback, symmetry_metadata)
-                elif is_full3d_solver_port(engine):
-                    # BEAT and Metal have one HornLab-facing port. Their native
-                    # protocols differ; the scheduler never needs to inspect them.
-                    return await run_full3d_solver_port(
-                        engine,
-                        request,
-                        cancel_cb=lambda: self._check_cancelled(job_id),
-                        stage_cb=stage_callback,
-                        artifact_cb=artifact_callback,
-                        result_cb=result_callback,
-                        imported_record=imported_record,
-                    )
-                else:
-                    run_kwargs: dict[str, Any] = {
-                        "cancel_cb": lambda: self._check_cancelled(job_id),
-                        "stage_cb": stage_callback,
-                    }
-                    if "artifact_cb" in inspect.signature(engine.run).parameters:
-                        run_kwargs["artifact_cb"] = artifact_callback
-                    if "result_cb" in inspect.signature(engine.run).parameters:
-                        run_kwargs["result_cb"] = result_callback
-                    if (
-                        imported_record is not None
-                        and "imported_record" in inspect.signature(engine.run).parameters
-                    ):
-                        run_kwargs["imported_record"] = imported_record
-                    return await engine.run(request, **run_kwargs)
+                return await run_full3d_solver_port(
+                    engine,
+                    request,
+                    cancel_cb=lambda: self._check_cancelled(job_id),
+                    stage_cb=stage_callback,
+                    artifact_cb=artifact_callback,
+                    result_cb=result_callback,
+                    imported_record=imported_record,
+                    execution_metadata_cb=execution_metadata_callback,
+                )
             def stop_callbacks():
                 callbacks_stopped.set()
                 flag = self._cancellation_flags.get(job_id)
@@ -4322,12 +4276,9 @@ class JobRuntime:
                     job_id,
                     exc,
                 )
-                outcome_metadata.update(
-                    {
-                        "field_plane_available": False,
-                        "field_trace_bytes": None,
-                        "unavailable_reason": "artifact_persistence_failed",
-                    }
+                await self._record_field_persistence_failure(
+                    job_id, outcome_metadata,
+                    "Field-trace persistence failed; planes are unavailable. Re-solve to retain field data.",
                 )
             else:
                 if stored_field_traces is None:
@@ -4348,6 +4299,7 @@ class JobRuntime:
                     "unavailable_reason": field_trace_reason or "unsupported_solve_mode",
                 }
             )
+        await self._persist_coupled_fields(job_id, outcome)
         self._record_execution_metadata(job_id, outcome_metadata)
         channel_bases = getattr(outcome, "channel_bases", None)
         if channel_bases is not None:

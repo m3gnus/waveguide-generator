@@ -259,7 +259,7 @@ def test_negative_author_region_and_asymmetric_role_refuse(tmp_path):
 def test_fake_worker_job_retains_half_field_and_displays_completed_field(tmp_path, runtime, planes, sealed):
     import asyncio
     from io import BytesIO
-    from server.jobs.runtime import JobRuntime
+    from server.tests.test_fem_engine_route import run_coupled_port
     from server.jobs.store import JobStore
     from server.jobs.fem_field import load_fem_field_payload
     from server.tests.test_imported_jobs import _request
@@ -274,7 +274,6 @@ def test_fake_worker_job_retains_half_field_and_displays_completed_field(tmp_pat
     store = JobStore(tmp_path / "jobs.db")
     store.initialize()
     store.create_job(_job("symmetric", "running"))
-    runner = JobRuntime(store)
 
     def mutate(raw):
         wire = runtime.requests[-1]
@@ -282,11 +281,13 @@ def test_fake_worker_job_retains_half_field_and_displays_completed_field(tmp_pat
         raw.update(coupled_result(wire, 100.))
     runtime.mutate = mutate
     with pytest.raises(ValueError, match="disagree on symmetry"):
-        asyncio.run(runner._run_coupled_regions("symmetric", request, record, lambda *args: None,
-                                              {"resolved_quadrants": 1234}))
+        asyncio.run(run_coupled_port(
+            store, "symmetric", request, record, lambda *args: None,
+            symmetry_metadata={"resolved_quadrants": 1234}))
     assert not runtime.requests  # Reject before starting the native worker.
-    result = asyncio.run(runner._run_coupled_regions("symmetric", request, record, lambda *args: None,
-                                                   {"resolved_quadrants": 14 if len(planes) == 1 else 1}))
+    result = asyncio.run(run_coupled_port(
+        store, "symmetric", request, record, lambda *args: None,
+        symmetry_metadata={"resolved_quadrants": 14 if len(planes) == 1 else 1}))
     assert result.results["channel_order"] == ["drive-lf"]
     wire = runtime.requests[-1]
     assert wire["solver_options"]["symmetry"] == ("x" if len(planes) == 1 else "xy")
