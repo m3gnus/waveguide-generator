@@ -217,6 +217,19 @@ def test_promotion_verifies_all_subjects_and_preserves_exact_release_bytes(promo
             assert (tmp_path / directory / name).read_bytes() == source.read_bytes()
 
 
+@pytest.mark.parametrize("asset", ASSETS, ids=[name for _, name in ASSETS])
+@pytest.mark.parametrize("sidecar", [False, True])
+def test_promotion_requires_every_asset_and_sidecar_before_staging(promotion, tmp_path, asset, sidecar):
+    root, _, _, verified = promotion
+    directory, name = asset
+    (root / directory / (names.checksum_name(name) if sidecar else name)).unlink()
+    with pytest.raises(ValueError, match="Missing canonical app identity|Candidate inventory mismatch"):
+        _promote(promotion, tmp_path)
+    assert not (tmp_path / "downloads").exists()
+    assert not (tmp_path / "updates").exists()
+    assert not verified
+
+
 @pytest.mark.parametrize('damage', ['signature', 'signed-payload', 'missing', 'extra', 'manifest-subjects',
                                    'sha', 'version', 'digest', 'extra-root', 'signed-link'])
 def test_promotion_refuses_damage_before_staging_or_provenance(promotion, tmp_path, damage):

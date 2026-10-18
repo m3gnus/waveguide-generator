@@ -17,6 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 RC_WORKFLOW = ROOT / ".github" / "workflows" / "rc-build.yml"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 PROPOSAL_WORKFLOW = ROOT / "docs" / "reference" / "main-build.workflow-proposal.yml"
 INNO_PREFLIGHT_WORKFLOW = ROOT / ".github" / "workflows" / "windows-inno-preflight.yml"
@@ -140,12 +141,18 @@ def test_inno_verifier_uses_bounded_compiler_version_probe_and_all_workflow_vari
     assert "Get-ChildItem" not in verifier
     assert '"$env:ProgramFiles(x86)' not in verifier
 
-    for workflow_path in (RC_WORKFLOW, RELEASE_WORKFLOW, PROPOSAL_WORKFLOW):
+    for workflow_path in (RC_WORKFLOW, CI_WORKFLOW, PROPOSAL_WORKFLOW, INNO_PREFLIGHT_WORKFLOW):
         workflow = workflow_path.read_text(encoding="utf-8")
         assert "choco install innosetup --version=6.7.1" in workflow
         assert 'if ($LASTEXITCODE -ne 0)' in workflow
         assert "./scripts/ci/verify_inno_setup.ps1" in workflow
         assert '$banner -notmatch "6\\.7\\.1"' not in workflow
+
+    # Publication consumes the qualified installer; it must not install or
+    # probe a compiler now that rc-build is the only release builder.
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "innosetup" not in release.lower()
+    assert "verify_inno_setup.ps1" not in release
 
 
 def test_windows_inno_preflight_is_manual_read_only_and_uses_the_shared_gate() -> None:

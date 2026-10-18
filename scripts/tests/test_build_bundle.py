@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import zipfile
 
 import pytest
+import yaml
 
 from launchers.macos import generate_icon
 from scripts import build_bundle, fetch_spa
@@ -1226,23 +1227,36 @@ def test_release_workflow_publishes_one_complete_draft_inventory() -> None:
         line for line in workflow.splitlines() if not line.lstrip().startswith("#")
     )
     assert keys.count("prerelease: true") == 1
-    assert keys.count("prerelease: ${{ needs.spa.outputs.prerelease }}") == 1
-    assert "needs: [spa, macos-bundle, windows-bundle, linux-bundle]" in workflow
+    assert keys.count("prerelease: ${{ steps.release_guard.outputs.prerelease }}") == 1
+    jobs = yaml.safe_load(workflow)["jobs"]
+    assert set(jobs) == {"publish"}
     assert 'gh release edit "$RELEASE_TAG" --draft=false' in workflow
     assert "Reuse a runtime already published" not in workflow
-    # The count is derived from the spec list rather than spelled out. Adding the
-    # Windows installer made a hardcoded "seven" wrong, and a message that has to
-    # be edited in step with the list is one that eventually is not.
-    assert 'f"Validated {len(specs)} release assets and one SPA sidecar: "' in workflow
-    assert "Waveguide.Generator-*-macos-arm64.dmg" in workflow
-    assert "Waveguide.Generator-*-windows-x86_64.zip" in workflow
-    assert "Waveguide.Generator-*-windows-x86_64-setup.exe" in workflow
-    assert "release_assets.windows_setup_name(version)" in workflow
-    assert "Waveguide.Generator-*-linux-x86_64.tar.gz" in workflow
-    assert "update-runtime-linux-x86_64-*.zip" in workflow
+    # Inventory validation moved to promote_candidate.stage (and its shared
+    # candidate validator). Its completeness is exercised in
+    # test_candidate_manifest; here prove both uploads consume its output only.
+    steps = jobs["publish"]["steps"]
+    verify = next(step for step in steps if "promote_candidate.py stage" in step.get("run", ""))
+    assert "if" not in verify
+    for argument in (
+        '--version "${{ steps.release_guard.outputs.version }}"',
+        '--root build/publish-inputs', '--signed build/signed-candidate',
+        '--downloads build/release-assets', '--updates build/update-assets',
+    ):
+        assert argument in verify["run"]
+    publish = [step for step in steps if "softprops/action-gh-release@" in step.get("uses", "")]
+    assert {step["with"]["files"] for step in publish} == {
+        "build/release-assets/*", "build/update-assets/*",
+    }
+    for step in publish:
+        assert step["with"]["fail_on_unmatched_files"] is True
+        assert steps.index(verify) < steps.index(step)
     # Named as the distribution the build was verified against, not as
     # "ubuntu-latest": the runner is what fixes the glibc the runtime links to.
-    assert "runs-on: ubuntu-24.04" in workflow
+    candidate = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / ".github/workflows/rc-build.yml").read_text()
+    )
+    assert candidate["jobs"]["linux-bundle"]["runs-on"] == "ubuntu-24.04"
 
 
 def test_release_notes_give_both_platforms_their_first_launch_wall() -> None:

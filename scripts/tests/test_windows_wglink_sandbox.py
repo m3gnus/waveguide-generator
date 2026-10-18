@@ -516,7 +516,8 @@ ENTRYPOINTS = ('build_bundle.py', 'gates.ps1', 'qualify_installed_cpu.py', 'qual
 
 # Each platform runs one official CPU gate and BEMPP/official BEAT Quit gates.
 # Every qualifier uses isolated_environment to sandbox the installed candidate.
-@pytest.mark.parametrize('workflow_name,counts', [('rc-build', (3, 1, 3, 6)), ('release', (3, 1, 0, 0))])
+# Release only promotes those bytes: it must neither rebuild nor execute them.
+@pytest.mark.parametrize('workflow_name,counts', [('rc-build', (3, 1, 3, 6)), ('release', (0, 0, 0, 0))])
 def test_workflow_execution_inventory(workflow_name: str, counts: tuple[int, ...]) -> None:
     workflow = yaml.safe_load((ROOT / f'.github/workflows/{workflow_name}.yml').read_text())
     found = dict.fromkeys(ENTRYPOINTS, 0)
