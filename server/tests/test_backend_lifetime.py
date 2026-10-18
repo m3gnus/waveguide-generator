@@ -214,18 +214,28 @@ def test_delivery_activity_holds_work(delivery):
 
 @pytest.mark.parametrize("pass_fails", [False, True])
 def test_delivery_loop_honours_hold_and_counts_in_flight_work(tmp_path, monkeypatch, pass_fails):
+    """The loop honours the retirement hold and counts only its own pass.
+
+    Preparation and execution are the jobs runtime's work: once a pass hands
+    an operation over, the runtime's preparation queue is what keeps a
+    retiring headless backend alive (``ActivityTracker.holds_work``), not a
+    set the delivery loop keeps.
+    """
     from server.cadlink import api
 
     async def scenario():
         hold = RestartApproval().retirement_hold
         hold.hold("test")
-        state = SimpleNamespace(jobs_runtime=None, retirement_hold=hold)
+        runtime = SimpleNamespace(
+            running_job_ids=set(), _prep_running=set(), _prep_queue=(),
+            store=SimpleNamespace(list_jobs=lambda **_kwargs: ([], 0)),
+        )
+        state = SimpleNamespace(jobs_runtime=runtime, retirement_hold=hold)
         app = SimpleNamespace(state=state)
         tracker = ActivityTracker(app)
         sleeping, resume = asyncio.Queue(), asyncio.Queue()
         collecting, collect_release = asyncio.Event(), asyncio.Event()
         entered, pass_release = asyncio.Event(), asyncio.Event()
-        operation_entered, operation_release = asyncio.Event(), asyncio.Event()
         passes = []
 
         async def sleep(_seconds):
@@ -238,17 +248,14 @@ def test_delivery_loop_honours_hold_and_counts_in_flight_work(tmp_path, monkeypa
             await collect_release.wait()
             return function(*args)
 
-        async def operation():
-            operation_entered.set()
-            await operation_release.wait()
-
-        async def delivery_pass(_context, *, spawn, **_kwargs):
+        async def delivery_pass(_context, **_kwargs):
             passes.append(True)
             entered.set()
             await pass_release.wait()
             if pass_fails:
                 raise RuntimeError("pass failed")
-            spawn("operation", operation())
+            # The pass hands its operation to the runtime's preparation lane.
+            runtime._prep_running.add("job-1")
 
         api_asyncio = SimpleNamespace(**vars(asyncio))
         api_asyncio.sleep = sleep
@@ -279,21 +286,17 @@ def test_delivery_loop_honours_hold_and_counts_in_flight_work(tmp_path, monkeypa
             hold.hold("test")
             pass_release.set()
             await asyncio.wait_for(sleeping.get(), 2)
-            if not pass_fails:
-                await asyncio.wait_for(operation_entered.wait(), 2)
-                assert state.cad_delivery_in_flight() and await tracker.holds_work()
-                operation_release.set()
-                await asyncio.gather(*state.cad_preparations)
+            # The pass is over either way; only work the runtime holds counts now.
             assert not state.cad_delivery_in_flight()
+            assert await tracker.holds_work() is (not pass_fails)
+            runtime._prep_running.clear()
+            assert not await tracker.holds_work()
             resume.put_nowait(True)
             await asyncio.wait_for(sleeping.get(), 2)
             assert passes == [True]
         finally:
             task.cancel()
-            operations = list(getattr(state, "cad_preparations", ()))
-            for pending in operations:
-                pending.cancel()
-            await asyncio.gather(task, *operations, return_exceptions=True)
+            await asyncio.gather(task, return_exceptions=True)
         assert not state.cad_delivery_in_flight()
 
     asyncio.run(scenario())
