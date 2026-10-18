@@ -39,7 +39,7 @@ describe('source editor interactions', () => {
   async function enter(text: string, value: string) { await act(async () => { const field = input(text); field.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value); field.dispatchEvent(new Event('input', { bubbles: true })); }); await act(async () => input(text).blur()); }
 
 
-  const pointer = async (element: Element, type = 'pointerdown', x = 0, y = 0) => act(async () => { element.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y })); });
+  const pointer = async (element: Element, type = 'pointerdown', x = 0, y = 0) => act(async () => { element.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, buttons: type === 'pointerup' ? 0 : 1 })); });
   async function deletePoleLock() {
     const lock = [...host.querySelectorAll('[aria-label^="Constraint pointOnLine"]')][0];
     await pointer(lock); await act(async () => button('Delete selection').click());

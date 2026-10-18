@@ -34,7 +34,8 @@ afterEach(() => { act(() => root.unmount()); host.remove(); vi.restoreAllMocks()
 const button = (label: string) => [...host.querySelectorAll('button')].find(b => (b.getAttribute('aria-label') ?? b.textContent) === label)!;
 const svg = () => host.querySelector<SVGSVGElement>('svg[role="application"]')!;
 const key = async (key: string, options = {}) => act(async () => { svg().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...options })); });
-const pointer = async (element: Element, type: string, x = 0, y = 0, options = {}) => act(async () => { element.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, ...options })); });
+// Like a real mouse, the primary button is held from pointerdown until pointerup.
+const pointer = async (element: Element, type: string, x = 0, y = 0, options = {}) => act(async () => { element.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, buttons: type === 'pointerup' ? 0 : 1, ...options })); });
 async function mount(initial = base(), diagnosis?: Diagnosis) {
   await act(async () => root.render(<Harness initial={initial} diagnosis={diagnosis}/>));
   vi.spyOn(svg(), 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 640, height: 360 } as DOMRect);
@@ -502,6 +503,21 @@ describe('SketchCanvas with real slvs', () => {
     expect(host.querySelector('.sketch-curve-name')).not.toBeNull();
   });
 
+  it('does not drag a dimension when the button was released off the canvas before the threshold', async () => {
+    const initial = importedSketch([{ id: 'p', x: 0, y: 0 }, { id: 'q', x: 0, y: 10 }], [{ kind: 'line', id: 'line', p1: 'p', p2: 'q' }]);
+    initial.constraints.push({ kind: 'distanceY', id: 'depth', a: 'p', b: 'q', value: 10, driving: true });
+    await mount(initial);
+    const command = vi.spyOn(SketchController.prototype, 'command');
+    const label = () => host.querySelector<SVGTextElement>('[data-constraint-id="depth"] text')!;
+    const at = () => ({ x: Number(label().getAttribute('x')), y: Number(label().getAttribute('y')) });
+    const start = at();
+    await pointer(label(), 'pointerdown', start.x, start.y);
+    // The pointerup happened outside the canvas; a later hover arrives with no button held.
+    await pointer(svg(), 'pointermove', start.x - 40, start.y + 10, { buttons: 0 });
+    expect(at()).toEqual(start); expect(command).not.toHaveBeenCalled();
+    await pointer(svg(), 'pointermove', start.x - 60, start.y + 30, { buttons: 0 });
+    expect(at()).toEqual(start); expect(command).not.toHaveBeenCalled();
+  });
   it('previews a dimension text drag after four pixels and commits it once, with reset, cancel and undo', async () => {
     const initial = importedSketch([{ id: 'p', x: 0, y: 0 }, { id: 'q', x: 0, y: 10 }], [{ kind: 'line', id: 'line', p1: 'p', p2: 'q' }]);
     initial.constraints.push({ kind: 'distanceY', id: 'depth', a: 'p', b: 'q', value: 10, driving: true });

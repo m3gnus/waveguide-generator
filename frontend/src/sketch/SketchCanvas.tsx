@@ -355,7 +355,7 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
       }
       return;
     }
-    labelDown.current = undefined; labelDrag.current = undefined;
+    labelDown.current = undefined; labelDrag.current = undefined; setDimensionPreview(undefined);
     event.currentTarget.setPointerCapture?.(event.pointerId);
     svg.current?.focus({ preventScroll: true });
     const screen = position(event), at = screenToWorld(view, screen);
@@ -406,7 +406,8 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
     const screen = position(event), at = screenToWorld(view, screen); setCursor(at); cursorRef.current.at = at;
     const label = labelDrag.current;
     if (label) {
-      if (!viewOptions.dimensions) { labelDrag.current = undefined; setDimensionPreview(undefined); return; }
+      // A release outside the canvas before the drag threshold leaves no pointerup here: never drag without the button held.
+      if (!viewOptions.dimensions || (event.buttons & 1) === 0) { labelDrag.current = undefined; setDimensionPreview(undefined); return; }
       if (label.next || Math.hypot(event.clientX - label.client.x, event.clientY - label.client.y) >= 4) {
         const c = sketch.constraints.find(c => c.id === label.id)!;
         label.next = dragDimensionPlacement(sketch, c, label.placement, { x: (screen.x - label.screen.x) / view.scale, y: (label.screen.y - screen.y) / view.scale });
