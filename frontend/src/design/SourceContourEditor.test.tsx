@@ -828,9 +828,8 @@ describe('source editor interactions', () => {
   it('fits an accepted semicircle using its entire canonical meridian', async () => {
     const doc = structuredClone(INITIAL_SOURCE);
     doc.contour.segments[0] = { ...doc.contour.segments[0], kind: 'arc', center_mm: [4, 0], direction: 'ccw' };
-    storage.setItem('', JSON.stringify(doc));
     vi.mocked(sourceEditorApi.validate).mockImplementation(async (document) => ({ ...validation(document), meridian: { piston: Array.from({ length: 65 }, (_, i) => { const t = Math.PI + i / 64 * Math.PI; return [4 + 4 * Math.cos(t), 4 * Math.sin(t)]; }) } }));
-    await mountClassic(); await act(async () => button('Fit drawing').click());
+    await mountClassic(doc); await act(async () => button('Fit drawing').click());
     const values = [...host.querySelector('svg path')!.getAttribute('d')!.matchAll(/[ML]([\d.e+-]+),([\d.e+-]+)/g)];
     expect(values).toHaveLength(65);
     expect(values.every((v) => Number(v[1]) >= 0 && Number(v[1]) <= 640 && Number(v[2]) >= 0 && Number(v[2]) <= 260)).toBe(true);
