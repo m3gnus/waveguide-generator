@@ -36,6 +36,34 @@ def test_release_only_promotes_and_requires_an_explicit_source_run():
     assert 'fetch-depth: 0' in WORKFLOW
 
 
+def test_publication_requires_its_own_protected_environment_approval():
+    assert JOBS['publish']['environment'] == 'update-signing'
+
+
+def test_publish_credentials_are_scoped_to_steps_that_need_them():
+    workflow = yaml.safe_load(WORKFLOW)
+    assert 'GH_TOKEN' not in workflow.get('env', {})
+    publish = JOBS['publish']
+    assert 'GH_TOKEN' not in publish.get('env', {})
+    credential_steps = {
+        'Require a successful signed candidate run on this source',
+        'Verify digests, signatures and same-run attestations before staging',
+        'Verify existing releases before any publication',
+        'Create the annotated tag now that every asset exists',
+        'Publish only after every upload succeeded',
+    }
+    for step in publish['steps']:
+        if step.get('name') in credential_steps:
+            assert step['env']['GH_TOKEN'] == '${{ secrets.GITHUB_TOKEN }}'
+        else:
+            assert 'GH_TOKEN' not in step.get('env', {})
+        if 'actions/checkout@' in step.get('uses', ''):
+            assert step['with']['persist-credentials'] is False
+    tag = next(s for s in publish['steps'] if s.get('name', '').startswith('Create the annotated tag'))
+    assert "git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin" in tag['run']
+    assert 'gh auth setup-git' not in WORKFLOW
+
+
 def test_every_download_comes_from_the_selected_qualified_run():
     steps = JOBS['publish']['steps']
     downloads = [s for s in steps if 'download-artifact@' in s.get('uses', '')]
@@ -75,7 +103,7 @@ def test_the_tag_is_created_after_the_assets_and_before_publication() -> None:
     publish = WORKFLOW.index("Publish only after every upload succeeded")
     assert upload < create_tag < publish
     assert 'git tag -a "$RELEASE_TAG"' in WORKFLOW
-    assert 'git push origin "refs/tags/$RELEASE_TAG"' in WORKFLOW
+    assert "git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin" in WORKFLOW
 
 
 def test_release_instructions_are_two_phases_that_tag_last() -> None:

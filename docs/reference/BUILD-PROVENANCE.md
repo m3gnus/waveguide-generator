@@ -58,10 +58,14 @@ check in its identity job.
   Only the RC's SPA job resolves the input; every later job checks out
   `github.sha`, so a push to the branch or to `main` during the run cannot
   split one RC across two commits.
-- **Release:** prepare the versioned source on main, dispatch the signed RC
-  build on its full SHA, and promote that successful run id. `release.yml`
-  verifies the matching source SHA and each payload's attestation, including
-  the selected run and attempt. See [RELEASING.md](../RELEASING.md).
+- **Release, including a hotfix:** every release must be built from `main`
+  through rc-build's signed route (`sign_candidate=true`), using its full SHA,
+  then promoted with that successful run id through `release.sh`. There is no
+  branch-release override; unsigned branch RCs are development rehearsals.
+  `release.yml` verifies the matching source SHA and each payload's attestation, including
+  the selected run and attempt. Publication requires its own `update-signing`
+  environment approval, separate from signing. See
+  [RELEASING.md](../RELEASING.md) for full re-run and publication recovery rules.
 
 ## Verify an RC installer
 

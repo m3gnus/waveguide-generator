@@ -25,18 +25,14 @@ ROOT = Path(__file__).resolve().parents[2]
 RC_WORKFLOW = ROOT / ".github" / "workflows" / "rc-build.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 PROPOSAL_WORKFLOW = ROOT / "docs" / "reference" / "main-build.workflow-proposal.yml"
-ALL_WORKFLOWS = (RC_WORKFLOW, RELEASE_WORKFLOW, PROPOSAL_WORKFLOW)
+BUILD_WORKFLOWS = (RC_WORKFLOW, PROPOSAL_WORKFLOW)
+ALL_WORKFLOWS = (*BUILD_WORKFLOWS, RELEASE_WORKFLOW)
 ATTEST_PIN = "actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d"
 BUILD_JOBS = ("spa", "macos-bundle", "windows-bundle", "linux-bundle")
 GUARD = "Verify the candidate matches the workflow source"
 
 ATTESTING = {"id-token": "write", "attestations": "write"}
 RC_BUILD = {"contents": "read", **ATTESTING}
-# A job-level block replaces the workflow's rather than adding to it, so each
-# release build job restates the workflow's actions: read. Nothing reads it now
-# -- the SPA job's CI-run lookup became the qualify job -- and removing it is a
-# permissions change of its own.
-RELEASE_BUILD = {"actions": "read", "contents": "read", **ATTESTING}
 PUBLISH = {"contents": "write"}
 #: The call to ci.yml that every build job needs. Read-only: ci.yml needs no
 #: more, and a called workflow's token holds no more than the caller grants.
@@ -46,14 +42,7 @@ QUALIFY = {"contents": "read"}
 #: the workflow's). Exact, so a job that gains anything is caught.
 JOB_PERMISSIONS = {
     RC_WORKFLOW: {"qualify": QUALIFY, **dict.fromkeys(BUILD_JOBS, RC_BUILD), "sign-candidate": None},
-    RELEASE_WORKFLOW: {
-        "qualify": QUALIFY,
-        **dict.fromkeys(BUILD_JOBS, RELEASE_BUILD),
-        # Signs the manifest behind the update-signing Environment; reads
-        # artifacts and the checkout, writes nothing.
-        "sign": {"contents": "read"},
-        "publish": PUBLISH,
-    },
+    RELEASE_WORKFLOW: {"publish": {"contents": "write", "actions": "read"}},
     PROPOSAL_WORKFLOW: {
         "identity": None,
         **dict.fromkeys(BUILD_JOBS, RC_BUILD),
@@ -84,21 +73,12 @@ RUNTIMES = {
 }
 
 #: What each bundle job must attest, by the names the builder gives the files.
-RC_SUBJECTS = {
-    "macos-bundle": {DMG, APP_LAYER, APP_MANIFEST},
-    "windows-bundle": {SETUP},
-    "linux-bundle": {TARBALL},
-}
-RELEASE_SUBJECTS = {
+BUILD_SUBJECTS = {
     "macos-bundle": {DMG, APP_LAYER, APP_MANIFEST, RUNTIMES[MACOS]},
     "windows-bundle": {SETUP, PORTABLE, RUNTIMES[WINDOWS]},
     "linux-bundle": {TARBALL, RUNTIMES[LINUX]},
 }
-SUBJECTS = {
-    RC_WORKFLOW: RC_SUBJECTS,
-    RELEASE_WORKFLOW: RELEASE_SUBJECTS,
-    PROPOSAL_WORKFLOW: RELEASE_SUBJECTS,
-}
+SUBJECTS = dict.fromkeys(BUILD_WORKFLOWS, BUILD_SUBJECTS)
 
 #: Every file a bundle job can leave in build/bundle, checksum sidecars
 #: included, so a glob that also reaches a sidecar or a neighbour is caught.
@@ -133,7 +113,7 @@ def _subject_lines(step: dict) -> list[str]:
     ]
 
 
-@pytest.mark.parametrize("path", ALL_WORKFLOWS)
+@pytest.mark.parametrize("path", BUILD_WORKFLOWS)
 def test_attest_is_pinned_to_the_reviewed_immutable_commit(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     assert f"uses: {ATTEST_PIN} # v4.2.1" in text
@@ -147,7 +127,7 @@ def test_attest_is_pinned_to_the_reviewed_immutable_commit(path: Path) -> None:
         assert set(step["with"]) == {"subject-path"}, job
 
 
-@pytest.mark.parametrize("path", ALL_WORKFLOWS)
+@pytest.mark.parametrize("path", BUILD_WORKFLOWS)
 def test_an_attestation_can_never_be_skipped_or_allowed_to_fail(path: Path) -> None:
     workflow = _load(path)
     for job in BUILD_JOBS:
@@ -167,7 +147,7 @@ def test_every_job_has_exactly_its_permissions(path: Path) -> None:
         assert workflow["jobs"][job].get("permissions") == permissions, job
 
 
-@pytest.mark.parametrize("path", ALL_WORKFLOWS)
+@pytest.mark.parametrize("path", BUILD_WORKFLOWS)
 def test_the_source_guard_is_the_step_straight_after_checkout(path: Path) -> None:
     workflow = _load(path)
     jobs = ("identity",) if path == PROPOSAL_WORKFLOW else BUILD_JOBS
@@ -198,7 +178,7 @@ def test_the_rc_resolves_its_input_once_and_later_jobs_build_that_commit() -> No
         assert "spa" in workflow["jobs"][job]["needs"], job
 
 
-@pytest.mark.parametrize("path", ALL_WORKFLOWS)
+@pytest.mark.parametrize("path", BUILD_WORKFLOWS)
 def test_each_job_attests_exactly_its_own_payloads(path: Path) -> None:
     workflow = _load(path)
     _index, spa = _attestation(workflow, "spa")
@@ -224,7 +204,7 @@ def test_each_job_attests_exactly_its_own_payloads(path: Path) -> None:
         assert attested == expected, job
 
 
-@pytest.mark.parametrize("path", ALL_WORKFLOWS)
+@pytest.mark.parametrize("path", BUILD_WORKFLOWS)
 def test_each_attestation_precedes_every_upload(path: Path) -> None:
     workflow = _load(path)
     for job in BUILD_JOBS:
@@ -253,7 +233,7 @@ def test_each_attestation_precedes_every_upload(path: Path) -> None:
         )
 
 
-@pytest.mark.parametrize("path", (RC_WORKFLOW, RELEASE_WORKFLOW))
+@pytest.mark.parametrize("path", (RC_WORKFLOW,))
 def test_a_windows_setup_is_attested_only_after_its_installer_gates(path: Path) -> None:
     """A setup that fails its gates must never carry a build claim."""
 
@@ -301,10 +281,21 @@ def test_verification_document_uses_repository_signer_and_source_constraints() -
         "--repo m3gnus/waveguide-generator",
         "--signer-workflow",
         "m3gnus/waveguide-generator/.github/workflows/rc-build.yml",
-        "m3gnus/waveguide-generator/.github/workflows/release.yml",
+        "m3gnus/waveguide-generator/.github/workflows/main-build.yml",
         "--source-digest",
         "--format json",
         ".[].verificationResult.statement",
     ):
         assert required in text
+    assert "m3gnus/waveguide-generator/.github/workflows/release.yml" not in text
     assert "updater enforce signatures" in text
+
+
+def test_publisher_verifies_builder_provenance_without_creating_a_new_claim() -> None:
+    workflow = _load(RELEASE_WORKFLOW)
+    assert set(workflow['jobs']) == {'publish'}
+    assert 'actions/attest@' not in RELEASE_WORKFLOW.read_text()
+    steps = _steps(workflow, 'publish')
+    verify = next(step for step in steps if 'promote_candidate.py stage' in step.get('run', ''))
+    assert '--source-run build/source-run.json' in verify['run']
+    assert 'if' not in verify

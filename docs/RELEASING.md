@@ -42,10 +42,14 @@ the exact source commit, builds the SPA and platform bundles, checks app-layer
 identity, and runs installed BEAT CPU and Quit gates on all three platforms
 plus Windows setup gates. Its protected signing job runs only after all these
 jobs succeed. Stable, alpha, beta and RC versions use this same route; build
-stamps remain refused.
+stamps remain refused. **Every release, including a hotfix, must be built from
+`main` through rc-build's signed route** (`sign_candidate=true`). An unsigned
+branch rehearsal cannot be promoted; there is no branch-release override.
 
-Phase 2 dispatches `.github/workflows/release.yml` with the full source SHA and
-that **explicit qualified run id**. It builds and signs nothing. It refuses a
+Phase 2 requires a separate approval of the existing protected `update-signing`
+environment on the publish job. Signing approval for a platform rehearsal does
+not authorize publication. `release.sh` dispatches `.github/workflows/release.yml`
+with the full source SHA and that **explicit qualified run id**. It builds and signs nothing. It refuses a
 version that does not move forward past published tags or a commit outside
 `origin/main`, and requires the dispatch source to equal the release SHA on
 `main`. It checks the source run through GitHub's API: the same repository,
@@ -58,22 +62,28 @@ identity, and verifies the unchanged Ed25519 signature against compiled keys.
 It verifies every payload's GitHub attestation with repository, RC workflow,
 source SHA and `main` constraints, and requires its verified invocation to
 match the selected run **and attempt**. Missing/expired artifacts, missing
-attestations and mixed attempts fail closed. Rerun the entire signed candidate
-as a fresh run if necessary; promotion never rebuilds a missing artifact.
-The run is checked again before staging, so a concurrent rerun is refused.
+attestations and mixed attempts fail closed. If a candidate run is re-run, its
+latest attempt must be a **full re-run** (GitHub's **Re-run all jobs**).
+**Re-run failed jobs** leaves attestations from older attempts and is refused,
+even if GitHub reports success. The run is checked again before staging, so a
+concurrent re-run is refused. Promotion never rebuilds a missing artifact.
 Promotions are serialized across source commits. A retry may reuse a published
 companion only if its source tag, exact inventory, sizes and GitHub SHA-256
 digests match the staged candidate. It is then left untouched; a differing
 companion or draft inventory is refused before publication. An orphan companion
 tag is also refused rather than reused or moved automatically.
 
-The policy repository owns `release.sh`. The proposed companion change adds
-`--source-run-id` and recognizes this promotion route instead of waiting for
-push CI on main. Until that change lands, use the equivalent deliberate dispatch:
+The policy repository owns `release.sh`, the only supported publication entry
+point. Land its companion promotion change (including `--source-run-id` and the
+promotion capability check) before using this application's promotion workflow.
+Do not bypass its guards with a raw workflow dispatch.
 
-```bash
-gh workflow run release.yml --ref main -f sha=<full-release-sha> -f source_run_id=<qualified-run-id>
-```
+The five artifacts promotion consumes (`release-spa`, the three
+`rc-<platform>-sign-inputs`, and `rc-signed-candidate`) explicitly retain for
+**90 days**. This matches [GitHub's default retention](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/remove-workflow-artifacts)
+and the public-repository maximum, allowing normal qualification, approval and
+retry windows without reducing the previous default. Missing or expired inputs
+still fail closed; retention does not make deleted artifacts recoverable.
 
 The SPA job builds `update-spa-<version>.tar.gz`. Each platform builds its
 full installer; Windows also builds the portable ZIP. The canonical app archive,
@@ -102,7 +112,30 @@ triggered the build, so the version was committed to before anything was known
 to build. When a cross-platform gate failed twice on 2026-08-26, `v0.2.5` and
 `v0.2.6` became permanently dead tags with no assets and the work shipped as
 `v0.2.7`. A draft release does not create a git ref, so a failure now costs
-nothing and the same version is retried.
+nothing before the tag push. Recovery depends on how far publication got:
+
+- **Before the companion is public:** fix the candidate and use a new signed run
+  or a full re-run, then publish through `release.sh` with the selected run id.
+- **After `v<version>-updates` is public:** only the same source run id and its
+  original artifact bytes can finish that version. Builds are not
+  byte-reproducible; a fresh run or a full re-run can change the archives even
+  for the same SHA, and the public companion must match exactly. Keep that
+  source commit at main's tip while retrying. Retry `release.sh ... publish
+  --source-run-id <original-run-id>` without re-running rc-build. If that run's
+  artifacts are expired, lost or unusable, prepare a **new version bump** and a
+  new signed run. Do not replace the public companion or move its tag.
+- **After the annotated release tag was pushed, but `gh release edit
+  --draft=false` failed:** both `release.sh` and the workflow refuse the existing
+  tag, so an ordinary retry cannot finish. With publication authorization,
+  manually verify the existing remote tag is annotated and peels to the original
+  release SHA, the user-facing release is still a draft with the correct
+  pre-release flag, and both releases' exact inventories, sizes and SHA-256
+  digests match the original qualified run. Verify `SHA256SUMS`, its Ed25519
+  signature and payload attestations as described in
+  [BUILD-PROVENANCE.md](reference/BUILD-PROVENANCE.md). Then finish only the
+  visibility change with `gh release edit v<version> --draft=false`, and verify
+  the public release and tag again. If the release is already public, verify it
+  instead of repeating publication. Do not delete, recreate or move the tag.
 
 Installer filenames use dots because those are the names GitHub serves; the
 installed application and extracted Windows folder retain spaces. The prebuilt
@@ -221,11 +254,14 @@ metadata must expose exactly three installers plus `SHA256SUMS` and
 `SHA256SUMS.sig`; the SPA archive and portable ZIP belong in separate companion metadata.
 Actions artifact URLs are not accepted installer URLs. Keep signature, version,
 checksum and same-origin verification enabled. This exercises a private update,
-not production channel discovery. Publication remains a separate owner decision.
+not production channel discovery. Publication requires its own protected-environment
+approval.
 
 Promotion permissions: the release publish job retains `contents: write` and
 adds only `actions: read` to read the selected run, jobs and artifacts. The
 workflow-level `actions: read` already existed. The removed release build and
 sign jobs no longer need their former permissions or signing secret; RC job
-permissions, Environment and secrets are unchanged. Attestations cover the
-portable ZIP and runtime archives as well as the existing RC subjects.
+permissions, Environment and secrets are unchanged. The publish job also uses
+`update-signing` for publication approval. Its checkout does not persist
+credentials; `GH_TOKEN` is scoped to API/attestation checks, the tag push and
+making the draft public. Attestations cover the portable ZIP and runtime archives as well as the existing RC subjects.

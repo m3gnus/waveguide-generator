@@ -1,7 +1,7 @@
 name: Release
 
 # Promote only the exact bytes from a successful, signed rc-build run on main.
-# No builds or signing here: installed qualification and approval live there.
+# No builds or signing here. Signing and publication each require approval.
 # Verify the source, complete inventory, checksums, signatures and same-run
 # provenance before either release is written. Create the release tag last.
 on:
@@ -27,17 +27,18 @@ jobs:
   publish:
     name: Verify and promote the qualified candidate
     runs-on: ubuntu-latest
+    environment: update-signing
     permissions:
       actions: read
       contents: write
     env:
       RELEASE_SHA: ${{ inputs.sha }}
       SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
           ref: ${{ inputs.sha }}
 
       - name: Verify the immutable dispatch source
@@ -161,6 +162,8 @@ jobs:
           echo "UPDATES_TAG=$tag-updates" >> "$GITHUB_ENV"
 
       - name: Require a successful signed candidate run on this source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           python3 scripts/promote_candidate.py check-run --repository "$GITHUB_REPOSITORY" \
@@ -207,6 +210,8 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify digests, signatures and same-run attestations before staging
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           python3 scripts/promote_candidate.py stage --repository "$GITHUB_REPOSITORY" \
@@ -217,6 +222,8 @@ jobs:
 
       - name: Verify existing releases before any publication
         id: publication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           python3 scripts/promote_candidate.py check-publication --repository "$GITHUB_REPOSITORY" \
@@ -372,6 +379,8 @@ jobs:
             </details>
 
       - name: Create the annotated tag now that every asset exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # This is the step that spends the version, and it is deliberately the
         # last thing before publication. Everything that can fail - the source run, provenance, inventory and every
         # checksum - has already succeeded. A draft release does not create a
@@ -382,7 +391,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$RELEASE_TAG" -m "Waveguide Generator $RELEASE_TAG" "$RELEASE_SHA"
-          git push origin "refs/tags/$RELEASE_TAG"
+          # Authenticate this push only; checkout stores no token in git config.
+          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin "refs/tags/$RELEASE_TAG"
 
       - name: Publish only after every upload succeeded
         env:

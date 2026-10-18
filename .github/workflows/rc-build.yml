@@ -5,6 +5,8 @@ name: RC build
 # with its full SHA and sign_candidate=true. Stable and release prerelease
 # versions use the same installed gates and protected signing approval.
 # Unsigned branch builds remain available for development hand tests.
+# Promotion inputs retain for 90 days (the default and public-repository maximum),
+# covering qualification, approval and retry windows without shortening retention.
 #
 # Every action is pinned to an immutable commit, with the release it belonged to
 # in a trailing comment. A major tag such as `@v4` moves, so a workflow that
@@ -80,6 +82,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           ref: ${{ inputs.sha }}
       - name: Verify the candidate matches the workflow source
         env:
@@ -143,6 +146,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-spa
+          retention-days: 90
           path: |
             ${{ env.artifact }}
             ${{ env.artifact }}.sha256
@@ -161,6 +165,7 @@ jobs:
       # commit, and re-resolving a moving ref such as main here could not be.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
       - name: Verify the candidate matches the workflow source
         env:
@@ -221,6 +226,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rc-macos-sign-inputs
+          retention-days: 90
           path: |
             build/bundle/Waveguide.Generator-*-macos-arm64.dmg*
             build/bundle/update-*
@@ -373,6 +379,7 @@ jobs:
       # github.sha, not inputs.sha; see the macOS job.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
       - name: Verify the candidate matches the workflow source
         env:
@@ -471,6 +478,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rc-windows-sign-inputs
+          retention-days: 90
           path: |
             build/bundle/Waveguide.Generator-*-windows-x86_64*
             build/bundle/update-runtime-windows-*.zip*
@@ -654,6 +662,7 @@ jobs:
       # github.sha, not inputs.sha; see the macOS job.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
       - name: Verify the candidate matches the workflow source
         env:
@@ -725,6 +734,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rc-linux-sign-inputs
+          retention-days: 90
           path: |
             build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz*
             build/bundle/update-runtime-linux-*.zip*
@@ -852,6 +862,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
       - name: Verify immutable versioned source and signing key availability
         env:
@@ -916,6 +927,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rc-signed-candidate
+          retention-days: 90
           path: build/sign-files/*
           if-no-files-found: error
       - name: Prepare compact verification metadata for platform rehearsals

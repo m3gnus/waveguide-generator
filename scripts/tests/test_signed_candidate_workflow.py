@@ -24,6 +24,9 @@ def test_signing_is_opt_in_with_no_publication_authority():
     assert signer.get('permissions', WORKFLOW['permissions']) == {'contents': 'read'}
     assert set(signer['needs']) == {'spa', 'macos-bundle', 'windows-bundle', 'linux-bundle'}
     for name, job in WORKFLOW['jobs'].items():
+        for step in job.get('steps', []):
+            if 'actions/checkout@' in step.get('uses', ''):
+                assert step['with']['persist-credentials'] is False
         if name != 'sign-candidate':
             assert 'UPDATE_SIGNING_KEY' not in json.dumps(job)
         for step in job.get('steps', []):
@@ -121,3 +124,18 @@ def test_all_internal_and_published_payloads_have_builder_provenance():
         assert all(subject in attest['with']['subject-path'] for subject in subjects)
         assert WORKFLOW['jobs'][name]['permissions'] == {
             'contents': 'read', 'id-token': 'write', 'attestations': 'write'}
+
+
+def test_every_artifact_consumed_by_promotion_retains_for_the_release_window():
+    release = yaml.safe_load((ROOT / '.github/workflows/release.yml').read_text())
+    consumed = {step['with']['name'] for step in release['jobs']['publish']['steps']
+                if 'actions/download-artifact@' in step.get('uses', '')}
+    retained = {step['with']['name']: step['with'].get('retention-days')
+                for job in WORKFLOW['jobs'].values() for step in job.get('steps', [])
+                if 'actions/upload-artifact@' in step.get('uses', '')}
+    for job in WORKFLOW['jobs'].values():
+        for step in job.get('steps', []):
+            if 'actions/download-artifact@' in step.get('uses', ''):
+                assert 'retention-days' not in step.get('with', {})
+    assert len(consumed) == 5
+    assert {name: retained[name] for name in consumed} == dict.fromkeys(consumed, 90)

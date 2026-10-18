@@ -281,7 +281,8 @@ def _run_response():
 
 
 @pytest.mark.parametrize('field,value', [
-    ('id', 4321), ('path', '.github/workflows/release.yml'), ('event', 'pull_request'),
+    ('id', 4321), ('path', '.github/workflows/release.yml'),
+    ('path', '.github/workflows/rc-build.yml@refs/heads/main'), ('event', 'pull_request'),
     ('head_branch', 'dev'), ('head_sha', 'b' * 40), ('status', 'in_progress'),
     ('conclusion', 'failure'), ('run_attempt', 0), ('run_attempt', True),
     ('repository', {'full_name': 'other/project'}), ('head_repository', {'full_name': 'other/project'}),
@@ -292,8 +293,9 @@ def test_unqualified_source_runs_are_refused(monkeypatch, field, value):
         promote_candidate.check_run('example/project', '1234', SOURCE_SHA)
 
 
+@pytest.mark.parametrize('attempt', [1, 2])
 @pytest.mark.parametrize('damage', [None, 'missing', 'skipped', 'failure', 'duplicate'])
-def test_source_run_requires_successful_builds_and_protected_signing(monkeypatch, damage):
+def test_source_run_requires_successful_builds_and_protected_signing(monkeypatch, damage, attempt):
     jobs = [{'name': name, 'status': 'completed', 'conclusion': 'success'}
             for name in sorted(promote_candidate.REQUIRED_JOBS)]
     if damage == 'missing':
@@ -304,15 +306,15 @@ def test_source_run_requires_successful_builds_and_protected_signing(monkeypatch
         jobs[-1]['conclusion'] = damage
     def gh(*args):
         if '--slurp' in args:
-            assert '/attempts/1/jobs?per_page=100' in args[-1]
+            assert f'/attempts/{attempt}/jobs?per_page=100' in args[-1]
             return [{'jobs': jobs[:2]}, {'jobs': jobs[2:]}]
-        return _run_response()
+        return _run_response() | {'run_attempt': attempt}
     monkeypatch.setattr(promote_candidate, '_gh_json', gh)
     if damage:
         with pytest.raises(ValueError, match='Required candidate job'):
             promote_candidate.check_run('example/project', '1234', SOURCE_SHA)
     else:
-        assert promote_candidate.check_run('example/project', '1234', SOURCE_SHA)['attempt'] == 1
+        assert promote_candidate.check_run('example/project', '1234', SOURCE_SHA)['attempt'] == attempt
 
 
 @pytest.mark.parametrize('run_id', ['', '0', '-1', '../other', '1?x', 'abc'])
