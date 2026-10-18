@@ -28,6 +28,16 @@ from server.platform import instance
 from server.platform.backend_owner import BackendHandle
 
 
+def _owner_health(tmp_path, *, pid=4242, port=3199, lifetime="headless"):
+    data = tmp_path / "data"
+    locks = data / "locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    (locks / instance.LOCK_FILENAME).write_text(json.dumps({"pid": pid, "port": port}))
+    payload = {"version": "test", "commit": "abc", "pid": pid,
+               "data_dir": str(data), "lifetime": lifetime}
+    return data, json.dumps(payload).encode()
+
+
 def _retirement_controller(tmp_path, monkeypatch, *, lifetime="headless", adopted=True):
     """Exercise adoption and stop entirely in process, with only our fake child."""
     from launchers.statusapp import controller as module
@@ -35,7 +45,10 @@ def _retirement_controller(tmp_path, monkeypatch, *, lifetime="headless", adopte
     owner_pid, child_pid = 4242, 100
     calls = []
     controller = _controller(tmp_path)
-    data = tmp_path / "data"
+    data, body = _owner_health(tmp_path, lifetime=lifetime)
+    controller.request_probe = lambda url, _timeout: (
+        (200, body) if url.endswith("/health") else (200, b"<html></html>")
+    )
     monkeypatch.setattr(controller, "_data_dir", lambda: data)
     record = BackendHandle("http://127.0.0.1:3199", owner_pid, 3199, data, "test", "abc", lifetime)
     discoveries = []
@@ -85,7 +98,7 @@ def test_adopted_backend_quit_writes_only_for_retiring_lifetimes(tmp_path, monke
     controller, record, discoveries, calls = _retirement_controller(tmp_path, monkeypatch, lifetime=lifetime)
     assert controller.poll().backend.state is ServiceState.OK
     assert controller.poll().backend.state is ServiceState.OK
-    assert len(discoveries) == 1 and controller._adopted_backend == record
+    assert not discoveries and controller._adopted_backend == record
     controller.stop()
     path = record.data_dir / "locks" / REQUEST_FILENAME
     if lifetime in ("headless", "contained"):
@@ -108,18 +121,20 @@ def test_owned_server_quit_never_writes_adopted_request(tmp_path, monkeypatch):
     assert not (record.data_dir / "locks" / REQUEST_FILENAME).exists()
 
 
-def test_adoption_discovery_retries_none_and_mismatched_port(tmp_path, monkeypatch):
-    from dataclasses import replace
-    from launchers.statusapp import controller as module
-
+@pytest.mark.parametrize("metadata", [None, {"pid": 4242, "port": 3200}])
+def test_adoption_retries_unconfirmed_metadata(tmp_path, monkeypatch, metadata):
     controller, record, _discoveries, _calls = _retirement_controller(tmp_path, monkeypatch)
-    results = iter([None, replace(record, port=3200), record])
-    monkeypatch.setattr(module, "discover_backend", lambda _folder: next(results))
-    controller.poll()
+    lock = record.data_dir / "locks" / instance.LOCK_FILENAME
+    confirmed = lock.read_text()
+    if metadata is None:
+        lock.unlink()
+    else:
+        lock.write_text(json.dumps(metadata))
+    monkeypatch.setattr(controller, "_await_lock_release", lambda: controller._snapshot)
+    assert controller.poll().backend.state is ServiceState.STARTING
     assert controller._adopted_backend is None
-    controller.poll()
-    assert controller._adopted_backend is None
-    controller.poll()
+    lock.write_text(confirmed)
+    assert controller.poll().backend.state is ServiceState.OK
     assert controller._adopted_backend == record
     controller.stop()
     assert controller._adopted_at_stop == record
@@ -129,20 +144,20 @@ def test_adoption_discovery_retries_none_and_mismatched_port(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("matching_port", [True, False])
-def test_quit_rediscovers_adoption_after_transient_poll_failure(tmp_path, monkeypatch, matching_port):
+def test_quit_rediscovers_adoption_without_cached_record(tmp_path, monkeypatch, matching_port):
     from dataclasses import replace
     from launchers.backend_retire_request import REQUEST_FILENAME
     from launchers.statusapp import controller as module
 
     controller, record, _discoveries, calls = _retirement_controller(tmp_path, monkeypatch)
-    results = iter([None, record if matching_port else replace(record, port=3200)])
+    result = record if matching_port else replace(record, port=3200)
     discoveries = []
 
     def discover(folder):
         assert not controller._lock._is_owned()
         assert folder == record.data_dir
         discoveries.append(folder)
-        return next(results)
+        return result
 
     writes = []
     real_write = module.write_request
@@ -155,9 +170,9 @@ def test_quit_rediscovers_adoption_after_transient_poll_failure(tmp_path, monkey
     monkeypatch.setattr(module, "discover_backend", discover)
     monkeypatch.setattr(module, "write_request", write)
     assert controller.poll().backend.state is ServiceState.OK
-    assert controller._adopted_backend is None
+    controller._adopted_backend = None
     controller.stop()
-    assert len(discoveries) == 2
+    assert len(discoveries) == 1
     path = record.data_dir / "locks" / REQUEST_FILENAME
     if matching_port:
         assert writes == [{"pid": record.pid, "mode": "release", "reason": "gui-quit"}]
@@ -199,25 +214,68 @@ def test_instance_answers_false_when_retiring(tmp_path):
     assert not controller._instance_answers("http://127.0.0.1:3199/")
 
 
+@pytest.mark.parametrize("foreign", ["data_dir", "pid", "port", "version_only", "retiring"])
+def test_gui_does_not_adopt_foreign_backend(tmp_path, monkeypatch, foreign):
+    from launchers.backend_retire_request import REQUEST_FILENAME
+
+    controller, record, _discoveries, _calls = _retirement_controller(tmp_path, monkeypatch)
+    payload = json.loads(controller.request_probe(record.base_url + "/health", 0)[1])
+    if foreign == "data_dir":
+        payload["data_dir"] = str(tmp_path / "another-install")
+    elif foreign == "pid":
+        payload["pid"] += 1
+    elif foreign == "port":
+        (record.data_dir / "locks" / instance.LOCK_FILENAME).write_text(
+            json.dumps({"pid": record.pid, "port": 3200})
+        )
+    elif foreign == "version_only":
+        payload = {"version": "test"}
+    else:
+        payload["retiring"] = True
+    requested = []
+
+    def probe(url, _timeout):
+        requested.append(url)
+        return 200, json.dumps(payload).encode()
+
+    controller.request_probe = probe
+    # Keep the normal lock-conflict retry pending without starting a real child.
+    monkeypatch.setattr(controller, "_await_lock_release", lambda: controller._snapshot)
+    assert controller.poll().backend.state is ServiceState.STARTING
+    assert controller._adopted_backend is None
+    assert requested == [record.base_url + "/health"]
+    # The bounded wait eventually reports the conflict instead of adopting it.
+    monkeypatch.setattr(controller, "_await_lock_release", lambda: None)
+    assert controller.poll().backend.state is ServiceState.ERROR
+    controller.stop()
+    assert not (record.data_dir / "locks" / REQUEST_FILENAME).exists()
+
+
 def test_adoption_rediscovers_a_replacement_pid(tmp_path, monkeypatch):
     from dataclasses import replace
-    from launchers.statusapp import controller as module
-
     controller, record, _discoveries, _calls = _retirement_controller(tmp_path, monkeypatch)
     controller.poll()
     replacement = replace(record, pid=record.pid + 1, lifetime="contained")
-    controller.request_probe = lambda url, _timeout: (
-        (200, json.dumps({"version": "test", "pid": replacement.pid}).encode())
-        if url.endswith("/health") else (200, b"<html></html>")
-    )
-    results = iter([None, replacement])
-    monkeypatch.setattr(module, "discover_backend", lambda _folder: next(results))
     controller._adopted_at_stop = record
     controller._adopted_update_requested = True
-    controller.poll()
+    # A response changing between the admission and status probes invalidates
+    # the old record. Once metadata catches up, the new owner can be adopted.
+    valid = controller.request_probe("http://127.0.0.1:3199/health", 0)[1]
+    changed = json.loads(valid)
+    changed["pid"] = replacement.pid
+    changed["lifetime"] = replacement.lifetime
+    replies = iter([valid, json.dumps(changed).encode()])
+    controller.request_probe = lambda url, _timeout: (
+        (200, next(replies)) if url.endswith("/health") else (200, b"<html></html>")
+    )
+    assert controller.poll().backend.state is ServiceState.ERROR
     assert controller._adopted_backend is None
     assert controller._adopted_at_stop is None
-    controller.poll()
+    _data, body = _owner_health(tmp_path, pid=replacement.pid, lifetime=replacement.lifetime)
+    controller.request_probe = lambda url, _timeout: (
+        (200, body) if url.endswith("/health") else (200, b"<html></html>")
+    )
+    assert controller.poll().backend.state is ServiceState.OK
     assert controller._adopted_backend == replacement
     assert not controller._adopted_update_requested
     controller.stop()
@@ -619,6 +677,7 @@ def test_busy_preferred_port_is_left_for_the_child_instance_check(
         "port_is_available",
         lambda candidate, _host: candidate == port + 1,
     )
+    data, owner_body = _owner_health(tmp_path)
     checkout = _checkout(tmp_path)
     existing = tmp_path / "existing.py"
     existing.write_text(
@@ -633,10 +692,11 @@ def test_busy_preferred_port_is_left_for_the_child_instance_check(
     )
     controller = StatusController(
         repo_root=checkout,
+        environ={**os.environ, "WG2_DATA_DIR": str(data)},
         server_command=(sys.executable, str(existing)),
         server_args=("--port", str(port)),
         request_probe=lambda url, _timeout: (
-            (200, b'{"version":"test"}')
+            (200, owner_body)
             if url.endswith("/health")
             else (200, b"<!doctype html><html></html>")
         ),
@@ -843,6 +903,7 @@ def test_an_adopted_instance_is_asked_rarely_and_believed_only_after_a_retry(
     of a dialog.
     """
 
+    data, owner_body = _owner_health(tmp_path)
     checkout = _checkout(tmp_path)
     already_running = tmp_path / "already_running.py"
     already_running.write_text(
@@ -851,7 +912,8 @@ def test_an_adopted_instance_is_asked_rarely_and_believed_only_after_a_retry(
         "raise SystemExit(2)\n",
         encoding="utf-8",
     )
-    _seen, probe = _counting_probe()
+    def probe(url, _timeout):
+        return (200, owner_body) if url.endswith("/health") else (200, b"<html></html>")
     #: True answers, then the blip that must not be believed, then a real loss.
     answers = [True, False, True, False, False]
     asked: list[str] = []
@@ -859,11 +921,12 @@ def test_an_adopted_instance_is_asked_rarely_and_believed_only_after_a_retry(
     def liveness(url: str, _timeout: float) -> tuple[int, bytes]:
         asked.append(url)
         if answers.pop(0):
-            return 200, b'{"version":"test"}'
+            return 200, owner_body
         raise OSError("connection refused")
 
     controller = StatusController(
         repo_root=checkout,
+        environ={**os.environ, "WG2_DATA_DIR": str(data)},
         server_command=(sys.executable, str(already_running)),
         request_probe=probe,
         liveness_probe=liveness,
@@ -1108,6 +1171,7 @@ def test_the_status_window_polls_on_until_the_interface_is_served(tmp_path: Path
 
 
 def test_existing_instance_exit_two_keeps_its_real_url_healthy(tmp_path: Path) -> None:
+    data, owner_body = _owner_health(tmp_path)
     checkout = _checkout(tmp_path)
     already_running = tmp_path / "already_running.py"
     already_running.write_text(
@@ -1118,9 +1182,10 @@ def test_existing_instance_exit_two_keeps_its_real_url_healthy(tmp_path: Path) -
     )
     controller = StatusController(
         repo_root=checkout,
+        environ={**os.environ, "WG2_DATA_DIR": str(data)},
         server_command=(sys.executable, str(already_running)),
         request_probe=lambda url, _timeout: (
-            (200, b'{"version":"test"}')
+            (200, owner_body)
             if url.endswith("/health")
             else (200, b"<!doctype html><html></html>")
         ),
@@ -1603,14 +1668,17 @@ def test_a_serving_lock_holder_read_before_its_output_arrives_is_still_adopted(
     a crash with no diagnostic instead of opening the one already running.
     """
 
+    data, owner_body = _owner_health(tmp_path)
     _drain_without_a_bound(monkeypatch)
     attempts = _Attempts(tmp_path / "attempts", conflicts=99)
     controller = _conflicted_controller(
         tmp_path,
         attempts,
         _LateCollector,
+        environ={**os.environ, "WG2_DATA_DIR": str(data),
+                 "WG2_TEST_ATTEMPTS": str(attempts.path), "WG2_TEST_CONFLICTS": "99"},
         request_probe=lambda url, _timeout: (
-            (200, b'{"version":"test"}')
+            (200, owner_body)
             if url.endswith("/health")
             else (200, b"<!doctype html><html></html>")
         ),

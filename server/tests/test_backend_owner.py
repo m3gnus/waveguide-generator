@@ -210,6 +210,42 @@ def test_discover_none_without_lock_file(data_dir: Path) -> None:
     assert not (data_dir / "locks" / LOCK_FILENAME).exists()
 
 
+@pytest.mark.parametrize("mismatch", [None, "pid", "data_dir", "port", "retiring", "metadata"])
+def test_fetched_health_and_discovery_share_identity(data_dir, monkeypatch, mismatch):
+    info = {"pid": os.getpid(), "port": 3199}
+    health = {"pid": info["pid"], "data_dir": str(data_dir), "version": "test"}
+    if mismatch == "pid":
+        health["pid"] += 1
+    elif mismatch == "data_dir":
+        health["data_dir"] = str(data_dir / "foreign")
+    elif mismatch == "port":
+        info["port"] = 3200
+    elif mismatch == "retiring":
+        health["retiring"] = True
+    if mismatch != "metadata":
+        (data_dir / "locks" / LOCK_FILENAME).write_text(json.dumps(info))
+    monkeypatch.setattr(backend_owner, "_fetch_health", lambda port: health if port == 3199 else None)
+    fetched = backend_owner.backend_from_health(data_dir, 3199, health)
+    assert fetched == discover_backend(data_dir)
+    assert (fetched is None) == (mismatch is not None)
+    if fetched is not None:
+        # Startup and the CLI reuse exactly the same confirmed owner.
+        assert ensure_backend(data_dir, ["must-not-spawn"]) == fetched
+
+
+def test_fetched_health_accepts_filesystem_alias(data_dir, tmp_path):
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(data_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+    (data_dir / "locks" / LOCK_FILENAME).write_text(json.dumps({"pid": 42, "port": 3199}))
+    handle = backend_owner.backend_from_health(
+        data_dir, 3199, {"pid": 42, "data_dir": str(alias), "version": "test"}
+    )
+    assert handle is not None and handle.data_dir == data_dir.resolve()
+
+
 @pytest.mark.parametrize("contents", ["", "invalid", '{"pid": 1, "port": 0}'])
 def test_discover_ignores_incomplete_metadata(data_dir: Path, contents: str) -> None:
     (data_dir / "locks" / LOCK_FILENAME).write_text(contents)

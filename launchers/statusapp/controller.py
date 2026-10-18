@@ -33,7 +33,7 @@ from scripts.frontend_freshness import (
 from launch.serve_options import UPDATE_RELEASED_FILENAME
 from launchers.backend_start import backend_argv, backend_environment
 from launchers.backend_retire_request import write_request
-from server.platform.backend_owner import BackendHandle, discover_backend
+from server.platform.backend_owner import BackendHandle, backend_from_health, discover_backend
 from server.platform.instance import requested_port
 from server.platform.job_start import ContainedStartError, JobStart, windows_job_start
 from server.platform.paths import app_root, resolve_data_dir
@@ -961,7 +961,7 @@ class StatusController:
         return None
 
     def _instance_answers(self, url: str, probe: RequestProbe | None = None) -> bool:
-        """Whether the instance holding the lock is actually serving."""
+        """Whether this folder's lock owner is actually serving at this URL."""
 
         try:
             status, body = (probe or self.request_probe)(url + "health", self.request_timeout)
@@ -970,7 +970,7 @@ class StatusController:
             return False
         return (
             status == 200 and isinstance(payload, dict) and "version" in payload
-            and payload.get("retiring") is not True
+            and backend_from_health(self._data_dir(), urlsplit(url).port, payload) is not None
         )
 
     def _discard_dead_child(self) -> None:
@@ -1108,6 +1108,7 @@ class StatusController:
                     return self._snapshot
 
         named: object = _UNANSWERED
+        adopted_handle = None
         try:
             status, body = self.request_probe(url + "health", self.request_timeout)
             payload = json.loads(body)
@@ -1116,6 +1117,10 @@ class StatusController:
                 or payload.get("retiring") is True
             ):
                 raise RuntimeError("unexpected /health response")
+            if observing_existing:
+                adopted_handle = backend_from_health(self._data_dir(), urlsplit(url).port, payload)
+                if adopted_handle is None:
+                    raise RuntimeError("/health does not match this data folder's backend owner")
             if not observing_existing:
                 # An adopted server is never settled on, so its build is left
                 # alone; this start's own server must be the installed build.
@@ -1127,20 +1132,6 @@ class StatusController:
             backend = LampStatus(ServiceState.OK, f"Healthy — v{payload['version']}{suffix}")
         except (OSError, ValueError, RuntimeError, HTTPError, URLError) as exc:
             backend = LampStatus(ServiceState.ERROR, "/health failed: " + _probe_failure(exc))
-
-        adopted_handle = None
-        adopted_changed = False
-        if observing_existing and backend.state is ServiceState.OK:
-            with self._lock:
-                record = self._adopted_backend
-                adopted_changed = record is not None and payload.get("pid", record.pid) != record.pid
-                needs_discovery = record is None or adopted_changed
-            if needs_discovery:
-                # File and HTTP work stays outside the controller lock. None is
-                # transient; the next healthy poll tries discovery again.
-                handle = discover_backend(self._data_dir())
-                if handle is not None and handle.port == urlsplit(url).port:
-                    adopted_handle = handle
 
         dist_index = self.repo_root / "frontend" / "dist" / "index.html"
         if not dist_index.is_file():
@@ -1179,15 +1170,13 @@ class StatusController:
                 not observing_existing and process.poll() is not None
             ):
                 return self.poll()
+            if observing_existing and self._adopted_backend != adopted_handle:
+                self._adopted_backend = None
+                self._adopted_at_stop = None
+                self._adopted_update_requested = False
             if backend.state is ServiceState.OK:
-                if adopted_changed:
-                    self._adopted_backend = None
-                    self._adopted_at_stop = None
-                    self._adopted_update_requested = False
                 if adopted_handle is not None:
                     self._adopted_backend = adopted_handle
-                    self._adopted_at_stop = None
-                    self._adopted_update_requested = False
                 # Only a serving backend ends the wait. A child that is merely
                 # alive is not evidence: the retry starts one every time, so
                 # resetting on that would renew the budget on each attempt and

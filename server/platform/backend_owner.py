@@ -160,6 +160,23 @@ def _discover(data_dir: Path) -> BackendHandle | None:
     return _validate(data_dir, *_observe(data_dir))
 
 
+def backend_from_health(
+    data_dir: str | os.PathLike[str], port: int | None, health: dict[str, object]
+) -> BackendHandle | None:
+    """Confirm an already-fetched response against this folder's owner metadata.
+
+    The responding port must also be the metadata port. Use the same identity
+    check as discovery and startup, including filesystem aliases and retirement.
+    No process is opened, signalled or adopted merely because a port answers.
+    """
+
+    root = Path(data_dir).resolve()
+    info = _owner_info(root)
+    if info is None or info.port != port:
+        return None
+    return _validate(root, info, health)
+
+
 def discover_backend(data_dir: str | os.PathLike[str]) -> BackendHandle | None:
     """Confirm the metadata pid's healthy backend for this folder, or return None.
 
