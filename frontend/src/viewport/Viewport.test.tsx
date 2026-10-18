@@ -1156,6 +1156,47 @@ describe('solver-mesh refresh inputs and document loads', () => {
     expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === '/api/solve/plan')).toHaveLength(0);
   });
 
+  it('revalidates the preview when switching to strict without a design edit', async () => {
+    const modes: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (String(input) !== '/api/solver-mesh') return new Response('not found', { status: 404 });
+      modes.push(JSON.parse(String(init?.body)).options.mesh_validation_mode);
+      return new Response(JSON.stringify(solverMeshResponse('same')), { status: 200 });
+    });
+    await act(async () => root.render(<Viewport />));
+    const revision = useDesignStore.getState().designRevision;
+    expect(modes).toEqual(['warn']);
+    act(() => useSolveOptionsStore.getState().setMeshValidationMode('strict'));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 550)); });
+    expect(useDesignStore.getState().designRevision).toBe(revision);
+    expect(modes).toEqual(['warn', 'strict']);
+  });
+
+  it.each(['http', 'network', 'parse'] as const)('clears a previous solve refusal after a %s build failure', async (failure) => {
+    let requests = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input) !== '/api/solver-mesh') return new Response('not found', { status: 404 });
+      requests += 1;
+      if (requests === 1) return new Response(JSON.stringify({
+        ...solverMeshResponse('refused'),
+        plan: { refusal: 'Turn off the ground plane' },
+      }), { status: 200 });
+      if (failure === 'network') throw new Error('network failed');
+      if (failure === 'parse') return new Response(JSON.stringify({
+        ...solverMeshResponse('invalid'), msh_text: 'invalid mesh',
+        plan: { refusal: 'A different refusal' },
+      }), { status: 200 });
+      return new Response(JSON.stringify({ detail: 'build failed' }), { status: 422 });
+    });
+    await act(async () => root.render(<Viewport />));
+    expect(host.textContent).toContain('Solve unavailable: Turn off the ground plane');
+    act(() => useSolveOptionsStore.getState().setEngine('bempp'));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 550)); });
+    expect(requests).toBe(2);
+    expect(host.textContent).toContain('Mesh build failed');
+    expect(host.textContent).not.toContain('Solve unavailable:');
+  });
+
   it.each(['slow build', 'running solve'] as const)('ignores frequency and polar edits after a %s', async (guard) => {
     const clock = vi.spyOn(performance, 'now').mockReturnValue(0);
     const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {

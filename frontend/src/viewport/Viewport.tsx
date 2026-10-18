@@ -596,7 +596,7 @@ export function Viewport() {
           const settings = useSolveOptionsStore.getState();
           const body = JSON.stringify({
             design: toSolveDesign(useDesignStore.getState().design),
-            options: { ...solverMeshOptions(settings), mesh_validation_mode: settings.meshValidationMode },
+            options: solverMeshOptions(settings),
           });
           const result = await postSolverMesh(body, fetch, signal);
           if (signal.aborted) return { ok: false, durationMs: performance.now() - started };
@@ -613,6 +613,7 @@ export function Viewport() {
           }
           return { ok: true, durationMs: performance.now() - started };
         } catch (error) {
+          if (!signal.aborted) setSolverMeshRefusal(null);
           return {
             ok: false,
             durationMs: performance.now() - started,

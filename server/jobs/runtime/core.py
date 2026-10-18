@@ -760,20 +760,10 @@ async def _resolve_parametric_engine(
     resolved_quadrants: int,
     plan: dict[str, Any],
 ) -> tuple[SolveRequest, str, EngineUnavailableError | None]:
-    """Choose the host engine, deferring availability refusal until admission.
-
-    Availability affects admission, not the geometry rules below. Still perform
-    normal AUTO selection and substitution when possible so previews and solves
-    on a ready host share the same engine-dependent geometry and cache entry.
-    """
+    """Select or substitute an engine, retaining selection failures for preview."""
 
     try:
-        request, cpu_fallback = await _accuracy_engine(request, engine_registry)
         engine_name = request.options.engine
-        plan["accuracy"] = request.options.accuracy
-        plan["engine"] = engine_name
-        if cpu_fallback is not None:
-            plan["fallback_reason"] = cpu_fallback
         if engine_name == "auto":
             # Resolve against the requested mounting, not just the host's engine
             # list: BEAT advertises no coupled infinite-baffle support and rejects
@@ -866,17 +856,6 @@ async def _resolve_parametric_engine(
                     unavailable_reason or "No capability reason was reported.",
                 )
                 engine_name = substitute
-        if await engine_registry.get_engine(engine_name) is None:
-            reason = await engine_registry.unavailable_reason(engine_name)
-            fallback_reason = (
-                "Dry-run solves require WG2_ENABLE_DRYRUN=1."
-                if engine_name == "dryrun"
-                else "No capability reason was reported."
-            )
-            raise EngineUnavailableError(
-                f"Solve engine '{engine_name}' is unavailable. "
-                f"{reason or fallback_reason}"
-            )
     except EngineUnavailableError as exc:
         engine_name = request.options.engine
         plan["engine"] = engine_name
@@ -920,6 +899,11 @@ async def resolve_submission(
 
     _refuse_removed_solver(request)
     original_requested = request.options.engine
+    cpu_fallback = None
+    try:
+        request, cpu_fallback = await _accuracy_engine(request, engine_registry)
+    except EngineUnavailableError as exc:
+        refuse(exc)
     engine_name = request.options.engine
     if engine_name not in SELECTABLE_ENGINE_NAMES:
         raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
@@ -959,10 +943,8 @@ async def resolve_submission(
         ),
         "eligibility_reasons": [],
     }
-    request, engine_name, unavailable = await _resolve_parametric_engine(
-        request, engine_registry, resolved_quadrants,
-        symmetry_metadata["solver_plan"],
-    )
+    if cpu_fallback is not None:
+        symmetry_metadata["solver_plan"]["fallback_reason"] = cpu_fallback
     if request.options.accuracy == "accurate":
         if resolved_quadrants == 12:
             refuse(SymmetryValidationError(
@@ -979,6 +961,13 @@ async def resolve_submission(
                 "Accurate via BEAT cannot solve a rigid ground plane in this adapter. "
                 "Turn off the ground plane, or choose Fast and a compatible engine."
             ))
+
+    request, engine_name, unavailable = await _resolve_parametric_engine(
+        request, engine_registry, resolved_quadrants,
+        symmetry_metadata["solver_plan"],
+    )
+    if unavailable is not None:
+        refuse(unavailable)
 
     if (
         _ground_plane_axis(request) is not None
@@ -1070,6 +1059,17 @@ async def resolve_submission(
         symmetry_metadata["solver_plan"]["symmetry_reason"] = (
             "BEMPP coupled infinite-baffle uses the validated full-domain formulation"
         )
+    if await engine_registry.get_engine(engine_name) is None:
+        reason = await engine_registry.unavailable_reason(engine_name)
+        fallback_reason = (
+            "Dry-run solves require WG2_ENABLE_DRYRUN=1."
+            if engine_name == "dryrun"
+            else "No capability reason was reported."
+        )
+        refuse(EngineUnavailableError(
+            f"Solve engine '{engine_name}' is unavailable. "
+            f"{reason or fallback_reason}"
+        ))
     wall_adjustment = None
     try:
         request, wall_adjustment = _apply_bempp_wall_default(request, engine_name)
@@ -1079,9 +1079,6 @@ async def resolve_submission(
         symmetry_metadata["solver_plan"].setdefault("adjustments", []).append(
             wall_adjustment
         )
-    # Availability is the final admission check, after geometry and contracts.
-    if unavailable is not None:
-        refuse(unavailable)
     if refusal is not None:
         symmetry_metadata["solver_plan"]["refusal"] = refusal
     return SubmissionResolution(

@@ -12,13 +12,14 @@ import type { components } from './generated/openapi';
 export type SolverMeshStats = components['schemas']['SolverMeshStats'];
 export type SolverMeshResult = components['schemas']['SolverMeshResponse'];
 
-/** The resolver's engine/domain/geometry inputs, independent of sampling validation. */
+/** Preview request inputs, including validation applied to the cached artifact. */
 export function solverMeshOptions(state: SolveOptionsStore) {
   return {
     engine: state.engine,
     accuracy: state.accuracy,
     solver_mode: state.solverMode,
     symmetry: state.symmetry,
+    mesh_validation_mode: state.meshValidationMode,
     ...(state.groundPlane.enabled ? { ground_plane: state.groundPlane } : {}),
   };
 }

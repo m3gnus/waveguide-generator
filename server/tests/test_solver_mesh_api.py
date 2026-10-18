@@ -419,27 +419,112 @@ def test_geometry_refusals_still_preview_mesh_and_reason(monkeypatch, design_ext
 
 
 @pytest.mark.parametrize("path", ["/api/solve", "/api/solve/plan"])
-def test_geometry_refusal_precedes_engine_unavailability(tmp_path, path):
+@pytest.mark.parametrize(
+    ("options", "status", "message"),
+    [
+        (
+            {"engine": "auto", "ground_plane": {"enabled": True}},
+            503,
+            "AUTO could not resolve a compatible solve engine that supports a rigid "
+            "ground-plane mounting from this host's capabilities. Install/enable Metal, "
+            "BEAT, or BEMPP. Explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
+            "synthetic development solves.",
+        ),
+        (
+            {"engine": "bempp", "ground_plane": {"enabled": True}},
+            503,
+            "Solve engine 'bempp' is unavailable, and no other engine on this host that "
+            "supports a rigid ground-plane mounting can take its place. No capability "
+            "reason was reported. Install/enable Metal, BEAT, or BEMPP. Explicitly enable "
+            "dry-run with WG2_ENABLE_DRYRUN=1 for synthetic development solves.",
+        ),
+        (
+            {"engine": "auto", "accuracy": "accurate", "ground_plane": {"enabled": True}},
+            503,
+            "Accurate requires a ready BEAT GPU or BEAT CPU backend. "
+            "Enable BEAT, or choose Fast.",
+        ),
+        (
+            {"engine": "auto", "accuracy": "accurate", "symmetry": "half_xz"},
+            503,
+            "Accurate requires a ready BEAT GPU or BEAT CPU backend. "
+            "Enable BEAT, or choose Fast.",
+        ),
+        (
+            {"engine": "auto", "accuracy": "accurate", "symmetry": "quarter",
+             "ground_plane": {"enabled": True}},
+            503,
+            "Accurate requires a ready BEAT GPU or BEAT CPU backend. "
+            "Enable BEAT, or choose Fast.",
+        ),
+        (
+            {"engine": "beat-metal", "accuracy": "accurate", "ground_plane": {"enabled": True}},
+            422,
+            "Accurate via BEAT cannot solve a rigid ground plane in this adapter. "
+            "Turn off the ground plane, or choose Fast and a compatible engine.",
+        ),
+        (
+            {"engine": "beat-metal", "accuracy": "accurate", "symmetry": "half_xz"},
+            422,
+            "Accurate via BEAT cannot solve an xz-only half domain. "
+            "Use a full or yz-half/quarter domain, or choose Fast.",
+        ),
+        (
+            {"engine": "dryrun"},
+            503,
+            "Solve engine 'dryrun' is unavailable. Dry-run solves require WG2_ENABLE_DRYRUN=1.",
+        ),
+    ],
+)
+def test_refusal_order_matches_dev(tmp_path, path, options, status, message):
     from server.jobs.api import create_jobs_router
     from server.jobs.runtime.core import JobRuntime
     from server.jobs.store import JobStore
 
-    runtime = JobRuntime(
-        JobStore(tmp_path / "jobs.sqlite"),
-        engine_registry=EngineRegistry(detector=lambda: []),
-    )
+    registry = EngineRegistry(detector=lambda: [])
+    runtime = JobRuntime(JobStore(tmp_path / "jobs.sqlite"), engine_registry=registry)
     app = FastAPI()
     app.include_router(create_jobs_router(runtime))
+    request = SolveRequest.model_validate({"design": _rosse(), "options": options})
     with TestClient(app) as client:
-        response = client.post(path, json={
-            "design": _rosse().model_dump(mode="json"),
-            "options": {"engine": "beat-metal", "accuracy": "accurate", "ground_plane": {"enabled": True}},
-        })
-    assert response.status_code == 422
-    assert "Accurate via BEAT cannot solve a rigid ground plane" in response.json()["detail"]
+        response = client.post(path, json=request.model_dump(mode="json"))
+    assert response.status_code == status
+    assert response.json()["detail"] == message
+    preview = asyncio.run(resolve_submission(request, registry, preview=True))
+    assert preview.symmetry_metadata["solver_plan"]["refusal"] == message
 
 
-def test_bare_native_bempp_refusal_still_previews_geometry(monkeypatch):
+def test_validation_mode_rechecks_cached_mesh_without_rebuilding(monkeypatch):
+    calls = []
+    worker = _stub_worker(calls)
+
+    async def invalid_worker(*args, **kwargs):
+        result = await worker(*args, **kwargs)
+        result["integrity"]["valid"] = False
+        return result
+
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", invalid_worker)
+    clear_solver_mesh_cache()
+
+    async def scenario():
+        warned = await _preview_response(_rosse(), "auto", options=SolveOptions(mesh_validation_mode="warn"))
+        with pytest.raises(HTTPException) as refused:
+            await _preview_response(_rosse(), "auto", options=SolveOptions(mesh_validation_mode="strict"))
+        assert refused.value.status_code == 422
+        assert refused.value.detail == "Solver mesh failed strict topology integrity validation"
+        repeated = await _preview_response(_rosse(), "auto", options=SolveOptions(mesh_validation_mode="warn"))
+        assert repeated["stats"]["mesh_cache_hit"] is True
+        assert repeated["stats"]["mesh_cache_key"] == warned["stats"]["mesh_cache_key"]
+        assert calls == [1]
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        clear_solver_mesh_cache()
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_bare_native_bempp_refusal_still_previews_geometry(monkeypatch, available):
     from server.tests.test_native_formulas import design_payload
 
     design = DesignConfig.model_validate(design_payload("OSSE-AXIAL"))
@@ -448,9 +533,13 @@ def test_bare_native_bempp_refusal_still_previews_geometry(monkeypatch):
     try:
         preview = asyncio.run(solver_mesh_response(
             design, None, options=SolveOptions(engine="bempp"),
-            engine_registry=EngineRegistry(detector=lambda: []),
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", available, "test", "test")],
+                factory=lambda name: object(),
+            ),
         ))
         assert preview["msh_text"] == STUB_MSH
-        assert "BEMPP requires a closed body" in preview["plan"]["refusal"]
+        reason = "BEMPP requires a closed body" if available else "Solve engine 'bempp' is unavailable"
+        assert reason in preview["plan"]["refusal"]
     finally:
         clear_solver_mesh_cache()
