@@ -129,7 +129,10 @@ The user-facing release carries the three installers, `SHA256SUMS` and
 runtime ZIPs remain attested build artifacts but are not published. Every
 published payload is verified the same way (SHA256SUMS and its signature use
 Ed25519 verification, and the SPA sidecar is checked against its payload), with `rc-build.yml` as the signer workflow and the release commit — the
-commit the annotated tag points at — as the source digest:
+commit the annotated tag points at — as the source digest. Releases published
+before build-once promotion (v0.3.5 and earlier) were built and attested by
+`release.yml`; verify those with `.github/workflows/release.yml` as the signer
+workflow instead:
 
 ```bash
 TAG=vVERSION
