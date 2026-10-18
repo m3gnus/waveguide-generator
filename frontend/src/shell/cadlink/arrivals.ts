@@ -17,6 +17,7 @@ import { preferencesStore } from '../../prefs/preferences';
 import { useDocumentStore } from '../../stores/document';
 import { useCadReturnStore } from '../../stores/cadReturn';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
+import { resolvePreparationTarget } from './preparationTarget';
 
 export interface RefreshOptions {
   background?: boolean;
@@ -267,7 +268,6 @@ export interface CadArrivalActionsIntegration {
   enterCadWorkspace(): void;
   autoIngestSelected(): void;
   rereadDrivers(): void;
-  fusionInstanceId(): string | null;
   onshapeInstanceId(): string | null;
   showIngestedMesh: typeof showIngestedMeshInViewport;
 }
@@ -286,7 +286,7 @@ export function createCadArrivalActions(
     setIngesting: noop, setIngestError: noop, setError: noop, setStatus: noop,
     setViewportNotice: noop, setBundles: noop, reportViewportNotice: noop,
     enterCadWorkspace, autoIngestSelected: noop, rereadDrivers: noop,
-    fusionInstanceId: () => null, onshapeInstanceId: () => null,
+    onshapeInstanceId: () => null,
     showIngestedMesh: showIngestedMeshInViewport,
   };
   const adapter = { ...defaults, ...integration };
@@ -294,7 +294,7 @@ export function createCadArrivalActions(
     refusedForeignReturn, setIngesting, setIngestError, setError, setStatus,
     setViewportNotice, setBundles, reportViewportNotice, enterCadWorkspace: activateWorkspace,
     autoIngestSelected, rereadDrivers,
-    fusionInstanceId, onshapeInstanceId, showIngestedMesh } = adapter;
+    onshapeInstanceId, showIngestedMesh } = adapter;
   const ingestSelected = async (): Promise<CadReturnIngestRecord> => {
     if (useCadReturnStore.getState().projectLineageId && !await waitForCadProjectSettings()) throw new Error('Model settings could not be loaded. Select the return again.');
     const current = useCadReturnStore.getState();
@@ -328,18 +328,7 @@ export function createCadArrivalActions(
         skippedSourceIds: current.skippedSourceIds,
         areaDriftOverrides: current.areaDriftOverrides,
         expectedDesignId: useDocumentStore.getState().identity?.designId ?? null,
-        expectedInstanceId: (() => {
-          const bundle = current.selectedBundle;
-          const instances = bundle.instances ?? [];
-          const liveInstanceId = fusionInstanceId() ?? null;
-          if (liveInstanceId && instances.some((item) => item.instanceId === liveInstanceId)) {
-            return liveInstanceId;
-          }
-          const anchor = bundle.solverAnchorInstanceId ?? null;
-          return anchor && instances.some((item) => item.instanceId === anchor)
-            ? anchor
-            : null;
-        })(),
+        expectedInstanceId: resolvePreparationTarget(current.selectedBundle),
         symmetryMode: useCadPreparationStore.getState().symmetryMode,
       }, fetcher, abortController.signal);
       if (!isCurrentDocumentLoad(documentLoad)

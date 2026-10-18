@@ -266,6 +266,49 @@ it('legacy folder discovery selects and prepares a new arrival once without a re
   expect(calls('/api/cadlink/ingest')).toHaveLength(1);
 });
 
+it.each(['manual', 'watch-folder', 'receipt'] as const)(
+  'prepares the solver anchor through %s when another Fusion instance is live', async (path) => {
+    const anchor = 'instance-anchor';
+    const live = status().link!.instanceId;
+    const returned = { ...bundle, solverAnchorInstanceId: anchor, instanceCount: 2,
+      designIds: [identity.designId], instances: [anchor, live].map((instanceId) => ({
+        instanceId, designId: identity.designId, occurrencePath: null, bodyObjectIds: [],
+        bodyFingerprintHash: null, transformHash: null, sourceIds: [], driveChannelIds: [],
+      })) };
+    const base = fetcher.getMockImplementation()!;
+    fetcher.mockImplementation((input, init) => {
+      if (String(input).endsWith('/fusion-status')) return Promise.resolve(json(status({ addinInboxTransfer: path !== 'watch-folder' })));
+      if (String(input).endsWith('/ingest')) {
+        const request = JSON.parse(String(init?.body));
+        return Promise.resolve(request.expectedInstanceId === anchor ? json(record)
+          : json({ detail: `selected instance is not the return's solver anchor ${anchor}` }, 409));
+      }
+      return base(input, init);
+    });
+    stop = mountCadWorkspaceOwners(); await flush();
+    const connectionState = useCadConnectionStore.getState;
+    // Hold the live observation through selection's advisory invalidations.
+    vi.spyOn(useCadConnectionStore, 'getState').mockImplementation(() => ({ ...connectionState(),
+      fusionStatus: status({ addinInboxTransfer: path !== 'watch-folder' }) }));
+    expect(useCadConnectionStore.getState().fusionStatus?.link?.instanceId).toBe(live);
+    returns = [returned];
+    if (path === 'manual') cadWorkspace.getSnapshot().selectBundle(returned);
+    else if (path === 'watch-folder') await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true });
+    else {
+      receipts = [sendReceipt()];
+      channels.forEach((channel) => channel.resync());
+    }
+    await flush();
+    const ingests = calls('/api/cadlink/ingest');
+    expect(ingests.length).toBeGreaterThan(0);
+    expect(ingests.map(([, init]) => JSON.parse(String(init?.body)).expectedInstanceId))
+      .toEqual(ingests.map(() => anchor));
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+    if (path === 'receipt') expect(cadReceiptsStore.getState().feedback['receipt-1'].outcome).toBe('accepted');
+  },
+);
+
 const sendReceipt = (): CadReceipt => ({ receipt_id: 'receipt-1', send_id: 'send-1', send_sequence: 1,
   project_id: null, design_ids: [], ingest_id: null, outcome: 'accepted', reason: null, message: null,
   created_at: new Date().toISOString(), sent_at: new Date().toISOString(), cursor: 1,

@@ -115,7 +115,7 @@ export function mountCadWorkspaceOwners(): () => void {
   };
   const actions = createCadArrivalActions({
     mounted, ingestRequest, ingestAbortController, manualSelectionAt, refusedForeignReturn,
-    autoIngestSelected, enterCadWorkspace, rereadDrivers, fusionInstanceId: () => useCadConnectionStore.getState().fusionStatus?.link?.instanceId ?? null,
+    autoIngestSelected, enterCadWorkspace, rereadDrivers,
     onshapeInstanceId: () => onshapeInstance,
     setIngesting: (ingesting) => publish({ ingesting }), setIngestError: (ingestError) => publish({ ingestError }),
     setError: reportError, setStatus: reportStatus, setViewportNotice: reportViewportNotice,

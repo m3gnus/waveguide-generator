@@ -8,6 +8,7 @@ import { useDocumentStore } from '../../stores/document';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { returnBelongsToAnotherProject } from './arrivals';
 import type { SolvedModelDisplay } from './solvedModel';
+import { resolvePreparationTarget } from './preparationTarget';
 
 /** The existing artifact display path is supplied by the shell's display owner.
  * This action owns no parametric-document writes and never submits a solve.
@@ -137,7 +138,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
           sourceSizeMm: Object.fromEntries(Object.entries(selected.sourceSizesMm).filter(([id]) => !skipped.has(id))) },
         skippedSourceIds: selected.skippedSourceIds, areaDriftOverrides: selected.areaDriftOverrides,
         expectedDesignId: document.identity?.designId ?? null,
-        expectedInstanceId: bundle.solverAnchorInstanceId ?? null,
+        expectedInstanceId: resolvePreparationTarget(bundle),
         symmetryMode: useCadPreparationStore.getState().symmetryMode,
       }, transport);
       if (!current()) return superseded();
