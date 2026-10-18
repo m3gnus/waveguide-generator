@@ -3053,13 +3053,17 @@ class CadLinkStore:
         return cursor.rowcount > 0
 
     def close(self) -> None:
-        with self._connections_lock:
-            connections = tuple(self._connections)
-            self._connections.clear()
-        for conn in connections:
-            conn.close()
-        self._local = threading.local()
-        self._initialized = False
+        # Every statement runs under self._lock on its own thread's connection;
+        # closing one mid-statement from another thread crashes the process, so
+        # wait for the statement in flight before closing them all.
+        with self._lock:
+            with self._connections_lock:
+                connections = tuple(self._connections)
+                self._connections.clear()
+            for conn in connections:
+                conn.close()
+            self._local = threading.local()
+            self._initialized = False
 
     def _connect(self) -> sqlite3.Connection:
         existing = getattr(self._local, "conn", None)
