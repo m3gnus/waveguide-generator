@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SlvsModule } from 'slvs';
 import { GcsWrapper } from '@salusoft89/planegcs';
-import * as acs from 'acs-solver';
 import { createSolver, solverNames } from './types';
 import { branchCases, constraintCase, contourChainConstrained, diagnosticCases, residual } from './corpus';
 
@@ -11,17 +10,12 @@ vi.mock('slvs', async importOriginal => {
   const actual = await importOriginal<typeof import('slvs')>();
   return { ...actual, default: async () => { capture.slvs = await actual.default(); return capture.slvs; } };
 });
-vi.mock('acs-solver', async importOriginal => {
-  const actual = await importOriginal<typeof import('acs-solver')>();
-  return { ...actual, acsSolveSketch: vi.fn(actual.acsSolveSketch) };
-});
 
 for (const name of solverNames) describe(`${name} drag session`, () => {
   it('updates goals without rebuilding; release removes goals and diagnoses', async () => {
     const s = await createSolver(name);
     const push = vi.spyOn(GcsWrapper.prototype, 'push_primitives_and_params');
     const clear = capture.slvs && vi.spyOn(capture.slvs, 'clearSketch');
-    const nativeAcs = vi.mocked(acs.acsSolveSketch); nativeAcs.mockClear();
     try {
       s.load(diagnosticCases[0].sketch); s.beginDrag(['a', 'b']);
       const pushCount = push.mock.calls.length, clearCount = clear?.mock.calls.length;
@@ -33,19 +27,8 @@ for (const name of solverNames) describe(`${name} drag session`, () => {
         expect(r.points.a.y).toBeCloseTo(1, 5); expect(r.points.b.y).toBeCloseTo(2, 5);
       }
       expect(push.mock.calls.length).toBe(pushCount); expect(clear?.mock.calls.length).toBe(clearCount);
-      if (name === 'acs') {
-        const requests = nativeAcs.mock.calls.map(([json]) => JSON.parse(json));
-        expect(requests).toHaveLength(3);
-        expect(requests.every(r => r.analyze === false)).toBe(true);
-        expect(requests[1].primitives.find((p: { id: string }) => p.id === 'e0').x).toBeCloseTo(1, 5);
-        expect(requests[2].primitives.find((p: { id: string }) => p.id === 'e1').x).toBeCloseTo(15, 5);
-      }
       const final = s.endDrag(); expect(final.status).toBe('ok'); expect(final.dof).toBe(4);
       expect(final.conflicting).toEqual([]);
-      if (name === 'acs') {
-        const request = JSON.parse(nativeAcs.mock.calls.at(-1)![0]);
-        expect(request.analyze).toBe(true); expect(request.primitives.some((p: { temporary?: boolean }) => p.temporary)).toBe(false);
-      }
     } finally { s.destroy(); push.mockRestore(); clear?.mockRestore(); }
   });
   it('constrained arc drags preserve equations and release DOF', async () => {
@@ -88,18 +71,6 @@ it('slvs restores sessions after another instance uses or destroys its global sk
     expect(a.dragTo([{ pointId: 'b', x: 30, y: 5 }]).points.b.y).toBeCloseTo(5);
     expect(a.endDrag().dof).toBe(4);
   } finally { a.destroy(); b.destroy(); }
-});
-
-it('ACS honors top-level analysis and iteration options', async () => {
-  const initialized = await createSolver('acs'); initialized.destroy();
-  const primitives = [{ type: 'point', id: 'a', x: 0, y: 0, fixed: true },
-    { type: 'point', id: 'b', x: 10, y: 2 }, { type: 'distance', id: 'd', a: 'a', b: 'b', value: 7 }];
-  const solve = (options: object) => JSON.parse(acs.acsSolveSketch(JSON.stringify({ version: 1, primitives, ...options })));
-  expect(solve({ analyze: false }).dof).toBeUndefined(); expect(solve({ analyze: true }).dof).toBe(1);
-  const limited = solve({ analyze: false, maxIterations: 1 });
-  expect(limited.status).toBe('failed'); expect(limited.stats.iterations).toBe(1);
-  const nested = solve({ options: { analyze: false, maxIterations: 1 } });
-  expect(nested.status).toBe('converged'); expect(nested.dof).toBe(1); expect(nested.stats.iterations).toBeGreaterThan(1);
 });
 
 it('slvs preserves the loaded unsigned-distance side through cursor fallback and rebuilds', async () => {

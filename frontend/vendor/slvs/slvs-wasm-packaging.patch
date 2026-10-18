@@ -1,0 +1,17 @@
+diff --git a/src/slvs/CMakeLists.txt b/src/slvs/CMakeLists.txt
+index d931f8fa..203e30eb 100644
+--- a/src/slvs/CMakeLists.txt
++++ b/src/slvs/CMakeLists.txt
+@@ -50,9 +50,9 @@ if(EMSCRIPTEN)
+     target_link_options(slvs-wasm PRIVATE
+         "SHELL:-s MODULARIZE=1"
+         "SHELL:-s EXPORT_NAME=solvespace"
+-        "SHELL:-s SINGLE_FILE=1"
+-        "SHELL:-s INITIAL_MEMORY=512MB"
+-        "SHELL:-s ALLOW_MEMORY_GROWTH"
++        "SHELL:-s EXPORT_ES6=1"
++        "SHELL:-s INITIAL_MEMORY=16MB"
++        "SHELL:-s ALLOW_MEMORY_GROWTH=1"
+         -O3
+         -flto
+         --closure 1)

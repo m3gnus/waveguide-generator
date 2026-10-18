@@ -1,7 +1,14 @@
 # Sketch solver contract and Phase 0 harness
 
-Audience: sketcher implementers and bake-off reviewers. Status: experimental adapters;
-no solver selection or packaged-webview qualification has been made.
+Audience: sketcher implementers and reviewers.
+
+**Decision (2026-10-18):** the sketcher uses SolveSpace libslvs 3.2 from our own WASM build,
+vendored in `frontend/vendor/slvs/` (see its `BUILD.md`). The planegcs adapter stays as the
+second implementation of this contract. ACS was evaluated and removed. The drag gate is a
+median frame under 8 ms and p99 under 33 ms at 24 segments, with rendering included.
+Long sessions must recycle the slvs module instance, because libslvs leaks memory on each
+`clearSketch` rebuild. The Phase 0 bake-off evidence is kept outside the repository.
+ACS rows and columns below are historical Phase 0 measurements; the adapter no longer exists.
 
 `types.ts` exposes lazy `createSolver(name)`, `load`, `solve`, `beginDrag`, `dragTo`,
 `endDrag`, `capabilities`, and `destroy`. Lengths are mm; angles are signed radians
@@ -61,7 +68,7 @@ interior positions and split timings. The opt-in investigation remains skipped.
 
 The opt-in Vite input (`SKETCH_BENCH=1`) includes `sketch-bench.html`. Through the normal
 frontend host, click **Run bench** or use `?autorun=1`. Optional filters:
-`solver=planegcs|slvs|acs`, `n=8|16|24|32|60|256`,
+`solver=planegcs|slvs`, `n=8|16|24|32|60|256`,
 `variant=underconstrained|constrained`. No browser run was performed in round 3.
 Read `window.__sketchBench` or **Download JSON** for full results.
 
@@ -206,7 +213,7 @@ Pinned package licenses (versions unchanged):
 - `@salusoft89/planegcs` 1.3.0: LGPL-2.0-or-later metadata, LGPL-2.1-or-later wrapper
   headers. [Source](https://github.com/Salusoft89/planegcs); upstream `npm run build:all`
   uses Docker/C++/Emscripten. AOT Node loading needs a filesystem `locateFile` path.
-- `slvs` 3.2.0: GPL-3.0-or-later.
-  [Source](https://github.com/solvespace/solvespace); installed artifact has inline WASM.
-- `acs-solver` 0.1.17: MIT. [Source](https://github.com/angelobartolome/acs);
-  upstream `wasm-pack build --target web --out-dir pkg` / release artifact.
+- `slvs` 3.2.0-hornlab.1 (vendored): GPL-3.0-or-later, licence text in
+  `vendor/slvs/COPYING.txt`. [Source](https://github.com/solvespace/solvespace) at
+  v3.2, commit 27b6a080. Our build has a separate `.wasm` and a 16 MiB initial heap, and
+  is stripped. The solver source is unchanged.

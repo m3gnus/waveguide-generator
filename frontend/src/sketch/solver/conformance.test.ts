@@ -48,9 +48,7 @@ for (const name of solverNames) {
       });
     }
     for (const variant of ['negative', 'reversed', 'negative-reversed', 'mirrored', 'negative-mirrored']) {
-      // ACS 0.1.17 accepts a supplementary signed angle from these mirrored seeds.
-      const test = name === 'acs' && variant.includes('mirrored') ? it.fails : it;
-      test(`signed angle ${variant}`, () => {
+      it(`signed angle ${variant}`, () => {
         const sketch = constraintCase('angle', variant);
         return withSolver(sketch, s => {
           const r = s.solve({ mode: 'full' });

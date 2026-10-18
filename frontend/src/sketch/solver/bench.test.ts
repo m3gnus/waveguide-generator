@@ -22,9 +22,9 @@ function workerFactory(complete: boolean, progress = false) {
 it('filters solver and size, retaining both variants unless explicitly filtered', async () => {
   vi.stubGlobal('navigator', { userAgent: 'unit-test' });
   const { factory, workers } = workerFactory(true);
-  const state = await runBench(() => {}, factory, { solver: 'acs', n: 60 });
+  const state = await runBench(() => {}, factory, { solver: 'planegcs', n: 60 });
   expect(state.done).toBe(true); expect(state.results.map(r => [r.solver, r.n, r.variant])).toEqual([
-    ['acs', 60, 'underconstrained'], ['acs', 60, 'constrained'],
+    ['planegcs', 60, 'underconstrained'], ['planegcs', 60, 'constrained'],
   ]);
   expect(workers.every(w => w.terminate.mock.calls.length === 1)).toBe(true);
   const single = await runBench(() => {}, factory, { solver: 'slvs', n: 8, variant: 'constrained' });
@@ -41,10 +41,10 @@ it('terminates each stuck worker at 120 seconds and starts no more after 900 sec
   await vi.advanceTimersByTimeAsync(RUN_BUDGET_MS - ROW_BUDGET_MS + 300);
   const state = await running;
   expect(workers).toHaveLength(8); expect(workers.every(w => w.terminate.mock.calls.length === 1)).toBe(true);
-  expect(state.results).toHaveLength(36); expect(state.results.every(r => r.status === 'timeout')).toBe(true);
+  expect(state.results).toHaveLength(24); expect(state.results.every(r => r.status === 'timeout')).toBe(true);
   expect(state.results[0].frames).toBe(1); expect(state.results[0].frameSamples).toHaveLength(0);
   expect(state.results[0].totalMs?.p50).toBe(32); expect(state.results.every(r => r.distribution === 'partial')).toBe(true);
-  expect(state.results.filter(r => r.reason?.includes('before this row'))).toHaveLength(28); expect(state.done).toBe(true);
+  expect(state.results.filter(r => r.reason?.includes('before this row'))).toHaveLength(16); expect(state.done).toBe(true);
   expect(renders.every((t, i) => i === 0 || t - renders[i - 1] >= 250)).toBe(true);
 });
 it('keeps telemetry storage bounded and plans complete drags for each size', () => {

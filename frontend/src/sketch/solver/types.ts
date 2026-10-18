@@ -44,7 +44,7 @@ export interface Capabilities {
   diagnostics: Record<'dof' | 'conflicting' | 'redundant' | 'partiallyRedundant', Capability>;
   drag: string; referenceDimensions: string;
 }
-export const solverNames = ['planegcs', 'slvs', 'acs'] as const;
+export const solverNames = ['planegcs', 'slvs'] as const;
 export type SolverName = typeof solverNames[number];
 export interface SketchSolver {
   load(sketch: Sketch): void;
@@ -65,7 +65,6 @@ export async function createSolver(name: SolverName): Promise<SketchSolver> {
   switch (name) {
     case 'planegcs': return (await import('./planegcs')).create();
     case 'slvs': return (await import('./slvs')).create();
-    case 'acs': return (await import('./acs')).create();
   }
 }
 export class Unsupported extends Error { override name = 'Unsupported' }
