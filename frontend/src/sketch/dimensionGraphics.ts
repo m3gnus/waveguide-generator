@@ -10,7 +10,7 @@ export function dimensionName(c: Constraint): string {
 }
 export function dimensionLabel(c: Constraint & { value: number; driving: boolean }, mode: 'value' | 'name' = 'value') {
   const value = (c.kind === 'angle' ? c.value * 180 / Math.PI : c.value).toFixed(2);
-  return `${c.driving ? '' : '('}${mode === 'name' ? `${dimensionName(c)} ` : ''}${c.kind === 'radius' ? 'R ' : ''}${value}${c.kind === 'angle' ? '°' : ' mm'}${c.driving ? '' : ')'}`;
+  return `${c.driving ? '' : '('}${mode === 'name' || c.label === 'r' || c.label === 'z' ? `${dimensionName(c)} ` : ''}${c.kind === 'radius' ? 'R ' : ''}${value}${c.kind === 'angle' ? '°' : ' mm'}${c.driving ? '' : ')'}`;
 }
 export interface LabelBox { x: number; y: number; width: number; height: number }
 export interface DimensionLayout {

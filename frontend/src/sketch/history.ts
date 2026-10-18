@@ -22,10 +22,12 @@ export class History<T = Sketch> {
     if (!this.transaction) throw new Error('begin() must precede an update.');
     this.current = snapshot;
   }
-  commit() {
+  /** mergePrevious amends the latest undo step; cancellation still restores this edit's start. */
+  commit(mergePrevious = false) {
     if (!this.transaction) throw new Error('No active transaction.');
     if (this.current !== this.transaction.snapshot) {
-      this.past = [...this.past.slice(-99), this.transaction]; this.future = [];
+      if (!mergePrevious || !this.past.length) this.past = [...this.past.slice(-99), this.transaction];
+      this.future = [];
     }
     this.transaction = undefined; return this.current;
   }

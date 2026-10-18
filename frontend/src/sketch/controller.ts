@@ -21,6 +21,7 @@ export class SketchController<T> {
   private dragging = false;
   private dragStart?: Authoring<T>;
   private pending = 0;
+  private placedDimension?: { id: string; state: Authoring<T> };
   private busy = false;
   constructor(initial: Authoring<T>, private references: Reference[] | ((state: Authoring<T>) => Reference[]), private apply: Apply<T>, private changed: (state: Authoring<T>, diagnosis?: Diagnosis) => void, failed?: (reason: unknown) => void, private activity?: (busy: boolean) => void, private preview?: (state: Authoring<T>, diagnosis?: Diagnosis) => void, private dimensionProblem?: (state: Authoring<T>, id: string, value: number) => string | undefined) {
     this.history = new History(initial);
@@ -54,11 +55,11 @@ export class SketchController<T> {
     return { ...state, sketch: session.sketch };
   }
   private publish(state: Authoring<T>) { if (!this.destroyed) this.changed(state, this.diagnosis); }
-  private async transaction(session: SketchSession, label: string, edit: () => Promise<Authoring<T>>) {
+  private async transaction(session: SketchSession, label: string, edit: () => Promise<Authoring<T>>, mergePrevious = false) {
     const diagnosis = this.diagnosis; this.notice = undefined;
     this.history.begin(label);
     try {
-      const next = await edit(); this.history.update(next); this.history.commit(); this.publish(next); return next.sketch;
+      const next = await edit(); this.history.update(next); this.history.commit(mergePrevious); this.publish(next); return next.sketch;
     } catch (e) { session.sketch = this.history.cancel().sketch; this.diagnosis = diagnosis; throw e; }
   }
   /** A function is resolved against the state the queued command actually runs on, so fields
@@ -121,25 +122,38 @@ export class SketchController<T> {
       return state;
     }));
   }
-  constraint(constraint: NewConstraint, reference = false) {
-    return this.queue(session => this.transaction(session, 'Constraint', async () => {
-      const result = await session.tryAddConstraint(this.current.sketch, constraint, { ifRedundant: reference ? 'reference' : 'refuse' });
-      if (!result.ok) {
-        const error = new Error(`Conflicts with ${result.conflicting.join(', ') || result.redundant.join(', ') || 'the sketch'}: ${result.reason}`);
-        Object.assign(error, { conflicting: result.conflicting }); throw error;
-      }
-      this.diagnosis = result.diagnosis; return { ...this.current, sketch: result.sketch };
-    }));
+  /** A placed dimension can merge its first submitted value into the add's undo step. */
+  constraint(constraint: NewConstraint, reference = false, placement = false) {
+    return this.queue(async session => {
+      const before = this.current;
+      const sketch = await this.transaction(session, 'Constraint', async () => {
+        const result = await session.tryAddConstraint(this.current.sketch, constraint, { ifRedundant: reference ? 'reference' : 'refuse' });
+        if (!result.ok) {
+          const error = new Error(`Conflicts with ${result.conflicting.join(', ') || result.redundant.join(', ') || 'the sketch'}: ${result.reason}`);
+          Object.assign(error, { conflicting: result.conflicting, overconstrained: result.conflicting.length > 0 || result.redundant.length > 0 || /redundan|conflict|inconsisten|over.?constrain/i.test(result.reason) }); throw error;
+        }
+        this.diagnosis = result.diagnosis; return { ...this.current, sketch: result.sketch };
+      });
+      const added = sketch.constraints.find(c => !before.sketch.constraints.some(old => old.id === c.id));
+      this.placedDimension = placement && added ? { id: added.id, state: this.current } : undefined;
+      return sketch;
+    });
   }
-  dimension(id: string, value: number) {
-    return this.queue(session => this.transaction(session, 'Dimension', async () => {
-      const problem = this.dimensionProblem?.(this.current, id, value);
-      if (problem) throw new Error(problem);
-      session.sketch = this.current.sketch;
-      const result = await session.setDimensionContinuation(id, value);
-      if (!result.ok) throw new Error(result.reason);
-      return this.diagnose(session, { ...this.current, sketch: result.sketch });
-    }));
+  dimension(id: string, value: number, mergePlacement = false) {
+    return this.queue(async session => {
+      // Identity also prevents merging across any intervening authoring edit.
+      const merge = mergePlacement && this.placedDimension?.id === id && this.placedDimension.state === this.current;
+      const sketch = await this.transaction(session, 'Dimension', async () => {
+        const problem = this.dimensionProblem?.(this.current, id, value);
+        if (problem) throw new Error(problem);
+        session.sketch = this.current.sketch;
+        const result = await session.setDimensionContinuation(id, value);
+        if (!result.ok) throw new Error(result.reason);
+        return this.diagnose(session, { ...this.current, sketch: result.sketch });
+      }, merge);
+      this.placedDimension = undefined;
+      return sketch;
+    });
   }
   adopt(state: Authoring<T>) {
     return this.queue(session => this.transaction(session, 'Load contour', async () => {

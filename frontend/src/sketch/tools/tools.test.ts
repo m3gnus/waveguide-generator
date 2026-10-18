@@ -4,7 +4,7 @@ import { emptySketch } from '../model';
 import { applyCommand, importedSketch } from '../ops';
 import { cancelLine, continueLine, lineState, placeLine, typedTarget } from './line';
 import { coalesceTargets, select } from './select';
-import { dimensionFor } from './dimension';
+import { candidateDimension, dimensionPicks } from './dimension';
 import { constraintFor } from './constraints';
 
 describe('pure sketch tools', () => {
@@ -58,13 +58,14 @@ describe('pure sketch tools', () => {
     const s = importedSketch([{ id: 'p', x: 0, y: 0 }, { id: 'q', x: 4, y: 0 }, { id: 'r', x: 4, y: 3 }], [
       { id: 'l', kind: 'line', p1: 'p', p2: 'q' }, { id: 'm', kind: 'line', p1: 'q', p2: 'r' }, { id: 'a', kind: 'arc', center: 'p', start: 'q', end: 'r', ccw: true },
     ]);
+    const dimensionFor = (sketch: typeof s, ids: string[], cursor = { x: -3, y: 4 }) => candidateDimension(dimensionPicks(sketch, ids), cursor);
     expect(dimensionFor(s, ['l'])).toMatchObject({ kind: 'distance', value: 4 });
     expect(dimensionFor(s, ['p', 'r'])).toMatchObject({ kind: 'distance', value: 5 });
-    expect(dimensionFor(s, ['p', 'r'], 'x')).toMatchObject({ kind: 'distanceX', value: 4 });
-    expect(dimensionFor(s, ['l'], 'y')).toMatchObject({ kind: 'distanceY', value: 0 });
+    expect(dimensionFor(s, ['p', 'r'], { x: 2, y: 5 })).toMatchObject({ kind: 'distanceX', value: 4 });
+    expect(dimensionFor(s, ['l'], { x: -2, y: 0 })).toMatchObject({ kind: 'distanceY', value: 0 });
     expect(dimensionFor(s, ['a'])).toMatchObject({ kind: 'radius', value: 4 });
     expect(dimensionFor(s, ['l', 'm'])).toMatchObject({ kind: 'angle', value: Math.PI / 2 });
-    expect(dimensionFor(s, ['l', 'r'])).toBeUndefined();
+    expect(dimensionFor(s, ['l', 'r'])).toMatchObject({ kind: 'pointLineDistance', value: 3 });
     expect(constraintFor(s, ['l', 'm'], 'tangent')).toBeUndefined();
     expect(constraintFor(s, ['l', 'a'], 'tangent')).toMatchObject({ kind: 'tangent' });
     expect(constraintFor(s, ['q', 'l'], 'point-on')).toMatchObject({ point: 'q', line: 'l' });

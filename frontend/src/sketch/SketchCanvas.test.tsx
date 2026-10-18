@@ -185,7 +185,7 @@ describe('SketchCanvas with real slvs', () => {
     await act(async () => root.render(<SketchCanvas sketch={s} diagnosis={{ ...diagnosis, constraintStates: { [s.constraints[0].id]: 'conflicting' } }} references={[]} problems={[]}/>));
     expect(host.querySelector('.sketch-entity.conflicting')).not.toBeNull();
   });
-  it('shows only selection-valid actions and keeps dimension controls contextual', async () => {
+  it('shows only selection-valid actions and keeps dimension hints contextual', async () => {
     await mount();
     expect(host.querySelector('[aria-label="Selection constraints"]')).toBeNull();
     expect(host.querySelector('[aria-label="Dimension measurement"]')).toBeNull();
@@ -199,11 +199,12 @@ describe('SketchCanvas with real slvs', () => {
     await pointer(coordinate('q').element, 'pointerdown', 0, 0, { shiftKey: true }); await pointer(svg(), 'pointerup');
     expect(labels()).toEqual(['Horizontal', 'Vertical', 'Coincident', 'Delete selection']);
     await act(async () => button('Dimension (D)').click());
-    expect(host.querySelector('[aria-label="Dimension measurement"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Dimension measurement"]')).toBeNull();
+    expect(host.textContent).toContain('move to choose; click to place; type the value');
     await key('Escape');
     expect(host.querySelector('[aria-label="Dimension measurement"]')).toBeNull();
   });
-  it('keeps the canvas offset and flow siblings unchanged when dimension options appear', async () => {
+  it('keeps the canvas offset and flow siblings unchanged when dimensioning starts', async () => {
     const style = document.createElement('style');
     style.textContent = new TextDecoder().decode(readFileSync('src/sketch/sketchCanvas.css'));
     document.head.append(style);
@@ -213,29 +214,35 @@ describe('SketchCanvas with real slvs', () => {
       const siblings = [...surface.parentElement!.children];
       const offset = svg().getBoundingClientRect().top;
       await act(async () => button('Dimension (D)').click());
-      const options = host.querySelector<HTMLElement>('.sketch-dimension-context')!;
-      expect(options.parentElement).toBe(surface);
-      expect(getComputedStyle(options).position).toBe('absolute');
+      expect(host.querySelector('.sketch-dimension-context')).toBeNull();
       expect([...surface.parentElement!.children]).toEqual(siblings);
       expect(svg().getBoundingClientRect().top).toBe(offset);
       expect(button('Apply dimension')).toBeUndefined();
       await key('Escape'); expect(svg().getBoundingClientRect().top).toBe(offset);
     } finally { style.remove(); }
   });
-  it('adds a measured dimension in one click, selects its focused value and keeps it on Esc', async () => {
+  it('previews then places a measured dimension, selects its focused value and keeps it on Esc', async () => {
     await mount(); await act(async () => button('Dimension (D)').click());
     await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown');
+    expect(host.querySelector('[aria-label="Dimension value"]')).toBeNull();
+    await pointer(svg(), 'pointermove', 320, 60);
+    expect(host.querySelector('.sketch-dimension-preview')).not.toBeNull();
+    await pointer(svg(), 'pointerdown', 320, 60);
     const input = host.querySelector<HTMLInputElement>('[aria-label="Dimension value"]')!;
     expect(input.value).toBe('10'); expect(document.activeElement).toBe(input);
     expect(input.selectionStart).toBe(0); expect(input.selectionEnd).toBe(2);
     await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
     expect(host.querySelector('[aria-label="Dimension value"]')).toBeNull();
     expect(host.querySelector('.sketch-glyph')?.textContent).toContain('10.00 mm');
-    // The same measured length becomes a reference dimension when already driven.
+    // Redundancy requires an explicit reference choice.
     await act(async () => button('Dimension (D)').click());
     await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown');
+    await pointer(svg(), 'pointerdown', 320, 80);
+    expect(host.querySelector('.sketch-glyph.reference')).toBeNull();
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    await act(async () => button('Make it a reference (driven) dimension').click());
     expect(host.querySelector('.sketch-glyph.reference')?.textContent).toContain('(10.00 mm)');
-    expect(document.activeElement).toBe(host.querySelector('[aria-label="Dimension value"]'));
+    expect(host.querySelector('[aria-label="Dimension value"]')).toBeNull();
   });
   it('dimensions sequential points and lines and opens the radius editor on an arc', async () => {
     const initial = importedSketch([{ id: 'p', x: 0, y: 0 }, { id: 'q', x: 10, y: 0 }, { id: 'r', x: 10, y: 10 }], [
@@ -246,15 +253,22 @@ describe('SketchCanvas with real slvs', () => {
     await pointer(coordinate('p').element, 'pointerdown');
     expect(host.querySelector('[aria-label="Dimension value"]')).toBeNull();
     await pointer(coordinate('r').element, 'pointerdown');
+    expect(host.querySelector('[aria-label^="Dimension distance"]')).toBeNull();
+    await pointer(svg(), 'pointermove', 500, 300);
+    await pointer(svg(), 'pointerdown', 500, 300);
     expect(host.querySelector('[aria-label^="Dimension distance"]')).not.toBeNull();
     expect(document.activeElement).toBe(host.querySelector('[aria-label="Dimension value"]'));
     await key('Escape'); await key('d');
-    await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown', 0, 0, { altKey: true });
-    await pointer(host.querySelector('[data-id="other"]')!, 'pointerdown', 0, 0, { altKey: true });
+    await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown', 0, 0);
+    await pointer(host.querySelector('[data-id="other"]')!, 'pointerdown', 0, 0);
+    await pointer(svg(), 'pointermove', 500, 80);
+    await pointer(svg(), 'pointerdown', 500, 80);
     expect(host.querySelector('[aria-label^="Dimension angle"]')).not.toBeNull();
     expect(host.querySelector<HTMLInputElement>('[aria-label="Dimension value"]')!.value).toBe('90');
     await key('Escape'); await key('d');
     await pointer(host.querySelector('[data-id="arc"]')!, 'pointerdown');
+    await pointer(svg(), 'pointermove', 500, 200);
+    await pointer(svg(), 'pointerdown', 500, 200);
     expect(host.querySelector('[aria-label^="Dimension radius"]')).not.toBeNull();
     expect(host.querySelector<HTMLInputElement>('[aria-label="Dimension value"]')!.value).toBe('10');
   });
@@ -442,16 +456,19 @@ describe('SketchCanvas with real slvs', () => {
     await act(async () => { for (let i = 0; i < 2; i++) svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true })); });
     expect(host.querySelectorAll('.sketch-entity')).toHaveLength(2);
   });
-  it('fix 11: explicit Alt two-line picks add only an angle without an extra length', async () => {
+  it('two ordinary line picks preview and place only an angle without an extra length', async () => {
     const initial = importedSketch([{ id: 'p', x: 0, y: 0 }, { id: 'q', x: 10, y: 0 }, { id: 'r', x: 10, y: 10 }], [
       { kind: 'line', id: 'line', p1: 'p', p2: 'q' }, { kind: 'line', id: 'other', p1: 'q', p2: 'r' },
     ]);
     await mount(initial); await key('d');
-    await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown', 0, 0, { altKey: true });
+    await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown', 0, 0);
     expect(host.querySelector('.sketch-glyph')).toBeNull();
-    await pointer(host.querySelector('[data-id="other"]')!, 'pointerdown', 0, 0, { altKey: true });
-    expect(host.querySelectorAll('.sketch-glyph')).toHaveLength(1);
+    await pointer(host.querySelector('[data-id="other"]')!, 'pointerdown', 0, 0);
+    expect(host.querySelectorAll('.sketch-glyph')).toHaveLength(0);
+    await pointer(svg(), 'pointermove', 500, 80);
+    await pointer(svg(), 'pointerdown', 500, 80);
     expect(host.querySelector('[aria-label^="Dimension angle"]')).not.toBeNull();
+    expect(host.querySelectorAll('.sketch-glyph')).toHaveLength(1);
   });
 
   it('shows values at rest, names on hover or selection, and sizes the hit rect to the displayed text', async () => {

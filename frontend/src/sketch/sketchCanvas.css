@@ -53,12 +53,9 @@
 .sketch-inline { position: absolute; top: 12px; left: 12px; width: 150px; background: var(--surface-floating); padding: 8px; border: 1px solid var(--hair); border-radius: 4px; font-size: 11px; }
 .sketch-inline input { min-width: 0; }
 .sketch-entity:focus-visible, .sketch-point:focus-visible, .sketch-glyph:focus-visible { outline: 2px solid var(--blue); }
-.sketch-dimension-kind { display: flex; align-items: center; gap: 4px; margin: 0; font-size: 11px; }
-.source-editor .sketch-dimension-kind { display: flex; margin: 0; }
 @media (max-width: 1100px) { .sketch-toolbar { gap: 4px; } .sketch-toolbar button { padding: 5px 4px; } }
 @media (max-width: 600px) { .sketch-tool-label { display: none; } }
 
-.sketch-dimension-context { position: absolute; top: 8px; right: 8px; z-index: 1; margin: 0; }
 .sketch-label-hit { fill: transparent; pointer-events: all; cursor: pointer; }
 
 .sketch-dimension-lines { fill: none; stroke: var(--fg3); stroke-width: 1; pointer-events: none; }
@@ -73,3 +70,8 @@
 .sketch-glyph.conflicting { fill: var(--red); }
 
 .sketch-dimension .sketch-label-hit, .sketch-dimension .sketch-glyph { cursor: grab; }
+
+.sketch-references .hovered, .sketch-references .selected { stroke: var(--acc); stroke-width: 3; }
+.sketch-dimension-preview { pointer-events: none; fill: none; stroke: var(--blue); stroke-width: 1; }
+.sketch-dimension-preview text { fill: var(--blue); stroke: var(--surface-raised); stroke-width: 3; paint-order: stroke; font-size: 11px; }
+.sketch-dimension-prompt { width: 230px; z-index: 2; }
