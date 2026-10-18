@@ -33,6 +33,11 @@ describe('source editor interactions', () => {
   });
   afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); });
   const mount = async () => { await act(async () => root.render(<Editor onClose={() => {}}/>)); await settle(); };
+  // Classic drawing is reachable only as the fallback for newer sketch data, which it keeps untouched.
+  const mountClassic = async (doc = INITIAL_SOURCE) => {
+    storage.setItem('', JSON.stringify({ version: 'wg-source-authoring-v1', document: doc, sketch: { version: 'wg-sketch-v99' }, meta: {} }));
+    await mount();
+  };
   const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(200); }); };
   const button = (text: string) => [...host.querySelectorAll('button')].find((b) => (b.getAttribute('aria-label') ?? b.textContent) === text)!;
   const input = (text: string) => { const direct = host.querySelector<HTMLInputElement>(`input[aria-label="${text}"]`); if (direct) return direct; const label = [...host.querySelectorAll('label')].find((l) => l.querySelector('.field-name')?.textContent === text)!; return document.getElementById(label.htmlFor) as HTMLInputElement; };
@@ -497,7 +502,9 @@ describe('source editor interactions', () => {
         expect(dialog.querySelector('.sketch-entity.rigid')).not.toBeNull();
         expect(dialog.querySelector('.sketch-role')).toBeNull();
         expect([...dialog.querySelectorAll('button')].some(b => ['Fit drawing', 'Undo edit', 'Draw lines'].includes(b.textContent ?? ''))).toBe(false);
-        expect(dialog.querySelector('[aria-label="More sketch actions"]')).not.toBeNull();
+        // Classic drawing is no longer a user choice (Magnus could not return from it); there is no overflow menu.
+        expect(dialog.querySelector('[aria-label="More sketch actions"]')).toBeNull();
+        expect([...dialog.querySelectorAll('button')].some(b => b.textContent === 'Classic drawing')).toBe(false);
       }
       for (const css of [editorCss, canvasCss]) {
         expect(css).not.toContain('--ctl-bg');
@@ -550,8 +557,7 @@ describe('source editor interactions', () => {
     doc.contour.points[1].r_mm = 8.123456789;
     doc.contour.segments[0] = { ...doc.contour.segments[0], kind: 'arc', center_mm: [4.0617283945, .000123456], direction: 'ccw' };
     doc.drive.weights.piston = .123456789;
-    storage.setItem('', JSON.stringify(doc)); await mount();
-    await act(async () => button('More sketch actions').click()); await act(async () => button('Classic drawing').click());
+    await mountClassic(doc);
     for (const [label, displayed] of [['Point 2 radius', '8.12'], ['Arc center radius', '4.06'], ['Arc center z', '0.00'], ['Patch 1 weight', '0.123']]) {
       expect(input(label).value).toBe(displayed);
       await act(async () => input(label).focus());
@@ -566,8 +572,7 @@ describe('source editor interactions', () => {
   it('stores typed rim radius and arc centre exactly despite the two-decimal display', async () => {
     const doc = structuredClone(INITIAL_SOURCE);
     doc.contour.segments[0] = { ...doc.contour.segments[0], kind: 'arc', center_mm: [4, 0], direction: 'ccw' };
-    storage.setItem('', JSON.stringify(doc)); await mount();
-    await act(async () => button('More sketch actions').click()); await act(async () => button('Classic drawing').click());
+    await mountClassic(doc);
     await enter('Point 2 radius', '9.525'); await settle();
     await enter('Arc center radius', '6.123457'); await enter('Arc center z', '-0.000123'); await settle();
     const stored = readSourceDraft().contour;
@@ -622,7 +627,7 @@ describe('source editor interactions', () => {
     expect(readSourceDraft()).toEqual(INITIAL_SOURCE);
   });
   it('keeps zero/negative weights as moving and refuses stale validation for an invalid draft', async () => {
-    await mount(); await act(async () => button('More sketch actions').click()); await act(async () => button('Classic drawing').click()); await enter('Patch 1 weight', '-0.5'); await settle();
+    await mountClassic(); await enter('Patch 1 weight', '-0.5'); await settle();
     expect(readSourceDraft().drive.weights.piston).toBe(-.5);
     await enter('Patch 1 weight', '0'); await settle();
     expect(readSourceDraft().contour.segments[0].role).toBe('moving');
@@ -633,7 +638,7 @@ describe('source editor interactions', () => {
     expect(host.querySelector('svg path')?.getAttribute('class')).toContain('draft');
   });
   it('ignores an older accepted response after a newer draft was refused', async () => {
-    await mount(); await act(async () => button('More sketch actions').click()); await act(async () => button('Classic drawing').click()); let resolve!: (value: SourceValidation) => void;
+    await mountClassic(); let resolve!: (value: SourceValidation) => void;
     vi.mocked(sourceEditorApi.validate).mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     await enter('Point 2 radius', '12'); await settle();
     const old = readSourceDraft();
@@ -656,7 +661,7 @@ describe('source editor interactions', () => {
     expect(sourceEditorApi.save).toHaveBeenLastCalledWith('My source', INITIAL_SOURCE, saved);
   });
   it('drawing creates explicit points and blocks export until the drawing is finished', async () => {
-    await mount(); await act(async () => button('More sketch actions').click()); await act(async () => button('Classic drawing').click()); await act(async () => button('Draw lines').click());
+    await mountClassic(); await act(async () => button('Draw lines').click());
     expect(button('Export STEP + mesh bundle').disabled).toBe(true);
     const svg = host.querySelector('svg')!;
     vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 640, height: 260 } as DOMRect);
@@ -825,7 +830,7 @@ describe('source editor interactions', () => {
     doc.contour.segments[0] = { ...doc.contour.segments[0], kind: 'arc', center_mm: [4, 0], direction: 'ccw' };
     storage.setItem('', JSON.stringify(doc));
     vi.mocked(sourceEditorApi.validate).mockImplementation(async (document) => ({ ...validation(document), meridian: { piston: Array.from({ length: 65 }, (_, i) => { const t = Math.PI + i / 64 * Math.PI; return [4 + 4 * Math.cos(t), 4 * Math.sin(t)]; }) } }));
-    await mount(); await act(async () => button('More sketch actions').click()); await act(async () => button('Classic drawing').click()); await act(async () => button('Fit drawing').click());
+    await mountClassic(); await act(async () => button('Fit drawing').click());
     const values = [...host.querySelector('svg path')!.getAttribute('d')!.matchAll(/[ML]([\d.e+-]+),([\d.e+-]+)/g)];
     expect(values).toHaveLength(65);
     expect(values.every((v) => Number(v[1]) >= 0 && Number(v[1]) <= 640 && Number(v[2]) >= 0 && Number(v[2]) <= 260)).toBe(true);

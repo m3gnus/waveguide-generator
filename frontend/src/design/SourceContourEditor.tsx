@@ -340,7 +340,6 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
           {drawPoints !== null && <><button type="button" disabled={drawPoints.length < 2} onClick={() => { change(drawnSource(draft, drawPoints, id)); setSelectedPatch(0); setDrawPoints(null); }}>Finish at rim</button><button type="button" onClick={() => setDrawPoints(null)}>Cancel drawing</button></>}
         </div>}
         {!classic && <SketchCanvas fitRequest={fitRequest} sketch={displayAuthor.sketch} diagnosis={diagnosis} references={displayAuthor.meta.references} problems={validationError && !hasSketchProblems ? [...sketchProblems, { code: 'server', ids: [], message: validationError }] : sketchProblems} session={sketchReady && !busy ? controller.current : undefined}
-          onClassicDrawing={() => { setClassic(true); setCanvasSelection([]); }}
           entityClassName={entity => entity.data && typeof entity.data === 'object' && !Array.isArray(entity.data) && entity.data.role === 'rigid' ? 'rigid' : 'moving'}
           hoverId={hoverId} onHoverChange={setHoverId} nameFor={id => displayName(displayAuthor.sketch, id)} onLimitChange={editLimit}
           selection={canvasSelection} onSelectionChange={ids => { setCanvasSelection(ids); const index = tablePatches.findIndex(p => ids.includes(p.id)); if (index >= 0) setSelectedPatch(index); }}

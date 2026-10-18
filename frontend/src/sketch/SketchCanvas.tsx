@@ -31,7 +31,6 @@ export interface SketchCanvasProps {
   sketch: Sketch; diagnosis?: Diagnosis; references: Reference[]; problems: DomainProblem[];
   session?: CanvasSession; entityStyle?: (entity: Entity) => CSSProperties;
   problemAction?: (problem: DomainProblem) => { label: string; constraint: NewConstraint } | undefined;
-  onClassicDrawing?: () => void;
   entityClassName?: (entity: Entity) => string;
   hoverId?: string; onHoverChange?: (id?: string) => void; nameFor?: (id: string) => string;
   onLimitChange?: (radius: number) => void;
@@ -69,7 +68,7 @@ function initialView(sketch: Sketch, width = 640, height = 360): View {
   const fitted = fit({ minX: Math.min(0, ...pts.map(p => p.x)), maxX: Math.max(1, ...pts.map(p => p.x)), minY: Math.min(0, ...pts.map(p => p.y)), maxY: Math.max(1, ...pts.map(p => p.y)) }, { width: Math.max(100, width - right), height: Math.max(100, height - bottom - top) }, 32);
   return { ...fitted, offsetX: fitted.offsetX + (named.length ? 48 : 0), offsetY: fitted.offsetY + top };
 }
-export function SketchCanvas({ sketch, diagnosis, references, problems, session, entityStyle, problemAction, selection: controlled, onSelectionChange, fitRequest, onClassicDrawing, entityClassName, hoverId, onHoverChange, nameFor, onLimitChange }: SketchCanvasProps) {
+export function SketchCanvas({ sketch, diagnosis, references, problems, session, entityStyle, problemAction, selection: controlled, onSelectionChange, fitRequest, entityClassName, hoverId, onHoverChange, nameFor, onLimitChange }: SketchCanvasProps) {
   const svg = useRef<SVGSVGElement>(null);
   const dimensionInput = useRef<HTMLInputElement>(null);
   const labelDrag = useRef<{ id: string; screen: XY; client: XY; placement: DimensionPlacement; next?: DimensionPlacement } | undefined>(undefined);
@@ -80,7 +79,6 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
   const [dimensionAxis, setDimensionAxis] = useState<'x' | 'y'>();
   const [renderFrame, setRenderFrame] = useState(0);
   const [arcMenu, setArcMenu] = useState(false);
-  const [overflow, setOverflow] = useState(false);
   const [viewOptions, setViewOptions] = useState(readSketchView);
   const [hoveredConstraint, setHoveredConstraint] = useState<string>();
   const [arcTool, setArcTool] = useState<'tangent' | 'arc3'>('arc3');
@@ -293,7 +291,7 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
     if ((event.target as Element).matches('input, select, textarea')) return;
     const key = event.key.toLowerCase();
     if (key === 'escape') {
-      event.stopPropagation(); event.preventDefault(); setOverflow(false); setArcMenu(false); frames.current?.cancel();
+      event.stopPropagation(); event.preventDefault(); setArcMenu(false); frames.current?.cancel();
       if (drag.current) { const active = drag.current; drag.current = undefined; void active.ready.then(() => session!.endDrag(true)).catch(error); }
       labelDrag.current = undefined; setDimensionPreview(undefined); labelDown.current = undefined;
       panning.current = undefined; gesture.current = undefined;
@@ -501,7 +499,7 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
         }}>{key[0].toUpperCase() + key.slice(1)}</button>)}
         <button type="button" disabled={!session} onClick={() => void run(() => session!.undo())}>Undo</button><button type="button" disabled={!session} onClick={() => void run(() => session!.undo(true))}>Redo</button>
         <button type="button" title="Fit (F)" onClick={() => setView(initialView(sketch, size.width, size.height))}>Fit (F)</button>
-        {onClassicDrawing && <div className="sketch-menu-anchor"><button type="button" aria-label="More sketch actions" aria-expanded={overflow} onClick={() => setOverflow(!overflow)}>⋯</button>{overflow && <div className="sketch-menu"><button type="button" onClick={onClassicDrawing}>Classic drawing</button></div>}</div>}
+
       </div>
     </div>
     <div className="sketch-surface">
