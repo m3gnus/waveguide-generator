@@ -123,6 +123,50 @@ def solve_compiled(
         raise UnsupportedBackend("BEAT runtime supports CPU, Metal, CUDA and ROCm")
     if not _coupled:
         validate_exterior_physics(request.wire)
+
+    def decode(events, request_cancel):
+        if _coupled:
+            from .beat_adapter.results import map_coupled_sweep
+
+            native = map_coupled_sweep(
+                events, request, progress_callback=progress_callback,
+                on_frequency_result=on_frequency_result, request_cancel=request_cancel)
+        else:
+            selected = channel_id if channel_callbacks is None else next(iter(channel_callbacks))
+            loading = request.channel_loading[selected]
+            native = map_sweep(
+                events, request.wire["frequencies_hz"], layout=request.layout,
+                source_area_m2=loading.area_m2,
+                excitation_port_id=request.channel_ports[selected][0],
+                symmetry=options["symmetry"], precision=options["precision"],
+                backend=options["bem_backend"], boundary_loading=loading,
+                trace_counts=(len(request.mesh.points_m), len(request.mesh.faces))
+                if request.surface_traces else None,
+                compiled_request=request, channel_id=channel_id, _channel_callbacks=channel_callbacks,
+                progress_callback=progress_callback, on_frequency_result=on_frequency_result,
+                request_cancel=request_cancel,
+            )
+        return native
+
+    native = _solve_session(
+        request, decode, worker_manager=worker_manager, julia_executable=julia_executable,
+        cancellation_callback=cancellation_callback, status_callback=status_callback, _profile=_profile,
+    )
+    first = (next(iter(native.channels.values())) if _coupled else
+             next(iter(native.values())) if channel_callbacks is not None else native)
+    if first.cancelled and not len(first.frequencies_hz):
+        raise OfficialBeatUnavailable("BEAT solve cancelled before any results")
+    return native
+
+
+def _solve_session(
+    request, decode: Callable, *,
+    worker_manager: WorkerManager | None = None, julia_executable: str | None = None,
+    cancellation_callback: Callable[[], None] | None = None,
+    status_callback: Callable[[str], None] | None = None,
+    _profile: SweepProfile | None = None,
+):
+    """Own admission, event forwarding, profiling and cleanup for every solve."""
     profile = _profile or start_profile(logging.getLogger(__name__).info, "wg")
     if profile is not None and _profile is None:
         # Direct compiled callers have already selected their runtime.
@@ -138,7 +182,7 @@ def solve_compiled(
         try:
             try:
                 client = (worker_manager or get_manager()).get_worker(
-                    options["bem_backend"], julia_executable=julia_executable,
+                    request.wire["solver_options"]["bem_backend"], julia_executable=julia_executable,
                 )
             except (OwnershipClosed, UnsupportedBackend):
                 raise
@@ -180,37 +224,13 @@ def solve_compiled(
             finally:
                 events.close()
 
-        if _coupled:
-            from .beat_adapter.results import map_coupled_sweep
-
-            native = map_coupled_sweep(
-                reported_events(), request, progress_callback=progress_callback,
-                on_frequency_result=on_frequency_result, request_cancel=session.request_cancel)
-        else:
-            selected = channel_id if channel_callbacks is None else next(iter(channel_callbacks))
-            loading = request.channel_loading[selected]
-            native = map_sweep(
-                reported_events(), wire["frequencies_hz"], layout=request.layout,
-                source_area_m2=loading.area_m2,
-                excitation_port_id=request.channel_ports[selected][0],
-                symmetry=options["symmetry"], precision=options["precision"],
-                backend=options["bem_backend"], boundary_loading=loading,
-                trace_counts=(len(request.mesh.points_m), len(request.mesh.faces))
-                if request.surface_traces else None,
-                compiled_request=request, channel_id=channel_id, _channel_callbacks=channel_callbacks,
-                progress_callback=progress_callback, on_frequency_result=on_frequency_result,
-                request_cancel=session.request_cancel,
-            )
+        native = decode(reported_events(), session.request_cancel)
         if profile is not None:
             profile.mark("mapped")
         session.close()
         if profile is not None:
             profile.mark("closed")
         session.raise_callback_error()
-        first = (next(iter(native.channels.values())) if _coupled else
-                 next(iter(native.values())) if channel_callbacks is not None else native)
-        if first.cancelled and not len(first.frequencies_hz):
-            raise OfficialBeatUnavailable("BEAT solve cancelled before any results")
         return native
 
 
@@ -258,51 +278,15 @@ def solve_transducer_compiled(
     if not isinstance(request, TransducerRequest):
         raise TypeError("Expected an opt-in TransducerRequest")
     validate_transducer_request(request)
-    try:
-        contract = importlib.import_module("beat_engine.beat_contract.worker")
-    except ImportError as exc:
-        raise OfficialBeatUnavailable("beat-engine is not installed.") from exc
-    with SolveSession(cancellation_callback=cancellation_callback) as session:
-        wire = dict(request.wire, cancel_path=str(session.cancel_path.resolve()))
-        negotiate = validated_negotiator(contract, wire)
-        try:
-            try:
-                client = (worker_manager or get_manager()).get_worker(
-                    request.wire["solver_options"]["bem_backend"], julia_executable=julia_executable,
-                )
-            except (OwnershipClosed, UnsupportedBackend):
-                raise
-            except (ValueError, RuntimeError, OSError) as exc:
-                readiness.probe_cache_clear()
-                raise OfficialBeatUnavailable(str(exc)) from exc
-            session.submit(client, wire, negotiate=negotiate, status_callback=status_callback)
-        except (discovery.JuliaDiscoveryError, assets.AssetsUnavailable, paths.RootConflict,
-                registry.RecordRefused, HostError, OSError) as exc:
-            readiness.probe_cache_clear()
-            raise OfficialBeatUnavailable(str(exc)) from exc
-        events = session.events()
-
-        def reported_events():
-            try:
-                for event in events:
-                    if isinstance(event, dict) and event.get("type") == "status" and status_callback:
-                        status_callback(str(event.get("message") or ""))
-                    yield event
-                    if isinstance(event, dict) and event.get("type") == "result" and cancellation_callback:
-                        try:
-                            cancellation_callback()
-                        except BaseException:
-                            session.request_cancel()
-                            raise
-            finally:
-                events.close()
-
-        result = map_transducer_sweep(reported_events(), request, on_frequency_result=on_frequency_result)
-        session.close()
-        session.raise_callback_error()
-        if result.cancelled and not result.rows:
-            raise OfficialBeatUnavailable("BEAT solve cancelled before any results")
-        return result
+    result = _solve_session(
+        request, lambda events, _request_cancel: map_transducer_sweep(
+            events, request, on_frequency_result=on_frequency_result),
+        worker_manager=worker_manager, julia_executable=julia_executable,
+        cancellation_callback=cancellation_callback, status_callback=status_callback,
+    )
+    if result.cancelled and not result.rows:
+        raise OfficialBeatUnavailable("BEAT solve cancelled before any results")
+    return result
 
 
 def solve_coupled_compiled(request, **callbacks):

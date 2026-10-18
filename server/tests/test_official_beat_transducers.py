@@ -88,3 +88,34 @@ def test_cancellation_callback_after_result_preserves_error_and_closes(runtime, 
     assert runtime.result_count == 1
     assert all(stream.closed for stream in runtime.streams)
     assert all(not path.exists() for path in runtime.paths)
+
+
+@pytest.mark.parametrize("transducer", [False, True])
+def test_shared_transport_profiles_both_solve_types(runtime, built, monkeypatch, caplog, transducer):
+    import logging
+    from server.solver import beat
+    from server.tests.test_official_beat_bridge import MESH, _context
+
+    calls = []
+    transport = bridge._solve_session
+
+    def observed(request, decode, **options):
+        calls.append(request)
+        return transport(request, decode, **options)
+
+    monkeypatch.setattr(bridge, "_solve_session", observed)
+    monkeypatch.setenv("WG2_BEAT_PROFILE", "1")
+    caplog.set_level(logging.INFO)
+    if transducer:
+        bridge.solve_transducer_compiled(built)
+        assert calls == [built]
+    else:
+        runtime.mutate = None
+        beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
+        assert len(calls) == 1
+    marks = [record.message.split(": ")[1].split(" elapsed_s=")[0]
+             for record in caplog.records if record.message.startswith("BEAT profile wg:")]
+    assert marks == ["solve start", "statuses done", "request built", "worker acquired", "submitted",
+                     "first event", "first result", "last result", "completed", "mapped", "closed"]
+    assert all(stream.closed for stream in runtime.streams)
+    assert all(not path.exists() for path in runtime.paths)
