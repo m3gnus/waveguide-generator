@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Box3, MathUtils, Vector3 } from 'three';
-import { calculateCameraFit, clippingRange, framingRadius, orthographicExtents, zoomedOrthographicValue } from './cameraMath';
+import { calculateCameraFit, clippingRange, orthographicExtents, zoomedOrthographicValue } from './cameraMath';
 
 describe('depth clipping range', () => {
   it('brackets the model instead of spanning the universe', () => {
