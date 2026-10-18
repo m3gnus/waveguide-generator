@@ -22,8 +22,8 @@ const candidate = (ids: string[], cursor = { x: -4, y: 14 }) => candidateDimensi
 describe('dimension candidate policy', () => {
   it.each([['a'], ['p', 'q']])('switches cursor regions for %j, with exact placements', (...ids) => {
     expect(candidate(ids)).toMatchObject({ kind: 'distance', a: 'p', b: 'q', value: 10 });
-    for (const y of [-4, 14]) expect(candidate(ids, { x: 6, y })).toMatchObject({ kind: 'distanceX', value: 8, placement: { along: .5, offset: y - 6 } });
-    for (const x of [-4, 14]) expect(candidate(ids, { x, y: 6 })).toMatchObject({ kind: 'distanceY', value: 6, placement: { along: .5, offset: x - 6 } });
+    for (const y of [-10, 22]) expect(candidate(ids, { x: 6, y })).toMatchObject({ kind: 'distanceX', value: 8, placement: { along: .5, offset: y - 6 } });
+    for (const x of [-10, 22]) expect(candidate(ids, { x, y: 6 })).toMatchObject({ kind: 'distanceY', value: 6, placement: { along: .5, offset: x - 6 } });
     expect(candidate(ids, { x: 6, y: 6 })).toMatchObject({ kind: 'distance' });
   });
   it.each([['r', 'a'], ['a', 'r']])('measures point to supporting line in either pick order: %j', (...ids) => {
@@ -33,11 +33,23 @@ describe('dimension candidate policy', () => {
     for (const ids of [[point, line], [line, point]]) expect(candidate(ids)).toMatchObject({ kind, label, value, a: 'origin', b: point, driving: true });
   });
   it('uses positive projected magnitudes, including depth below the baffle', () => {
-    expect(candidate(['q', 'p'], { x: 6, y: 14 })).toMatchObject({ kind: 'distanceX', a: 'p', b: 'q', value: 8 });
+    expect(candidate(['q', 'p'], { x: 6, y: 22 })).toMatchObject({ kind: 'distanceX', a: 'p', b: 'q', value: 8 });
     const below = { kind: 'point' as const, id: 'below', point: { id: 'below', x: 4, y: -6 } };
     expect(candidateDimension([below, ...dimensionPicks(sketch, ['baffle'], references)], { x: 8, y: -2 })).toMatchObject({ kind: 'distanceY', a: 'below', b: 'origin', value: 6, label: 'z' });
     expect(candidate(['b', 'a'])).toMatchObject({ kind: 'angle', value: expect.any(Number) });
     expect(candidate(['b', 'a'])!.value).toBeGreaterThan(0);
+  });
+  it.each([['p', 'a'], ['a', 'q']])('rejects a line endpoint as a zero point-line distance: %j', (...ids) => {
+    expect(candidate(ids)).toBeUndefined();
+  });
+  it.each([false, true])('keeps a shallow line aligned along its normal (reversed: %s)', reverse => {
+    const a = { id: 'a', x: 0, y: 0 }, b = { id: 'b', x: 10, y: 1 };
+    const picks = [{ kind: 'line' as const, id: 'line', a: reverse ? b : a, b: reverse ? a : b }];
+    for (const sign of [-1, 1]) {
+      expect(candidateDimension(picks, { x: 5 - sign, y: .5 + sign * 10 })).toMatchObject({ kind: 'distance', value: Math.sqrt(101) });
+    }
+    expect(candidateDimension(picks, { x: 5, y: 70 })).toMatchObject({ kind: 'distanceX', value: 10 });
+    expect(candidateDimension(picks, { x: 15, y: .5 })).toMatchObject({ kind: 'distanceY', value: 1 });
   });
   it('measures parallel lines and an arc radius', () => {
     expect(candidate(['a', 'parallel'])).toMatchObject({ kind: 'pointLineDistance', point: 'u', line: 'a', value: 8 });

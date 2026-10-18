@@ -61,7 +61,7 @@ describe('pure sketch tools', () => {
     const dimensionFor = (sketch: typeof s, ids: string[], cursor = { x: -3, y: 4 }) => candidateDimension(dimensionPicks(sketch, ids), cursor);
     expect(dimensionFor(s, ['l'])).toMatchObject({ kind: 'distance', value: 4 });
     expect(dimensionFor(s, ['p', 'r'])).toMatchObject({ kind: 'distance', value: 5 });
-    expect(dimensionFor(s, ['p', 'r'], { x: 2, y: 5 })).toMatchObject({ kind: 'distanceX', value: 4 });
+    expect(dimensionFor(s, ['p', 'r'], { x: 2, y: 8 })).toMatchObject({ kind: 'distanceX', value: 4 });
     expect(dimensionFor(s, ['l'], { x: -2, y: 0 })).toMatchObject({ kind: 'distanceY', value: 0 });
     expect(dimensionFor(s, ['a'])).toMatchObject({ kind: 'radius', value: 4 });
     expect(dimensionFor(s, ['l', 'm'])).toMatchObject({ kind: 'angle', value: Math.PI / 2 });

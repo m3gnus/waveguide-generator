@@ -684,6 +684,7 @@ describe('source editor interactions', () => {
       const canvas = host.querySelector('[role="application"]')!;
       canvas.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 620, clientY: 40 }));
       canvas.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 620, clientY: 40 }));
+      canvas.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 620, clientY: 40 }));
     }); await settle();
     const envelope = JSON.parse(storage.getItem('')!);
     expect(envelope.version).toBe('wg-source-authoring-v1');
@@ -733,6 +734,7 @@ describe('source editor interactions', () => {
       const canvas = host.querySelector('[role="application"]')!;
       canvas.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 620, clientY: 40 }));
       canvas.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 620, clientY: 40 }));
+      canvas.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 620, clientY: 40 }));
     }); await settle();
     await act(async () => button('Apply shape').click()); await settle();
     expect(readSourceDraft().contour.points[1].r_mm).toBe(14);

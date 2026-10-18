@@ -227,7 +227,7 @@ describe('SketchCanvas with real slvs', () => {
     expect(host.querySelector('[aria-label="Dimension value"]')).toBeNull();
     await pointer(svg(), 'pointermove', 320, 60);
     expect(host.querySelector('.sketch-dimension-preview')).not.toBeNull();
-    await pointer(svg(), 'pointerdown', 320, 60);
+    await pointer(svg(), 'pointerdown', 320, 60); await pointer(svg(), 'pointerup', 320, 60);
     const input = host.querySelector<HTMLInputElement>('[aria-label="Dimension value"]')!;
     expect(input.value).toBe('10'); expect(document.activeElement).toBe(input);
     expect(input.selectionStart).toBe(0); expect(input.selectionEnd).toBe(2);
@@ -237,7 +237,7 @@ describe('SketchCanvas with real slvs', () => {
     // Redundancy requires an explicit reference choice.
     await act(async () => button('Dimension (D)').click());
     await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown');
-    await pointer(svg(), 'pointerdown', 320, 80);
+    await pointer(svg(), 'pointerdown', 320, 80); await pointer(svg(), 'pointerup', 320, 80);
     expect(host.querySelector('.sketch-glyph.reference')).toBeNull();
     expect(host.querySelector('[role="dialog"]')).not.toBeNull();
     await act(async () => button('Make it a reference (driven) dimension').click());
@@ -254,21 +254,21 @@ describe('SketchCanvas with real slvs', () => {
     expect(host.querySelector('[aria-label="Dimension value"]')).toBeNull();
     await pointer(coordinate('r').element, 'pointerdown');
     expect(host.querySelector('[aria-label^="Dimension distance"]')).toBeNull();
-    await pointer(svg(), 'pointermove', 500, 300);
-    await pointer(svg(), 'pointerdown', 500, 300);
+    await pointer(svg(), 'pointermove', 600, 100);
+    await pointer(svg(), 'pointerdown', 600, 100); await pointer(svg(), 'pointerup', 600, 100);
     expect(host.querySelector('[aria-label^="Dimension distance"]')).not.toBeNull();
     expect(document.activeElement).toBe(host.querySelector('[aria-label="Dimension value"]'));
     await key('Escape'); await key('d');
     await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown', 0, 0);
     await pointer(host.querySelector('[data-id="other"]')!, 'pointerdown', 0, 0);
     await pointer(svg(), 'pointermove', 500, 80);
-    await pointer(svg(), 'pointerdown', 500, 80);
+    await pointer(svg(), 'pointerdown', 500, 80); await pointer(svg(), 'pointerup', 500, 80);
     expect(host.querySelector('[aria-label^="Dimension angle"]')).not.toBeNull();
     expect(host.querySelector<HTMLInputElement>('[aria-label="Dimension value"]')!.value).toBe('90');
     await key('Escape'); await key('d');
     await pointer(host.querySelector('[data-id="arc"]')!, 'pointerdown');
     await pointer(svg(), 'pointermove', 500, 200);
-    await pointer(svg(), 'pointerdown', 500, 200);
+    await pointer(svg(), 'pointerdown', 500, 200); await pointer(svg(), 'pointerup', 500, 200);
     expect(host.querySelector('[aria-label^="Dimension radius"]')).not.toBeNull();
     expect(host.querySelector<HTMLInputElement>('[aria-label="Dimension value"]')!.value).toBe('10');
   });
@@ -466,7 +466,7 @@ describe('SketchCanvas with real slvs', () => {
     await pointer(host.querySelector('[data-id="other"]')!, 'pointerdown', 0, 0);
     expect(host.querySelectorAll('.sketch-glyph')).toHaveLength(0);
     await pointer(svg(), 'pointermove', 500, 80);
-    await pointer(svg(), 'pointerdown', 500, 80);
+    await pointer(svg(), 'pointerdown', 500, 80); await pointer(svg(), 'pointerup', 500, 80);
     expect(host.querySelector('[aria-label^="Dimension angle"]')).not.toBeNull();
     expect(host.querySelectorAll('.sketch-glyph')).toHaveLength(1);
   });

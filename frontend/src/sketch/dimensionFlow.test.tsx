@@ -1,6 +1,7 @@
 import { act, useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useModalDialogFocus } from '../shell/dialogFocus';
 import { SketchCanvas } from './SketchCanvas';
 import { SketchController } from './controller';
 import type { Reference } from './adapter';
@@ -17,7 +18,10 @@ import { expandedPreset } from './adapters/presetTestSupport';
 
 const references: Reference[] = [{ id: 'axis', kind: 'axis' }, { id: 'baffle', kind: 'baffle' }];
 let host: HTMLDivElement, root: Root, current: Sketch;
+const closeDialog = vi.fn();
+let controller: SketchController<null>;
 function Harness({ initial }: { initial: Sketch }) {
+  const dialog = useModalDialogFocus<HTMLDivElement>({ open: true, onClose: closeDialog });
   const [sketch, setSketch] = useState(initial), [diagnosis, setDiagnosis] = useState<Diagnosis>();
   const [session, setSession] = useState<SketchController<null>>();
   useEffect(() => {
@@ -25,12 +29,14 @@ function Harness({ initial }: { initial: Sketch }) {
       const result = applyCommand(s.sketch, command);
       return 'error' in result ? result : { ...s, sketch: result.sketch };
     }, (s, d) => { current = s.sketch; setSketch(s.sketch); setDiagnosis(d); setSession(c); });
+    controller = c;
     return () => c.destroy();
   }, [initial]);
-  return <SketchCanvas sketch={sketch} diagnosis={diagnosis} references={references} problems={[]} session={session}/>;
+  return <div ref={dialog} role="dialog"><SketchCanvas sketch={sketch} diagnosis={diagnosis} references={references} problems={[]} session={session}/></div>;
 }
 beforeEach(async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  closeDialog.mockClear();
   localStorage.removeItem(sketchViewKey); await realSessionReady();
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
 });
@@ -201,11 +207,11 @@ describe('dimension pick → preview → place → type with the real solver', (
   it.each(['reference', 'cancel'] as const)('asks before an over-constraint: %s', async choice => {
     await mount(fixture('line')); await pick('line'); await previewPlace({ x: 0, y: 16 }, 'distance');
     await key('Escape', field()!); const measured = current;
-    await pick('line'); await pointer('pointermove', screen({ x: 0, y: 18 })); await pointer('pointerdown', screen({ x: 0, y: 18 }));
-    expect(host.querySelector('[role="dialog"]')!.textContent).toContain('This dimension would over-constrain the sketch.');
+    await pick('line'); await pointer('pointermove', screen({ x: 0, y: 18 })); await pointer('pointerdown', screen({ x: 0, y: 18 })); await pointer('pointerup', screen({ x: 0, y: 18 }));
+    expect(host.querySelector('[aria-label="Over-constrained dimension"]')!.textContent).toContain('This dimension would over-constrain the sketch.');
     expect(current).toBe(measured); expect(field()).toBeNull();
     await act(async () => button(choice === 'reference' ? 'Make it a reference (driven) dimension' : 'Cancel').click());
-    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Over-constrained dimension"]')).toBeNull();
     if (choice === 'cancel') expect(current).toBe(measured);
     else {
       expect(current.constraints.at(-1)).toMatchObject({ driving: false, placement: expect.any(Object) });
@@ -214,6 +220,128 @@ describe('dimension pick → preview → place → type with the real solver', (
   });
 });
 
+
+describe('dimension interaction regressions', () => {
+  it('waits for mouse release and retains focus through the full browser gesture before applying 12', async () => {
+    await mount(fixture('line')); await pick('line');
+    let captured = false;
+    svg().setPointerCapture = () => { captured = true; };
+    svg().hasPointerCapture = () => captured;
+    svg().releasePointerCapture = () => { captured = false; };
+    const at = screen({ x: 0, y: 16 });
+    await pointer('pointermove', at);
+    await pointer('pointerdown', at);
+    expect(field()).toBeNull();
+    act(() => svg().focus());
+    expect(captured).toBe(true);
+    await pointer('pointerup', at);
+    expect(captured).toBe(false);
+    await pointer('click', at);
+    expect(document.activeElement).toBe(field());
+    expect(field()!.selectionEnd).toBe(field()!.value.length);
+    // Focus churn alone is not an outside interaction.
+    act(() => svg().focus());
+    expect(field()).not.toBeNull();
+    act(() => field()!.focus());
+    await input('12'); await key('Enter', field()!);
+    expect(current.constraints.at(-1)).toMatchObject({ kind: 'distance', value: 12 });
+  });
+  it('cancels Dimension with body focus without closing its editor dialog', async () => {
+    await mount(fixture('line')); act(() => svg().blur());
+    expect(document.activeElement).toBe(document.body);
+    await key('Escape', document.body);
+    expect(closeDialog).not.toHaveBeenCalled();
+    expect(button('Select (Esc)').getAttribute('aria-pressed')).toBe('true');
+    act(() => svg().blur()); await key('Escape', document.body);
+    expect(closeDialog).toHaveBeenCalledOnce();
+  });
+  it('places a completed two-point pick on a third entity without highlighting it as another pick', async () => {
+    await mount(fixture('line')); await pick('p'); await pick('q');
+    const at = screen({ x: 13, y: 16 }); // midpoint of other
+    await pointer('pointermove', at);
+    expect(host.querySelector('.sketch-entity[data-id="other"]')!.classList.contains('hovered')).toBe(false);
+    expect(host.querySelector('.sketch-dimension-preview')).not.toBeNull();
+    await pointer('pointerdown', at); await pointer('pointerup', at);
+    expect(field()).not.toBeNull();
+    expect(current.constraints.at(-1)).toMatchObject({ a: 'p', b: 'q' });
+  });
+  it('shows placement on an unsupported second entity and places a single arc there', async () => {
+    await mount(fixture('arc')); await pick('arc');
+    const at = screen({ x: 8, y: 16.5 });
+    await pointer('pointermove', at);
+    expect(host.querySelector('.sketch-entity[data-id="other"]')!.classList.contains('hovered')).toBe(false);
+    expect(host.querySelector('.sketch-dimension-preview')!.getAttribute('aria-label')).toBe('Preview radius');
+    await pointer('pointerdown', at); await pointer('pointerup', at);
+    expect(current.constraints.at(-1)).toMatchObject({ kind: 'radius' });
+  });
+  it('highlights a valid second line as a pick and hides placement until that pick completes', async () => {
+    await mount(fixture('angle')); await pick('line');
+    const at = screen({ x: 14, y: 9 }); await pointer('pointermove', at);
+    expect(host.querySelector('.sketch-entity[data-id="other"]')!.classList.contains('hovered')).toBe(true);
+    expect(host.querySelector('.sketch-dimension-preview')).toBeNull();
+    await pointer('pointerdown', at); await pointer('pointerup', at);
+    expect(field()).toBeNull();
+    await previewPlace({ x: 20, y: 10 }, 'angle');
+  });
+  it('uses the click dismissing a value box as the first pick of the next dimension', async () => {
+    await mount(fixture('line')); await pick('line'); await previewPlace({ x: 0, y: 16 }, 'distance');
+    const at = screen(current.points.find(p => p.id === 'r')!);
+    await pointer('pointermove', at); await pointer('pointerdown', at); await pointer('pointerup', at);
+    expect(field()).toBeNull();
+    expect(host.querySelector('.sketch-point[data-id="r"]')!.classList.contains('selected')).toBe(true);
+    await pick('s');
+    await previewPlace({ x: 22, y: 24 }, 'distance');
+    expect(current.constraints.at(-1)).toMatchObject({ a: 'r', b: 's' });
+  });
+  it.each(['Delete selection', 'Reset position', 'Undo'])('leaves Enter on %s to the focused button', async label => {
+    await mount(fixture('arc')); await pick('arc'); await previewPlace({ x: 15, y: 21 }, 'radius');
+    await key('Escape', field()!); await key('Escape');
+    const dimension = host.querySelector('[data-constraint-id] text[aria-label^="Dimension"]')!;
+    await pointer('pointerdown', { x: 500, y: 100 }, dimension); await pointer('pointerup', { x: 500, y: 100 });
+    const target = button(label); act(() => target.focus());
+    const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter' });
+    await act(async () => { target.dispatchEvent(event); });
+    expect(field()).toBeNull(); expect(event.defaultPrevented).toBe(false);
+    await act(async () => target.click());
+    if (label === 'Delete selection' || label === 'Undo') expect(current.constraints.some(c => 'value' in c)).toBe(false);
+    else expect(current.constraints.at(-1)!.placement).toBeUndefined();
+  });
+  it.each(['undo', 'redo', 'external'] as const)('clears pending picks after %s changes the sketch', async how => {
+    await mount(fixture('line')); await pick('line'); await previewPlace({ x: 0, y: 16 }, 'distance');
+    await key('Escape', field()!);
+    if (how === 'redo') await key('z', svg(), { ctrlKey: true });
+    await pick('r'); await pick('s'); await pointer('pointermove', screen({ x: 22, y: 24 }));
+    expect(host.querySelector('.sketch-dimension-preview')).not.toBeNull();
+    if (how === 'external') await act(async () => { await controller.command({ kind: 'setConstruction', id: 'other', construction: true }); });
+    else await key('z', svg(), { ctrlKey: true, shiftKey: how === 'redo' });
+    expect(host.querySelector('.sketch-dimension-preview')).toBeNull();
+  });
+  it('dismisses on Tab blur while ignoring incidental opening focus churn', async () => {
+    await mount(fixture('line')); await pick('line'); await previewPlace({ x: 0, y: 16 }, 'distance');
+    const measured = current;
+    act(() => svg().focus()); expect(field()).not.toBeNull();
+    act(() => field()!.focus()); await key('Tab', field()!);
+    act(() => button('Apply dimension value').focus());
+    expect(field()).toBeNull(); expect(current).toBe(measured);
+  });
+  it.each(['Escape', 'tool change', 'overconstraint'])('does not reopen a box or prompt after %s during the add solve', async how => {
+    await mount(fixture('line')); await pick('line');
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const original = controller.constraint.bind(controller);
+    vi.spyOn(controller, 'constraint').mockImplementation(async (...args) => {
+      await gate;
+      if (how === 'overconstraint') throw { overconstrained: true };
+      return original(...args);
+    });
+    const at = screen({ x: 0, y: 16 });
+    await pointer('pointerdown', at); await pointer('pointerup', at);
+    if (how === 'tool change') await key('l'); else await key('Escape');
+    await act(async () => { release(); });
+    expect(field()).toBeNull();
+    expect(host.querySelector('[aria-label="Over-constrained dimension"]')).toBeNull();
+  });
+});
 
 describe('hand-drawn cone dimensions', () => {
   it('recreates the preset radius, depth and surround width using drawing and dimension tools', async () => {

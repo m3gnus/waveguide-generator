@@ -33,11 +33,14 @@ function placement(kind: string, a: XY, b: XY, cursor: XY) {
   return { offset: (-dy * x + dx * y) / length, along: .5 + (dx * x + dy * y) / (length * length) };
 }
 function betweenPoints(a: Point, b: Point, cursor: XY): CandidateDimension {
-  // The strips above/below and left/right of the endpoint box choose projected
-  // distances. Inside the box and in its corner regions the dimension is aligned.
+  // The band swept along the segment normal is aligned, including shallow lines.
+  // Projected distances take over only beyond this band, in the axis strips.
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const along = ((cursor.x - a.x) * dx + (cursor.y - a.y) * dy) / (dx * dx + dy * dy || 1);
   const inX = cursor.x >= Math.min(a.x, b.x) && cursor.x <= Math.max(a.x, b.x);
   const inY = cursor.y >= Math.min(a.y, b.y) && cursor.y <= Math.max(a.y, b.y);
-  const kind = inX && !inY ? 'distanceX' : inY && !inX ? 'distanceY' : 'distance';
+  const normalBand = along >= 0 && along <= 1 && Math.abs(dx) > 1e-9 * Math.hypot(dx, dy) && Math.abs(dy) > 1e-9 * Math.hypot(dx, dy);
+  const kind = normalBand ? 'distance' : inX && !inY ? 'distanceX' : inY && !inX ? 'distanceY' : 'distance';
   if (kind === 'distanceX' && b.x < a.x || kind === 'distanceY' && b.y < a.y) [a, b] = [b, a];
   return { kind, a: a.id, b: b.id, value: kind === 'distanceX' ? b.x - a.x : kind === 'distanceY' ? b.y - a.y : distance(a, b), driving: true, placement: placement(kind, a, b, cursor) };
 }
@@ -64,6 +67,7 @@ export function candidateDimension(picks: DimensionPick[], cursor: XY): Candidat
         label: line.reference === 'axis' ? 'r' : 'z', driving: true, placement: placement(kind, a, b, cursor) };
     }
     const foot = projection(p.point, line.a, line.b);
+    if (distance(p.point, foot) <= 1e-9) return;
     return { kind: 'pointLineDistance', point: p.id, line: line.id, value: distance(p.point, foot), driving: true,
       placement: placement('distance', p.point, foot, cursor) };
   }
