@@ -6048,12 +6048,37 @@ export interface components {
          */
         SolverMeshRequest: {
             design: components["schemas"]["DesignConfig"];
+            options?: components["schemas"]["SolveOptions"];
             /**
              * Symmetry
              * @default auto
              * @enum {string}
              */
             symmetry?: "auto" | "full" | "half_xz" | "half_yz" | "quarter";
+        };
+        /** SolverMeshResponse */
+        SolverMeshResponse: {
+            /** Cut Planes */
+            cut_planes: string[];
+            /** Msh Text */
+            msh_text: string;
+            plan: components["schemas"]["SolvePlanResponse"];
+            /** Quadrants */
+            quadrants: number;
+            stats: components["schemas"]["SolverMeshStats"];
+        };
+        /** SolverMeshStats */
+        SolverMeshStats: {
+            /** Mesh Cache Hit */
+            mesh_cache_hit: boolean;
+            /** Mesh Cache Key */
+            mesh_cache_key: string;
+            /** Triangle Count */
+            triangle_count: number;
+            /** Vertex Count */
+            vertex_count: number;
+            /** Warnings */
+            warnings: string[];
         };
         /** SolverSelectionRequest */
         SolverSelectionRequest: {
@@ -10007,9 +10032,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["SolverMeshResponse"];
                 };
             };
             /** @description Validation Error */

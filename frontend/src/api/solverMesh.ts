@@ -1,25 +1,14 @@
 import { formatApiDetail } from '../jobs/actions';
 import { createImportedMeshScene, type ImportedMeshScene } from '../viewport/importedMesh';
 import { parseMSH } from '../viewport/mshParser';
+import type { components } from './generated/openapi';
 
 /** Trimmed build statistics the solver-mesh endpoint reports alongside the
  * artifact. `mesh_cache_key` identifies the artifact independently of the
  * design revision that requested it: an edit that cannot change the mesh
  * (a frequency sweep, a polar setting) comes back with the same key. */
-export interface SolverMeshStats {
-  triangle_count: number;
-  vertex_count: number;
-  warnings: string[];
-  mesh_cache_key: string;
-  mesh_cache_hit: boolean;
-}
-
-export interface SolverMeshResult {
-  msh_text: string;
-  stats: SolverMeshStats;
-  cut_planes: string[];
-  quadrants: number;
-}
+export type SolverMeshStats = components['schemas']['SolverMeshStats'];
+export type SolverMeshResult = components['schemas']['SolverMeshResponse'];
 
 async function detail(response: Response): Promise<string> {
   try {
@@ -34,7 +23,7 @@ async function detail(response: Response): Promise<string> {
  * Build (or fetch from the server's shared artifact cache) the authoritative
  * solver mesh for an already-serialised solve design.
  *
- * `body` is the JSON request `{design, symmetry}`; callers serialise it
+ * `body` is the JSON request `{design, options}`; callers serialise it
  * themselves for the same reason `postSymmetry` does — re-serialising the
  * live design here would race an edit that landed after keying.
  *

@@ -32,7 +32,7 @@ from server.drivers import mount_drivers
 from server.exports import mount_exports
 from server.jobs import mount_jobs
 from server.integration import mount_integration
-from server.mesh.api import mount_solver_mesh
+from server.jobs.mesh_preview import mount_solver_mesh
 from server.cadlink.fusion.addin_update import shutdown_addin_refresh, start_addin_refresh
 from server.mesh.child import begin_mesher_child_shutdown, close_mesher_child
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
@@ -902,7 +902,7 @@ def create_app(
     from server.engines.runtime_api import mount_runtime_preparation
 
     mount_runtime_preparation(application)
-    mount_solver_mesh(application)
+    mount_solver_mesh(application, engine_registry)
     mount_preview(application, extra_ws_origins=extra_ws_origins)
     mount_design_io(application)
     mount_exports(application)

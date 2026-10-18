@@ -61,9 +61,6 @@ ignore_imports =
     server.mesh.imported -> server.cadlink.interpretation.solver_frame
     # Legacy use: source_physical_name.
     server.mesh.imported -> server.cadlink.wglink_protocol
-    # mesh -> solver: existing upward dependency.
-    # Legacy use: resolve_symmetry, validate_symmetry_mode.
-    server.mesh.api -> server.solver.symmetry
     # solver -> cadlink: existing upward dependency.
     # Legacy use: canonical_source_role.
     server.solver.imported_channels -> server.cadlink.roles

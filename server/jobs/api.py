@@ -39,6 +39,7 @@ from server.jobs.models import (
     SolveRequest,
     StopResponse,
 )
+from server.jobs.plans import SolvePlanResponse, solve_plan_response
 from server.jobs.result_contracts import ResultEnvelope
 from server.jobs.retention import settings_auto_cleanup_policy
 from server.settings.store import SettingsStore
@@ -202,49 +203,6 @@ class FemPlanePresentation(BaseModel):
     region_class: str
     crosses_body: str
     mask_reason: str = Field(description="Base64 uint8 per point: 0 valid, 1 solid or outside selected domain, 2 too close to a surface for a reliable velocity")
-
-
-class EngineSubstitution(BaseModel):
-    """The engine the request asked for, and the one standing in for it.
-
-    Present only when a stored selection named an engine this host cannot run.
-    `requested` is left exactly as the caller sent it, because the selection is
-    host-local UI state that should re-engage untouched the day that engine
-    becomes available here.
-    """
-
-    requested: str
-    resolved: str
-    reason: str
-
-
-class PlanAdjustment(BaseModel):
-    """A change the runtime makes to the submitted design before solving it.
-
-    `bempp_wall_default` is the one kind today: a free-standing BEMPP solve
-    whose wall thickness was left unset (`omitted`) or set to 0 mm, a bare
-    shell (`explicit_zero`), is solved with an `effective_mm` closed wall.
-    The explicit case is an override of what the user asked for, which is why
-    the two are reported apart. `policy_version` names the rule that applied,
-    so a run stays attributable if that rule later changes.
-    """
-
-    kind: Literal["bempp_wall_default"]
-    requested: Literal["omitted", "explicit_zero"]
-    effective_mm: float
-    reason_code: str
-    policy_version: int
-
-
-class SolvePlanResponse(BaseModel):
-    """The request-specific engine/formulation selected by the runtime."""
-
-    engine: str
-    formulation: Literal["full-3d"]
-    reason: str
-    eligibility_reasons: list[str]
-    engine_substitution: EngineSubstitution | None = None
-    adjustments: list[PlanAdjustment] = []
 
 
 class JobRequestsResponse(BaseModel):
@@ -534,21 +492,7 @@ def create_jobs_router(
                 message=str(exc),
                 client_request_id=body.client_request_id,
             )
-        plan = resolved.symmetry_metadata["solver_plan"]
-        substitution = plan.get("engine_substitution")
-        return SolvePlanResponse(
-            engine=resolved.engine_name,
-            formulation=plan["formulation"],
-            reason=plan["reason"],
-            eligibility_reasons=[str(reason) for reason in plan["eligibility_reasons"]],
-            engine_substitution=(
-                EngineSubstitution(**substitution) if substitution else None
-            ),
-            adjustments=[
-                PlanAdjustment(**adjustment)
-                for adjustment in plan.get("adjustments") or []
-            ],
-        )
+        return solve_plan_response(resolved)
 
     @router.post(
         "/api/solve",

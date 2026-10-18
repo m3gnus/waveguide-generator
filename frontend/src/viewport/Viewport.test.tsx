@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SolvePlan } from '../jobs/actions';
 import type { DecodedFrame } from '../api/frame';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
@@ -19,7 +20,7 @@ import { currentDocumentLoad, resetDesignStore, serializeDesign, useDesignStore 
 import { useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from './importedMesh';
-import { useSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { importedMeshStore } from './importedMeshStore';
 import { parseMSH } from './mshParser';
 import { useFieldPlaneStore } from './fieldPlaneStore';
@@ -28,6 +29,12 @@ import meshFixture from './test-fixtures/tagged_sources-small.msh?raw';
 import { femFieldFixture } from './test-fixtures/femField';
 import * as canvasModule from './ViewportCanvas';
 import * as femSceneModule from './FemFieldScene';
+
+const coordinator = vi.hoisted(() => ({ plan: null as SolvePlan | null }));
+vi.mock('../shell/JobsCoordinator', async (original) => ({
+  ...await original<typeof import('../shell/JobsCoordinator')>(),
+  useOptionalSolveControl: () => ({ plan: coordinator.plan }),
+}));
 
 const frame: DecodedFrame = {
   header: {
@@ -1001,7 +1008,7 @@ describe('BEMPP wall plan-adjustment note', () => {
   let host: HTMLDivElement;
   let root: Root;
 
-  function solvePlanWithAdjustments(adjustments: unknown[]) {
+  function solvePlanWithAdjustments(adjustments: NonNullable<SolvePlan["adjustments"]>): SolvePlan {
     return {
       engine: 'bempp',
       formulation: 'full-3d',
@@ -1016,8 +1023,8 @@ describe('BEMPP wall plan-adjustment note', () => {
     resetDesignStore();
     resetCadReturnStore();
     workspaceModeStore.setMode('parametric');
-    // Either solver slot may be selected while empty; the mesh view is what
-    // makes the effect that reads `/api/solve/plan` active.
+    coordinator.plan = null;
+    // The note is displayed only while the simulation mesh is selected.
     importedMeshStore.showSolver();
     host = document.createElement('div');
     document.body.append(host);
@@ -1032,22 +1039,11 @@ describe('BEMPP wall plan-adjustment note', () => {
     vi.restoreAllMocks();
   });
 
-  async function renderWithAdjustments(adjustments: unknown[]) {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      if (String(input) === '/api/solve/plan') {
-        return new Response(JSON.stringify(solvePlanWithAdjustments(adjustments)), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      // The solver-mesh build the same view activates is not under test here.
-      return new Response('not found', { status: 404 });
-    });
-    act(() => root.render(<Viewport />));
-    // The plan request is debounced (`SYMMETRY_TINT_DEBOUNCE_MS`), then awaited.
-    await act(async () => {
-      await new Promise((resolve) => { setTimeout(resolve, 450); });
-    });
+  async function renderWithAdjustments(adjustments: NonNullable<SolvePlan['adjustments']>) {
+    coordinator.plan = solvePlanWithAdjustments(adjustments);
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('not found', { status: 404 }));
+    await act(async () => root.render(<Viewport />));
+    expect(fetcher.mock.calls.filter(([url]) => String(url) === '/api/solve/plan')).toHaveLength(0);
   }
 
   it('shows the override sentence for an explicit-zero wall', async () => {
@@ -1078,32 +1074,18 @@ describe('BEMPP wall plan-adjustment note', () => {
     expect(note?.textContent).toContain('5 mm closed-wall default');
   });
 
-  it('plans again when the engine or accuracy changes', async () => {
-    const bodies: string[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      if (String(input) === '/api/solve/plan') {
-        bodies.push(String(init?.body));
-        return new Response(JSON.stringify(solvePlanWithAdjustments([])), {
-          status: 200, headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      return new Response('not found', { status: 404 });
-    });
-    const settle = async () => act(async () => { await new Promise((resolve) => { setTimeout(resolve, 450); }); });
-    act(() => root.render(<Viewport />));
-    await settle();
-    const first = bodies.length;
-    expect(first).toBeGreaterThan(0);
-    act(() => useSolveOptionsStore.getState().setEngine('bempp'));
-    await settle();
-    expect(bodies.length).toBeGreaterThan(first);
-    expect(JSON.parse(bodies.at(-1)!).options.engine).toBe('bempp');
-    const second = bodies.length;
-    act(() => useSolveOptionsStore.getState().setAccuracy('accurate'));
-    await settle();
-    expect(bodies.length).toBeGreaterThan(second);
-    expect(JSON.parse(bodies.at(-1)!).options.accuracy).toBe('accurate');
-    useSolveOptionsStore.getState().setEngine('auto');
+  it('renders coordinator plan updates without fetching a second plan', async () => {
+    await renderWithAdjustments([]);
+    coordinator.plan = solvePlanWithAdjustments([{
+      kind: 'bempp_wall_default', requested: 'omitted', effective_mm: 5,
+      reason_code: 'bempp_wall_default', policy_version: 1,
+    }]);
+    await act(async () => root.render(<Viewport />));
+    expect(host.querySelector('.solver-plan-adjustment-note')?.textContent).toContain('5 mm');
+    coordinator.plan = null;
+    await act(async () => root.render(<Viewport />));
+    expect(host.querySelector('.solver-plan-adjustment-note')).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === '/api/solve/plan')).toHaveLength(0);
   });
 
   it('shows nothing when the plan has no adjustments', async () => {
@@ -1128,6 +1110,7 @@ describe('solver-mesh refresh across a design load', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetDesignStore();
+    resetSolveOptionsStore();
     resetCadReturnStore();
     workspaceModeStore.setMode('parametric');
     importedMeshStore.showSolver();
@@ -1142,6 +1125,29 @@ describe('solver-mesh refresh across a design load', () => {
     importedMeshStore.clear();
     workspaceModeStore.setMode('parametric');
     vi.restoreAllMocks();
+  });
+
+  it('sends complete solve options and rebuilds after an option-only edit', async () => {
+    useSolveOptionsStore.getState().updateGroundPlane({ enabled: true, axis: 'y', height_m: 1 });
+    const requests: Array<{ options: { engine: string; ground_plane: { enabled: boolean } } }> = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (String(input) !== '/api/solver-mesh') return new Response('not found', { status: 404 });
+      requests.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify(solverMeshResponse(String(requests.length))), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    await act(async () => root.render(<Viewport />));
+    expect(requests).toHaveLength(1);
+    expect(requests[0].options.engine).toBe('auto');
+    expect(requests[0].options.ground_plane.enabled).toBe(true);
+    const revision = useDesignStore.getState().designRevision;
+    act(() => useSolveOptionsStore.getState().setEngine('bempp'));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 550)); });
+    expect(useDesignStore.getState().designRevision).toBe(revision);
+    expect(requests).toHaveLength(2);
+    expect(requests[1].options.engine).toBe('bempp');
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === '/api/solve/plan')).toHaveLength(0);
   });
 
   // `resetDesignStore` always rewinds the revision counter to the same value

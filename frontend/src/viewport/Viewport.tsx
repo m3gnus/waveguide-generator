@@ -7,8 +7,9 @@ import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { compareSelection } from '../api/results';
 import { runContext, runMatchesContext, useRunContext, type RunContext } from '../results/runCoherence';
-import { postSolvePlan, postSymmetry, solvePlanRequestBody, toSolveDesign, type PlanAdjustment } from '../jobs/actions';
+import { postSymmetry, solvePlanRequestBody, toSolveDesign } from '../jobs/actions';
 import { planAdjustmentNotice } from '../jobs/planAdjustments';
+import { useOptionalSolveControl } from '../shell/JobsCoordinator';
 import { postSolverMesh, solverMeshArtifactToken, solverMeshScene } from '../api/solverMesh';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -428,9 +429,8 @@ export function Viewport() {
   const observationHovered = useObservationStore((state) => state.hovered);
   // The observation readout follows the workspace: Imported has its own options.
   const polar = useScopedSolveOptions((state) => state.polar);
-  // Every input the plan depends on (engine, accuracy, symmetry, polar, ...),
-  // so the solver-view plan fetch re-runs when any of them changes.
-  const planOptionsKey = useSolveOptionsStore((state) => {
+  // Mesh resolution depends on the complete solve options as well as design.
+  const meshOptionsKey = useSolveOptionsStore((state) => {
     try { return JSON.stringify(state.options()); } catch { return null; }
   });
   const fieldEnabled = useFieldPlaneStore((state) => state.enabled);
@@ -573,7 +573,7 @@ export function Viewport() {
   const [solverMeshState, setSolverMeshState] = useState<SolverMeshRefreshState>({
     building: false, stale: false, staleReason: null, error: null,
   });
-  const [planAdjustments, setPlanAdjustments] = useState<PlanAdjustment[]>([]);
+  const planAdjustments = useOptionalSolveControl()?.plan?.adjustments ?? [];
   // Created once: the build reads the design, symmetry mode, and job list at
   // call time, so the latest design always wins without re-instantiating.
   const solverRefreshRef = useRef<SolverMeshRefreshController | null>(null);
@@ -583,10 +583,10 @@ export function Viewport() {
         const generation = importedMeshStore.beginIntent();
         const started = performance.now();
         try {
-          const body = JSON.stringify({
-            design: toSolveDesign(useDesignStore.getState().design),
-            symmetry: useSolveOptionsStore.getState().symmetry,
-          });
+          const body = solvePlanRequestBody(
+            useDesignStore.getState().design,
+            useSolveOptionsStore.getState().options(),
+          );
           const result = await postSolverMesh(body, fetch, signal);
           const token = solverMeshArtifactToken(result.stats.mesh_cache_key);
           const current = importedMeshStore.getSnapshot().solver;
@@ -857,6 +857,15 @@ export function Viewport() {
     [solverRefresh],
   );
 
+  const previousMeshOptions = useRef(meshOptionsKey);
+  useEffect(() => {
+    if (previousMeshOptions.current === meshOptionsKey) return;
+    previousMeshOptions.current = meshOptionsKey;
+    if (solverViewSelected) importedMeshStore.beginIntent();
+    solverRefresh.documentLoaded();
+    solverRefresh.designChanged(useDesignStore.getState().designRevision);
+  }, [meshOptionsKey, solverRefresh, solverViewSelected]);
+
   useEffect(() => {
     if (!solveRunningOrQueued) solverRefresh.solveSettled();
   }, [solveRunningOrQueued, solverRefresh]);
@@ -889,39 +898,6 @@ export function Viewport() {
       setCadSolverLoading(false);
     };
   }, [cadIngestId, cadName, cadSolverMesh, cadSolverRetry, cadSolverViewSelected]);
-
-  // Keep the plan fetch: a BEMPP wall-thickness override becomes visible here
-  // before submission, while the job log reports it only after submission.
-  useEffect(() => {
-    if (!solverViewSelected) {
-      setPlanAdjustments([]);
-      return undefined;
-    }
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      let body: string;
-      try {
-        if (planOptionsKey === null) throw new Error('Solve options are not usable.');
-        body = solvePlanRequestBody(design, JSON.parse(planOptionsKey));
-      } catch {
-        setPlanAdjustments([]);
-        return;
-      }
-      void postSolvePlan(body, fetch, controller.signal)
-        .then((plan) => {
-          if (controller.signal.aborted) return;
-          setPlanAdjustments(plan.adjustments ?? []);
-        })
-        .catch(() => {
-          if (controller.signal.aborted) return;
-          setPlanAdjustments([]);
-        });
-    }, SYMMETRY_TINT_DEBOUNCE_MS);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [design, planOptionsKey, solverViewSelected]);
 
   useEffect(() => {
     if (availablePlaneJob || !fieldEnabled) return;

@@ -754,11 +754,149 @@ async def _accuracy_engine(request: SolveRequest, registry: EngineRegistry) -> t
     )
 
 
+async def _resolve_parametric_engine(
+    request: SolveRequest,
+    engine_registry: EngineRegistry,
+    resolved_quadrants: int,
+    plan: dict[str, Any],
+    *,
+    require_available: bool,
+) -> tuple[SolveRequest, str]:
+    """Choose the host engine; previews can retain an unavailable selection.
+
+    Availability affects admission, not the geometry rules below. Still perform
+    normal AUTO selection and substitution when possible so previews and solves
+    on a ready host share the same engine-dependent geometry and cache entry.
+    """
+
+    try:
+        request, cpu_fallback = await _accuracy_engine(request, engine_registry)
+        engine_name = request.options.engine
+        plan["accuracy"] = request.options.accuracy
+        plan["engine"] = engine_name
+        if cpu_fallback is not None:
+            plan["fallback_reason"] = cpu_fallback
+        if engine_name == "auto":
+            # Resolve against the requested mounting, not just the host's engine
+            # list: BEAT advertises no coupled infinite-baffle support and rejects
+            # such a request outright, so picking it here would persist a job that
+            # a coupling-capable BEMPP on the same host could have solved.
+            mounting = _requested_mounting(request)
+            engine_name = await engine_registry.resolve(
+                "auto",
+                solver_mode=request.options.solver_mode,
+                mounting=mounting,
+                resolved_quadrants=resolved_quadrants,
+            )
+            if engine_name is None:
+                unsupported = {
+                    "infinite-baffle": " that supports a coupled infinite-baffle mounting",
+                    "ground-plane": " that supports a rigid ground-plane mounting",
+                }.get(mounting or "", "")
+                raise EngineUnavailableError(
+                    f"AUTO could not resolve a compatible solve engine{unsupported} from "
+                    "this host's capabilities. "
+                    + _engine_remedy(mounting)
+                    + " Explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
+                    "synthetic development solves."
+                )
+            request = request.model_copy(deep=True)
+            request.options.engine = engine_name
+            plan["engine"] = engine_name
+        else:
+            if engine_name == "beat":
+                # Legacy BEAT names the family; prefer its best ready backend
+                # before considering substitution by another engine.
+                resolved_beat = resolve_legacy_beat_engine(
+                    await engine_registry.capabilities()
+                )
+                if resolved_beat is not None:
+                    engine_name = resolved_beat
+                    request = request.model_copy(deep=True)
+                    request.options.engine = engine_name
+                    plan["engine"] = engine_name
+            if engine_name != "dryrun" and (
+                await engine_registry.get_engine(engine_name) is None
+            ):
+                if request.options.accuracy == "accurate":
+                    reason = await engine_registry.unavailable_reason(engine_name)
+                    raise EngineUnavailableError(
+                        f"Accurate requires BEAT engine '{engine_name}', which is unavailable. "
+                        f"{reason or 'No capability reason was reported.'} Choose Fast or enable BEAT."
+                    )
+                # Preserve the stored preference but substitute what AUTO would
+                # run on this host, reporting both the selection and its reason.
+                # Dry-run is excluded: real engines must never stand in for it.
+                unavailable_reason = await engine_registry.unavailable_reason(engine_name)
+                # Ground-plane mounting lives in options, not sim_type.
+                mounting = _requested_mounting(request)
+                substitute = await engine_registry.resolve(
+                    "auto",
+                    solver_mode=request.options.solver_mode,
+                    mounting=mounting,
+                    resolved_quadrants=resolved_quadrants,
+                )
+                if substitute is None:
+                    unsupported = {
+                        "infinite-baffle": " that supports a coupled infinite-baffle mounting",
+                        "ground-plane": " that supports a rigid ground-plane mounting",
+                    }.get(mounting or "", "")
+                    raise EngineUnavailableError(
+                        f"Solve engine '{engine_name}' is unavailable, and no other "
+                        f"engine on this host{unsupported} can take its place. "
+                        + (unavailable_reason or "No capability reason was reported.")
+                        + " "
+                        + _engine_remedy(mounting)
+                        + " Explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
+                        "synthetic development solves."
+                    )
+                request = request.model_copy(deep=True)
+                request.options.engine = substitute
+                plan["engine"] = substitute
+                plan["engine_substitution"] = {
+                    "requested": engine_name,
+                    "resolved": substitute,
+                    "reason": unavailable_reason
+                    or "No capability reason was reported.",
+                }
+                logger.info(
+                    "Solve engine %r is unavailable on this host; falling back to %r, "
+                    "which is what AUTO would have selected. %s The stored engine "
+                    "preference is unchanged.",
+                    engine_name,
+                    substitute,
+                    unavailable_reason or "No capability reason was reported.",
+                )
+                engine_name = substitute
+        if await engine_registry.get_engine(engine_name) is None:
+            reason = await engine_registry.unavailable_reason(engine_name)
+            fallback_reason = (
+                "Dry-run solves require WG2_ENABLE_DRYRUN=1."
+                if engine_name == "dryrun"
+                else "No capability reason was reported."
+            )
+            raise EngineUnavailableError(
+                f"Solve engine '{engine_name}' is unavailable. "
+                f"{reason or fallback_reason}"
+            )
+    except EngineUnavailableError:
+        if require_available:
+            raise
+        engine_name = request.options.engine
+        plan["engine"] = engine_name
+    return request, engine_name
+
+
 async def resolve_submission(
     request: SolveRequest,
     engine_registry: EngineRegistry,
+    *,
+    require_available_engine: bool = True,
 ) -> SubmissionResolution:
     """Resolve every host-dependent parametric submission decision once.
+
+    ``require_available_engine=False`` resolves preview geometry even when this
+    host cannot admit the solve. Geometry transforms and domain rules stay here.
 
     This boundary deliberately stops before UUID allocation or store access so
     non-HTTP callers can ask the runtime exactly the same questions as a real
@@ -776,7 +914,6 @@ async def resolve_submission(
 
     _refuse_removed_solver(request)
     original_requested = request.options.engine
-    request, cpu_fallback = await _accuracy_engine(request, engine_registry)
     engine_name = request.options.engine
     if engine_name not in SELECTABLE_ENGINE_NAMES:
         raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
@@ -815,8 +952,10 @@ async def resolve_submission(
         ),
         "eligibility_reasons": [],
     }
-    if cpu_fallback is not None:
-        symmetry_metadata["solver_plan"]["fallback_reason"] = cpu_fallback
+    request, engine_name = await _resolve_parametric_engine(
+        request, engine_registry, resolved_quadrants,
+        symmetry_metadata["solver_plan"], require_available=require_available_engine,
+    )
     if request.options.accuracy == "accurate":
         if resolved_quadrants == 12:
             raise SymmetryValidationError(
@@ -834,122 +973,6 @@ async def resolve_submission(
                 "Turn off the ground plane, or choose Fast and a compatible engine."
             )
 
-    if engine_name == "auto":
-        # Resolve against the requested mounting, not just the host's engine
-        # list: BEAT advertises no coupled infinite-baffle support and rejects
-        # such a request outright, so picking it here would persist a job that
-        # a coupling-capable BEMPP on the same host could have solved.
-        mounting = _requested_mounting(request)
-        engine_name = await engine_registry.resolve(
-            "auto",
-            solver_mode=request.options.solver_mode,
-            mounting=mounting,
-            resolved_quadrants=resolved_quadrants,
-        )
-        if engine_name is None:
-            unsupported = {
-                "infinite-baffle": " that supports a coupled infinite-baffle mounting",
-                "ground-plane": " that supports a rigid ground-plane mounting",
-            }.get(mounting or "", "")
-            raise EngineUnavailableError(
-                f"AUTO could not resolve a compatible solve engine{unsupported} from "
-                "this host's capabilities. "
-                + _engine_remedy(mounting)
-                + " Explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
-                "synthetic development solves."
-            )
-        request = request.model_copy(deep=True)
-        request.options.engine = engine_name
-        symmetry_metadata["solver_plan"]["engine"] = engine_name
-    else:
-        if engine_name == "beat":
-            # A design file or stored solve option written before BEAT's
-            # backends became separately selectable. It named the family and
-            # let the package probe pick the backend; it still means "the best
-            # BEAT this host has", resolved against the same order AUTO uses.
-            #
-            # This runs before the substitution below rather than folding into
-            # it, because the two mean different things. Substituting would
-            # hand a stored "beat" to whatever AUTO prefers -- Metal, on the
-            # Macs where that is faster -- and silently change which solver ran
-            # for a user who had asked for BEAT by name. Resolving it keeps the
-            # engine and only names its backend. If no BEAT backend is
-            # available at all, the name stands and the substitution below
-            # takes over, which is the correct outcome for that case.
-            resolved_beat = resolve_legacy_beat_engine(
-                await engine_registry.capabilities()
-            )
-            if resolved_beat is not None:
-                engine_name = resolved_beat
-                request = request.model_copy(deep=True)
-                request.options.engine = engine_name
-                symmetry_metadata["solver_plan"]["engine"] = engine_name
-        if engine_name != "dryrun" and (
-            await engine_registry.get_engine(engine_name) is None
-        ):
-            if request.options.accuracy == "accurate":
-                reason = await engine_registry.unavailable_reason(engine_name)
-                raise EngineUnavailableError(
-                    f"Accurate requires BEAT engine '{engine_name}', which is unavailable. "
-                    f"{reason or 'No capability reason was reported.'} Choose Fast or enable BEAT."
-                )
-            # A stored engine selection outlives the machine it was made on. Pick
-            # BEAT on a box that has it, open the app on one that does not, and the
-            # refusal this used to raise reached the UI as nothing but a disabled
-            # Solve button: the app knew exactly why it could not solve and said so
-            # in a `title` tooltip on a control you cannot hover meaningfully. Fall
-            # back to what AUTO would have chosen and report the swap, so the user
-            # is told rather than left guessing.
-            #
-            # The stored preference is deliberately not rewritten. It is host-local
-            # UI state, not part of the design, and leaving it alone is what lets it
-            # re-engage by itself the day the engine becomes available here.
-            #
-            # Excluded: `dryrun`, a development toggle whose entire point
-            # is that a real engine must never quietly stand in for it.
-            unavailable_reason = await engine_registry.unavailable_reason(engine_name)
-            # The requested mounting, not the design's sim_type: a ground plane
-            # lives in SolveOptions, so reading sim_type here would let a
-            # substitution hand a grounded solve to an engine that ignores it.
-            mounting = _requested_mounting(request)
-            substitute = await engine_registry.resolve(
-                "auto",
-                solver_mode=request.options.solver_mode,
-                mounting=mounting,
-                resolved_quadrants=resolved_quadrants,
-            )
-            if substitute is None:
-                unsupported = {
-                    "infinite-baffle": " that supports a coupled infinite-baffle mounting",
-                    "ground-plane": " that supports a rigid ground-plane mounting",
-                }.get(mounting or "", "")
-                raise EngineUnavailableError(
-                    f"Solve engine '{engine_name}' is unavailable, and no other "
-                    f"engine on this host{unsupported} can take its place. "
-                    + (unavailable_reason or "No capability reason was reported.")
-                    + " "
-                    + _engine_remedy(mounting)
-                    + " Explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
-                    "synthetic development solves."
-                )
-            request = request.model_copy(deep=True)
-            request.options.engine = substitute
-            symmetry_metadata["solver_plan"]["engine"] = substitute
-            symmetry_metadata["solver_plan"]["engine_substitution"] = {
-                "requested": engine_name,
-                "resolved": substitute,
-                "reason": unavailable_reason
-                or "No capability reason was reported.",
-            }
-            logger.info(
-                "Solve engine %r is unavailable on this host; falling back to %r, "
-                "which is what AUTO would have selected. %s The stored engine "
-                "preference is unchanged.",
-                engine_name,
-                substitute,
-                unavailable_reason or "No capability reason was reported.",
-            )
-            engine_name = substitute
     if (
         _ground_plane_axis(request) is not None
         and request.design.root.simulation.sim_type == "infinite-baffle"
@@ -966,7 +989,11 @@ async def resolve_submission(
             "baffle already mounts the mouth in an unbounded wall; turn the "
             "ground plane off, or set the simulation type to free-standing."
         )
-    if _ground_plane_axis(request) is not None:
+    check_engine_contract = (
+        require_available_engine
+        or await engine_registry.get_engine(engine_name) is not None
+    )
+    if check_engine_contract and _ground_plane_axis(request) is not None:
         # Every path that picks an engine converges here, which is the point.
         # The AUTO gate above filters candidates by mounting, but it is only
         # reached when the engine is literally "auto": an explicitly selected engine skips it, and a
@@ -991,7 +1018,7 @@ async def resolve_submission(
                 f"Engines that can: {offer}. Choose one, or turn the ground "
                 "plane off."
             )
-    if request.design.root.simulation.sim_type == "infinite-baffle":
+    if check_engine_contract and request.design.root.simulation.sim_type == "infinite-baffle":
         # Every path that picks an engine converges here, exactly as for the
         # ground plane above: an explicit engine skips the AUTO gate, and so do
         # a stored preference, an imported ATH SimType=1 and a retry. Refused
@@ -1012,7 +1039,8 @@ async def resolve_submission(
                 "simulation type to free-standing."
             )
     if (
-        engine_name != "dryrun"
+        check_engine_contract
+        and engine_name != "dryrun"
         and await engine_registry.get_engine(engine_name) is not None
         and not await engine_registry.supports_symmetry(engine_name, resolved_quadrants)
     ):
@@ -1039,17 +1067,6 @@ async def resolve_submission(
         symmetry_metadata["resolved_quadrants"] = resolved_quadrants
         symmetry_metadata["solver_plan"]["symmetry_reason"] = (
             "BEMPP coupled infinite-baffle uses the validated full-domain formulation"
-        )
-    if await engine_registry.get_engine(engine_name) is None:
-        reason = await engine_registry.unavailable_reason(engine_name)
-        fallback_reason = (
-            "Dry-run solves require WG2_ENABLE_DRYRUN=1."
-            if engine_name == "dryrun"
-            else "No capability reason was reported."
-        )
-        raise EngineUnavailableError(
-            f"Solve engine '{engine_name}' is unavailable. "
-            f"{reason or fallback_reason}"
         )
     request, wall_adjustment = _apply_bempp_wall_default(request, engine_name)
     if wall_adjustment is not None:

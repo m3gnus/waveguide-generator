@@ -16,8 +16,9 @@ import pytest
 from fastapi import HTTPException
 
 from server.design.schema import DesignConfig
+from server.engines.registry import EngineRegistry
+from server.jobs.mesh_preview import solver_mesh_response
 from server.mesh import builder as mesh_builder
-from server.mesh.api import solver_mesh_response
 from server.mesh.builder import clear_solver_mesh_cache
 from server.mesh.child import (
     CRASH_MESSAGE,
@@ -31,6 +32,12 @@ from server.mesh.child import (
     close_mesher_child,
     run_mesh_build,
 )
+
+
+async def _preview_response(*args, **kwargs):
+    return await solver_mesh_response(
+        *args, engine_registry=EngineRegistry(detector=lambda: []), **kwargs
+    )
 
 
 # Test doubles. Module-level so the spawned child can import them by name.
@@ -387,11 +394,11 @@ def test_a_job_reaching_mesh_after_child_shutdown_is_interrupted(
 def test_mesh_http_request_during_child_shutdown_returns_503(path, shared_child) -> None:
     from fastapi import FastAPI
     from server.exports.api import router as export_router
-    from server.mesh.api import mount_solver_mesh
+    from server.jobs.mesh_preview import mount_solver_mesh
     from server.mesh.child import get_mesher_child
 
     app = FastAPI()
-    mount_solver_mesh(app)
+    mount_solver_mesh(app, EngineRegistry(detector=lambda: []))
     app.include_router(export_router)
     clear_solver_mesh_cache()
     begin_mesher_child_shutdown()
@@ -500,7 +507,7 @@ def test_a_crashing_solve_mesh_is_a_422_that_names_the_fix(monkeypatch, shared_c
 
     async def scenario() -> None:
         with pytest.raises(HTTPException) as refusal:
-            await solver_mesh_response(design, "auto")
+            await _preview_response(design, "auto")
         assert refusal.value.status_code == 422
         assert refusal.value.detail == CRASH_MESSAGE
         # The same event loop and process still serve a build afterwards.

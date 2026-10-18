@@ -11633,6 +11633,9 @@
           "design": {
             "$ref": "#/components/schemas/DesignConfig"
           },
+          "options": {
+            "$ref": "#/components/schemas/SolveOptions"
+          },
           "symmetry": {
             "default": "auto",
             "enum": [
@@ -11650,6 +11653,76 @@
           "design"
         ],
         "title": "SolverMeshRequest",
+        "type": "object"
+      },
+      "SolverMeshResponse": {
+        "properties": {
+          "cut_planes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cut Planes",
+            "type": "array"
+          },
+          "msh_text": {
+            "title": "Msh Text",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/SolvePlanResponse"
+          },
+          "quadrants": {
+            "title": "Quadrants",
+            "type": "integer"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/SolverMeshStats"
+          }
+        },
+        "required": [
+          "msh_text",
+          "stats",
+          "cut_planes",
+          "quadrants",
+          "plan"
+        ],
+        "title": "SolverMeshResponse",
+        "type": "object"
+      },
+      "SolverMeshStats": {
+        "properties": {
+          "mesh_cache_hit": {
+            "title": "Mesh Cache Hit",
+            "type": "boolean"
+          },
+          "mesh_cache_key": {
+            "title": "Mesh Cache Key",
+            "type": "string"
+          },
+          "triangle_count": {
+            "title": "Triangle Count",
+            "type": "integer"
+          },
+          "vertex_count": {
+            "title": "Vertex Count",
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "triangle_count",
+          "vertex_count",
+          "warnings",
+          "mesh_cache_key",
+          "mesh_cache_hit"
+        ],
+        "title": "SolverMeshStats",
         "type": "object"
       },
       "SolverSelectionRequest": {
@@ -17353,9 +17426,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Solver Mesh Api Solver Mesh Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SolverMeshResponse"
                 }
               }
             },

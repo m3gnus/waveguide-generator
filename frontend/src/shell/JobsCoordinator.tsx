@@ -54,6 +54,8 @@ export interface SolveNotice {
 }
 
 interface SolveControl {
+  /** The coordinator's current parametric plan, also shared with dock panels. */
+  plan: SolvePlan | null;
   solve(): void;
   /** CAD Link mode: Solve solves the CAD model on screen. */
   cadMode: boolean;
@@ -720,6 +722,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     [cadGeometryActive, fileGeometryActive, crossoverDraftError, solveOptionsError, solvePlan, solvePlanError, solvePlanPending],
   );
   const control = useMemo<SolveControl>(() => ({
+    plan: solvePlan,
     solve,
     cadMode: cadGeometryActive,
     disabled: !solveEnabled,

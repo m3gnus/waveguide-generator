@@ -3,6 +3,7 @@ import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw'
 import { postSolverMesh, solverMeshArtifactToken, solverMeshScene, type SolverMeshResult } from './solverMesh';
 
 const result: SolverMeshResult = {
+  plan: { engine: 'metal', formulation: 'full-3d', reason: 'test', eligibility_reasons: [] },
   msh_text: meshFixture,
   stats: {
     triangle_count: 12,

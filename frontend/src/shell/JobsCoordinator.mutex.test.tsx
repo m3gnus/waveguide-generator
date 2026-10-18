@@ -37,6 +37,7 @@ import {
   refreshedArchiveJob,
   SolveEngineUnavailableError,
   useSolveControl,
+  useOptionalSolveControl,
 } from './JobsCoordinator';
 import { SolveActions } from './TopBar';
 import { CrossoverAdvanced } from '../design/CrossoverAdvanced';
@@ -294,6 +295,29 @@ describe('solve invocation mutex', () => {
     workspaceModeStore.setMode('parametric');
     vi.clearAllTimers();
     vi.useRealTimers();
+  });
+
+  it('shares its plan with a viewport consumer in a separate dock root', async () => {
+    const observed = { control: null as ReturnType<typeof useOptionalSolveControl> };
+    function DockPlan() {
+      observed.control = useOptionalSolveControl();
+      return null;
+    }
+    const dock = document.createElement('div');
+    const dockRoot = createRoot(dock);
+    try {
+      await act(async () => dockRoot.render(<DockPlan />));
+      expect(observed.control?.plan).toBe(mocks.solvePlan);
+      mocks.solvePlan = { ...mocks.solvePlan!, engine: 'bempp' };
+      await act(async () => root.render(<JobsCoordinator><span>updated</span></JobsCoordinator>));
+      expect(observed.control?.plan).toBe(mocks.solvePlan);
+      mocks.solvePlan = null;
+      mocks.solvePlanPending = true;
+      await act(async () => root.render(<JobsCoordinator><span>pending</span></JobsCoordinator>));
+      expect(observed.control?.plan).toBeNull();
+    } finally {
+      act(() => dockRoot.unmount());
+    }
   });
 
   const flushPlan = async () => {

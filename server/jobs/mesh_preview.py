@@ -4,9 +4,8 @@
 the exact Gmsh 2.2 artifact a parametric solve would run on, so the viewport
 can draw real solver triangles instead of the smooth preview tessellation.
 The build queues FIFO on the persistent single-thread gmsh worker, which is
-the same serialization a solve submission observes; symmetry is resolved with
-the same helpers the solve pipeline uses, so the reduced domain and its cut
-planes match what the solver will actually assemble.
+the same serialization a solve submission observes. Submission resolution and
+execution transforms are shared with the solve pipeline.
 """
 
 from __future__ import annotations
@@ -17,12 +16,15 @@ from typing import Any, Awaitable, Callable, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from server.contracts.geometry import CUT_PLANES_BY_QUADRANTS as CUT_PLANES_BY_QUADRANTS
-from server.design.schema import DesignConfig, Expr
+from server.design.schema import DesignConfig
+from server.engines.registry import EngineRegistry
+from server.jobs.models import SolveOptions, SolveRequest
+from server.jobs.plans import SolvePlanResponse, solve_plan_response
+from server.jobs.runtime.core import _execution_request, resolve_submission
 from server.mesh.child import MesherShuttingDownError
-from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
 
 #: How often the disconnect watcher samples the request socket. Coarse on
 #: purpose: the cooperative cancel checkpoints inside the builder are sparse,
@@ -37,6 +39,23 @@ class SolverMeshRequest(BaseModel):
 
     design: DesignConfig
     symmetry: SymmetryMode = "auto"
+    options: SolveOptions = Field(default_factory=SolveOptions)
+
+
+class SolverMeshStats(BaseModel):
+    triangle_count: int
+    vertex_count: int
+    warnings: list[str]
+    mesh_cache_key: str
+    mesh_cache_hit: bool
+
+
+class SolverMeshResponse(BaseModel):
+    msh_text: str
+    stats: SolverMeshStats
+    cut_planes: list[str]
+    quadrants: int
+    plan: SolvePlanResponse
 
 
 class ClientDisconnected(Exception):
@@ -45,10 +64,13 @@ class ClientDisconnected(Exception):
 
 async def solver_mesh_response(
     design: DesignConfig,
-    symmetry: SymmetryMode,
+    symmetry: SymmetryMode | None,
     is_disconnected: Callable[[], Awaitable[bool]] | None = None,
+    *,
+    options: SolveOptions | None = None,
+    engine_registry: EngineRegistry,
 ) -> dict[str, Any]:
-    """Resolve symmetry, build the artifact, and shape the viewport payload.
+    """Resolve the solve request, build its artifact, and return mesh plus plan.
 
     Separated from the route so tests exercise the full behaviour without
     fabricating a ``Request``. ``is_disconnected`` is polled on a side task;
@@ -61,17 +83,19 @@ async def solver_mesh_response(
     # heavy and a process that never builds must never pay for it.
     from server.mesh.builder import build_solver_mesh
 
-    resolution = await asyncio.to_thread(resolve_symmetry, design)
+    options = (options or SolveOptions()).model_copy(deep=True)
+    if symmetry is not None:
+        options.symmetry = symmetry
     try:
-        quadrants = validate_symmetry_mode(symmetry, resolution)
+        resolved = await resolve_submission(
+            SolveRequest.model_validate({"design": design, "options": options}),
+            engine_registry,
+            require_available_engine=False,
+        )
+        quadrants = int(resolved.symmetry_metadata["resolved_quadrants"])
+        execution = _execution_request(resolved.request, resolved_quadrants=quadrants)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    # Stamp the resolved domain exactly as runtime._execution_request does, so
-    # the artifact -- and decisively its cache entry -- is the one the solve
-    # will reuse rather than a full-domain sibling.
-    stamped = design.model_copy(deep=True)
-    stamped.root.mesh.quadrants = Expr(value=float(quadrants))
 
     disconnected = threading.Event()
     watcher: asyncio.Task[None] | None = None
@@ -91,8 +115,8 @@ async def solver_mesh_response(
 
     try:
         result = await build_solver_mesh(
-            stamped,
-            {"mesh_validation_mode": "warn"},
+            execution.design,
+            execution.options,
             cancel_cb=_cancel_cb,
         )
     except ClientDisconnected as exc:
@@ -119,16 +143,19 @@ async def solver_mesh_response(
         },
         "cut_planes": list(CUT_PLANES_BY_QUADRANTS[quadrants]),
         "quadrants": quadrants,
+        "plan": solve_plan_response(resolved).model_dump(mode="json"),
     }
 
 
-def mount_solver_mesh(application: FastAPI) -> None:
-    @application.post("/api/solver-mesh")
+def mount_solver_mesh(application: FastAPI, engine_registry: EngineRegistry) -> None:
+    @application.post("/api/solver-mesh", response_model=SolverMeshResponse)
     async def solver_mesh(request: Request, body: SolverMeshRequest) -> dict[str, Any]:
         return await solver_mesh_response(
             body.design,
-            body.symmetry,
+            body.symmetry if "symmetry" in body.model_fields_set else None,
             request.is_disconnected,
+            options=body.options,
+            engine_registry=engine_registry,
         )
 
 
