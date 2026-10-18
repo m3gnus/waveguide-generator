@@ -377,7 +377,7 @@ def test_typed_startup_errors_do_not_change_folder(tmp_path, monkeypatch, error,
 
 
 class CancellableEngine(TinyEngine):
-    async def run(self, request, *, cancel_cb, stage_cb):
+    async def run(self, request, *, cancel_cb, stage_cb, **_port_kwargs):
         stage_cb("frequency_solve", 0.5, "Waiting for cancellation")
         while True:
             cancel_cb()

@@ -401,7 +401,7 @@ class _GatedSolve:
         self.release = threading.Event()
         self.solves = 0
 
-    async def run(self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any) -> Any:
+    async def run(self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any, **_port_kwargs: Any) -> Any:
         del stage_cb
 
         def solve() -> Any:

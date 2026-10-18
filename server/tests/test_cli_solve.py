@@ -51,7 +51,7 @@ $EndElements
 class TinyEngine:
     name = "metal"
 
-    async def run(self, request, *, cancel_cb, stage_cb):
+    async def run(self, request, *, cancel_cb, stage_cb, **_port_kwargs):
         cancel_cb()
         stage_cb("frequency_solve", 0.5, "Solving tiny fixture")
         frequencies = request.options.frequencies_hz or [500.0]
@@ -631,7 +631,7 @@ class InterruptedEngine:
 
     name = "metal"
 
-    async def run(self, request, *, cancel_cb, stage_cb):
+    async def run(self, request, *, cancel_cb, stage_cb, **_port_kwargs):
         import signal
         import threading
 

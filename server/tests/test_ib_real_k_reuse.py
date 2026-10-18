@@ -45,7 +45,7 @@ def _request(*, sim_type: str, key: str) -> SolveRequest:
 class _FakeEngine:
     name = "metal"
 
-    async def run(self, request, *, cancel_cb, stage_cb):
+    async def run(self, request, *, cancel_cb, stage_cb, **_port_kwargs):
         return EngineRunResult(
             results={
                 "frequencies": [500.0],

@@ -74,7 +74,7 @@ class RecordedEngine:
     def __init__(self, name, runs):
         self.name, self.runs = name, runs
 
-    async def run(self, request, *, cancel_cb, stage_cb):
+    async def run(self, request, *, cancel_cb, stage_cb, **_port_kwargs):
         cancel_cb()
         backend = probe.execution_route()[0] if self.name == 'bempp' else self.name
         self.runs.append((self.name, backend))

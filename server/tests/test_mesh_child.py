@@ -339,7 +339,7 @@ def test_a_job_reaching_mesh_after_child_shutdown_is_interrupted(
         class MeshEngine:
             name = "bempp"
 
-            async def run(self, request, *, cancel_cb, stage_cb):
+            async def run(self, request, *, cancel_cb, stage_cb, **_port_kwargs):
                 stage_cb("mesh", 0.0, "Building solver mesh")
                 ready.set()
                 await reach_mesh.wait()
@@ -855,7 +855,7 @@ def test_app_shutdown_does_not_respawn_the_mesh_child(
     class MeshEngine:
         name = "bempp"
 
-        async def run(self, _request, *, cancel_cb, stage_cb):
+        async def run(self, _request, *, cancel_cb, stage_cb, **_port_kwargs):
             def checkpoint():
                 try:
                     cancel_cb()

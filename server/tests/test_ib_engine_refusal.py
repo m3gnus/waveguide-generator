@@ -181,7 +181,7 @@ def test_retry_of_a_stored_job_is_refused_when_the_engine_cannot_do_it(
     class FakeEngine:
         name = "beat-cpu"
 
-        async def run(self, request, *, cancel_cb, stage_cb):
+        async def run(self, request, *, cancel_cb, stage_cb, **_port_kwargs):
             return EngineRunResult(
                 results={
                     "frequencies": [500.0],

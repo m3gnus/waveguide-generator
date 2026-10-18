@@ -25,13 +25,15 @@ def test_disconnect_resumes_cursor_while_http_waits_for_running_job(tmp_path, mo
     released = asyncio.Event()
 
     class WaitingEngine(CancellableEngine):
-        async def run(self, request, *, cancel_cb, stage_cb):
+        async def run(self, request, *, cancel_cb, stage_cb, **_port_kwargs):
             stage_cb("frequency_solve", 0.5, "Waiting for reconnect")
             while not released.is_set():
                 cancel_cb()
                 await asyncio.sleep(0.01)
             from server.tests.test_cli_solve import TinyEngine
-            return await TinyEngine().run(request, cancel_cb=cancel_cb, stage_cb=stage_cb)
+            return await TinyEngine().run(
+                request, cancel_cb=cancel_cb, stage_cb=stage_cb, **_port_kwargs
+            )
 
     registry = EngineRegistry(
         detector=lambda: [EngineInfo("metal", True, "test", "test")],

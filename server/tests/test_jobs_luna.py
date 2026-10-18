@@ -9,7 +9,6 @@ import logging
 from pathlib import Path
 import sqlite3
 import threading
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -22,6 +21,7 @@ from server.jobs.models import JobMetadataPatch, SolveOptions, SolveRequest
 from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
 from server.mesh.builder import _solver_mesher_config
+from server.solver.base import EngineRunResult
 
 
 def _record(job_id: str, status: str = "running") -> dict[str, Any]:
@@ -317,10 +317,10 @@ def test_real_stage_task_exception_is_logged(
         class Engine:
             name = "mock"
 
-            async def run(self, _request: Any, *, cancel_cb: Any, stage_cb: Any) -> Any:
+            async def run(self, _request: Any, *, cancel_cb: Any, stage_cb: Any, **_port_kwargs: Any) -> Any:
                 stage_cb("solve", 0.5, "half")
                 await asyncio.sleep(0)
-                return SimpleNamespace(results={"ok": True}, msh_text=None, mesh_stats=None)
+                return EngineRunResult(results={"ok": True}, msh_text=None, mesh_stats=None)
 
         with caplog.at_level(logging.ERROR):
             await runtime._run_real_engine("real", _request(), Engine())
@@ -435,7 +435,7 @@ def test_real_completion_flushes_latest_coalesced_progress_and_log(
         class Engine:
             name = "mock"
 
-            async def run(self, _request: Any, *, cancel_cb: Any, stage_cb: Any) -> Any:
+            async def run(self, _request: Any, *, cancel_cb: Any, stage_cb: Any, **_port_kwargs: Any) -> Any:
                 for index in range(20):
                     stage_cb(
                         "frequency_solve",
@@ -443,7 +443,7 @@ def test_real_completion_flushes_latest_coalesced_progress_and_log(
                         f"terminal-frequency-{index}",
                     )
                 await asyncio.sleep(0)
-                return SimpleNamespace(
+                return EngineRunResult(
                     results={"metadata": {}}, msh_text=None, mesh_stats=None
                 )
 
@@ -474,7 +474,7 @@ def test_radiation_artifact_availability_and_failure_warning_are_job_visible(
             name = "mock"
 
             async def run(self, _request: Any, **_kwargs: Any) -> Any:
-                return SimpleNamespace(
+                return EngineRunResult(
                     results={
                         "channels": {"main": {}},
                         "metadata": {
@@ -533,7 +533,7 @@ def test_degraded_cardioid_result_completes_with_main_channels(tmp_path: Path) -
             name = "mock"
 
             async def run(self, _request: Any, **_kwargs: Any) -> Any:
-                return SimpleNamespace(
+                return EngineRunResult(
                     results={
                         "channels": {"mf": {}, "port": {}},
                         "channel_order": ["mf", "port"],
@@ -579,7 +579,7 @@ def test_noncomplete_exit_cleans_persisted_radiation_artifact(
             name = "mock"
 
             async def run(self, _request: Any, **_kwargs: Any) -> Any:
-                return SimpleNamespace(
+                return EngineRunResult(
                     results={"channels": {"main": {}}, "metadata": {}},
                     msh_text=None,
                     mesh_stats=None,

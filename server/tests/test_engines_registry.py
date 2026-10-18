@@ -1018,7 +1018,7 @@ def test_real_runtime_seam_persists_artifact_stats_results_and_stages(
     class FakeMetal:
         name = "metal"
 
-        async def run(self, request, *, cancel_cb, stage_cb):
+        async def run(self, request, *, cancel_cb, stage_cb, **_port_kwargs):
             cancel_cb()
             stage_cb("mesh_prepare", 0.5, "Building real mesh")
             stage_cb("frequency_solve", 0.5, "Solving native frequency")
@@ -1089,7 +1089,7 @@ $EndElements
     class FakeMetal:
         name = "metal"
 
-        async def run(self, request, *, cancel_cb, stage_cb):
+        async def run(self, request, *, cancel_cb, stage_cb, **_port_kwargs):
             del stage_cb
             cancel_cb()
             if not request.options.polar_config.field_plane:
@@ -1218,7 +1218,7 @@ def test_real_runtime_persists_mesh_before_a_native_solve_failure(
     class FailingMetal:
         name = "metal"
 
-        async def run(self, request, *, cancel_cb, stage_cb, artifact_cb):
+        async def run(self, request, *, cancel_cb, stage_cb, artifact_cb, **_port_kwargs):
             cancel_cb()
             await artifact_cb("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", {"triangle_count": 7})
             raise RuntimeError("native solve failed")
@@ -1262,7 +1262,7 @@ def test_real_runtime_persists_advisory_mesh_warning_in_job_log(
     class WarningMetal:
         name = "metal"
 
-        async def run(self, request, *, cancel_cb, stage_cb, artifact_cb):
+        async def run(self, request, *, cancel_cb, stage_cb, artifact_cb, **_port_kwargs):
             cancel_cb()
             await artifact_cb(
                 "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
@@ -1307,7 +1307,7 @@ def test_accurate_cpu_fallback_is_recorded_in_job_result_and_log(tmp_path: Path)
     class BeatCpu:
         name = "beat-cpu"
 
-        async def run(self, request, *, cancel_cb, stage_cb, artifact_cb):
+        async def run(self, request, *, cancel_cb, stage_cb, artifact_cb, **_port_kwargs):
             cancel_cb()
             await artifact_cb("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", {"triangle_count": 7})
             return EngineRunResult(results={
