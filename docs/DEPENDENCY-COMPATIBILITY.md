@@ -1,7 +1,8 @@
 # Dependency compatibility
 
-The mesher pin `232dff4c` supplies native source-contour, front-baffle woofer,
-shared horn/woofer and passive phase-plug contracts. Its ATH import contract is
+The mesher pin `7b803c63` supplies native source-contour, front-baffle woofer,
+shared horn/woofer and passive phase-plug contracts, and the public
+`printable_surface_tags()` that STL export uses. Its ATH import contract is
 versioned: designs saved with the `ath-2026-08c-v1` stamp build exactly as
 before, including bounded near-planar imported rear returns (pointwise
 displacement at most the smaller of 0.0001 mm and 0.0001 times the wall
