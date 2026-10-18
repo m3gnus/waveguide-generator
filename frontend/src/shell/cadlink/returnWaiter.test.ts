@@ -22,9 +22,10 @@ const returned = { ...bundle, requestId: 'pull-1', designIds: [identity.designId
 const waiters: ReturnType<typeof createCadReturnWaiter>[] = [];
 const connections: ReturnType<typeof createCadConnectionStore>[] = [];
 beforeEach(() => {
-  vi.useFakeTimers(); vi.setSystemTime('2026-10-11T12:00:00Z');
   localStorage.clear(); resetDesignStore(); resetDocumentStore(); resetCadReturnStore(); importedMeshStore.clear();
   useDocumentStore.getState().setCadLink(identity, 'current'); workspaceModeStore.setMode('parametric');
+  // Count the waiter's timers, excluding the fixture's durable mode write.
+  vi.useFakeTimers(); vi.setSystemTime('2026-10-11T12:00:00Z');
 });
 afterEach(() => {
   waiters.forEach((waiter) => waiter.dispose()); connections.forEach((connection) => connection.invalidate());

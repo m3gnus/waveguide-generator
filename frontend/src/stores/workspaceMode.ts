@@ -1,4 +1,4 @@
-import { namespaceStorage } from './durableSettings';
+import { durableSettings, namespaceStorage } from './durableSettings';
 
 export type WorkspaceMode = 'parametric' | 'cad';
 
@@ -27,6 +27,21 @@ class WorkspaceModeStore {
   private value: WorkspaceModeState = { mode: storedMode(), importedInput: inputStorage.getItem('input') === 'file' ? 'file' : 'cad', inputRevision: 0 };
   private listeners = new Set<Listener>();
 
+  constructor() {
+    // Adopt both namespaces together after hydration, so model restoration
+    // never sees the restored mode with the previous imported input.
+    const adopt = () => queueMicrotask(() => {
+      const mode = storedMode();
+      const importedInput = inputStorage.getItem('input') === 'file' ? 'file' : 'cad';
+      if (mode === this.value.mode && importedInput === this.value.importedInput) return;
+      this.value = { mode, importedInput,
+        inputRevision: this.value.inputRevision + (importedInput !== this.value.importedInput ? 1 : 0) };
+      this.listeners.forEach((listener) => listener());
+    });
+    durableSettings.subscribe('workspaceMode', adopt);
+    durableSettings.subscribe('importedInput', adopt);
+  }
+
   subscribe = (listener: Listener): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -42,9 +57,10 @@ class WorkspaceModeStore {
   };
 
   setMode = (mode: WorkspaceMode): void => {
+    // Even an unchanged choice is newer intent than a pending server read.
+    storage.setItem(STORAGE_KEY, mode);
     if (mode === this.value.mode) return;
     this.value = { ...this.value, mode };
-    storage.setItem(STORAGE_KEY, mode);
     this.listeners.forEach((listener) => listener());
   };
 }

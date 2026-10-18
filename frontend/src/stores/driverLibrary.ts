@@ -5,7 +5,7 @@ import {
   type DriverKind,
   type DriverLibraryInfo,
 } from '../api/drivers';
-import { namespaceStorage } from './durableSettings';
+import { durableSettings, namespaceStorage } from './durableSettings';
 import { DRIVER_FIELD_KEYS, type DriverFieldKey, type DriverPreset } from './cadReturn';
 
 /**
@@ -180,6 +180,11 @@ export const useDriverLibraryStore = create<DriverLibraryState>((set, get) => ({
     });
   },
 }));
+
+// Hydration replaces the cache; adopt it before a later save uses this list.
+durableSettings.subscribe('driverLibrary', () => {
+  useDriverLibraryStore.setState({ saved: readSavedDrivers() });
+});
 
 /** Whether the picker can offer a search at all. */
 export function driverLibraryHasFiles(state: Pick<DriverLibraryState, 'status' | 'info'>): boolean {

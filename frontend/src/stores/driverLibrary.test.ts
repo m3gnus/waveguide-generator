@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SETTINGS_NAMESPACES } from './durableSettings';
 import { SETTINGS_NAMESPACE_EFFECTS } from './settingsClassification';
 import {
@@ -22,6 +22,56 @@ const MINE: SavedDriver = {
   z_ohm: 8,
   xo_min_hz: 1_600,
 };
+
+describe('late driver-library hydration', () => {
+  beforeEach(() => { vi.resetModules(); localStorage.clear(); vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+  it('adopts a fuller server list before saving another driver', async () => {
+    localStorage.setItem(storageKey, JSON.stringify({ version: 1, drivers: [MINE] }));
+    let answer!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { answer = resolve; });
+    vi.stubGlobal('fetch', vi.fn(() => pending));
+    const { durableSettings } = await import('./durableSettings');
+    const hydration = durableSettings.hydrate({ timeoutMs: 1_500 });
+    await vi.advanceTimersByTimeAsync(1_500);
+    await hydration;
+    const { useDriverLibraryStore: store } = await import('./driverLibrary');
+    const remote = { ...MINE, id: 'mine:remote', label: 'Remote driver' };
+    answer(new Response(JSON.stringify({ namespaces: {
+      driverLibrary: JSON.stringify({ version: 1, drivers: [MINE, remote] }),
+    } })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.getState().saved).toEqual([MINE, remote]);
+    const added = { ...MINE, id: 'mine:new', label: 'New driver' };
+    store.getState().save(added);
+    expect(JSON.parse(localStorage.getItem(storageKey)!)).toEqual({ version: 1, drivers: [added, MINE, remote] });
+  });
+
+  it('adopts a durable deletion without republishing the cached list', async () => {
+    localStorage.setItem(storageKey, JSON.stringify({ version: 1, drivers: [MINE] }));
+    const { durableSettings } = await import('./durableSettings');
+    const { useDriverLibraryStore: store } = await import('./driverLibrary');
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ deleted: ['driverLibrary'] })));
+    vi.stubGlobal('fetch', fetcher);
+    await durableSettings.hydrate();
+    expect(store.getState().saved).toEqual([]);
+    expect(localStorage.getItem(storageKey)).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains a local save made while hydration is pending', async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));
+    const { durableSettings } = await import('./durableSettings');
+    const { useDriverLibraryStore: store } = await import('./driverLibrary');
+    const hydration = durableSettings.hydrate();
+    store.getState().save(MINE);
+    answer(new Response(JSON.stringify({ namespaces: { driverLibrary: JSON.stringify({ version: 1, drivers: [] }) } })));
+    await hydration;
+    expect(store.getState().saved).toEqual([MINE]);
+  });
+});
 
 describe('the driverLibrary durable namespace', () => {
   beforeEach(() => {
