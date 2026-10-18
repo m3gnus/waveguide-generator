@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 
 from server.cadlink.intake import ingest as ingest_module
+from server.cadlink.joblane.job_shims import accept_operation_solve_isolated
 from server.cadlink.joblane import preparation as preparation_module
 from server.cadlink.intake.ingest import read_snapshot, retain_snapshot
 from server.cadlink.intake.isolation import ChildRefusal
@@ -163,7 +164,13 @@ def _received(
 
 
 def _collect(harness: Harness) -> Any:
-    """Collect delivered solve commands as the backend's delivery loop does."""
+    """Retain and admit deliveries, leaving preparation for the scenario's press."""
+
+    def admit(operation_id: str) -> bool:
+        job_id = harness._loop.run(accept_operation_solve_isolated(
+            harness.context(), operation_id, schedule=False, delivery_released=True,
+        ))
+        return job_id is not None
 
     return collect_solve_deliveries(
         harness.data_dir,
@@ -171,7 +178,17 @@ def _collect(harness: Harness) -> Any:
         retain=lambda operation_id: retain_operation_snapshot(
             harness.store, harness.data_dir, harness.workspace.resolve(), operation_id
         ),
+        accept_solve=admit,
     )
+
+
+def _assert_admitted_ack(harness: Harness, operation_id: str = "cmd-1") -> None:
+    path = harness.data_dir / "ipc/wglink/.wg-solve-acks" / f"{operation_id}.json"
+    ack = json.loads(path.read_text())
+    job = harness.latest_job(operation_id)
+    assert (ack["outcome"], ack["jobId"]) == ("accepted", job["id"])
+    assert harness.row(operation_id)["job_id"] == job["id"]
+    assert job["status"] == "preparing" and job["started_at"] is None
 
 
 # -- setup revisions ---------------------------------------------------------------
@@ -315,6 +332,7 @@ def test_a_delivered_return_is_retained_before_its_delivery_is_acknowledged(
     _collect(harness)
 
     assert list(requests.iterdir()) == []  # acknowledged
+    _assert_admitted_ack(harness)
     assert harness.store.get_operation("cmd-1") is not None
     assert json.loads(harness.store.get_operation("cmd-1")["snapshot_json"])["manifest_sha256"] == manifest
     # Nothing prepared it before its folder went and WG restarted.
@@ -1584,10 +1602,13 @@ def test_a_malformed_return_never_blocks_the_deliveries_behind_it(harness: Harne
     _collect(harness)
 
     assert list(requests.iterdir()) == []
+    _assert_admitted_ack(harness, "cmd-bad")
+    _assert_admitted_ack(harness, "cmd-good")
     assert harness.row("cmd-bad")["snapshot_json"] is None
     assert json.loads(harness.row("cmd-good")["snapshot_json"])["manifest_sha256"] == good_manifest
     with pytest.raises(WgReturnError, match="nested too deeply"):
         read_wgreturn(nested)
+    assert harness.prepare("cmd-bad")["reason"] == "snapshot_invalid"
 
 
 def test_an_unexpected_failure_never_strands_the_operation(harness: Harness) -> None:
@@ -1780,10 +1801,13 @@ def test_a_delivery_is_acknowledged_only_after_its_snapshot_is_retained(harness:
     # The claim is kept: the add-in's command is not spent on a return WG could not keep.
     assert len(_claims(requests)) == 1
     assert harness.row()["snapshot_json"] is None
+    assert harness.row()["job_id"] is None
+    assert not (harness.data_dir / "ipc/wglink/.wg-solve-acks/cmd-1.json").exists()
     hidden.rename(bundle)
     _collect(harness)
 
     assert list(requests.iterdir()) == []
+    _assert_admitted_ack(harness)
     assert json.loads(harness.row()["snapshot_json"])["manifest_sha256"] == manifest
     # The return then leaves the WGLink folder, and the operation still prepares.
     shutil.rmtree(bundle)
@@ -1808,13 +1832,14 @@ def test_a_claim_whose_return_stays_unreadable_is_acknowledged_at_the_bound(
         _collect(harness)
 
     assert list(requests.iterdir()) == []
+    _assert_admitted_ack(harness)
     assert any(
         record.levelno == logging.WARNING and "cmd-1" in record.getMessage()
         for record in caplog.records
     )
-    # Acknowledged anyway, and the operation waits for its return, as before.
+    # Admission supplies a job at the bound; preparation explains the missing return.
     row = harness.row()
-    assert (row["state"], row["snapshot_json"]) == ("received", None)
+    assert (row["state"], row["snapshot_json"]) == ("accepted", None)
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
 
@@ -1827,6 +1852,7 @@ def test_a_return_that_can_never_be_retained_is_acknowledged_at_once(harness: Ha
     _collect(harness)
 
     assert list(requests.iterdir()) == []
+    _assert_admitted_ack(harness)
     assert harness.row()["snapshot_json"] is None
     summary = harness.prepare()
     assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_invalid")
@@ -1844,7 +1870,10 @@ def test_one_unreadable_claim_never_holds_the_deliveries_behind_it(harness: Harn
 
     assert len(_claims(requests)) == 1
     assert not (requests / "cmd-2.json").exists()
+    _assert_admitted_ack(harness, "cmd-2")
     assert harness.row("cmd-1")["snapshot_json"] is None
+    assert harness.row("cmd-1")["job_id"] is None
+    assert not (harness.data_dir / "ipc/wglink/.wg-solve-acks/cmd-1.json").exists()
     assert json.loads(harness.row("cmd-2")["snapshot_json"])["manifest_sha256"] == second_manifest
 
 

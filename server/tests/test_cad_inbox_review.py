@@ -32,6 +32,7 @@ from server.cadlink.intake.solve_command import (
     RETAIN_TRANSIENT,
     SOLVE_REQUESTS_DIRECTORY,
     collect_solve_deliveries,
+    record_outcome,
 )
 from server.cadlink.store import CadLinkStore
 from server.tests.test_cad_preparation import _write_return
@@ -166,7 +167,14 @@ def test_a_kept_claim_whose_later_read_fails_is_still_taken(env, monkeypatch) ->
     collect_solve_deliveries(data_dir, store, retain=retain)
     collect_solve_deliveries(data_dir, store, retain=retain)
     assert store.get_operation("cmd-kept") is not None
+    # Reading and retention succeeded; only admission may now release the claim.
+    assert len(_claims(data_dir)) == 1
+    ack = data_dir / "ipc/wglink/.wg-solve-acks/cmd-kept.json"
+    assert not ack.exists()
+    record_outcome(store, "cmd-kept", state="accepted", job_id="job-kept")
+    collect_solve_deliveries(data_dir, store)
     assert _claims(data_dir) == []
+    assert json.loads(ack.read_text())["jobId"] == "job-kept"
 
 
 def test_a_claim_that_stays_unreadable_is_reported_once_and_kept(env, monkeypatch) -> None:
@@ -332,7 +340,19 @@ def test_a_brief_hold_on_the_claim_is_ridden_out_in_the_same_pass(env, monkeypat
     data_dir, workspace, store = env
     bundle_path, manifest = _write_return(workspace)
     _drop(data_dir, _request("cmd-brief", bundle_path, manifest))
-    _fail_reads(monkeypatch, claims=True, times=2)
-    collect_solve_deliveries(data_dir, store)
+    count = _fail_reads(monkeypatch, claims=True, times=2)
+    admitted: list[str] = []
+
+    def admit(operation_id: str) -> bool:
+        admitted.append(operation_id)
+        record_outcome(store, operation_id, state="accepted", job_id="job-brief")
+        return True
+
+    collect_solve_deliveries(data_dir, store, accept_solve=admit)
+    assert count["n"] == 2 and admitted == ["cmd-brief"]
     assert store.get_operation("cmd-brief") is not None
     assert _claims(data_dir) == []
+    ack = json.loads((data_dir / "ipc/wglink/.wg-solve-acks/cmd-brief.json").read_text())
+    assert (ack["outcome"], ack["jobId"]) == (
+        "accepted", "job-brief",
+    )

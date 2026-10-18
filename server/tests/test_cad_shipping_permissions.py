@@ -22,6 +22,7 @@ from server.cadlink.intake.solve_command import (
     CLAIM_PREFIX,
     SOLVE_REQUESTS_DIRECTORY,
     collect_solve_deliveries,
+    record_outcome,
 )
 from server.cadlink.ipc import ipc_folder
 from server.cadlink.store import CadLinkStore
@@ -330,8 +331,14 @@ def test_parent_swap_is_not_followed(
 
     monkeypatch.setattr(solve_command.os, "open", swap_after_directory_open)
     store = CadLinkStore.for_data_dir(data_dir)
+
+    def admit(operation_id: str) -> bool:
+        assert operation_id == original["commandId"]
+        record_outcome(store, operation_id, state="accepted", job_id="job-original")
+        return True
+
     try:
-        collect_solve_deliveries(data_dir, store)
+        collect_solve_deliveries(data_dir, store, accept_solve=admit)
         assert swapped
         assert store.get_operation(original["commandId"]) is not None
         assert store.get_operation(outside_request["commandId"]) is None
@@ -340,6 +347,8 @@ def test_parent_swap_is_not_followed(
 
     assert (outside / "request.json").is_file()
     assert list(saved_inbox.iterdir()) == []
+    ack = json.loads((data_dir / "ipc/wglink/.wg-solve-acks/original-request.json").read_text())
+    assert (ack["outcome"], ack["jobId"]) == ("accepted", "job-original")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks and modes")

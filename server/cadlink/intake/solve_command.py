@@ -142,11 +142,11 @@ CAD_SOLVE_SUBMISSION_PREFIX = "cad-solve:"
 # rather than one the consumer is about to delete.
 CLAIM_PREFIX = ".wg-solve-claim-"
 # What retaining a delivery's snapshot found (CAD-OPERATIONS.md, "Consuming a
-# delivery"). A delivery is acknowledged once its snapshot is retained, or once
-# its return can never be retained as it is named, which preparation then
-# refuses. A return that cannot be read now keeps its claim for the next pass,
-# for at most RETENTION_PASSES passes; then the delivery is acknowledged anyway
-# and the operation waits for its return, so no claim is held for ever.
+# delivery"). Solve retention precedes admission and acknowledgement. An invalid
+# solve return proceeds to admission so preparation can explain its refusal. A
+# return that cannot be read now waits for at most RETENTION_PASSES passes;
+# then admission proceeds and preparation explains the unavailable return.
+# The claim stays until admission settles and its acknowledgement is published.
 RETAINED = "retained"
 RETAIN_INVALID = "invalid"
 RETAIN_TRANSIENT = "transient"
@@ -1025,8 +1025,8 @@ def _keep_for_retention(claim: Path, command: PendingSolveCommand) -> bool:
             )
         return True
     logger.warning(
-        "The return of solve command %r could not be read in %d passes. Its delivery is "
-        "acknowledged, and the operation waits for its return.",
+        "The return of solve command %r could not be read in %d passes. Its retention "
+        "wait has ended; acknowledgement still waits for a durable outcome.",
         command.command_id,
         waited,
     )
