@@ -6,7 +6,7 @@ type Base = { id: string; reference?: boolean; construction?: boolean; data?: JS
 export type Line = Base & { kind: 'line'; p1: string; p2: string };
 export type Arc = Base & { kind: 'arc'; center: string; start: string; end: string; ccw: boolean };
 export type Entity = Line | Arc | (Base & { kind: 'circle' | 'ellipse' | 'bspline' });
-export type Constraint = SolverConstraint;
+export type Constraint = SolverConstraint & { label?: string };
 export type NewConstraint = Constraint extends infer C ? C extends Constraint ? Omit<C, 'id'> : never : never;
 export interface Sketch {
   version: 'wg-sketch-v1'; points: Point[]; entities: Entity[]; constraints: Constraint[]; nextId: number;
@@ -44,6 +44,7 @@ export function constraintProblem(s: Sketch, c: Constraint | NewConstraint): str
     case 'pointOnArc': valid = point(c.point) && kind(c.arc) === 'arc'; break;
     case 'radius': valid = kind(c.arc) === 'arc'; break;
   }
+  if (c.label !== undefined && typeof c.label !== 'string') return 'Constraint labels must be strings.';
   if (!valid) return `Invalid entity kinds or references for ${c.kind}.`;
   if (['distance', 'distanceX', 'distanceY', 'angle', 'pointLineDistance', 'radius'].includes(c.kind)
     && (!('value' in c) || !Number.isFinite(c.value) || typeof c.driving !== 'boolean')) return 'Dimensions need a finite value and a driving flag.';

@@ -156,9 +156,13 @@ export class SketchSession {
     for (const a of before.entities) if (a.kind === 'arc') {
       const previous = arcGeometry(before, a, oldPoints).sweep, g = arcGeometry(after, a, newPoints);
       const next = g.sweep + tau * Math.round((previous - g.sweep) / tau);
+      // A driving dimension may reach an exact semicircle (e.g. surround depth =
+      // half its width), while continuing through it to a major arc still flips branch.
+      const branchChanged = dimension
+        ? Math.abs(previous) <= Math.PI + 1e-9 ? Math.abs(next) > Math.PI + 1e-9 : Math.abs(next) < Math.PI - 1e-9
+        : Math.abs(previous) < Math.PI && Math.abs(next) >= Math.PI || Math.abs(previous) > Math.PI && Math.abs(next) <= Math.PI;
       if (g.radius <= 1e-9 || Math.abs(g.radius - g.endRadius) > 1e-9 * Math.max(1, g.radius)
-        || previous * next <= 0 || Math.abs(previous) < Math.PI && Math.abs(next) >= Math.PI
-        || Math.abs(previous) > Math.PI && Math.abs(next) <= Math.PI
+        || previous * next <= 0 || branchChanged
         || Math.abs(next) >= tau || Math.abs(next) <= 1e-12) return false;
     }
     if (!dimension) return true;

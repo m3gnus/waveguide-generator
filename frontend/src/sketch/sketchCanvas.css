@@ -60,3 +60,6 @@
 
 .sketch-dimension-context { position: absolute; top: 8px; right: 8px; z-index: 1; margin: 0; }
 .sketch-label-hit { fill: transparent; pointer-events: all; cursor: pointer; }
+
+.sketch-dimension-lines { fill: none; stroke: var(--fg3); stroke-width: 1; pointer-events: none; }
+.sketch-dimension .sketch-glyph { paint-order: stroke; stroke: var(--surface-floating); stroke-width: 4px; stroke-linejoin: round; }

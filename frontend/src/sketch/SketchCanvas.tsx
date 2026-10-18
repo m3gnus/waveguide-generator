@@ -11,6 +11,7 @@ import { continueLine, lineState, placeLine, typedTarget, type LineState } from 
 import { coalesceTargets, select } from './tools/select';
 import { dimensionFor } from './tools/dimension';
 import { constraintFor, selectionConstraints } from './tools/constraints';
+import { dimensionHelper, dimensionLabel, dimensionLayout } from './dimensionGraphics';
 import './sketchCanvas.css';
 
 export interface CanvasSession {
@@ -43,17 +44,22 @@ const hints: Record<Tool, string> = {
 };
 const symbols: Record<string, string> = { horizontal: 'H', vertical: 'V', coincident: '●', tangent: '⌒', fix: '▣', equal: '=', pointOnLine: '⊙', pointOnArc: '⊙' };
 function initialView(sketch: Sketch, width = 640, height = 360): View {
-  const ids = new Set(sketch.entities.filter(e => !e.reference).flatMap(entityPoints));
+  const ids = new Set(sketch.entities.filter(e => !e.reference && !dimensionHelper(e)).flatMap(e => e.kind === 'arc' ? [e.start, e.end] : entityPoints(e)));
   const pts = sketch.points.filter(p => ids.has(p.id));
   // Include only extrema on the finite arc, including major arcs.
-  for (const e of sketch.entities) if (e.kind === 'arc') {
+  for (const e of sketch.entities) if (e.kind === 'arc' && !dimensionHelper(e)) {
     const g = arcGeometry(sketch, e);
     for (const angle of [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2]) {
       const p = { id: '', x: g.center.x + g.radius * Math.cos(angle), y: g.center.y + g.radius * Math.sin(angle) };
       if (onArc(sketch, e, p)) pts.push(p);
     }
   }
-  return fit({ minX: Math.min(0, ...pts.map(p => p.x)), maxX: Math.max(1, ...pts.map(p => p.x)), minY: Math.min(0, ...pts.map(p => p.y)), maxY: Math.max(1, ...pts.map(p => p.y)) }, { width, height }, 32);
+  const named = sketch.constraints.filter(c => c.label && 'value' in c);
+  const bottom = named.filter(c => c.kind === 'distanceX').length * 24;
+  const top = named.filter(c => c.kind === 'distanceY').length * 24;
+  const right = named.length ? 170 : 0;
+  const fitted = fit({ minX: Math.min(0, ...pts.map(p => p.x)), maxX: Math.max(1, ...pts.map(p => p.x)), minY: Math.min(0, ...pts.map(p => p.y)), maxY: Math.max(1, ...pts.map(p => p.y)) }, { width: Math.max(100, width - right), height: Math.max(100, height - bottom - top) }, 32);
+  return { ...fitted, offsetY: fitted.offsetY + top };
 }
 export function SketchCanvas({ sketch, diagnosis, references, problems, session, entityStyle, problemAction, selection: controlled, onSelectionChange, fitRequest, onClassicDrawing, entityClassName }: SketchCanvasProps) {
   const svg = useRef<SVGSVGElement>(null);
@@ -115,7 +121,8 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
   const endpoints = new Set(sketch.entities.flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : e.kind === 'arc' ? [e.start, e.end] : []));
   const hiddenCentres = arcs.map(e => e.center).filter(id => !endpoints.has(id) && !selection.includes(id) && hoveredPoint !== id
     && !arcs.some(e => e.center === id && (selection.includes(e.id) || hoveredArc === e.id)));
-  const visiblePoints = sketch.points.filter(p => !fixedPoints.has(p.id) && !hiddenCentres.includes(p.id));
+  const helperPoints = new Set(sketch.entities.filter(dimensionHelper).flatMap(entityPoints).filter(id => !sketch.entities.some(e => !dimensionHelper(e) && entityPoints(e).includes(id))));
+  const visiblePoints = sketch.points.filter(p => !fixedPoints.has(p.id) && !hiddenCentres.includes(p.id) && !helperPoints.has(p.id));
   const validStarts = new Set(drawing && tool !== 'line' ? visiblePoints.filter(p => {
     try { tangentIncoming(sketch, p.id); return true; } catch { return false; }
   }).map(p => p.id) : []);
@@ -407,6 +414,18 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
     const points = ids.filter(id => !fixedPoints.has(id)).map(xy);
     return { x: (points.reduce((v, p) => v + p.x, 0) / points.length || 24) + 8, y: (points.reduce((v, p) => v + p.y, 0) / points.length || 24) - 12 - i % 3 * 14 };
   };
+  const contourPoints = sketch.entities.filter(e => !e.construction).flatMap(e => e.kind === 'arc' ? [e.start, e.end] : entityPoints(e)).map(xy);
+  for (const e of sketch.entities) if (e.kind === 'arc' && !e.construction) {
+    const g = arcGeometry(sketch, e);
+    for (const angle of [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2]) {
+      const p = { x: g.center.x + g.radius * Math.cos(angle), y: g.center.y + g.radius * Math.sin(angle) };
+      if (onArc(sketch, e, p)) contourPoints.push(worldToScreen(view, p));
+    }
+  }
+  const dimensionBounds = { right: Math.max(0, ...contourPoints.map(p => p.x)), bottom: Math.max(0, ...contourPoints.map(p => p.y)), top: Math.min(size.height, ...contourPoints.map(p => p.y)) };
+  const dimensionLanes = new Map<string, number>();
+  const laneCounts: Record<string, number> = {};
+  for (const c of sketch.constraints) if ('value' in c) { dimensionLanes.set(c.id, laneCounts[c.kind] ?? 0); laneCounts[c.kind] = (laneCounts[c.kind] ?? 0) + 1; }
   const start = from(chain.from), preview = worldToScreen(view, snap ?? cursor);
   let previewPath: string | undefined;
   if (drawing && start && (chain.mode === 'arc3' && chain.end || chain.mode === 'tangent' && typeof chain.from === 'string')) {
@@ -452,7 +471,7 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
       <svg ref={svg} viewBox={`0 0 ${size.width} ${size.height}`} preserveAspectRatio="xMidYMid meet" tabIndex={0} role="application" aria-label="Sketch drawing" onPointerEnter={() => { hovered.current = true; }} onPointerLeave={() => { hovered.current = false; setHoveredArc(undefined); setHoveredPoint(undefined); setPickReason(''); }} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={() => pointerUp()} onPointerCancel={() => pointerUp(true)} onLostPointerCapture={() => pointerUp(true)} onDoubleClick={() => { if (drawing) choose('select'); }}>
         <g className="sketch-grid" aria-hidden="true">{gridX.map(x => <line key={`x${x}`} x1={worldToScreen(view, { x, y: 0 }).x} x2={worldToScreen(view, { x, y: 0 }).x} y1={0} y2={size.height}/>)}{gridY.map(y => <line key={`y${y}`} x1={0} x2={size.width} y1={worldToScreen(view, { x: 0, y }).y} y2={worldToScreen(view, { x: 0, y }).y}/>)}</g>
         <g className="sketch-references" aria-label="Fixed references">{references.map(r => <g key={r.id}><line x1={r.kind === 'axis' ? view.offsetX : 0} x2={r.kind === 'axis' ? view.offsetX : size.width} y1={r.kind === 'baffle' ? view.offsetY : 0} y2={r.kind === 'baffle' ? view.offsetY : size.height}/><text x={r.kind === 'axis' ? view.offsetX + 4 : 8} y={r.kind === 'baffle' ? view.offsetY - 4 : 14}>{r.kind}</text></g>)}</g>
-        {sketch.entities.filter(e => !e.reference && !references.some(r => r.id === e.id)).map(e => {
+        {sketch.entities.filter(e => !e.reference && !dimensionHelper(e) && !references.some(r => r.id === e.id)).map(e => {
           const ids = entityPoints(e), status = conflictRefs.has(e.id) ? 'conflicting' : color(ids), issues = problems.filter(p => p.ids.includes(e.id) || ids.some(id => p.ids.includes(id)));
           let d = '';
           if (e.kind === 'line') { const a = xy(e.p1), b = xy(e.p2); d = `M${a.x},${a.y} L${b.x},${b.y}`; }
@@ -466,9 +485,13 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
             {centre ? <path data-id={p.id} d={`M${at.x - 5},${at.y} h10 M${at.x},${at.y - 5} v10`} tabIndex={-1} role="button" aria-label={`Select point ${p.id}`} className={`${className} sketch-centre`}><title>{p.id}: {p.x}, {p.y} mm</title></path>
               : <circle data-id={p.id} cx={at.x} cy={at.y} r={4} tabIndex={-1} role="button" aria-label={`Select point ${p.id}`} className={className}><title>{p.id}: {p.x}, {p.y} mm{problems.filter(v => v.ids.includes(p.id)).map(v => ` · ${v.message}`)}</title></circle>}
           </g>; })}
-        {sketch.constraints.map((c, i) => { const at = constraintPosition(c, i), dimension = 'value' in c;
-          const label = dimension ? `${c.driving ? '' : '('}${(c.kind === 'angle' ? c.value * 180 / Math.PI : c.value).toFixed(2)}${c.kind === 'angle' ? '°' : ' mm'}${c.driving ? '' : ')'}` : symbols[c.kind] ?? c.kind;
-          return <g key={c.id} data-constraint-id={c.id}><rect data-id={c.id} x={at.x - 6} y={at.y - 17} width={dimension ? label.length * 7 + 12 : 24} height={28} className="sketch-label-hit"/><text data-id={c.id} x={at.x} y={at.y} tabIndex={-1} role="button" aria-label={`${dimension ? 'Dimension' : 'Constraint'} ${c.kind} ${c.id}${diagnosis?.constraintStates[c.id] === 'redundant' ? ' implied' : ''}`} className={`sketch-glyph ${dimension && !c.driving ? 'reference' : ''} ${diagnosis?.constraintStates[c.id] ?? ''} ${conflicts.includes(c.id) ? 'conflicting' : ''} ${selection.includes(c.id) ? 'selected' : ''}`} onDoubleClick={event => { event.stopPropagation(); if (dimension) editDimension(c); }}><title>{c.kind} {c.id}{diagnosis?.constraintStates[c.id] === 'redundant' ? ' (implied)' : ''}</title>{label}</text></g>;
+        {sketch.constraints.map((c, i) => { const dimension = 'value' in c;
+          const layout = dimensionLayout(sketch, c, xy, dimensionBounds, dimensionLanes.get(c.id) ?? 0);
+          const at = layout?.at ?? constraintPosition(c, i);
+          const label = dimension ? dimensionLabel(c) : symbols[c.kind] ?? c.kind;
+          return <g key={c.id} data-constraint-id={c.id} className={dimension ? 'sketch-dimension' : undefined}>
+            {layout && <g className="sketch-dimension-lines" aria-hidden="true"><path className="sketch-extension-lines" d={layout.path}/><path className="sketch-dimension-arrows" d={layout.arrows}/></g>}
+            <rect data-id={c.id} x={at.x - (layout ? label.length * 3.2 : 0) - 6} y={at.y - 17} width={dimension ? label.length * 6.4 + 12 : 24} height={28} className="sketch-label-hit"/><text textAnchor={layout ? 'middle' : undefined} data-id={c.id} x={at.x} y={at.y} tabIndex={-1} role="button" aria-label={`${dimension ? 'Dimension' : 'Constraint'} ${c.kind} ${c.id}${c.label ? ` ${c.label}` : ''}${diagnosis?.constraintStates[c.id] === 'redundant' ? ' implied' : ''}`} className={`sketch-glyph ${dimension && !c.driving ? 'reference' : ''} ${diagnosis?.constraintStates[c.id] ?? ''} ${conflicts.includes(c.id) ? 'conflicting' : ''} ${selection.includes(c.id) ? 'selected' : ''}`} onDoubleClick={event => { event.stopPropagation(); if (dimension) editDimension(c); }}><title>{c.kind} {c.id}{diagnosis?.constraintStates[c.id] === 'redundant' ? ' (implied)' : ''}</title>{label}</text></g>;
         })}
         {previewPath && <path className="sketch-preview" d={previewPath}/>}
         {drawing && start && !previewPath && <line className="sketch-preview" x1={worldToScreen(view, start).x} y1={worldToScreen(view, start).y} x2={preview.x} y2={preview.y}/>}

@@ -9,6 +9,7 @@ import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
 import { SketchController, type Authoring } from '../sketch/controller';
 import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, type SourceMeta } from '../sketch/adapters/sourceContour';
+import { presetDefaults as defaults, presetLabels, seedPreset } from '../sketch/adapters/sourcePreset';
 import { uniqueProblems } from '../sketch/adapter';
 import { parseSketch } from '../sketch/model';
 import type { Command } from '../sketch/commands';
@@ -19,12 +20,7 @@ import './sourceContourEditor.css';
 
 const storage = namespaceStorage('sourceContourDraft');
 const id = () => globalThis.crypto.randomUUID();
-const defaults = {
-  flat: { radius_mm: 8 },
-  dome: { radius_mm: 8, height_mm: 3, surround_width_mm: 2, surround_depth_mm: .5, land_width_mm: 1 },
-  cone: { radius_mm: 10, depth_mm: 4, cap_radius_mm: 3, cap_height_mm: 2, surround_width_mm: 2, surround_depth_mm: .6, land_width_mm: 1 },
-};
-const labels: Record<string, string> = { radius_mm: 'Radius', height_mm: 'Dome height', depth_mm: 'Cone depth', cap_radius_mm: 'Dust-cap radius', cap_height_mm: 'Dust-cap height', surround_width_mm: 'Surround width', surround_depth_mm: 'Surround depth', land_width_mm: 'Rigid land width', width_mm: 'Baffle width', length_mm: 'Horn length', mouth_radius_mm: 'Mouth radius', housing_radius_mm: 'Housing radius', backing_depth_mm: 'Backing depth', aperture_radius_mm: 'Aperture radius' };
+const labels: Record<string, string> = { ...presetLabels, width_mm: 'Baffle width', length_mm: 'Horn length', mouth_radius_mm: 'Mouth radius', housing_radius_mm: 'Housing radius', backing_depth_mm: 'Backing depth', aperture_radius_mm: 'Aperture radius' };
 
 export function readSourceDraft(): SourceDocument {
   try {
@@ -59,6 +55,9 @@ export function readSourceAuthoring(document: SourceDocument): Authoring<SourceM
       || !Array.isArray(meta.references) || meta.references.length !== 2
       || !meta.references.every(r => ['axis', 'baffle'].includes(r.kind) && parsed.sketch.entities.some(e => e.id === r.id && e.reference && e.kind === 'line'))
       || ![meta.physical_source_id, meta.rim_id, meta.channel_id].every(v => typeof v === 'string') || !['normal', 'axial'].includes(meta.motion)) return fallback;
+    if (meta.preset && (!['flat', 'dome', 'cone'].includes(meta.preset.shape) || !meta.preset.dimensions
+      || typeof meta.preset.dimensions !== 'object' || Array.isArray(meta.preset.dimensions)
+      || !Object.values(meta.preset.dimensions).every(id => typeof id === 'string'))) return fallback;
     const lowered = lower(parsed.sketch, meta);
     return envelope.pending === true || lowered.ok && sameDocument(lowered.document, document)
       ? { sketch: parsed.sketch, meta: { ...meta, weights: movingWeights(parsed.sketch, meta.weights) } } : fallback;
@@ -152,8 +151,8 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   const [presets, setPresets] = useState<SourcePreset[]>([]);
   const [selected, setSelected] = useState<SourcePreset>();
   const [name, setName] = useState('');
-  const [shape, setShape] = useState<'flat' | 'dome' | 'cone'>('cone');
-  const [dimensions, setDimensions] = useState<Record<string, number>>({ ...defaults.cone });
+  const [shape, setShape] = useState<'flat' | 'dome' | 'cone'>(() => author.meta.preset?.shape ?? 'cone');
+  const [dimensions, setDimensions] = useState<Record<string, number>>(() => ({ ...defaults[author.meta.preset?.shape ?? 'cone'] }));
   const [drawPoints, setDrawPoints] = useState<SourcePoint[] | null>(null);
   const [selectedPatch, setSelectedPatch] = useState(0);
   const [attachment, setAttachment] = useState<SourceAttachment>({ kind: 'baffle', dimensions: { width_mm: 44, height_mm: 54, depth_mm: 12, aperture_radius_mm: 14, center_mm: [0, 0, 0] } });
@@ -244,11 +243,11 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
     try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   }
-  async function adopt(value: SourceValidation) {
-    const next = seed(value.document);
+  async function adopt(value: SourceValidation, preset?: { shape: typeof shape; dimensions: Record<string, number> }) {
+    const next = preset ? seedPreset(value.document, preset.shape, preset.dimensions) : seed(value.document);
     if (!classic && controller.current) { await controller.current.adopt(next); }
     else { replaceAuthor(next); change(value.document); }
-    setFitRequest(v => v + 1); setNotice('Constraints were reset for the loaded contour.');
+    setFitRequest(v => v + 1); setNotice(next.meta.preset ? 'Named dimensions drive this shape.' : 'Constraints were reset for the loaded contour.');
     setView(fit(value.document.contour.points, value.meridian)); setAccepted({ key: JSON.stringify(value.document), value }); setSelectedPatch(0); setDrawPoints(null); setCanvasSelection([]);
   }
 
@@ -264,6 +263,18 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   }
   const xy = (p: SourcePoint) => [30 + p.r_mm / view.r * 580, 20 + (view.high - p.z_mm) / (view.high - view.low) * 210];
   const path = (points: [number, number][]) => points.map(([r_mm, z_mm], i) => `${i ? 'L' : 'M'}${xy({ id: '', r_mm, z_mm }).join(',')}`).join(' ');
+  const activePreset = !classic && author.meta.preset?.shape === shape ? author.meta.preset : undefined;
+  const presetDimensions = { ...dimensions };
+  if (activePreset) for (const [parameter, id] of Object.entries(activePreset.dimensions)) {
+    const c = author.sketch.constraints.find(c => c.id === id);
+    if (c && 'value' in c) presetDimensions[parameter] = c.value;
+  }
+  function editPresetDimensions(next: Record<string, number>) {
+    const parameter = Object.keys(next).find(key => next[key] !== presetDimensions[key]);
+    const id = parameter && activePreset?.dimensions[parameter];
+    if (id && parameter) { void run(async () => { await controller.current?.dimension(id, next[parameter]); }); }
+    else setDimensions(next);
+  }
   const fields = (values: Record<string, number>, write: (next: Record<string, number>) => void, suffix: string) => Object.entries(values).map(([field, value]) => <NumberField key={field} label={`${suffix === 'attachment' && attachment.kind === 'baffle' && field === 'height_mm' ? 'Baffle height' : suffix === 'attachment' && attachment.kind === 'baffle' && field === 'depth_mm' ? 'Baffle depth' : labels[field] ?? field.replace('_mm', '').replaceAll('_', ' ')} ${suffix}`} unit="mm" value={value} precision={6} displayPrecision={2} step={.1} onCommit={(v) => write({ ...values, [field]: v })}/>);
 
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Source contour editor" className="source-editor">
@@ -328,7 +339,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
         </details>
         <label>Prescribed motion<select aria-label="Prescribed motion" value={draft.drive.motion} onChange={(e) => change({ ...draft, drive: { ...draft.drive, motion: e.target.value as 'normal' | 'axial' } })}><option value="normal">Normal</option><option value="axial">Axial +Z</option></select></label>
         <h3>Start from a shape</h3><label>Shape<select aria-label="Source shape" value={shape} onChange={(e) => { const s = e.target.value as typeof shape; setShape(s); setDimensions({ ...defaults[s] }); }}><option value="flat">Flat</option><option value="dome">Dome and surround</option><option value="cone">Cone and dust cap</option></select></label>
-        <div className="source-fields">{fields(dimensions, setDimensions, 'preset')}</div><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.expand(shape, dimensions, draft)); setSelected(undefined); })}>Apply shape</button>
+        <div className="source-fields">{fields(presetDimensions, editPresetDimensions, 'preset')}</div><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.expand(shape, presetDimensions, draft), { shape, dimensions: presetDimensions }); setSelected(undefined); })}>Apply shape</button>
         <h3>Saved presets</h3><label>Preset name<input aria-label="Preset name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)}/></label><div className="source-editor-toolbar">
           <button type="button" disabled={!valid || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft); setPresets([...presets, item]); setSelected(item); setNotice('Saved new preset.'); })}>Save new preset</button>
           <button type="button" disabled={!valid || !selected || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, selected); setPresets(presets.map((p) => p.id === item.id ? item : p)); setSelected(item); setNotice('Updated preset.'); })}>Update loaded preset</button>

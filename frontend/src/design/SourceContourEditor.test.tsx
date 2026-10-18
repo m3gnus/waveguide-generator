@@ -8,6 +8,8 @@ import { Editor, readSourceDraft, readSourceAuthoring, SourceContourDialog, Sour
 
 vi.mock('../api/sourceEditor', () => ({ sourceEditorApi: { validate: vi.fn(), presets: vi.fn(), save: vi.fn(), delete: vi.fn(), expand: vi.fn(), split: vi.fn(), export: vi.fn() } }));
 import * as sourceAdapter from '../sketch/adapters/sourceContour';
+import { expandedPreset } from '../sketch/adapters/presetTestSupport';
+import { presetDefaults, presetLabels } from '../sketch/adapters/sourcePreset';
 import { realSessionReady } from '../sketch/testSupport';
 import { readFileSync } from 'node:fs';
 const tokensCss = new TextDecoder().decode(readFileSync('src/styles/tokens.css'));
@@ -45,6 +47,59 @@ describe('source editor interactions', () => {
     const line = host.querySelector('.sketch-entity[data-id="piston"]')!, values = line.getAttribute('d')!.match(/[\d.e+-]+/g)!.map(Number);
     await pointer(line, 'pointerdown', (values[0] + values[2]) / 2, (values[1] + values[3]) / 2);
   }
+  it('applies a parametric cone, renders seven separated named dimensions, and synchronizes both editors through continuation', async () => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await mount(); await act(async () => button('Apply shape').click()); await settle();
+    expect(readSourceDraft()).toEqual(expandedPreset('cone'));
+    expect(host.textContent).toContain('Fully constrained');
+    const labels = [...host.querySelectorAll<SVGTextElement>('.sketch-dimension text')];
+    expect(labels).toHaveLength(7);
+    for (const parameter of Object.keys(presetDefaults.cone)) expect(labels.some(label => label.lastChild?.textContent?.startsWith(presetLabels[parameter] + ' '))).toBe(true);
+    expect(host.querySelectorAll('.sketch-dimension-arrows')).toHaveLength(7);
+    expect(host.querySelectorAll('.sketch-extension-lines')).toHaveLength(7);
+    // The placement rule uses disjoint 24px rows in each gutter; text is 11px high.
+    for (const [i, label] of labels.entries()) {
+      const x = Number(label.getAttribute('x')), y = Number(label.getAttribute('y')), half = label.lastChild!.textContent!.length * 3.2;
+      expect(x - half).toBeGreaterThanOrEqual(0); expect(x + half).toBeLessThanOrEqual(640);
+      expect(y).toBeGreaterThanOrEqual(12); expect(y).toBeLessThanOrEqual(360);
+      for (const other of labels.slice(i + 1)) {
+        const ox = Number(other.getAttribute('x')), oy = Number(other.getAttribute('y')), oh = other.lastChild!.textContent!.length * 3.2;
+        expect(Math.abs(y - oy) >= 20 || Math.abs(x - ox) >= half + oh).toBe(true);
+      }
+    }
+    await enter('Surround depth preset', '1'); await settle();
+    expect(sourceEditorApi.expand).toHaveBeenCalledTimes(1);
+    const expected = expandedPreset('cone', { surround_depth_mm: 1 });
+    const actual = readSourceDraft();
+    actual.contour.segments.forEach((segment, i) => segment.center_mm?.forEach((v, axis) => expect(v).toBeCloseTo(expected.contour.segments[i].center_mm![axis], 6)));
+    expect(host.textContent).toContain('Surround depth 1.00');
+    const coneDepth = [...host.querySelectorAll('.sketch-dimension text')].find(label => label.lastChild?.textContent?.startsWith('Cone depth '))!;
+    await act(async () => coneDepth.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    await enter('Dimension value', '5');
+    await act(async () => button('Apply dimension value').click()); await settle();
+    expect(Number(input('Cone depth preset').value)).toBe(5);
+    expect(readSourceDraft().contour.points.find(p => p.id === 'cap.rim')!.z_mm).toBeCloseTo(-5, 6);
+    await act(async () => button('Undo').click()); await settle();
+    expect(Number(input('Cone depth preset').value)).toBe(4);
+    await act(async () => root.render(null)); await mount();
+    // Restoring the envelope keeps the mapping and the labelled constraints.
+    const shape = host.querySelector<HTMLSelectElement>('[aria-label="Source shape"]')!;
+    expect(shape.value).toBe('cone'); expect(Number(input('Surround depth preset').value)).toBe(1);
+  });
+
+  it.each(['flat', 'dome'] as const)('keeps the active %s preset fields and dimensions after reopening', async shape => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (kind, dimensions) => validation(expandedPreset(kind, dimensions)));
+    await mount();
+    await act(async () => { const select = host.querySelector<HTMLSelectElement>('[aria-label="Source shape"]')!; select.value = shape; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    await act(async () => button('Apply shape').click()); await settle();
+    await enter('Radius preset', '11'); await settle();
+    expect(readSourceDraft().contour.points.find(p => p.id === (shape === 'dome' ? 'dome.rim' : 'rim'))!.r_mm).toBeCloseTo(11, 6);
+    await act(async () => root.render(null)); await mount();
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Source shape"]')!.value).toBe(shape);
+    expect(Number(input('Radius preset').value)).toBe(11);
+    expect(host.textContent).toContain('Radius 11.00');
+  });
+
   it('fix 1: preserves split weights when metadata changes while lowering fails', async () => {
     await mount(); await splitCanvas(); await deletePoleLock(); await splitCanvas();
     const before = JSON.parse(storage.getItem('')!);

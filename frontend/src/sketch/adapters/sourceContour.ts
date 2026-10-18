@@ -8,6 +8,7 @@ import { arcGeometry } from '../geometry';
 export interface SourceMeta {
   physical_source_id: string; rim_id: string; channel_id: string; motion: 'normal' | 'axial';
   weights: Record<string, number>; references: Reference[];
+  preset?: { shape: 'flat' | 'dome' | 'cone'; dimensions: Record<string, string> };
 }
 export const references: Reference[] = [{ id: 'axis', kind: 'axis' }, { id: 'baffle', kind: 'baffle' }];
 export function seed(document: SourceDocument): { sketch: Sketch; meta: SourceMeta } {
