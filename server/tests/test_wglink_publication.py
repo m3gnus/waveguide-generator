@@ -416,10 +416,10 @@ def test_windows_access_denied_is_retried_then_replaced(monkeypatch, tmp_path):
     assert json.loads(path.read_text()) == {"sequence": 2}
 
 
-def test_recovery_after_a_crash_between_accept_and_file_publishes_nothing(monkeypatch, tmp_path):
-    """Startup never delivers a handoff. The accepted row is left as it was:
-    cancelling it without positive evidence of non-delivery could cancel one
-    the add-in already ran while WG was down (see post-0.3.6 backlog)."""
+def test_a_crash_between_accept_and_file_is_reissued_only_by_a_live_retry(monkeypatch, tmp_path):
+    """Startup never delivers a handoff and leaves the accepted row as it was:
+    cancelling it there could cancel one the add-in already ran while WG was
+    down. Only a live same-key retry re-issues it."""
     from server.cadlink.fusion import fusion_delivery
     from server.cadlink.ipc import ipc_folder
 
@@ -449,4 +449,16 @@ def test_recovery_after_a_crash_between_accept_and_file_publishes_nothing(monkey
     assert not (handoffs / f"{old_id}.json").exists()
     assert recovered.get_operation(old_id)["state"] == "received"
     # Recovery did not rebuild the bundle either.
+    assert len(writes) == 1
+    # A live same-key retry re-issues the never-published handoff with a fresh
+    # id, as every retry did before immutable bundles, and never a dead one.
+    retry = api._export_wglink_sync(_request(saved), recovered, workspace, "A")
+    assert retry["exportId"] == row["export_id"]
+    assert retry["cadHandoff"] == "published"
+    new_id = retry["cadHandoffRequestId"]
+    assert new_id != old_id
+    assert (handoffs / f"{new_id}.json").exists()
+    assert recovered.get_operation(old_id)["reason"] == "publication_failed"
+    again = api._export_wglink_sync(_request(saved), recovered, workspace, "A")
+    assert again["cadHandoffRequestId"] == new_id
     assert len(writes) == 1

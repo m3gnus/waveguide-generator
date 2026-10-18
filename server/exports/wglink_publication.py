@@ -18,6 +18,7 @@ import time
 from typing import Any, Callable, Mapping
 import uuid
 
+from server.cadlink.operations import CANCELLED, RECEIVED
 from server.cadlink.store import CadLinkStore
 
 BUNDLE_LAYOUT = "immutable-v1"
@@ -255,6 +256,32 @@ def publish_bundle(
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def _never_published(existing: Mapping[str, Any], data_dir: str) -> bool:
+    """Whether an accepted handoff row has no request file and no claim.
+
+    A crash between accepting the operation and renaming its request file into
+    place leaves such a row. A live same-key retry re-issues it with a fresh id,
+    as every retry did before immutable bundles; startup never decides this.
+    """
+    from server.cadlink.fusion.fusion_delivery import HANDOFFS
+    from server.cadlink.ipc import ipc_folder
+
+    if existing.get("state") != RECEIVED or existing.get("claim_json") is not None:
+        return False
+    operation_id = str(existing["operation_id"])
+    directory = ipc_folder(Path(data_dir)) / HANDOFFS.directory
+    try:
+        names = {path.name for path in directory.iterdir()}
+    except FileNotFoundError:
+        names = set()
+    except OSError:
+        return False  # Unreadable evidence is not an absent request.
+    return f"{operation_id}.json" not in names and not any(
+        name.startswith(f".wglink-claim-{operation_id}-") and name.endswith(".json")
+        for name in names
+    )
+
+
 def finish_publication(
     store: CadLinkStore, row: Mapping[str, Any], *, deliver_handoff: bool = True,
 ) -> dict[str, Any]:
@@ -289,6 +316,15 @@ def finish_publication(
         if handoff:
             from .cad_handoff import publish_fusion_handoff
 
+            if existing is not None and _never_published(existing, handoff["dataDir"]):
+                store.record_outcome(
+                    intent["requestId"],
+                    int(existing["attempt_generation"]),
+                    CANCELLED,
+                    reason="publication_failed",
+                    outcome={"message": "The Fusion handoff request file was never published; a retry re-issued it."},
+                )
+                existing = store.get_operation(intent["requestId"])
             # A consumed or terminal operation must never become runnable again.
             if existing is not None and existing.get("reason") == "publication_failed":
                 intent["requestId"] = str(uuid.uuid4())
