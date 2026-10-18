@@ -532,7 +532,8 @@ def test_prepare_of_manual_solve_with_missing_copy_keeps_damaged_copy_remedy(h):
     assert len(h.ingest.calls) == 1 and h.submitted == []
 
 
-def test_failed_admission_keeps_claim_then_refuses_at_bound_and_still_retries(h, monkeypatch):
+@pytest.mark.parametrize("decision", ["accepted", "refused"])
+def test_failed_admission_stays_unconfirmed_until_a_durable_decision(h, monkeypatch, decision):
     from server.cadlink.intake import solve_command
     from server.cadlink.joblane.job_shims import run_delivery_pass
     from test_cad_preparation import _deliver_file
@@ -543,7 +544,8 @@ def test_failed_admission_keeps_claim_then_refuses_at_bound_and_still_retries(h,
     async def broken(*args, **kwargs):
         raise sqlite3.OperationalError("admission storage unavailable")
     monkeypatch.setattr(h.runtime, "accept_cad_solve", broken)
-    monkeypatch.setattr(solve_command, "RETENTION_PASSES", 6)
+    monkeypatch.setattr(solve_command, "RETENTION_PASSES", 2)
+    monkeypatch.setattr(solve_command, "ACK_FAILURE_PASSES", 2)
     ack = h.data_dir / "ipc" / "wglink" / solve_command.SOLVE_ACKS_DIRECTORY / "cmd-1.json"
     def run():
         return h._loop.run(run_delivery_pass(h.context(), spawn=lambda *_: None))
@@ -557,18 +559,31 @@ def test_failed_admission_keeps_claim_then_refuses_at_bound_and_still_retries(h,
     summary = operation_summary(h.row(), h.jobs_store)
     assert summary["reason"] == "admission_retrying"
     assert "admission storage unavailable" in summary["message"]
-    # The capped backoff stays in effect; reaching the claim bound is not a
-    # sixth admission attempt and does not turn the operation terminal.
+    # Beyond both former delivery bounds, backoff keeps the claim and emits
+    # no answer. The pending sweep must not bypass this hold in the same pass.
     assert run() == []
-    answer = json.loads(ack.read_text())
-    assert answer["outcome"] == "refused" and answer["jobId"] is None
-    assert "retry bound" in answer["reason"] and "admission storage unavailable" in answer["reason"]
-    assert not list(inbox.glob(solve_command.CLAIM_PREFIX + "*"))
+    assert not ack.exists()
+    assert list(inbox.glob(solve_command.CLAIM_PREFIX + "*"))
+    assert h.runtime._cad_admission_retries["cmd-1"][0] == 5
     assert h.row()["state"] == "received"
+    assert h.jobs_store.latest_cad_job("cmd-1") is None
     monkeypatch.setattr(h.runtime, "accept_cad_solve", real)
     h.runtime._cad_admission_retries["cmd-1"] = (5, 0)
-    assert run() == ["cmd-1"]
-    assert h.row()["job_id"] and operation_summary(h.row(), h.jobs_store)["reason"] is None
+    if decision == "refused":
+        solve_command.record_outcome(h.store, "cmd-1", state="refused", reason="The request is invalid.")
+    assert run() == (["cmd-1"] if decision == "accepted" else [])
+    answer = json.loads(ack.read_text())
+    assert answer["outcome"] == decision
+    assert not list(inbox.glob(solve_command.CLAIM_PREFIX + "*"))
+    if decision == "accepted":
+        assert answer["jobId"] == h.row()["job_id"]
+        assert answer["jobId"] and operation_summary(h.row(), h.jobs_store)["reason"] is None
+    else:
+        assert answer["reason"] == "The request is invalid." and answer["jobId"] is None
+        assert h.row()["state"] == "rejected"
+    assert run() == []
+    assert h.jobs_store.list_jobs()[1] == (1 if decision == "accepted" else 0)
+    assert json.loads(ack.read_text())["outcome"] == decision
 
 
 @pytest.mark.parametrize("state", ["processing", "needs_user_input", "cancel_requested"])

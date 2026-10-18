@@ -883,7 +883,7 @@ under `frontend/src/` unless they start with `server/`.
 | 5 | An older listing, ingest, Send display or mesh load never replaces a newer selection or the selected CAD application | none (job fencing is not selection fencing) | `shell/cadlink/arrivals.ts`, `shell/cadlink/receiptDisplay.ts`, `shell/cadlink/artifactLoader.ts`, `stores/cadReturn.ts`, `viewport/importedMeshStore.ts` | `arrivals.test.ts` deferred success/error tests; `receiptDisplay.test.ts` selection fences; `artifactLoader.test.ts`; `CadWorkspaceOwners.test.ts` single-pull-owner and Onshape deferred listing/ingest/mesh tests |
 | 6 | After a reconnect, pending work reloads and missed outcomes of awaited requests are found | partial (solves: jobs) | `shell/cadObservation.ts` reloads jobs, the receipt feed and exact return/outbound outcomes; settled pull evidence remains available across recovery awaits; `stores/cadConnection.ts` holds reconnect feedback | `cadObservation.test.ts` disconnected completion, bounded retry, omitted exact outcomes and superseded reconnect tests; `returnWaiter.test.ts` exact outcomes and settled evidence; `CadWorkspaceOwners.test.ts` pull settlement during a delayed reconnect feed; `cadSetupPublisher.test.ts` visible recovery feedback |
 | 7 | Sends accepted before the page connected, or during an outage, are discovered | none | `server/cadlink/intake/receipts_api.py`, cursor feed `stores/cadReceipts.ts` | `cadReceipts.test.ts` cursor paging, overlap, failed-page recovery and push/resync tests; `test_cad_receipts.py` |
-| 8 | A solve's job is claimed and its label advanced once, despite duplicates, reloads or a lost response | *job* | `jobs/cadSolve.ts`, `shell/JobsCoordinator.tsx` job/client-request-keyed claims | `JobsCoordinator.mutex.test.tsx`; `M1Acceptance.test.tsx :: makes no second job and no second result…` |
+| 8 | A solve's job is claimed and its label advanced once, despite duplicates, reloads or a lost response; Fusion sees no refusal while admission is pending, including across restart | *job* | `jobs/cadSolve.ts`, `shell/JobsCoordinator.tsx` job/client-request-keyed claims; `server/cadlink/intake/solve_command.py` projects durable admission to the ACK | `JobsCoordinator.mutex.test.tsx`; `M1Acceptance.test.tsx :: makes no second job and no second result…`; `test_cad_job_cutover.py :: test_failed_admission_stays_unconfirmed_until_a_durable_decision`; `test_cad_inbox_restart.py :: test_restart_while_admission_is_pending_never_publishes_refusal` |
 | 9 | A pinned result stays until the new run has results; Results is revealed once, only if the user has not navigated | yes | `api/results.ts`, `shell/ResultsPanel.tsx`, `shell/solveAttention.ts` | `ResultsPanel.transition.test.tsx`, `solveAttention.test.tsx` |
 | 10 | Idle CAD work makes no routine reads; events and moving work resume them | none | `shell/cadObservation.ts` uses moving requests/CAD jobs, including published and restored Insert/Update operations. WG reports the retired coordination gate as off; the environment switch is gone. Older add-ins without inbox Send still need folder discovery; the pin uses schema-4 Send. Listing changes and Sends reset the quiet clock; coarse job notifications do not. Mount wake and an overlapping hello share reads; hidden/Onshape mounts clear model loading | `cadObservation.test.ts` idle/off, moving jobs, parked requests, hidden pages and legacy discovery; `CadWorkspaceOwners.test.ts` outbound cadence, startup coalescing and initial loading; `cadObservation.test.ts` listing/Send quiet resets; `:: on: moving jobs and coarse notifications do not hold the base rate or reset the quiet clock` |
 | 11 | A held Fusion status ages into "last report" and a superseded read cannot drive an action | none | `stores/cadConnection.ts` owns status TTL, bounded command reads and read/context generations; `shell/cadWorkflowView.ts` projects last reports | `cadConnection.test.ts` TTL/overlapping reads, hanging command timeout and command-slot cancellation tests |
@@ -1606,8 +1606,13 @@ asked" or silently invents a new request ID.
      message. An explicit Prepare press after the bound does the same. A claim that
      waits never holds up the files behind it, and its operation is not started while it waits, even
      by a pass that stops before it reaches the claim.
-5. **Acknowledge**: publish the outcome as a file (see "Request acknowledgement file").
-   It is written after the operation is durable and before the claim is deleted. If it
+5. **Admit and acknowledge**: a Solve first creates or recovers its keyed job, then
+   records durable ledger acceptance and publishes that outcome (see "Request
+   acknowledgement file"). A transient admission failure or backoff leaves the claim
+   held and writes no ACK, however many passes it takes. The pending sweep cannot bypass
+   that hold in the same pass. A terminal refusal instead publishes `refused` and can
+   never be admitted later. There is no delivery-timeout refusal for retryable admission.
+   The ACK is written after the operation is durable and before the claim is deleted. If it
    cannot be written, the claim stays and the next poll recovers the same operation and
    writes it then.
 6. **Delete** the claim. WG deletes only the file it consumed, and only after the store
@@ -1621,14 +1626,16 @@ before it deletes the request. It changes nothing about what is accepted or refu
 
 ```json
 {"schemaVersion": 1, "commandId": "...", "operationId": "...", "outcome": "accepted",
- "reason": null, "jobId": null, "digest": "sha256:...", "manifestSha256": "sha256:...",
+ "reason": null, "jobId": "...", "digest": "sha256:...", "manifestSha256": "sha256:...",
  "kind": "prepare_and_solve", "at": "2026-09-29T10:00:00Z"}
 ```
 
-- `outcome` is `accepted` when WG holds the operation, whatever it later becomes: a Solve
-  then prepares and becomes a job (or not) as its own record shows. It is `refused` when
-  WG will not take the request, and `reason` is the message the user reads. `jobId` is set
-  by a redelivery after the job exists. `manifestSha256` and `kind` are the request's own,
+- `outcome` is `accepted` for a Solve only after WG durably holds its keyed job and
+  ledger acceptance; `jobId` identifies that job. Acceptance confirms admission, not
+  preparation or solver success. A Send is accepted once its snapshot is retained and
+  has no job. It is `refused` when WG will not take the request or its operation is
+  terminally rejected or cancelled, and `reason` is the message the user reads.
+  `manifestSha256` and `kind` are the request's own,
   so the add-in can match the file to the request it wrote; `digest` is WG-internal and
   opaque. A request that names no usable command id gets no file.
 - The refusals are: a request from an older add-in, a request WG identified but could not
@@ -1652,7 +1659,10 @@ before it deletes the request. It changes nothing about what is accepted or refu
   and says the request was taken but not confirmed after 120 s without an answer.
 - **No file, and what the add-in does then.** Some requests get no file: one with no usable
   command id, one WG cannot read (the claim is kept and read again), a power cut, and one
-  whose acknowledgement cannot be written. A file that cannot be created or written
+  whose admission is pending or acknowledgement cannot be written. Pending admission
+  keeps its claim indefinitely, including across restart; no write-failure counter can
+  turn that wait into a refusal or consume the claim. A file that cannot be created or
+  written
   (for example a plain file named `.wg-solve-acks`) keeps its claim for 30 passes and is
   reported once per pass with a warning; then WG gives it up with one error and consumes
   the request, whose operation was made durable first. If the operation cannot be made
@@ -1676,8 +1686,8 @@ the next start finds:
 | WG stopped | What is on disk | The next start |
 |---|---|---|
 | after the claim, before acceptance | a claim, no operation | reads the claim and accepts it |
-| after acceptance, before retention | a claim, operation `received` | recovers the operation from the claim, retains, deletes the claim |
-| after retention, before job acceptance | a claim, snapshot retained | creates the keyed job, records acceptance, acknowledges and deletes the claim |
+| after acceptance, before retention | a claim, operation `received` | recovers the operation, retains, admits its keyed job, acknowledges and deletes the claim (Send settles without a job) |
+| after retention, while admission is pending | a claim, snapshot retained, no ACK | retries admission without a timeout refusal; on durable job acceptance or terminal refusal, acknowledges and deletes the claim |
 | after job acceptance, before the acknowledgement | a claim, keyed job, possibly uncommitted ledger acceptance | recovers the same key, commits the ledger, writes the acknowledgement and deletes the claim |
 | after the acknowledgement, before the delete | a claim and an acknowledgement | recovers, writes the same acknowledgement again, deletes the claim |
 | after the delete, before preparation | no file, accepted ledger, unheld `preparing` job | the job lane resumes it |

@@ -57,11 +57,11 @@ def store(data_dir):
 
 @pytest.fixture(autouse=True)
 def _fresh_state():
-    for name in ("_retention_waits", "_unreadable_waits", "_refused_claims", "_pending_refusal_acks", "_ack_failures"):
+    for name in ("_retention_waits", "_admission_waits", "_unreadable_waits", "_refused_claims", "_pending_refusal_acks", "_ack_failures"):
         getattr(solve_command, name).clear()
     solve_command._last_ack_prune = 0.0
     yield
-    for name in ("_retention_waits", "_unreadable_waits", "_refused_claims", "_pending_refusal_acks", "_ack_failures"):
+    for name in ("_retention_waits", "_admission_waits", "_unreadable_waits", "_refused_claims", "_pending_refusal_acks", "_ack_failures"):
         getattr(solve_command, name).clear()
 
 
@@ -78,14 +78,14 @@ def _claims(data_dir) -> list[str]:
     return [name for name in _delivery_files(data_dir) if "claim" in name]
 
 
-def _poll(data_dir, store):
+def _poll(data_dir, store, **kwargs):
     """Collect with the admission receipt a production jobs pass provides."""
     def admit(operation_id):
         row = store.get_operation(operation_id)
         if row is not None and row["state"] == "received":
             _finish(store, operation_id, "job-" + operation_id.removeprefix("cmd-"))
         return True
-    return collect_solve_deliveries(data_dir, store, accept_solve=admit)
+    return collect_solve_deliveries(data_dir, store, accept_solve=admit, **kwargs)
 
 
 def _send_file(data_dir, bundle_path, manifest):
@@ -321,9 +321,12 @@ def test_an_unusable_acknowledgement_folder_is_given_up_once_after_a_bounded_num
 
     with caplog.at_level("ERROR"):
         for _ in range(2):
-            collect_solve_deliveries(data_dir, store, refuse=reports.append)
+            _poll(data_dir, store, refuse=reports.append)
         assert len(_claims(data_dir)) == 2, "given up too early"
-        collect_solve_deliveries(data_dir, store, refuse=reports.append)
+        _poll(data_dir, store, refuse=reports.append)
+        # Replaying the admitted solve can end that pass before the other
+        # claim gets its final write attempt.
+        _poll(data_dir, store, refuse=reports.append)
 
     assert _claims(data_dir) == []
     assert store.get_operation("cmd-1") is not None
@@ -601,12 +604,11 @@ def test_a_busy_checkpoint_result_raises(store, monkeypatch) -> None:
 @pytest.mark.parametrize("job_id", [None, ""])
 @pytest.mark.parametrize("reason", [None, "Cancelled before admission."])
 @pytest.mark.parametrize("kind", [None, "prepare_and_solve"])
-def test_acknowledgement_writer_refuses_solve_acceptance_without_a_job(data_dir, job_id, reason, kind):
-    assert write_acknowledgement(data_dir, "cmd-1", "accepted", job_id=job_id, reason=reason, kind=kind)
-    ack = _ack(data_dir, "cmd-1")
-    assert ack["outcome"] == "refused"
-    assert ack["jobId"] == job_id
-    assert ack["reason"] == (reason or "WG did not admit this request to a job.")
+def test_acknowledgement_writer_keeps_solve_acceptance_without_a_job_unconfirmed(data_dir, job_id, reason, kind):
+    assert write_acknowledgement(
+        data_dir, "cmd-1", "accepted", job_id=job_id, reason=reason, kind=kind,
+    ) is None
+    assert _ack(data_dir, "cmd-1") is None
 
 
 def test_acknowledgement_writer_accepts_a_retained_send_without_a_job(data_dir):
@@ -674,10 +676,13 @@ def test_send_without_retention_is_never_acknowledged_accepted(data_dir, workspa
     assert store.get_operation("cmd-1")["snapshot_json"] is None
 
 
-def test_collection_without_admission_never_acknowledges_accepted(data_dir, workspace, store):
+def test_collection_without_admission_keeps_claim_unconfirmed(data_dir, workspace, store):
     bundle_path, manifest = _bundle(workspace)
     _file(data_dir, "cmd-1", bundle_path, manifest)
-    collect_solve_deliveries(data_dir, store)
-    ack = _ack(data_dir, "cmd-1")
-    assert ack["outcome"] == "refused" and ack["jobId"] is None
-    assert ack["reason"] and store.get_operation("cmd-1")["state"] == "received"
+    # Pending admission is not an ACK write failure and must never expire.
+    for _ in range(ACK_FAILURE_PASSES + 1):
+        collect_solve_deliveries(data_dir, store)
+        assert _ack(data_dir, "cmd-1") is None
+        assert len(_claims(data_dir)) == 1
+        assert store.get_operation("cmd-1")["state"] == "received"
+    assert solve_command._ack_failures == {}

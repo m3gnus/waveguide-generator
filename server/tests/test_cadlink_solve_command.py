@@ -90,7 +90,7 @@ def _waiting(store) -> list[str]:
 
 
 def _collect(harness: Harness):
-    """One delivery pass as the backend runs it: retain, record, acknowledge."""
+    """Retain and record the delivery; acknowledgement waits for job admission."""
 
     return collect_solve_deliveries(
         harness.data_dir,
@@ -121,7 +121,7 @@ def test_a_matching_command_is_accepted_as_an_operation(tmp_path, data_dir, stor
     assert (row["kind"], row["state"]) == ("prepare_and_solve", "received")
     assert json.loads(row["inputs_json"])["bundle_path"] == "wgreturn/speaker.wgreturn"
     assert _waiting(store) == ["cmd-1"]
-    assert _held(data_dir) is None
+    assert _held(data_dir) is not None
 
 
 def test_a_bundle_that_changed_after_the_command_is_refused_when_prepared(solve_harness) -> None:
@@ -139,6 +139,7 @@ def test_a_bundle_that_changed_after_the_command_is_refused_when_prepared(solve_
     # The delivery is one-shot, while the store keeps the terminal answer.
     assert ledger_entry(harness.store, "cmd-1")["state"] == "accepted"
     assert harness.summary()["state"] == "rejected"
+    _collect(harness)
     assert _held(harness.data_dir) is None
     assert harness.submitted == []
 
@@ -159,6 +160,7 @@ def test_a_request_naming_a_bundle_with_a_torn_step_is_never_ingested(solve_harn
     assert harness.ingest.calls == [] and harness.submitted == []
     assert ledger_entry(harness.store, "cmd-1")["state"] == "accepted"
     assert harness.summary()["state"] == "rejected"
+    _collect(harness)
     assert _held(harness.data_dir) is None
 
 
@@ -223,6 +225,7 @@ def test_a_command_pointing_outside_the_workspace_is_refused_when_prepared(solve
     summary = harness.prepare()
 
     assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_invalid")
+    _collect(harness)
     assert _held(harness.data_dir) is None
     assert harness.ingest.calls == [] and harness.submitted == []
 
@@ -341,10 +344,10 @@ def test_delivery_refuses_a_conflicting_file_and_leaves_the_operation(
     # is neither answered with nor rewritten.
     _write_command(data_dir, "wgreturn/speaker.wgreturn", "sha256:" + "b" * 64)
 
-    # The delivery is refused and removed. The operation holding the id is
-    # unfinished, so its refusal is no answer: it would end the operation.
+    # The conflict is reported, but the claim waits for the held operation
+    # to settle. Its unfinished admission cannot be answered with a refusal.
     assert collect_solve_deliveries(data_dir, store) is None
-    assert _held(data_dir) is None
+    assert _held(data_dir) is not None
     assert _raw(data_dir, "cmd-1") == before
     assert _waiting(store) == ["cmd-1"]
 
@@ -382,9 +385,9 @@ def test_delivery_never_replaces_a_held_request_with_a_different_one(
 
     assert collect_solve_deliveries(data_dir, store) is None
 
-    # The different request is removed and never accepted. The held one is not
-    # refused for it: its preparation, from its own retained snapshot, decides.
-    assert _held(data_dir) is None
+    # The different request stays claimed and is never accepted. The held one
+    # is not refused for it: its own preparation decides.
+    assert _held(data_dir) is not None
     row = store.get_operation("cmd-1")
     assert (row["request_digest"], row["state"]) == (held_digest, "received")
 

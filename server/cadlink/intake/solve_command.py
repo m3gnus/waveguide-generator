@@ -181,7 +181,8 @@ _DELIVERY_LOCK = threading.Lock()
 # Each kept claim, by claim name: the operation it names, and how many passes
 # it has waited for that operation's return.
 _retention_waits: dict[str, tuple[str, int]] = {}
-_admission_waits: dict[str, tuple[str, int]] = {}
+# Admission has no delivery timeout: only its durable outcome may answer it.
+_admission_waits: dict[str, str] = {}
 _now = time.monotonic
 @dataclass(frozen=True)
 class PendingSolveCommand:
@@ -763,22 +764,23 @@ def write_acknowledgement(
     manifest_sha256: str | None = None,
     kind: str | None = None,
     only_if_missing: bool = False,
-) -> bool:
-    """Publish the outcome of a delivered request, atomically. False: could not be written.
+) -> bool | None:
+    """Publish a decided outcome atomically. False: could not be written.
+
+    None: solve admission is still pending, so no acknowledgement is owed yet.
 
     The file is staged under a name starting with "." and moved into place with
     ``os.replace``, so a reader sees the whole old file or the whole new one. A
     replace that meets a reader holding the target (Windows raises
     ``PermissionError``) is retried briefly. A command id that is not a plain
     operation id names no safe file and is not acknowledged (True: nothing owed).
-    A solve acceptance without a job is converted to a refusal with its reason.
+    A solve acceptance without a job stays unconfirmed until admission settles.
     A retained receive_snapshot is accepted without making a job. An omitted
     kind uses the legacy solve convention.
     """
 
     if outcome == ACK_ACCEPTED and (kind or PREPARE_AND_SOLVE) == PREPARE_AND_SOLVE and not job_id:
-        outcome = ACK_REFUSED
-        reason = reason or "WG did not admit this request to a job."
+        return None
     if not _OPERATION_ID.fullmatch(command_id):
         # Nothing to publish under: not a failure, and never a reason to keep
         # the request.
@@ -858,8 +860,8 @@ def _ack_written(claim_name: str, written: bool | None) -> bool:
 
     A failed write keeps the claim for ``ACK_FAILURE_PASSES`` passes; then it is
     given up once, with an error, and the request is consumed without one.
-    ``None`` means the operation could not be made durable: the claim is kept,
-    however often, because consuming it would risk losing the request.
+    ``None`` means admission is pending or the operation could not be made
+    durable: the claim is kept however often, until an outcome is durable.
     """
 
     if written is None:
@@ -1056,7 +1058,8 @@ def _publish_acknowledgement(
     command: PendingSolveCommand,
 ) -> bool | None:
     """Publish what became of a delivered request. False: not written yet.
-    None: the operation could not be made durable, so nothing may be consumed.
+    None: admission is pending or the operation could not be made durable, so
+    nothing may be consumed.
 
     The operation's own row is the acknowledgement, so a redelivery replays it,
     and a different request under an id the store holds -- a conflict -- speaks
@@ -1213,7 +1216,7 @@ def collect_solve_deliveries(
             # A pass can stop at an answer before it reaches a waiting claim;
             # that claim's operation is held all the same.
             held.update(operation_id for operation_id, _waited in _retention_waits.values())
-            held.update(operation_id for operation_id, _waited in _admission_waits.values())
+            held.update(_admission_waits.values())
         for delivery in deliveries:
             if delivery.claimed and delivery.path.name in _refused_claims:
                 # Refused (or reported unreadable) already, and its file is
@@ -1343,25 +1346,12 @@ def collect_solve_deliveries(
                 # It waits no more: retained, never retainable, or at the bound.
                 held.discard(command.command_id)
             if accept_solve is not None and accept_solve(command.command_id) is False:
-                waited = _admission_waits.get(claim.name, (command.command_id, 0))[1] + 1
-                _admission_waits[claim.name] = (command.command_id, waited)
-                if waited < RETENTION_PASSES:
-                    if held is not None:
-                        held.add(command.command_id)
-                    continue
-                reason = "WG could not admit this solve within the delivery retry bound. The operation is kept and admission will be retried."
-                row = store.get_operation(command.command_id)
-                outcome = json.loads(row.get("outcome_json") or "{}") if row else {}
-                if outcome.get("admission_retrying"):
-                    reason += " " + outcome["admission_retrying"]
-                refused(inbox_refusal(payload, delivery.path.name, reason), claim.name)
-                if not write_acknowledgement(data_dir, command.command_id, ACK_REFUSED, reason=reason,
-                                             manifest_sha256=command.manifest_sha256, kind=command.kind):
-                    continue
-                _admission_waits.pop(claim.name, None)
+                # Backoff or a transient admission failure is not a refusal.
+                # Keep the claim held, including from the pending sweep later
+                # in this pass, until admission supplies a durable decision.
+                _admission_waits[claim.name] = command.command_id
                 if held is not None:
-                    held.discard(command.command_id)
-                consume(claim, dir_fd=delivery.dir_fd)
+                    held.add(command.command_id)
                 continue
             _admission_waits.pop(claim.name, None)
             if held is not None:

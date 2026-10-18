@@ -134,10 +134,16 @@ def _delivery_files(data_dir) -> list[str]:
     return sorted(name for name in names if name != V2_DIR)
 
 
-def _poll(data_dir, store):
-    """One collection pass of the backend's delivery loop."""
+def _poll(data_dir, store, *, admit=False):
+    """Collect; deletion scenarios supply the durable job admission receipt."""
 
-    return collect_solve_deliveries(data_dir, store)
+    def accept(operation_id):
+        row = store.get_operation(operation_id)
+        if row["state"] == "received":
+            _finish(store, operation_id, "job-" + operation_id.removeprefix("cmd-"))
+        return True
+
+    return collect_solve_deliveries(data_dir, store, accept_solve=accept if admit else None)
 
 
 def _waiting(store) -> list[str]:
@@ -174,9 +180,9 @@ def test_a_newer_marker_written_during_the_acknowledgement_survives(
 
     monkeypatch.setattr(solve_command.os, "unlink", unlink_after_a_newer_marker_lands)
 
-    assert _poll(data_dir, store) is None
+    assert _poll(data_dir, store, admit=True) is None
     assert injected, "the consumer never deleted a delivery file"
-    assert _waiting(store) == ["cmd-1"]
+    assert _waiting(store) == []
     _finish(store, "cmd-1", "job-1")
 
     assert _poll(data_dir, store) is None
@@ -199,8 +205,12 @@ def test_one_command_delivered_twice_is_one_operation(
 
     assert _waiting(store) == ["cmd-1"]
     assert _operation_ids(data_dir) == ["cmd-1"]
-    assert _delivery_files(data_dir) == []
+    assert len(_delivery_files(data_dir)) == 2
     _finish(store, "cmd-1", "job-1")
+    # Each delivery replays the same job before its claim is removed.
+    for _ in range(2):
+        assert _poll(data_dir, store)["outcome"]["jobId"] == "job-1"
+    assert _delivery_files(data_dir) == []
     # Nothing is left to execute a second time.
     assert _waiting(store) == []
     assert _poll(data_dir, store) is None
@@ -213,6 +223,7 @@ def test_a_duplicate_after_the_outcome_replays_it_instead_of_running_again(
     _file(data_dir, "cmd-1", bundle_path, manifest)
     assert _poll(data_dir, store) is None
     _finish(store, "cmd-1", "job-1")
+    assert _poll(data_dir, store)["outcome"]["jobId"] == "job-1"
     before = _raw(data_dir, "cmd-1")
     _file(data_dir, "cmd-1", bundle_path, manifest)
 
@@ -294,7 +305,7 @@ def test_a_crash_between_claim_and_persist_is_recovered_on_the_next_poll(
     monkeypatch.setattr(CadLinkStore, "accept_operation", real_accept)
     assert _poll(data_dir, store) is None
 
-    assert _delivery_files(data_dir) == []
+    assert len(_delivery_files(data_dir)) == 1
     assert _operation_ids(data_dir) == ["cmd-1"]
     assert _waiting(store) == ["cmd-1"]
 
@@ -316,13 +327,13 @@ def test_a_failed_delete_after_persisting_recovers_the_same_operation(
 
     monkeypatch.setattr(solve_command.os, "unlink", held_open_once)
 
-    assert _poll(data_dir, store) is None
+    assert _poll(data_dir, store, admit=True) is None
     assert refused and len(_delivery_files(data_dir)) == 1
-    assert _poll(data_dir, store) is None
+    assert _poll(data_dir, store)["outcome"]["jobId"] == "job-1"
 
     assert _delivery_files(data_dir) == []
     assert _operation_ids(data_dir) == ["cmd-1"]
-    assert _waiting(store) == ["cmd-1"]
+    assert _waiting(store) == []
 
 
 def test_a_marker_the_writer_still_holds_is_retried_on_the_next_poll(
@@ -375,7 +386,7 @@ def test_two_per_command_files_are_accepted_oldest_first_and_neither_is_lost(
 
     assert _waiting(store) == ["cmd-3"]
     assert _operation_ids(data_dir) == ["cmd-1", "cmd-2", "cmd-3"]
-    assert _delivery_files(data_dir) == []
+    assert len(_delivery_files(data_dir)) == 3
 
 
 def test_an_operation_accepted_earlier_stays_ahead_of_a_later_delivery(
@@ -438,7 +449,7 @@ def test_identified_requests_wg_cannot_accept_are_refused_and_removed(
     assert _waiting(store) == ["cmd-1"]
     assert _operation_ids(data_dir) == ["cmd-1"]
     assert not any(path.exists() for path in (no_kind, mismatched, snapshot_with_return, unknown_kind))
-    assert _delivery_files(data_dir) == []
+    assert len(_delivery_files(data_dir)) == 1
     reasons = {item["operationId"]: item["reason"] for item in refused}
     assert set(reasons) == {"cmd-9", "cmd-7", "cmd-6", "cmd-4"}
     assert "kind" in reasons["cmd-9"] and "operationId" in reasons["cmd-7"]
@@ -472,7 +483,7 @@ def test_a_v4_solve_and_a_v4_snapshot_are_taken_as_their_kinds(data_dir, workspa
     assert store.get_operation("cmd-s")["kind"] == "prepare_and_solve"
     assert store.get_operation("cmd-r")["kind"] == "receive_snapshot"
     assert sorted(row["operation_id"] for row in published) == ["cmd-r", "cmd-s"]
-    assert _delivery_files(data_dir) == []
+    assert len(_delivery_files(data_dir)) == 1
 
 
 def test_an_outcome_for_a_held_operation_ignores_a_conflicting_file_still_waiting(
@@ -494,7 +505,9 @@ def test_an_outcome_for_a_held_operation_ignores_a_conflicting_file_still_waitin
             return_id="wgr_1", bundle_path=bundle_path, manifest_sha256=manifest
         ),
     )
-    # The waiting file is then refused as a delivery in its own right.
+    # First the held original replays its acceptance, then the conflicting
+    # file is refused as a delivery in its own right.
+    assert _poll(data_dir, store)["outcome"]["jobId"] == "job-1"
     refused = _poll(data_dir, store)
     assert "different request" in refused["outcome"]["reason"]
     assert store.get_operation("cmd-1")["job_id"] == "job-1"

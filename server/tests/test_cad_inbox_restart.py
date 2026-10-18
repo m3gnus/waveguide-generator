@@ -62,6 +62,7 @@ def _forget_process_state() -> None:
     """What a process keeps in memory, gone with it."""
 
     solve_command._retention_waits.clear()
+    solve_command._admission_waits.clear()
     solve_command._unreadable_waits.clear()
     solve_command._refused_claims.clear()
 
@@ -225,6 +226,32 @@ def _run_to_rest(wg: JobsWg) -> None:
             break
     # One more pass after rest: it must start nothing.
     assert wg.run_pass() == []
+
+
+@pytest.mark.parametrize("name", ["v4-solve", "v3-solve"])
+def test_restart_while_admission_is_pending_never_publishes_refusal(tmp_path, monkeypatch, name):
+    wg = new_wg(tmp_path, "jobs")
+    request = _request(name, *_setup_project(wg))
+    drop(wg.data_dir, request)
+    ack = wg.data_dir / "ipc" / "wglink" / solve_command.SOLVE_ACKS_DIRECTORY / f"{request['operationId']}.json"
+
+    async def unavailable(*args, **kwargs):
+        raise sqlite3.OperationalError("admission unavailable")
+
+    monkeypatch.setattr(wg.harness.runtime, "accept_cad_solve", unavailable)
+    monkeypatch.setattr(solve_command, "RETENTION_PASSES", 1)
+    for _ in range(2):
+        assert wg.run_pass() == []
+        assert not ack.exists()
+        assert len(_inbox(wg)) == 1 and _inbox(wg)[0].startswith(CLAIM_PREFIX)
+        assert _operation_rows(wg) == [(request["operationId"], "received")]
+        assert _jobs_for(wg, request["operationId"]) == []
+    wg = _restart(wg)
+    try:
+        _run_to_rest(wg)
+        _assert_exactly_once(wg, request, len(wg.submitted))
+    finally:
+        wg.stop()
 
 
 # -- the baseline, with no stop ------------------------------------------------
