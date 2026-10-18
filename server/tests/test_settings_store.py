@@ -17,6 +17,7 @@ from server.settings.store import (
     SettingsStore,
     StaleWriteError,
 )
+from server.settings import cad_drafts
 
 
 def store_for(tmp_path: Path) -> SettingsStore:
@@ -386,14 +387,106 @@ def test_cad_journal_bounds_25_models_and_each_entry(tmp_path):
     store = store_for(tmp_path)
     namespace = "cadSetupDrafts_v2"
     for i in range(25):
-        store.put(namespace, json.dumps({draft_key(str(i)): draft_entry(i, "x" * 32_000)}))
+        store.put(namespace, json.dumps({draft_key(str(i)): draft_entry(i, "x" * 1000)}))
     entries = json.loads(store.get(namespace))
     assert len(entries) == 20
     assert set(entries) == {draft_key(str(i)) for i in range(5, 25)}
-    # The map may exceed the ordinary 256 KB namespace ceiling, but each entry is bounded.
-    assert len(store.get(namespace)) > MAX_NAMESPACE_BYTES
     store.put(namespace, json.dumps({draft_key("huge"): draft_entry(100, "x" * 65_536)}))
     assert json.loads(store.get(namespace)) == entries
+
+
+def test_newer_cad_markers_never_evict_a_live_draft_or_revive_a_stale_cache(tmp_path):
+    store = store_for(tmp_path)
+    live, cleared = draft_key("incomplete"), draft_key("published")
+    store.put(cad_drafts.NAMESPACE, {live: draft_entry(0), cleared: draft_entry(1, None)})
+    for i in range(63):
+        store.put(cad_drafts.NAMESPACE, {draft_key(str(i)): draft_entry(i + 2, None)})
+    store.put(cad_drafts.NAMESPACE, {cleared: draft_entry(0)})
+    journal = json.loads(store_for(tmp_path).get(cad_drafts.NAMESPACE))
+    assert journal[live] == draft_entry(0)
+    assert journal[cleared] == draft_entry(1, None)
+    assert sum(entry["draft"] is None for entry in journal.values()) == 64
+
+
+def test_full_cad_journal_leaves_room_for_a_growing_design_draft(tmp_path):
+    store = store_for(tmp_path)
+    # Other growing namespaces put the envelope close enough to its total cap
+    # that the old journal allowance would starve designDraft's next write.
+    for i in range(3):
+        store.put(f"other{i}", "x" * (MAX_NAMESPACE_BYTES - 2))
+    store.put("designDraft", "small")
+    store.put(cad_drafts.NAMESPACE, {
+        draft_key(str(i)): draft_entry(i, "x" * 60_000) for i in range(20)
+    })
+    journal = store.get(cad_drafts.NAMESPACE)
+    assert len(json.dumps(journal).encode()) <= cad_drafts.MAX_NAMESPACE_BYTES
+    entries = json.loads(journal)
+    assert 0 < len(entries) < 20
+    assert draft_key("19") in entries and draft_key("0") not in entries
+    design = "x" * (MAX_NAMESPACE_BYTES - 2)
+    store.put("designDraft", design)
+    assert store_for(tmp_path).get("designDraft") == design
+
+
+_JOURNAL_PARITY_CASES = json.loads(
+    (Path(__file__).parent / "fixtures/cad_draft_journal_parity.json").read_text(encoding="utf-8")
+)
+
+
+@pytest.mark.parametrize("fixture", _JOURNAL_PARITY_CASES, ids=lambda case: case["name"])
+def test_cad_journal_retention_matches_typescript(fixture):
+    def key(index):
+        return f"{index:016x}_{0:016x}"
+
+    journals = []
+    for groups in fixture["journals"]:
+        journal = {}
+        for group in groups:
+            for i in range(group["count"]):
+                value = group["value"]
+                journal[key(group["start"] + i * group.get("step", 1))] = {
+                    "draft": None if value is None else {"value": value * group.get("repeat", 1)},
+                    "updatedAt": group["timestamp"] + i * group.get("timestampStep", 0),
+                    "baseRevisionId": "r" * group.get("baseRepeat", 1),
+                }
+        journals.append(journal)
+    merged = json.loads(cad_drafts.merge(*journals))
+    assert list(merged) == [
+        key(group["start"] + i * group.get("step", 1))
+        for group in fixture["expected"] for i in range(group["count"])
+    ]
+    for index, value in fixture.get("values", {}).items():
+        assert merged[key(int(index))]["draft"] == (None if value is None else {"value": value})
+
+
+def test_migration_write_error_reports_write_failure_and_retries_without_losing_settings(tmp_path, monkeypatch):
+    from server.settings import store as settings_store
+
+    path = tmp_path / "ui_settings.json"
+    original = {"namespaces": {"theme": "dark", "cadSetupDrafts": json.dumps({
+        json.dumps(["model", "inventory"]): {"settings": {"driver": {}}, "updatedAt": 1},
+    })}}
+    path.write_text(json.dumps(original))
+    real_write = settings_store._write_json_atomic
+
+    def fail_write(*args, **kwargs):
+        raise OSError("migration disk failure")
+
+    monkeypatch.setattr(settings_store, "_write_json_atomic", fail_write)
+    store = store_for(tmp_path)
+    for _ in range(2):
+        with pytest.raises(SettingsError, match="Could not write settings file.*migration disk failure"):
+            store.put("designDraft", "new")
+        assert json.loads(path.read_text()) == original
+    monkeypatch.setattr(settings_store, "_write_json_atomic", real_write)
+    store.put("designDraft", "new")
+    reloaded = store_for(tmp_path)
+    assert reloaded.get("theme") == "dark"
+    assert reloaded.get("designDraft") == "new"
+    assert json.loads(reloaded.get(cad_drafts.NAMESPACE))[draft_key("model")]["draft"] == {
+        "settings": {"driver": {}}, "legacy": True,
+    }
+    assert reloaded.get("cadSetupDrafts") is None
 
 
 def test_publishing_cad_drafts_does_not_churn_namespace_tombstones(tmp_path):

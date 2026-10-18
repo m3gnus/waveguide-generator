@@ -121,8 +121,10 @@ class SettingsStore:
         self._accepted: dict[str, tuple[str, int]] = {}
         self._loaded = False
         self._load_error: OSError | None = None
+        self._load_error_action = "read"
 
     def _load(self) -> None:
+        self._load_error_action = "read"
         try:
             raw = self.settings_path.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -191,6 +193,7 @@ class SettingsStore:
                 })
             except OSError as exc:
                 self._load_error = exc
+                self._load_error_action = "write"
                 self._loaded = False
 
     def _ensure_loaded(self) -> None:
@@ -200,7 +203,7 @@ class SettingsStore:
     def _ensure_writable(self) -> None:
         if self._load_error is not None:
             raise SettingsError(
-                f"Could not read settings from {self.settings_path}: {self._load_error}"
+                f"Could not {self._load_error_action} settings file {self.settings_path}: {self._load_error}"
             ) from self._load_error
 
     def all(self) -> dict[str, Any]:
@@ -271,7 +274,7 @@ class SettingsStore:
             encoded = json.dumps(value)
         except (TypeError, ValueError) as exc:
             raise SettingsError(f"Settings for {namespace!r} are not JSON-serialisable: {exc}") from exc
-        namespace_limit = MAX_TOTAL_BYTES if namespace == cad_drafts.NAMESPACE else MAX_NAMESPACE_BYTES
+        namespace_limit = cad_drafts.MAX_NAMESPACE_BYTES if namespace == cad_drafts.NAMESPACE else MAX_NAMESPACE_BYTES
         if len(encoded.encode("utf-8")) > namespace_limit:
             raise SettingsError(
                 f"Settings for {namespace!r} exceed {namespace_limit} bytes."

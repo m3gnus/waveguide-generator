@@ -1,5 +1,8 @@
 /** Shared with server/settings/cad_drafts.py: bounded per-entry last-write wins. */
 export const CAD_DRAFTS_NAMESPACE = 'cadSetupDrafts_v2';
+const MAX_ENTRIES = 20;
+const MAX_MARKERS = 64;
+const MAX_NAMESPACE_BYTES = 512 * 1024;
 export interface CadDraftEntry {
   draft: Record<string, unknown> | null;
   baseRevisionId: string | null;
@@ -32,8 +35,19 @@ export function mergeCadDrafts(...journals: unknown[]): CadDraftJournal {
   for (const raw of journals) for (const [key, entry] of Object.entries(parseCadDrafts(raw))) {
     if (!merged[key] || entry.updatedAt >= merged[key].updatedAt) merged[key] = entry;
   }
-  return Object.fromEntries(Object.entries(merged)
-    .sort(([ka, a], [kb, b]) => b.updatedAt - a.updatedAt || ka.localeCompare(kb)).slice(0, 20));
+  const newest = Object.entries(merged)
+    .sort(([ka, a], [kb, b]) => b.updatedAt - a.updatedAt || (ka < kb ? -1 : ka > kb ? 1 : 0));
+  const live = newest.filter(([, entry]) => entry.draft !== null).slice(0, MAX_ENTRIES);
+  const markers = newest.filter(([, entry]) => entry.draft === null).slice(0, MAX_MARKERS);
+  const retained = new Set([...live, ...markers].map(([key]) => key));
+  for (;;) {
+    const result = Object.fromEntries(newest.filter(([key]) => retained.has(key)));
+    // Match Python's ASCII JSON encoding of the namespace's JSON string.
+    const stored = JSON.stringify(JSON.stringify(result)).replace(/[\u007f-\uffff]/g,
+      char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+    if (new TextEncoder().encode(stored).length <= MAX_NAMESPACE_BYTES) return result;
+    retained.delete((live.length ? live : markers).pop()![0]);
+  }
 }
 /** Only migration understands the original unbounded keys and flat draft values. */
 export function migrateCadDrafts(raw: string): CadDraftJournal {

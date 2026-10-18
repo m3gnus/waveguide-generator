@@ -9,7 +9,9 @@ from typing import Any
 
 NAMESPACE = "cadSetupDrafts_v2"
 MAX_ENTRIES = 20
+MAX_MARKERS = 64
 MAX_ENTRY_BYTES = 64 * 1024
+MAX_NAMESPACE_BYTES = 512 * 1024
 
 
 def draft_hash(value: str) -> str:
@@ -48,8 +50,18 @@ def merge(*journals: Any) -> str:
         for key, entry in parse(raw).items():
             if key not in entries or entry["updatedAt"] >= entries[key]["updatedAt"]:
                 entries[key] = entry
-    newest = sorted(entries, key=lambda key: (-entries[key]["updatedAt"], key))[:MAX_ENTRIES]
-    return json.dumps({key: entries[key] for key in newest}, ensure_ascii=False, separators=(",", ":"))
+    newest = sorted(entries, key=lambda key: (-entries[key]["updatedAt"], key))
+    live = [key for key in newest if entries[key]["draft"] is not None][:MAX_ENTRIES]
+    markers = [key for key in newest if entries[key]["draft"] is None][:MAX_MARKERS]
+    retained = set(live + markers)
+    while True:
+        result = json.dumps({key: entries[key] for key in newest if key in retained},
+                            ensure_ascii=False, separators=(",", ":"))
+        # The namespace is itself a JSON string in the settings envelope.
+        if len(json.dumps(result).encode("utf-8")) <= MAX_NAMESPACE_BYTES:
+            return result
+        # Preserve clears while trimming drafts; oversized clears are bounded too.
+        retained.remove((live if live else markers).pop())
 
 
 def migrate(namespaces: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:

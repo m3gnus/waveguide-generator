@@ -1,0 +1,44 @@
+[
+  {
+    "name": "separate caps with timestamp ties and reversed insertion order",
+    "journals": [[
+      {"start": 24, "count": 25, "step": -1, "timestamp": 1, "value": "live"},
+      {"start": 169, "count": 70, "step": -1, "timestamp": 2, "value": null}
+    ]],
+    "expected": [{"start": 100, "count": 64}, {"start": 0, "count": 20}]
+  },
+  {
+    "name": "oldest markers are evicted independently of live drafts",
+    "journals": [[
+      {"start": 0, "count": 70, "timestamp": 1, "timestampStep": 1, "value": null},
+      {"start": 100, "count": 1, "timestamp": 0, "value": "incomplete"}
+    ]],
+    "expected": [{"start": 69, "count": 64, "step": -1}, {"start": 100, "count": 1}]
+  },
+  {
+    "name": "later journal wins equal timestamps including clears",
+    "journals": [
+      [{"start": 5, "count": 1, "timestamp": 10, "value": "stale"},
+       {"start": 6, "count": 1, "timestamp": 10, "value": null}],
+      [{"start": 5, "count": 1, "timestamp": 10, "value": null},
+       {"start": 6, "count": 1, "timestamp": 10, "value": "new"}]
+    ],
+    "expected": [{"start": 5, "count": 2}],
+    "values": {"5": null, "6": "new"}
+  },
+  {
+    "name": "encoded byte budget evicts oldest live drafts before markers",
+    "journals": [[
+      {"start": 0, "count": 20, "timestamp": 1, "timestampStep": 1, "value": "é\"\\😀", "repeat": 2000},
+      {"start": 100, "count": 1, "timestamp": 0, "value": null}
+    ]],
+    "expected": [{"start": 19, "count": 10, "step": -1}, {"start": 100, "count": 1}]
+  },
+  {
+    "name": "oversized markers alone also respect the byte budget",
+    "journals": [[
+      {"start": 0, "count": 64, "timestamp": 1, "value": null, "baseRepeat": 12000}
+    ]],
+    "expected": [{"start": 0, "count": 43}]
+  }
+]
