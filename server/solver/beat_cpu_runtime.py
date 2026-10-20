@@ -44,7 +44,6 @@ _prepare_cpu = True
 _prepare_gpu = False
 _gpu_stage_backend: str | None = None
 _gpu_stage_step: str | None = None
-_runtimes_prepared = False
 _requested_backend: str | None = None
 _preparation_errors: dict[str, str] = {}
 _readiness_listeners: list[Any] = []
@@ -112,24 +111,6 @@ def gpu_preparation_reason(backend: str) -> str | None:
         f"Waveguide Generator is preparing the BEAT {backend} runtime now"
         f"{detail}. It becomes selectable here when ready."
     )
-
-
-def runtimes_prepared_this_process() -> bool:
-    """Whether this process has run a CPU or GPU provisioning step.
-
-    The registry's cue that the GPU rows it detected at startup may describe a
-    host that no longer exists -- one without a Julia, or without the GPU
-    runtime -- and must be probed again rather than kept.
-    """
-
-    with _provision_lock:
-        return _runtimes_prepared
-
-
-def _mark_runtimes_prepared() -> None:
-    global _runtimes_prepared
-    with _provision_lock:
-        _runtimes_prepared = True
 
 
 def cpu_preparation_in_flight() -> bool:
@@ -251,7 +232,6 @@ def _start_official_provisioning(env: Mapping[str, str], *, backend: str | None 
         global _official_cpu_stage_pending
         try:
             if prepare_cpu:
-                _mark_runtimes_prepared()
                 _record_step("starting")
                 try:
                     result = readiness.provision_cpu(environ=snapshot, status_cb=_provision_status, step_cb=_record_step,
@@ -280,7 +260,6 @@ def _start_official_provisioning(env: Mapping[str, str], *, backend: str | None 
                 if not facts["available"]:
                     _remember_preparation_failure(gpu_backend, str(facts["reason"]))
                     return
-                _mark_runtimes_prepared()
                 with _provision_lock:
                     _gpu_stage_backend, _gpu_stage_step = gpu_backend, "starting"
                 _notify_readiness_listeners()
@@ -450,7 +429,6 @@ __all__ = [
     "cpu_runtime_readiness",
     "gpu_preparation_reason",
     "provision_command",
-    "runtimes_prepared_this_process",
     "start_cpu_provisioning",
     "start_runtime_preparation",
     "runtime_preparation_status",

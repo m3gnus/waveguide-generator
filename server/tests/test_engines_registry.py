@@ -196,7 +196,6 @@ def test_finished_preparation_refreshes_the_gpu_rows_too(monkeypatch) -> None:
     monkeypatch.setattr(
         beat_cpu_runtime, "cpu_preparation_in_flight", lambda: in_flight["value"]
     )
-    monkeypatch.setattr(beat_cpu_runtime, "runtimes_prepared_this_process", lambda: True)
     monkeypatch.setattr(
         beat_cpu_runtime, "gpu_preparation_reason",
         lambda backend: "preparing metal" if backend == "metal" else None,

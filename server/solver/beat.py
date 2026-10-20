@@ -133,18 +133,6 @@ def is_beat_engine(engine: str) -> bool:
 logger = logging.getLogger(__name__)
 
 
-def reprobe_package_backend_statuses() -> dict[str, Any] | None:
-    """Refresh the official engine's independent readiness for every backend.
-
-    After runtime preparation, discard readiness cached before Julia or the
-    backend runtime was available.
-    """
-
-    from .official_beat import production_statuses
-
-    return production_statuses(force_refresh=True)
-
-
 def beat_backend_statuses() -> dict[str, dict[str, Any]]:
     """Read the official engine's independent readiness for all four backends."""
     from .official_beat import production_statuses
@@ -755,7 +743,6 @@ __all__ = [
     "beat_geometry_sources",
     "beat_status",
     "is_beat_engine",
-    "reprobe_package_backend_statuses",
     "resolve_beat_backend",
     "solve_beat_from_msh_text",
 ]

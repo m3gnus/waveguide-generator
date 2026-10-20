@@ -20,7 +20,6 @@ def preparation(monkeypatch):
     monkeypatch.setattr(runtime.platform, "system", lambda: "Linux")
     for name, value in (("_provision_thread", None), ("_provision_step", None),
                         ("_requested_backend", None), ("_preparation_errors", {}),
-                        ("_runtimes_prepared", False),
                         ("_preparation_in_flight", False), ("_official_cpu_stage_pending", False),
                         ("_gpu_stage_backend", None), ("_gpu_stage_step", None)):
         monkeypatch.setattr(runtime, name, value)

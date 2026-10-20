@@ -766,28 +766,30 @@ def test_profile_logs_complete_wg_timing_sequence(runtime, monkeypatch, caplog):
                      "first event", "first result", "last result", "completed", "mapped", "closed"]
 
 
-def test_ui_refresh_and_reprobe_request_full_proof(runtime, monkeypatch):
+def test_ui_refresh_requests_full_proof(runtime, monkeypatch):
     import asyncio
     from server.engines.registry import EngineRegistry, detect_engines
     from server.solver.beat_runtime import warm_cache
 
     observed = []
     original = bridge.production_statuses
-    monkeypatch.setattr(bridge, "production_statuses", lambda **kwargs: (observed.append(kwargs), original(**kwargs))[1])
+    monkeypatch.setattr(bridge, "production_statuses", lambda **kwargs: (observed.append(warm_cache.generation()), original(**kwargs))[1])
 
     async def scenario():
         engines = EngineRegistry(cpu_refresh=True, detector=lambda: detect_engines(names=("beat-cpu", "beat-metal")))
         try:
             await engines.capabilities()
             before = warm_cache.generation()
+            observed.clear()
             await engines.refresh_official_readiness()
             assert warm_cache.generation() > before
+            # An initial background read may already be in flight; refresh must
+            # finish with a status read from the invalidated generation.
+            assert observed and observed[-1] > before
             assert all(row.available for row in await engines.capabilities())
         finally:
             await engines.shutdown_prewarm()
     asyncio.run(scenario())
-    beat.reprobe_package_backend_statuses()
-    assert observed[-1] == {"force_refresh": True}
 
 
 @pytest.mark.parametrize("backend", ["cpu", "metal"])

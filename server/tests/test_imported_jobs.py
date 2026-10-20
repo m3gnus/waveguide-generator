@@ -96,7 +96,6 @@ def test_imported_beat_cpu_refresh_restores_the_complete_capability_row(
 
     monkeypatch.setattr(registry, "CAPABILITIES_WAIT_SECONDS", 0.01)
     monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: preparing)
-    monkeypatch.setattr(beat_cpu_runtime, "runtimes_prepared_this_process", lambda: False)
     from server.solver import official_beat
     statuses = {
         backend: {"available": backend == "cpu", "reason": "CPU ready" if backend == "cpu" else "no device",

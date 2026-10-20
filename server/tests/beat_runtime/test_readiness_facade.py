@@ -17,7 +17,7 @@ def official(monkeypatch, tmp_path):
     monkeypatch.setenv(provider.PROVIDER_ENV, "official")
     for name, value in (("_provision_thread", None), ("_provision_step", None),
                         ("_requested_backend", None), ("_preparation_errors", {}),
-                        ("_preparation_in_flight", False), ("_official_cpu_stage_pending", False), ("_runtimes_prepared", False),
+                        ("_preparation_in_flight", False), ("_official_cpu_stage_pending", False),
                         ("_gpu_stage_backend", None), ("_gpu_stage_step", None)):
         monkeypatch.setattr(facade, name, value)
     yield

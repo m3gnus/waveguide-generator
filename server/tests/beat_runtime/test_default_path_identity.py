@@ -43,7 +43,6 @@ def test_default_preparation_ignores_existing_hbb_state(tmp_path, monkeypatch):
     monkeypatch.setattr(beat_cpu_runtime, "_requested_backend", None)
     monkeypatch.setattr(beat_cpu_runtime, "_preparation_errors", {})
     monkeypatch.setattr(beat_cpu_runtime, "_preparation_in_flight", False)
-    monkeypatch.setattr(beat_cpu_runtime, "_runtimes_prepared", False)
     monkeypatch.setattr(beat_cpu_runtime, "_notify_readiness_listeners", lambda: None)
     monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {"metal": {"available": False}})
     monkeypatch.setattr(readiness, "expected_identity", lambda *args, **kwargs: {"julia_executable": None})
