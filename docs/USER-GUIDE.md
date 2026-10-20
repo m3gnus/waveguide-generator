@@ -721,7 +721,7 @@ dialog with the verdict, what would be installed, and the **Install update** but
 finished releases only. Beta also offers pre-releases — release candidates published
 to test packaging and installation on every platform before a stable version number
 is committed to them. Beta is per release candidate, not per commit on `main`; see
-`docs/reference/UPDATE-CHANNELS.md` for exactly what each channel reads. Switching
+`docs/history/UPDATE-CHANNELS.md` for exactly what each channel reads. Switching
 re-checks immediately, so the verdict above the buttons updates while the dialog is
 open. The choice is stored with WG's application data rather than in the browser, so
 it survives the update it controls. Switching back to Stable while running a beta

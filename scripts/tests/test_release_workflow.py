@@ -452,7 +452,7 @@ def test_the_guard_refuses_something_that_is_not_a_release_version(
 def test_the_guard_refuses_a_build_stamp(tmp_path: Path, declared: str) -> None:
     """A build of `main` is not a release, and shares the pre-release slot.
 
-    `docs/reference/UPDATE-CHANNELS.md` states that a main build can never go
+    `docs/history/UPDATE-CHANNELS.md` states that a main build can never go
     out through this workflow. That held only because the guard's own parser
     refused every hyphen, and widening it for release candidates admitted a
     build stamp with them. The identifier is what tells the two apart, so the

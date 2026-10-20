@@ -17,7 +17,7 @@ This records the implemented transaction and retained receiving-bridge contract:
 what the records are, what cleanup may remove, what an old release's launcher
 hands the new helper, and how a restart is coordinated. It began as Phase 1
 ("reliability of the current updater") of the 2026-09-12 updater review.
-Channels and publication stay in [`UPDATE-CHANNELS.md`](UPDATE-CHANNELS.md).
+Channels and publication stay in [`UPDATE-CHANNELS.md`](../history/UPDATE-CHANNELS.md).
 The current full-installer route is described in
 [`INSTALLER-HANDOFF-CONTRACT.md`](INSTALLER-HANDOFF-CONTRACT.md); this document
 also preserves compatibility obligations for the older receiving route.

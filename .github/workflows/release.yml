@@ -111,7 +111,7 @@ jobs:
           # A release candidate and a build stamp share SemVer's pre-release
           # slot, and only one of them is a release. `0.4.0-main.7` names a
           # build of `main` -- published, if ever, by its own workflow, as its
-          # own immutable pre-release. docs/reference/UPDATE-CHANNELS.md states
+          # own immutable pre-release. docs/history/UPDATE-CHANNELS.md states
           # that a main build can never go out through this workflow, and until
           # the parser was widened for release candidates that was true only
           # because the parser refused every hyphen. The identifier is what

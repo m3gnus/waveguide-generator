@@ -198,7 +198,7 @@ which is the only endpoint the stable channel reads. Independently,
 `server/updates/installer_checker.py` refuses any tag but a plain triple on the stable
 channel (`eligible_release(..., channel="stable")`), so a
 pre-release arriving there anyway is still not offered. See
-[`docs/reference/UPDATE-CHANNELS.md`](reference/UPDATE-CHANNELS.md).
+[`docs/history/UPDATE-CHANNELS.md`](history/UPDATE-CHANNELS.md).
 
 ## A candidate is not a build stamp
 

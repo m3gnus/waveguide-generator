@@ -22,7 +22,7 @@ the exception in `validation/`: it is a blank form to copy, not evidence.
 | [Solve symmetry](reference/SYMMETRY-CONTRACT.md) | Solver and geometry developers | Canonical contract | `server/solver/symmetry.py` and its tests |
 | [Result contract](reference/RESULT-CONTRACTS.md) | Solver, chart, export, and integration developers | Canonical contracts v1/v2 | native and imported result mappers, 2026-08-20 |
 | [Export contract](reference/EXPORT-CONTRACTS.md) | UI, API, and CAD developers | Canonical contract | `server/exports/` and `frontend/src/results/`, 2026-08-13 |
-| [Update channels](reference/UPDATE-CHANNELS.md) | Release and updater maintainers | Channel choice and open main-build design; layer-updater details historical from 0.3.6 | `server/updates/`, 2026-09-06 |
+| [Update channels](history/UPDATE-CHANNELS.md) | Release and updater maintainers | Historical layer-updater channel design; main-build proposal dropped | Archived from 0.3.6 |
 | [Update transaction contract](reference/UPDATE-TRANSACTION-CONTRACT.md) | Updater and launcher maintainers | Restart latch (section 4) and data compatibility (section 6) current; layer transaction historical, removed in 0.3.6 | `server/updates/restart.py`; status reviewed 2026-10-17 |
 | [Installer handoff](reference/INSTALLER-HANDOFF-CONTRACT.md) | Installer and updater maintainers | Current full-installer handoff contract | `server/updates/` and platform installers |
 | [Windows native installer recovery](reference/WINDOWS-INSTALLER-RECOVERY.md) | Windows launcher and installer maintainers | Current native admission, recovery and diagnostics contract; Windows artifact evidence required | `launchers/windows/` and Windows installers |

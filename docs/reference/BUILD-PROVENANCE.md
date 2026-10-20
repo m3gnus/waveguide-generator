@@ -6,9 +6,8 @@ current plans. GitHub's `actions/attest` action obtains a short-lived Sigstore
 certificate through the Actions OIDC token; it does not require a purchased
 certificate or a repository secret.
 
-The RC build and the manual Beta proposal (when activated) attest their own
-files immediately after building and before uploading them. The release
-workflow promotes the qualified RC artifacts; it never builds or attests.
+The RC build attests its own files immediately after building and before
+uploading them. The release workflow promotes the qualified RC artifacts; it never builds or attests.
 An attestation describes origin and build provenance, not CPU qualification.
 Promotion also requires the complete source run, including installed gates and
 protected signing, to have succeeded.
@@ -48,8 +47,7 @@ The attestation records `github.sha` — the tip of the ref a run was dispatched
 on — as its source digest, not the `sha` input the jobs check out. So before
 building, every build job verifies that its checked-out `HEAD` equals
 `github.sha`, and a run whose input resolves to a different commit fails before
-any artifact is built or attested. The inactive Beta proposal applies the same
-check in its identity job.
+any artifact is built or attested.
 
 - **RC of a fix branch:** dispatch on that branch, with its tip as the input:
   `gh workflow run rc-build.yml --ref BRANCH -f sha=BRANCH_TIP`. The earlier
@@ -115,11 +113,9 @@ unzip -p update-app-VERSION.zip APP-MANIFEST.json \
   | jq '{commit, sourceCommit, treeSha256}'
 ```
 
-An RC manifest's `commit` is the resolved checkout of the dispatch input. A
-manual Beta manifest also has `sourceCommit` for the candidate input, `commit`
-for the fixed build-stamp commit, and `treeSha256` for the stamped app tree.
-Compare those fields with the candidate and with the exact archive under
-review. The attestation signature covers the manifest subject.
+An RC manifest's `commit` is the resolved checkout of the dispatch input.
+Compare its `treeSha256` with the exact archive under review. The attestation
+signature covers the manifest subject.
 
 ## Verify a published release
 
@@ -144,32 +140,3 @@ gh attestation verify "$ASSET" \
   --signer-workflow m3gnus/waveguide-generator/.github/workflows/rc-build.yml \
   --source-digest "$SOURCE"
 ```
-
-## Verify a manual Beta after activation
-
-The Beta proposal remains inert under `docs/reference/` until the release owner
-authorizes moving it into `.github/workflows/`. If it is activated under the
-name below, use that path as the signer workflow:
-
-```bash
-SOURCE=COMMIT_SHA
-ASSET=Waveguide.Generator-VERSION-windows-x86_64-setup.exe
-
-gh attestation verify "$ASSET" \
-  --repo m3gnus/waveguide-generator \
-  --signer-workflow m3gnus/waveguide-generator/.github/workflows/main-build.yml \
-  --source-digest "$SOURCE"
-```
-
-The identity job has the same dispatch-source check before it resolves the
-candidate. Verify the Beta app archive and manifest with the same command and
-constraints, substituting `main-build.yml` for `rc-build.yml` in the signer
-workflow path. The stamped Beta app manifest must report that candidate in
-`sourceCommit`, a distinct local `commit` created by the build stamp, and a
-64-character lowercase `treeSha256`. `--source-digest` checks the workflow's
-dispatch source; the manifest fields independently bind the candidate and its
-stamped tree. Those values are evidence about the stamped tree; they do not
-make the updater enforce signatures. The updater continues to use its existing
-checksum and trusted-release checks. macOS Gatekeeper and Windows SmartScreen
-behavior remains unchanged; paid platform signing is a separate future choice,
-and SmartScreen reputation is separately accumulated.

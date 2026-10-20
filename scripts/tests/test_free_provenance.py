@@ -1,8 +1,7 @@
 """Focused checks for the free build provenance workflow wiring.
 
-These checks inspect the real RC and release workflows and the inactive
-manual-Beta proposal. They keep the attestation boundary visible: a producing
-job signs only files it built locally, before its upload step, while a later
+These checks inspect the real RC and release workflows. They keep the
+attestation boundary visible: a producing job signs only files it built locally, before its upload step, while a later
 job may consume an attested file without creating a new claim for it.
 
 The assertions are exact on purpose. The pinned action fails only when every
@@ -24,8 +23,7 @@ from shared import release_assets
 ROOT = Path(__file__).resolve().parents[2]
 RC_WORKFLOW = ROOT / ".github" / "workflows" / "rc-build.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
-PROPOSAL_WORKFLOW = ROOT / "docs" / "reference" / "main-build.workflow-proposal.yml"
-BUILD_WORKFLOWS = (RC_WORKFLOW, PROPOSAL_WORKFLOW)
+BUILD_WORKFLOWS = (RC_WORKFLOW,)
 ALL_WORKFLOWS = (*BUILD_WORKFLOWS, RELEASE_WORKFLOW)
 ATTEST_PIN = "actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d"
 BUILD_JOBS = ("spa", "macos-bundle", "windows-bundle", "linux-bundle")
@@ -33,7 +31,6 @@ GUARD = "Verify the candidate matches the workflow source"
 
 ATTESTING = {"id-token": "write", "attestations": "write"}
 RC_BUILD = {"contents": "read", **ATTESTING}
-PUBLISH = {"contents": "write"}
 #: The call to ci.yml that every build job needs. Read-only: ci.yml needs no
 #: more, and a called workflow's token holds no more than the caller grants.
 QUALIFY = {"contents": "read"}
@@ -43,16 +40,10 @@ QUALIFY = {"contents": "read"}
 JOB_PERMISSIONS = {
     RC_WORKFLOW: {"qualify": QUALIFY, **dict.fromkeys(BUILD_JOBS, RC_BUILD), "sign-candidate": None},
     RELEASE_WORKFLOW: {"publish": {"contents": "write", "actions": "read"}},
-    PROPOSAL_WORKFLOW: {
-        "identity": None,
-        **dict.fromkeys(BUILD_JOBS, RC_BUILD),
-        "publish": PUBLISH,
-    },
 }
 WORKFLOW_PERMISSIONS = {
     RC_WORKFLOW: {"contents": "read"},
     RELEASE_WORKFLOW: {"actions": "read", "contents": "read"},
-    PROPOSAL_WORKFLOW: {"contents": "read"},
 }
 
 VERSION = "9.8.7-rc.6"
@@ -150,8 +141,7 @@ def test_every_job_has_exactly_its_permissions(path: Path) -> None:
 @pytest.mark.parametrize("path", BUILD_WORKFLOWS)
 def test_the_source_guard_is_the_step_straight_after_checkout(path: Path) -> None:
     workflow = _load(path)
-    jobs = ("identity",) if path == PROPOSAL_WORKFLOW else BUILD_JOBS
-    for job in jobs:
+    for job in BUILD_JOBS:
         steps = _steps(workflow, job)
         assert str(steps[0].get("uses", "")).startswith("actions/checkout@"), job
         guard = steps[1]
@@ -226,12 +216,6 @@ def test_each_attestation_precedes_every_upload(path: Path) -> None:
             assert qualification, job
             assert attest_index < min(qualification), job
 
-    if "publish" in workflow["jobs"]:
-        assert not any(
-            str(step.get("uses", "")).startswith("actions/attest@")
-            for step in _steps(workflow, "publish")
-        )
-
 
 @pytest.mark.parametrize("path", (RC_WORKFLOW,))
 def test_a_windows_setup_is_attested_only_after_its_installer_gates(path: Path) -> None:
@@ -260,18 +244,6 @@ def test_the_rc_dispatch_input_says_it_must_be_the_dispatch_ref_tip() -> None:
     assert "--ref <branch>" in RC_WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_manual_beta_attests_the_manifest_that_carries_stamped_identity() -> None:
-    workflow = _load(PROPOSAL_WORKFLOW)
-    _index, macos_attestation = _attestation(workflow, "macos-bundle")
-    assert "build/bundle/update-app-*.manifest.json" in _subject_lines(macos_attestation)
-
-    text = PROPOSAL_WORKFLOW.read_text(encoding="utf-8")
-    assert "--source-commit \"$SOURCE\"" in text
-    assert "sourceCommit" in text
-    assert "treeSha256" in text
-    assert "does not make the updater enforce" in text
-
-
 def test_verification_document_uses_repository_signer_and_source_constraints() -> None:
     text = (ROOT / "docs" / "reference" / "BUILD-PROVENANCE.md").read_text(
         encoding="utf-8"
@@ -281,14 +253,12 @@ def test_verification_document_uses_repository_signer_and_source_constraints() -
         "--repo m3gnus/waveguide-generator",
         "--signer-workflow",
         "m3gnus/waveguide-generator/.github/workflows/rc-build.yml",
-        "m3gnus/waveguide-generator/.github/workflows/main-build.yml",
         "--source-digest",
         "--format json",
         ".[].verificationResult.statement",
     ):
         assert required in text
     assert "m3gnus/waveguide-generator/.github/workflows/release.yml" not in text
-    assert "updater enforce signatures" in text
 
 
 def test_publisher_verifies_builder_provenance_without_creating_a_new_claim() -> None:
