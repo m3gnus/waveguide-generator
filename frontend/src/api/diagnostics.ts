@@ -1,3 +1,4 @@
+import { httpErrorMessage } from './httpError';
 import { deadlineFetch } from './deadlineFetch';
 /**
  * The problem-report surface.
@@ -44,23 +45,15 @@ export interface DiagnosticsReport {
   text: string;
 }
 
-async function errorMessage(response: Response, fallback: string): Promise<string> {
-  try {
-    const body = await response.json() as { detail?: unknown };
-    if (typeof body.detail === 'string') return body.detail;
-  } catch { /* HTTP status remains useful. */ }
-  return `${fallback} (${response.status})`;
-}
-
 export async function getDiagnosticsReport(fetcher: typeof fetch = fetch): Promise<DiagnosticsReport> {
   const response = await deadlineFetch(fetcher, '/api/diagnostics/summary');
-  if (!response.ok) throw new Error(await errorMessage(response, 'Problem report details are unavailable'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Problem report details are unavailable'));
   return response.json() as Promise<DiagnosticsReport>;
 }
 
 export async function openLogsFolder(fetcher: typeof fetch = fetch): Promise<void> {
   const response = await fetcher('/api/diagnostics/open-logs', { method: 'POST' });
-  if (!response.ok) throw new Error(await errorMessage(response, 'The logs folder could not be opened'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'The logs folder could not be opened'));
 }
 
 /** A plain URL, so the download can be an anchor rather than a fetch. */

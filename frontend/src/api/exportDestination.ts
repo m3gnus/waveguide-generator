@@ -1,3 +1,4 @@
+import { httpErrorMessage } from './httpError';
 import { deadlineFetch } from './deadlineFetch';
 /**
  * Where one manual export goes, chosen for that export and no other.
@@ -22,16 +23,8 @@ export interface ExportDestination {
   selected: boolean;
 }
 
-async function errorMessage(response: Response): Promise<string> {
-  try {
-    const body = await response.json() as { detail?: unknown };
-    if (typeof body.detail === 'string') return body.detail;
-  } catch { /* the status is still worth reporting */ }
-  return `Export destination request failed (${response.status})`;
-}
-
 async function read(response: Response): Promise<ExportDestination> {
-  if (!response.ok) throw new Error(await errorMessage(response));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Export destination request failed'));
   const payload = await response.json() as Record<string, unknown>;
   return {
     path: typeof payload.path === 'string' && payload.path ? payload.path : null,

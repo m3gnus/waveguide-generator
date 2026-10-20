@@ -1,3 +1,4 @@
+import { httpErrorMessage } from './httpError';
 import { deadlineFetch } from './deadlineFetch';
 /**
  * The driver library's REST surface (CADLINK-CROSSOVER-DRIVERS.md section 4).
@@ -85,14 +86,6 @@ export interface DriverLibraryInfo {
   last_scan?: string | null;
 }
 
-async function errorMessage(response: Response): Promise<string> {
-  try {
-    const body = await response.json() as { detail?: unknown };
-    if (typeof body.detail === 'string') return body.detail;
-  } catch { /* HTTP status remains useful. */ }
-  return `Driver library request failed (${response.status})`;
-}
-
 export interface DriverSearchQuery {
   q?: string;
   kind?: DriverSearchKind;
@@ -127,7 +120,7 @@ export async function searchDrivers(
   if (z !== null && Number.isFinite(z)) params.set('z', String(z));
   if (complete) params.set('complete', 'true');
   const response = await deadlineFetch(fetcher, `/api/drivers?${params.toString()}`);
-  if (!response.ok) throw new Error(await errorMessage(response));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Driver library request failed'));
   const body = await response.json() as {
     items?: DriverHit[];
     hidden_incomplete?: number;
@@ -156,7 +149,7 @@ export async function getDriver(
   fetcher: typeof fetch = fetch,
 ): Promise<DriverDetail> {
   const response = await deadlineFetch(fetcher, `/api/drivers/${encodeURIComponent(driverId)}?complete=true`);
-  if (!response.ok) throw new Error(await errorMessage(response));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Driver library request failed'));
   return response.json() as Promise<DriverDetail>;
 }
 
@@ -164,7 +157,7 @@ export async function getDriverLibrary(
   fetcher: typeof fetch = fetch,
 ): Promise<DriverLibraryInfo> {
   const response = await deadlineFetch(fetcher, '/api/drivers/library');
-  if (!response.ok) throw new Error(await errorMessage(response));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Driver library request failed'));
   return response.json() as Promise<DriverLibraryInfo>;
 }
 
@@ -172,6 +165,6 @@ export async function rescanDriverLibrary(
   fetcher: typeof fetch = fetch,
 ): Promise<DriverLibraryInfo> {
   const response = await fetcher('/api/drivers/library/rescan', { method: 'POST' });
-  if (!response.ok) throw new Error(await errorMessage(response));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Driver library request failed'));
   return response.json() as Promise<DriverLibraryInfo>;
 }

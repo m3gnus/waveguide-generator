@@ -1,3 +1,4 @@
+import { httpErrorMessage } from './httpError';
 import { deadlineFetch } from './deadlineFetch';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 
@@ -20,19 +21,11 @@ export interface CadWorkspacePath {
   captureMode?: CadCaptureMode;
 }
 
-async function errorMessage(response: Response): Promise<string> {
-  try {
-    const body = await response.json() as { detail?: unknown };
-    if (typeof body.detail === 'string') return body.detail;
-  } catch { /* HTTP status remains useful. */ }
-  return `WGLink folder request failed (${response.status})`;
-}
-
 export async function getCadWorkspace(
   fetcher: typeof fetch = fetch,
 ): Promise<CadWorkspacePath> {
   const response = await deadlineFetch(fetcher, '/api/cad-workspace/path');
-  if (!response.ok) throw new Error(await errorMessage(response));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WGLink folder request failed'));
   return response.json() as Promise<CadWorkspacePath>;
 }
 
@@ -47,7 +40,7 @@ export async function selectCadWorkspace(
       body: JSON.stringify({ path }),
     } : {}),
   });
-  if (!response.ok) throw new Error(await errorMessage(response));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WGLink folder request failed'));
   const selection = await response.json() as CadWorkspacePath;
   // Both routes to a folder land here -- the native picker when `path` is
   // absent, the manual field when it is not -- so this is the only place that
@@ -61,7 +54,7 @@ export async function openCadWorkspace(
   fetcher: typeof fetch = fetch,
 ): Promise<CadWorkspacePath> {
   const response = await fetcher('/api/cad-workspace/open', { method: 'POST' });
-  if (!response.ok) throw new Error(await errorMessage(response));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WGLink folder request failed'));
   return response.json() as Promise<CadWorkspacePath>;
 }
 
@@ -82,6 +75,6 @@ export async function setCaptureMode(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mode }),
   });
-  if (!response.ok) throw new Error(await errorMessage(response));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WGLink folder request failed'));
   return ((await response.json()) as { captureMode: CadCaptureMode }).captureMode;
 }
