@@ -610,22 +610,6 @@ def _git_tracked_app_entries(
     return tuple(entries)
 
 
-def git_tracked_app_files(
-    repo_root: Path,
-    *,
-    commit: str = "HEAD",
-    runner: RunCallable = subprocess.run,
-) -> tuple[PurePosixPath, ...]:
-    return tuple(
-        path
-        for path, _object_id, _mode in _git_tracked_app_entries(
-            repo_root,
-            commit=commit,
-            runner=runner,
-        )
-    )
-
-
 def copy_tracked_app_files(
     repo_root: Path,
     destination: Path,
@@ -3219,117 +3203,112 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
         runtime_root = scratch / "runtime"
         app_root = scratch / "app"
 
-        if not args.app_only:
-            builder.build_runtime(
-                runtime_root,
-                python_version=args.python_version,
-                python_build=PYTHON_BUILD,
-                runtime_recipe=recipe,
-                runtime_id=runtime_id,
-                requirements=requirements,
-                pins=pins,
-                lock=lock,
-                hashed_lock=hashed_lock,
-                platform_name=platform_name,
-            )
-            runtime_asset = output / release_assets.runtime_layer_name(
-                platform_name, runtime_id
-            )
-            deterministic_zip(runtime_root, runtime_asset)
-            _register_asset(assets, runtime_asset)
+        builder.build_runtime(
+            runtime_root,
+            python_version=args.python_version,
+            python_build=PYTHON_BUILD,
+            runtime_recipe=recipe,
+            runtime_id=runtime_id,
+            requirements=requirements,
+            pins=pins,
+            lock=lock,
+            hashed_lock=hashed_lock,
+            platform_name=platform_name,
+        )
+        runtime_asset = output / release_assets.runtime_layer_name(
+            platform_name, runtime_id
+        )
+        deterministic_zip(runtime_root, runtime_asset)
+        _register_asset(assets, runtime_asset)
 
-        if not args.runtime_only:
-            builder.build_app(
-                app_root,
+        builder.build_app(
+            app_root,
+            version=version,
+            runtime_id=runtime_id,
+            spa=args.spa,
+            commit=commit,
+            source_commit=args.source_commit,
+        )
+        app_asset = output / release_assets.app_layer_name(version)
+        # Canonical modes avoid NTFS/POSIX checkout differences. The archive
+        # is compressed: the two platforms are held to the same *content*
+        # through the manifest's treeSha256, which no compressor can
+        # perturb, so there is no reason to make every update download ten
+        # times what it needs to.
+        deterministic_zip(
+            app_root,
+            app_asset,
+            canonical_modes=True,
+        )
+        _register_asset(assets, app_asset)
+        manifest_asset = output / release_assets.app_manifest_name(version)
+        shutil.copy2(app_root / "APP-MANIFEST.json", manifest_asset)
+        _register_asset(assets, manifest_asset)
+
+        if platform_name == MACOS_PLATFORM:
+            bundle = scratch / "Waveguide Generator.app"
+            builder.assemble_bundle(
+                bundle,
+                runtime_root=runtime_root,
+                app_root=app_root,
                 version=version,
-                runtime_id=runtime_id,
-                spa=args.spa,
-                commit=commit,
-                source_commit=args.source_commit,
             )
-            app_asset = output / release_assets.app_layer_name(version)
-            # Canonical modes avoid NTFS/POSIX checkout differences. The archive
-            # is compressed: the two platforms are held to the same *content*
-            # through the manifest's treeSha256, which no compressor can
-            # perturb, so there is no reason to make every update download ten
-            # times what it needs to.
+            installer_asset = output / release_assets.installer_name(
+                release_assets.MACOS_PLATFORM, version
+            )
+            if installer_asset.exists():
+                installer_asset.unlink()
+            builder.create_dmg(bundle, installer_asset, scratch / "dmg-staging")
+        elif platform_name == LINUX_PLATFORM:
+            bundle = scratch / LINUX_BUNDLE_DIRECTORY
+            builder.assemble_linux_bundle(
+                bundle,
+                runtime_root=runtime_root,
+                app_root=app_root,
+            )
+            installer_asset = output / release_assets.installer_name(
+                release_assets.LINUX_PLATFORM, version
+            )
+            builder.create_linux_tarball(bundle, installer_asset)
+        else:
+            bundle = scratch / "Waveguide Generator"
+            builder.assemble_windows_bundle(
+                bundle,
+                runtime_root=runtime_root,
+                app_root=app_root,
+            )
+            installer_asset = output / release_assets.installer_name(
+                release_assets.WINDOWS_PLATFORM, version
+            )
             deterministic_zip(
-                app_root,
-                app_asset,
-                canonical_modes=True,
+                bundle,
+                installer_asset,
+                archive_root=bundle.name,
+                extra_root_files={WINDOWS_README_NAME: builder.windows_readme()},
             )
-            _register_asset(assets, app_asset)
-            manifest_asset = output / release_assets.app_manifest_name(version)
-            shutil.copy2(app_root / "APP-MANIFEST.json", manifest_asset)
-            _register_asset(assets, manifest_asset)
-
-        if not args.runtime_only and not args.app_only:
-            if platform_name == MACOS_PLATFORM:
-                bundle = scratch / "Waveguide Generator.app"
-                builder.assemble_bundle(
+            setup_asset = output / release_assets.windows_setup_name(version)
+            if setup_asset.exists():
+                setup_asset.unlink()
+            builder.build_windows_setup(bundle, setup_asset, version=version)
+            _register_asset(assets, setup_asset)
+            output_bundle = output / bundle.name
+            if output_bundle.exists() or output_bundle.is_symlink():
+                _remove(output_bundle)
+            shutil.copytree(bundle, output_bundle, symlinks=True)
+        _register_asset(assets, installer_asset)
+        if args.skip_verify:
+            print("Verification skipped by --skip-verify.")
+        else:
+            try:
+                builder.verify_bundle(
                     bundle,
-                    runtime_root=runtime_root,
-                    app_root=app_root,
-                    version=version,
+                    scratch / "verification",
+                    platform_name=platform_name,
                 )
-                installer_asset = output / release_assets.installer_name(
-                    release_assets.MACOS_PLATFORM, version
-                )
-                if installer_asset.exists():
-                    installer_asset.unlink()
-                builder.create_dmg(bundle, installer_asset, scratch / "dmg-staging")
-            elif platform_name == LINUX_PLATFORM:
-                bundle = scratch / LINUX_BUNDLE_DIRECTORY
-                builder.assemble_linux_bundle(
-                    bundle,
-                    runtime_root=runtime_root,
-                    app_root=app_root,
-                )
-                installer_asset = output / release_assets.installer_name(
-                    release_assets.LINUX_PLATFORM, version
-                )
-                builder.create_linux_tarball(bundle, installer_asset)
-            else:
-                bundle = scratch / "Waveguide Generator"
-                builder.assemble_windows_bundle(
-                    bundle,
-                    runtime_root=runtime_root,
-                    app_root=app_root,
-                )
-                installer_asset = output / release_assets.installer_name(
-                    release_assets.WINDOWS_PLATFORM, version
-                )
-                deterministic_zip(
-                    bundle,
-                    installer_asset,
-                    archive_root=bundle.name,
-                    extra_root_files={WINDOWS_README_NAME: builder.windows_readme()},
-                )
-                setup_asset = output / release_assets.windows_setup_name(version)
-                if setup_asset.exists():
-                    setup_asset.unlink()
-                builder.build_windows_setup(bundle, setup_asset, version=version)
-                _register_asset(assets, setup_asset)
-                output_bundle = output / bundle.name
-                if output_bundle.exists() or output_bundle.is_symlink():
-                    _remove(output_bundle)
-                shutil.copytree(bundle, output_bundle, symlinks=True)
-            _register_asset(assets, installer_asset)
-            if args.skip_verify:
-                print("Verification skipped by --skip-verify.")
-            else:
-                try:
-                    builder.verify_bundle(
-                        bundle,
-                        scratch / "verification",
-                        platform_name=platform_name,
-                    )
-                except (BundleError, OSError):
-                    print_asset_sizes(assets)
-                    raise
-                print("Bundle verification passed.")
-        elif not args.skip_verify:
-            print("Bundle verification is not applicable to a layer-only build.")
+            except (BundleError, OSError):
+                print_asset_sizes(assets)
+                raise
+            print("Bundle verification passed.")
 
     print_asset_sizes(assets)
     return assets
