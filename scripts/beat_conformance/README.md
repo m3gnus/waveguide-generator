@@ -12,7 +12,7 @@ current instructions.
 The retained tools exercise official compiled requests, backend capability
 refusals, coordinate/phase/area controls, sweep protocol and independent analytic
 references. `corpus.py` retains small frozen production requests; `runners.py`
-provides official child/managed runners and metre-scale mesh conversion.
+provides the official child/managed runners.
 Fake protocol tests do not claim numerical qualification.
 
 Run the declared cases with the official runner through the compute broker:

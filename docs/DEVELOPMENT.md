@@ -311,8 +311,8 @@ python3 scripts/build_bundle.py \
 ```
 
 Without `--spa`, `frontend/dist` must already contain the matching verified
-`.wg2-spa.json` release stamp. `--runtime-only` and `--app-only` build an individual
-update layer, `--python-version` can rehearse another CPython 3.13 patch, and
+`.wg2-spa.json` release stamp. `--runtime-only` and `--app-only` are refused (the layer
+updater was removed in 0.3.6), `--python-version` can rehearse another CPython 3.13 patch, and
 `--skip-verify` skips the copied-bundle gate (backends ready, `/` and `/health`
 answer, and `codesign --verify --strict` still passes after the run, which proves the
 launcher's cache redirection keeps the sealed bundle unmodified). A normal local build

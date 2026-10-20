@@ -373,8 +373,8 @@ def release_prerelease(version_or_tag: str) -> ReleasePrerelease | None:
     **SemVer gives a release candidate and a build stamp the same slot.** Both
     are pre-release labels: `0.3.2-rc.1` is a candidate for the 0.3.2 release,
     and `0.4.0-main.7` is the seventh build of `main` past 0.3.x, which is not a
-    release at all and is published by a different workflow (see
-    ``docs/reference/UPDATE-CHANNELS.md``). Nothing in the SemVer grammar tells
+    release at all and was a proposed main-build channel (see
+    ``docs/history/UPDATE-CHANNELS.md``). Nothing in the SemVer grammar tells
     them apart, so **the identifier is what does it**, and it is the only thing
     that can: they differ in intent, not in shape.
 
