@@ -67,7 +67,7 @@ UPDATE_RESTART_INTERRUPTION_KEY = "interrupted_by_update_restart"
 #: What a `running` row that the user had already asked to stop
 #: (``cancellation_requested = 1``) reads as if the process ends -- Quit's
 #: budget, a crash, a forced kill -- before its own cancellation checkpoint
-#: applies. Equal to ``server.jobs.runtime.CANCELLED_MESSAGE``, the message an
+#: applies. Equal to ``server.jobs.runtime.core.CANCELLED_MESSAGE``, the message an
 #: ordinary in-process cancellation uses for both ``stage_message`` and
 #: ``error_message``; kept as a literal here rather than imported, because
 #: ``runtime`` imports this module and the reverse would cycle.
@@ -2796,7 +2796,7 @@ class JobStore:
         neither mark -- the ordinary case, since ``mark_running_interrupted_by_quit``
         leaves such a row to its own request rather than also marking it -- ends
         cancelled with ``user_cancelled_message`` when that is given (the
-        default matches ``server.jobs.runtime.CANCELLED_MESSAGE``) instead of
+        default matches ``server.jobs.runtime.core.CANCELLED_MESSAGE``) instead of
         being read as a crash: the user chose to stop it before the process
         ever ended. None is requeued.
 

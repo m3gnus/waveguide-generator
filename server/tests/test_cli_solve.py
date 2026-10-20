@@ -168,7 +168,7 @@ def test_result_identity_is_independent_of_output_artifacts(
     capsys,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("server.jobs.runtime.time.perf_counter", lambda: 10.0)
+    monkeypatch.setattr("server.jobs.runtime.core.time.perf_counter", lambda: 10.0)
     design = _design(tmp_path)
 
     assert main(

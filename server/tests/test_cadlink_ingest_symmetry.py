@@ -1047,7 +1047,7 @@ def test_the_same_half_returned_undeclared_is_recovered_from_its_geometry(
     the domain the same half declared by hand is solved with.
     """
 
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     pytest.importorskip("gmsh")
     record = _ingest(

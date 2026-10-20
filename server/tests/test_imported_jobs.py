@@ -25,13 +25,9 @@ from server.jobs.models import (
     SolveRequest,
 )
 from server.jobs.api import create_jobs_router
-from server.jobs.runtime import (
-    EngineUnavailableError,
-    ImportedSolveRefusal,
-    JobRuntime,
-    _imported_symmetry_metadata,
-    _replay_request,
-)
+from server.jobs.runtime import EngineUnavailableError, ImportedSolveRefusal, JobRuntime
+from server.jobs.runtime.cad_lane import _imported_symmetry_metadata
+from server.jobs.runtime.core import _replay_request
 from server.jobs.store import JobStore
 from server.mesh.imported import polar_grid_from_symmetry
 from server.solver import imported_channels, metal
@@ -95,7 +91,7 @@ def test_imported_beat_cpu_refresh_restores_the_complete_capability_row(
 
     from server.diagnostics.capabilities import capabilities_payload
     from server.engines import registry
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
     from server.solver import beat, beat_cpu_runtime, bempp
 
     monkeypatch.setattr(registry, "CAPABILITIES_WAIT_SECONDS", 0.01)
@@ -3394,7 +3390,7 @@ def test_imported_explicit_capable_engine_that_is_unavailable_stays_unavailable(
 
 
 def test_resolve_imported_submission_is_one_named_function_beside_resolve_submission() -> None:
-    from server.jobs.runtime import SubmissionResolution, resolve_imported_submission
+    from server.jobs.runtime.core import SubmissionResolution, resolve_imported_submission
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "auto"
@@ -3496,7 +3492,7 @@ def test_imported_auto_takes_beat_cpu_where_no_metal_runs(tmp_path: Path) -> Non
 def test_imported_fast_auto_prefers_beat_cpu_and_retains_bempp_fallback(
     monkeypatch: pytest.MonkeyPatch, beat_ready: bool, quadrants: int, expected: str
 ) -> None:
-    from server.jobs.runtime import plan_imported_submission
+    from server.jobs.runtime.core import plan_imported_submission
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "auto"
@@ -3537,7 +3533,7 @@ def test_imported_explicit_beat_cpu_refuses_a_y_only_half_by_name(tmp_path: Path
 
 
 def test_imported_accurate_refuses_xz_half_without_switching_to_metal(tmp_path: Path) -> None:
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "auto"
@@ -3555,7 +3551,7 @@ def test_imported_accurate_refuses_xz_half_without_switching_to_metal(tmp_path: 
 
 
 def test_imported_accurate_selects_ready_beat_gpu() -> None:
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "auto"
@@ -3586,7 +3582,7 @@ def test_imported_accurate_selects_ready_beat_gpu() -> None:
 def test_fast_auto_imported_resolution_keeps_legacy_platform_table(
     platform: str, metal_ready: bool, gpu: str | None, expected: str,
 ) -> None:
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "auto"
@@ -3618,7 +3614,7 @@ def _fast_gpu(name: str, *, available: bool = True) -> EngineInfo:
 
 
 def test_explicit_beat_metal_takes_imported_geometry_in_fast() -> None:
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "beat-metal"
@@ -3636,7 +3632,7 @@ def test_explicit_beat_metal_takes_imported_geometry_in_fast() -> None:
 def test_the_fast_plan_offers_beat_metal_without_resolving_to_it(requested: str) -> None:
     """The selector's verdict is "if picked"; AUTO's resolution is unchanged."""
 
-    from server.jobs.runtime import plan_imported_submission
+    from server.jobs.runtime.core import plan_imported_submission
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = requested
@@ -3648,7 +3644,7 @@ def test_the_fast_plan_offers_beat_metal_without_resolving_to_it(requested: str)
 
 
 def test_beat_cuda_fast_refusal_offers_beat_metal_and_never_an_empty_auto() -> None:
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "beat-cuda"
@@ -3676,7 +3672,7 @@ def test_beat_cuda_fast_refusal_offers_beat_metal_and_never_an_empty_auto() -> N
 def test_explicit_beat_gpu_not_detected_says_it_is_unavailable(
     engine: str, accuracy: str,
 ) -> None:
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = engine
@@ -3687,7 +3683,7 @@ def test_explicit_beat_gpu_not_detected_says_it_is_unavailable(
 
 @pytest.mark.parametrize("engine", ["beat-cuda", "beat-rocm"])
 def test_imported_plan_for_undetected_gpu_returns_unavailable(engine: str) -> None:
-    from server.jobs.runtime import plan_imported_submission
+    from server.jobs.runtime.core import plan_imported_submission
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = engine
@@ -3703,7 +3699,7 @@ def test_imported_plan_for_undetected_gpu_returns_unavailable(engine: str) -> No
 
 
 def test_explicit_beat_metal_fast_is_capable_in_the_imported_plan() -> None:
-    from server.jobs.runtime import _imported_capabilities
+    from server.jobs.runtime.imported_refusals import _imported_capabilities
 
     infos = [_metal(), _fast_gpu("beat-metal"), _fast_gpu("beat-cuda"), _beat_cpu()]
     declared = _imported_capabilities(infos, "fast", "beat-metal")
@@ -3717,7 +3713,7 @@ def test_explicit_beat_metal_fast_is_capable_in_the_imported_plan() -> None:
 
 @pytest.mark.parametrize("gpu", ["beat-cuda", "beat-rocm"])
 def test_explicit_beat_cuda_or_rocm_fast_is_refused_with_the_real_way_forward(gpu: str) -> None:
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = gpu
@@ -3739,7 +3735,7 @@ def test_explicit_beat_cuda_or_rocm_fast_is_refused_with_the_real_way_forward(gp
 
 
 def test_explicit_beat_cuda_accurate_is_still_accepted() -> None:
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "beat-cuda"
@@ -3751,7 +3747,7 @@ def test_explicit_beat_cuda_accurate_is_still_accepted() -> None:
 
 
 def test_fast_auto_never_resolves_to_beat_metal_when_metal_is_absent() -> None:
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "auto"
@@ -3760,7 +3756,7 @@ def test_fast_auto_never_resolves_to_beat_metal_when_metal_is_absent() -> None:
 
 
 def test_imported_accurate_refuses_passive_cardioid_without_switching_to_metal() -> None:
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
 
     request = _request(
         "wgi_" + "0" * 26,
@@ -3820,7 +3816,7 @@ def _symmetry_full() -> dict[str, Any]:
 
 
 def test_a_passive_cardioid_return_goes_only_to_an_engine_that_declares_it() -> None:
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
 
     request = _request(
         "wgi_" + "0" * 26,
@@ -4230,7 +4226,7 @@ def test_legacy_record_without_observations_is_checked_at_every_entry(tmp_path: 
 
 
 def test_legacy_record_whose_mesh_cannot_be_observed_asks_for_a_fresh_send(tmp_path: Path) -> None:
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     empty = tmp_path / "empty.msh"
     empty.write_text("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", encoding="utf-8")
@@ -4538,7 +4534,7 @@ def test_imported_outcomes_follow_from_each_engines_declared_capability(
     """
 
     from server.engines.registry import create_engine, detect_engines, engine_supports_symmetry
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
     from server.solver import beat, bempp, official_beat
 
     available = {"available": True, "reason": "ok", "version": "t"}
@@ -4706,7 +4702,7 @@ def _axial_geometry_changes() -> dict[str, Any]:
 
 
 async def _resolve_axial(tmp_path: Path, registry: Any, engine: str, mesh_text: str, planes: bool = True):
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
 
     tmp_path.mkdir(parents=True, exist_ok=True)
     changes: dict[str, Any] = {"mesh": _record_mesh_with_open_edges(tmp_path, 0)}

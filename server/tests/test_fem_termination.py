@@ -9,7 +9,8 @@ import pytest
 
 from server.cadlink.intake import ingest
 from server.jobs.models import DriveChannel
-from server.jobs.runtime import ImportedSolveRefusal, resolve_imported_submission
+from server.jobs.runtime import ImportedSolveRefusal
+from server.jobs.runtime.core import resolve_imported_submission
 from server.jobs.runtime.imported_refusals import _imported_request_refusal
 from server.solver.beat_adapter import coupled_request
 from server.solver.coupled_system import CoupledSystemError, ExteriorSurface, build_coupled_system, solve_kind

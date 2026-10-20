@@ -715,7 +715,7 @@ def _solve_verdicts(record: dict[str, Any]) -> tuple[dict[str, Any], dict[str, s
     import asyncio
     from types import SimpleNamespace
 
-    from server.jobs.runtime import plan_imported_submission, resolve_imported_submission
+    from server.jobs.runtime.core import plan_imported_submission, resolve_imported_submission
     from test_imported_jobs import _beat_cpu, _bempp, _metal, _request
 
     engines = (_metal(), _beat_cpu(), _bempp(sources=("parametric", "imported")))
@@ -814,7 +814,7 @@ def test_open_half_with_provenance_is_mirrored_and_its_second_plane_cut(tmp_path
 def test_the_same_open_half_without_provenance_is_recovered_from_its_geometry(tmp_path: Path) -> None:
     """Every flip condition holds: the cut half is solved as the whole speaker's reduced domain."""
 
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     bundle = _bundle(tmp_path, "half-bare", _open_half, HORN_THROAT)
     record = _ingest(bundle, tmp_path / "data")
@@ -846,7 +846,7 @@ def test_an_open_half_saved_without_observations_is_refused_from_its_mesh(tmp_pa
     The half's source is identified as the left one, so it is not recovered.
     """
 
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(
         _bundle(tmp_path, "half-legacy", _open_half, HORN_THROAT, sources=["woofer-left"]),
@@ -876,7 +876,7 @@ def test_an_open_half_saved_without_observations_is_refused_from_its_mesh(tmp_pa
 
 
 def test_undeclared_negative_side_half_is_recovered_by_reflection(tmp_path: Path) -> None:
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(_bundle(tmp_path, "negative-bare", _negative_half, HORN_THROAT), tmp_path / "data")
     observed = _interpretation(record)["observations"]["planes"]["x0"]
@@ -935,7 +935,7 @@ def test_open_quarter_with_provenance_on_both_planes_is_a_quarter(tmp_path: Path
 
 
 def test_open_quarter_without_provenance_is_recovered_as_a_quarter(tmp_path: Path) -> None:
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(_bundle(tmp_path, "quarter-bare", _open_quarter, HORN_THROAT), tmp_path / "data")
 
@@ -957,7 +957,7 @@ def test_an_off_centre_complete_model_is_a_full_model(tmp_path: Path) -> None:
 
 
 def test_standalone_source_sheet_without_cut_shaped_rim_remains_eligible(tmp_path: Path) -> None:
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(_bundle(tmp_path, "source-sheet", _standalone_sheet, HORN_THROAT), tmp_path / "data")
     assert record["symmetry"]["domain_planes"] == []
@@ -967,7 +967,7 @@ def test_standalone_source_sheet_without_cut_shaped_rim_remains_eligible(tmp_pat
 
 
 def test_edge_aligned_standalone_source_sheet_is_not_a_shell_cut(tmp_path: Path) -> None:
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(
         _bundle(tmp_path, "edge-sheet", _edge_aligned_source_sheet, HORN_THROAT),
@@ -987,7 +987,7 @@ def test_edge_aligned_standalone_source_sheet_is_not_a_shell_cut(tmp_path: Path)
 def test_a_port_through_the_plane_is_solved_as_shown(tmp_path: Path) -> None:
     """A real opening on x = 0 with the driver clear of it: not a cut, not asked."""
 
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(_bundle(tmp_path, "slot", _slot_on_plane, SLOT_DRIVER), tmp_path / "data")
 
@@ -1005,7 +1005,7 @@ def test_a_port_through_the_plane_is_solved_as_shown(tmp_path: Path) -> None:
 def test_a_port_ending_open_on_the_plane_is_not_a_cut(tmp_path: Path) -> None:
     """An uncapped opening on x = 0 that does not span the model stays solvable."""
 
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(_bundle(tmp_path, "port-exit", _port_exit_on_plane, PORT_DRIVER), tmp_path / "data")
     observed = _interpretation(record)["observations"]["planes"]["x0"]
@@ -1021,7 +1021,7 @@ def test_a_port_ending_open_on_the_plane_is_not_a_cut(tmp_path: Path) -> None:
 def test_a_cut_on_the_solver_y0_plane_is_refused_whatever_its_cad_name(tmp_path: Path) -> None:
     """Z-up, facing -Y: the top half kept, open along CAD z = 0, driver clear of it."""
 
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(
         _bundle(tmp_path, "z-up-top-half", _z_up_top_half, _faces_near((0.0, -80.0, 30.0))),
@@ -1041,7 +1041,7 @@ def test_a_cut_on_the_solver_y0_plane_is_refused_whatever_its_cad_name(tmp_path:
 def test_a_horn_mouth_on_the_solver_z0_plane_stays_solvable_under_any_frame(tmp_path: Path) -> None:
     """A single-sheet horn facing -Y: its open mouth lies on CAD y = 0, the solver's z0."""
 
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(
         _bundle(tmp_path, "horn-minus-y", _open_mouth_horn_facing_minus_y, _throat_farthest_along_y),
@@ -1063,7 +1063,7 @@ def test_an_open_half_with_another_body_on_the_plane_is_still_refused(
 ) -> None:
     """A capped or straddling separate body does not make the cut shell whole."""
 
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(
         _bundle(tmp_path, "half-with-block", lambda path: _open_half_with_block(path, block_x=block_x), BOX_DRIVER),
@@ -1089,7 +1089,7 @@ def test_a_cut_through_a_winged_shell_is_refused(tmp_path: Path) -> None:
     """A side wing leaves the cut section at about 70% of the shell's width."""
 
     from server.cadlink.interpretation.domain_interpretation import SPANNING_RIM_FRACTION
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     # The x=0 rim is 80 mm wide; the attached shell plus wing is 115 mm.
     # This would be missed by the former three-quarter threshold.
@@ -1108,7 +1108,7 @@ def test_a_curved_source_sheet_edged_on_the_plane_is_not_a_shell_cut(tmp_path: P
     """Its straight edges span the box on x = 0; only rigid edges can be a cut."""
 
     from server.cadlink.interpretation.domain_interpretation import observe_record_mesh
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(_bundle(tmp_path, "curved-sheet", _curved_source_sheet, _curved_face), tmp_path / "data")
     observed = _interpretation(record)["observations"]["planes"]["x0"]
@@ -1124,7 +1124,7 @@ def test_a_curved_source_sheet_edged_on_the_plane_is_not_a_shell_cut(tmp_path: P
 
 
 def test_an_open_backed_shell_without_provenance_is_refused_at_solve(tmp_path: Path) -> None:
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(
         _bundle(tmp_path, "open-backed", _split_open_backed_shell, BOX_DRIVER), tmp_path / "data"
@@ -1182,7 +1182,7 @@ def test_a_split_open_backed_shell_with_provenance_is_mirrored_and_change_unmirr
     assert shown["mesh_cache_key"] != mirrored["mesh_cache_key"]
     # Shown unmirrored, the shell is still open across x = 0: a free-space
     # solve of it is refused like any other undeclared cut.
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     refusal = _imported_open_half_refusal(shown)
     assert refusal is not None and refusal[0] == "imported_open_half_shell"
@@ -1281,7 +1281,7 @@ def test_mirrored_distinct_sources_are_not_mirrored_onto_each_other(tmp_path: Pa
 def test_an_old_add_in_manifest_keeps_its_meaning(tmp_path: Path) -> None:
     """Absent domain still prepares both shapes; an open pre-cut is recovered or refused alike."""
 
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     data_dir = tmp_path / "data"
     full = _ingest(_bundle(tmp_path, "old-full", _horn, HORN_THROAT, domain=None), data_dir)
@@ -1298,7 +1298,7 @@ def test_an_old_add_in_manifest_keeps_its_meaning(tmp_path: Path) -> None:
 
 
 def test_a_new_add_in_manifest_of_a_full_model_is_cut_as_before(tmp_path: Path) -> None:
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(_bundle(tmp_path, "new-full", _horn, HORN_THROAT), tmp_path / "data")
 
@@ -1311,7 +1311,7 @@ def test_a_new_add_in_manifest_of_a_full_model_is_cut_as_before(tmp_path: Path) 
 
 
 def test_acceptance_evidence_backed_precut_equals_the_same_cut_declared_by_hand(tmp_path: Path) -> None:
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     data_dir = tmp_path / "data"
     automatic = _ingest(

@@ -515,7 +515,8 @@ def test_a_stored_snapshot_is_solvable_with_fusion_closed(harness: Harness) -> N
 
 
 def test_the_polar_grid_is_widened_to_what_the_ingestion_derived() -> None:
-    from server.jobs.runtime import ImportedSolveRefusal, _validate_imported_polar_grid
+    from server.jobs.runtime import ImportedSolveRefusal
+    from server.jobs.runtime.cad_lane import _validate_imported_polar_grid
 
     setup = validate_setup({
         **_setup(),

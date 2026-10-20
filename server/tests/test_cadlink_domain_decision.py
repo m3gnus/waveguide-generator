@@ -494,7 +494,7 @@ def test_preview_plan_preparation_and_job_consume_the_same_decision(tmp_path: Pa
 def test_a_decision_that_does_not_describe_its_record_is_refused_everywhere(
     tmp_path: Path, tamper: Any
 ) -> None:
-    from server.jobs.runtime import _imported_request_refusal
+    from server.jobs.runtime.imported_refusals import _imported_request_refusal
 
     record = _ingest(_bundle(tmp_path, "tamper", _horn, HORN_THROAT), tmp_path / "data")
     _decision(record)
@@ -519,7 +519,7 @@ def _solve_verdicts_quiet(record: dict[str, Any]) -> str | None:
 
 
 def test_a_record_from_an_earlier_build_has_no_decision_and_is_judged_as_before(tmp_path: Path) -> None:
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(_bundle(tmp_path, "earlier", _split_open_backed_shell, BOX_DRIVER), tmp_path / "data")
     decided = _imported_open_half_refusal(record)
@@ -536,7 +536,7 @@ def test_a_record_from_an_earlier_build_has_no_decision_and_is_judged_as_before(
 def test_the_decision_refusal_can_never_weaken_the_open_shell_check(tmp_path: Path) -> None:
     """A decision whose refusal were lost still meets the saved-observation check."""
 
-    from server.jobs.runtime import _imported_open_half_refusal
+    from server.jobs.runtime.imported_refusals import _imported_open_half_refusal
 
     record = _ingest(_bundle(tmp_path, "belt", _split_open_backed_shell, BOX_DRIVER), tmp_path / "data")
     silent = json.loads(json.dumps(record))
@@ -740,7 +740,8 @@ def test_swapped_left_and_right_source_tags_are_refused_at_every_entry_point(tmp
     """Review finding 1: the decision binds which tag is which source identity."""
 
     from server.cadlink.joblane import preparation_inputs as preparation
-    from server.jobs.runtime import JobRuntime, _imported_request_refusal
+    from server.jobs.runtime import JobRuntime
+    from server.jobs.runtime.imported_refusals import _imported_request_refusal
     from server.jobs.store import JobStore
     from test_cad_preparation_solver_frame import _PreparedStore
 

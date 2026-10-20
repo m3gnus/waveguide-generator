@@ -165,7 +165,8 @@ assert not any(module in sys.modules for module in blocked)
 @pytest.mark.parametrize("value", ["0", "false", "off", "no"])
 def test_kill_switch_refuses_job_admission_before_engine_probe(monkeypatch, value):
     import asyncio
-    from server.jobs.runtime import ImportedSolveRefusal, resolve_imported_submission
+    from server.jobs.runtime import ImportedSolveRefusal
+    from server.jobs.runtime.core import resolve_imported_submission
     from server.tests.test_imported_jobs import _request
 
     monkeypatch.setenv(FEM_REGIONS_ENV, value)

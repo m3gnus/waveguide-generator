@@ -483,7 +483,7 @@ def test_cad_submission_replay_after_missing_outcome_returns_the_same_job(
 def test_discarded_mesh_is_regenerated_from_stored_design_for_each_download(
     tmp_path: Path, monkeypatch
 ) -> None:
-    import server.jobs.runtime as jobs_runtime
+    import server.jobs.runtime.core as jobs_runtime
     import server.mesh.builder as mesh_builder
 
     request = SolveRequest.model_validate(

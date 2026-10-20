@@ -433,7 +433,7 @@ def test_a_return_with_no_document_identity_claims_nothing(tmp_path: Path) -> No
 def test_a_cad_authored_run_joins_the_project_its_document_owns(
     tmp_path: Path,
 ) -> None:
-    from server.jobs.runtime import _cad_authored_project
+    from server.jobs.runtime.cad_lane import _cad_authored_project
 
     store = CadLinkStore(tmp_path / "cadlink.db")
     urn = "urn:adsk.wipprod:dm.lineage:party"

@@ -21,7 +21,7 @@ from server.contracts.canonical import canonical_utf8_strict_json
 from server.jobs.models_api import MeshRegistration, public_record, register_mesh
 from server.cadlink.store import file_model_id
 from server.jobs.models import ImportedGeometrySource, SolveRequest
-from server.jobs.runtime import _solved_under_legacy_axial
+from server.jobs.runtime.core import _solved_under_legacy_axial
 from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.file_import import MAX_MESH_BYTES, mesh_text, parse_file_mesh, prepare_file_mesh
 from server.mesh.prepared_gc import prepared_mesh_use

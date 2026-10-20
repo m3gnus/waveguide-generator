@@ -518,7 +518,7 @@ def test_official_imported_combined_channel(runtime):
 @pytest.mark.parametrize("error_kind", ["cancel", "sqlite", "interrupt"])
 def test_callback_errors_reach_production_caller(runtime, imported, adaptive, rows, error_kind):
     import sqlite3
-    from server.jobs.runtime import _CancelledAtCheckpoint
+    from server.jobs.runtime.core import _CancelledAtCheckpoint
 
     original = {"cancel": _CancelledAtCheckpoint("job cancelled"),
                 "sqlite": sqlite3.OperationalError("database busy"),
@@ -552,7 +552,7 @@ def test_callback_errors_reach_production_caller(runtime, imported, adaptive, ro
 @pytest.mark.parametrize("error_kind", ["cancel", "sqlite", "interrupt"])
 def test_blocked_production_read_preserves_monitor_error(runtime, imported, rows, error_kind):
     import sqlite3
-    from server.jobs.runtime import _CancelledAtCheckpoint
+    from server.jobs.runtime.core import _CancelledAtCheckpoint
 
     runtime.block_after = rows
     original = {"cancel": _CancelledAtCheckpoint("job cancelled"),

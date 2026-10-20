@@ -1391,7 +1391,7 @@ def test_snapshot_cursor_and_rows_are_from_one_store_view(tmp_path: Path) -> Non
 def test_default_off_adaptive_option_replays_a_stored_pre_change_submission_hash(tmp_path):
     from server.integration.provenance import canonical_json_sha256
     from server.jobs.models import SolveRequest
-    from server.jobs.runtime import _submission_identity
+    from server.jobs.runtime.core import _submission_identity
 
     old_json = {
         "design": {"formula": "OSSE", "L": 120, "a": 45,

@@ -322,8 +322,8 @@ def test_a_job_reaching_mesh_after_child_shutdown_is_interrupted(
     """Reject a real builder submission before runtime.shutdown requests cancellation."""
     from server.engines.registry import EngineInfo, EngineRegistry
     from server.jobs.models import SolveRequest
-    from server.jobs.runtime import (
-        JobRuntime,
+    from server.jobs.runtime import JobRuntime
+    from server.jobs.runtime.core import (
         QUIT_INTERRUPTED_MESSAGE,
         QUIT_INTERRUPTED_STAGE_MESSAGE,
         UPDATE_RESTART_MESSAGE,

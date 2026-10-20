@@ -24,7 +24,8 @@ from server.app import create_app
 from server.jobs import store as store_module
 from server.jobs.models import JobItem
 from server.jobs.cad_intent import INTERRUPTED_MESSAGE as CAD_INTERRUPTED_MESSAGE
-from server.jobs.runtime import JobConflictError, JobRuntime, RESTART_RECOVERY_MESSAGE
+from server.jobs.runtime import JobConflictError, JobRuntime
+from server.jobs.runtime.core import RESTART_RECOVERY_MESSAGE
 from server.jobs.store import (
     ACTIVE_STATUSES,
     ALLOWED_STATUSES,

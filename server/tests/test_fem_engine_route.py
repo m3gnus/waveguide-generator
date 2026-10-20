@@ -304,7 +304,7 @@ def test_job_refusals(monkeypatch, change, code):
 @pytest.mark.parametrize("accuracy", ["fast", "accurate"])
 def test_auto_dispatch_skips_gpu_for_fem(monkeypatch, tmp_path, accuracy):
     import asyncio
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
     from server.engines.registry import EngineInfo
     from server.tests.test_imported_jobs import _request, _record
     from server.tests.test_imported_beat import MESH
@@ -335,7 +335,8 @@ def test_auto_dispatch_skips_gpu_for_fem(monkeypatch, tmp_path, accuracy):
 @pytest.mark.parametrize("accuracy", ["fast", "accurate"])
 def test_fem_plan_offers_cpu_despite_incompatible_selected_backend(monkeypatch, tmp_path, engine, accuracy):
     import asyncio
-    from server.jobs.runtime import ImportedSolveRefusal, plan_imported_submission, resolve_imported_submission
+    from server.jobs.runtime import ImportedSolveRefusal
+    from server.jobs.runtime.core import plan_imported_submission, resolve_imported_submission
     from server.engines.registry import EngineInfo
     from server.tests.test_imported_jobs import _request, _record
     from server.tests.test_imported_beat import MESH
@@ -842,7 +843,8 @@ def test_fem_only_design_retains_its_channels(fem_admission, monkeypatch):
 def test_admission_refuses_combine_collision_before_engine_selection(fem_admission, fem_channel):
     import asyncio
     from server.jobs.models import ChannelCombineSpec
-    from server.jobs.runtime import resolve_imported_submission, ImportedSolveRefusal
+    from server.jobs.runtime.core import resolve_imported_submission
+    from server.jobs.runtime import ImportedSolveRefusal
     fem_admission.geometry.combine = ChannelCombineSpec.model_validate({
         "id": fem_channel, "members": ["left", "right"], "crossovers_hz": [500.]})
     class NoEngine:
@@ -1002,7 +1004,8 @@ def test_default_fem_admission_refuses_without_a_capable_engine(
 def test_fem_unavailable_remedy_tracks_cpu_preparation(monkeypatch, state, remedy):
     import asyncio
     from server.engines.registry import EngineInfo
-    from server.jobs.runtime import EngineUnavailableError, resolve_imported_submission
+    from server.jobs.runtime import EngineUnavailableError
+    from server.jobs.runtime.core import resolve_imported_submission
     from server.tests.test_imported_jobs import _request
 
     monkeypatch.setenv("WG2_FEM_REGIONS", "1")
@@ -1073,7 +1076,7 @@ def test_imported_fem_precision_and_interior_reroutes(monkeypatch, backend, accu
 def test_fem_explicit_gpu_submission_and_planner(monkeypatch, tmp_path, backend, accuracy, interior):
     import asyncio
     from server.engines.registry import _beat_engine_info
-    from server.jobs.runtime import plan_imported_submission, resolve_imported_submission
+    from server.jobs.runtime.core import plan_imported_submission, resolve_imported_submission
     from server.tests.test_imported_jobs import _request, _record
     from server.tests.test_imported_beat import MESH
 
@@ -1253,7 +1256,8 @@ def test_coupled_frequencies_must_be_representable_and_distinct_at_selected_prec
 def test_fem_fast_unavailable_gpu_names_availability_reason(monkeypatch, tmp_path, backend, state):
     import asyncio
     from server.engines.registry import EngineInfo, _beat_engine_info
-    from server.jobs.runtime import EngineUnavailableError, resolve_imported_submission
+    from server.jobs.runtime import EngineUnavailableError
+    from server.jobs.runtime.core import resolve_imported_submission
     from server.tests.test_imported_jobs import _request, _record
     from server.tests.test_imported_beat import MESH
 
@@ -1281,7 +1285,8 @@ def test_fem_fast_unavailable_gpu_names_availability_reason(monkeypatch, tmp_pat
 def test_fem_auto_preparing_cpu_explains_reference_policy(monkeypatch, ready_gpu):
     import asyncio
     from server.engines.registry import EngineInfo, _beat_engine_info
-    from server.jobs.runtime import EngineUnavailableError, resolve_imported_submission
+    from server.jobs.runtime import EngineUnavailableError
+    from server.jobs.runtime.core import resolve_imported_submission
     from server.tests.test_imported_jobs import _request
 
     monkeypatch.delenv("WG2_FEM_REGIONS", raising=False)
@@ -1323,7 +1328,8 @@ def test_non_fem_driver_engine_refusal_is_preserved(engine, exterior_only, accur
         refusal = _imported_request_refusal(validated, {})
         assert refusal is None or refusal[0] != "exterior_transducer_engine_unsupported"
         import asyncio
-        from server.jobs.runtime import ImportedSolveRefusal, resolve_imported_submission
+        from server.jobs.runtime import ImportedSolveRefusal
+        from server.jobs.runtime.core import resolve_imported_submission
         class Registry:
             async def capabilities(self):
                 pytest.fail("non-FEM Auto drivers must refuse before accuracy resolves the engine")
@@ -1337,7 +1343,7 @@ def test_planner_keeps_beat_cpu_and_metal_selectable_for_auto_exterior_drivers(m
     import asyncio
     from server.engines.registry import EngineInfo
     from server.jobs.models import DriveChannel
-    from server.jobs.runtime import plan_imported_submission
+    from server.jobs.runtime.core import plan_imported_submission
     from server.tests.test_fem_electrodynamic import driver
     from server.tests.test_imported_beat import MESH
     from server.tests.test_imported_jobs import _record, _request
@@ -1433,7 +1439,8 @@ def test_unavailable_bem_retention_keeps_completed_coupled_solve(runtime, monkey
 
 def test_fem_plan_checks_the_request_geometry_once(monkeypatch, tmp_path):
     import asyncio
-    from server.jobs.runtime import core, plan_imported_submission
+    from server.jobs.runtime import core
+    from server.jobs.runtime.core import plan_imported_submission
     from server.engines.registry import EngineInfo
     from server.tests.test_imported_jobs import _request, _record
     from server.tests.test_imported_beat import MESH

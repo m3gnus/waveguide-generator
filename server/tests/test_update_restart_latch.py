@@ -28,12 +28,12 @@ from launchers.statusapp.controller import StatusController
 from server.app import create_app
 from server.engines.registry import EngineInfo, EngineRegistry
 from server.jobs.models import SolveRequest
-from server.jobs.runtime import (
+from server.jobs.runtime.core import (
     QUIT_INTERRUPTED_MESSAGE,
     QUIT_INTERRUPTED_STAGE_MESSAGE,
     RESTART_RECOVERY_MESSAGE,
-    JobRuntime,
 )
+from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
 from server.solver.base import EngineRunResult
 from server.tests._asgi import SOLVE_BODY, _post

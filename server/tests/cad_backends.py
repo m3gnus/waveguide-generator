@@ -25,7 +25,9 @@ from server.cadlink.intake.solve_command import record_outcome
 from server.cadlink.store import CadLinkStore
 from server.jobs.cad_intent import CadSolveIntent
 from server.jobs.cad_preparation import CadPreparationHost, job_operation_view
-from server.jobs.runtime import JobConflictError, JobRuntime, _CadLanePort, _ComposedJob
+from server.jobs.runtime import JobConflictError, JobRuntime
+from server.jobs.runtime.core import _CadLanePort
+from server.jobs.runtime.cad_lane import _ComposedJob
 from server.jobs.store import JobStore
 
 BACKENDS = ("jobs",)

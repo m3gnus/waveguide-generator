@@ -15,23 +15,25 @@ from server.engines.dryrun import DryRunEngine
 from server.engines.registry import EngineInfo, EngineRegistry
 from server.design.native import NATIVE_FORMULAS
 from server.jobs.models import ChannelCombineSpec, SolveRequest
-from server.jobs.runtime import (
+from server.jobs.runtime.core import (
     CANCELLED_MESSAGE,
+    QUIT_INTERRUPTED_MESSAGE,
+    QUIT_INTERRUPTED_STAGE_MESSAGE,
+    RESTART_RECOVERY_MESSAGE,
+    _apply_bempp_wall_default,
+    _bempp_wall_adjustment_message,
+    _replay_request,
+)
+from server.jobs.runtime import (
     JobConflictError,
     JobMeshDiscardedError,
     JobNotFoundError,
     JobResourceUnavailableError,
     JobRuntime,
-    QUIT_INTERRUPTED_MESSAGE,
-    QUIT_INTERRUPTED_STAGE_MESSAGE,
-    RESTART_RECOVERY_MESSAGE,
     SymmetryValidationError,
-    _apply_bempp_wall_default,
-    _bempp_wall_adjustment_message,
-    _replay_request,
-    merge_provisional_results,
     resolve_submission,
 )
+from server.jobs.runtime.provisional import merge_provisional_results
 from server.jobs.store import JobStore
 from server.platform.shutdown_backstop import CLEANUP_RESERVE_SECONDS, ShutdownBackstop
 from server.solver.base import EngineRunResult
@@ -1781,7 +1783,7 @@ def test_a_stop_that_begins_during_an_approved_update_restart_is_marked_as_that(
     has only this mark, so it alone decides what the next start reads.
     """
 
-    from server.jobs.runtime import UPDATE_RESTART_MESSAGE, UPDATE_RESTART_STAGE_MESSAGE
+    from server.jobs.runtime.core import UPDATE_RESTART_MESSAGE, UPDATE_RESTART_STAGE_MESSAGE
     from server.updates.restart import RestartApproval
 
     store = JobStore(tmp_path / "jobs.db")

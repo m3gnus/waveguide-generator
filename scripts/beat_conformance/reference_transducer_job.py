@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from server.jobs.models import SolveRequest
-from server.jobs.runtime import _extend_provisional_results
+from server.jobs.runtime.provisional import _extend_provisional_results
 from server.solver.beat_runtime.manager import WorkerManager
 from server.solver.beat_transducer_imported import solve
 from .reference_exterior_transducer import validate_installed_provenance

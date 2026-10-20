@@ -139,7 +139,7 @@ def test_the_identity_of_other_mountings_is_unchanged(tmp_path: Path, monkeypatc
 @pytest.mark.parametrize("explicit_off", [False, True])
 def test_default_off_identity_matches_base_bytes(explicit_off: bool) -> None:
     from server.integration.provenance import _canonical_json
-    from server.jobs.runtime import _submission_identity
+    from server.jobs.runtime.core import _submission_identity
 
     request = _request(sim_type="freestanding", key="fs-1")
     if explicit_off:
@@ -150,7 +150,7 @@ def test_default_off_identity_matches_base_bytes(explicit_off: bool) -> None:
 
 
 def test_the_infinite_baffle_identity_names_the_real_k_formulation() -> None:
-    from server.jobs.runtime import _submission_identity
+    from server.jobs.runtime.core import _submission_identity
 
     ib = _submission_identity(_request(sim_type="infinite-baffle", key="k"))
     assert ib["effective_bem_formulation"] == {"formulation": "standard", "complex_k_shift": 0.0}

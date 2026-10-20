@@ -870,7 +870,10 @@ def test_a_stored_record_mirroring_a_side_identified_source_is_refused_at_plan_a
 
     import json
 
-    from server.jobs.runtime import SIDE_IDENTIFIED_SOURCE_CODE, _imported_side_identity_refusal
+    from server.jobs.runtime.imported_refusals import (
+        SIDE_IDENTIFIED_SOURCE_CODE,
+        _imported_side_identity_refusal,
+    )
 
     record = _ingest(_box_bundle(tmp_path, "stored", sources=["woofer"]), tmp_path / "data")
     assert record["symmetry"]["domain_planes"] == ["x0"]

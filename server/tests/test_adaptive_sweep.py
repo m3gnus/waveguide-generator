@@ -16,7 +16,7 @@ from scipy.signal import find_peaks
 
 from server.jobs.models import SolveOptions
 from server.jobs.result_contracts import ParametricResultEnvelope
-from server.jobs.runtime import merge_provisional_results
+from server.jobs.runtime.provisional import merge_provisional_results
 from server.solver.adaptive_rational import SweepModel, aaa
 from server.solver.adaptive_sweep import SweepPlanner, enabled, solve_native_adaptively
 from server.solver.context import SolverContext

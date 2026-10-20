@@ -237,7 +237,7 @@ def test_auto_waits_when_higher_available_engine_cannot_solve_mounting(pending_p
 
 @pytest.mark.parametrize('outcome', ['opencl', 'numba'])
 def test_imported_auto_uses_ready_beat_cpu_without_waiting_for_bempp(pending_probe, monkeypatch, outcome):
-    from server.jobs.runtime import resolve_imported_submission
+    from server.jobs.runtime.core import resolve_imported_submission
     from server.tests.test_imported_jobs import _request
 
     p = pending_probe
@@ -269,7 +269,8 @@ def test_imported_auto_uses_ready_beat_cpu_without_waiting_for_bempp(pending_pro
 
 @pytest.mark.parametrize('outcome', ['opencl', 'numba'])
 def test_imported_auto_without_ready_beat_waits_for_bempp_and_refuses_numba(pending_probe, monkeypatch, outcome):
-    from server.jobs.runtime import EngineUnavailableError, resolve_imported_submission
+    from server.jobs.runtime import EngineUnavailableError
+    from server.jobs.runtime.core import resolve_imported_submission
     from server.tests.test_imported_jobs import _request
 
     p = pending_probe

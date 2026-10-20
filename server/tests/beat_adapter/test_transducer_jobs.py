@@ -201,7 +201,7 @@ def test_job_route_keeps_rms_pressure_all_coupled_traces_and_matrix(solid, recor
     assert trace["current_definition"] == "per physical driver; orbit images excluded"
     assert result["metadata"]["radiation_impedance_matrix"]["values"][0][0][1]["imaginary"] == -1
     assert partial[0][1]["channels"]["driver"]["frequencies"] == [100.0]
-    from server.jobs.runtime import _extend_provisional_results
+    from server.jobs.runtime.provisional import _extend_provisional_results
 
     accumulated = {}
     for revision, frame in partial:
@@ -239,7 +239,10 @@ def test_metal_wire_precision_echo_and_mixed_quantity_dtypes(solid, record, monk
 
 def test_capability_requires_official_provider(monkeypatch):
     from server.engines.registry import _beat_engine_info
-    from server.jobs.runtime import _imported_features_needed, _imported_capability_blocker
+    from server.jobs.runtime.imported_refusals import (
+        _imported_features_needed,
+        _imported_capability_blocker,
+    )
 
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
     needed = _imported_features_needed(request().geometry)

@@ -12,7 +12,8 @@ from pydantic import ValidationError
 from server.contracts.source_contour import validate_contour_request
 from server.integration.provenance import canonical_json_sha256
 from server.jobs.models import DriveChannel, SolveRequest
-from server.jobs.runtime import JobRuntime, _submission_identity
+from server.jobs.runtime import JobRuntime
+from server.jobs.runtime.core import _submission_identity
 from server.jobs.store import JobStore, SubmissionConflictError
 from server.tests.beat_adapter.test_transducer_jobs import PARAMETERS
 from server.tests.test_imported_jobs import _PausedRegistry
