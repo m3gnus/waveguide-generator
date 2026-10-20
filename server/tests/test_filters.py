@@ -11,7 +11,17 @@ import numpy as np
 import pytest
 
 from server.solver import filters
-from server.solver.combine import _lr4_highpass, _lr4_lowpass
+
+
+# Independent closed-form LR4 oracle; do not call production filter helpers.
+def _lr4_lowpass(freqs: np.ndarray, fc_hz: float) -> np.ndarray:
+    s = 1j * np.asarray(freqs, dtype=np.float64) / float(fc_hz)
+    return 1.0 / (s * s + np.sqrt(2.0) * s + 1.0) ** 2
+
+
+def _lr4_highpass(freqs: np.ndarray, fc_hz: float) -> np.ndarray:
+    s = 1j * np.asarray(freqs, dtype=np.float64) / float(fc_hz)
+    return (s * s) ** 2 / (s * s + np.sqrt(2.0) * s + 1.0) ** 2
 
 
 def _freqs() -> np.ndarray:
@@ -62,7 +72,7 @@ def test_an_unknown_family_refuses() -> None:
         filters.validate_family_order("chebyshev", 4)
 
 
-def test_lr_order_four_reproduces_the_legacy_pair() -> None:
+def test_lr_order_four_matches_closed_form_pair() -> None:
     freqs = _freqs()
     assert np.allclose(
         filters.lowpass(freqs, "lr", 4, FC), _lr4_lowpass(freqs, FC), atol=1e-12

@@ -10,8 +10,17 @@ import pytest
 from server.solver.combine import (
     combine_drive_channels,
     expand_legacy_channels,
-    lr4_chain_weights,
+    chain_weights,
+    normalize_channel,
 )
+from server.tests.test_filters import _lr4_highpass, _lr4_lowpass
+
+
+def _legacy_weights(freqs, members, crossovers_hz):
+    channels = expand_legacy_channels(members, crossovers_hz)
+    return chain_weights(freqs, members, {
+        name: normalize_channel(channel) for name, channel in channels.items()
+    })
 
 
 def _freqs() -> np.ndarray:
@@ -56,18 +65,15 @@ def _member(
     )
 
 
-def test_lr4_pair_is_allpass_and_minus_six_db_at_fc() -> None:
-    freqs = _freqs()
-    weights = lr4_chain_weights(freqs, ["low", "high"], [1000.0])
-    summed = weights["low"] + weights["high"]
-    assert np.allclose(np.abs(summed), 1.0, atol=1e-9)
-    at_fc = np.interp(1000.0, freqs, np.abs(weights["low"]))
-    assert at_fc == pytest.approx(0.5, abs=1e-3)
-
-
 def test_three_way_chain_has_bandpass_middle() -> None:
     freqs = _freqs()
-    weights = lr4_chain_weights(freqs, ["lf", "mf", "hf"], [300.0, 3000.0])
+    weights = _legacy_weights(freqs, ["lf", "mf", "hf"], [300.0, 3000.0])
+    np.testing.assert_allclose(weights["lf"], _lr4_lowpass(freqs, 300.0), atol=1e-12)
+    np.testing.assert_allclose(
+        weights["mf"], _lr4_highpass(freqs, 300.0) * _lr4_lowpass(freqs, 3000.0),
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(weights["hf"], _lr4_highpass(freqs, 3000.0), atol=1e-12)
     mid = np.abs(weights["mf"])
     assert mid[0] < 0.05 and mid[-1] < 0.05
     assert np.interp(1000.0, freqs, mid) > 0.9
@@ -99,7 +105,7 @@ def test_weights_are_conjugated_onto_raw_fields() -> None:
         level_match=False,
         align=False,
     )
-    weights = lr4_chain_weights(_freqs(), ["low", "high"], [1000.0])
+    weights = _legacy_weights(_freqs(), ["low", "high"], [1000.0])
     expected_raw = np.conjugate(weights["low"] + weights["high"])
     assert np.allclose(combined.pressure_complex[:, 0, 1], expected_raw, atol=1e-12)
 
@@ -217,7 +223,7 @@ def test_balloon_sums_with_the_same_weights() -> None:
         level_match=False,
         align=False,
     )
-    weights = lr4_chain_weights(freqs, ["low", "high"], [1000.0])
+    weights = _legacy_weights(freqs, ["low", "high"], [1000.0])
     expected = np.conjugate(weights["low"] + weights["high"])[:, None] * sphere
     assert combined.sphere_pressure_complex is not None
     assert np.allclose(combined.sphere_pressure_complex, expected, atol=1e-12)

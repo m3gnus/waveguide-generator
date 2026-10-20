@@ -149,32 +149,6 @@ def deserialize_channel_bases(data: bytes) -> dict[str, Any]:
     }
 
 
-def _lr4_lowpass(freqs: np.ndarray, fc_hz: float) -> np.ndarray:
-    s = 1j * np.asarray(freqs, dtype=np.float64) / float(fc_hz)
-    return 1.0 / (s * s + np.sqrt(2.0) * s + 1.0) ** 2
-
-
-def _lr4_highpass(freqs: np.ndarray, fc_hz: float) -> np.ndarray:
-    s = 1j * np.asarray(freqs, dtype=np.float64) / float(fc_hz)
-    return (s * s) ** 2 / (s * s + np.sqrt(2.0) * s + 1.0) ** 2
-
-
-def lr4_chain_weights(
-    freqs: np.ndarray, members: list[str], crossovers_hz: list[float]
-) -> dict[str, np.ndarray]:
-    """LR4 weights along an ordered chain: LP, BP..., HP (engineering)."""
-
-    weights: dict[str, np.ndarray] = {}
-    for index, name in enumerate(members):
-        weight = np.ones(np.asarray(freqs).shape, dtype=np.complex128)
-        if index > 0:
-            weight = weight * _lr4_highpass(freqs, crossovers_hz[index - 1])
-        if index < len(crossovers_hz):
-            weight = weight * _lr4_lowpass(freqs, crossovers_hz[index])
-        weights[name] = weight
-    return weights
-
-
 @dataclass(frozen=True)
 class ResolvedChannel:
     """One member's resolved crossover settings.
