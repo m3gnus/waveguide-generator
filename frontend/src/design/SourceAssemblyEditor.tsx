@@ -7,7 +7,7 @@ import { NumberField } from './NumberField';
 import { serializeDesign, useDesignStore } from '../stores/design';
 import { hornAssemblyContext, wooferAssemblyContext } from '../sketch/adapters/sourceContext';
 import type { HornWall } from '../api/sourceEditor';
-import { parseSourceAuthoring, serializeSourceAuthoring } from '../sketch/adapters/sourceAuthoring';
+import { newerEnvelope, parseSourceAuthoring } from '../sketch/adapters/sourceAuthoring';
 import { Editor } from './SourceContourEditor';
 import { identityProblem, INITIAL_SOURCE } from './sourceContourEditing';
 import { prepareNativeAssembly } from './nativeAssemblyPreparation';
@@ -27,7 +27,7 @@ function reconcileAuthoring(document: SourceAssemblyDocument) {
   const saved = readAssemblyAuthoring();
   const next: AssemblyAuthoring = {};
   for (const source of ['horn', 'woofer'] as const) {
-    if (document[source] && parseSourceAuthoring(saved[source], document[source])) next[source] = saved[source];
+    if (newerEnvelope(saved[source]) || document[source] && parseSourceAuthoring(saved[source], document[source])) next[source] = saved[source];
   }
   if (JSON.stringify(next) !== JSON.stringify(saved)) authoringStorage.setItem('', JSON.stringify(next));
 }
@@ -117,7 +117,11 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   const [identifiersOpen, setIdentifiersOpen] = useState(false);
   const identityIssue = identityProblem(validationError, draft.phase_plugs.map((p) => p.id));
   useEffect(() => { if (identityIssue) setIdentifiersOpen(true); }, [identityIssue]);
-  function change(next: SourceAssemblyDocument) { draftRef.current = next; setDraft(next); storage.setItem('', JSON.stringify(next)); setError(''); setNotice(''); }
+  function change(next: SourceAssemblyDocument, sourceEdit = false) {
+    // Nested edits publish their paired envelope immediately after the document.
+    if (!sourceEdit) reconcileAuthoring(next);
+    draftRef.current = next; setDraft(next); storage.setItem('', JSON.stringify(next)); setError(''); setNotice('');
+  }
   useEffect(() => durableSettings.subscribe('sourceAssemblyDraft', () => {
     const restored = readDraft();
     // Hydration adopts sibling namespaces in order. Reconcile after that batch,
@@ -134,7 +138,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       if (!current || !seedAllowed.current || draftRef.current !== initial || storage.getItem('') !== null) return;
       const seeded = seedAssembly(profile);
       setResolvedThroat({ config: JSON.stringify(profile.horn_config), radius: profile.throat_radius_mm });
-      draftRef.current = seeded; setDraft(seeded);
+      reconcileAuthoring(seeded); draftRef.current = seeded; setDraft(seeded);
       setHornText(JSON.stringify(seeded.horn_config, null, 2));
     }).catch(() => { /* Unresolvable designs retain the standalone defaults. */ });
     return () => { current = false; };
@@ -184,11 +188,11 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   // Publish nested edits to the assembly namespace immediately: the settings
   // owner protects genuine local changes from an in-flight hydration reply.
   if (editing) return <Editor context={editing === 'horn' ? hornContext : wooferContext} contextStale={editing === 'horn' && (wallStale || !!draft.horn_config && wall?.config !== configKey)} key={editing} initialDocument={draft[editing]!} initialAuthoring={readAssemblyAuthoring()[editing]}
-    onAuthoringChange={(envelope: ReturnType<typeof serializeSourceAuthoring>) => authoringStorage.setItem('', JSON.stringify({ ...readAssemblyAuthoring(), [editing]: envelope }))}
+    onAuthoringChange={envelope => authoringStorage.setItem('', JSON.stringify({ ...readAssemblyAuthoring(), [editing]: envelope }))}
     limit={editing === 'woofer' ? { kind: 'aperture', radius: draft.dimensions.aperture_radius_mm }
       : draft.horn_config ? { kind: 'throat', radius: throat ?? draft.horn.contour.points.at(-1)!.r_mm, hard: true } : { kind: 'mouth', radius: draft.dimensions.mouth_radius_mm }}
     onLimitChange={radius => change({ ...draftRef.current, dimensions: { ...draftRef.current.dimensions, [editing === 'woofer' ? 'aperture_radius_mm' : 'mouth_radius_mm']: radius } })}
-    onDraftChange={(document) => change({ ...draftRef.current, [editing]: document })} onClose={() => setEditing(null)} onUseDocument={(document) => { change({ ...draftRef.current, [editing]: document }); setEditing(null); }}/>;
+    onDraftChange={(document) => change({ ...draftRef.current, [editing]: document }, true)} onClose={() => setEditing(null)} onUseDocument={(document) => { change({ ...draftRef.current, [editing]: document }, true); setEditing(null); }}/>;
   const scalarLabels = { width_mm: 'Enclosure width', height_mm: 'Enclosure height', depth_mm: 'Enclosure depth', front_z_mm: 'Front Z', horn_length_mm: 'Horn length', mouth_radius_mm: 'Horn mouth radius', aperture_radius_mm: 'Woofer aperture radius' };
   const maxR = Math.max(dimensions.mouth_radius_mm, ...draft.phase_plugs.map((p) => Math.max(p.outer0_mm, p.outer1_mm)), 1);
   const minZ = Math.min(0, ...draft.horn.contour.points.map((p) => p.z_mm));

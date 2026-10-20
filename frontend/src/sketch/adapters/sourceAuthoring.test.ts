@@ -4,10 +4,10 @@ import { materialiseContext } from '../context';
 import { hornAssemblyContext } from './sourceContext';
 import { INITIAL_ASSEMBLY } from '../../design/SourceAssemblyEditor';
 import { lower, seed, withSourceContext } from './sourceContour';
-import { parseSourceAuthoring, serializeSourceAuthoring } from './sourceAuthoring';
+import { newerEnvelope, parseSourceAuthoring, serializeSourceAuthoring, SOURCE_AUTHORING_VERSIONS } from './sourceAuthoring';
 
 describe('shared source authoring envelope', () => {
-  it.each(['wg-source-authoring-v1', 'wg-source-authoring-v2'])('reads %s with all authoring data and preserves document bytes', version => {
+  it.each(SOURCE_AUTHORING_VERSIONS)('reads %s with all authoring data and preserves document bytes', version => {
     const state = seed(INITIAL_SOURCE);
     state.sketch.entities.find(e => e.id === 'piston')!.data = { name: 'Diaphragm' };
     state.sketch.points.push({ id: 'guide-a', x: 1, y: 1 }, { id: 'guide-b', x: 2, y: 1 });
@@ -19,11 +19,27 @@ describe('shared source authoring envelope', () => {
     expect(restored).toEqual(state);
     expect(JSON.stringify(lower(restored.sketch, restored.meta))).toBe(document);
   });
-  it('rejects mismatched documents except pending authoring', () => {
+  it('accepts pending authoring only for its paired document, even when lowering matches another document', () => {
     const envelope = serializeSourceAuthoring(seed(INITIAL_SOURCE));
     const changed = structuredClone(INITIAL_SOURCE); changed.drive.motion = 'axial';
     expect(parseSourceAuthoring(envelope, changed)).toBeNull();
-    expect(parseSourceAuthoring({ ...envelope, pending: true }, changed)?.sketch).toEqual(envelope.sketch);
+    expect(parseSourceAuthoring({ ...envelope, pending: true }, changed)).toBeNull();
+    expect(parseSourceAuthoring({ ...envelope, pending: true }, INITIAL_SOURCE)).toBeNull();
+    const pending = { ...envelope, pending: true, document: changed };
+    expect(parseSourceAuthoring(pending, changed)?.sketch).toEqual(envelope.sketch);
+    expect(parseSourceAuthoring(pending, INITIAL_SOURCE)).toBeNull();
+    expect(parseSourceAuthoring({ ...pending, document: { drive: changed.drive, contour: changed.contour } }, changed)).not.toBeNull();
+  });
+  it.each([
+    { version: 'wg-source-authoring-v3', opaque: { keep: true } },
+    { version: 'wg-source-authoring-v1', sketch: { version: 'wg-sketch-v99', opaque: true } },
+  ])('protects unknown formats without interpreting them: %j', envelope => {
+    expect(newerEnvelope(envelope)).toBe(envelope);
+    expect(parseSourceAuthoring(envelope, INITIAL_SOURCE)).toBeNull();
+  });
+  it('does not protect malformed sketches in a supported format as newer data', () => {
+    expect(newerEnvelope(serializeSourceAuthoring(seed(INITIAL_SOURCE)))).toBeUndefined();
+    expect(newerEnvelope({ version: 'wg-source-authoring-v2', sketch: { version: 'wg-sketch-v1' } })).toBeUndefined();
   });
   it('retains materialised context and preset mappings but never persists live context', () => {
     const context = hornAssemblyContext(INITIAL_ASSEMBLY.dimensions, [], undefined, 8);

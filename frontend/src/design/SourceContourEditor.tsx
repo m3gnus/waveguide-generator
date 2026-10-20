@@ -17,8 +17,7 @@ import { refreshContext, type SketchContext } from '../sketch/context';
 import { contextClearances, standaloneContext } from '../sketch/adapters/sourceContext';
 import { displayName } from '../sketch/displayName';
 import { uniqueProblems } from '../sketch/adapter';
-import { parseSourceAuthoring, serializeSourceAuthoring, sameSourceDocument } from '../sketch/adapters/sourceAuthoring';
-import { parseSketch } from '../sketch/model';
+import { newerEnvelope, parseSourceAuthoring, serializeSourceAuthoring, sameSourceDocument } from '../sketch/adapters/sourceAuthoring';
 import type { Command } from '../sketch/commands';
 import type { Diagnosis } from '../sketch/session';
 import { arcGeometry } from '../sketch/geometry';
@@ -74,12 +73,9 @@ function openingSourceContext(state: Authoring<SourceMeta>, context: SketchConte
   return { ...withSourceContext(state, context), sketch: state.sketch };
 }
 
-function newerEnvelope(): Record<string, unknown> | undefined {
+function readNewerEnvelope(): Record<string, unknown> | undefined {
   try {
-    const raw = JSON.parse(storage.getItem('') ?? 'null');
-    // Newer authoring data, either a newer envelope or a newer sketch inside a v1 envelope, is kept untouched.
-    if (typeof raw?.version === 'string' && raw.version.startsWith('wg-source-authoring-') && !['wg-source-authoring-v1', 'wg-source-authoring-v2'].includes(raw.version)) return raw;
-    if (raw?.sketch && parseSketch(raw.sketch).ok === false && raw.sketch.version !== 'wg-sketch-v1') return raw;
+    return newerEnvelope(JSON.parse(storage.getItem('') ?? 'null'));
   } catch { /* use the document fallback */ }
 }
 
@@ -118,7 +114,7 @@ export function SourceContourDialog() {
   return open ? createPortal(<Editor onClose={close}/>, document.body) : null;
 }
 
-export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange, limit: hostLimit, onLimitChange, context: hostContext, contextStale = false, initialAuthoring, onAuthoringChange }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; onDraftChange?: (document: SourceDocument) => void; limit?: SourceLimit; onLimitChange?: (radius: number) => void; context?: SketchContext; contextStale?: boolean; initialAuthoring?: unknown; onAuthoringChange?: (envelope: ReturnType<typeof serializeSourceAuthoring>) => void }) {
+export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange, limit: hostLimit, onLimitChange, context: hostContext, contextStale = false, initialAuthoring, onAuthoringChange }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; onDraftChange?: (document: SourceDocument) => void; limit?: SourceLimit; onLimitChange?: (radius: number) => void; context?: SketchContext; contextStale?: boolean; initialAuthoring?: unknown; onAuthoringChange?: (envelope: unknown) => void }) {
   const [attachment, setAttachment] = useState<SourceAttachment>(() => initialDocument ? structuredClone(defaultAttachment) : readSourceAttachment());
   const limit: SourceLimit = hostLimit ?? attachmentLimit(attachment);
   const attachmentRef = useRef(attachment); attachmentRef.current = attachment;
@@ -132,7 +128,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   });
   const authorRef = useRef(author); authorRef.current = author;
   const [generation, setGeneration] = useState(0);
-  const [newer, setNewer] = useState(() => initialDocument ? undefined : newerEnvelope());
+  const [newer, setNewer] = useState(() => initialDocument ? newerEnvelope(initialAuthoring) : readNewerEnvelope());
   const [classic, setClassic] = useState(() => !!newer);
   const [preview, setPreview] = useState<Authoring<SourceMeta>>();
   const displayAuthor = preview ?? author;
@@ -199,7 +195,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const hydrateRef = useRef<() => void>(() => {});
   const deferredHydration = useRef(false);
   hydrateRef.current = () => {
-    const envelope = newerEnvelope(); setNewer(envelope); if (envelope) setClassic(true);
+    const envelope = readNewerEnvelope(); setNewer(envelope); if (envelope) setClassic(true);
     const restored = readSourceDraft(), next = readSourceAuthoring(restored), restoredAttachment = readSourceAttachment();
     setAttachment(restoredAttachment);
     const restoredLimit = hostLimit ?? attachmentLimit(restoredAttachment), restoredContext = hostContext ?? standaloneContext(restoredAttachment, restored.contour.points.at(-1)?.r_mm ?? 0);
@@ -274,9 +270,9 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const draftRef = useRef(draft); draftRef.current = draft;
   const editingIntent = useRef(false);
   function persistAuthoring(state: Authoring<SourceMeta>, document: SourceDocument, pending: boolean) {
-    const envelope = serializeSourceAuthoring(state, pending);
+    const envelope = newer ? { ...newer, document } : { ...serializeSourceAuthoring(state, pending), document };
     if (initialDocument) authoringCallback.current?.(envelope);
-    else storage.setItem('', JSON.stringify({ ...envelope, document, attachment: attachmentRef.current }));
+    else storage.setItem('', JSON.stringify(newer ? envelope : { ...envelope, attachment: attachmentRef.current }));
   }
   function replaceAuthor(next: Authoring<SourceMeta>) {
     installedContext.current = undefined;
@@ -303,7 +299,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         channel_id: next.drive.channel_id, motion: next.drive.motion })).catch(reason => setError(String(reason))); return;
     }
     if (recordUndo) setUndo((history) => [...history.slice(-19), structuredClone(draft)]);
-    setDraft(next); if (!initialDocument && newer) storage.setItem('', JSON.stringify({ ...newer, document: next })); else persistAuthoring(classic ? seed(next) : authorRef.current, next, false); onDraftChange?.(next); setNotice(''); setError('');
+    setDraft(next); persistAuthoring(classic ? seed(next) : authorRef.current, next, false); onDraftChange?.(next); setNotice(''); setError('');
   }
   async function run(action: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
