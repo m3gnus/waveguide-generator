@@ -46,11 +46,13 @@ export function visibleAnchor(points: XY[], viewport: Viewport, near?: XY): XY |
   return nearest;
 }
 
-/** Pixel scroll gestures pan; discrete wheels zoom, and ctrl-wheel is a pinch. */
-export function wheelGesture(event: Pick<WheelEvent, 'deltaX' | 'deltaY' | 'deltaMode' | 'ctrlKey'>):
+/** Legacy notch data distinguishes smooth mouse wheels from trackpads; ctrl-wheel is a pinch. */
+export function wheelGesture(event: Pick<WheelEvent, 'deltaX' | 'deltaY' | 'deltaMode' | 'ctrlKey'> & { wheelDeltaY?: number }):
   { kind: 'pan'; dx: number; dy: number } | { kind: 'zoom'; factor: number } {
-  const { deltaX, deltaY, deltaMode, ctrlKey } = event;
-  if (!ctrlKey && deltaMode === 0 && (deltaX !== 0 || Math.abs(deltaY) < 40))
+  const { deltaX, deltaY, deltaMode, ctrlKey, wheelDeltaY } = event;
+  const trackpad = deltaX !== 0 || (wheelDeltaY !== undefined && wheelDeltaY !== 0
+    ? wheelDeltaY % 120 !== 0 : deltaMode === 0 && Math.abs(deltaY) < 40);
+  if (!ctrlKey && trackpad)
     return { kind: 'pan', dx: -deltaX, dy: -deltaY };
   const pixels = deltaY * (deltaMode === 1 ? 16 : deltaMode === 2 ? 360 : 1);
   return { kind: 'zoom', factor: Math.exp(-pixels * (ctrlKey ? .01 : .001)) };

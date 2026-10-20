@@ -55,3 +55,27 @@ it('classifies trackpad scroll, pinch, and discrete mouse wheels in one policy',
   expect(wheelGesture(event(-2, { ctrlKey: true }))).toEqual({ kind: 'zoom', factor: Math.exp(.02) });
   expect(wheelGesture(event(0, { ctrlKey: true }))).toEqual({ kind: 'zoom', factor: 1 });
 });
+
+it.each([100, 120, 4])('zooms a mouse notch with deltaY %s and legacy wheelDeltaY', async deltaY => {
+  const { wheelGesture } = await import('./view');
+  expect(wheelGesture({ deltaX: 0, deltaY, deltaMode: 0, ctrlKey: false, wheelDeltaY: -120 }))
+    .toEqual({ kind: 'zoom', factor: Math.exp(-deltaY * .001) });
+});
+
+it.each([
+  { deltaX: 1, deltaY: 3.5, wheelDeltaY: -10 },
+  { deltaX: 0, deltaY: 80, wheelDeltaY: -10 },
+  { deltaX: 1, deltaY: 4, wheelDeltaY: -120 },
+])('pans trackpad data even with large deltas or discrete legacy values: %j', async event => {
+  const { wheelGesture } = await import('./view');
+  expect(wheelGesture({ ...event, deltaMode: 0, ctrlKey: false }))
+    .toEqual({ kind: 'pan', dx: -event.deltaX, dy: -event.deltaY });
+});
+
+it('gives pinch priority over legacy wheel data and falls back for zero legacy values', async () => {
+  const { wheelGesture } = await import('./view');
+  expect(wheelGesture({ deltaX: 1, deltaY: 3.5, deltaMode: 0, ctrlKey: true, wheelDeltaY: -10 }))
+    .toEqual({ kind: 'zoom', factor: Math.exp(-.035) });
+  expect(wheelGesture({ deltaX: 0, deltaY: 4, deltaMode: 0, ctrlKey: false, wheelDeltaY: 0 }))
+    .toEqual({ kind: 'pan', dx: -0, dy: -4 });
+});

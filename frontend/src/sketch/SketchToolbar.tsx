@@ -25,6 +25,7 @@ export function SketchToolbar({ tool, arcTool, enabled, palette, activeConstrain
     <div className="sketch-toolbar-group" role="group" aria-label="Navigate"><span className="sketch-group-caption">Navigate</span><div className="sketch-tool-segment">{(['select', 'hand'] as const).map(drawingButton)}</div></div>
     <div className="sketch-toolbar-group" role="group" aria-label="Sketch"><span className="sketch-group-caption">Sketch</span><div className="sketch-tool-segment">{(['line', 'arc', 'dimension', 'split'] as const).map(drawingButton)}</div></div>
     <div className="sketch-toolbar-group" role="group" aria-label="Constraints"><span className="sketch-group-caption">Constraints</span><div className="sketch-tool-segment">{palette.map(entry => <button type="button" key={entry.kind} aria-label={entry.label} title={entry.key ? `${entry.label} (${entry.key.toUpperCase()})` : entry.label} aria-pressed={tool === 'constraint' && activeConstraint === entry.kind} disabled={entry.disabled} onClick={() => constrain(entry)}><span aria-hidden="true" className="sketch-constraint-icon">{entry.symbol}</span></button>)}</div></div>
+    <button type="button" disabled={!enabled} onClick={() => undo()}>Undo</button><button type="button" disabled={!enabled} onClick={() => undo(true)}>Redo</button>
     <div className="sketch-view-tools" role="group" aria-label="View"><span className="sketch-group-caption">View</span>
       <button type="button" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoom(1 / 1.25)}>−</button><button type="button" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoom(1.25)}>+</button>
       <button type="button" title="Fit (F)" onClick={() => fit()}>Fit (F)</button><button type="button" title="Fit all (Shift+F)" onClick={() => fit(true)}>Fit all (Shift+F)</button>
@@ -34,7 +35,6 @@ export function SketchToolbar({ tool, arcTool, enabled, palette, activeConstrain
           ['under', 'Profile: under-constrained'], ['determined', 'Profile: fully constrained'], ['construction', 'Construction'], ['projected', 'Projected context'], ['conflicting', 'Conflict'], ['under moving', 'Moving patch (2 px)'], ['under rigid', 'Rigid patch (3.5 px)'],
         ].map(([style, label]) => <div key={label}><svg aria-hidden="true" viewBox="0 0 40 12"><path d="M0 6H40" className={`sketch-entity ${style}`}/></svg><span>{label}</span></div>)}</div>}
       </div>
-      <button type="button" disabled={!enabled} onClick={() => undo()}>Undo</button><button type="button" disabled={!enabled} onClick={() => undo(true)}>Redo</button>
     </div>
   </div>;
 }

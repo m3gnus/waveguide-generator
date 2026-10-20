@@ -23,13 +23,9 @@
 .sketch-entity.construction { stroke: var(--sketch-construction); stroke-width: 1.5; stroke-dasharray: 6 4; }
 .sketch-curve-hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }
 .sketch-point-hit { fill: transparent; pointer-events: all; cursor: grab; }
-.sketch-curve:hover .sketch-entity { filter: brightness(1.3); }
-.sketch-entity.selected { filter: drop-shadow(0 0 2px currentColor); }
 .sketch-point { fill: var(--surface-raised); stroke: var(--sketch-under); stroke-width: 1.5; cursor: grab; }
 .sketch-point.determined { fill: var(--sketch-determined); stroke: var(--sketch-determined); }
 .sketch-point.conflicting { fill: var(--sketch-conflicting); stroke: var(--sketch-conflicting); }
-.sketch-handle:hover .sketch-point { stroke-width: 3; }
-.sketch-point.selected { stroke-width: 2.5; }
 .sketch-point.valid-start { stroke: var(--green); stroke-width: 3; }
 .sketch-arc-start { fill: none; stroke: var(--green); stroke-width: 1.5; pointer-events: none; }
 .sketch-centre { fill: none; pointer-events: none; }
@@ -59,8 +55,6 @@
 .sketch-dimension-lines { fill: none; stroke: var(--fg3); stroke-width: 1; pointer-events: none; }
 .sketch-dimension .sketch-glyph { paint-order: stroke; stroke: var(--surface-floating); stroke-width: 4px; stroke-linejoin: round; }
 .sketch-limit text { cursor: pointer; }
-.sketch-entity.hovered { filter: brightness(1.3) drop-shadow(0 0 2px currentColor); }
-.sketch-point.hovered { stroke-width: 3; }
 
 .sketch-view-tools { flex-wrap: wrap; }
 .sketch-glyph.problem { fill: var(--amber); }
@@ -79,8 +73,9 @@
 .sketch-context-item .sketch-context-hit { stroke: transparent; stroke-width: 14; fill: none; pointer-events: stroke; }
 .sketch-context-stale { color: var(--fg3); font-size: 11px; }
 
-.sketch-context-item.selected > path:not(.sketch-context-hit), .sketch-context-item.hovered > path:not(.sketch-context-hit) { stroke: var(--accent); stroke-width: 2.5; }
-.sketch-context-item.selected text { fill: var(--accent); }
+.sketch-context-item.hovered > path:not(.sketch-context-hit) { stroke: var(--sketch-selected); stroke-width: 2; }
+.sketch-context-item.selected > path:not(.sketch-context-hit) { stroke: var(--sketch-selected); stroke-width: 3.5; }
+.sketch-context-item.selected text { fill: var(--sketch-selected); }
 
 .sketch-conflict-banner { display: flex; align-items: center; gap: .5rem; padding: .5rem; border: 1px solid var(--red); border-radius: 4px; }
 .sketch-conflict-banner span { flex: 1; }
@@ -94,5 +89,10 @@
 .sketch-entity.projected { stroke: var(--sketch-context-color); stroke-width: 1; }
 .sketch-surface svg.sketch-pan, .sketch-surface svg.sketch-pan * { cursor: grab; }
 .sketch-surface svg.sketch-pan.grabbing, .sketch-surface svg.sketch-pan.grabbing * { cursor: grabbing; }
-.sketch-constraint-tool .sketch-curve:hover .sketch-entity:not(.hovered) { filter: none; }
-.sketch-constraint-tool .sketch-handle:hover .sketch-point:not(.hovered) { stroke-width: 1.5; }
+svg:not(.sketch-constraint-tool) .sketch-curve:hover .sketch-entity,
+svg:not(.sketch-constraint-tool) .sketch-handle:hover .sketch-point,
+.sketch-entity.hovered, .sketch-point.hovered { stroke: var(--sketch-selected); stroke-width: 3.5; }
+svg:not(.sketch-constraint-tool) .sketch-curve:hover .sketch-entity.rigid,
+.sketch-entity.rigid.hovered { stroke-width: 4.5; }
+.sketch-entity.selected, .sketch-point.selected { stroke: var(--sketch-selected); stroke-width: 3.5; }
+.sketch-entity.rigid.selected { stroke-width: 4.5; }

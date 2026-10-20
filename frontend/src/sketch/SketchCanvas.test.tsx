@@ -14,7 +14,7 @@ import { INITIAL_SOURCE } from '../design/sourceContourEditing';
 
 let host: HTMLDivElement, root: Root;
 const base = () => importedSketch([{ id: 'p', x: 0, y: 0 }, { id: 'q', x: 10, y: 0 }], [{ kind: 'line', id: 'line', p1: 'p', p2: 'q' }]);
-function Harness({ initial = base(), diagnosis }: { initial?: Sketch; diagnosis?: Diagnosis }) {
+function Harness({ initial = base(), diagnosis, role }: { initial?: Sketch; diagnosis?: Diagnosis; role?: string }) {
   const [state, setState] = useState(initial), [result, setResult] = useState(diagnosis);
   const [session, setSession] = useState<SketchController<null>>();
   const handle = useRef<SketchController<null> | undefined>(undefined);
@@ -22,7 +22,7 @@ function Harness({ initial = base(), diagnosis }: { initial?: Sketch; diagnosis?
     const controller = new SketchController({ sketch: initial, meta: null }, [], (s, c) => { const r = applyCommand(s.sketch, c); return 'error' in r ? r : { ...s, sketch: r.sketch }; }, (s, d) => { setState(s.sketch); setResult(diagnosis ?? d); setSession(controller); }, undefined, undefined, (s, d) => { setState(s.sketch); setResult(diagnosis ?? d); });
     handle.current = controller; return () => controller.destroy();
   }, [initial, diagnosis]);
-  return <SketchCanvas sketch={state} diagnosis={result} session={session} references={[]} problems={[]}/>;
+  return <SketchCanvas sketch={state} diagnosis={result} session={session} references={[]} problems={[]} entityClassName={() => role ?? ''}/>;
 }
 beforeEach(async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -36,8 +36,8 @@ const svg = () => host.querySelector<SVGSVGElement>('svg[role="application"]')!;
 const key = async (key: string, options = {}) => act(async () => { svg().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...options })); });
 // Like a real mouse, the primary button is held from pointerdown until pointerup.
 const pointer = async (element: Element, type: string, x = 0, y = 0, options = {}) => act(async () => { element.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, buttons: type === 'pointerup' ? 0 : 1, ...options })); });
-async function mount(initial = base(), diagnosis?: Diagnosis) {
-  await act(async () => root.render(<Harness initial={initial} diagnosis={diagnosis}/>));
+async function mount(initial = base(), diagnosis?: Diagnosis, role?: string) {
+  await act(async () => root.render(<Harness initial={initial} diagnosis={diagnosis} role={role}/>));
   vi.spyOn(svg(), 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 640, height: 360 } as DOMRect);
 }
 function coordinate(id: string) { const p = host.querySelector(`[data-id="${id}"]`)!; return { element: p, x: Number(p.getAttribute('cx')), y: Number(p.getAttribute('cy')) }; }
@@ -154,6 +154,8 @@ describe('SketchCanvas with real slvs', () => {
           const s = { ...sketch, constraints: status === 'conflicting' ? [{ kind: 'horizontal' as const, id: 'h', line: 'line' }] : [] };
           const d: Diagnosis = { ...diagnosis, dof: status === 'determined' ? 0 : 4, constraintStates: status === 'conflicting' ? { h: 'conflicting' as const } : {} };
           await act(async () => root.render(<SketchCanvas sketch={s} diagnosis={d} references={[]} problems={[]} entityClassName={() => role}/>));
+          // Conflict references are highlighted until the banner is dismissed; check the resting status.
+          if (status === 'conflicting') await act(async () => button('Dismiss').click());
           const entity = host.querySelector('.sketch-entity')!, computed = getComputedStyle(entity);
           expect(entity.classList.contains(status)).toBe(true);
           expect(computed.strokeDasharray).toBe('none');
@@ -707,6 +709,54 @@ describe('constraint context controls', () => {
 
 
 describe('navigation and line legend', () => {
+  it('keeps Undo and Redo outside View and before Fit, with working history actions', async () => {
+    await mount();
+    const toolbar = host.querySelector('[aria-label="Sketch tools"]')!, view = toolbar.querySelector('[aria-label="View"]')!;
+    for (const label of ['Undo', 'Redo']) {
+      expect(button(label).parentElement).toBe(toolbar);
+      expect(view.contains(button(label))).toBe(false);
+      expect(button(label).compareDocumentPosition(button('Fit (F)')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(button('Undo').nextElementSibling).toBe(button('Redo'));
+    const undo = vi.spyOn(SketchController.prototype, 'undo');
+    await act(async () => button('Undo').click()); await act(async () => button('Redo').click());
+    expect(undo).toHaveBeenCalledTimes(2); expect(undo).toHaveBeenNthCalledWith(1, false); expect(undo).toHaveBeenNthCalledWith(2, true);
+  });
+  it.each(['moving', 'rigid'])('uses the accent for fully constrained %s selections and pending constraint picks', async role => {
+    const style = document.createElement('style'); style.textContent = new TextDecoder().decode(readFileSync('src/sketch/sketchCanvas.css')); document.head.append(style);
+    try {
+      const sketch = base();
+      sketch.points.push({ id: 'r', x: 0, y: 5 }, { id: 's', x: 10, y: 5 });
+      sketch.entities.push({ id: 'other', kind: 'line', p1: 'r', p2: 's' });
+      const diagnosis = { ...initialDiagnosis(sketch), dof: 0 };
+      await mount(sketch, diagnosis, role);
+      const line = () => host.querySelector('.sketch-entity.determined')!;
+      expect(getComputedStyle(line()).stroke).toBe('var(--sketch-determined)');
+      await pointer(line(), 'pointerdown'); await pointer(svg(), 'pointerup');
+      expect(line().classList.contains('selected')).toBe(true);
+      expect(getComputedStyle(line()).stroke).toBe('var(--sketch-selected)');
+      expect(getComputedStyle(line()).strokeWidth).toBe(role === 'rigid' ? '4.5' : '3.5');
+      await key('Escape');
+      expect(getComputedStyle(line()).stroke).toBe('var(--sketch-determined)');
+      await act(async () => button('Parallel').click());
+      const p = coordinate('p'), q = coordinate('q');
+      await pointer(line(), 'pointermove', (p.x + q.x) / 2, (p.y + q.y) / 2, { buttons: 0 });
+      expect(line().classList.contains('hovered')).toBe(true);
+      expect(getComputedStyle(line()).stroke).toBe('var(--sketch-selected)');
+      await pointer(line(), 'pointerdown', (p.x + q.x) / 2, (p.y + q.y) / 2); await pointer(svg(), 'pointerup');
+      expect(line().classList.contains('selected')).toBe(true);
+      expect(getComputedStyle(line()).stroke).toBe('var(--sketch-selected)');
+      await key('Escape'); await key('Escape');
+      await act(async () => button('Coincident').click());
+      const point = () => host.querySelector('.sketch-point.determined[data-id="q"]')!;
+      await pointer(point(), 'pointermove', q.x, q.y, { buttons: 0 });
+      expect(getComputedStyle(point()).stroke).toBe('var(--sketch-selected)');
+      await pointer(point(), 'pointerdown', q.x, q.y); await pointer(svg(), 'pointerup');
+      expect(point().classList.contains('selected')).toBe(true);
+      expect(getComputedStyle(point()).stroke).toBe('var(--sketch-selected)');
+      expect(getComputedStyle(point()).strokeWidth).toBe('3.5');
+    } finally { style.remove(); }
+  });
   it('pans with Hand over geometry and dimension labels without selecting or editing, then Esc selects', async () => {
     const initial = base(); initial.constraints.push({ id: 'length', kind: 'distance', a: 'p', b: 'q', value: 10, driving: true });
     await mount(initial);
