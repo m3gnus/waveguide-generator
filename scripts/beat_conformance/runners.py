@@ -1,4 +1,4 @@
-"""Broker-job runners with one frozen exterior input for both engines."""
+"""Managed conformance runners and frozen exterior inputs."""
 
 from __future__ import annotations
 
@@ -13,21 +13,16 @@ from typing import Any
 
 import numpy as np
 
-from server.contracts.conventions import SOLVER_TIME_CONVENTION
 from server.solver.beat_adapter import request, results
 from server.solver.beat_adapter.capabilities import FRAME
 from server.solver.beat_adapter.observations import build_observations
-from server.solver.beat_adapter.mesh import read_surface
 from server.solver.beat_runtime.discovery import JULIA_ENV_VAR
 from server.solver.beat_runtime.manager import WorkerManager
 from server.solver.beat_runtime.paths import checked_root
 from server.solver.beat_runtime.session import SolveSession
 from server.solver.beat_runtime.threads import resolve_julia_threads
-from server.solver.directivity_index import calculate_di_from_spherical_grid
 
-from .agreement import ResultSet
 from .recorder import EngineRun
-from .settings import observed_settings
 
 
 def output_directory(directory: Path, *, engine_source: Path | None = None) -> Path:
@@ -95,25 +90,6 @@ class FrozenExterior:
             symmetry=self.symmetry, quadrature_order=self.quadrature_order,
             singular_order=self.singular_order, density_kg_per_m3=self.density,
             sound_speed_m_per_s=self.sound_speed)
-
-    def settings(self) -> dict[str, Any]:
-        compiled = self.compiled()
-        mesh = read_surface(self.mesh_bytes.decode())
-        triangles = np.asarray(mesh.points_m[mesh.faces], dtype=float)
-        normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
-        normals /= np.linalg.norm(normals, axis=1, keepdims=True)
-        areas = np.linalg.norm(np.cross(triangles[:, 1] - triangles[:, 0],
-                                       triangles[:, 2] - triangles[:, 0]), axis=1) / 2
-        return {"tags": mesh.tags, "normals": normals, "axes": FRAME,
-                "mesh": {"node_count": len(mesh.points_m), "triangle_count": len(mesh.faces),
-                         "tag_areas_m2": {int(tag): float(areas[mesh.tags == tag].sum()) for tag in np.unique(mesh.tags)}},
-                "observation_points": {k: v.tolist() for k, v in compiled.layout.points_m.items()},
-                "quadrature": {k: v for k, v in compiled.wire["solver_options"].items()
-                               if "quadrature" in k or "wavelength" in k or k == "singular_order"},
-                "backend": self.backend, "precision": self.precision, "threads": self.threads,
-                "time_convention": SOLVER_TIME_CONVENTION, "density_kg_per_m3": self.density,
-                "sound_speed_m_per_s": self.sound_speed, "symmetry": self.symmetry,
-                "source_tag": self.source_tag, "source_motion": "normal"}
 
 
 def validate_frequency_axis(frequencies: tuple[float, ...]) -> None:
@@ -196,46 +172,3 @@ def metal_worker_environment(threads: int | str, *, assembly: str = "direct_syst
     # Direct assembly reserves one BLAS thread for T > 1.
     environment["OPENBLAS_NUM_THREADS"] = str(count + (count > 1))
     return environment
-
-
-def result_set(inputs: FrozenExterior, native: Any, *, revision: str,
-               recorder_record: dict | None = None) -> ResultSet:
-    """Score the same full-sphere quadrature for DI and far-field power estimates."""
-    compiled = inputs.compiled()
-    if (native.cancelled or native.is_partial
-            or not np.array_equal(native.frequencies_hz, inputs.frequencies_hz)
-            or not np.array_equal(native.observation_angles_deg, compiled.layout.angles_deg)
-            or list(native.observation_planes) != list(compiled.layout.planes)):
-        raise ValueError("Runner returned incomplete or mismatched frequency/observation axes")
-    count = len(inputs.frequencies_hz)
-    n_theta, n_phi = inputs.sphere_grid
-    sphere = np.asarray(native.sphere_pressure_complex, dtype=complex)
-    if sphere.shape != (count, n_theta * n_phi) or not np.isfinite(sphere).all():
-        raise ValueError("Agreement requires the complete frozen spherical field")
-    grid = sphere.reshape(count, n_theta, n_phi)
-    theta = np.linspace(0., 180., n_theta)
-    phi = np.arange(n_phi) * 360. / n_phi
-    levels = 20 * np.log10(np.maximum(np.abs(grid), np.finfo(float).tiny))
-    di = np.asarray(calculate_di_from_spherical_grid(theta, phi, levels), dtype=float)
-    edges = np.deg2rad(np.r_[0., (theta[1:] + theta[:-1]) / 2, 180.])
-    weights = (np.cos(edges[:-1]) - np.cos(edges[1:])) / 2
-    mean_square = np.sum(np.mean(np.abs(grid)**2, axis=2) * weights, axis=1)
-    power = 4 * np.pi * inputs.distance_m**2 * mean_square / (2 * inputs.density * inputs.sound_speed)
-    settings = inputs.settings()
-    evidence = None
-    if recorder_record is not None:
-        settings, evidence = observed_settings(settings, native, official=True,
-                                               native_symmetry=compiled.wire["solver_options"]["symmetry"])
-    return ResultSet(inputs.mesh_bytes, np.asarray(native.frequencies_hz), np.asarray(native.pressure_complex),
-                     np.asarray(native.impedance), di, power, settings, revision,
-                     recorder_record, recorder_record["record_sha256"] if recorder_record else "", evidence)
-
-
-def metre_mesh(original: bytes, scale: float) -> bytes:
-    """Create one shared metre artifact, preserving row IDs, tags and winding."""
-    mesh = read_surface(original.decode(), scale_to_m=scale)
-    nodes = [f"{i} {x:.17e} {y:.17e} {z:.17e}" for i, (x, y, z) in zip(mesh.node_ids, mesh.points_m)]
-    faces = [f"{i} 2 2 {tag} {tag} " + " ".join(str(mesh.node_ids[n]) for n in face)
-             for i, tag, face in zip(mesh.element_ids, mesh.tags, mesh.faces)]
-    return ("\n".join(["$MeshFormat", "2.2 0 8", "$EndMeshFormat", "$Nodes", str(len(nodes)), *nodes,
-                        "$EndNodes", "$Elements", str(len(faces)), *faces, "$EndElements", ""])).encode()

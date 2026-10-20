@@ -55,7 +55,7 @@ tests and existing CI qualify this routing change; real-GPU qualification is
 not a gate for enabling it. CAD solves on CUDA/ROCm still require Accurate;
 explicit BEAT Metal also accepts Fast. The official engine is the sole BEAT route.
 
-The conformance and agreement tools in `scripts/beat_conformance` cover CPU
+The conformance tools in `scripts/beat_conformance` cover CPU
 and Metal only. There is no CUDA/ROCm corpus.
 
 Known risk: source-driver startup and `import CUDA` run under the engine's

@@ -12,7 +12,6 @@ import numpy as np
 import pytest
 
 from scripts.beat_conformance import recorder, runners
-from scripts.beat_conformance.runners import metre_mesh
 from server.solver.beat_adapter.capabilities import PROBE_MESH
 from server.solver.beat_runtime.manager import ManagedWorker
 
@@ -46,16 +45,12 @@ def native(inputs):
 
 @pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize("symmetry", ["full", "yz", "yz+xz"])
-def test_inputs_freeze_actual_coordinates_normals_and_options(inputs, precision, symmetry):
+def test_inputs_freeze_coordinates_and_options(inputs, precision, symmetry):
     inputs = replace(inputs, precision=precision, symmetry=symmetry)
     compiled = inputs.compiled()
     assert compiled.wire["frequencies_hz"] == [500., 300., 450.]
     assert compiled.wire["solver_options"]["precision"] == precision
     assert compiled.wire["solver_options"]["regular_quadrature_mode"] == "fixed"
-    settings = inputs.settings()
-    assert settings["threads"] == 1 and settings["source_motion"] == "normal"
-    assert np.allclose(np.linalg.norm(settings["normals"], axis=1), 1.)
-    assert settings["observation_points"]["sphere"] == compiled.layout.points_m["sphere"].tolist()
     assert inputs.mesh_bytes == PROBE_MESH.encode()
 
 
@@ -68,21 +63,6 @@ def test_nonidentical_or_implicit_inputs_refuse_before_launch(inputs, change):
 def test_official_runner_is_only_a_managed_launch_selection(inputs):
     selection = runners.official_runner("fake-julia", threads=2, engine_source=Path("fake-source"))(inputs.compiled())
     assert selection == recorder.EngineRun("fake-julia", 2, runtime_mode="child", engine_source=Path("fake-source"))
-
-
-@pytest.mark.parametrize("field,value", [("cancelled", True), ("frequencies_hz", np.array([300., 450., 500.])),
-                                        ("sphere_pressure_complex", np.ones((3, 1)))])
-def test_result_conversion_rejects_partial_or_mismatched_evidence(inputs, field, value):
-    result = native(inputs)
-    setattr(result, field, value)
-    with pytest.raises(ValueError):
-        runners.result_set(inputs, result, revision="a" * 40)
-
-
-def test_uniform_sphere_power_and_di_have_physical_normalization(inputs):
-    result = runners.result_set(inputs, native(inputs), revision="a" * 40)
-    assert np.allclose(result.di_db, 0.)
-    assert np.allclose(result.power_w, 4 * np.pi * inputs.distance_m**2 / (2 * inputs.density * inputs.sound_speed))
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -172,15 +152,6 @@ def test_managed_solve_stages_negotiates_maps_and_closes(inputs, raw_result, lay
     assert runners.os.environ["OPENBLAS_NUM_THREADS"] == "2"
 
 
-def test_shared_metre_artifact_preserves_connectivity_tags_and_ids(inputs):
-    scaled = metre_mesh(inputs.mesh_bytes, .001)
-    from server.solver.beat_adapter.mesh import read_surface
-    before, after = read_surface(inputs.mesh_bytes.decode()), read_surface(scaled.decode())
-    assert after.node_ids == before.node_ids and after.element_ids == before.element_ids
-    assert np.array_equal(after.faces, before.faces) and np.array_equal(after.tags, before.tags)
-    assert np.array_equal(after.points_m, before.points_m * .001)
-
-
 def test_recorder_managed_path_observes_terminals_without_direct_worker(inputs, monkeypatch):
     facts = {"backend": "cpu", "device_class": "cpu", "device_name": "fake CPU",
              "julia_executable": "fake", "julia_version": "julia version fake",
@@ -226,19 +197,10 @@ def test_output_isolation_refuses_source_checkout_and_symlink(tmp_path, layout):
     assert not (root / "evidence").exists()
 
 
-def test_official_observation_layout_is_declared_not_observed(inputs):
-    from scripts.beat_conformance import settings
-    mapped = native(inputs)
-    _, evidence = settings.observed_settings(inputs.settings(), mapped, official=True, native_symmetry="off")
-    official_values, _ = settings.observed_settings(inputs.settings(), mapped, official=True, native_symmetry="off")
-    for name in ("observation_angles_deg", "observation_planes"):
-        assert evidence[name]["status"] == "declared" and name in official_values
-
-
 @pytest.mark.parametrize("official", [False, True])
 @pytest.mark.parametrize("defect", ["cpu", "missing", "conflicting", "late_cpu"])
 def test_metal_result_must_have_native_backend_on_every_row(inputs, official, defect):
-    from scripts.beat_conformance.settings import observed_settings
+    from scripts.beat_conformance.settings import validate_native_backend
     selected = replace(inputs, backend="metal", precision="float32")
     mapped = native(selected)
     diagnostic = mapped.solver_log[-1 if defect == "late_cpu" else 0]["native_diagnostics"]
@@ -250,7 +212,7 @@ def test_metal_result_must_have_native_backend_on_every_row(inputs, official, de
     else:
         diagnostic.update(bem_backend="cpu", backend="cpu")
     with pytest.raises(ValueError, match="native backend"):
-        observed_settings(selected.settings(), mapped, official=official, native_symmetry="off")
+        validate_native_backend(mapped, selected.backend, official=official)
 
 
 @pytest.mark.parametrize("defect", [None, "cpu", "missing", "wrong_device", "device_backend"])
@@ -316,25 +278,21 @@ def test_metal_operator_matrix_policy_refuses_blas_reservation(inputs, monkeypat
 
 @pytest.mark.parametrize("backend", ["cpu", "metal"])
 @pytest.mark.parametrize("official", [False, True])
-@pytest.mark.parametrize("missing", ["blas_threads", "backend"])
 @pytest.mark.parametrize("row_index", [0, -1])
-def test_missing_blas_or_backend_observation_fails_closed_on_each_row(inputs, backend, official, missing, row_index):
-    from scripts.beat_conformance.settings import observed_settings
+def test_missing_backend_observation_fails_closed_on_each_row(inputs, backend, official, row_index):
+    from scripts.beat_conformance.settings import validate_native_backend
     selected = replace(inputs, backend=backend, precision="float32" if backend == "metal" else "float64")
     mapped = native(selected)
     diagnostic = mapped.solver_log[row_index]["native_diagnostics"]
-    if missing == "backend":
-        diagnostic.pop("backend")
-        diagnostic.pop("bem_backend")
-    else:
-        diagnostic.pop(missing)
-    with pytest.raises(ValueError, match="blas_threads|native backend"):
-        observed_settings(selected.settings(), mapped, official=official, native_symmetry="off")
+    diagnostic.pop("backend")
+    diagnostic.pop("bem_backend")
+    with pytest.raises(ValueError, match="native backend"):
+        validate_native_backend(mapped, selected.backend, official=official)
 
 
 @pytest.mark.parametrize("official", [False, True])
 def test_cpu_native_backend_accepts_real_driver_diagnostic_spellings(inputs, official):
-    from scripts.beat_conformance.settings import observed_settings, validate_native_backend
+    from scripts.beat_conformance.settings import validate_native_backend
     mapped = native(inputs)
     # Frozen spellings from coupled_solver.jl's exterior diagnostics/provenance
     # and HBB BeatEngineDriver.jl; HBB exposes no precision/provenance here.
@@ -346,9 +304,6 @@ def test_cpu_native_backend_accepts_real_driver_diagnostic_spellings(inputs, off
                    "regular_assembly_mode": "cpu_fused_burton_miller", "metal_pipeline": False})
     mapped.solver_log = [{"native_diagnostics": dict(diagnostic)} for _ in inputs.frequencies_hz]
     validate_native_backend(mapped, "cpu", official=official)
-    _, evidence = observed_settings(inputs.settings(), mapped, official=official, native_symmetry="off")
-    assert evidence["backend"]["status"] == evidence["blas_threads"]["status"] == "observed"
-    assert evidence["precision"]["status"] == ("observed" if official else "declared")
 
 
 @pytest.mark.parametrize("threads,launch_count", [(1, "1"), (6, "7")])
