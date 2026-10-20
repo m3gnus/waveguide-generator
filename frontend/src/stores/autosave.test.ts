@@ -15,18 +15,19 @@ describe('design autosave', () => {
     resetDocumentStore();
   });
 
-  it('round-trips the design, name, revision, and explicit-save state', () => {
+  it('round-trips the design, name, and revision', () => {
     useDesignStore.getState().updateField('R', 177);
     useDocumentStore.getState().setDesignName('Recovered Horn');
-    useDocumentStore.getState().markSaved(1);
     expect(writeAutosave()).toBe(true);
+    // Keep the required v1 field for older readers without tracking a baseline.
+    expect(JSON.parse(localStorage.getItem(AUTOSAVE_KEY)!).savedRevision).toBeNull();
 
     resetDesignStore();
     resetDocumentStore();
     expect(restoreAutosave()).toBe(true);
     expect(useDesignStore.getState()).toMatchObject({ designRevision: 2, design: { R: 177 } });
     expect(useDocumentStore.getState()).toMatchObject({
-      designName: 'Recovered Horn', filename: 'Recovered_Horn.cfg', savedRevision: 1,
+      designName: 'Recovered Horn', filename: 'Recovered_Horn.cfg',
     });
     expect(useDesignStore.temporal.getState().pastStates).toEqual([]);
   });
@@ -73,6 +74,9 @@ describe('design autosave', () => {
     useDocumentStore.getState().setOpenedContentKey(`${DESIGN_CONTENT_KEY_VERSION}:opened`);
     expect(writeAutosave()).toBe(true);
     const legacy = JSON.parse(localStorage.getItem(AUTOSAVE_KEY)!);
+    legacy.savedRevision = 1;
+    legacy.savedDesignName = 'Opened Horn';
+    legacy.savedSettings = '{"distance":2}';
     delete legacy.openedContentKey;
     delete legacy.contentKeyVersion;
     localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(legacy));

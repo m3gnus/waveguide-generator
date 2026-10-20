@@ -316,9 +316,6 @@ describe('would replacing the design on screen lose it', () => {
 
     expect(useDesignStore.getState().design.R).toBe(321);
     expect(useDocumentStore.getState()).toMatchObject({ designName: 'legacy', openedContentKey: null });
-    // The old baseline would call this clean -- its revision is its saved
-    // revision -- yet the draft is the only copy.
-    expect(useDocumentStore.getState().savedRevision).toBe(useDesignStore.getState().designRevision);
     expect(replacingWouldLoseNow()).toBe(true);
   });
 

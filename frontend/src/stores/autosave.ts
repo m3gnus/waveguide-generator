@@ -22,11 +22,9 @@ interface AutosaveRecord {
   filename: string;
   /** Absent in drafts written before the design carried one name. */
   designName?: string;
-  savedDesignName?: string;
   designRevision: number;
+  /** Retired baseline; v1 readers still require this wire field. */
   savedRevision: number | null;
-  /** Absent in drafts written before directivity edits counted as changes. */
-  savedSettings?: string | null;
   identity?: DesignIdentity | null;
   classification?: CadLinkClassification | null;
   /**
@@ -102,17 +100,15 @@ export function writeAutosave(storage: DraftStorage | null = defaultStorage()): 
   if (!storage) return false;
   const { design, designRevision } = useDesignStore.getState();
   const {
-    designName, filename, savedRevision, savedDesignName, savedSettings, openedContentKey, identity, classification,
+    designName, filename, openedContentKey, identity, classification,
   } = useDocumentStore.getState();
   const record: AutosaveRecord = {
     version: 1,
     savedAt: new Date().toISOString(),
     filename,
     designName,
-    savedDesignName,
     designRevision,
-    savedRevision,
-    savedSettings,
+    savedRevision: null,
     identity: identity ? { ...identity } : null,
     classification,
     openedContentKey,
@@ -128,10 +124,7 @@ export function writeAutosave(storage: DraftStorage | null = defaultStorage()): 
 }
 
 /** Restore the most recent local draft before React mounts. Autosave is crash
- * recovery, not opening a new file baseline, so the stored savedRevision is
- * retained as it was.
- *
- * So is the replacement check's remembered-copy key: it is the one the record
+ * recovery. The replacement check's remembered-copy key is the one the record
  * stored beside the draft, so a draft still equal to what was last
  * opened or written stays kept after a restart, and an edited one does not.
  * No key is ever derived from the draft itself. */
@@ -149,9 +142,6 @@ export function restoreAutosave(storage: DraftStorage | null = defaultStorage())
       designName: typeof record.designName === 'string'
         ? record.designName
         : designNameFromFilename(record.filename),
-      savedDesignName: typeof record.savedDesignName === 'string' ? record.savedDesignName : undefined,
-      savedRevision: record.savedRevision,
-      savedSettings: typeof record.savedSettings === 'string' ? record.savedSettings : null,
       openedContentKey: storedOpenedContentKey(record),
       identity: record.identity ? { ...record.identity } : null,
       classification: record.classification ?? null,
@@ -217,10 +207,7 @@ export function startAutosave(
   });
   const unsubscribeDocument = useDocumentStore.subscribe((state, previous) => {
     if (state.designName !== previous.designName
-      || state.savedDesignName !== previous.savedDesignName
       || state.filename !== previous.filename
-      || state.savedRevision !== previous.savedRevision
-      || state.savedSettings !== previous.savedSettings
       // Export a copy and Send to CAD change only this: the draft must record
       // the copy they wrote, or a restart forgets it.
       || state.openedContentKey !== previous.openedContentKey

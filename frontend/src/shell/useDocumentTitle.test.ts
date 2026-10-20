@@ -45,7 +45,6 @@ describe('the window title', () => {
   // title names the design, and nothing about it changes with an edit.
   it('carries no bullet after an edit or a rename', () => {
     useDocumentStore.getState().setDesignName('horn');
-    useDocumentStore.getState().markSaved(useDesignStore.getState().designRevision);
     act(() => root.render(createElement(Title)));
     expect(document.title).toBe(`horn — ${APP_NAME}`);
 

@@ -29,18 +29,6 @@ export interface DocumentState {
    */
   filename: string;
   /**
-   * The opened-file baseline: the geometry revision, the name, and
-   * `documentSettingsSignature()` (null until a file has been opened) as the
-   * last open applied them. Autosave keeps them with the draft.
-   *
-   * Nothing on screen marks a difference from it: WG has no Save, so there is
-   * no unsaved state to show. A replacement asks whether the design exists
-   * anywhere else instead (`openedContentKey`).
-   */
-  savedRevision: number | null;
-  savedDesignName: string;
-  savedSettings: string | null;
-  /**
    * The content key of the design as WG last opened it (captured once the open
    * had fully applied), or as WG itself last wrote it somewhere it can be
    * opened from again: Export a copy, or the registry a Send to CAD commits
@@ -55,26 +43,21 @@ export interface DocumentState {
   identity: DesignIdentity | null;
   classification: CadLinkClassification | null;
   setDesignName: (name: string) => void;
-  markSaved: (revision: number, settings?: string) => void;
   setOpenedContentKey: (key: string | null) => void;
   setCadLink: (identity: DesignIdentity | null, classification: CadLinkClassification) => void;
   adoptSavedIdentity: (identity: DesignIdentity) => void;
   restoreDocumentState: (
-    state: Pick<DocumentState, 'savedRevision' | 'identity' | 'classification'>
-      & Partial<Pick<DocumentState, 'designName' | 'savedSettings' | 'savedDesignName' | 'openedContentKey'>>,
+    state: Pick<DocumentState, 'identity' | 'classification'>
+      & Partial<Pick<DocumentState, 'designName' | 'openedContentKey'>>,
   ) => void;
 }
 
 export const useDocumentStore = create<DocumentState>((set) => ({
   // Untitled. The name used to be a specific .cfg -- someone's test fixture --
   // so a fresh window claimed that document was open when what was on screen
-  // was the built-in default design. The saved revision starts at the design
-  // store's initial revision, so a fresh window begins at its own baseline.
+  // was the built-in default design.
   designName: '',
   filename: '',
-  savedRevision: 1,
-  savedDesignName: '',
-  savedSettings: null,
   openedContentKey: null,
   identity: null,
   classification: null,
@@ -82,24 +65,16 @@ export const useDocumentStore = create<DocumentState>((set) => ({
     const designName = normalizeDesignName(name);
     set({ designName, filename: designName ? designFilename(designName) : '' });
   },
-  markSaved: (savedRevision, savedSettings) => set((state) => ({
-    savedRevision,
-    savedDesignName: state.designName,
-    ...(savedSettings === undefined ? {} : { savedSettings }),
-  })),
   setOpenedContentKey: (openedContentKey) => set({ openedContentKey }),
   setCadLink: (identity, classification) => set({ identity, classification }),
   adoptSavedIdentity: (identity) => set({ identity, classification: 'current' }),
   restoreDocumentState: ({
-    designName, savedRevision, savedSettings, savedDesignName, openedContentKey, identity, classification,
+    designName, openedContentKey, identity, classification,
   }) => {
     const name = normalizeDesignName(designName);
     set({
       designName: name,
       filename: name ? designFilename(name) : '',
-      savedRevision,
-      savedDesignName: normalizeDesignName(savedDesignName ?? name),
-      savedSettings: savedSettings ?? null,
       // Only ever the key the caller recorded beside the draft, never one
       // derived from the draft being restored: a draft is the only copy of
       // what it holds. Without a recorded key it counts as kept nowhere.
@@ -120,9 +95,6 @@ export function resetDocumentStore(): void {
   useDocumentStore.setState({
     designName: '',
     filename: '',
-    savedRevision: 1,
-    savedDesignName: '',
-    savedSettings: null,
     openedContentKey: null,
     identity: null,
     classification: null,

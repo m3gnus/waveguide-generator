@@ -1,7 +1,6 @@
 import { getCadLinkedDesign } from '../api/cadlink';
 import { hydrateDesignDocument, openDesignText, type CadLinkOpenState } from '../api/designIo';
 import { currentDocumentLoad, useDesignStore, type DesignLoadSource } from '../stores/design';
-import { documentSettingsSignature } from '../stores/designWire';
 import { designNameForOpenedFile } from '../stores/designName';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { currentEditorMutation } from '../stores/editorMutation';
@@ -46,7 +45,6 @@ export function applyOpenedDesign(
   // Report.Title is that same name spelled more fully.
   document.setDesignName(designNameForOpenedFile(filename, openedDesign.extra_blocks));
   document.setCadLink(editableIdentity(opened.cadlink?.identity), opened.cadlink?.classification ?? 'missing');
-  document.markSaved(useDesignStore.getState().designRevision, documentSettingsSignature());
   // Last, once the design, its settings and its name have all applied: the
   // design as opened is one a later replacement can count as kept.
   document.setOpenedContentKey(keptContentKeyNow());

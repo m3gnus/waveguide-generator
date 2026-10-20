@@ -185,7 +185,7 @@ describe('design file export menu', () => {
 
     await chooseLocalDesign({ name: 'replacement.cfg', text: async () => 'R = 999' });
     expect(useDesignStore.getState().design.R).toBe(999);
-    expect(useDocumentStore.getState()).toMatchObject({ designName: 'replacement', savedRevision: 3 });
+    expect(useDocumentStore.getState()).toMatchObject({ designName: 'replacement' });
   });
 
   it('does not apply a delayed open response over an edit made while it was pending', async () => {
@@ -686,7 +686,7 @@ describe('design file export menu', () => {
     });
   });
 
-  it('downloads a serialized copy without changing identity or the saved baseline', async () => {
+  it('downloads a serialized copy without changing identity', async () => {
     const original = {
       designId: 'wgd_01K00000000000000000000000',
       lineageId: 'wgl_01K00000000000000000000000',
@@ -694,14 +694,10 @@ describe('design file export menu', () => {
     };
     useDocumentStore.getState().setDesignName('copied-horn');
     useDocumentStore.getState().setCadLink(original, 'stale_copy');
-    useDocumentStore.getState().markSaved(2, 'saved-settings-baseline');
     useDesignStore.setState({ designRevision: 3 });
     const before = {
       identity: useDocumentStore.getState().identity,
       classification: useDocumentStore.getState().classification,
-      savedRevision: useDocumentStore.getState().savedRevision,
-      savedSettings: useDocumentStore.getState().savedSettings,
-      savedDesignName: useDocumentStore.getState().savedDesignName,
     };
     vi.mocked(fetch).mockImplementationOnce(async () => new Response(JSON.stringify({
       text: 'serialized copy',
@@ -753,7 +749,6 @@ describe('design file export menu', () => {
   // WG has no Save, so the file chip has no unsaved state to mark: whether a
   // design would be lost is asked when something is about to replace it.
   it('shows no unsaved indicator after an edit or a rename', () => {
-    useDocumentStore.getState().markSaved(useDesignStore.getState().designRevision);
     act(() => root.render(<DesignFileMenu/>));
     act(() => useDesignStore.getState().updateField('R', 321));
     act(() => useDocumentStore.getState().setDesignName('renamed horn'));
@@ -829,14 +824,13 @@ describe('design file export menu', () => {
       .toContain('Opened CAD-linked design registry-head.cfg');
   });
 
-  it('reports serialization failure without downloading or changing saved state', async () => {
+  it('reports serialization failure without downloading or changing identity', async () => {
     useDocumentStore.getState().setDesignName('keep-unsaved');
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_01K00000000000000000000000',
       lineageId: 'wgl_01K00000000000000000000000',
       baseEditVersion: 4,
     }, 'current');
-    useDocumentStore.getState().markSaved(4, 'saved-settings-baseline');
     useDesignStore.setState({ designRevision: 5 });
     const before = useDocumentStore.getState();
     vi.mocked(fetch).mockImplementationOnce(async () => new Response(
@@ -854,9 +848,6 @@ describe('design file export menu', () => {
     expect(useDocumentStore.getState()).toMatchObject({
       identity: before.identity,
       classification: before.classification,
-      savedRevision: before.savedRevision,
-      savedSettings: before.savedSettings,
-      savedDesignName: before.savedDesignName,
     });
     expect(container.querySelector('[role="status"]')?.textContent).toBe('Could not serialize this design.');
   });

@@ -43,28 +43,4 @@ describe('the design name owns the filename', () => {
     useDocumentStore.getState().setDesignName('');
     expect(useDocumentStore.getState()).toMatchObject({ designName: '', filename: '' });
   });
-
-  it('stamps the name into the opened-file baseline only when it is established', () => {
-    useDocumentStore.getState().setDesignName('winner');
-    expect(useDocumentStore.getState().savedDesignName).toBe('');
-
-    useDocumentStore.getState().markSaved(1);
-    expect(useDocumentStore.getState().savedDesignName).toBe('winner');
-  });
-});
-
-describe('the opened-file baseline', () => {
-  beforeEach(() => resetDocumentStore());
-
-  it('stamps a settings baseline only when the caller supplies one', () => {
-    useDocumentStore.getState().markSaved(7, '{"distance":2}');
-    expect(useDocumentStore.getState()).toMatchObject({ savedRevision: 7, savedSettings: '{"distance":2}' });
-
-    // Callers that only know the revision must not silently clear the baseline.
-    useDocumentStore.getState().markSaved(8);
-    expect(useDocumentStore.getState()).toMatchObject({ savedRevision: 8, savedSettings: '{"distance":2}' });
-
-    resetDocumentStore();
-    expect(useDocumentStore.getState().savedSettings).toBeNull();
-  });
 });
