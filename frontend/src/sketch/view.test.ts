@@ -42,3 +42,16 @@ it('anchors hover text at the nearest visible polyline point to the cursor', () 
   expect(visibleAnchor([{ x: 10, y: -100 }, { x: 10, y: 500 }], viewport, { x: 12, y: 250 })).toEqual({ x: 10, y: 250 });
   expect(visibleAnchor([{ x: -100, y: 20 }, { x: 800, y: 20 }, { x: 600, y: 100 }], viewport, { x: 600, y: 98 })).toEqual({ x: expect.closeTo(600.6896551724137, 10), y: expect.closeTo(99.72413793103448, 10) });
 });
+
+it('classifies trackpad scroll, pinch, and discrete mouse wheels in one policy', async () => {
+  const { wheelGesture } = await import('./view');
+  const event = (deltaY: number, options = {}) => ({ deltaX: 0, deltaY, deltaMode: 0, ctrlKey: false, ...options });
+  expect(wheelGesture(event(2))).toEqual({ kind: 'pan', dx: -0, dy: -2 });
+  expect(wheelGesture(event(80, { deltaX: 5 }))).toEqual({ kind: 'pan', dx: -5, dy: -80 });
+  expect(wheelGesture(event(-12))).toEqual({ kind: 'pan', dx: -0, dy: 12 });
+  expect(wheelGesture(event(100))).toEqual({ kind: 'zoom', factor: Math.exp(-.1) });
+  expect(wheelGesture(event(3, { deltaMode: 1 }))).toEqual({ kind: 'zoom', factor: Math.exp(-.048) });
+  expect(wheelGesture(event(1, { deltaMode: 2 }))).toEqual({ kind: 'zoom', factor: Math.exp(-.36) });
+  expect(wheelGesture(event(-2, { ctrlKey: true }))).toEqual({ kind: 'zoom', factor: Math.exp(.02) });
+  expect(wheelGesture(event(0, { ctrlKey: true }))).toEqual({ kind: 'zoom', factor: 1 });
+});

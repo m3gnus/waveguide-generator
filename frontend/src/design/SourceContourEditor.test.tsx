@@ -452,9 +452,10 @@ describe('source editor interactions', () => {
     expect(writes).toHaveBeenCalledTimes(1); expect(callback).toHaveBeenCalledTimes(1); expect(lowering).toHaveBeenCalledTimes(1);
     expect(readSourceDraft().contour.points[1].r_mm).toBeGreaterThan(8);
   });
-  it('fix 12: distinguishes solid rigid sections from thin dashed references in both canvases', () => {
-    expect(canvasCss).toContain('.sketch-entity.rigid { stroke: var(--fg2); stroke-width: 3; }');
-    expect(canvasCss).toContain('stroke-dasharray: 4 4');
+  it('fix 12: distinguishes rigid sections by weight and solid projected references in both canvases', () => {
+    expect(canvasCss).toContain('.sketch-entity.rigid { stroke-width: 3.5; }');
+    expect(canvasCss).not.toContain('stroke-dasharray: 4 4');
+    expect(canvasCss).toContain('.sketch-context-layer { stroke: var(--sketch-context-color); stroke-width: 1; stroke-dasharray: none;');
     expect(editorCss).toContain('.source-meridian .rigid { stroke: var(--fg2); stroke-width: 3; }');
     expect(editorCss).toContain('.source-axis { stroke: var(--fg3); stroke-width: 1; stroke-dasharray: 4 4; }');
   });
@@ -519,8 +520,8 @@ describe('source editor interactions', () => {
       expect(editorCss).toContain('var(--ctl-grad)');
       expect(editorCss).toContain('var(--ctl-grad-h)');
       expect(editorCss).toContain('var(--surface-field)');
-      expect(canvasCss).toContain('.sketch-entity.moving { stroke: var(--source-moving); }');
-      expect(canvasCss).toContain('.sketch-entity.rigid { stroke: var(--fg2); stroke-width: 3; }');
+      expect(canvasCss).toContain('.sketch-entity.moving { stroke-width: 2; }');
+      expect(canvasCss).toContain('.sketch-entity.rigid { stroke-width: 3.5; }');
       expect(tokensCss).toContain('--source-moving: #69d4ce');
       expect(tokensCss).toContain('--source-moving: #176d68');
     } finally {

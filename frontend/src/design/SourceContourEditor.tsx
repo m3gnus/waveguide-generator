@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { sourceEditorApi, type SourceAttachment, type SourceDocument, type SourcePatch, type SourcePoint, type SourcePreset, type SourceValidation } from '../api/sourceEditor';
 import { durableSettings, namespaceStorage } from '../stores/durableSettings';
@@ -376,7 +376,6 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
           entityClassName={entity => entity.data && typeof entity.data === 'object' && !Array.isArray(entity.data) && entity.data.role === 'rigid' ? 'rigid' : 'moving'}
           hoverId={hoverId} onHoverChange={setHoverId} nameFor={id => displayName(displayAuthor.sketch, id)} onLimitChange={editLimit}
           selection={canvasSelection} onSelectionChange={ids => { setCanvasSelection(ids); const index = tablePatches.findIndex(p => ids.includes(p.id)); if (index >= 0) setSelectedPatch(index); }}
-          entityStyle={entity => ({ '--sketch-patch': entity.data && typeof entity.data === 'object' && !Array.isArray(entity.data) && entity.data.role === 'rigid' ? 'var(--fg2)' : 'var(--source-moving)' } as CSSProperties)}
           problemAction={problem => {
             if (problem.code !== 'pole' && problem.code !== 'rim') return;
             const reference = author.meta.references.find(r => r.kind === (problem.code === 'pole' ? 'axis' : 'baffle')), point = problem.ids[0];

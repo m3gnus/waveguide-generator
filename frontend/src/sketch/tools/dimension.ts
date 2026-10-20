@@ -1,7 +1,7 @@
 import type { Reference } from '../adapter';
 import type { NewConstraint, Point, Sketch } from '../model';
 import type { XY } from '../solver/types';
-import { arcGeometry, distance, projectToEntity } from '../geometry';
+import { arcGeometry, distance, projectToLine, projectToEntity } from '../geometry';
 import { dimensionHelper } from '../dimensionGraphics';
 import { geometryHit } from '../geometryHit';
 
@@ -22,10 +22,6 @@ export function dimensionPicks(sketch: Sketch, ids: string[], references: Refere
     return [];
   });
 }
-const projection = (p: XY, a: XY, b: XY): XY => {
-  const dx = b.x - a.x, dy = b.y - a.y, t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1);
-  return { x: a.x + t * dx, y: a.y + t * dy };
-};
 function placement(kind: string, a: XY, b: XY, cursor: XY) {
   const dx = b.x - a.x, dy = b.y - a.y, x = cursor.x - (a.x + b.x) / 2, y = cursor.y - (a.y + b.y) / 2;
   if (kind === 'distanceX') return { offset: y, along: .5 + x / (dx || 1) };
@@ -67,7 +63,7 @@ export function candidateDimension(picks: DimensionPick[], cursor: XY): Candidat
       return { kind, a: a.id, b: b.id, value: Math.abs(delta),
         label: line.reference === 'axis' ? 'r' : 'z', driving: true, placement: placement(kind, a, b, cursor) };
     }
-    const foot = projection(p.point, line.a, line.b);
+    const foot = projectToLine(p.point, line.a, line.b);
     if (distance(p.point, foot) <= 1e-9) return;
     return { kind: 'pointLineDistance', point: p.id, line: line.id, value: distance(p.point, foot), driving: true,
       placement: placement('distance', p.point, foot, cursor) };
@@ -76,7 +72,7 @@ export function candidateDimension(picks: DimensionPick[], cursor: XY): Candidat
   const dx = a.b.x - a.a.x, dy = a.b.y - a.a.y, ex = b.b.x - b.a.x, ey = b.b.y - b.a.y;
   const cross = dx * ey - dy * ex;
   if (Math.abs(cross) <= 1e-9 * Math.hypot(dx, dy) * Math.hypot(ex, ey)) {
-    const foot = projection(b.a, a.a, a.b);
+    const foot = projectToLine(b.a, a.a, a.b);
     return { kind: 'pointLineDistance', point: b.a.id, line: a.id, value: distance(b.a, foot), driving: true,
       placement: placement('distance', b.a, foot, cursor) };
   }
@@ -96,7 +92,7 @@ export function hitDimension(sketch: Sketch, references: Reference[], cursor: XY
   const excluded = new Set([...hidden, ...sketch.entities.filter(e => e.reference || references.some(r => r.id === e.id) || dimensionHelper(e)).flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : e.kind === 'arc' ? [e.center, e.start, e.end] : [])]);
   const points = sketch.points.filter(p => !excluded.has(p.id)).map(p => ({ kind: 'point', id: p.id, gap: distance(p, cursor) }));
   const curves = dimensionPicks(sketch, sketch.entities.map(e => e.id), references).map(p => {
-    const at = p.kind === 'line' && (p.reference === 'axis' || p.reference === 'baffle') ? projection(cursor, p.a, p.b) : projectToEntity(sketch, p.id, cursor.x, cursor.y);
+    const at = p.kind === 'line' && (p.reference === 'axis' || p.reference === 'baffle') ? projectToLine(cursor, p.a, p.b) : projectToEntity(sketch, p.id, cursor.x, cursor.y);
     return { kind: p.kind, id: p.id, gap: distance(cursor, at) };
   });
   return geometryHit([...points, ...curves], tolerance)?.id;

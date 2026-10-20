@@ -96,6 +96,10 @@ export function onArc(s: Sketch, a: Arc, p: Omit<Point, 'id'>, interior = false)
     && along <= span + 1e-12 && (!interior || along > 1e-12 && along < span - 1e-12);
 }
 
+export function projectToLine(p: XY, a: XY, b: XY): XY {
+  const dx = b.x - a.x, dy = b.y - a.y, t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1);
+  return { x: a.x + t * dx, y: a.y + t * dy };
+}
 export function projectToEntity(sketch: Sketch, entityId: string, x: number, y: number): { x: number; y: number } {
   const e = sketch.entities.find(e => e.id === entityId), cursor = { x, y };
   const point = (id: string) => sketch.points.find(p => p.id === id)!;

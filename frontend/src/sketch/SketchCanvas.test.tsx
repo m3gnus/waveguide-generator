@@ -145,18 +145,28 @@ describe('SketchCanvas with real slvs', () => {
     await pointer(svg(), 'pointermove', 0, 0);
     expect(host.querySelector(`[data-id="${arc.center}"]`)).not.toBeNull();
   });
-  it('keeps role stroke colours while under-constrained curves are dashed and determined curves are solid', async () => {
+  it('uses solid status-coloured profiles, role weights, and orange dashed construction', async () => {
     const style = document.createElement('style'); style.textContent = new TextDecoder().decode(readFileSync('src/sketch/sketchCanvas.css')); document.head.append(style);
     const sketch = base(), diagnosis = initialDiagnosis(sketch);
     try {
       for (const role of ['moving', 'rigid']) {
-        await act(async () => root.render(<SketchCanvas sketch={sketch} diagnosis={diagnosis} references={[]} problems={[]} entityClassName={() => role}/>));
-        const under = getComputedStyle(host.querySelector('.sketch-entity')!);
-        expect(under.strokeDasharray).toBe('7 4');
-        expect(under.stroke).toBe(role === 'moving' ? 'var(--source-moving)' : 'var(--fg2)');
-        await act(async () => root.render(<SketchCanvas sketch={sketch} diagnosis={{ ...diagnosis, dof: 0 }} references={[]} problems={[]} entityClassName={() => role}/>));
-        expect(getComputedStyle(host.querySelector('.sketch-entity')!).strokeDasharray).toBe('none');
+        for (const status of ['under', 'determined', 'conflicting']) {
+          const s = { ...sketch, constraints: status === 'conflicting' ? [{ kind: 'horizontal' as const, id: 'h', line: 'line' }] : [] };
+          const d: Diagnosis = { ...diagnosis, dof: status === 'determined' ? 0 : 4, constraintStates: status === 'conflicting' ? { h: 'conflicting' as const } : {} };
+          await act(async () => root.render(<SketchCanvas sketch={s} diagnosis={d} references={[]} problems={[]} entityClassName={() => role}/>));
+          const entity = host.querySelector('.sketch-entity')!, computed = getComputedStyle(entity);
+          expect(entity.classList.contains(status)).toBe(true);
+          expect(computed.strokeDasharray).toBe('none');
+          expect(computed.stroke).toBe(`var(--sketch-${status})`);
+          expect(computed.strokeWidth).toBe(role === 'moving' ? '2' : '3.5');
+          expect(host.querySelector(`.sketch-point.${status}`)).not.toBeNull();
+        }
       }
+      sketch.entities[0].construction = true;
+      await act(async () => root.render(<SketchCanvas sketch={sketch} diagnosis={diagnosis} references={[]} problems={[]}/>));
+      const construction = getComputedStyle(host.querySelector('.sketch-entity.construction')!);
+      expect(construction.strokeDasharray).toBe('6 4'); expect(construction.stroke).toBe('var(--sketch-construction)'); expect(construction.strokeWidth).toBe('1.5');
+      expect(style.textContent).not.toContain('--source-moving');
     } finally { style.remove(); }
   });
   it('converts the selected curve in place from the contextual toolbar and undoes in one step', async () => {
@@ -187,17 +197,20 @@ describe('SketchCanvas with real slvs', () => {
   });
   it('shows only selection-valid actions and keeps dimension hints contextual', async () => {
     await mount();
-    expect(host.querySelector('[aria-label="Selection constraints"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Selection actions"]')).toBeNull();
     expect(host.querySelector('[aria-label="Dimension measurement"]')).toBeNull();
     await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown');
-    const labels = () => [...host.querySelectorAll('[aria-label="Selection constraints"] button')].map(b => b.textContent);
-    expect(labels()).toEqual(['Horizontal', 'Vertical', 'Construction (X)', 'Make arc', 'Delete selection']);
-    expect(host.querySelector('.sketch-surface > [aria-label="Selection constraints"]')).not.toBeNull();
+    const labels = () => [...host.querySelectorAll('[aria-label="Selection actions"] button')].map(b => b.textContent);
+    expect(labels()).toEqual(['Construction (X)', 'Make arc', 'Delete selection']);
+    expect(button('Horizontal').disabled).toBe(false); expect(button('Coincident').disabled).toBe(true);
+    expect(host.querySelector('.sketch-surface > [aria-label="Selection actions"]')).not.toBeNull();
     await pointer(svg(), 'pointerdown');
     await pointer(coordinate('p').element, 'pointerdown'); await pointer(svg(), 'pointerup');
-    expect(labels()).toEqual(['Fix', 'Delete selection']);
+    expect(labels()).toEqual(['Delete selection']);
+    expect(button('Fix').disabled).toBe(false); expect(button('Horizontal').disabled).toBe(true);
     await pointer(coordinate('q').element, 'pointerdown', 0, 0, { shiftKey: true }); await pointer(svg(), 'pointerup');
-    expect(labels()).toEqual(['Horizontal', 'Vertical', 'Coincident', 'Delete selection']);
+    expect(labels()).toEqual(['Delete selection']);
+    expect(button('Horizontal').disabled).toBe(false); expect(button('Coincident').disabled).toBe(false);
     await act(async () => button('Dimension (D)').click());
     expect(host.querySelector('[aria-label="Dimension measurement"]')).toBeNull();
     expect(host.textContent).toContain('move to choose; click to place; type the value');
@@ -689,5 +702,87 @@ describe('constraint context controls', () => {
     await key('v');
     expect(host.querySelector('[aria-label^="Constraint vertical"]')).not.toBeNull();
     await key('l'); expect(button('Line (L)').getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
+
+describe('navigation and line legend', () => {
+  it('pans with Hand over geometry and dimension labels without selecting or editing, then Esc selects', async () => {
+    const initial = base(); initial.constraints.push({ id: 'length', kind: 'distance', a: 'p', b: 'q', value: 10, driving: true });
+    await mount(initial);
+    const beginDrag = vi.spyOn(SketchController.prototype, 'beginDrag'), command = vi.spyOn(SketchController.prototype, 'command');
+    await act(async () => button('Pan (hold Space)').click());
+    expect(button('Pan (hold Space)').title).toBe('Pan (hold Space)');
+    expect(svg().classList.contains('sketch-pan')).toBe(true);
+    const before = coordinate('q');
+    await pointer(before.element, 'pointerdown', before.x, before.y);
+    expect(svg().classList.contains('grabbing')).toBe(true);
+    await pointer(svg(), 'pointermove', before.x + 25, before.y + 15); await pointer(svg(), 'pointerup');
+    expect(coordinate('q').x).toBeCloseTo(before.x + 25); expect(coordinate('q').y).toBeCloseTo(before.y + 15);
+    const label = host.querySelector('[data-constraint-id="length"] text')!;
+    const x = coordinate('q').x;
+    await pointer(label, 'pointerdown', 100, 100); await pointer(svg(), 'pointermove', 110, 100); await pointer(svg(), 'pointerup');
+    await pointer(label, 'dblclick'); await key('Delete');
+    expect(coordinate('q').x).toBeCloseTo(x + 10);
+    expect(host.querySelector('.selected')).toBeNull(); expect(host.querySelector('[aria-label="Edit dimension"]')).toBeNull();
+    expect(beginDrag).not.toHaveBeenCalled(); expect(command).not.toHaveBeenCalled();
+    await key('Escape'); expect(button('Select (Esc)').getAttribute('aria-pressed')).toBe('true');
+  });
+  it.each(['space', 'middle'] as const)('keeps %s drag panning from the Line tool even over a label', async mode => {
+    const initial = base(); initial.constraints.push({ id: 'length', kind: 'distance', a: 'p', b: 'q', value: 10, driving: true });
+    await mount(initial); await key('l');
+    const command = vi.spyOn(SketchController.prototype, 'command'), before = coordinate('q');
+    if (mode === 'space') await key(' ');
+    await pointer(host.querySelector('[data-constraint-id="length"] text')!, 'pointerdown', 100, 100, { button: mode === 'middle' ? 1 : 0 });
+    await pointer(svg(), 'pointermove', 130, 115); await pointer(svg(), 'pointerup');
+    if (mode === 'space') await act(async () => svg().dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true })));
+    expect(coordinate('q').x).toBeCloseTo(before.x + 30); expect(coordinate('q').y).toBeCloseTo(before.y + 15);
+    expect(button('Line (L)').getAttribute('aria-pressed')).toBe('true'); expect(command).not.toHaveBeenCalled();
+    expect(host.querySelector('.selected')).toBeNull();
+  });
+  it('zooms buttons and focused canvas keys 1.25 times around the centre', async () => {
+    await mount(); svg().focus();
+    const original = coordinate('q');
+    for (const action of ['Zoom in', '+', '=', '-', 'Zoom out']) {
+      const before = coordinate('q'), p = coordinate('p'), factor = action === '-' || action === 'Zoom out' ? 1 / 1.25 : 1.25;
+      if (action.startsWith('Zoom')) await act(async () => button(action).click()); else await key(action);
+      const after = coordinate('q'), nextP = coordinate('p');
+      expect(after.x).toBeCloseTo(320 + (before.x - 320) * factor);
+      expect(after.y).toBeCloseTo(180 + (before.y - 180) * factor);
+      expect((after.x - nextP.x) / (before.x - p.x)).toBeCloseTo(factor);
+    }
+    expect(coordinate('q').x).toBeCloseTo(320 + (original.x - 320) * 1.25);
+  });
+  it('pans pixel scroll and uses stronger cursor-centred pinch zoom', async () => {
+    await mount();
+    const before = coordinate('q');
+    await act(async () => svg().dispatchEvent(new WheelEvent('wheel', { deltaX: 10, deltaY: 5, deltaMode: 0, bubbles: true })));
+    const scrolled = coordinate('q');
+    expect(scrolled.x).toBeCloseTo(before.x - 10); expect(scrolled.y).toBeCloseTo(before.y - 5);
+    for (const [deltaY, ctrlKey, factor] of [[-2, true, Math.exp(.02)], [-100, false, Math.exp(.1)]] as const) {
+      const q = coordinate('q');
+      await act(async () => svg().dispatchEvent(new WheelEvent('wheel', { clientX: 100, clientY: 110, deltaY, ctrlKey, bubbles: true })));
+      expect(coordinate('q').x).toBeCloseTo(100 + (q.x - 100) * factor);
+      expect(coordinate('q').y).toBeCloseTo(110 + (q.y - 110) * factor);
+    }
+  });
+  it('shows every line channel in a toolbar popover and keeps projected context solid', async () => {
+    const style = document.createElement('style'); style.textContent = new TextDecoder().decode(readFileSync('src/sketch/sketchCanvas.css')); document.head.append(style);
+    try {
+      const sketch = base();
+      await act(async () => root.render(<SketchCanvas sketch={sketch} references={[]} problems={[]} context={{ fingerprint: '1', rimPlaneLabel: '', items: [
+        { id: 'wall', role: 'wall', kind: 'segment', label: 'Wall', geometry: [{ x: 1, y: 2 }, { x: 5, y: 2 }], pickable: true, emphasis: 'far' },
+      ] }}/>));
+      const context = getComputedStyle(host.querySelector('.sketch-context-layer')!);
+      expect(context.strokeDasharray).toBe('none'); expect(context.stroke).toBe('var(--sketch-context-color)'); expect(context.strokeWidth).toBe('1');
+      expect(getComputedStyle(host.querySelector('.sketch-context-item.far')!).opacity).toBe('0.25');
+      await act(async () => button('Line styles').click());
+      const legend = host.querySelector('[aria-label="Line styles legend"]')!;
+      expect(legend.textContent).toContain('Profile: under-constrained'); expect(legend.textContent).toContain('Profile: fully constrained');
+      expect(legend.querySelectorAll('svg')).toHaveLength(7);
+      expect(getComputedStyle(legend.querySelector('.construction')!).strokeDasharray).toBe('6 4');
+      expect(getComputedStyle(legend.querySelector('.rigid')!).strokeWidth).toBe('3.5');
+      await act(async () => button('Line styles').click()); expect(host.querySelector('[aria-label="Line styles legend"]')).toBeNull();
+    } finally { style.remove(); }
   });
 });
