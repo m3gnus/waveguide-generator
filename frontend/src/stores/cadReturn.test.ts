@@ -2,6 +2,7 @@ vi.mock('./cadProjectSettings', async original => ({ ...await original<typeof im
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import {
+  combineSpecEffective,
   blockingFindingWire,
   channelDriverPresent,
   channelDriverWire,
@@ -21,7 +22,6 @@ import {
   type DriverPreset,
 } from './cadReturn';
 import {
-  expandLegacy,
   relinkPairs,
   withChannel,
   withPair,
@@ -381,25 +381,9 @@ describe('combined output', () => {
     }]);
   });
 
-  it('adopts the spec a recombine was computed with, ignoring foreign members', () => {
-    useCadReturnStore.getState().selectBundle(bundle);
-    const applied = expandLegacy(['drive-mf', 'drive-hf'], [1_450]);
-    useCadReturnStore.getState().setCombineSpecFromResult(applied);
-    expect(useCadReturnStore.getState().combineSpec).toEqual(applied);
-    expect(combineChain(useCadReturnStore.getState())[0].hz).toBe(1_450);
-
-    // A run from another return names channels this one has not got.
-    useCadReturnStore.getState().setCombineSpecFromResult(
-      expandLegacy(['drive-lf', 'drive-mf', 'drive-hf'], [90, 900]),
-    );
-    expect(useCadReturnStore.getState().combineSpec).toEqual(applied);
-  });
-
   it('keeps a family and slope change symmetric and submits it as the v2 wire', () => {
     useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().updateCombineSpec(
-      (spec) => withPair(spec, 'drive-mf→drive-hf', { hz: 1_400, family: 'butterworth', order: 3 }),
-    );
+    useCadReturnStore.getState().setCombineSpec(withPair(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf→drive-hf', { hz: 1_400, family: 'butterworth', order: 3 }));
     const [pair] = combineChain(useCadReturnStore.getState());
     expect(pair).toMatchObject({ hz: 1_400, family: 'butterworth', order: 3, linked: true });
     const wire = combineWire(useCadReturnStore.getState())!;
@@ -411,17 +395,17 @@ describe('combined output', () => {
 
   it('marks a pair unlinked when one channel is edited on its own', () => {
     useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().updateCombineSpec((spec) => withChannel(spec, 'drive-mf', {
+    useCadReturnStore.getState().setCombineSpec(withChannel(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf', {
       lp: { family: 'butterworth', order: 3, fcHz: 900 },
     }));
     expect(combineChain(useCadReturnStore.getState())[0]).toMatchObject({ linked: false, hz: 900 });
-    useCadReturnStore.getState().updateCombineSpec(relinkPairs);
+    useCadReturnStore.getState().setCombineSpec(relinkPairs(combineSpecEffective(useCadReturnStore.getState())!));
     expect(combineChain(useCadReturnStore.getState())[0]).toMatchObject({ linked: true, hz: 900 });
   });
 
   it('falls back to the base chain when the drive channels no longer match the override', () => {
     useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().setCombineCrossover('drive-mf→drive-hf', 1_450);
+    useCadReturnStore.getState().setCombineSpec(withPair(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf→drive-hf', { hz: 1_450 }));
     useCadReturnStore.getState().setSourceChannel('source-hf', 'drive-mf');
     expect(combineWire(useCadReturnStore.getState())).toBeUndefined();
     useCadReturnStore.getState().setSourceChannel('source-hf', 'drive-hf');

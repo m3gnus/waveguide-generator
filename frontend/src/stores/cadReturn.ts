@@ -4,11 +4,9 @@ import { withEditSignals } from './solveSettingsEdits';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import type { DriverKind } from '../api/drivers';
 import {
-  cloneSpec,
   expandLegacy,
   pairsOf,
   toWire,
-  withPair,
   type CrossoverSpec,
   type CrossoverWire,
   type FilterFamily,
@@ -247,15 +245,6 @@ export interface CadReturnState {
   setCombineEnabled: (enabled: boolean) => void;
   /** Replace the whole override, or clear it back to the base chain. */
   setCombineSpec: (spec: CrossoverSpec | null) => void;
-  /** Edit the current effective spec in place. The editor is handed the spec
-   * the rail is showing, so a caller never has to reconstruct the base. */
-  updateCombineSpec: (edit: (spec: CrossoverSpec) => CrossoverSpec) => void;
-  setCombineCrossover: (pairKey: string, hz: number) => void;
-  /** Adopt the crossover a recombined result was computed with, so the dock and
-   * the rail hold one setting and the next solve starts where the last
-   * recombine left off. A spec naming channels this return has not got is
-   * ignored: a stale run must not seed the rail with foreign ids. */
-  setCombineSpecFromResult: (spec: CrossoverSpec) => void;
   setChannelDriverField: (channelId: string, field: DriverFieldKey, value: number | null) => void;
   /** Pick a driver, or clear the picked one back to hand entry.
    *
@@ -517,8 +506,8 @@ function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: stri
  * same state without anyone choosing it, and say nothing. */
 const CAD_RETURN_EDITS: ReadonlyArray<keyof CadReturnState> = [
   'setSourceSize', 'setRigidSize', 'setTransition', 'setSkipped', 'setSourceChannel', 'setChannelMotion', 'setExteriorTransducer',
-  'setAreaDriftOverride', 'setExteriorOnly', 'setCombineEnabled', 'setCombineSpec', 'updateCombineSpec',
-  'setCombineCrossover', 'setCombineSpecFromResult', 'setChannelDriverField', 'setChannelDriverPreset',
+  'setAreaDriftOverride', 'setExteriorOnly', 'setCombineEnabled', 'setCombineSpec',
+  'setChannelDriverField', 'setChannelDriverPreset',
   'clearChannelDriverOverrides', 'setDriveVoltage', 'setMaxDriveVoltage', 'setPassiveCardioid', 'setSweep',
 ];
 
@@ -816,23 +805,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   },
   setCombineEnabled: (combineEnabled) => { set({ combineEnabled }); },
   setCombineSpec: (combineSpec) => { set({ combineSpec }); },
-  updateCombineSpec: (edit) => {
-    set((state) => {
-      const current = combineSpecEffective(state);
-      return current ? { combineSpec: edit(current) } : {};
-    });
-  },
-  setCombineCrossover: (pairKey, hz) => {
-    useCadReturnStore.getState().updateCombineSpec((spec) => withPair(spec, pairKey, { hz }));
-  },
-  setCombineSpecFromResult: (spec) => {
-    set((state) => {
-      const known = new Set(state.driveChannels.map((channel) => channel.id));
-      return spec.members.length >= 2 && spec.members.every((member) => known.has(member))
-        ? { combineSpec: cloneSpec(spec) }
-        : {};
-    });
-  },
   setChannelDriverField: (channelId, field, value) => {
     set((state) => {
       const current = state.channelDrivers[channelId] ?? { ...EMPTY_DRIVER_FORM };

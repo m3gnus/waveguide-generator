@@ -22,7 +22,7 @@ import type { SolverFrameState } from '../api/solverFrame';
 import { compareSelection, provisionalResults, resultsCache } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { combineSpecEffective, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetCadSolverFrameStore, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { resetDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
@@ -501,12 +501,12 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await mount();
     await vi.waitFor(() => expect(solveButton().disabled).toBe(false));
     for (const hz of [8, 80, 199]) {
-      await act(async () => useCadReturnStore.getState().updateCombineSpec((spec) => withPair(spec, 'drive-mf→drive-hf', { hz })));
+      await act(async () => useCadReturnStore.getState().setCombineSpec(withPair(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf→drive-hf', { hz })));
       expect(solveButton().disabled).toBe(true);
       expect(host.querySelector('.cad-solve-blocker')?.textContent).toContain(`The ${hz} Hz crossover is below the 200 Hz sweep start`);
     }
     for (const hz of [200, 800]) {
-      await act(async () => useCadReturnStore.getState().updateCombineSpec((spec) => withPair(spec, 'drive-mf→drive-hf', { hz })));
+      await act(async () => useCadReturnStore.getState().setCombineSpec(withPair(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf→drive-hf', { hz })));
       expect(solveButton().disabled).toBe(false);
       expect(host.querySelector('.cad-solve-blocker')).toBeNull();
     }

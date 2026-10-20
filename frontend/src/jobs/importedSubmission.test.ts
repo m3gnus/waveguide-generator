@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { expandLegacy, toWire, withChannel, withDelayMode } from '../results/crossoverSpec';
-import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { combineSpecEffective, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { buildImportedSubmission, importedSubmissionBlocker, importedSubmissionNotices, undrivenChannels, widenPolarToDerivation } from './importedSubmission';
 
@@ -74,11 +74,11 @@ describe('imported solve submission wire', () => {
       frequencyStartHz: 200, frequencyEndHz: 20_000,
     });
     expect(importedSubmissionBlocker()).toBe('The 199 Hz crossover is below the 200 Hz sweep start. In Frequency Sweep, set Sweep start to 199 Hz or lower, or raise the crossover.');
-    useCadReturnStore.getState().updateCombineSpec((spec) => withChannel(spec, 'drive-mf', {
+    useCadReturnStore.getState().setCombineSpec(withChannel(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf', {
       lp: { family: 'lr', order: 4, fcHz: 200 },
     }));
     expect(importedSubmissionBlocker()).toBe('The 199 Hz crossover is below the 200 Hz sweep start. In Frequency Sweep, set Sweep start to 199 Hz or lower, or raise the crossover.');
-    useCadReturnStore.getState().updateCombineSpec((spec) => withChannel(spec, 'drive-hf', {
+    useCadReturnStore.getState().setCombineSpec(withChannel(combineSpecEffective(useCadReturnStore.getState())!, 'drive-hf', {
       hp: { family: 'lr', order: 4, fcHz: 800 },
     }));
     expect(importedSubmissionBlocker()).toBeNull();
@@ -87,7 +87,7 @@ describe('imported solve submission wire', () => {
     expect(importedSubmissionBlocker()).toContain('200 Hz crossover is below the 900 Hz sweep start');
     useImportedSolveOptionsStore.getState().setFrequencyListText('200, 400, 800');
     expect(importedSubmissionBlocker()).toBeNull();
-    useCadReturnStore.getState().updateCombineSpec((spec) => withChannel(spec, 'drive-hf', {
+    useCadReturnStore.getState().setCombineSpec(withChannel(combineSpecEffective(useCadReturnStore.getState())!, 'drive-hf', {
       hp: { family: 'lr', order: 4, fcHz: 801 },
     }));
     expect(importedSubmissionBlocker()).toContain('801 Hz crossover is above the 800 Hz sweep end');
@@ -136,7 +136,7 @@ describe('imported solve submission wire', () => {
       toWire(expandLegacy(['drive-mf', 'drive-hf'], [1_250], false, true)),
     );
 
-    useCadReturnStore.getState().updateCombineSpec((spec) => withDelayMode(spec, 'manual'));
+    useCadReturnStore.getState().setCombineSpec(withDelayMode(combineSpecEffective(useCadReturnStore.getState())!, 'manual'));
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.channels?.['drive-hf'].delay)
       .toEqual({ mode: 'manual', ms: 0 });
   });

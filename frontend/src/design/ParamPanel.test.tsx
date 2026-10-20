@@ -6,13 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitForCadProjectSettings } from '../stores/cadProjectSettings';
 import type { CadRealizedDimensions, CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
-import { sharedDelayMode } from '../results/crossoverSpec';
+import { sharedDelayMode, withPair } from '../results/crossoverSpec';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { CadSetupPublisher, useCadSetupPublisherStore } from '../shell/cadSetupPublisher';
 import { buildParameterPaletteEntries } from '../shell/TopBar';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
-import { channelDriverPresent, channelDriverWire, driverEditedKeys, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { combineSpecEffective, channelDriverPresent, channelDriverWire, driverEditedKeys, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetDriverLibraryStore, useDriverLibraryStore } from '../stores/driverLibrary';
 import { hydrateDesignDocument } from '../api/designIo';
@@ -1359,7 +1359,7 @@ describe('ParamPanel inventory UX', () => {
     expect(panel.textContent).toContain('Acme HD-1 minimum 1.6 kHz — current 1 kHz');
 
     // Raising the pair above the minimum clears the note in both views.
-    act(() => useCadReturnStore.getState().setCombineCrossover('drive-mf→drive-hf', 2_000));
+    act(() => useCadReturnStore.getState().setCombineSpec(withPair(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf→drive-hf', { hz: 2_000 })));
     expect(panel.textContent).not.toContain('minimum');
     crossoverView(host, 'Basic');
     expect(host.textContent).not.toContain('minimum');
@@ -1367,7 +1367,7 @@ describe('ParamPanel inventory UX', () => {
     // A driver whose source published no minimum never warns, whatever the
     // pair's frequency.
     act(() => {
-      useCadReturnStore.getState().setCombineCrossover('drive-mf→drive-hf', 100);
+      useCadReturnStore.getState().setCombineSpec(withPair(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf→drive-hf', { hz: 100 }));
       useCadReturnStore.getState().setChannelDriverPreset('drive-hf', {
         id: 'Acme::HD-1::8', label: 'Acme HD-1', source: 'database', kind: 'cd',
         z_ohm: 8, xo_min_hz: null, base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2 },

@@ -11,11 +11,11 @@ import { applyOpenedDesign } from '../design/openCadProject';
 import type { OnshapeLink } from '../api/onshape';
 import { preferencesStore } from '../prefs/preferences';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
-import { expandLegacy, toWire, withDelayMode } from '../results/crossoverSpec';
+import { expandLegacy, toWire, withDelayMode, withPair } from '../results/crossoverSpec';
 import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { cadReceiptsStore } from '../stores/cadReceipts';
-import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { combineSpecEffective, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
@@ -2404,11 +2404,11 @@ describe('CadLinkPanel', () => {
 
     useCadReturnStore.getState().setCombineEnabled(true);
 
-    useCadReturnStore.getState().setCombineCrossover('drive-mf\u2192drive-hf', 1_200);
+    useCadReturnStore.getState().setCombineSpec(withPair(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf\u2192drive-hf', { hz: 1_200 }));
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)
       .toEqual(toWire(expandLegacy(['drive-mf', 'drive-hf'], [1_200])));
 
-    useCadReturnStore.getState().updateCombineSpec((spec) => withDelayMode(spec, 'manual'));
+    useCadReturnStore.getState().setCombineSpec(withDelayMode(combineSpecEffective(useCadReturnStore.getState())!, 'manual'));
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.channels?.['drive-hf'].delay)
       .toEqual({ mode: 'manual', ms: 0 });
 
