@@ -7,9 +7,9 @@ runner owns persistence, progress delivery and cancellation state; an adapter
 owns meshing, native submission, response mapping and its worker lifetime.
 `EngineInfo` in `server.engines.registry` remains the capability/readiness
 snapshot used before creating a port. These are HornLab contacts, not a request
-for Metal to implement BEAT's Julia protocol. Registered adapters opt in with
-`FULL3D_SOLVER_PORT_MARKER`; the runner never infers the contract from an
-engine-name prefix.
+for Metal to implement BEAT's Julia protocol. The engine factory selects known
+adapters; the runner calls `engine.run` directly and checks that it returns
+an `EngineRunResult`.
 
 The installed `beat-engine` pin uses the official compiled-system worker API.
 WG's `beat_adapter` builds requests and maps responses; `beat_runtime` owns

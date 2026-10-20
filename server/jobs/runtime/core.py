@@ -91,7 +91,7 @@ from server.solver.field_plane import FieldPlaneEvaluation, FieldPlaneService
 from server.solver.polar_arc import effective_polar_config, effective_polar_grid
 from server.solver.formulation import bem_formulation
 from server.solver.metal_permit import MetalPermit, process_metal_permit
-from server.solver.base import run_full3d_solver_port
+from server.solver.base import EngineRunResult
 from server.solver.watchdog import watch_native_operation, stall_timeout_seconds
 
 from . import logger
@@ -4192,8 +4192,7 @@ class JobRuntime:
                     },
                 }
             async def invoke():
-                return await run_full3d_solver_port(
-                    engine,
+                outcome = await engine.run(
                     request,
                     cancel_cb=lambda: self._check_cancelled(job_id),
                     stage_cb=stage_callback,
@@ -4202,6 +4201,9 @@ class JobRuntime:
                     imported_record=imported_record,
                     execution_metadata_cb=execution_metadata_callback,
                 )
+                if not isinstance(outcome, EngineRunResult):
+                    raise TypeError(f"{engine.name} returned no normalized EngineRunResult")
+                return outcome
             def stop_callbacks():
                 callbacks_stopped.set()
                 flag = self._cancellation_flags.get(job_id)

@@ -26,11 +26,10 @@ FRAME = {"origin": [0., 0., 0.], "axis": [0., 0., 1.], "u": [1., 0., 0.], "v": [
 
 async def run_coupled_port(store, job_id, request, record, stage_cb, result_cb=None, symmetry_metadata=None):
     from server.jobs.runtime import JobRuntime
-    from server.solver.base import run_full3d_solver_port
     from server.solver.beat import BeatEngine, beat_engine_backend
 
-    outcome = await run_full3d_solver_port(
-        BeatEngine(beat_engine_backend(request.options.engine)), request,
+    outcome = await BeatEngine(beat_engine_backend(request.options.engine)).run(
+        request,
         cancel_cb=lambda: None, stage_cb=stage_cb, result_cb=result_cb,
         imported_record={**record, "_execution_metadata": {
             **store.get_job_row(job_id)["task_metadata"],

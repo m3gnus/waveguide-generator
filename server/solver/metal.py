@@ -46,7 +46,6 @@ from .base import (
     CancelCallback,
     EngineRunResult,
     ExecutionMetadataCallback,
-    FULL3D_SOLVER_PORT_MARKER,
     ResultCallback,
     StageCallback,
 )
@@ -2253,8 +2252,6 @@ def imported_metal_preflight(drive_channels: Sequence[Any] | None = None) -> str
 
 class MetalEngine:
     name = "metal"
-    solver_port_marker = FULL3D_SOLVER_PORT_MARKER
-
     def imported_preflight(
         self,
         record: Mapping[str, Any],

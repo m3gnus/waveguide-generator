@@ -2223,8 +2223,34 @@ def test_native_quarantine_survives_runtime_recreation(tmp_path):
         store.close()
 
 
+def test_runtime_refuses_non_normalized_solver_result(tmp_path):
+    class Engine:
+        name = "bempp"
+
+        async def run(self, request, **callbacks):
+            return {"results": {}}
+
+    async def scenario():
+        runtime = JobRuntime(
+            JobStore(tmp_path / "invalid-result.db"),
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+                factory=lambda _: Engine(),
+            ),
+        )
+        try:
+            job_id = await runtime.submit(_bare_request(engine="bempp", wall=5))
+            await runtime.wait_idle()
+            row = await runtime.get_job(job_id)
+            assert row["status"] == "error"
+            assert "bempp returned no normalized EngineRunResult" in row["error_message"]
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_bempp_runtime_dispatch_uses_the_port_without_signature_inspection(tmp_path):
-    from server.solver.base import is_full3d_solver_port
     from server.solver.bempp import BemppEngine
 
     calls = []
@@ -2246,7 +2272,6 @@ def test_bempp_runtime_dispatch_uses_the_port_without_signature_inspection(tmp_p
 
     async def scenario():
         engine = Engine()
-        assert is_full3d_solver_port(engine)
         runtime = JobRuntime(
             JobStore(tmp_path / "bempp-port.db"),
             engine_registry=EngineRegistry(

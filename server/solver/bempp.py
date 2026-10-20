@@ -36,7 +36,6 @@ from .base import (
     CancelCallback,
     EngineRunResult,
     ExecutionMetadataCallback,
-    FULL3D_SOLVER_PORT_MARKER,
     ResultCallback,
     StageCallback,
 )
@@ -1046,7 +1045,6 @@ def solve_bempp_from_msh_text(
 
 
 class BemppEngine:
-    solver_port_marker = FULL3D_SOLVER_PORT_MARKER
     name = "bempp"
 
     def imported_preflight(

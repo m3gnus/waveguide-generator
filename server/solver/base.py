@@ -22,11 +22,6 @@ ArtifactCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 ResultCallback = Callable[[int, dict[str, Any]], None]
 ExecutionMetadataCallback = Callable[[Mapping[str, Any]], Awaitable[None]]
 
-# Registration marker rather than engine-name matching: a future engine can
-# happen to use a BEAT-like name without implementing this exact run contract.
-FULL3D_SOLVER_PORT_MARKER = object()
-
-
 @dataclass(slots=True)
 class EngineRunResult:
     results: dict[str, Any]
@@ -65,7 +60,6 @@ class Full3DSolverPort(Protocol):
     """
 
     name: str
-    solver_port_marker: object
 
     async def run(
         self,
@@ -80,48 +74,12 @@ class Full3DSolverPort(Protocol):
     ) -> EngineRunResult: ...
 
 
-def is_full3d_solver_port(engine: object) -> bool:
-    """Return whether an adapter explicitly opts into the shared run seam."""
-
-    return getattr(engine, "solver_port_marker", None) is FULL3D_SOLVER_PORT_MARKER
-
-
-async def run_full3d_solver_port(
-    engine: Full3DSolverPort,
-    request: SolveRequest,
-    *,
-    cancel_cb: CancelCallback,
-    stage_cb: StageCallback,
-    artifact_cb: ArtifactCallback | None = None,
-    result_cb: ResultCallback | None = None,
-    imported_record: Mapping[str, Any] | None = None,
-    execution_metadata_cb: ExecutionMetadataCallback | None = None,
-) -> EngineRunResult:
-    """Invoke a solver port without native-protocol or signature introspection."""
-
-    outcome = await engine.run(
-        request,
-        cancel_cb=cancel_cb,
-        stage_cb=stage_cb,
-        artifact_cb=artifact_cb,
-        result_cb=result_cb,
-        imported_record=imported_record,
-        execution_metadata_cb=execution_metadata_cb,
-    )
-    if not isinstance(outcome, EngineRunResult):
-        raise TypeError(f"{engine.name} returned no normalized EngineRunResult")
-    return outcome
-
-
 __all__ = [
     "ArtifactCallback",
     "CancelCallback",
     "EngineRunResult",
     "ExecutionMetadataCallback",
-    "FULL3D_SOLVER_PORT_MARKER",
     "Full3DSolverPort",
-    "is_full3d_solver_port",
-    "run_full3d_solver_port",
     "ResultCallback",
     "StageCallback",
 ]

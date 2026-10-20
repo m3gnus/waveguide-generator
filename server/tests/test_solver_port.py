@@ -9,11 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from server.solver import beat, metal, bempp
-from server.solver.base import (
-    EngineRunResult,
-    is_full3d_solver_port,
-    run_full3d_solver_port,
-)
 from server.solver.context import SolverContext
 from server.solver.ground_plane import GroundPlane
 
@@ -35,71 +30,6 @@ def test_all_full3d_engines_expose_the_same_run_contact_points() -> None:
     assert {"cancel_cb", "stage_cb", "artifact_cb", "result_cb", "imported_record"} <= set(
         beat_params
     )
-    assert is_full3d_solver_port(beat.BeatEngine("cpu"))
-    assert is_full3d_solver_port(metal.MetalEngine())
-    assert is_full3d_solver_port(bempp.BemppEngine())
-    # Naming alone must not opt an unrelated adapter into the port.
-    assert not is_full3d_solver_port(SimpleNamespace(name="beat-experimental"))
-
-
-def test_port_forwards_lifecycle_callbacks_and_normalized_result() -> None:
-    calls = []
-
-    class Port:
-        name = "metal"
-
-        async def run(self, request, **kwargs):
-            assert request is marker
-            assert kwargs["imported_record"] == {"mesh": "verified"}
-            kwargs["cancel_cb"]()
-            kwargs["stage_cb"]("frequency_solve", 0.5, "halfway")
-            kwargs["result_cb"](0, {"frequency_hz": 500.0})
-            await kwargs["execution_metadata_cb"]({"backend": "fixture"})
-            await kwargs["artifact_cb"]("$MeshFormat", {"triangle_count": 1})
-            return EngineRunResult(results={"metadata": {"solver_backend": "metal"}})
-
-    async def artifact(msh, stats):
-        calls.append(("artifact", msh, stats))
-
-    async def execution_metadata(metadata):
-        calls.append(("execution", metadata))
-
-    marker = object()
-    result = asyncio.run(
-        run_full3d_solver_port(
-            Port(),
-            marker,
-            cancel_cb=lambda: calls.append(("cancel",)),
-            stage_cb=lambda *args: calls.append(("stage", *args)),
-            result_cb=lambda *args: calls.append(("result", *args)),
-            artifact_cb=artifact,
-            imported_record={"mesh": "verified"},
-            execution_metadata_cb=execution_metadata,
-        )
-    )
-    assert result.results["metadata"]["solver_backend"] == "metal"
-    assert calls == [
-        ("cancel",),
-        ("stage", "frequency_solve", 0.5, "halfway"),
-        ("result", 0, {"frequency_hz": 500.0}),
-        ("execution", {"backend": "fixture"}),
-        ("artifact", "$MeshFormat", {"triangle_count": 1}),
-    ]
-
-
-def test_port_refuses_non_normalized_result() -> None:
-    class Port:
-        name = "beat-cpu"
-
-        async def run(self, request, **kwargs):
-            return {"results": {}}
-
-    with pytest.raises(TypeError, match="normalized EngineRunResult"):
-        asyncio.run(
-            run_full3d_solver_port(
-                Port(), object(), cancel_cb=lambda: None, stage_cb=lambda *_: None
-            )
-        )
 
 
 def test_beat_port_refuses_imported_record_before_meshing() -> None:

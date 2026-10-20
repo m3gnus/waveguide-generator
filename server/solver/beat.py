@@ -29,7 +29,6 @@ from .base import (
     CancelCallback,
     EngineRunResult,
     ExecutionMetadataCallback,
-    FULL3D_SOLVER_PORT_MARKER,
     ResultCallback,
     StageCallback,
 )
@@ -465,8 +464,6 @@ class BeatEngine:
     ``beat`` engine: the package probe picks, exactly as it did before the
     backends became separately selectable.
     """
-
-    solver_port_marker = FULL3D_SOLVER_PORT_MARKER
 
     def __init__(self, backend: str | None = None) -> None:
         if backend is not None and backend not in BEAT_BACKENDS:
