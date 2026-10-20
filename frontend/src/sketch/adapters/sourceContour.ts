@@ -3,7 +3,9 @@ import type { DomainProblem, Lowered, Reference, SketchAdapter } from '../adapte
 import { constraintRefs, entityPoints, validateSketch, type Entity, type Sketch } from '../model';
 import { applyCommand, importedSketch } from '../ops';
 import type { Command } from '../commands';
-import { arcGeometry } from '../geometry';
+import { arcGeometry, onArc } from '../geometry';
+import { contextData, moveReferenceLine, refreshContext, type SketchContext } from '../context';
+import { SOURCE_CLEARANCE_MM, SOURCE_LIMIT_INSET_MM, contextClearances, type SourceClearances } from './sourceContext';
 import { presetDimensionActive } from './sourcePresetMapping';
 
 export interface SourceMeta {
@@ -11,12 +13,14 @@ export interface SourceMeta {
   weights: Record<string, number>; references: Reference[];
   preset?: { shape: 'flat' | 'dome' | 'cone'; dimensions: Record<string, string>; values?: Record<string, number> };
   limit?: SourceLimit;
+  clearances?: SourceClearances;
+  missingContext?: { id: string; label: string }[];
 }
 export interface SourceLimit { kind: 'aperture' | 'mouth' | 'throat'; radius: number; hard?: boolean }
 
 /** The conical horn needs strictly more than 0.1 mm between its mouth and rim. */
 export function sourceLimitTarget(limit: SourceLimit): number {
-  return limit.kind === 'mouth' ? limit.radius - .1 - 1e-6 : limit.radius;
+  return limit.kind === 'mouth' ? limit.radius - SOURCE_CLEARANCE_MM - SOURCE_LIMIT_INSET_MM : limit.radius;
 }
 function validLimit(limit: SourceLimit): boolean { return limit.radius > 0 && Number.isFinite(limit.radius); }
 
@@ -51,8 +55,8 @@ export function withSourceLimit(state: { sketch: Sketch; meta: SourceMeta }, lim
     sketch.points = sketch.points.map(p => referencePoints.has(p.id) ? p : { ...p, x: p.x * scale, y: p.y * scale });
     sketch.constraints = sketch.constraints.map(c => 'value' in c && c.kind !== 'angle' ? { ...c, value: c.value * scale } : c);
   }
-  const ends = [line.p1, line.p2];
-  sketch.points = sketch.points.map(p => ends.includes(p.id) ? { ...p, x: limit.radius } : limit.hard && p.id === rim ? { ...p, x: limit.radius } : p);
+  sketch = moveReferenceLine(sketch, line, [{ x: limit.radius, y: 0 }, { x: limit.radius, y: 1 }]);
+  sketch.points = sketch.points.map(p => limit.hard && p.id === rim ? { ...p, x: limit.radius } : p);
   sketch.constraints = sketch.constraints.filter(c => !(c.kind === 'pointOnLine' && c.line === line.id));
   if (limit.hard && rim) {
     const result = applyCommand(sketch, { kind: 'addConstraint', constraint: { kind: 'pointOnLine', point: rim, line: line.id } });
@@ -98,7 +102,7 @@ export function seed(document: SourceDocument): { sketch: Sketch; meta: SourceMe
 type Chain = { points: string[]; entities: { entity: Entity; reversed: boolean }[] };
 function chain(sketch: Sketch, meta: SourceMeta): Chain | DomainProblem {
   const entities = sketch.entities.filter(e => !e.construction), ids = entities.map(e => e.id);
-  const problem = (): DomainProblem => ({ code: 'chain', ids, message: 'Use one open chain from the axis to the baffle.' });
+  const problem = (): DomainProblem => ({ code: 'chain', ids, message: 'Use one open chain from the axis to the rim plane.' });
   if (!entities.length || entities.some(e => e.kind !== 'line' && e.kind !== 'arc')) return problem();
   const parent = new Map(sketch.points.map(p => [p.id, p.id]));
   const root = (id: string): string => { const next = parent.get(id); return next && next !== id ? root(next) : id; };
@@ -124,7 +128,7 @@ function chain(sketch: Sketch, meta: SourceMeta): Chain | DomainProblem {
   }
   if (!tips.some(id => rims.includes(id) && !poles.includes(id))) {
     const candidates = tips.filter(id => !poles.includes(id) && (poles.length > 0 || Math.abs(sketch.points.find(p => p.id === id)!.y) <= 1e-9));
-    if (candidates.length === 1) return { code: 'rim', ids: candidates, message: 'Lock the rim to the baffle' };
+    if (candidates.length === 1) return { code: 'rim', ids: candidates, message: 'Lock the rim to the rim plane' };
     return problem();
   }
   if (poles.length !== 1) return problem();
@@ -170,8 +174,8 @@ export function contourPointOrder(sketch: Sketch, meta: SourceMeta): string[] {
 }
 export function rules(sketch: Sketch, meta: SourceMeta): DomainProblem[] {
   const valid = validateSketch(sketch); if (!valid.ok) return [{ code: 'schema', ids: [], message: valid.reason }];
-  const ordered = chain(sketch, meta); if ('code' in ordered) return [ordered];
-  const problems: DomainProblem[] = [];
+  const problems: DomainProblem[] = (meta.missingContext ?? []).map(({ id, label }) => ({ code: 'missing-context', ids: sketch.entities.filter(e => contextData(e)?.context === id).map(e => e.id), severity: 'warning', message: `${label} no longer exists. Re-attach or delete the constraint` }));
+  const ordered = chain(sketch, meta); if ('code' in ordered) return [...problems, ordered];
   if (meta.limit && !validLimit(meta.limit)) problems.push({ code: 'limit', ids: [], message: 'Limit radius must be positive' });
   const add = (code: string, ids: string[], message: string) => problems.push({ code, ids, message });
   const pts = ordered.points.map(id => sketch.points.find(p => p.id === id));
@@ -184,14 +188,14 @@ export function rules(sketch: Sketch, meta: SourceMeta): DomainProblem[] {
   if (limit?.hard && Math.abs(rim.x - limit.radius) > 1e-8) add('rim-limit', [rim.id], 'Rim must match the horn throat');
   else if (limit && validLimit(limit) && !limit.hard) {
     const rawGap = limit.radius - rim.x, gap = Math.abs(rawGap) <= 1e-9 ? 0 : rawGap;
-    if (gap < 0 || limit.kind === 'mouth' && gap <= .1 || limit.kind === 'aperture' && gap > 0 && gap <= .1) {
+    if (gap < 0 || limit.kind === 'mouth' && gap <= SOURCE_CLEARANCE_MM || limit.kind === 'aperture' && gap > 0 && gap <= SOURCE_CLEARANCE_MM) {
       problems.push({ code: 'rim-limit', ids: [rim.id, ordered.entities.at(-1)!.entity.id], severity: 'warning',
         message: gap < 0 ? limit.kind === 'aperture' ? 'Rim exceeds the baffle aperture' : 'Rim exceeds the horn mouth'
           : limit.kind === 'mouth' ? 'Horn mouth must exceed the rim by more than 0.1 mm' : 'Aperture gap must be zero or more than 0.1 mm' });
     }
   }
   if (points[0].x !== 0) add('pole', [points[0].id], 'Place the pole exactly on the axis.');
-  if (points.at(-1)!.y !== 0) add('rim', [points.at(-1)!.id], 'Place the rim exactly on the baffle.');
+  if (points.at(-1)!.y !== 0) add('rim', [points.at(-1)!.id], 'Place the rim exactly on the rim plane.');
   if (ordered.entities.length > 256) add('patch-count', ordered.entities.map(e => e.entity.id), 'Use at most 256 patches.');
   if (!ordered.entities.some(e => role(e.entity) === 'moving')) add('moving', ordered.entities.map(e => e.entity.id), 'Include at least one moving patch.');
   for (const p of points) if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || p.x < 0) add('point', [p.id], 'Use finite coordinates and a nonnegative radius.');
@@ -211,6 +215,20 @@ export function rules(sketch: Sketch, meta: SourceMeta): DomainProblem[] {
       if (Math.abs(sweep) > Math.PI + 1e-12 || critical || -g.radius * Math.sin(start + sweep / 2) * sweep <= 0) add('arc-fold', [e.id], 'Arc must increase in radius without folding or exceeding a semicircle.');
     }
   });
+  // Match SourceContour.axial_bounds_mm, including interior extrema of circular patches.
+  const zs = points.map(p => p.y);
+  for (const { entity: e } of ordered.entities) if (e.kind === 'arc') {
+    const g = arcGeometry(sketch, e);
+    for (const sign of [-1, 1]) {
+      const at = { x: g.center.x, y: g.center.y + sign * g.radius };
+      if (onArc(sketch, e, at)) zs.push(at.y);
+    }
+  }
+  const maximum = Math.max(0, ...zs), minimum = Math.min(0, ...zs), clearance = meta.clearances;
+  const warn = (code: string, message: string) => problems.push({ code, ids: ordered.points, severity: 'warning', message });
+  if (clearance?.plugZ0 !== undefined && clearance.plugZ0 - maximum <= SOURCE_CLEARANCE_MM) warn('plug-clearance', 'Plug inlet must clear the source by more than 0.1 mm');
+  if (clearance?.backZ !== undefined && minimum - clearance.backZ <= SOURCE_CLEARANCE_MM) warn('back-clearance', 'Source must clear the enclosure back by more than 0.1 mm');
+  if (clearance?.frontZ !== undefined && clearance.frontZ - maximum <= SOURCE_CLEARANCE_MM) warn('front-clearance', 'Horn source must clear mouth by more than 0.1 mm');
   const moving = ordered.entities.filter(e => role(e.entity) === 'moving').map(e => e.entity.id);
   if (Object.keys(meta.weights).some(id => !moving.includes(id)) || moving.some(id => !Number.isFinite(meta.weights[id]))) add('weights', moving, 'Weights must cover exactly the moving patches.');
   return problems;
@@ -222,7 +240,7 @@ export function lower(sketch: Sketch, meta: SourceMeta): Lowered<SourceDocument>
   if (meta.limit?.hard && Math.abs(rim.x - meta.limit.radius) > 1e-8) return { ok: false, problems: [{ code: 'rim-limit', ids: [rim.id], message: 'Rim must match the horn throat' }] };
   if (Math.abs(pole.x) > 1e-9 || Math.abs(rim.y) > 1e-9) return { ok: false, problems: [
     ...(Math.abs(pole.x) > 1e-9 ? [{ code: 'pole', ids: [pole.id], message: 'Place the pole on the axis.' }] : []),
-    ...(Math.abs(rim.y) > 1e-9 ? [{ code: 'rim', ids: [rim.id], message: 'Place the rim on the baffle.' }] : []),
+    ...(Math.abs(rim.y) > 1e-9 ? [{ code: 'rim', ids: [rim.id], message: 'Place the rim on the rim plane.' }] : []),
   ] };
   const points = ordered.points.map((id, i) => {
     const p = sketch.points.find(p => p.id === id)!;
@@ -279,4 +297,15 @@ export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Co
   for (const id of Object.keys(weights)) if (!moving.some(e => e.id === id)) delete weights[id];
   for (const e of moving) if (!Object.hasOwn(weights, e.id)) weights[e.id] = 1;
   return { ...result, meta: { ...meta, weights, ...(preset ? { preset } : {}) } };
+}
+
+/** Refresh only materialised geometry. The display context never enters SourceMeta. */
+export function withSourceContext(state: { sketch: Sketch; meta: SourceMeta }, context: SketchContext): { sketch: Sketch; meta: SourceMeta } {
+  const refreshed = refreshContext(state.sketch, context);
+  return { sketch: refreshed.sketch, meta: { ...state.meta, clearances: contextClearances(context), missingContext: refreshed.missing.map(id => ({ id, label: id.startsWith('plug/') ? `Plug ${id.slice(5).replace(/\/inlet$/, ' inlet')}` : id })) } };
+}
+/** Only authoring entities and provenance persist; live host data is installed afresh. */
+export function sourceAuthoringEnvelope(state: { sketch: Sketch; meta: SourceMeta }, document: SourceDocument, pending = false) {
+  const { clearances: _clearances, missingContext: _missing, ...meta } = state.meta;
+  return { version: 'wg-source-authoring-v2', document, sketch: state.sketch, meta, pending };
 }

@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
+import { contextData, referenceContext, type ContextDrawingItem, type SketchContext } from './context';
 import type { DomainProblem, Reference } from './adapter';
 import type { Command, PointRef } from './commands';
 import { constraintRefs, entityPoints, type Constraint, type DimensionPlacement, type Entity, type NewConstraint, type Sketch } from './model';
@@ -19,6 +20,7 @@ import './sketchCanvas.css';
 export interface CanvasSession {
   readonly notice?: string;
   readonly lastSolveMs?: number;
+  materialiseContext?(context: SketchContext, itemId: string): Promise<{ sketch: Sketch; id: string }>;
   command(command: Command | Command[], dimensions?: { length: number; angle?: number }): Promise<Sketch>;
   constraint(constraint: NewConstraint, reference?: boolean, placement?: boolean): Promise<Sketch>;
   dimension(id: string, value: number, mergePlacement?: boolean): Promise<Sketch>;
@@ -28,6 +30,7 @@ export interface CanvasSession {
   undo(redo?: boolean): Promise<void>;
 }
 export interface SketchCanvasProps {
+  context?: SketchContext; contextStale?: boolean;
   sketch: Sketch; diagnosis?: Diagnosis; references: Reference[]; problems: DomainProblem[];
   session?: CanvasSession; entityStyle?: (entity: Entity) => CSSProperties;
   problemAction?: (problem: DomainProblem) => { label: string; constraint: NewConstraint } | undefined;
@@ -46,7 +49,7 @@ const hints: Record<Tool, string> = {
   dimension: 'Click a line, arc or point; click a second item if needed; move to choose; click to place; type the value', split: 'Click inside a curve to split',
 };
 const symbols: Record<string, string> = { horizontal: 'H', vertical: 'V', coincident: '●', tangent: '⌒', fix: '▣', equal: '=', pointOnLine: '⊙', pointOnArc: '⊙' };
-function initialView(sketch: Sketch, width = 640, height = 360): View {
+function initialView(sketch: Sketch, width = 640, height = 360, context?: SketchContext): View {
   const ids = new Set(sketch.entities.filter(e => !e.reference && !dimensionHelper(e)).flatMap(e => e.kind === 'arc' ? [e.start, e.end] : entityPoints(e)));
   const pts = sketch.points.filter(p => ids.has(p.id));
   // Include only extrema on the finite arc, including major arcs.
@@ -57,10 +60,15 @@ function initialView(sketch: Sketch, width = 640, height = 360): View {
       if (onArc(sketch, e, p)) pts.push(p);
     }
   }
-  for (const e of sketch.entities) if (e.reference && e.kind === 'line') {
-    const a = sketch.points.find(p => p.id === e.p1)!, b = sketch.points.find(p => p.id === e.p2)!;
-    if (a.x === b.x && a.x > 0) pts.push(a);
+  for (const e of sketch.entities) if (e.reference && !contextData(e) && e.kind === 'line') {
+    const a = sketch.points.find(p => p.id === e.p1)!;
+    if (a.x > 0) pts.push(a);
   }
+  const extent = Math.max(1, ...pts.map(p => Math.abs(p.x)), ...pts.map(p => Math.abs(p.y)));
+  const boxPoints = context?.items.filter(i => i.role === 'enclosure' || i.role === 'baffle').flatMap(i => i.geometry) ?? [];
+  const nearbyBox = boxPoints.every(p => Math.max(Math.abs(p.x), Math.abs(p.y)) <= 3 * extent);
+  for (const item of context?.items ?? []) if (['throat', 'plug', 'rim-plane'].includes(item.role)
+    || nearbyBox && ['enclosure', 'baffle', 'wall', 'mouth', 'aperture', 'collar'].includes(item.role)) pts.push(...item.geometry.map(p => ({ ...p, id: '' })));
   const named = sketch.constraints.filter(c => c.label && 'value' in c);
   const bottom = named.filter(c => c.kind === 'distanceX').length * 24;
   const top = named.filter(c => c.kind === 'distanceY').length * 24;
@@ -68,7 +76,7 @@ function initialView(sketch: Sketch, width = 640, height = 360): View {
   const fitted = fit({ minX: Math.min(0, ...pts.map(p => p.x)), maxX: Math.max(1, ...pts.map(p => p.x)), minY: Math.min(0, ...pts.map(p => p.y)), maxY: Math.max(1, ...pts.map(p => p.y)) }, { width: Math.max(100, width - right), height: Math.max(100, height - bottom - top) }, 32);
   return { ...fitted, offsetX: fitted.offsetX + (named.length ? 48 : 0), offsetY: fitted.offsetY + top };
 }
-export function SketchCanvas({ sketch, diagnosis, references, problems, session, entityStyle, problemAction, selection: controlled, onSelectionChange, fitRequest, entityClassName, hoverId, onHoverChange, nameFor, onLimitChange }: SketchCanvasProps) {
+export function SketchCanvas({ context, contextStale = false, sketch, diagnosis, references, problems, session, entityStyle, problemAction, selection: controlled, onSelectionChange, fitRequest, entityClassName, hoverId, onHoverChange, nameFor, onLimitChange }: SketchCanvasProps) {
   const svg = useRef<SVGSVGElement>(null);
   const dimensionInput = useRef<HTMLInputElement>(null);
   const dimensionApplying = useRef(false);
@@ -119,10 +127,12 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
   const perf = useRef<{ start: number; solveMs: number } | undefined>(undefined);
   const [perfEnabled] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('sketchPerf') === '1');
   const alive = useRef(true);
-  const latest = useRef({ sketch, session });
+  const latest = useRef({ sketch, session, context });
+  const contextPicking = useRef(false);
+  const contextPickSketch = useRef<Sketch | undefined>(undefined);
   const placementSketch = useRef(sketch);
   if (latest.current.sketch !== sketch) placementSketch.current = sketch;
-  latest.current = { sketch, session };
+  latest.current = { sketch, session, context };
   const setSelection = (ids: string[]) => { setLocalSelection(ids); onSelectionChange?.(ids); };
   const point = (id: string) => sketch.points.find(p => p.id === id)!;
   const xy = (id: string) => worldToScreen(view, point(id));
@@ -230,7 +240,8 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
     return () => { cancelled = true; };
   }, [editing?.id, refusals]);
   useLayoutEffect(() => {
-    setDimensionIds([]); setDimensionHover(undefined); dimensionPlacement.current = undefined;
+    if (!contextPicking.current && contextPickSketch.current !== sketch) { setDimensionIds([]); setDimensionHover(undefined); dimensionPlacement.current = undefined; }
+    if (contextPickSketch.current === sketch) contextPickSketch.current = undefined;
   }, [sketch]);
   useEffect(() => {
     // Own Escape before the enclosing modal, even when browser focus is on BODY.
@@ -393,7 +404,7 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
     else if (key === 'a') choose(tool === 'tangent' ? 'arc3' : tool === 'arc3' ? 'tangent' : arcTool);
     else if (key === 'd') choose('dimension');
     else if (key === 's') choose('split');
-    else if (key === 'f') setView(initialView(sketch, size.width, size.height));
+    else if (key === 'f') setView(initialView(sketch, size.width, size.height, context));
     else if (key === 'delete' || key === 'backspace') { event.preventDefault(); removeSelection(); }
     else if (key === 'x') {
       const commands = sketch.entities.filter(e => selection.includes(e.id) && !e.reference).map(e => ({ kind: 'setConstruction' as const, id: e.id, construction: !e.construction }));
@@ -563,6 +574,26 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
       previewPath = `M${a.x},${a.y} A${radius},${radius} 0 ${Math.abs(sweep) > Math.PI ? 1 : 0} ${g.ccw ? 0 : 1} ${b.x},${b.y}`;
     } catch { /* A collinear cursor shows the chord until an arc is defined. */ }
   }
+  const low = screenToWorld(view, { x: 0, y: size.height }), high = screenToWorld(view, { x: size.width, y: 0 });
+  const contextItems = referenceContext(references, context, { low: low.y, high: high.y, left: low.x, right: high.x });
+  function pickContext(item: ContextDrawingItem, additive: boolean) {
+    if (!session || drawing || tool === 'split' || contextStale || pendingCount.current) return;
+    const datum = item.role === 'axis' || item.role === 'rim-plane' ? item.referenceId : undefined;
+    const previous = [...dimensionIds];
+    contextPicking.current = true;
+    void run(async () => {
+      try {
+        const result = datum ? { id: datum, sketch: latest.current.sketch }
+          : await session.materialiseContext?.({ items: contextItems, rimPlaneLabel: context?.rimPlaneLabel ?? 'Rim plane (z = 0)', fingerprint: context?.fingerprint ?? '' }, item.id);
+        if (!result) return;
+        contextPickSketch.current = result.sketch;
+        if (toolRef.current === 'dimension') {
+          const ids = previous.includes(result.id) ? previous : [...previous, result.id].slice(-2);
+          setDimensionIds(ids); setSelection(ids);
+        } else setSelection(select(selection, result.id, additive));
+      } finally { queueMicrotask(() => { contextPicking.current = false; }); }
+    });
+  }
   const arcHint = tool === 'arc3' ? `3-point arc: ${!chain.from ? 'start 1' : !chain.end ? 'end 2' : 'point on arc 3'} of 3 · A: tangent arc` : hints[tool];
   return <div className="sketch-canvas" aria-busy={pending} onKeyDown={keyboard} onKeyUp={e => { if (e.key === ' ') space.current = false; }} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) space.current = false; }}>
     <div role="toolbar" aria-label="Sketch tools" className="sketch-toolbar">
@@ -583,13 +614,14 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
           setViewOptions(previous => { const next = { ...previous, [key]: !previous[key] }; saveSketchView(next); return next; });
         }}>{key[0].toUpperCase() + key.slice(1)}</button>)}
         <button type="button" disabled={!session} onClick={() => void undo()}>Undo</button><button type="button" disabled={!session} onClick={() => void undo(true)}>Redo</button>
-        <button type="button" title="Fit (F)" onClick={() => setView(initialView(sketch, size.width, size.height))}>Fit (F)</button>
+        <button type="button" title="Fit (F)" onClick={() => setView(initialView(sketch, size.width, size.height, context))}>Fit (F)</button>
 
       </div>
     </div>
+    {contextStale && <p role="status" className="sketch-context-stale">Context out of date</p>}
     <div className="sketch-surface">
     {selection.length > 0 && tool !== 'dimension' && <div role="toolbar" aria-label="Selection constraints" className="sketch-context sketch-selection-context">
-      {selectionConstraints.filter(kind => constraintFor(sketch, selection, kind) && !selection.some(id => fixedPoints.has(id))).map(kind => <button type="button" key={kind} disabled={!session} onClick={() => { const c = constraintFor(sketch, selection, kind); if (c) void run(() => session!.constraint(c)); }}>{kind === 'point-on' ? 'Point on' : kind[0].toUpperCase() + kind.slice(1)}</button>)}
+      {selectionConstraints.filter(kind => constraintFor(sketch, selection, kind) && !(selection.every(id => fixed.has(id) || sketch.entities.some(e => e.id === id && e.reference)))).map(kind => <button type="button" key={kind} disabled={!session} onClick={() => { const c = constraintFor(sketch, selection, kind); if (c) void run(() => session!.constraint(c)); }}>{kind === 'point-on' ? 'Point on' : kind[0].toUpperCase() + kind.slice(1)}</button>)}
       {sketch.entities.some(e => selection.includes(e.id) && !e.reference && !references.some(r => r.id === e.id)) && <button type="button" disabled={!session} onClick={() => void run(() => session!.command(sketch.entities.filter(e => selection.includes(e.id) && !e.reference).map(e => ({ kind: 'setConstruction', id: e.id, construction: !e.construction }))))}>Construction (X)</button>}
       {convertible && <button type="button" disabled={!session} onClick={() => void run(() => session!.command({ kind: 'convertEntity', id: convertible.id, to: convertible.kind === 'line' ? 'arc' : 'line' }))}>{convertible.kind === 'line' ? 'Make arc' : 'Make line'}</button>}
       {sketch.constraints.some(c => selection.includes(c.id) && 'value' in c) && <button type="button" disabled={!session} onClick={() => void run(() => session!.command(sketch.constraints.filter(c => selection.includes(c.id) && 'value' in c).map(c => ({ kind: 'setDimensionPlacement', id: c.id }))))}>Reset position</button>}
@@ -597,18 +629,8 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
     </div>}
       <svg ref={svg} viewBox={`0 0 ${size.width} ${size.height}`} preserveAspectRatio="xMidYMid meet" tabIndex={0} role="application" aria-label="Sketch drawing" onPointerEnter={() => { hovered.current = true; }} onPointerLeave={() => { hovered.current = false; setHoveredConstraint(undefined); setHoveredArc(undefined); setHoveredPoint(undefined); setDimensionHover(undefined); onHoverChange?.(undefined); setPickReason(''); }} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={event => pointerUp(false, event)} onPointerCancel={() => pointerUp(true)} onLostPointerCapture={() => pointerUp(true)} onDoubleClick={() => { if (drawing) choose('select'); }}>
         <g className="sketch-grid" aria-hidden="true">{gridX.map(x => <line key={`x${x}`} x1={worldToScreen(view, { x, y: 0 }).x} x2={worldToScreen(view, { x, y: 0 }).x} y1={0} y2={size.height}/>)}{gridY.map(y => <line key={`y${y}`} x1={0} x2={size.width} y1={worldToScreen(view, { x: 0, y }).y} y2={worldToScreen(view, { x: 0, y }).y}/>)}</g>
-        <g className="sketch-references" aria-label="Fixed references">{references.map(r => {
-          const x = r.kind === 'limit' ? worldToScreen(view, { x: r.radius, y: 0 }).x : view.offsetX;
-          return <g key={r.id} data-reference-id={r.id} className={`${r.kind === 'limit' ? 'sketch-limit' : ''} ${dimensionHover === r.id ? 'hovered' : ''} ${highlighted.has(r.id) ? 'selected' : ''}`}>
-            <line x1={r.kind === 'baffle' ? 0 : x} x2={r.kind === 'baffle' ? size.width : x} y1={r.kind === 'baffle' ? view.offsetY : 0} y2={r.kind === 'baffle' ? view.offsetY : size.height}/>
-            <text x={r.kind === 'baffle' ? 8 : Math.max(4, Math.min(x + 4, size.width - Math.max(150, r.kind === 'limit' ? r.label.length * 6.4 + 16 : 150)))} y={r.kind === 'baffle' ? view.offsetY - 4 : 14}
-              role={r.kind === 'limit' && !r.locked ? 'button' : undefined} tabIndex={r.kind === 'limit' && !r.locked ? 0 : undefined}
-              onPointerDown={e => { if (r.kind === 'limit') e.stopPropagation(); }}
-              onDoubleClick={e => { e.stopPropagation(); if (r.kind === 'limit' && !r.locked && onLimitChange) setLimitEditing(String(r.radius)); }}
-              onKeyDown={e => { if (r.kind === 'limit' && !r.locked && onLimitChange && e.key === 'Enter') { e.stopPropagation(); setLimitEditing(String(r.radius)); } }}>
-              <title>{r.kind === 'limit' ? r.locked ? 'Set by the horn design' : 'Double-click to edit limit' : r.kind}</title>{r.kind === 'limit' ? `${r.locked ? '🔒 ' : ''}${r.label}` : r.kind}</text>
-          </g>;
-        })}</g>
+        <ContextLayer width={size.width} items={contextItems} hoveredId={dimensionHover} highlighted={highlighted} stale={contextStale} view={view} onPick={pickContext}
+          onEditLimit={radius => setLimitEditing(String(radius))} canEditLimit={!!onLimitChange}/>
         {sketch.entities.filter(e => !e.reference && !dimensionHelper(e) && !references.some(r => r.id === e.id)).map(e => {
           const ids = entityPoints(e), status = conflictRefs.has(e.id) ? 'conflicting' : color(ids), issues = problems.filter(p => p.ids.includes(e.id) || ids.some(id => p.ids.includes(id)));
           let d = '';
@@ -689,4 +711,36 @@ export function SketchCanvas({ sketch, diagnosis, references, problems, session,
     {diagnosis && sketch.constraints.some(c => diagnosis.constraintStates[c.id] === 'redundant') && <p>Implied: {sketch.constraints.filter(c => diagnosis.constraintStates[c.id] === 'redundant').map(c => c.id).join(', ')}</p>}
     {problems.map((problem, i) => { const action = problemAction?.(problem); return <div className="sketch-domain-problem" key={`${problem.code}${i}`}>{problem.message}{problem.ids.filter(id => { const data = sketch.entities.find(e => e.id === id)?.data; return data && typeof data === 'object' && !Array.isArray(data) && typeof data.name === 'string' && data.name.trim(); }).map(id => ` · ${nameFor?.(id) ?? displayName(sketch, id)}`)}{action && <button type="button" disabled={!session} onClick={() => void run(() => session!.constraint(action.constraint))}>{action.label}</button>}</div>; })}
   </div>;
+}
+
+/** One layer and one geometry path for structural datums, limits and host geometry. */
+function ContextLayer({ width, items, hoveredId, highlighted, stale, view, onPick, onEditLimit, canEditLimit }: {
+  width: number; items: ContextDrawingItem[]; hoveredId?: string; highlighted: Set<string>; stale: boolean; view: View;
+  onPick: (item: ContextDrawingItem, additive: boolean) => void; onEditLimit: (radius: number) => void; canEditLimit: boolean;
+}) {
+  const hatch = 'sketch-context-hatch';
+  return <g className={`sketch-context-layer${stale ? ' stale' : ''}`} aria-label="Reference context">
+    <defs><pattern id={hatch} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" className="sketch-keepout-hatch"/></pattern></defs>
+    {items.map(item => {
+      const points = item.geometry.map(p => worldToScreen(view, p));
+      if (!points.length) return null;
+      const at = points[0], end = points.at(-1)!;
+      const limit = item.sourceLimit, label = item.label, reference = item.referenceId;
+      const editable = !!limit && !limit.locked && canEditLimit;
+      const pickable = item.pickable && !stale;
+      const path = item.kind === 'point' ? `M${at.x},${at.y - 4} l4,4 -4,4 -4,-4 Z`
+        : points.map((p, i) => `${i ? 'L' : 'M'}${p.x},${p.y}`).join(' ');
+      const edit = () => { if (editable && limit) onEditLimit(limit.radius); };
+      return <g key={item.id} data-context-id={item.id} data-reference-id={reference} className={`sketch-context-item role-${item.role} ${item.emphasis ?? ''}${limit ? ' sketch-limit' : ''}${reference === hoveredId ? ' hovered' : ''}${reference && highlighted.has(reference) ? ' selected' : ''}`}
+        style={{ pointerEvents: pickable || editable ? 'auto' : 'none' }}
+        onPointerDown={event => { event.stopPropagation(); if (pickable) onPick(item, event.shiftKey); }} onDoubleClick={event => { event.stopPropagation(); edit(); }}>
+        {pickable && <path d={path} className="sketch-context-hit"/>}
+        <path d={path} fill={item.role === 'keepout' ? `url(#${hatch})` : undefined}/>
+        {item.role !== 'keepout' && <text x={Math.max(4, Math.min(width - (label.length + 2) * 6.4, (item.kind === 'point' ? at.x : end.x) + 6))} y={Math.max(12, (item.kind === 'point' ? at.y : end.y) - 6)}
+          role={editable ? 'button' : undefined} tabIndex={editable ? 0 : undefined}
+          onKeyDown={event => { if (event.key === 'Enter') { event.stopPropagation(); edit(); } }}>
+          <title>{limit ? limit.locked ? 'Set by the horn design' : 'Double-click to edit limit' : item.label}</title>{item.kind === 'point' ? '◆ ' : ''}{label}</text>}
+      </g>;
+    })}
+  </g>;
 }

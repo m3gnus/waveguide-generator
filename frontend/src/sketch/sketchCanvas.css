@@ -14,8 +14,6 @@
 .sketch-selection-context { position: absolute; top: 8px; left: 8px; z-index: 1; margin: 0; max-width: calc(100% - 24px); }
 .sketch-surface svg { display: block; width: 100%; height: 100%; touch-action: none; outline-offset: -3px; }
 .sketch-grid { stroke: var(--hair); stroke-width: .5; opacity: .45; pointer-events: none; }
-.sketch-references { stroke: var(--fg3); stroke-width: 1; stroke-dasharray: 4 4; pointer-events: none; }
-.sketch-references text { fill: var(--fg3); stroke: none; font-size: 10px; }
 .sketch-entity { fill: none; stroke: var(--sketch-patch, var(--fg)); stroke-width: 2.5; cursor: pointer; }
 .sketch-entity.under { stroke-dasharray: 7 4; }
 .sketch-entity.determined { stroke-dasharray: none; }
@@ -60,7 +58,6 @@
 
 .sketch-dimension-lines { fill: none; stroke: var(--fg3); stroke-width: 1; pointer-events: none; }
 .sketch-dimension .sketch-glyph { paint-order: stroke; stroke: var(--surface-floating); stroke-width: 4px; stroke-linejoin: round; }
-.sketch-references .sketch-limit { pointer-events: all; }
 .sketch-limit text { cursor: pointer; }
 .sketch-entity.hovered { stroke-width: 5; filter: brightness(1.3); }
 .sketch-point.hovered { stroke: var(--acc); stroke-width: 3; }
@@ -71,7 +68,19 @@
 
 .sketch-dimension .sketch-label-hit, .sketch-dimension .sketch-glyph { cursor: grab; }
 
-.sketch-references .hovered, .sketch-references .selected { stroke: var(--acc); stroke-width: 3; }
 .sketch-dimension-preview { pointer-events: none; fill: none; stroke: var(--blue); stroke-width: 1; }
 .sketch-dimension-preview text { fill: var(--blue); stroke: var(--surface-raised); stroke-width: 3; paint-order: stroke; font-size: 11px; }
 .sketch-dimension-prompt { width: 230px; z-index: 2; }
+.sketch-canvas { --sketch-context-color: #985a88; --sketch-context-hatch: #b578a0; }
+[data-theme="dark"] .sketch-canvas { --sketch-context-color: #c38ab3; --sketch-context-hatch: #a47698; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sketch-canvas { --sketch-context-color: #c38ab3; --sketch-context-hatch: #a47698; } }
+.sketch-context-layer { stroke: var(--sketch-context-color); stroke-width: 1; fill: none; pointer-events: none; }
+.sketch-context-layer.stale { filter: grayscale(1); opacity: .55; }
+.sketch-context-item.role-wall, .sketch-context-item.role-plug { stroke-dasharray: 4 4; }
+.sketch-context-item.far { opacity: .25; }
+.sketch-context-item text { fill: var(--sketch-context-color); stroke: none; font-size: 10px; stroke-dasharray: none; }
+.sketch-context-item.role-keepout { stroke: none; opacity: .3; }
+.sketch-keepout-hatch { stroke: var(--sketch-context-hatch); stroke-width: 1; }
+.sketch-context-item .sketch-context-hit { stroke: transparent; stroke-width: 14; fill: none; pointer-events: stroke; }
+.sketch-context-item.role-throat > path, .sketch-context-item.role-mouth > path, .sketch-context-item.role-aperture > path { stroke-dasharray: none; }
+.sketch-context-stale { color: var(--fg3); font-size: 11px; }

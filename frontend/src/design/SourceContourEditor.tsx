@@ -10,9 +10,11 @@ import { drawnSource, editPatch, editPoint, identityProblem, INITIAL_SOURCE, rem
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
 import { SketchController, type Authoring } from '../sketch/controller';
-import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, withSourceLimit, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
+import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, withSourceLimit, withSourceContext, sourceAuthoringEnvelope, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
 import { presetDefaults as defaults, presetLabels, seedPreset, fitPresetDimensions } from '../sketch/adapters/sourcePreset';
 import { presetDimensionActive, presetDimensionProblem, presetTopologyMessage, reapplyPresetMessage } from '../sketch/adapters/sourcePresetMapping';
+import { contextData, type SketchContext } from '../sketch/context';
+import { contextClearances, standaloneContext } from '../sketch/adapters/sourceContext';
 import { displayName } from '../sketch/displayName';
 import { uniqueProblems } from '../sketch/adapter';
 import { parseSketch } from '../sketch/model';
@@ -53,12 +55,14 @@ export function readSourceAuthoring(document: SourceDocument): Authoring<SourceM
   const fallback = seed(document); fallback.meta.weights = movingWeights(fallback.sketch, fallback.meta.weights);
   try {
     const envelope = JSON.parse(storage.getItem('') ?? 'null');
-    if (envelope?.version !== 'wg-source-authoring-v1') return fallback;
+    if (!['wg-source-authoring-v1', 'wg-source-authoring-v2'].includes(envelope?.version)) return fallback;
     const parsed = parseSketch(envelope.sketch), meta = envelope.meta as SourceMeta;
     if (!parsed.ok || !meta || !meta.weights || !Object.values(meta.weights).every(Number.isFinite)
-      || !Array.isArray(meta.references) || ![2, 3].includes(meta.references.length)
-      || !meta.references.every(r => ['axis', 'baffle', 'limit'].includes(r.kind) && parsed.sketch.entities.some(e => e.id === r.id && e.reference && e.kind === 'line'))
+      || !Array.isArray(meta.references) || ['axis', 'baffle'].some(kind => meta.references.filter(r => r.kind === kind).length !== 1)
+      || new Set(meta.references.map(r => r.kind)).size !== meta.references.length
+      || !meta.references.every(r => ['axis', 'baffle', 'limit'].includes(r.kind) && parsed.sketch.entities.some(e => e.id === r.id && e.reference && e.construction && e.kind === 'line'))
       || ![meta.physical_source_id, meta.rim_id, meta.channel_id].every(v => typeof v === 'string') || !['normal', 'axial'].includes(meta.motion)) return fallback;
+    if (parsed.sketch.entities.some(e => e.reference && (!e.construction || e.kind !== 'line' || !meta.references.some(r => r.id === e.id) && !contextData(e)))) return fallback;
     if (meta.preset && (!['flat', 'dome', 'cone'].includes(meta.preset.shape) || !meta.preset.dimensions
       || meta.preset.values !== undefined && (!meta.preset.values || typeof meta.preset.values !== 'object'
         || Array.isArray(meta.preset.values) || !Object.values(meta.preset.values).every(Number.isFinite))
@@ -74,7 +78,7 @@ function newerEnvelope(): Record<string, unknown> | undefined {
   try {
     const raw = JSON.parse(storage.getItem('') ?? 'null');
     // Newer authoring data, either a newer envelope or a newer sketch inside a v1 envelope, is kept untouched.
-    if (typeof raw?.version === 'string' && raw.version.startsWith('wg-source-authoring-') && raw.version !== 'wg-source-authoring-v1') return raw;
+    if (typeof raw?.version === 'string' && raw.version.startsWith('wg-source-authoring-') && !['wg-source-authoring-v1', 'wg-source-authoring-v2'].includes(raw.version)) return raw;
     if (raw?.sketch && parseSketch(raw.sketch).ok === false && raw.sketch.version !== 'wg-sketch-v1') return raw;
   } catch { /* use the document fallback */ }
 }
@@ -114,14 +118,16 @@ export function SourceContourDialog() {
   return open ? createPortal(<Editor onClose={close}/>, document.body) : null;
 }
 
-export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange, limit: hostLimit, onLimitChange }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; onDraftChange?: (document: SourceDocument) => void; limit?: SourceLimit; onLimitChange?: (radius: number) => void }) {
+export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange, limit: hostLimit, onLimitChange, context: hostContext, contextStale = false }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; onDraftChange?: (document: SourceDocument) => void; limit?: SourceLimit; onLimitChange?: (radius: number) => void; context?: SketchContext; contextStale?: boolean }) {
   const [attachment, setAttachment] = useState<SourceAttachment>({ kind: 'baffle', dimensions: { width_mm: 44, height_mm: 54, depth_mm: 12, aperture_radius_mm: 14, center_mm: [0, 0, 0] } });
   const limit: SourceLimit = hostLimit ?? { kind: attachment.kind === 'baffle' ? 'aperture' : 'mouth', radius: Number(attachment.dimensions[attachment.kind === 'baffle' ? 'aperture_radius_mm' : 'mouth_radius_mm']) };
   const limitRef = useRef(limit); limitRef.current = limit;
   const [draft, setDraft] = useState(() => initialDocument ? structuredClone(initialDocument) : readSourceDraft());
+  const context = useMemo(() => hostContext ?? standaloneContext(hostLimit ? undefined : attachment, draft.contour.points.at(-1)?.r_mm ?? 0), [hostContext, attachment, !!hostLimit, draft.contour.points.at(-1)?.r_mm]);
+  const contextRef = useRef(context); contextRef.current = context;
   const [author, setAuthor] = useState(() => {
     const next = initialDocument ? seed(draft) : readSourceAuthoring(draft);
-    return withSourceLimit({ ...next, meta: { ...next.meta, weights: movingWeights(next.sketch, next.meta.weights) } }, limit);
+    return withSourceContext(withSourceLimit({ ...next, meta: { ...next.meta, weights: movingWeights(next.sketch, next.meta.weights) } }, limit), context);
   });
   const authorRef = useRef(author); authorRef.current = author;
   const [generation, setGeneration] = useState(0);
@@ -192,7 +198,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const deferredHydration = useRef(false);
   hydrateRef.current = () => {
     const envelope = newerEnvelope(); setNewer(envelope); if (envelope) setClassic(true);
-    const restored = readSourceDraft(), next = readSourceAuthoring(restored); setDraft(restored); replaceAuthor(withSourceLimit(next, limitRef.current)); setUndo([]); setSelected(undefined); setSelectedPatch(0);
+    const restored = readSourceDraft(), next = readSourceAuthoring(restored); setDraft(restored); replaceAuthor(withSourceContext(withSourceLimit(next, limitRef.current), contextRef.current)); setUndo([]); setSelected(undefined); setSelectedPatch(0);
     fitted.current = false; drag.current = null;
     setNotice(envelope ? 'Newer sketch data is read-only. Classic drawing edits preserve it unchanged.' : restorationNotice(next) || 'Restored source draft from saved settings.');
   };
@@ -223,20 +229,28 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
       if (lowered.ok) {
         draftRef.current = lowered.document; setDraft(lowered.document); draftCallback.current?.(lowered.document);
       }
-      if (!initialDocument) storage.setItem('', JSON.stringify({ version: 'wg-source-authoring-v1', document: lowered.ok ? lowered.document : draftRef.current, ...state, pending: !lowered.ok }));
+      if (!initialDocument) storage.setItem('', JSON.stringify(sourceAuthoringEnvelope(state, lowered.ok ? lowered.document : draftRef.current, !lowered.ok)));
       setNotice(next.notice ?? ''); setError('');
     }, reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }, active => { if (current) { editingIntent.current = active; setSketchPending(active); if (!active && deferredHydration.current) { deferredHydration.current = false; hydrateRef.current(); } } }, (state, result) => { if (current) { setPreview(state === authorRef.current ? undefined : state); setDiagnosis(result); } }, (state, id, value) => presetDimensionProblem(state.sketch, state.meta, id, value));
     controller.current = next;
     // Initialization errors are reported by queued operations as well.
     return () => { current = false; next.destroy(); controller.current = undefined; };
   }, [classic, generation]);
+  const installedContext = useRef(context.fingerprint);
   useEffect(() => {
     if (classic || !controller.current) return;
     const current = controller.current.current;
-    if (JSON.stringify(current.meta.limit) === JSON.stringify(limit)) return;
-    try { void controller.current.replaceContext(state => withSourceLimit(state, limit)).then(() => setFitRequest(v => v + 1)).catch(reason => setError(String(reason))); }
+    if (JSON.stringify(current.meta.limit) === JSON.stringify(limit) && installedContext.current === context.fingerprint) return;
+    const sameLimit = JSON.stringify(current.meta.limit) === JSON.stringify(limit);
+    const usedContext = current.sketch.entities.some(e => contextData(e)?.fingerprint !== undefined && contextData(e)?.fingerprint !== context.fingerprint);
+    if (sameLimit && !usedContext && JSON.stringify(current.meta.clearances) === JSON.stringify(contextClearances(context))) { installedContext.current = context.fingerprint; return; }
+    const oldThroat = current.meta.limit?.kind === 'throat' ? current.meta.limit.radius : undefined;
+    const notice = limit.kind === 'throat' && oldThroat !== undefined && oldThroat !== limit.radius
+      ? `Throat changed ${oldThroat.toFixed(2)} → ${limit.radius.toFixed(2)} mm; contour updated` : usedContext ? 'Reference context changed; contour updated' : undefined;
+    installedContext.current = context.fingerprint;
+    try { void controller.current.replaceContext(state => withSourceContext(withSourceLimit(state, limit), context), notice).catch(reason => setError(String(reason))); }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-  }, [limit.kind, limit.radius, limit.hard, classic, generation]);
+  }, [limit.kind, limit.radius, limit.hard, context.fingerprint, classic, generation]);
   function editLimit(radius: number) {
     if (limit.hard) return;
     if (hostLimit) onLimitChange?.(radius);
@@ -268,7 +282,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         channel_id: next.drive.channel_id, motion: next.drive.motion })).catch(reason => setError(String(reason))); return;
     }
     if (recordUndo) setUndo((history) => [...history.slice(-19), structuredClone(draft)]);
-    setDraft(next); if (!initialDocument) storage.setItem('', JSON.stringify(newer ? { ...newer, document: next } : { version: 'wg-source-authoring-v1', document: next, ...(classic ? seed(next) : authorRef.current) })); onDraftChange?.(next); setNotice(''); setError('');
+    setDraft(next); if (!initialDocument) storage.setItem('', JSON.stringify(newer ? { ...newer, document: next } : sourceAuthoringEnvelope(classic ? seed(next) : authorRef.current, next))); onDraftChange?.(next); setNotice(''); setError('');
   }
   async function run(action: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
@@ -276,7 +290,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     finally { setBusy(false); }
   }
   async function adopt(value: SourceValidation, preset?: { shape: typeof shape; dimensions: Record<string, number> }) {
-    const next = withSourceLimit(preset ? seedPreset(value.document, preset.shape, preset.dimensions) : seed(value.document), limitRef.current);
+    const next = withSourceContext(withSourceLimit(preset ? seedPreset(value.document, preset.shape, preset.dimensions) : seed(value.document), limitRef.current), contextRef.current);
     if (!classic && controller.current) { await controller.current.adopt(next); }
     else { replaceAuthor(next); const lowered = lower(next.sketch, next.meta); change(lowered.ok ? lowered.document : value.document); }
     if (preset) setDimensions({ ...preset.dimensions });
@@ -339,7 +353,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
           <button type="button" disabled={drawPoints !== null} onClick={() => setDrawPoints([])}>Draw lines</button>
           {drawPoints !== null && <><button type="button" disabled={drawPoints.length < 2} onClick={() => { change(drawnSource(draft, drawPoints, id)); setSelectedPatch(0); setDrawPoints(null); }}>Finish at rim</button><button type="button" onClick={() => setDrawPoints(null)}>Cancel drawing</button></>}
         </div>}
-        {!classic && <SketchCanvas fitRequest={fitRequest} sketch={displayAuthor.sketch} diagnosis={diagnosis} references={displayAuthor.meta.references} problems={validationError && !hasSketchProblems ? [...sketchProblems, { code: 'server', ids: [], message: validationError }] : sketchProblems} session={sketchReady && !busy ? controller.current : undefined}
+        {!classic && <SketchCanvas context={context} contextStale={contextStale} fitRequest={fitRequest} sketch={displayAuthor.sketch} diagnosis={diagnosis} references={displayAuthor.meta.references} problems={validationError && !hasSketchProblems ? [...sketchProblems, { code: 'server', ids: [], message: validationError }] : sketchProblems} session={sketchReady && !busy ? controller.current : undefined}
           entityClassName={entity => entity.data && typeof entity.data === 'object' && !Array.isArray(entity.data) && entity.data.role === 'rigid' ? 'rigid' : 'moving'}
           hoverId={hoverId} onHoverChange={setHoverId} nameFor={id => displayName(displayAuthor.sketch, id)} onLimitChange={editLimit}
           selection={canvasSelection} onSelectionChange={ids => { setCanvasSelection(ids); const index = tablePatches.findIndex(p => ids.includes(p.id)); if (index >= 0) setSelectedPatch(index); }}
@@ -348,7 +362,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
             if (problem.code !== 'pole' && problem.code !== 'rim') return;
             const reference = author.meta.references.find(r => r.kind === (problem.code === 'pole' ? 'axis' : 'baffle')), point = problem.ids[0];
             if (!reference || !point || author.sketch.constraints.some(c => c.kind === 'pointOnLine' && c.point === point && c.line === reference.id)) return;
-            return { label: problem.code === 'pole' ? 'Lock pole to axis' : 'Lock rim to baffle', constraint: { kind: 'pointOnLine', point, line: reference.id } };
+            return { label: problem.code === 'pole' ? 'Lock pole to axis' : 'Lock rim to rim plane', constraint: { kind: 'pointOnLine', point, line: reference.id } };
           }}/>}
         {classic && <>
         <p>{drawPoints !== null ? 'Click the pole, then points in increasing radius. Finish places the last point on z=0.' : 'Drag a point or select a patch. The table edits the same contour; corners remain explicit.'}</p>

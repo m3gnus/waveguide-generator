@@ -377,6 +377,29 @@ def export_bundle(body: ExportRequest, root: Path) -> bytes:
         raise HTTPException(422, detail) from exc
 
 
+class HornWallRequest(WireModel):
+    horn_config: dict[str, Any]
+
+
+def resolve_horn_wall(config=None, *, wall=None):
+    """One resolver/sampler for copied profiles and independent sketch context."""
+    try:
+        if wall is None:
+            from hornlab_mesher.general_horn import GeneralHornWall
+            wall = GeneralHornWall.from_config(config)
+        return {
+            "wall_mm": wall.evaluate([j / 256 for j in range(257)]).tolist(),
+            "throat_radius_mm": wall.throat_radius_mm,
+            "horn_length_mm": wall.length_mm,
+            "mouth_radius_mm": wall.mouth_radius_mm,
+            "wall_max_radius_mm": max(pole[0] for pole in wall.poles_mm),
+        }
+    except ImportError as exc:
+        raise HTTPException(503, "This mesher does not support general horn attachment. Update the mesher.") from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 def create_router(data_dir: Path) -> APIRouter:
     router = APIRouter(prefix="/api/source-editor", tags=["source-editor"])
     store = PresetStore(data_dir / "source_presets.json")
@@ -406,14 +429,17 @@ def create_router(data_dir: Path) -> APIRouter:
             config["mesh"]["wallThickness"] = 0
             config["mesh"]["quadrants"] = 1234
             config["mesh"]["verticalOffset"] = 0
-            wall = GeneralHornWall.from_config(config)
-            return {"horn_config": config, "throat_radius_mm": wall.throat_radius_mm,
-                    "horn_length_mm": wall.length_mm, "mouth_radius_mm": wall.mouth_radius_mm,
-                    "wall_max_radius_mm": max(pole[0] for pole in wall.poles_mm)}
+            resolved = resolve_horn_wall(config)
+            return {"horn_config": config, **{key: value for key, value in resolved.items() if key != "wall_mm"}}
         except ImportError as exc:
             raise HTTPException(503, "This mesher does not support general horn attachment. Update the mesher.") from exc
         except (TypeError, ValueError) as exc:
             raise HTTPException(422, str(exc)) from exc
+
+    @router.post("/assembly/horn-wall")
+    def assembly_horn_wall_endpoint(body: HornWallRequest) -> dict[str, Any]:
+        return {key: value for key, value in resolve_horn_wall(body.horn_config).items()
+                if key != "wall_max_radius_mm"}
 
     @router.post("/assembly/validate")
     def assembly_validate_endpoint(body: AssemblyRequest) -> dict[str, Any]:
@@ -435,7 +461,7 @@ def create_router(data_dir: Path) -> APIRouter:
                     for i, s in enumerate(model.horn.segments)
                 },
                 **{role: [list(a), list(b)] for role, (a, b) in rigid_edges(model).items()},
-                **({"horn-wall": model.horn_wall.evaluate([j / 256 for j in range(257)]).tolist()}
+                **({"horn-wall": resolve_horn_wall(wall=model.horn_wall)["wall_mm"]}
                    if model.horn_wall is not None else {}),
             },
         }

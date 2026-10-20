@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { sourceEditorApi, type AssemblyValidation, type SourceAssemblyDocument, type SourceDocument } from '../api/sourceEditor';
 import { durableSettings, namespaceStorage } from '../stores/durableSettings';
 import { useModalDialogFocus } from '../shell/dialogFocus';
 import { NumberField } from './NumberField';
 import { serializeDesign, useDesignStore } from '../stores/design';
+import { hornAssemblyContext, wooferAssemblyContext } from '../sketch/adapters/sourceContext';
+import type { HornWall } from '../api/sourceEditor';
 import { Editor } from './SourceContourEditor';
 import { identityProblem, INITIAL_SOURCE } from './sourceContourEditing';
 import { prepareNativeAssembly } from './nativeAssemblyPreparation';
@@ -83,6 +85,9 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   const [draft, setDraft] = useState(readDraft);
   const draftRef = useRef(draft);
   const seedAllowed = useRef(true);
+  const wallCache = useRef(new Map<string, Promise<HornWall>>());
+  const [wall, setWall] = useState<{ config: string; value: HornWall }>();
+  const [wallStale, setWallStale] = useState(!!draft.horn_config);
   const [resolvedThroat, setResolvedThroat] = useState<{ config: string; radius: number }>();
   const [hornText, setHornText] = useState(() => JSON.stringify(draft.horn_config ?? {}, null, 2));
   const [editing, setEditing] = useState<'horn' | 'woofer' | null>(null);
@@ -118,20 +123,42 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
     }, (reason: unknown) => { if (current) setValidationError(reason instanceof Error ? reason.message : String(reason)); }); }, 180);
     return () => { current = false; clearTimeout(timer); };
   }, [draft, key]);
+  const configKey = JSON.stringify(draft.horn_config);
+  useEffect(() => {
+    if (!draft.horn_config) { setWallStale(false); return; }
+    let current = true;
+    setWallStale(true);
+    let request = wallCache.current.get(configKey);
+    if (!request) {
+      request = sourceEditorApi.hornWall(draft.horn_config);
+      wallCache.current.set(configKey, request);
+    }
+    void request.then(value => {
+      if (current) { setWall({ config: configKey, value }); setResolvedThroat({ config: configKey, radius: value.throat_radius_mm }); setWallStale(false); }
+    }, () => { if (current) setWallStale(true); });
+    return () => { current = false; };
+  }, [configKey]);
+  const contextDimensions = draft.horn_config && wall ? { ...draft.dimensions, horn_length_mm: wall.value.horn_length_mm, mouth_radius_mm: wall.value.mouth_radius_mm } : draft.dimensions;
+  const builtHornContext = useMemo(() => hornAssemblyContext(contextDimensions, draft.phase_plugs, draft.horn_config ? wall?.value.wall_mm : undefined,
+    draft.horn_config ? wall?.value.throat_radius_mm ?? resolvedThroat?.radius ?? draft.horn.contour.points.at(-1)!.r_mm : draft.horn.contour.points.at(-1)!.r_mm),
+    [JSON.stringify(contextDimensions), draft.phase_plugs, draft.horn_config, wall, resolvedThroat, draft.horn.contour.points.at(-1)?.r_mm]);
+  const lastHornContext = useRef(builtHornContext);
+  if (!draft.horn_config || wall?.config === configKey) lastHornContext.current = builtHornContext;
+  const hornContext = lastHornContext.current;
+  const wooferContext = useMemo(() => wooferAssemblyContext(draft.dimensions, draft.woofer?.contour.points.at(-1)?.r_mm), [draft.dimensions, draft.woofer?.contour.points.at(-1)?.r_mm]);
   async function run(action: () => Promise<void>) { seedAllowed.current = false; setBusy(true); setError(''); setNotice(''); try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(false); } }
   const throat = draft.horn_config ? resolvedThroat?.config === JSON.stringify(draft.horn_config) ? resolvedThroat.radius
-    : accepted?.config === JSON.stringify(draft.horn_config) ? accepted.value.horn_section_mm['horn-wall']?.[0]?.[0] : undefined : undefined;
+    : wall?.value.throat_radius_mm : undefined;
   function editSource(source: 'horn' | 'woofer') {
     seedAllowed.current = false;
-    if (source === 'horn' && draft.horn_config && throat === undefined) { setError('Use current horn design to resolve the throat before editing its contour.'); return; }
     setEditing(source);
   }
   function download(blob: Blob, name: string) { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000); }
   // Publish nested edits to the assembly namespace immediately: the settings
   // owner protects genuine local changes from an in-flight hydration reply.
-  if (editing) return <Editor key={editing} initialDocument={draft[editing]!}
+  if (editing) return <Editor context={editing === 'horn' ? hornContext : wooferContext} contextStale={editing === 'horn' && (wallStale || !!draft.horn_config && wall?.config !== configKey)} key={editing} initialDocument={draft[editing]!}
     limit={editing === 'woofer' ? { kind: 'aperture', radius: draft.dimensions.aperture_radius_mm }
-      : draft.horn_config && throat !== undefined ? { kind: 'throat', radius: throat, hard: true } : { kind: 'mouth', radius: draft.dimensions.mouth_radius_mm }}
+      : draft.horn_config ? { kind: 'throat', radius: throat ?? draft.horn.contour.points.at(-1)!.r_mm, hard: true } : { kind: 'mouth', radius: draft.dimensions.mouth_radius_mm }}
     onLimitChange={radius => change({ ...draftRef.current, dimensions: { ...draftRef.current.dimensions, [editing === 'woofer' ? 'aperture_radius_mm' : 'mouth_radius_mm']: radius } })}
     onDraftChange={(document) => change({ ...draftRef.current, [editing]: document })} onClose={() => setEditing(null)} onUseDocument={(document) => { change({ ...draftRef.current, [editing]: document }); setEditing(null); }}/>;
   const dimensions = valid && draft.horn_config && accepted?.value.recipe

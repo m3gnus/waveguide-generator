@@ -44,6 +44,7 @@ describe('source editor interactions', () => {
   async function enter(text: string, value: string) { await act(async () => { const field = input(text); field.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value); field.dispatchEvent(new Event('input', { bubbles: true })); }); await act(async () => input(text).blur()); }
 
 
+  const limitX = () => Number(host.querySelector('.sketch-limit > path:not(.sketch-context-hit)')!.getAttribute('d')!.match(/M([^,]+)/)![1]);
   const pointer = async (element: Element, type = 'pointerdown', x = 0, y = 0) => act(async () => { element.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, buttons: type === 'pointerup' ? 0 : 1 })); });
   async function deletePoleLock() {
     const lock = [...host.querySelectorAll('[aria-label^="Constraint pointOnLine"]')][0];
@@ -68,19 +69,19 @@ describe('source editor interactions', () => {
     expect(label.textContent).toContain('max rim r = mouth − 0.1 mm');
     expect(Number(label.getAttribute('x')) + label.lastChild!.textContent!.length * 6.4).toBeLessThanOrEqual(640);
   });
-  it('snaps a dragged horn rim to the allowed maximum while leaving the line at the mouth', async () => {
+  it('snaps a dragged horn rim to the allowed maximum while leaving the marker at the mouth', async () => {
     await mount();
     const selector = host.querySelector<HTMLSelectElement>('[aria-label="Source attachment"]')!;
     await act(async () => { selector.value = 'horn'; selector.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
     const svg = host.querySelector('[aria-label="Sketch drawing"]')!;
-    const lineX = Number(host.querySelector('.sketch-limit line')!.getAttribute('x1'));
+    const lineX = limitX();
     const rim = host.querySelector('.sketch-point[data-id="rim"]')!, y = Number(rim.getAttribute('cy'));
     await pointer(rim, 'pointerdown', Number(rim.getAttribute('cx')), y);
     await pointer(svg, 'pointermove', lineX - 3, y); await settle();
     await pointer(svg, 'pointerup'); await settle();
     expect(readSourceDraft().contour.points.at(-1)!.r_mm).toBeCloseTo(20 - .1 - 1e-6, 8);
     expect(host.querySelector('.sketch-domain-problem')).toBeNull();
-    expect(Number(host.querySelector('.sketch-limit line')!.getAttribute('x1'))).toBe(lineX);
+    expect(limitX()).toBe(lineX);
   });
   it('keeps the attachment limit through Undo and Redo without adding sketch history', async () => {
     await mount(); await enter('Patch 1 weight', '.5'); await settle();
@@ -124,7 +125,8 @@ describe('source editor interactions', () => {
     await mount();
     const label = host.querySelector('.sketch-limit text')!;
     expect(label.textContent).toContain('Aperture r 14.00');
-    expect(host.querySelector('.sketch-limit line')!.getAttribute('x1')).toBe(host.querySelector('.sketch-limit line')!.getAttribute('x2'));
+    expect(host.querySelector('.sketch-limit > path:not(.sketch-context-hit)')!.getAttribute('d')).toContain('l4,4 -4,4 -4,-4 Z');
+    expect(host.querySelector('.sketch-limit line')).toBeNull();
     const selector = host.querySelector('[aria-label="Source attachment"]')!;
     expect(selector.compareDocumentPosition(button('Apply shape')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await act(async () => label.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
@@ -138,7 +140,7 @@ describe('source editor interactions', () => {
   it('snaps a dragged woofer rim to the aperture and warns live when dragged beyond it', async () => {
     await mount();
     const svg = host.querySelector('[aria-label="Sketch drawing"]')!;
-    const x = Number(host.querySelector('.sketch-limit line')!.getAttribute('x1'));
+    const x = limitX();
     let rim = host.querySelector('.sketch-point[data-id="rim"]')!;
     const y = Number(rim.getAttribute('cy'));
     await pointer(rim, 'pointerdown', Number(rim.getAttribute('cx')), y);
@@ -172,7 +174,7 @@ describe('source editor interactions', () => {
     const used = vi.fn();
     await act(async () => root.render(<Editor initialDocument={INITIAL_SOURCE} onClose={() => {}} onDraftChange={used} limit={{ kind: 'throat', radius: 12.7, hard: true }}/>)); await settle();
     const label = host.querySelector('.sketch-limit text')!;
-    expect(label.textContent).toContain('🔒 Throat r 12.70');
+    expect(label.textContent).toContain('Throat r 12.70 🔒');
     expect(label.querySelector('title')?.textContent).toBe('Set by the horn design');
     await act(async () => label.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
     expect(host.querySelector('[aria-label="Edit limit"]')).toBeNull();
@@ -184,7 +186,7 @@ describe('source editor interactions', () => {
     await act(async () => button('Fit to limit').click()); await settle();
     expect(used.mock.calls.at(-1)![0].contour.points.at(-1).r_mm).toBe(12.7);
     expect(input('Radius preset').disabled).toBe(true);
-    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('🔒 Throat r 12.70');
+    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Throat r 12.70 🔒');
   });
   it('links point and patch hover and selection between the table and canvas and scrolls the row', async () => {
     await mount();
@@ -403,13 +405,13 @@ describe('source editor interactions', () => {
     expect(JSON.parse(storage.getItem('')!).sketch).toEqual(sketch);
   });
   it('keeps a newer authoring envelope untouched and uses the Classic fallback', async () => {
-    const envelope = { version: 'wg-source-authoring-v2', document: INITIAL_SOURCE, sketch: { version: 'wg-sketch-v1', future: true }, extra: { opaque: 1 } };
+    const envelope = { version: 'wg-source-authoring-v99', document: INITIAL_SOURCE, sketch: { version: 'wg-sketch-v1', future: true }, extra: { opaque: 1 } };
     storage.setItem('', JSON.stringify(envelope));
     await mount();
     expect(host.querySelector('[aria-label="Sketch drawing"]')).toBeNull();
     await enter('Point 2 radius', '12'); await settle();
     const saved = JSON.parse(storage.getItem('')!);
-    expect(saved.version).toBe('wg-source-authoring-v2'); expect(saved.sketch).toEqual(envelope.sketch); expect(saved.extra).toEqual(envelope.extra);
+    expect(saved.version).toBe('wg-source-authoring-v99'); expect(saved.sketch).toEqual(envelope.sketch); expect(saved.extra).toEqual(envelope.extra);
   });
   it('fix 5: persists and reopens unfinished sketches with the last valid document', async () => {
     await mount(); await deletePoleLock();
@@ -687,7 +689,7 @@ describe('source editor interactions', () => {
       canvas.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 620, clientY: 40 }));
     }); await settle();
     const envelope = JSON.parse(storage.getItem('')!);
-    expect(envelope.version).toBe('wg-source-authoring-v1');
+    expect(envelope.version).toBe('wg-source-authoring-v2');
     expect(envelope.sketch.constraints).toContainEqual(expect.objectContaining({ kind: 'distance', value: 8, driving: true }));
     expect(envelope.document).toEqual(INITIAL_SOURCE);
     await act(async () => root.render(null)); await mount();
@@ -719,7 +721,7 @@ describe('source editor interactions', () => {
     await act(async () => button('Delete selection').click()); await settle();
     expect(button('Export STEP + mesh bundle').disabled).toBe(true);
     await enter(endpoint === 'pole' ? 'Point 1 radius' : 'Point 2 z', '1'); await settle();
-    await act(async () => button(endpoint === 'pole' ? 'Lock pole to axis' : 'Lock rim to baffle').click()); await settle();
+    await act(async () => button(endpoint === 'pole' ? 'Lock pole to axis' : 'Lock rim to rim plane').click()); await settle();
     expect(button('Export STEP + mesh bundle').disabled).toBe(false);
     expect(endpoint === 'pole' ? readSourceDraft().contour.points[0].r_mm : readSourceDraft().contour.points.at(-1)!.z_mm).toBe(0);
     expect(host.querySelector('[data-id="axis"]')).toBeNull();

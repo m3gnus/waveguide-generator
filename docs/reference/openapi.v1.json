@@ -5375,6 +5375,21 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HornWallRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "horn_config": {
+            "additionalProperties": true,
+            "title": "Horn Config",
+            "type": "object"
+          }
+        },
+        "required": [
+          "horn_config"
+        ],
+        "title": "HornWallRequest",
+        "type": "object"
+      },
       "ICWConfig": {
         "additionalProperties": false,
         "properties": {
@@ -17555,6 +17570,49 @@
           }
         },
         "summary": "Assembly Horn Profile Endpoint",
+        "tags": [
+          "source-editor"
+        ]
+      }
+    },
+    "/api/source-editor/assembly/horn-wall": {
+      "post": {
+        "operationId": "assembly_horn_wall_endpoint_api_source_editor_assembly_horn_wall_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HornWallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Assembly Horn Wall Endpoint Api Source Editor Assembly Horn Wall Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assembly Horn Wall Endpoint",
         "tags": [
           "source-editor"
         ]

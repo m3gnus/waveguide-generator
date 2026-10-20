@@ -294,14 +294,15 @@ describe('SketchCanvas with real slvs', () => {
     await act(async () => root.render(<SketchCanvas sketch={replacement} references={[]} problems={[]} fitRequest={1}/>));
     expect(inside()).toBe(true);
   });
-  it('renders infinite references without point or curve hit targets', async () => {
+  it('renders structural references in one context layer without editable point or curve hit targets', async () => {
     const { sketch, meta } = seed(INITIAL_SOURCE);
     await act(async () => root.render(<SketchCanvas sketch={sketch} references={meta.references} problems={[]}/>));
     const refs = sketch.entities.filter(e => meta.references.some(r => r.id === e.id));
     const refPoints = refs.flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : []);
     for (const id of [...refPoints, ...refs.map(e => e.id)]) expect(host.querySelector(`[data-id="${id}"]`)).toBeNull();
-    expect(host.querySelectorAll('.sketch-references line')).toHaveLength(2);
-    expect(host.querySelector('.sketch-references line')?.getAttribute('y2')).toBe('360');
+    expect(host.querySelectorAll('.sketch-context-layer')).toHaveLength(1);
+    expect(host.querySelectorAll('.sketch-context-item')).toHaveLength(2);
+    expect(host.querySelector('[data-context-id="axis"] > path:not(.sketch-context-hit)')?.getAttribute('d')).toContain(',360');
     expect([...host.querySelectorAll('.sketch-point-hit')].every(p => Number(p.getAttribute('r')) >= 10)).toBe(true);
     expect([...host.querySelectorAll('.sketch-point')].every(p => Number(p.getAttribute('r')) === 4)).toBe(true);
     expect(host.querySelector('.sketch-curve-hit')).not.toBeNull();

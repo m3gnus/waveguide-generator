@@ -143,3 +143,49 @@ def test_restart_gate_precedes_assembly_work(tmp_path, action):
     )
     assert result.status_code == 409
     assert not (tmp_path / "tmp").exists()
+
+
+def test_horn_wall_is_independent_of_invalid_source_and_matches_profile(client):
+    from hornlab_mesher.general_horn import GeneralHornWall
+
+    copied = client.post("/api/source-editor/assembly/horn-profile", json={
+        "formula": "OSSE", "r0": 4, "a": 32, "a0": 6, "L": 24,
+        "mesh": {"length_segments": 32, "angular_segments": 64},
+    })
+    assert copied.status_code == 200, copied.text
+    profile = copied.json()
+    # The pre-existing horn-profile wire contract must not gain the dense samples.
+    assert set(profile) == {"horn_config", "throat_radius_mm", "horn_length_mm",
+                            "mouth_radius_mm", "wall_max_radius_mm"}
+    response = client.post("/api/source-editor/assembly/horn-wall", json={"horn_config": profile["horn_config"]})
+    assert response.status_code == 200, response.text
+    wall = response.json()
+    assert set(wall) == {"wall_mm", "throat_radius_mm", "horn_length_mm", "mouth_radius_mm"}
+    assert len(wall["wall_mm"]) == 257
+    assert wall["wall_mm"][0] == pytest.approx([4, 0], abs=1e-9)
+    expected = GeneralHornWall.from_config(profile["horn_config"])
+    assert wall["wall_mm"] == expected.evaluate([j / 256 for j in range(257)]).tolist()
+    assert wall["horn_length_mm"] == profile["horn_length_mm"]
+    assert wall["mouth_radius_mm"] == profile["mouth_radius_mm"]
+    invalid = document()
+    invalid["horn"]["contour"]["points"][0]["r_mm"] = -1
+    assert client.post("/api/source-editor/assembly/validate", json=invalid).status_code == 422
+    assert client.post("/api/source-editor/assembly/horn-wall", json={"horn_config": profile["horn_config"]}).json() == wall
+
+
+def test_horn_wall_maps_invalid_configuration_to_422(client):
+    response = client.post("/api/source-editor/assembly/horn-wall", json={"horn_config": {}})
+    assert response.status_code == 422, response.text
+
+
+def test_horn_wall_maps_unavailable_mesher_to_503(client, monkeypatch):
+    original = builtins.__import__
+
+    def unavailable(name, *args, **kwargs):
+        if name == "hornlab_mesher.general_horn":
+            raise ImportError("old mesher")
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", unavailable)
+    response = client.post("/api/source-editor/assembly/horn-wall", json={"horn_config": {}})
+    assert response.status_code == 503, response.text

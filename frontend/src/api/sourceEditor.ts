@@ -31,6 +31,7 @@ export interface AssemblyValidation {
   geometry_sha256: string; horn_section_mm: Record<string, [number, number][]>;
   passage_contract: { open_passage_count: number; clearances_mm: Record<string, number>; surface_tolerance_mm: number } | null;
 }
+export interface HornWall { wall_mm: [number, number][]; throat_radius_mm: number; horn_length_mm: number; mouth_radius_mm: number }
 export interface AssemblyIngestion { ingestion: CadReturnIngestRecord }
 
 async function response(path: string, method = 'GET', body?: unknown): Promise<Response> {
@@ -50,6 +51,7 @@ function assemblyPayload(document: SourceAssemblyDocument) {
   return { ...document, dimensions };
 }
 export const sourceEditorApi = {
+  hornWall: async (horn_config: Record<string, unknown>): Promise<HornWall> => (await response('/assembly/horn-wall', 'POST', { horn_config })).json(),
   hornProfile: async (design: Record<string, unknown>): Promise<{ horn_config: Record<string, unknown>; throat_radius_mm: number; horn_length_mm: number; mouth_radius_mm: number; wall_max_radius_mm?: number }> => (await response('/assembly/horn-profile', 'POST', design)).json(),
   validateAssembly: async (document: SourceAssemblyDocument): Promise<AssemblyValidation> => (await response('/assembly/validate', 'POST', assemblyPayload(document))).json(),
   ingestAssembly: async (document: SourceAssemblyDocument): Promise<AssemblyIngestion> => (await response('/assembly/ingest', 'POST', assemblyPayload(document))).json(),

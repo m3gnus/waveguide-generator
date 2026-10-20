@@ -3,6 +3,7 @@ import type { Reference } from './adapter';
 import type { NewConstraint, Sketch } from './model';
 import { History } from './history';
 import { createSession, type Diagnosis, type SketchSession } from './session';
+import { materialiseContext, referencePointIds, type SketchContext } from './context';
 import type { XY } from './solver/types';
 
 export interface Authoring<T> { sketch: Sketch; meta: T }
@@ -23,6 +24,7 @@ export class SketchController<T> {
   private pending = 0;
   private placedDimension?: { id: string; state: Authoring<T> };
   private busy = false;
+  private contextSnapshots = new WeakSet<Authoring<T>>();
   constructor(initial: Authoring<T>, private references: Reference[] | ((state: Authoring<T>) => Reference[]), private apply: Apply<T>, private changed: (state: Authoring<T>, diagnosis?: Diagnosis) => void, failed?: (reason: unknown) => void, private activity?: (busy: boolean) => void, private preview?: (state: Authoring<T>, diagnosis?: Diagnosis) => void, private dimensionProblem?: (state: Authoring<T>, id: string, value: number) => string | undefined) {
     this.history = new History(initial);
     this.ready = createSession(initial.sketch, { references: this.getReferences(initial) }).then(async session => {
@@ -163,15 +165,38 @@ export class SketchController<T> {
       next.sketch = state.sketch; session.destroy(); this.session = next; return state;
     }));
   }
+  materialiseContext(context: SketchContext, itemId: string) {
+    return this.queue(async session => {
+      let picked = '';
+      const sketch = await this.transaction(session, 'Attach context reference', async () => {
+        const next = materialiseContext(this.current.sketch, context, itemId); picked = next.id;
+        // Fixed reference construction cannot change the contour on first attachment.
+        session.sketch = next.sketch;
+        return { ...this.current, sketch: next.sketch };
+      });
+      return { sketch, id: picked };
+    });
+  }
   /** External attachment context belongs to every undo/redo state, not sketch history. */
-  replaceContext(replace: (state: Authoring<T>) => Authoring<T>) {
+  replaceContext(replace: (state: Authoring<T>) => Authoring<T>, notice?: string) {
     return this.queue(async session => {
       const current = this.current, state = replace(current);
       const next = await createSession(state.sketch, { references: this.getReferences(state) });
       try { this.diagnosis = await next.solveFull(); }
       catch (e) { next.destroy(); throw e; }
-      next.sketch = state.sketch; session.destroy(); this.session = next;
-      this.history.map(snapshot => snapshot === current ? state : replace(snapshot));
+      const referenceMoved = (before: Sketch, after: Sketch) => [...referencePointIds(after)].some(id => {
+        const a = before.points.find(p => p.id === id), b = after.points.find(p => p.id === id)!;
+        return a && (a.x !== b.x || a.y !== b.y);
+      });
+      // A display/clearance refresh must not perturb exact imported contour coordinates.
+      const solved = { ...state, sketch: this.diagnosis.status === 'ok' && referenceMoved(current.sketch, state.sketch) ? next.sketch : state.sketch };
+      session.destroy(); this.session = next;
+      next.sketch = solved.sketch;
+      this.notice = this.diagnosis.status === 'ok' ? notice : 'Context changed; contour could not be solved';
+      this.history.map(snapshot => {
+        if (snapshot === current) return solved;
+        const updated = replace(snapshot); if (referenceMoved(snapshot.sketch, updated.sketch)) this.contextSnapshots.add(updated); return updated;
+      });
       if (this.dragStart) this.dragStart = replace(this.dragStart);
       this.publish(this.current);
     });
@@ -213,7 +238,7 @@ export class SketchController<T> {
   undo(redo = false) {
     return this.queue(async session => {
       this.notice = undefined;
-      const state = this.history.peek(redo);
+      let state = this.history.peek(redo);
       if (state === this.current) return;
       const next = await createSession(state.sketch, { references: this.getReferences(state) });
       let diagnosis: Diagnosis;
@@ -221,8 +246,10 @@ export class SketchController<T> {
         diagnosis = await next.solveFull();
         if (diagnosis.status !== 'ok') throw new Error(diagnosis.reason ?? 'The history state cannot be solved.');
       } catch (e) { next.destroy(); throw e; }
+      if (this.contextSnapshots.has(state)) state = { ...state, sketch: next.sketch };
       next.sketch = state.sketch; session.destroy(); this.session = next; this.diagnosis = diagnosis;
       if (redo) this.history.redo(); else this.history.undo();
+      this.history.current = state;
       this.publish(state);
     });
   }

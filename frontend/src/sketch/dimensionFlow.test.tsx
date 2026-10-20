@@ -82,7 +82,12 @@ async function pick(id: string) {
   else expect(host.querySelector(`.sketch-entity[data-id="${id}"]`)!.classList.contains('hovered')).toBe(true);
   await pointer('pointerdown', atScreen); await pointer('pointerup', atScreen);
 }
-async function mount(initial: Sketch) { current = initial; await act(async () => root.render(<Harness initial={initial}/>)); await key('d'); }
+async function mount(initial: Sketch) {
+  current = initial; await act(async () => root.render(<Harness initial={initial}/>));
+  // Finish the modal's initial autofocus before simulating the user's tool selection.
+  await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+  await key('d');
+}
 function fixture(kind: string) {
   let sketch = importedSketch([
     { id: 'p', x: 4, y: 4 }, { id: 'q', x: 14, y: kind === 'angle' || kind === 'pointLine' || kind === 'parallel' ? 4 : 10 },

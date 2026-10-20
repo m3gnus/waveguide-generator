@@ -15,8 +15,8 @@ export function dimensionPicks(sketch: Sketch, ids: string[], references: Refere
     if (p) return [{ kind: 'point', id, point: p }];
     const e = sketch.entities.find(e => e.id === id);
     const reference = references.find(r => r.id === id);
-    if (!e || dimensionHelper(e) || reference?.kind === 'limit' || e.reference && !reference) return [];
-    if (e.kind === 'line') return [{ kind: 'line', id, a: point(e.p1), b: point(e.p2), reference: reference?.kind }];
+    if (!e || dimensionHelper(e) || reference?.kind === 'limit') return [];
+    if (e.kind === 'line') return [{ kind: 'line', id, a: point(e.p1), b: point(e.p2), reference: reference?.kind === 'axis' || reference?.kind === 'baffle' ? reference.kind : undefined }];
     if (e.kind === 'arc') return [{ kind: 'arc', id, ...arcGeometry(sketch, e) }];
     return [];
   });

@@ -1,3 +1,4 @@
+import { referencePointIds } from './context';
 import type { Reference } from './adapter';
 import { applyCommand } from './ops';
 import { constraintProblem, validateSketch, type NewConstraint, type Sketch } from './model';
@@ -6,10 +7,7 @@ import { createSolver, type DragTarget, type Sketch as SolverSketch, type Sketch
 
 export function toSolverSketch(sketch: Sketch, references: Reference[]): SolverSketch {
   const valid = validateSketch(sketch); if (!valid.ok) throw new Error(valid.reason);
-  const fixed = new Set(references.flatMap(r => {
-    const e = sketch.entities.find(e => e.id === r.id && e.construction);
-    return e?.kind === 'line' ? [e.p1, e.p2] : [];
-  }));
+  const fixed = referencePointIds(sketch, references);
   return { entities: [
     ...sketch.points.map(p => ({ ...p, kind: 'point' as const, ...(fixed.has(p.id) ? { fixed: true } : {}) })),
     ...sketch.entities.map(e => e.kind === 'arc' ? { kind: 'arc' as const, id: e.id, center: e.center,
@@ -175,10 +173,7 @@ export class SketchSession {
     const pair = (a: string, b: string) => JSON.stringify([a, b].sort());
     const lengths = new Set(before.constraints.flatMap(c => c.kind === 'distance' && c.driving ? [pair(c.a, c.b)] : []));
     const fixed = new Set(before.constraints.flatMap(c => c.kind === 'fix' ? [c.point] : []));
-    for (const r of this.references) {
-      const e = before.entities.find(e => e.id === r.id);
-      if (e?.kind === 'line') { fixed.add(e.p1); fixed.add(e.p2); }
-    }
+    for (const id of referencePointIds(before, this.references)) fixed.add(id);
     const outgoing = new Map<string, string[]>();
     for (const [a, b] of ends) outgoing.set(a, [...outgoing.get(a) ?? [], b]);
     for (const [a, b] of ends) for (const c of outgoing.get(b) ?? []) if (a !== c && (lengths.has(pair(a, b)) || lengths.has(pair(b, c)))
@@ -190,10 +185,7 @@ export class SketchSession {
   }
   private restartDrag() { this.load(); if (this.dragIds) this.solver.beginDrag(this.dragIds); }
   private referencePoints(): Set<string> {
-    return new Set(this.references.flatMap(r => {
-      const e = this.sketch.entities.find(e => e.id === r.id);
-      return e?.kind === 'line' ? [e.p1, e.p2] : [];
-    }));
+    return referencePointIds(this.sketch, this.references);
   }
   private projectTargets(targets: DragTarget[]): DragTarget[] {
     const points = new Map(this.sketch.points.map(p => [p.id, p])), fixed = this.referencePoints();

@@ -8,7 +8,7 @@ import { AssemblyEditor, INITIAL_ASSEMBLY, parseAssemblyDraft } from './SourceAs
 import { realSessionReady } from '../sketch/testSupport';
 beforeAll(realSessionReady);
 
-vi.mock('../api/sourceEditor', () => ({ sourceEditorApi: { validateAssembly: vi.fn(), validate: vi.fn(), presets: vi.fn() } }));
+vi.mock('../api/sourceEditor', () => ({ sourceEditorApi: { validateAssembly: vi.fn(), hornWall: vi.fn(), validate: vi.fn(), presets: vi.fn() } }));
 vi.mock('./nativeAssemblyPreparation', () => ({ prepareNativeAssembly: vi.fn() }));
 let host: HTMLDivElement; let root: Root;
 beforeEach(() => {
