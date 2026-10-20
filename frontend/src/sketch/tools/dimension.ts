@@ -72,7 +72,7 @@ export function candidateDimension(picks: DimensionPick[], cursor: XY): Candidat
     return { kind: 'pointLineDistance', point: p.id, line: line.id, value: distance(p.point, foot), driving: true,
       placement: placement('distance', p.point, foot, cursor) };
   }
-  if (a.kind !== 'line' || b.kind !== 'line' || a.reference || b.reference) return;
+  if (a.kind !== 'line' || b.kind !== 'line') return;
   const dx = a.b.x - a.a.x, dy = a.b.y - a.a.y, ex = b.b.x - b.a.x, ey = b.b.y - b.a.y;
   const cross = dx * ey - dy * ex;
   if (Math.abs(cross) <= 1e-9 * Math.hypot(dx, dy) * Math.hypot(ex, ey)) {

@@ -68,7 +68,7 @@ describe('pure sketch tools', () => {
     expect(dimensionFor(s, ['l', 'r'])).toMatchObject({ kind: 'pointLineDistance', value: 3 });
     expect(constraintFor(s, ['l', 'm'], 'tangent')).toBeUndefined();
     expect(constraintFor(s, ['l', 'a'], 'tangent')).toMatchObject({ kind: 'tangent' });
-    expect(constraintFor(s, ['q', 'l'], 'point-on')).toMatchObject({ point: 'q', line: 'l' });
+    expect(constraintFor(s, ['q', 'l'], 'pointOnLine')).toMatchObject({ point: 'q', line: 'l' });
   });
   it('extends and toggles selection and coalesces to the latest frame target', () => {
     expect(select(['a'], 'b', true)).toEqual(['a', 'b']); expect(select(['a'], 'a', true)).toEqual([]);

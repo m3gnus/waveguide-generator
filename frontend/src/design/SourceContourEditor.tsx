@@ -416,7 +416,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
               <td><NumberField label={`Dimension ${c.id} value`} value={c.kind === 'angle' ? c.value * 180 / Math.PI : c.value} unit={c.kind === 'angle' ? '°' : 'mm'}
                 precision={9} displayPrecision={2} step={.1} disabled={!sketchReady || !c.driving} disabledReason={!c.driving ? 'Reference dimension' : undefined}
                 onCommit={value => void controller.current?.dimension(c.id, value * (c.kind === 'angle' ? Math.PI / 180 : 1)).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}/></td>
-              <td>{c.driving ? 'Driving' : 'Reference'}</td>
+              <td><button type="button" aria-label={`${c.driving ? 'Make reference' : 'Make driving'} ${dimensionName(c)}`} disabled={!sketchReady || sketchPending} onClick={() => sketchCommand({ kind: 'setDriving', id: c.id, driving: !c.driving })}>{c.driving ? 'Make reference' : 'Make driving'}</button></td>
             </tr>)}
           </tbody></table></div>
         </details>}

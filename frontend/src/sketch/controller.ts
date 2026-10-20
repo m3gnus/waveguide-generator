@@ -1,10 +1,22 @@
 import type { Command } from './commands';
 import type { Reference } from './adapter';
-import type { NewConstraint, Sketch } from './model';
+import type { Constraint, NewConstraint, Sketch } from './model';
 import { History } from './history';
 import { createSession, type Diagnosis, type SketchSession } from './session';
 import { materialiseContext, referencePointIds, type SketchContext } from './context';
+import { displayName } from './displayName';
 import type { XY } from './solver/types';
+
+/** Carry the rejected candidate too: it is rolled back and has no live glyph to name. */
+function constraintError(sketch: Sketch, result: { reason?: string; conflicting?: string[]; redundant?: string[]; constraints?: Constraint[]; hasRedundancy?: boolean }) {
+  const ids = [...result.conflicting ?? [], ...result.redundant ?? []];
+  const constraints = result.constraints ?? sketch.constraints.filter(c => ids.includes(c.id));
+  const named = { ...sketch, constraints: [...sketch.constraints.filter(c => !constraints.some(v => v.id === c.id)), ...constraints] };
+  const reason = result.reason ?? 'The constraint conflicts with the sketch.';
+  const error = new Error(`Conflicts with ${constraints.map(c => displayName(named, c.id)).join('; ') || 'the sketch'}: ${reason}`);
+  return Object.assign(error, { conflicting: constraints.map(c => c.id), constraints,
+    overconstrained: ids.length > 0 || result.hasRedundancy || /redundan|conflict|inconsisten|over.?constrain/i.test(reason) });
+}
 
 export interface Authoring<T> { sketch: Sketch; meta: T }
 export type Apply<T> = (state: Authoring<T>, command: Command) => Authoring<T> | { error: string };
@@ -13,6 +25,7 @@ export class SketchController<T> {
   readonly history: History<Authoring<T>>;
   diagnosis?: Diagnosis;
   notice?: string;
+  rejection?: unknown;
   lastSolveMs?: number;
   private readonly measureDrag = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('sketchPerf') === '1';
   private session?: SketchSession;
@@ -38,6 +51,7 @@ export class SketchController<T> {
     void this.ready.catch(reason => { if (!this.destroyed) failed?.(reason); });
   }
   private getReferences(state: Authoring<T>) { return typeof this.references === 'function' ? this.references(state) : this.references; }
+  get capabilities() { return this.session?.capabilities; }
   get current() { return this.history.current; }
   private setActivity(busy: boolean) { if (busy !== this.busy) { this.busy = busy; if (!this.destroyed) this.activity?.(busy); } }
   private queue<R>(fn: (session: SketchSession) => Promise<R>): Promise<R> {
@@ -52,7 +66,7 @@ export class SketchController<T> {
   private async diagnose(session: SketchSession, state: Authoring<T>) {
     session.sketch = state.sketch;
     const diagnosis = await session.solveFull();
-    if (diagnosis.status !== 'ok') throw new Error(diagnosis.reason ?? 'The edit cannot be solved.');
+    if (diagnosis.status !== 'ok') throw constraintError(state.sketch, diagnosis);
     this.diagnosis = diagnosis;
     return { ...state, sketch: session.sketch };
   }
@@ -61,8 +75,8 @@ export class SketchController<T> {
     const diagnosis = this.diagnosis; this.notice = undefined;
     this.history.begin(label);
     try {
-      const next = await edit(); this.history.update(next); this.history.commit(mergePrevious); this.publish(next); return next.sketch;
-    } catch (e) { session.sketch = this.history.cancel().sketch; this.diagnosis = diagnosis; throw e; }
+      const next = await edit(); this.rejection = undefined; this.history.update(next); this.history.commit(mergePrevious); this.publish(next); return next.sketch;
+    } catch (e) { this.rejection = e; session.sketch = this.history.cancel().sketch; this.diagnosis = diagnosis; throw e; }
   }
   /** A function is resolved against the state the queued command actually runs on, so fields
    *  it does not change (e.g. the other coordinate of a point) are never stale. */
@@ -75,7 +89,12 @@ export class SketchController<T> {
         if (command.kind === 'movePoint' && state.sketch.constraints.some(c => c.kind === 'fix' && c.point === command.id)) throw new Error('Point is held by constraints; remove its fix before editing coordinates.');
         const next = this.apply(state, command); if ('error' in next) throw new Error(next.error);
         if (['splitAt', 'deleteEntity', 'deletePoint', 'convertEntity'].includes(command.kind)) for (const c of state.sketch.constraints) if (!next.sketch.constraints.some(v => v.id === c.id)) removed.add(c.id);
-        state = next;
+        if (command.kind === 'setDriving') {
+          const result = await session.checkConstraintChange(state.sketch, next.sketch, command.id);
+          if (!result.ok) throw constraintError(next.sketch, result);
+          this.diagnosis = result.diagnosis;
+          state = { ...next, sketch: result.sketch };
+        } else state = next;
         if (command.kind === 'movePoint') {
           const solved = await this.diagnose(session, state), p = solved.sketch.points.find(p => p.id === command.id)!;
           if (Math.hypot(p.x - command.x, p.y - command.y) > 1e-7) throw new Error('Point is held by constraints; this coordinate cannot be reached.');
@@ -130,10 +149,7 @@ export class SketchController<T> {
       const before = this.current;
       const sketch = await this.transaction(session, 'Constraint', async () => {
         const result = await session.tryAddConstraint(this.current.sketch, constraint, { ifRedundant: reference ? 'reference' : 'refuse' });
-        if (!result.ok) {
-          const error = new Error(`Conflicts with ${result.conflicting.join(', ') || result.redundant.join(', ') || 'the sketch'}: ${result.reason}`);
-          Object.assign(error, { conflicting: result.conflicting, overconstrained: result.conflicting.length > 0 || result.redundant.length > 0 || /redundan|conflict|inconsisten|over.?constrain/i.test(result.reason) }); throw error;
-        }
+        if (!result.ok) throw constraintError(this.current.sketch, result);
         this.diagnosis = result.diagnosis; return { ...this.current, sketch: result.sketch };
       });
       const added = sketch.constraints.find(c => !before.sketch.constraints.some(old => old.id === c.id));

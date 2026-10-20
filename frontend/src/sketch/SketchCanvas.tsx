@@ -4,14 +4,14 @@ import type { DomainProblem, Reference } from './adapter';
 import type { Command, PointRef } from './commands';
 import { constraintRefs, entityPoints, type Constraint, type DimensionPlacement, type Entity, type NewConstraint, type Sketch } from './model';
 import type { Diagnosis, DragResult } from './session';
-import type { XY } from './solver/types';
+import type { Capabilities, XY } from './solver/types';
 import { arcGeometry, arcThrough, onArc, positiveAngle, projectToEntity, tangentArc, tangentIncoming, tau } from './geometry';
 import { findSnap, snapLimitTarget, type SnapResult } from './snap';
 import { fit, gridStep, pan, screenToWorld, worldToScreen, zoomAt, visibleAnchor, type View } from './view';
 import { continueLine, lineState, placeLine, typedTarget, type LineState } from './tools/line';
 import { coalesceTargets, select } from './tools/select';
 import { candidateDimension, dimensionPicks, hitDimension, type CandidateDimension } from './tools/dimension';
-import { constraintFor, selectionConstraints } from './tools/constraints';
+import { selectionConstraints } from './tools/constraints';
 import { dimensionLabelBox, labelsOverlap, type LabelBox, dimensionHelper, dimensionLabel, dimensionLayout, dimensionLayouts, dragDimensionPlacement } from './dimensionGraphics';
 import { contextLabelLayout } from './contextLabels';
 import { geometryHit } from './geometryHit';
@@ -20,6 +20,8 @@ import { readSketchView, saveSketchView } from './viewPreferences';
 import './sketchCanvas.css';
 
 export interface CanvasSession {
+  readonly capabilities?: Capabilities;
+  readonly rejection?: unknown;
   readonly notice?: string;
   readonly lastSolveMs?: number;
   materialiseContext?(context: SketchContext, itemId: string): Promise<{ sketch: Sketch; id: string }>;
@@ -50,7 +52,7 @@ const hints: Record<Tool, string> = {
   arc3: 'Click start, end, then a point on the arc · A: tangent arc',
   dimension: 'Click a line, arc or point; click a second item if needed; move to choose; click to place; type the value', split: 'Click inside a curve to split',
 };
-const symbols: Record<string, string> = { horizontal: 'H', vertical: 'V', coincident: '●', tangent: '⌒', fix: '▣', equal: '=', pointOnLine: '⊙', pointOnArc: '⊙' };
+const symbols: Record<string, string> = { horizontal: 'H', vertical: 'V', coincident: '●', tangent: '⌒', fix: '▣', equal: '=', parallel: '∥', perpendicular: '⊥', midpoint: 'M', pointOnLine: '⊙', pointOnArc: '⊙' };
 function initialView(sketch: Sketch, width = 640, height = 360, context?: SketchContext, all = false): View {
   const ids = new Set(sketch.entities.filter(e => !e.reference && !dimensionHelper(e)).flatMap(e => e.kind === 'arc' ? [e.start, e.end] : entityPoints(e)));
   const pts = sketch.points.filter(p => ids.has(p.id));
@@ -114,7 +116,14 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
   const [pickReason, setPickReason] = useState('');
   const [hoveredArc, setHoveredArc] = useState<string>();
   const [hoveredPoint, setHoveredPoint] = useState<string>();
-  const [conflicts, setConflicts] = useState<string[]>([]);
+  const [rejected, setRejected] = useState<{ constraints: Constraint[]; reason: string; sketch: Sketch }>();
+  const [showConflict, setShowConflict] = useState(false);
+  const [dismissedDiagnosis, setDismissedDiagnosis] = useState<Diagnosis>();
+  const conflictConstraints = rejected?.constraints ?? (diagnosis !== dismissedDiagnosis
+    ? sketch.constraints.filter(c => diagnosis?.constraintStates[c.id] === 'conflicting') : []);
+  const conflicts = conflictConstraints.map(c => c.id);
+  const conflictSketch = { ...sketch, constraints: [...sketch.constraints.filter(c => !conflicts.includes(c.id)), ...conflictConstraints] };
+  const conflictNames = conflictConstraints.map(c => displayName(conflictSketch, c.id)).join('; ');
   const [typed, setTyped] = useState<{ length: string; angle: string }>();
   const [editing, setEditing] = useState<{ id: string; value: string; reason?: string; placed?: boolean }>();
   const cursorRef = useRef({ at: cursor, snap });
@@ -146,8 +155,8 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
   const fixed = new Set([...fixedPoints, ...sketch.constraints.flatMap(c => c.kind === 'fix' ? [c.point] : [])]);
   const determined = (id: string) => diagnosis?.pointDetermined?.[id] ?? (diagnosis?.dof === 0 || fixed.has(id));
   const selectedConstraintRefs = sketch.constraints.filter(c => selection.includes(c.id) || conflicts.includes(c.id)).flatMap(constraintRefs);
-  const highlighted = new Set([...selection, ...selectedConstraintRefs]);
-  const conflictRefs = new Set(sketch.constraints.filter(c => diagnosis?.constraintStates[c.id] === 'conflicting' || conflicts.includes(c.id)).flatMap(constraintRefs));
+  const highlighted = new Set([...selection, ...selectedConstraintRefs, ...(showConflict ? conflictConstraints.flatMap(constraintRefs) : [])]);
+  const conflictRefs = new Set([...sketch.constraints.filter(c => diagnosis?.constraintStates[c.id] === 'conflicting'), ...conflictConstraints].flatMap(constraintRefs));
   const color = (ids: string[]) => ids.some(id => conflictRefs.has(id)) ? 'conflicting' : ids.every(determined) ? 'determined' : 'under';
   const arcs = sketch.entities.filter(e => e.kind === 'arc');
   const endpoints = new Set(sketch.entities.flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : e.kind === 'arc' ? [e.start, e.end] : []));
@@ -160,18 +169,32 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
   }).map(p => p.id) : []);
   const convertible = selection.length === 1 ? sketch.entities.find(e => e.id === selection[0] && !e.reference
     && !references.some(r => r.id === e.id) && (e.kind === 'line' || e.kind === 'arc')) : undefined;
+  const offeredConstraints = selection.every(id => fixed.has(id) || sketch.entities.some(e => e.id === id && e.reference))
+    ? [] : selectionConstraints(sketch, selection, session?.capabilities);
+  const selectedDimension = selection.length === 1 ? sketch.constraints.find(c => c.id === selection[0] && 'value' in c) : undefined;
+  function reasonText(reason: unknown) {
+    return reason instanceof Error ? reason.message : String(reason);
+  }
   function error(reason: unknown) {
     if (!alive.current) return;
-    setMessage(reason instanceof Error ? reason.message : String(reason));
-    if (reason && typeof reason === 'object' && 'conflicting' in reason && Array.isArray(reason.conflicting)) setConflicts(reason.conflicting);
+    setMessage(reasonText(reason));
+    if (reason && typeof reason === 'object' && ('conflicting' in reason || 'overconstrained' in reason)) {
+      const detail = reason as { conflicting?: string[]; constraints?: Constraint[]; overconstrained?: boolean };
+      if (detail.overconstrained || detail.conflicting?.length) {
+        setShowConflict(false);
+        setRejected({ constraints: detail.constraints ?? sketch.constraints.filter(c => detail.conflicting?.includes(c.id)), reason: reasonText(reason), sketch });
+      }
+    }
   }
+  // Table and canvas commands share the same rejection display.
+  useEffect(() => { if (session?.rejection) error(session.rejection); }, [session, session?.rejection]);
   function run(action: () => Promise<unknown>) {
     if (!session) return Promise.resolve();
     pendingCount.current++; setPending(true);
     const result = work.current.then(async () => {
       if (!alive.current) return;
       setMessage('');
-      try { await action(); if (session.notice && alive.current) setMessage(session.notice); }
+      try { const result = await action(); if (result !== false && alive.current) { setRejected(undefined); setDismissedDiagnosis(diagnosis); setPickReason(''); setMessage(session.notice ?? ''); } }
       catch (reason) { error(reason); }
       finally { pendingCount.current--; if (alive.current) setPending(pendingCount.current > 0); }
     });
@@ -268,9 +291,8 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
     const timer = setTimeout(() => setPickReason(''), 1500); return () => clearTimeout(timer);
   }, [pickReason]);
   useEffect(() => {
-    if (!conflicts.length) return;
-    const timer = setTimeout(() => setConflicts([]), 1800); return () => clearTimeout(timer);
-  }, [conflicts]);
+    if (rejected && rejected.sketch !== sketch) { setRejected(undefined); setMessage(''); setPickReason(''); }
+  }, [sketch, rejected]);
   function position(event: { clientX: number; clientY: number }) {
     const rect = svg.current!.getBoundingClientRect();
     return { x: (event.clientX - rect.left) * size.width / (rect.width || size.width), y: (event.clientY - rect.top) * size.height / (rect.height || size.height) };
@@ -296,11 +318,11 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
         setChain(placed.state);
         if (placed.state.mode !== previous.mode) { setTool(placed.state.mode); setArcTool(placed.state.mode === 'arc3' ? 'arc3' : 'tangent'); }
         if (placed.reason) { setMessage(placed.reason); if (placed.state === previous) setPickReason(placed.reason); }
-        return;
+        return false;
       }
       let after: Sketch;
       try { after = await session!.command(placed.command, dimensions); }
-      catch (reason) { setPickReason(reason instanceof Error ? reason.message : String(reason)); throw reason; }
+      catch (reason) { setPickReason(reasonText(reason)); throw reason; }
       placementSketch.current = after;
       setChain(continueLine(placed.state, before, after)); setTyped(undefined); svg.current?.focus({ preventScroll: true });
     });
@@ -412,6 +434,8 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
     else if (key === 'x') {
       const commands = sketch.entities.filter(e => selection.includes(e.id) && !e.reference).map(e => ({ kind: 'setConstruction' as const, id: e.id, construction: !e.construction }));
       if (commands.length) void run(() => session!.command(commands));
+    } else if (offeredConstraints.some(c => c.key === key)) {
+      event.preventDefault(); void run(() => session!.constraint(offeredConstraints.find(c => c.key === key)!.constraint));
     } else if (/^[0-9.]$/.test(key) && tool === 'line' && chain.from) { event.preventDefault(); setTyped({ length: key, angle: '' }); }
   }
   function pointerDown(event: PointerEvent<SVGSVGElement>) {
@@ -635,9 +659,15 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
       </div>
     </div>
     {contextStale && <p role="status" className="sketch-context-stale">Context out of date</p>}
+    {(rejected || conflictConstraints.length > 0) && <div role="alert" className="sketch-conflict-banner">
+      <span>{rejected?.reason || `Conflicting constraints: ${conflictNames}${diagnosis?.reason ? `. ${diagnosis.reason}` : ''}`}</span>
+      <button type="button" onClick={() => { setShowConflict(true); setSelection(conflicts.filter(id => sketch.constraints.some(c => c.id === id))); svg.current?.focus({ preventScroll: true }); }}>Show</button>
+      <button type="button" onClick={() => { setRejected(undefined); setDismissedDiagnosis(diagnosis); setMessage(''); setPickReason(''); }}>Dismiss</button>
+    </div>}
     <div className="sketch-surface">
     {selection.length > 0 && tool !== 'dimension' && <div role="toolbar" aria-label="Selection constraints" className="sketch-context sketch-selection-context">
-      {selectionConstraints.filter(kind => constraintFor(sketch, selection, kind) && !(selection.every(id => fixed.has(id) || sketch.entities.some(e => e.id === id && e.reference)))).map(kind => <button type="button" key={kind} disabled={!session} onClick={() => { const c = constraintFor(sketch, selection, kind); if (c) void run(() => session!.constraint(c)); }}>{kind === 'point-on' ? 'Point on' : kind[0].toUpperCase() + kind.slice(1)}</button>)}
+      {offeredConstraints.map(({ kind, label, key, constraint }) => <button type="button" key={kind} title={key ? `${label} (${key.toUpperCase()})` : label} disabled={!session || pending} onClick={() => void run(() => session!.constraint(constraint))}>{label}</button>)}
+      {selectedDimension && 'driving' in selectedDimension && <button type="button" disabled={!session || pending} onClick={() => void run(() => session!.command({ kind: 'setDriving', id: selectedDimension.id, driving: !selectedDimension.driving }))}>{selectedDimension.driving ? 'Make reference' : 'Make driving'}</button>}
       {sketch.entities.some(e => selection.includes(e.id) && !e.reference && !references.some(r => r.id === e.id)) && <button type="button" disabled={!session} onClick={() => void run(() => session!.command(sketch.entities.filter(e => selection.includes(e.id) && !e.reference).map(e => ({ kind: 'setConstruction', id: e.id, construction: !e.construction }))))}>Construction (X)</button>}
       {convertible && <button type="button" disabled={!session} onClick={() => void run(() => session!.command({ kind: 'convertEntity', id: convertible.id, to: convertible.kind === 'line' ? 'arc' : 'line' }))}>{convertible.kind === 'line' ? 'Make arc' : 'Make line'}</button>}
       {sketch.constraints.some(c => selection.includes(c.id) && 'value' in c) && <button type="button" disabled={!session} onClick={() => void run(() => session!.command(sketch.constraints.filter(c => selection.includes(c.id) && 'value' in c).map(c => ({ kind: 'setDimensionPlacement', id: c.id }))))}>Reset position</button>}

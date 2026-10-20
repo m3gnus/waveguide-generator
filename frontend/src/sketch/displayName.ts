@@ -1,14 +1,20 @@
 import { contextData } from './context';
-import type { Sketch } from './model';
+import { constraintRefs, type Sketch } from './model';
 
 const names: Record<string, string> = {
   'dust-cap': 'Dust cap', cone: 'Cone', dome: 'Dome', surround: 'Surround', land: 'Land', piston: 'Piston',
+  axis: 'Axis of revolution', baffle: 'Rim plane',
   pole: 'Pole', 'cap.rim': 'Dust-cap edge', 'dome.rim': 'Dome edge', 'cone.rim': 'Cone edge',
   'surround.rim': 'Surround edge', rim: 'Rim',
 };
 
 /** Stable labels follow authoring order; identifiers remain available in tooltips. */
 export function displayName(sketch: Sketch, id: string): string {
+  const constraint = sketch.constraints.find(c => c.id === id);
+  if (constraint) {
+    const kind = constraint.kind.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+    return `${constraint.label?.trim() || kind[0].toUpperCase() + kind.slice(1)} (${constraintRefs(constraint).map(ref => displayName(sketch, ref)).join(', ')})`;
+  }
   const entity = sketch.entities.find(e => e.id === id);
   const data = entity?.data;
   if (data && typeof data === 'object' && !Array.isArray(data) && typeof data.name === 'string' && data.name.trim()) return data.name.trim();

@@ -599,3 +599,79 @@ describe('SketchCanvas with real slvs', () => {
   });
 
 });
+
+
+describe('constraint context controls', () => {
+  it('toggles a selected dimension both ways and undoes once', async () => {
+    const initial = base();
+    initial.constraints.push({ id: 'length', kind: 'distance', a: 'p', b: 'q', value: 10, driving: true });
+    await mount(initial);
+    await pointer(host.querySelector('[data-constraint-id="length"] text')!, 'pointerdown');
+    await act(async () => button('Make reference').click());
+    expect(host.querySelector('[data-constraint-id="length"] .sketch-glyph.reference')).not.toBeNull();
+    await act(async () => button('Make driving').click());
+    expect(host.querySelector('[data-constraint-id="length"] .sketch-glyph.reference')).toBeNull();
+    await act(async () => button('Undo').click());
+    expect(host.querySelector('[data-constraint-id="length"] .sketch-glyph.reference')).not.toBeNull();
+  });
+  it('keeps named conflicts past 1.8 seconds, shows selection, dismisses, and clears on success', async () => {
+    const initial = base();
+    initial.entities[0].data = { name: 'Cone slope' };
+    initial.constraints.push(
+      { id: 'constraint-opaque-a', kind: 'horizontal', line: 'line', label: 'Level slope' },
+      { id: 'constraint-opaque-b', kind: 'distance', a: 'p', b: 'q', value: 10, driving: true, label: 'Slope length' },
+    );
+    await mount(initial);
+    const line = () => host.querySelector('.sketch-entity[data-id="line"]')!;
+    await pointer(line(), 'pointerdown');
+    await act(async () => button('Vertical').click());
+    const banner = () => host.querySelector('.sketch-conflict-banner');
+    expect(banner()?.textContent).toContain('Cone slope');
+    expect(banner()?.textContent).toMatch(/Level slope|Slope length/);
+    expect(banner()?.textContent).not.toContain('constraint-opaque');
+    vi.useFakeTimers();
+    try { await act(async () => { await vi.advanceTimersByTimeAsync(5000); }); }
+    finally { vi.useRealTimers(); }
+    expect(banner()).not.toBeNull();
+    await act(async () => button('Show').click());
+    expect(host.querySelector('[data-constraint-id] .sketch-glyph.selected')).not.toBeNull();
+    expect(line().classList.contains('selected')).toBe(true);
+    await act(async () => button('Dismiss').click()); expect(banner()).toBeNull();
+    await key('Escape'); await pointer(line(), 'pointerdown');
+    await act(async () => button('Vertical').click()); expect(banner()).not.toBeNull();
+    await act(async () => button('Construction (X)').click()); expect(banner()).toBeNull();
+  });
+  it('refuses a selected reference-to-driving toggle with a named persistent reason', async () => {
+    const initial = base();
+    initial.constraints.push(
+      { id: 'held', kind: 'distance', a: 'p', b: 'q', value: 10, driving: true, label: 'Held length' },
+      { id: 'measured', kind: 'distance', a: 'p', b: 'q', value: 10, driving: false, label: 'Measured length' },
+    );
+    await mount(initial);
+    await pointer(host.querySelector('[data-constraint-id="measured"] text')!, 'pointerdown');
+    await act(async () => button('Make driving').click());
+    expect(host.querySelector('[data-constraint-id="measured"] .reference')).not.toBeNull();
+    expect(host.querySelector('.sketch-conflict-banner')?.textContent).toContain('Measured length');
+    expect(button('Make driving')).toBeDefined();
+    await act(async () => button('Dismiss').click());
+    expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
+  });
+  it('clears a diagnosed conflict when the host resolves it', async () => {
+    const initial = base();
+    initial.constraints.push({ id: 'opaque', kind: 'horizontal', line: 'line' });
+    const diagnosis = { ...initialDiagnosis(initial), status: 'failed' as const, constraintStates: { opaque: 'conflicting' as const } };
+    await act(async () => root.render(<SketchCanvas sketch={initial} diagnosis={diagnosis} references={[]} problems={[]}/>));
+    expect(host.querySelector('.sketch-conflict-banner')?.textContent).toContain('Horizontal (Line 1)');
+    await act(async () => root.render(<SketchCanvas sketch={initial} diagnosis={initialDiagnosis(initial)} references={[]} problems={[]}/>));
+    expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
+  });
+  it('uses available constraint shortcut hints without taking the drawing keys', async () => {
+    const initial = base();
+    initial.points[1].y = 5;
+    await mount(initial); await pointer(host.querySelector('[data-id="line"]')!, 'pointerdown');
+    expect(button('Vertical').title).toBe('Vertical (V)');
+    await key('v');
+    expect(host.querySelector('[aria-label^="Constraint vertical"]')).not.toBeNull();
+    await key('l'); expect(button('Line (L)').getAttribute('aria-pressed')).toBe('true');
+  });
+});

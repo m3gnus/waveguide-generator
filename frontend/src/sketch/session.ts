@@ -1,7 +1,7 @@
 import { referencePointIds } from './context';
 import type { Reference } from './adapter';
 import { applyCommand } from './ops';
-import { constraintProblem, validateSketch, type NewConstraint, type Sketch } from './model';
+import { constraintProblem, validateSketch, type Constraint, type NewConstraint, type Sketch } from './model';
 import { arcGeometry, distance, projectToLoci, refreshReferenceDimensions, tau, type Locus } from './geometry';
 import { createSolver, type DragTarget, type Sketch as SolverSketch, type SketchSolver, type SolveResult } from './solver/types';
 
@@ -25,7 +25,7 @@ export type SolverFactory = () => Promise<SketchSolver>;
 export interface SessionOptions { solverFactory?: SolverFactory; references: Reference[]; dragTolerance?: number }
 export type DragResult = { sketch: Sketch; stopped: boolean; steps: number; result?: SolveResult; reason?: string };
 export type ConstraintAttempt = { ok: true; sketch: Sketch; id: string; diagnosis: Diagnosis }
-  | { ok: false; sketch: Sketch; reason: string; conflicting: string[]; redundant: string[] };
+  | { ok: false; sketch: Sketch; reason: string; conflicting: string[]; redundant: string[]; constraints?: Constraint[] };
 type DimensionResult = { ok: boolean; sketch: Sketch; reason?: string };
 type Pending<T, R> = { value: T; waiting: { resolve: (result: R) => void; reject: (error: unknown) => void }[] };
 export class SketchSession {
@@ -47,6 +47,7 @@ export class SketchSession {
     try { return new SketchSession(sketch, solver, factory, options.references, options.dragTolerance); }
     catch (e) { solver.destroy(); throw e; }
   }
+  get capabilities() { return this.solver.capabilities(); }
   private load() { this.solver.load(toSolverSketch(this.sketch, this.references)); }
   private alive() { if (this.destroyed) throw new Error('Session has been destroyed.'); }
   private async call<T>(operation: () => T, resumeDrag = true, measure = true): Promise<T> {
@@ -97,9 +98,21 @@ export class SketchSession {
       this.sketch = sketch; this.load(); return { ok: false, sketch, reason, conflicting, redundant };
     };
     if ('error' in applied) return refuse(applied.error);
-    const id = applied.created[0];
+    return this.performConstraintChange(sketch, applied.sketch, applied.created[0], options);
+  }
+  /** Existing dimensions use exactly the same conflict/redundancy policy as new constraints. */
+  checkConstraintChange(before: Sketch, after: Sketch, id: string): Promise<ConstraintAttempt> {
+    return this.enqueue(() => this.performConstraintChange(before, after, id, {}));
+  }
+  private async performConstraintChange(sketch: Sketch, candidate: Sketch, id: string, options: { ifRedundant?: 'refuse' | 'reference' }): Promise<ConstraintAttempt> {
+    const constraint = candidate.constraints.find(c => c.id === id)!;
+    const refuse = (reason: string, conflicting: string[] = [], redundant: string[] = []): ConstraintAttempt => {
+      this.sketch = sketch; this.load();
+      const ids = new Set([id, ...conflicting, ...redundant]);
+      return { ok: false, sketch, reason, conflicting, redundant, constraints: candidate.constraints.filter(c => ids.has(c.id)) };
+    };
     if ('driving' in constraint && !constraint.driving) {
-      this.sketch = applied.sketch;
+      this.sketch = candidate;
       const diagnosis = await this.performFull();
       if (diagnosis.status !== 'ok') return refuse(diagnosis.reason ?? 'Reference dimension could not be added.', diagnosis.conflicting ?? []);
       return { ok: true, sketch: this.sketch, id, diagnosis };
@@ -109,7 +122,7 @@ export class SketchSession {
     // appears that the sketch did not have before.
     this.sketch = sketch;
     const before = await this.performFull(), baseline = new Set(before.redundant ?? []);
-    this.sketch = applied.sketch;
+    this.sketch = candidate;
     const diagnosis = await this.performFull();
     if (diagnosis.status !== 'ok' || diagnosis.conflicting?.includes(id)) return refuse(diagnosis.reason ?? 'The constraint conflicts with the sketch.', diagnosis.conflicting ?? []);
     // SolveSpace can also report redundancy against an internal equation only, so use the
@@ -119,7 +132,7 @@ export class SketchSession {
       || (diagnosis.dof !== undefined && before.dof !== undefined && diagnosis.dof >= before.dof);
     if (implicated) {
       if (options.ifRedundant !== 'reference' || !('driving' in constraint)) return refuse('The constraint is redundant.', [], diagnosis.redundant?.length ? diagnosis.redundant : [id]);
-      const reference = applyCommand(applied.sketch, { kind: 'setDriving', id, driving: false });
+      const reference = applyCommand(candidate, { kind: 'setDriving', id, driving: false });
       if ('error' in reference) return refuse(reference.error);
       this.sketch = reference.sketch;
       const checked = await this.performFull();

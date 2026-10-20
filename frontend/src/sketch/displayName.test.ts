@@ -37,3 +37,12 @@ describe('displayName', () => {
     expect(displayName(sketch, '18fc-e143-0ab9')).toBe('Point 3');
   });
 });
+
+
+it('names constraints with their geometry and preserves custom labels', () => {
+  const { sketch } = seed(expandedPreset('cone'));
+  sketch.constraints.push({ id: 'opaque', kind: 'parallel', a: 'cone', b: 'axis' });
+  expect(displayName(sketch, 'opaque')).toBe('Parallel (Cone, Axis of revolution)');
+  sketch.constraints[sketch.constraints.length - 1].label = 'Cone direction';
+  expect(displayName(sketch, 'opaque')).toBe('Cone direction (Cone, Axis of revolution)');
+});

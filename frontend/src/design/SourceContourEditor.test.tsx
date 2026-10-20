@@ -944,6 +944,37 @@ describe('source editor interactions', () => {
     await act(async () => button('Apply shape').click()); await settle();
     expect(readSourceAuthoring(readSourceDraft()).sketch.constraints.every(c => c.placement === undefined)).toBe(true);
   });
+  it('toggles a dimension in the table both ways with one undo and persistence', async () => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await mount(); await act(async () => button('Apply shape').click()); await settle();
+    const before = readSourceAuthoring(readSourceDraft()), id = before.meta.preset!.dimensions.depth_mm;
+    const constraint = () => readSourceAuthoring(readSourceDraft()).sketch.constraints.find(c => c.id === id)!;
+    await act(async () => button('Make reference Cone depth').click()); await settle();
+    expect(constraint()).toMatchObject({ id, driving: false });
+    expect(input(`Dimension ${id} value`).disabled).toBe(true);
+    await act(async () => button('Make driving Cone depth').click()); await settle();
+    expect(constraint()).toMatchObject({ id, driving: true });
+    await act(async () => button('Undo').click()); await settle();
+    expect(constraint()).toMatchObject({ id, driving: false });
+    await act(async () => root.render(null)); await mount();
+    expect(button('Make driving Cone depth')).toBeDefined();
+    expect(constraint()).toMatchObject({ id, driving: false });
+  });
+  it('refuses a table toggle that conflicts with another dimension and keeps it reference', async () => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await mount(); await act(async () => button('Apply shape').click()); await settle();
+    const envelope = JSON.parse(storage.getItem('')!);
+    const depth = envelope.sketch.constraints.find((c: { label?: string }) => c.label === 'Cone depth');
+    envelope.sketch.constraints.push({ ...depth, id: 'measured-depth', label: 'Measured depth', driving: false });
+    await act(async () => root.render(null)); storage.setItem('', JSON.stringify(envelope)); await mount();
+    const before = storage.getItem('');
+    await act(async () => button('Make driving Measured depth').click()); await settle();
+    expect(readSourceAuthoring(readSourceDraft()).sketch.constraints.find(c => c.id === 'measured-depth')).toMatchObject({ driving: false });
+    expect(storage.getItem('')).toBe(before);
+    expect(host.querySelector('.sketch-conflict-banner')?.textContent).toContain('Measured depth');
+    expect(host.querySelector('.sketch-conflict-banner')?.textContent).toContain('Conflicts with');
+    expect(host.querySelector('.sketch-conflict-banner')?.textContent).not.toContain('measured-depth');
+  });
   async function rename(label: string, value: string, gesture: 'F2' | 'dblclick' = 'F2', cancel = false) {
     const cell = [...host.querySelectorAll('button')].find(b => b.getAttribute('aria-label')?.startsWith(`${label}:`))!;
     await act(async () => {

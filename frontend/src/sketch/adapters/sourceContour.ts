@@ -229,8 +229,8 @@ export function rules(sketch: Sketch, meta: SourceMeta): DomainProblem[] {
   const margin = clearance?.margin ?? SOURCE_CLEARANCE_MM;
   const warn = (code: string, message: string) => problems.push({ code, ids: ordered.points, severity: 'warning', message });
   if (clearance?.plugZ0 !== undefined && clearance.plugZ0 - maximum <= SOURCE_CLEARANCE_MM) warn('plug-clearance', 'Plug inlet must clear the source by more than 0.1 mm');
-  if (clearance?.backZ !== undefined && minimum - clearance.backZ <= margin) warn('back-clearance', `Source must clear the enclosure back by more than ${margin} mm`);
-  if (clearance?.frontZ !== undefined && clearance.frontZ - maximum <= margin) warn('front-clearance', `Horn source must clear mouth by more than ${margin} mm`);
+  if (clearance?.backZ !== undefined && minimum - clearance.backZ <= margin) warn('back-clearance', margin === 0 ? 'Source must stay inside the housing' : `Source must clear the enclosure back by more than ${margin} mm`);
+  if (clearance?.frontZ !== undefined && clearance.frontZ - maximum <= margin) warn('front-clearance', margin === 0 ? 'Source must stay inside the housing' : `Horn source must clear mouth by more than ${margin} mm`);
   const moving = ordered.entities.filter(e => role(e.entity) === 'moving').map(e => e.entity.id);
   if (Object.keys(meta.weights).some(id => !moving.includes(id)) || moving.some(id => !Number.isFinite(meta.weights[id]))) add('weights', moving, 'Weights must cover exactly the moving patches.');
   return problems;

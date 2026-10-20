@@ -134,7 +134,7 @@ async function previewPlace(at: XY, kind: string) {
 
 describe('dimension pick → preview → place → type with the real solver', () => {
   it.each([
-    ['line', ['line'], { x: 0, y: 16 }, 'distance', 14],
+    ['line', ['line'], { x: -4, y: 16 }, 'distance', 14],
     ['points', ['p', 'q'], { x: 0, y: 16 }, 'distance', 14],
     ['axis', ['q', 'axis'], { x: 6, y: 16 }, 'distanceX', 16],
     ['baffle', ['q', 'baffle'], { x: 20, y: 6 }, 'distanceY', 12],
@@ -167,14 +167,14 @@ describe('dimension pick → preview → place → type with the real solver', (
 
   it('cancels a pick before leaving the tool on the second Esc', async () => {
     await mount(fixture('line')); await pick('line');
-    await pointer('pointermove', screen({ x: 0, y: 16 }));
+    await pointer('pointermove', screen({ x: -4, y: 16 }));
     expect(host.querySelector('.sketch-dimension-preview')).not.toBeNull();
     await key('Escape'); expect(host.querySelector('.sketch-dimension-preview')).toBeNull();
     expect(button('Dimension (D)').getAttribute('aria-pressed')).toBe('true');
     await key('Escape'); expect(button('Select (Esc)').getAttribute('aria-pressed')).toBe('true');
   });
   it.each(['Escape', 'outside'] as const)('%s keeps the measured value and one undo step', async how => {
-    const initial = fixture('line'); await mount(initial); await pick('line'); await previewPlace({ x: 0, y: 16 }, 'distance');
+    const initial = fixture('line'); await mount(initial); await pick('line'); await previewPlace({ x: -4, y: 16 }, 'distance');
     const measured = current; await input('100');
     if (how === 'Escape') await key('Escape', field()!);
     else await pointer('pointerdown', { x: 600, y: 300 }, document.body);
@@ -210,9 +210,9 @@ describe('dimension pick → preview → place → type with the real solver', (
     await key('z', svg(), { ctrlKey: true }); expect(current).toEqual(initial);
   });
   it.each(['reference', 'cancel'] as const)('asks before an over-constraint: %s', async choice => {
-    await mount(fixture('line')); await pick('line'); await previewPlace({ x: 0, y: 16 }, 'distance');
+    await mount(fixture('line')); await pick('line'); await previewPlace({ x: -4, y: 16 }, 'distance');
     await key('Escape', field()!); const measured = current;
-    await pick('line'); await pointer('pointermove', screen({ x: 0, y: 18 })); await pointer('pointerdown', screen({ x: 0, y: 18 })); await pointer('pointerup', screen({ x: 0, y: 18 }));
+    await pick('line'); await pointer('pointermove', screen({ x: -4, y: 18 })); await pointer('pointerdown', screen({ x: -4, y: 18 })); await pointer('pointerup', screen({ x: -4, y: 18 }));
     expect(host.querySelector('[aria-label="Over-constrained dimension"]')!.textContent).toContain('This dimension would over-constrain the sketch.');
     expect(current).toBe(measured); expect(field()).toBeNull();
     await act(async () => button(choice === 'reference' ? 'Make it a reference (driven) dimension' : 'Cancel').click());
@@ -233,7 +233,7 @@ describe('dimension interaction regressions', () => {
     svg().setPointerCapture = () => { captured = true; };
     svg().hasPointerCapture = () => captured;
     svg().releasePointerCapture = () => { captured = false; };
-    const at = screen({ x: 0, y: 16 });
+    const at = screen({ x: -4, y: 16 });
     await pointer('pointermove', at);
     await pointer('pointerdown', at);
     expect(field()).toBeNull();
@@ -289,7 +289,7 @@ describe('dimension interaction regressions', () => {
     await previewPlace({ x: 20, y: 10 }, 'angle');
   });
   it('uses the click dismissing a value box as the first pick of the next dimension', async () => {
-    await mount(fixture('line')); await pick('line'); await previewPlace({ x: 0, y: 16 }, 'distance');
+    await mount(fixture('line')); await pick('line'); await previewPlace({ x: -4, y: 16 }, 'distance');
     const at = screen(current.points.find(p => p.id === 'r')!);
     await pointer('pointermove', at); await pointer('pointerdown', at); await pointer('pointerup', at);
     expect(field()).toBeNull();
@@ -312,7 +312,7 @@ describe('dimension interaction regressions', () => {
     else expect(current.constraints.at(-1)!.placement).toBeUndefined();
   });
   it.each(['undo', 'redo', 'external'] as const)('clears pending picks after %s changes the sketch', async how => {
-    await mount(fixture('line')); await pick('line'); await previewPlace({ x: 0, y: 16 }, 'distance');
+    await mount(fixture('line')); await pick('line'); await previewPlace({ x: -4, y: 16 }, 'distance');
     await key('Escape', field()!);
     if (how === 'redo') await key('z', svg(), { ctrlKey: true });
     await pick('r'); await pick('s'); await pointer('pointermove', screen({ x: 22, y: 24 }));
@@ -322,7 +322,7 @@ describe('dimension interaction regressions', () => {
     expect(host.querySelector('.sketch-dimension-preview')).toBeNull();
   });
   it('dismisses on Tab blur while ignoring incidental opening focus churn', async () => {
-    await mount(fixture('line')); await pick('line'); await previewPlace({ x: 0, y: 16 }, 'distance');
+    await mount(fixture('line')); await pick('line'); await previewPlace({ x: -4, y: 16 }, 'distance');
     const measured = current;
     act(() => svg().focus()); expect(field()).not.toBeNull();
     act(() => field()!.focus()); await key('Tab', field()!);
@@ -339,7 +339,7 @@ describe('dimension interaction regressions', () => {
       if (how === 'overconstraint') throw { overconstrained: true };
       return original(...args);
     });
-    const at = screen({ x: 0, y: 16 });
+    const at = screen({ x: -4, y: 16 });
     await pointer('pointerdown', at); await pointer('pointerup', at);
     if (how === 'tool change') await key('l'); else await key('Escape');
     await act(async () => { release(); });
@@ -408,4 +408,22 @@ describe('hand-drawn cone dimensions', () => {
     expect(JSON.stringify(lower(current, initial.meta))).toBe(before);
     expect(current).toEqual(initial.sketch);
   });
+});
+
+
+it('picks a cone slope and the axis, places 30 degrees, and undoes the whole dimension', async () => {
+  const initial = fixture('axis');
+  await mount(initial);
+  await pick('line'); await pick('axis');
+  const place = screen({ x: 18, y: 16 });
+  await pointer('pointermove', place); await pointer('pointerdown', place); await pointer('pointerup', place);
+  expect(field()).not.toBeNull();
+  await input('30'); await key('Enter', field()!);
+  expect(current.constraints.at(-1)).toMatchObject({ kind: 'angle', value: Math.PI / 6, driving: true });
+  const p = current.points.find(p => p.id === 'p')!, q = current.points.find(p => p.id === 'q')!;
+  expect(Math.atan2(q.x - p.x, q.y - p.y)).toBeCloseTo(Math.PI / 6, 8);
+  expect(current.points.find(p => p.id === 'origin')).toEqual(initial.points.find(p => p.id === 'origin'));
+  expect(current.points.find(p => p.id === 'up')).toEqual(initial.points.find(p => p.id === 'up'));
+  await act(async () => button('Undo').click());
+  expect(current).toEqual(initial);
 });

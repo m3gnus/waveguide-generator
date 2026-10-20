@@ -87,3 +87,6 @@
 
 .sketch-context-item.selected > path:not(.sketch-context-hit), .sketch-context-item.hovered > path:not(.sketch-context-hit) { stroke: var(--accent); stroke-width: 2.5; }
 .sketch-context-item.selected text { fill: var(--accent); }
+
+.sketch-conflict-banner { display: flex; align-items: center; gap: .5rem; padding: .5rem; border: 1px solid var(--red); border-radius: 4px; }
+.sketch-conflict-banner span { flex: 1; }

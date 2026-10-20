@@ -235,6 +235,7 @@ describe('fix-round reference lifecycle', () => {
       const state = withSourceContext(seed(document), context);
       expect(state.meta.clearances?.margin).toBe(0);
       expect(rules(state.sketch, state.meta).some(p => p.code === (front ? 'front-clearance' : 'back-clearance'))).toBe(delta <= 0);
+      if (delta <= 0) expect(rules(state.sketch, state.meta).find(p => p.code === (front ? 'front-clearance' : 'back-clearance'))?.message).toBe('Source must stay inside the housing');
     }
   });
 });
