@@ -1,3 +1,4 @@
+import { contextData } from './context';
 import type { Sketch } from './model';
 
 const names: Record<string, string> = {
@@ -11,6 +12,9 @@ export function displayName(sketch: Sketch, id: string): string {
   const entity = sketch.entities.find(e => e.id === id);
   const data = entity?.data;
   if (data && typeof data === 'object' && !Array.isArray(data) && typeof data.name === 'string' && data.name.trim()) return data.name.trim();
+  const reference = entity ?? sketch.entities.find(e => e.reference && e.kind === 'line' && [e.p1, e.p2].includes(id));
+  const label = reference && contextData(reference)?.label;
+  if (label) return label;
   if (names[id]) return names[id];
   if (entity) {
     if (entity.construction) {

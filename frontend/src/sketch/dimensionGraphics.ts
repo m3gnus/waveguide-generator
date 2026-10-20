@@ -1,6 +1,7 @@
 import type { Constraint, DimensionPlacement, Sketch } from './model';
 import { arcGeometry } from './geometry';
 import type { XY } from './solver/types';
+import { formatValue } from './formatValue';
 
 export const dimensionHelper = (e: Sketch['entities'][number]) => !!e.data && typeof e.data === 'object' && !Array.isArray(e.data) && e.data.dimensionHelper === true;
 export function dimensionName(c: Constraint): string {
@@ -9,7 +10,7 @@ export function dimensionName(c: Constraint): string {
   return c.label?.trim() || names[c.kind] || c.kind;
 }
 export function dimensionLabel(c: Constraint & { value: number; driving: boolean }, mode: 'value' | 'name' = 'value') {
-  const value = (c.kind === 'angle' ? c.value * 180 / Math.PI : c.value).toFixed(2);
+  const value = formatValue(c.kind === 'angle' ? c.value * 180 / Math.PI : c.value);
   return `${c.driving ? '' : '('}${mode === 'name' || c.label === 'r' || c.label === 'z' ? `${dimensionName(c)} ` : ''}${c.kind === 'radius' ? 'R ' : ''}${value}${c.kind === 'angle' ? '°' : ' mm'}${c.driving ? '' : ')'}`;
 }
 export interface LabelBox { x: number; y: number; width: number; height: number }

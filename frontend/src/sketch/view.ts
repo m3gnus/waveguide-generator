@@ -22,3 +22,26 @@ export function gridStep(scale: number): number {
   const minimum = 8 / scale, power = 10 ** Math.floor(Math.log10(minimum));
   return [1, 2, 5, 10].find(n => n * power >= minimum)! * power;
 }
+
+/** Visible segment midpoint, or the nearest visible point to a hover cursor. */
+export function visibleAnchor(points: XY[], viewport: Viewport, near?: XY): XY | undefined {
+  const inside = (p: XY) => p.x >= 0 && p.x <= viewport.width && p.y >= 0 && p.y <= viewport.height;
+  if (points.length === 1) return inside(points[0]) ? points[0] : undefined;
+  let nearest: XY | undefined, distance = Infinity;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i], delta = { x: b.x - a.x, y: b.y - a.y };
+    let low = 0, high = 1;
+    for (const [at, d, max] of [[a.x, delta.x, viewport.width], [a.y, delta.y, viewport.height]]) {
+      if (d === 0) { if (at < 0 || at > max) high = -1; }
+      else { const t0 = -at / d, t1 = (max - at) / d; low = Math.max(low, Math.min(t0, t1)); high = Math.min(high, Math.max(t0, t1)); }
+    }
+    if (low <= high) {
+      const t = near ? Math.max(low, Math.min(high, ((near.x - a.x) * delta.x + (near.y - a.y) * delta.y) / (delta.x ** 2 + delta.y ** 2 || 1))) : (low + high) / 2;
+      const p = { x: a.x + delta.x * t, y: a.y + delta.y * t };
+      if (!near) return p;
+      const d = Math.hypot(p.x - near.x, p.y - near.y);
+      if (d < distance) { nearest = p; distance = d; }
+    }
+  }
+  return nearest;
+}

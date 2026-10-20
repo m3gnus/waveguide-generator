@@ -132,25 +132,29 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
     if (!request) {
       request = sourceEditorApi.hornWall(draft.horn_config);
       wallCache.current.set(configKey, request);
+      void request.catch(() => { wallCache.current.delete(configKey); });
     }
     void request.then(value => {
       if (current) { setWall({ config: configKey, value }); setResolvedThroat({ config: configKey, radius: value.throat_radius_mm }); setWallStale(false); }
     }, () => { if (current) setWallStale(true); });
     return () => { current = false; };
   }, [configKey]);
-  const contextDimensions = draft.horn_config && wall ? { ...draft.dimensions, horn_length_mm: wall.value.horn_length_mm, mouth_radius_mm: wall.value.mouth_radius_mm } : draft.dimensions;
-  const builtHornContext = useMemo(() => hornAssemblyContext(contextDimensions, draft.phase_plugs, draft.horn_config ? wall?.value.wall_mm : undefined,
+  const dimensions = draft.horn_config && wall ? { ...draft.dimensions, horn_length_mm: wall.value.horn_length_mm, mouth_radius_mm: wall.value.mouth_radius_mm } : draft.dimensions;
+  const builtHornContext = useMemo(() => hornAssemblyContext(dimensions, draft.phase_plugs, draft.horn_config ? wall?.value.wall_mm : undefined,
     draft.horn_config ? wall?.value.throat_radius_mm ?? resolvedThroat?.radius ?? draft.horn.contour.points.at(-1)!.r_mm : draft.horn.contour.points.at(-1)!.r_mm),
-    [JSON.stringify(contextDimensions), draft.phase_plugs, draft.horn_config, wall, resolvedThroat, draft.horn.contour.points.at(-1)?.r_mm]);
+    [JSON.stringify(dimensions), draft.phase_plugs, draft.horn_config, wall, resolvedThroat, draft.horn.contour.points.at(-1)?.r_mm]);
   const lastHornContext = useRef(builtHornContext);
   if (!draft.horn_config || wall?.config === configKey) lastHornContext.current = builtHornContext;
   const hornContext = lastHornContext.current;
   const wooferContext = useMemo(() => wooferAssemblyContext(draft.dimensions, draft.woofer?.contour.points.at(-1)?.r_mm), [draft.dimensions, draft.woofer?.contour.points.at(-1)?.r_mm]);
   async function run(action: () => Promise<void>) { seedAllowed.current = false; setBusy(true); setError(''); setNotice(''); try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(false); } }
   const throat = draft.horn_config ? resolvedThroat?.config === JSON.stringify(draft.horn_config) ? resolvedThroat.radius
-    : wall?.value.throat_radius_mm : undefined;
+    : wall?.config === configKey ? wall.value.throat_radius_mm : undefined : undefined;
   function editSource(source: 'horn' | 'woofer') {
     seedAllowed.current = false;
+    if (source === 'horn' && draft.horn_config && throat === undefined) {
+      setError('Use current horn design to resolve the throat before editing its contour'); return;
+    }
     setEditing(source);
   }
   function download(blob: Blob, name: string) { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000); }
@@ -161,9 +165,6 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       : draft.horn_config ? { kind: 'throat', radius: throat ?? draft.horn.contour.points.at(-1)!.r_mm, hard: true } : { kind: 'mouth', radius: draft.dimensions.mouth_radius_mm }}
     onLimitChange={radius => change({ ...draftRef.current, dimensions: { ...draftRef.current.dimensions, [editing === 'woofer' ? 'aperture_radius_mm' : 'mouth_radius_mm']: radius } })}
     onDraftChange={(document) => change({ ...draftRef.current, [editing]: document })} onClose={() => setEditing(null)} onUseDocument={(document) => { change({ ...draftRef.current, [editing]: document }); setEditing(null); }}/>;
-  const dimensions = valid && draft.horn_config && accepted?.value.recipe
-    ? { ...draft.dimensions, horn_length_mm: accepted.value.recipe.horn_length_mm, mouth_radius_mm: accepted.value.recipe.mouth_radius_mm }
-    : draft.dimensions;
   const scalarLabels = { width_mm: 'Enclosure width', height_mm: 'Enclosure height', depth_mm: 'Enclosure depth', front_z_mm: 'Front Z', horn_length_mm: 'Horn length', mouth_radius_mm: 'Horn mouth radius', aperture_radius_mm: 'Woofer aperture radius' };
   const maxR = Math.max(dimensions.mouth_radius_mm, ...draft.phase_plugs.map((p) => Math.max(p.outer0_mm, p.outer1_mm)), 1);
   const minZ = Math.min(0, ...draft.horn.contour.points.map((p) => p.z_mm));

@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { sourceEditorApi, type SourceDocument, type SourceValidation } from '../api/sourceEditor';
 import { durableSettings, namespaceStorage, SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { INITIAL_SOURCE } from './sourceContourEditing';
-import { Editor, readSourceDraft, readSourceAuthoring, SourceContourDialog, SourceContourEditor } from './SourceContourEditor';
+import { Editor, readSourceDraft, readSourceAuthoring, readSourceAttachment, SourceContourDialog, SourceContourEditor } from './SourceContourEditor';
 
 vi.mock('../api/sourceEditor', () => ({ sourceEditorApi: { validate: vi.fn(), presets: vi.fn(), save: vi.fn(), delete: vi.fn(), expand: vi.fn(), split: vi.fn(), export: vi.fn() } }));
 import * as sourceAdapter from '../sketch/adapters/sourceContour';
@@ -64,10 +64,11 @@ describe('source editor interactions', () => {
     const document = readSourceDraft(), author = readSourceAuthoring(document);
     expect(document.contour.points.at(-1)!.r_mm).toBeCloseTo(20 - .1 - 1e-6, 8);
     expect(sourceAdapter.rules(author.sketch, author.meta)).toEqual([]);
-    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Mouth r 20.00');
-    const label = host.querySelector('.sketch-limit text')!;
-    expect(label.textContent).toContain('max rim r = mouth − 0.1 mm');
-    expect(Number(label.getAttribute('x')) + label.lastChild!.textContent!.length * 6.4).toBeLessThanOrEqual(640);
+    await act(async () => button('Fit all (Shift+F)').click());
+    const marker = host.querySelector('.sketch-limit')!, label = marker.querySelector('text');
+    expect(marker.querySelector('title')?.textContent).toContain('Mouth r 20.00');
+    expect(marker.querySelector('title')?.textContent).toContain('max rim r = mouth − 0.10 mm');
+    if (label) expect(Number(label.getAttribute('x')) + label.lastChild!.textContent!.length * 3.2).toBeLessThanOrEqual(640);
   });
   it('snaps a dragged horn rim to the allowed maximum while leaving the marker at the mouth', async () => {
     await mount();
@@ -88,17 +89,17 @@ describe('source editor interactions', () => {
     await enter('Aperture radius attachment', '18'); await settle();
     await act(async () => button('Undo').click()); await settle();
     expect(Number(input('Aperture radius attachment').value)).toBe(18);
-    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Aperture r 18.00');
+    expect(host.querySelector('.sketch-limit > title')?.textContent).toContain('Aperture r 18.00');
     expect(readSourceAuthoring(readSourceDraft()).meta.limit).toEqual({ kind: 'aperture', radius: 18 });
     expect(Number(input('Patch 1 weight').value)).toBe(1);
     await act(async () => button('Redo').click()); await settle();
-    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Aperture r 18.00');
+    expect(host.querySelector('.sketch-limit > title')?.textContent).toContain('Aperture r 18.00');
     expect(Number(input('Patch 1 weight').value)).toBe(.5);
     await act(async () => button('Undo').click()); await settle();
     await enter('Aperture radius attachment', '19'); await settle();
     expect(button('Redo').disabled).toBe(false);
     await act(async () => button('Redo').click()); await settle();
-    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Aperture r 19.00');
+    expect(host.querySelector('.sketch-limit > title')?.textContent).toContain('Aperture r 19.00');
     expect(Number(input('Patch 1 weight').value)).toBe(.5);
   });
   it('shows Valid contour alongside a soft limit warning while export stays enabled', async () => {
@@ -123,6 +124,7 @@ describe('source editor interactions', () => {
   });
   it('renders an editable aperture limit above export and writes label edits back to the attachment', async () => {
     await mount();
+    await act(async () => button('Fit all (Shift+F)').click());
     const label = host.querySelector('.sketch-limit text')!;
     expect(label.textContent).toContain('Aperture r 14.00');
     expect(host.querySelector('.sketch-limit > path:not(.sketch-context-hit)')!.getAttribute('d')).toContain('l4,4 -4,4 -4,-4 Z');
@@ -135,7 +137,7 @@ describe('source editor interactions', () => {
     expect(Number(input('Aperture radius attachment').value)).toBe(16);
     expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Aperture r 16.00');
     await enter('Aperture radius attachment', '18'); await settle();
-    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Aperture r 18.00');
+    expect(host.querySelector('.sketch-limit > title')?.textContent).toContain('Aperture r 18.00');
   });
   it('snaps a dragged woofer rim to the aperture and warns live when dragged beyond it', async () => {
     await mount();
@@ -159,6 +161,7 @@ describe('source editor interactions', () => {
     await mount();
     const selector = host.querySelector<HTMLSelectElement>('[aria-label="Source attachment"]')!;
     await act(async () => { selector.value = 'horn'; selector.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
+    await act(async () => button('Fit all (Shift+F)').click());
     expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Mouth r 20.00');
     await enter('Point 2 radius', '21'); await settle();
     expect(host.textContent).toContain('Rim exceeds the horn mouth');
@@ -987,6 +990,48 @@ describe('source editor interactions', () => {
     const other = host.querySelector('.sketch-dimension text')!, otherId = other.getAttribute('data-id');
     await pointer(other);
     expect(host.querySelector(`[data-row-id="${otherId}"]`)!.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('persists a 30 mm baffle and a pole-to-back dimension without retargeting on remount', async () => {
+    await mount(); await enter('Baffle depth attachment', '30'); await settle();
+    await act(async () => button('Fit all (Shift+F)').click());
+    await act(async () => button('Dimension (D)').click());
+    const svg = () => host.querySelector('[aria-label="Sketch drawing"]')!;
+    const pole = host.querySelector('.sketch-point[data-id="pole"]')!;
+    await pointer(pole, 'pointerdown', Number(pole.getAttribute('cx')), Number(pole.getAttribute('cy'))); await pointer(svg(), 'pointerup');
+    await pointer(host.querySelector('[data-context-id="box.back"] .sketch-context-hit')!); await settle();
+    await pointer(svg(), 'pointermove', 300, 110); await pointer(svg(), 'pointerdown', 300, 110); await pointer(svg(), 'pointerup'); await settle();
+    await act(async () => svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    const before = readSourceAuthoring(readSourceDraft()), documentBefore = readSourceDraft();
+    expect(before.sketch.constraints.some(c => c.kind === 'pointLineDistance')).toBe(true);
+    expect(readSourceAttachment().dimensions.depth_mm).toBe(30);
+    await act(async () => root.render(null)); await mount();
+    expect(readSourceAttachment().dimensions.depth_mm).toBe(30);
+    expect(Number(input('Baffle depth attachment').value)).toBe(30);
+    expect(readSourceAuthoring(readSourceDraft()).sketch).toEqual(before.sketch);
+    expect(readSourceDraft()).toEqual(documentBefore);
+    expect(host.textContent).not.toContain('Reference context changed');
+    await enter('Patch 1 weight', '.5'); await settle();
+    expect(readSourceDraft().contour.points).toEqual(documentBefore.contour.points);
+    await act(async () => root.render(null));
+    const envelope = JSON.parse(storage.getItem('')!); envelope.attachment.dimensions.depth_mm = 40;
+    storage.setItem('', JSON.stringify(envelope)); await mount();
+    expect(host.textContent).toContain('Reference context changed; contour updated');
+    expect(readSourceDraft().contour.points[0].z_mm).toBeCloseTo(-10, 8);
+
+  });
+
+  it('restores the standalone conical attachment kind and all dimensions on remount', async () => {
+    await mount();
+    const selector = host.querySelector<HTMLSelectElement>('[aria-label="Source attachment"]')!;
+    await act(async () => { selector.value = 'horn'; selector.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
+    await enter('Backing depth attachment', '25'); await settle();
+    const before = readSourceAttachment();
+    expect(before.kind).toBe('horn'); expect(before.dimensions.backing_depth_mm).toBe(25);
+    await act(async () => root.render(null)); await mount();
+    expect(readSourceAttachment()).toEqual(before);
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Source attachment"]')!.value).toBe('horn');
+    expect(Number(input('Backing depth attachment').value)).toBe(25);
   });
 
 });

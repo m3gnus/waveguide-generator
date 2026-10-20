@@ -3,6 +3,7 @@ import type { NewConstraint, Point, Sketch } from '../model';
 import type { XY } from '../solver/types';
 import { arcGeometry, distance, projectToEntity } from '../geometry';
 import { dimensionHelper } from '../dimensionGraphics';
+import { geometryHit } from '../geometryHit';
 
 export type DimensionPick = { kind: 'point'; point: Point; id: string }
   | { kind: 'line'; id: string; a: Point; b: Point; reference?: 'axis' | 'baffle' }
@@ -90,11 +91,10 @@ export function candidateDimension(picks: DimensionPick[], cursor: XY): Candidat
 /** Geometry hit testing, including infinite axis/baffle lines. Points always win. */
 export function hitDimension(sketch: Sketch, references: Reference[], cursor: XY, tolerance: number, hidden: string[] = []): string | undefined {
   const excluded = new Set([...hidden, ...sketch.entities.filter(e => e.reference || references.some(r => r.id === e.id) || dimensionHelper(e)).flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : e.kind === 'arc' ? [e.center, e.start, e.end] : [])]);
-  const point = sketch.points.filter(p => !excluded.has(p.id)).map(p => ({ id: p.id, gap: distance(p, cursor) })).filter(p => p.gap <= tolerance).sort((a, b) => a.gap - b.gap)[0];
-  if (point) return point.id;
-  return dimensionPicks(sketch, sketch.entities.map(e => e.id), references).flatMap(p => {
+  const points = sketch.points.filter(p => !excluded.has(p.id)).map(p => ({ kind: 'point', id: p.id, gap: distance(p, cursor) }));
+  const curves = dimensionPicks(sketch, sketch.entities.map(e => e.id), references).map(p => {
     const at = p.kind === 'line' && p.reference ? projection(cursor, p.a, p.b) : projectToEntity(sketch, p.id, cursor.x, cursor.y);
-    const gap = distance(cursor, at);
-    return gap <= tolerance ? [{ id: p.id, gap }] : [];
-  }).sort((a, b) => a.gap - b.gap)[0]?.id;
+    return { kind: p.kind, id: p.id, gap: distance(cursor, at) };
+  });
+  return geometryHit([...points, ...curves], tolerance)?.id;
 }

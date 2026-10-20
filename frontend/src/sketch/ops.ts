@@ -2,6 +2,16 @@ import type { Command, PointRef } from './commands';
 import { constraintProblem, constraintRefs, entityPoints, isJSON, numericSuffix, validateSketch, type Arc, type Constraint, type Entity, type Point, type Sketch } from './model';
 import { arcThrough, distance, onArc, tangentArc } from './geometry';
 
+/** Low-level removal shared by user deletion and reference lifecycle cleanup. */
+export function removeEntity(sketch: Sketch, id: string): { sketch: Sketch; removedConstraints: string[] } {
+  const entity = sketch.entities.find(e => e.id === id);
+  if (!entity) throw new Error(`Unknown entity: ${id}.`);
+  const entities = sketch.entities.filter(e => e.id !== id), stillUsed = new Set(entities.flatMap(entityPoints));
+  const deleted = new Set(entityPoints(entity).filter(point => !stillUsed.has(point)));
+  const constraints = sketch.constraints.filter(c => !constraintRefs(c).some(ref => ref === id || deleted.has(ref)));
+  return { sketch: { ...sketch, entities, points: sketch.points.filter(p => !deleted.has(p.id)), constraints },
+    removedConstraints: sketch.constraints.filter(c => !constraints.includes(c)).map(c => c.id) };
+}
 export type CommandResult = { sketch: Sketch; created: string[]; removedConstraints: string[] } | { error: string };
 export function applyCommand(sketch: Sketch, command: Command): CommandResult {
   const s: Sketch = { ...sketch, points: [...sketch.points], entities: [...sketch.entities], constraints: [...sketch.constraints] };
@@ -130,13 +140,8 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
       case 'deleteEntity': {
         const e = entity(command.id);
         if (e.reference) throw new Error('Reference lines cannot be deleted.');
-        const candidates = new Set(entityPoints(e));
-        s.entities = s.entities.filter(e => e.id !== command.id);
-        cleanConstraints(c => constraintRefs(c).includes(command.id));
-        const stillUsed = new Set(s.entities.flatMap(entityPoints));
-        const deleted = new Set([...candidates].filter(id => !stillUsed.has(id)));
-        s.points = s.points.filter(p => !deleted.has(p.id));
-        cleanConstraints(c => constraintRefs(c).some(id => deleted.has(id))); break;
+        const removed = removeEntity(s, command.id);
+        Object.assign(s, removed.sketch); removedConstraints.push(...removed.removedConstraints); break;
       }
       case 'convertEntity': {
         const e = entity(command.id);

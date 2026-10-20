@@ -1,11 +1,12 @@
-import type { SourceDocument, SourcePatch } from '../../api/sourceEditor';
+import type { SourceAttachment, SourceDocument, SourcePatch } from '../../api/sourceEditor';
 import type { DomainProblem, Lowered, Reference, SketchAdapter } from '../adapter';
 import { constraintRefs, entityPoints, validateSketch, type Entity, type Sketch } from '../model';
-import { applyCommand, importedSketch } from '../ops';
+import { applyCommand, importedSketch, removeEntity } from '../ops';
 import type { Command } from '../commands';
 import { arcGeometry, onArc } from '../geometry';
-import { contextData, moveReferenceLine, refreshContext, type SketchContext } from '../context';
+import { contextData, moveReferenceLine, referencePointIds, refreshContext, type SketchContext } from '../context';
 import { SOURCE_CLEARANCE_MM, SOURCE_LIMIT_INSET_MM, contextClearances, type SourceClearances } from './sourceContext';
+import { formatValue } from '../formatValue';
 import { presetDimensionActive } from './sourcePresetMapping';
 
 export interface SourceMeta {
@@ -47,7 +48,7 @@ export function withSourceLimit(state: { sketch: Sketch; meta: SourceMeta }, lim
     line.reference = true; line.construction = true;
   }
   if (line.kind !== 'line') throw new Error('Expected a limit line.');
-  const referencePoints = new Set(sketch.entities.filter(e => e.reference).flatMap(entityPoints));
+  const referencePoints = referencePointIds(sketch);
   const radius = sketch.points.find(p => p.id === rim)?.x;
   // When attaching an existing contour to a new throat, preserve its shape and circles.
   if (limit.hard && radius && radius !== limit.radius) {
@@ -67,7 +68,7 @@ export function withSourceLimit(state: { sketch: Sketch; meta: SourceMeta }, lim
     sketch.constraints = sketch.constraints.map(c => c.id === radiusDimension && 'driving' in c ? { ...c, driving: false } : c);
   }
   const reference: Reference = { id: line.id, kind: 'limit', radius: limit.radius,
-    label: `${limit.kind[0].toUpperCase()}${limit.kind.slice(1)} r ${limit.radius.toFixed(2)}${limit.kind === 'mouth' ? ' · max rim r = mouth − 0.1 mm' : ''}`,
+    label: `${limit.kind[0].toUpperCase()}${limit.kind.slice(1)} r ${formatValue(limit.radius)}${limit.kind === 'mouth' ? ` · max rim r = mouth − ${formatValue(SOURCE_CLEARANCE_MM)} mm` : ''}`,
     snapRadius: sourceLimitTarget(limit), locked: !!limit.hard, ...(rim ? { point: rim } : {}) };
   return { sketch, meta: { ...state.meta, limit, references: [...state.meta.references.filter(r => r.kind !== 'limit'), reference] } };
 }
@@ -225,10 +226,11 @@ export function rules(sketch: Sketch, meta: SourceMeta): DomainProblem[] {
     }
   }
   const maximum = Math.max(0, ...zs), minimum = Math.min(0, ...zs), clearance = meta.clearances;
+  const margin = clearance?.margin ?? SOURCE_CLEARANCE_MM;
   const warn = (code: string, message: string) => problems.push({ code, ids: ordered.points, severity: 'warning', message });
   if (clearance?.plugZ0 !== undefined && clearance.plugZ0 - maximum <= SOURCE_CLEARANCE_MM) warn('plug-clearance', 'Plug inlet must clear the source by more than 0.1 mm');
-  if (clearance?.backZ !== undefined && minimum - clearance.backZ <= SOURCE_CLEARANCE_MM) warn('back-clearance', 'Source must clear the enclosure back by more than 0.1 mm');
-  if (clearance?.frontZ !== undefined && clearance.frontZ - maximum <= SOURCE_CLEARANCE_MM) warn('front-clearance', 'Horn source must clear mouth by more than 0.1 mm');
+  if (clearance?.backZ !== undefined && minimum - clearance.backZ <= margin) warn('back-clearance', `Source must clear the enclosure back by more than ${margin} mm`);
+  if (clearance?.frontZ !== undefined && clearance.frontZ - maximum <= margin) warn('front-clearance', `Horn source must clear mouth by more than ${margin} mm`);
   const moving = ordered.entities.filter(e => role(e.entity) === 'moving').map(e => e.entity.id);
   if (Object.keys(meta.weights).some(id => !moving.includes(id)) || moving.some(id => !Number.isFinite(meta.weights[id]))) add('weights', moving, 'Weights must cover exactly the moving patches.');
   return problems;
@@ -262,6 +264,13 @@ export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Co
     if (adjacent.length === 2 && (role(adjacent[0]) !== role(adjacent[1]) || meta.weights[adjacent[0].id] !== meta.weights[adjacent[1].id])) return { error: 'Adjacent patches need the same role and literal weight to remove their join.' };
   }
   const result = applyCommand(sketch, command); if ('error' in result) return result;
+  // Remove references that lost their final constraint in this edit. Newly picked
+  // references remain available until a constraint has actually used them.
+  const referenced = (value: Sketch, e: Entity) => value.constraints.some(c => constraintRefs(c).some(id => id === e.id || entityPoints(e).includes(id)));
+  for (const e of result.sketch.entities) if (contextData(e) && referenced(sketch, e) && !referenced(result.sketch, e)) {
+    result.sketch = removeEntity(result.sketch, e.id).sketch;
+  }
+  const missingContext = meta.missingContext?.filter(({ id }) => result.sketch.entities.some(e => contextData(e)?.context === id));
   let preset = meta.preset;
   if (preset) {
     // Older envelopes only stored dimension IDs. Capture their values before an edit
@@ -296,16 +305,16 @@ export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Co
   const moving = result.sketch.entities.filter(e => !e.construction && role(e) === 'moving');
   for (const id of Object.keys(weights)) if (!moving.some(e => e.id === id)) delete weights[id];
   for (const e of moving) if (!Object.hasOwn(weights, e.id)) weights[e.id] = 1;
-  return { ...result, meta: { ...meta, weights, ...(preset ? { preset } : {}) } };
+  return { ...result, meta: { ...meta, missingContext, weights, ...(preset ? { preset } : {}) } };
 }
 
 /** Refresh only materialised geometry. The display context never enters SourceMeta. */
 export function withSourceContext(state: { sketch: Sketch; meta: SourceMeta }, context: SketchContext): { sketch: Sketch; meta: SourceMeta } {
   const refreshed = refreshContext(state.sketch, context);
-  return { sketch: refreshed.sketch, meta: { ...state.meta, clearances: contextClearances(context), missingContext: refreshed.missing.map(id => ({ id, label: id.startsWith('plug/') ? `Plug ${id.slice(5).replace(/\/inlet$/, ' inlet')}` : id })) } };
+  return { sketch: refreshed.sketch, meta: { ...state.meta, clearances: contextClearances(context), missingContext: refreshed.missing } };
 }
 /** Only authoring entities and provenance persist; live host data is installed afresh. */
-export function sourceAuthoringEnvelope(state: { sketch: Sketch; meta: SourceMeta }, document: SourceDocument, pending = false) {
+export function sourceAuthoringEnvelope(state: { sketch: Sketch; meta: SourceMeta }, document: SourceDocument, pending = false, attachment?: SourceAttachment) {
   const { clearances: _clearances, missingContext: _missing, ...meta } = state.meta;
-  return { version: 'wg-source-authoring-v2', document, sketch: state.sketch, meta, pending };
+  return { version: 'wg-source-authoring-v2', document, sketch: state.sketch, meta, pending, ...(attachment ? { attachment } : {}) };
 }

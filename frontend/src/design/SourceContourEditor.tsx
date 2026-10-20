@@ -13,7 +13,7 @@ import { SketchController, type Authoring } from '../sketch/controller';
 import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, withSourceLimit, withSourceContext, sourceAuthoringEnvelope, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
 import { presetDefaults as defaults, presetLabels, seedPreset, fitPresetDimensions } from '../sketch/adapters/sourcePreset';
 import { presetDimensionActive, presetDimensionProblem, presetTopologyMessage, reapplyPresetMessage } from '../sketch/adapters/sourcePresetMapping';
-import { contextData, type SketchContext } from '../sketch/context';
+import { contextData, refreshContext, type SketchContext } from '../sketch/context';
 import { contextClearances, standaloneContext } from '../sketch/adapters/sourceContext';
 import { displayName } from '../sketch/displayName';
 import { uniqueProblems } from '../sketch/adapter';
@@ -27,6 +27,18 @@ import './sourceContourEditor.css';
 const storage = namespaceStorage('sourceContourDraft');
 const id = () => globalThis.crypto.randomUUID();
 const labels: Record<string, string> = { ...presetLabels, width_mm: 'Baffle width', length_mm: 'Horn length', mouth_radius_mm: 'Mouth radius', housing_radius_mm: 'Housing radius', backing_depth_mm: 'Backing depth', aperture_radius_mm: 'Aperture radius' };
+
+const defaultAttachment: SourceAttachment = { kind: 'baffle', dimensions: { width_mm: 44, height_mm: 54, depth_mm: 12, aperture_radius_mm: 14, center_mm: [0, 0, 0] } };
+export function readSourceAttachment(): SourceAttachment {
+  try {
+    const envelope = JSON.parse(storage.getItem('') ?? 'null'), attachment = envelope?.attachment as SourceAttachment;
+    if (envelope?.version !== 'wg-source-authoring-v2' || !attachment || !['baffle', 'horn'].includes(attachment.kind)) return structuredClone(defaultAttachment);
+    const fields = attachment.kind === 'baffle' ? ['width_mm', 'height_mm', 'depth_mm', 'aperture_radius_mm'] : ['length_mm', 'mouth_radius_mm', 'housing_radius_mm', 'backing_depth_mm'];
+    if (!fields.every(key => Number.isFinite(attachment.dimensions[key])) || attachment.kind === 'baffle' && (!Array.isArray(attachment.dimensions.center_mm) || attachment.dimensions.center_mm.length !== 3 || !attachment.dimensions.center_mm.every(Number.isFinite))) return structuredClone(defaultAttachment);
+    return attachment;
+  } catch { return structuredClone(defaultAttachment); }
+}
+const attachmentLimit = (attachment: SourceAttachment): SourceLimit => ({ kind: attachment.kind === 'baffle' ? 'aperture' : 'mouth', radius: Number(attachment.dimensions[attachment.kind === 'baffle' ? 'aperture_radius_mm' : 'mouth_radius_mm']) });
 
 export function readSourceDraft(): SourceDocument {
   try {
@@ -74,6 +86,11 @@ export function readSourceAuthoring(document: SourceDocument): Authoring<SourceM
   } catch { return fallback; }
 }
 
+/** Install diagnostics on open; moved references go through replaceContext's solve and notice. */
+function openingSourceContext(state: Authoring<SourceMeta>, context: SketchContext): Authoring<SourceMeta> {
+  return { ...withSourceContext(state, context), sketch: state.sketch };
+}
+
 function newerEnvelope(): Record<string, unknown> | undefined {
   try {
     const raw = JSON.parse(storage.getItem('') ?? 'null');
@@ -119,15 +136,16 @@ export function SourceContourDialog() {
 }
 
 export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange, limit: hostLimit, onLimitChange, context: hostContext, contextStale = false }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; onDraftChange?: (document: SourceDocument) => void; limit?: SourceLimit; onLimitChange?: (radius: number) => void; context?: SketchContext; contextStale?: boolean }) {
-  const [attachment, setAttachment] = useState<SourceAttachment>({ kind: 'baffle', dimensions: { width_mm: 44, height_mm: 54, depth_mm: 12, aperture_radius_mm: 14, center_mm: [0, 0, 0] } });
-  const limit: SourceLimit = hostLimit ?? { kind: attachment.kind === 'baffle' ? 'aperture' : 'mouth', radius: Number(attachment.dimensions[attachment.kind === 'baffle' ? 'aperture_radius_mm' : 'mouth_radius_mm']) };
+  const [attachment, setAttachment] = useState<SourceAttachment>(() => initialDocument ? structuredClone(defaultAttachment) : readSourceAttachment());
+  const limit: SourceLimit = hostLimit ?? attachmentLimit(attachment);
+  const attachmentRef = useRef(attachment); attachmentRef.current = attachment;
   const limitRef = useRef(limit); limitRef.current = limit;
   const [draft, setDraft] = useState(() => initialDocument ? structuredClone(initialDocument) : readSourceDraft());
   const context = useMemo(() => hostContext ?? standaloneContext(hostLimit ? undefined : attachment, draft.contour.points.at(-1)?.r_mm ?? 0), [hostContext, attachment, !!hostLimit, draft.contour.points.at(-1)?.r_mm]);
   const contextRef = useRef(context); contextRef.current = context;
   const [author, setAuthor] = useState(() => {
     const next = initialDocument ? seed(draft) : readSourceAuthoring(draft);
-    return withSourceContext(withSourceLimit({ ...next, meta: { ...next.meta, weights: movingWeights(next.sketch, next.meta.weights) } }, limit), context);
+    return openingSourceContext(withSourceLimit({ ...next, meta: { ...next.meta, weights: movingWeights(next.sketch, next.meta.weights) } }, limit), context);
   });
   const authorRef = useRef(author); authorRef.current = author;
   const [generation, setGeneration] = useState(0);
@@ -198,9 +216,13 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const deferredHydration = useRef(false);
   hydrateRef.current = () => {
     const envelope = newerEnvelope(); setNewer(envelope); if (envelope) setClassic(true);
-    const restored = readSourceDraft(), next = readSourceAuthoring(restored); setDraft(restored); replaceAuthor(withSourceContext(withSourceLimit(next, limitRef.current), contextRef.current)); setUndo([]); setSelected(undefined); setSelectedPatch(0);
+    const restored = readSourceDraft(), next = readSourceAuthoring(restored), restoredAttachment = readSourceAttachment();
+    setAttachment(restoredAttachment);
+    const restoredLimit = hostLimit ?? attachmentLimit(restoredAttachment), restoredContext = hostContext ?? standaloneContext(restoredAttachment, restored.contour.points.at(-1)?.r_mm ?? 0);
+    const moved = refreshContext(next.sketch, restoredContext).moved;
+    setDraft(restored); replaceAuthor(openingSourceContext(withSourceLimit(next, restoredLimit), restoredContext)); setUndo([]); setSelected(undefined); setSelectedPatch(0);
     fitted.current = false; drag.current = null;
-    setNotice(envelope ? 'Newer sketch data is read-only. Classic drawing edits preserve it unchanged.' : restorationNotice(next) || 'Restored source draft from saved settings.');
+    setNotice(envelope ? 'Newer sketch data is read-only. Classic drawing edits preserve it unchanged.' : moved ? 'Reference context changed; contour updated' : restorationNotice(next) || 'Restored source draft from saved settings.');
   };
   useEffect(() => initialDocument ? undefined : durableSettings.subscribe('sourceContourDraft', () => {
     // The settings owner only notifies adopted server state: it already protects
@@ -229,21 +251,30 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
       if (lowered.ok) {
         draftRef.current = lowered.document; setDraft(lowered.document); draftCallback.current?.(lowered.document);
       }
-      if (!initialDocument) storage.setItem('', JSON.stringify(sourceAuthoringEnvelope(state, lowered.ok ? lowered.document : draftRef.current, !lowered.ok)));
+      if (!initialDocument) storage.setItem('', JSON.stringify(sourceAuthoringEnvelope(state, lowered.ok ? lowered.document : draftRef.current, !lowered.ok, attachmentRef.current)));
       setNotice(next.notice ?? ''); setError('');
     }, reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }, active => { if (current) { editingIntent.current = active; setSketchPending(active); if (!active && deferredHydration.current) { deferredHydration.current = false; hydrateRef.current(); } } }, (state, result) => { if (current) { setPreview(state === authorRef.current ? undefined : state); setDiagnosis(result); } }, (state, id, value) => presetDimensionProblem(state.sketch, state.meta, id, value));
     controller.current = next;
     // Initialization errors are reported by queued operations as well.
     return () => { current = false; next.destroy(); controller.current = undefined; };
   }, [classic, generation]);
-  const installedContext = useRef(context.fingerprint);
+  const savedAttachment = useRef(JSON.stringify(attachment));
+  useEffect(() => {
+    const key = JSON.stringify(attachment);
+    if (key === savedAttachment.current) return;
+    savedAttachment.current = key;
+    if (!initialDocument && !newer) storage.setItem('', JSON.stringify(sourceAuthoringEnvelope(authorRef.current, draftRef.current, !lower(authorRef.current.sketch, authorRef.current.meta).ok, attachment)));
+  }, [attachment]);
+  const installedContext = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (classic || !controller.current) return;
     const current = controller.current.current;
     if (JSON.stringify(current.meta.limit) === JSON.stringify(limit) && installedContext.current === context.fingerprint) return;
     const sameLimit = JSON.stringify(current.meta.limit) === JSON.stringify(limit);
-    const usedContext = current.sketch.entities.some(e => contextData(e)?.fingerprint !== undefined && contextData(e)?.fingerprint !== context.fingerprint);
-    if (sameLimit && !usedContext && JSON.stringify(current.meta.clearances) === JSON.stringify(contextClearances(context))) { installedContext.current = context.fingerprint; return; }
+    const refreshed = refreshContext(current.sketch, context);
+    const usedContext = refreshed.moved;
+    const sameReferences = refreshed.sketch === current.sketch && JSON.stringify(refreshed.missing) === JSON.stringify(current.meta.missingContext ?? []);
+    if (sameLimit && sameReferences && JSON.stringify(current.meta.clearances) === JSON.stringify(contextClearances(context))) { installedContext.current = context.fingerprint; return; }
     const oldThroat = current.meta.limit?.kind === 'throat' ? current.meta.limit.radius : undefined;
     const notice = limit.kind === 'throat' && oldThroat !== undefined && oldThroat !== limit.radius
       ? `Throat changed ${oldThroat.toFixed(2)} → ${limit.radius.toFixed(2)} mm; contour updated` : usedContext ? 'Reference context changed; contour updated' : undefined;
@@ -259,6 +290,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const draftRef = useRef(draft); draftRef.current = draft;
   const editingIntent = useRef(false);
   function replaceAuthor(next: Authoring<SourceMeta>) {
+    installedContext.current = undefined;
     setFitRequest(v => v + 1);
     authorRef.current = next; setAuthor(next); setPreview(undefined); setGeneration(v => v + 1); setDiagnosis(undefined); setCanvasSelection([]);
   }
@@ -282,7 +314,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         channel_id: next.drive.channel_id, motion: next.drive.motion })).catch(reason => setError(String(reason))); return;
     }
     if (recordUndo) setUndo((history) => [...history.slice(-19), structuredClone(draft)]);
-    setDraft(next); if (!initialDocument) storage.setItem('', JSON.stringify(newer ? { ...newer, document: next } : sourceAuthoringEnvelope(classic ? seed(next) : authorRef.current, next))); onDraftChange?.(next); setNotice(''); setError('');
+    setDraft(next); if (!initialDocument) storage.setItem('', JSON.stringify(newer ? { ...newer, document: next } : sourceAuthoringEnvelope(classic ? seed(next) : authorRef.current, next, false, attachmentRef.current))); onDraftChange?.(next); setNotice(''); setError('');
   }
   async function run(action: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
@@ -425,7 +457,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         <label>Drive channel ID<input aria-label="Drive channel ID" value={draft.drive.channel_id} onChange={(e) => change({ ...draft, drive: { ...draft.drive, channel_id: e.target.value } })}/></label>
         </details>
         <label>Prescribed motion<select aria-label="Prescribed motion" value={draft.drive.motion} onChange={(e) => change({ ...draft, drive: { ...draft.drive, motion: e.target.value as 'normal' | 'axial' } })}><option value="normal">Normal</option><option value="axial">Axial +Z</option></select></label>
-        <h3>Start from a shape</h3>{hostLimit ? <p>{limit.kind === 'throat' ? 'Fits into the horn design' : limit.kind === 'aperture' ? 'Fits into the woofer baffle' : 'Fits into the conical horn'}</p> : <label>Fits into<select aria-label="Source attachment" value={attachment.kind} onChange={(e) => setAttachment(e.target.value === 'baffle' ? { kind: 'baffle', dimensions: { width_mm: 44, height_mm: 54, depth_mm: 12, aperture_radius_mm: 14, center_mm: [0, 0, 0] } } : { kind: 'horn', dimensions: { mouth_radius_mm: 20, length_mm: 30, housing_radius_mm: 22, backing_depth_mm: 12 } })}><option value="baffle">Front baffle woofer</option><option value="horn">Circular conical horn</option></select></label>}<label>Shape<select aria-label="Source shape" value={shape} onChange={(e) => { const s = e.target.value as typeof shape; setShape(s); setDimensions({ ...defaults[s] }); setTopologyDimensions({}); }}><option value="flat">Flat</option><option value="dome">Dome and surround</option><option value="cone">Cone and dust cap</option></select></label>
+        <h3>Start from a shape</h3>{hostLimit ? <p>{limit.kind === 'throat' ? 'Fits into the horn design' : limit.kind === 'aperture' ? 'Fits into the woofer baffle' : 'Fits into the conical horn'}</p> : <label>Fits into<select aria-label="Source attachment" value={attachment.kind} onChange={(e) => setAttachment(e.target.value === 'baffle' ? structuredClone(defaultAttachment) : { kind: 'horn', dimensions: { mouth_radius_mm: 20, length_mm: 30, housing_radius_mm: 22, backing_depth_mm: 12 } })}><option value="baffle">Front baffle woofer</option><option value="horn">Circular conical horn</option></select></label>}<label>Shape<select aria-label="Source shape" value={shape} onChange={(e) => { const s = e.target.value as typeof shape; setShape(s); setDimensions({ ...defaults[s] }); setTopologyDimensions({}); }}><option value="flat">Flat</option><option value="dome">Dome and surround</option><option value="cone">Cone and dust cap</option></select></label>
         <div className="source-fields">{fields(presetDimensions, editPresetDimensions, 'preset')}</div><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.expand(shape, presetDimensions, draft), { shape, dimensions: presetDimensions }); setSelected(undefined); })}>Apply shape</button>
         <p>Rim radius {((presetDimensions.radius_mm ?? 0) + (presetDimensions.surround_width_mm ?? 0) + (presetDimensions.land_width_mm ?? 0)).toFixed(2)} mm</p>
         <button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => {

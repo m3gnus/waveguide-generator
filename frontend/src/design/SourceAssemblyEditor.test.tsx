@@ -20,7 +20,7 @@ describe('shared source and passage authoring', () => {
     vi.useFakeTimers(); vi.clearAllMocks(); storage.removeItem('');
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT:boolean }).IS_REACT_ACT_ENVIRONMENT=true;
     vi.mocked(sourceEditorApi.validateAssembly).mockResolvedValue({ geometry_sha256:'geometry', passage_contract:null, horn_section_mm:{} });
-    vi.mocked(sourceEditorApi.hornWall).mockImplementation(async config => { const p = config.profile as { r0_mm?: number; L_mm?: number }; const radius = p?.r0_mm ?? 4, length = p?.L_mm ?? 24; return { wall_mm: [[radius, 0], [10, length]], throat_radius_mm: radius, horn_length_mm: length, mouth_radius_mm: 10 }; });
+    vi.mocked(sourceEditorApi.hornWall).mockImplementation(async config => { const p = config.profile as { r0_mm?: number; L_mm?: number }; const radius = p?.r0_mm ?? 4, length = p?.L_mm ?? 24, mouth = length === 130 ? 80 : 10; return { wall_mm: [[radius, 0], [mouth, length]], throat_radius_mm: radius, horn_length_mm: length, mouth_radius_mm: mouth }; });
     vi.mocked(sourceEditorApi.hornProfile).mockRejectedValue(new Error('No resolved profile'));
     vi.mocked(sourceEditorApi.presets).mockResolvedValue([]);
     vi.mocked(sourceEditorApi.validate).mockImplementation(async (document) => ({ document, geometry_sha256:'g',excitation_sha256:'e',meridian:Object.fromEntries(document.contour.segments.map((s,i) => [s.id,document.contour.points.slice(i,i+2).map((p) => [p.r_mm,p.z_mm])])) }));
@@ -360,20 +360,40 @@ describe('shared source and passage authoring', () => {
     await act(async () => button('Edit horn contour…').click()); await settle();
     expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Throat r 4.00');
   });
-  it('retains the last physical context greyed while loading and after failure', async () => {
+  it('retains the last physical context greyed while loading and after failure when the current design resolved its throat', async () => {
     const saved = structuredClone(INITIAL_ASSEMBLY); saved.horn_config = { formula: 'OSSE', profile: { r0_mm: 4, L_mm: 24 } };
     storage.setItem('', JSON.stringify(saved)); await mount();
     let reject!: (reason: Error) => void;
     vi.mocked(sourceEditorApi.hornWall).mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
-    await applyConfig({ formula: 'OSSE', profile: { r0_mm: 9, L_mm: 30 } });
+    vi.mocked(sourceEditorApi.hornProfile).mockResolvedValue({ horn_config: { formula: 'OSSE', profile: { r0_mm: 9, L_mm: 30 } }, throat_radius_mm: 9, horn_length_mm: 30, mouth_radius_mm: 10 });
+    await act(async () => button('Use current horn design').click()); await settle();
     await act(async () => button('Edit horn contour…').click()); await settle();
     const previous = host.querySelector('[data-context-id="horn.wall"] > path')!.getAttribute('d');
     expect(host.textContent).toContain('Context out of date');
-    expect(host.querySelector('[data-context-id="horn.throat"] text')?.textContent).toContain('Throat r 4.00');
+    expect(host.querySelector('[data-context-id="horn.throat"] text')?.textContent).toContain('Throat r 9.00');
     await act(async () => reject(new Error('Wall unavailable'))); await settle();
     expect(host.querySelector('[data-context-id="horn.wall"] > path')!.getAttribute('d')).toBe(previous);
     expect(host.querySelector('.sketch-context-layer')?.classList.contains('stale')).toBe(true);
     expect(host.textContent).toContain('Context out of date');
+  });
+  it('guards unresolved throat edits after a configuration change and retries rejected cached requests', async () => {
+    const saved = structuredClone(INITIAL_ASSEMBLY), first = { formula: 'OSSE', profile: { r0_mm: 4, L_mm: 24 } };
+    saved.horn_config = first;
+    storage.setItem('', JSON.stringify(saved));
+    let reject!: (reason: Error) => void;
+    vi.mocked(sourceEditorApi.hornWall).mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    await mount();
+    await act(async () => button('Edit horn contour…').click()); await settle();
+    expect(host.querySelector('[aria-label="Source contour editor"]')).toBeNull();
+    expect(host.textContent).toContain('Use current horn design to resolve the throat before editing its contour');
+    await act(async () => reject(new Error('Transient failure'))); await settle();
+    await act(async () => button('Edit horn contour…').click()); await settle();
+    expect(host.querySelector('[aria-label="Source contour editor"]')).toBeNull();
+    const second = { formula: 'OSSE', profile: { r0_mm: 9, L_mm: 30 } };
+    await applyConfig(second); await applyConfig(first);
+    expect(sourceEditorApi.hornWall).toHaveBeenCalledTimes(3);
+    await act(async () => button('Edit horn contour…').click()); await settle();
+    expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Throat r 4.00');
   });
 
 });

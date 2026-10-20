@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { fit, gridStep, pan, screenToWorld, worldToScreen, zoomAt } from './view';
+import { visibleAnchor, fit, gridStep, pan, screenToWorld, worldToScreen, zoomAt } from './view';
 
 describe('true-aspect view', () => {
   it('fits all bounds at one scale with z pointing up', () => {
@@ -27,4 +27,18 @@ describe('true-aspect view', () => {
     expect(() => gridStep(0)).toThrow(); expect(() => zoomAt({ scale: 1, offsetX: 0, offsetY: 0 }, { x: 0, y: 0 }, -1)).toThrow();
     expect(() => fit({ minX: 2, maxX: 1, minY: 0, maxY: 1 }, { width: 100, height: 100 })).toThrow();
   });
+});
+
+it('anchors labels to visible geometry, including segments with both endpoints off screen', () => {
+  const viewport = { width: 640, height: 360 };
+  expect(visibleAnchor([{ x: 10, y: -100 }, { x: 10, y: 500 }], viewport)).toEqual({ x: 10, y: 180 });
+  expect(visibleAnchor([{ x: -100, y: 20 }, { x: 800, y: 20 }], viewport)).toEqual({ x: 320, y: 20 });
+  expect(visibleAnchor([{ x: 700, y: -100 }, { x: 700, y: 500 }], viewport)).toBeUndefined();
+  expect(visibleAnchor([{ x: 20, y: -1 }], viewport)).toBeUndefined();
+});
+
+it('anchors hover text at the nearest visible polyline point to the cursor', () => {
+  const viewport = { width: 640, height: 360 };
+  expect(visibleAnchor([{ x: 10, y: -100 }, { x: 10, y: 500 }], viewport, { x: 12, y: 250 })).toEqual({ x: 10, y: 250 });
+  expect(visibleAnchor([{ x: -100, y: 20 }, { x: 800, y: 20 }, { x: 600, y: 100 }], viewport, { x: 600, y: 98 })).toEqual({ x: expect.closeTo(600.6896551724137, 10), y: expect.closeTo(99.72413793103448, 10) });
 });

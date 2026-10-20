@@ -84,3 +84,6 @@
 .sketch-context-item .sketch-context-hit { stroke: transparent; stroke-width: 14; fill: none; pointer-events: stroke; }
 .sketch-context-item.role-throat > path, .sketch-context-item.role-mouth > path, .sketch-context-item.role-aperture > path { stroke-dasharray: none; }
 .sketch-context-stale { color: var(--fg3); font-size: 11px; }
+
+.sketch-context-item.selected > path:not(.sketch-context-hit), .sketch-context-item.hovered > path:not(.sketch-context-hit) { stroke: var(--accent); stroke-width: 2.5; }
+.sketch-context-item.selected text { fill: var(--accent); }

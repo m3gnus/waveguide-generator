@@ -192,7 +192,7 @@ export class SketchController<T> {
       const solved = { ...state, sketch: this.diagnosis.status === 'ok' && referenceMoved(current.sketch, state.sketch) ? next.sketch : state.sketch };
       session.destroy(); this.session = next;
       next.sketch = solved.sketch;
-      this.notice = this.diagnosis.status === 'ok' ? notice : 'Context changed; contour could not be solved';
+      this.notice = this.diagnosis.status === 'ok' ? notice ?? (referenceMoved(current.sketch, state.sketch) ? 'Reference context changed; contour updated' : undefined) : 'Context changed; contour could not be solved';
       this.history.map(snapshot => {
         if (snapshot === current) return solved;
         const updated = replace(snapshot); if (referenceMoved(snapshot.sketch, updated.sketch)) this.contextSnapshots.add(updated); return updated;

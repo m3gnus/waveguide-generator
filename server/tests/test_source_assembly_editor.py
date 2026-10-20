@@ -189,3 +189,36 @@ def test_horn_wall_maps_unavailable_mesher_to_503(client, monkeypatch):
     monkeypatch.setattr(builtins, "__import__", unavailable)
     response = client.post("/api/source-editor/assembly/horn-wall", json={"horn_config": {}})
     assert response.status_code == 503, response.text
+
+
+def test_horn_profile_uses_shared_errors_without_sampling(client, monkeypatch):
+    from hornlab_mesher.general_horn import GeneralHornWall
+
+    def unexpected_sample(*args, **kwargs):
+        raise AssertionError("horn-profile must not sample the wall")
+
+    monkeypatch.setattr(GeneralHornWall, "evaluate", unexpected_sample)
+    design = {"formula": "OSSE", "r0": 4, "a": 32, "a0": 6, "L": 24,
+              "mesh": {"length_segments": 32, "angular_segments": 64}}
+    response = client.post("/api/source-editor/assembly/horn-profile", json=design)
+    assert response.status_code == 200, response.text
+    assert "wall_mm" not in response.json()
+
+    def invalid(*args, **kwargs):
+        raise ValueError("bad wall")
+
+    monkeypatch.setattr(GeneralHornWall, "from_config", invalid)
+    response = client.post("/api/source-editor/assembly/horn-profile", json=design)
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "bad wall"
+
+    original = builtins.__import__
+
+    def unavailable(name, *args, **kwargs):
+        if name == "hornlab_mesher.general_horn":
+            raise ImportError("old mesher")
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", unavailable)
+    response = client.post("/api/source-editor/assembly/horn-profile", json=design)
+    assert response.status_code == 503, response.text

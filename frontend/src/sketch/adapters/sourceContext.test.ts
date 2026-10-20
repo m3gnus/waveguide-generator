@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { hornAssemblyContext, standaloneContext, wooferAssemblyContext } from './sourceContext';
 import { lower, rules, seed, sourceAuthoringEnvelope, withSourceContext, withSourceLimit } from './sourceContour';
-import { contextData, materialiseContext } from '../context';
+import { contextData, geometryFingerprint, materialiseContext } from '../context';
 import { entityPoints } from '../model';
 import { toSolverSketch } from '../session';
 import { SketchController } from '../controller';
@@ -24,21 +24,27 @@ afterEach(() => { vi.unstubAllGlobals(); storage.removeItem(''); });
 describe('source context frame golden numbers', () => {
   it('places the throat, mouth, back, off-centre walls and plug corners in the horn frame', () => {
     const context = horn(), item = (id: string) => context.items.find(i => i.id === id)!;
-    expect(context.rimPlaneLabel).toBe('Throat plane (z = 0)');
+    expect(context.rimPlaneLabel).toBe('Throat plane (z = 0.00)');
     expect(item('horn.throat').geometry).toEqual([{ x: 12.7, y: 0 }]);
     expect(item('horn.mouth').geometry).toEqual([{ x: 20, y: 30 }]);
     expect(item('rim-plane').geometry).toEqual([{ x: 0, y: 0 }, { x: 12.7, y: 0 }]);
     expect(item('box.back').geometry).toEqual([{ x: 0, y: -30 }, { x: 68, y: -30 }]);
     expect(item('box.side.near').geometry).toEqual([{ x: 12, y: -30 }, { x: 12, y: 30 }]);
-    expect(item('box.side.near').label).toBe('Enclosure side (nearest, +x) 12.0 mm');
+    expect(item('box.side.near').label).toBe('Enclosure side (nearest, +x) 12.00 mm');
     expect(item('box.side.far').geometry).toEqual([{ x: 68, y: -30 }, { x: 68, y: 30 }]);
-    expect(item('box.side.far').label).toBe('Enclosure side (farthest, −x) 68.0 mm');
+    expect(item('box.side.far').label).toBe('Enclosure side (farthest, −x) 68.00 mm');
     expect(item('box.side.far').emphasis).toBe('far');
     expect(item('plug/core/inlet').geometry).toEqual([{ x: 0, y: 2 }, { x: 2, y: 2 }]);
     expect(item('plug/core/body').geometry).toEqual([{ x: 2, y: 2 }, { x: 3, y: 6 }, { x: 0, y: 6 }, { x: 0, y: 2 }]);
     expect(item('plug/core/keepout').geometry[2].y).toBe(1.9);
     expect(item('keepout.back').geometry[2].y).toBe(-29.9);
     expect(item('keepout.front').geometry[2].y).toBe(29.9);
+  });
+  it('formats every numeric context value to two decimals, including the front z', () => {
+    const context = hornAssemblyContext({ ...d, horn_length_mm: 119.70664012995216 }, [], undefined, 12.7);
+    expect(context.items.find(i => i.id === 'baffle.front')!.label).toBe('Front baffle (z = 119.71)');
+    expect(context.items.find(i => i.id === 'keepout.front')!.label).toBe('Minimum clearance 0.10 mm');
+    expect(context.items.find(i => i.id === 'horn.mouth')!.label).toBe('Mouth r 20.00');
   });
   it('splits a cone only at the planes used by phase_plug.wall_edges', () => {
     expect(horn().items.find(i => i.id === 'horn.wall')!.geometry).toHaveLength(4);
@@ -48,7 +54,7 @@ describe('source context frame golden numbers', () => {
   });
   it('uses the woofer baffle origin, aperture and radial collar', () => {
     const context = wooferAssemblyContext(d, 6), item = (id: string) => context.items.find(i => i.id === id)!;
-    expect(context.rimPlaneLabel).toBe('Front baffle (z = 0)');
+    expect(context.rimPlaneLabel).toBe('Front baffle (z = 0.00)');
     expect(item('box.back').geometry[0].y).toBe(-60);
     expect(item('woofer.aperture').geometry).toEqual([{ x: 8, y: 0 }]);
     expect(item('woofer.collar').geometry).toEqual([{ x: 6, y: 0 }, { x: 8, y: 0 }]);
@@ -59,7 +65,7 @@ describe('source context frame golden numbers', () => {
     const cone = standaloneContext({ kind: 'horn', dimensions: { length_mm: 30, mouth_radius_mm: 20, housing_radius_mm: 22, backing_depth_mm: 12 } }, 8);
     expect(cone.items.find(i => i.id === 'horn.wall')!.geometry).toEqual([{ x: 8, y: 0 }, { x: 20, y: 30 }]);
     expect(cone.items.find(i => i.id === 'box.back')!.geometry).toEqual([{ x: 22, y: -12 }, { x: 0, y: -12 }]);
-    expect(standaloneContext(undefined, 8).rimPlaneLabel).toBe('Rim plane (z = 0)');
+    expect(standaloneContext(undefined, 8).rimPlaneLabel).toBe('Rim plane (z = 0.00)');
   });
 });
 
@@ -70,7 +76,7 @@ describe('context ownership and canonical separation', () => {
     const atFace = materialiseContext(atPoint.sketch, context, 'plug/core/inlet');
     const line = atFace.sketch.entities.find(e => e.id === atFace.id)!;
     expect(line.kind).toBe('line'); expect(line.reference).toBe(true); expect(line.construction).toBe(true);
-    expect(line.data).toEqual({ context: 'plug/core/inlet', fingerprint: context.fingerprint });
+    expect(line.data).toEqual({ context: 'plug/core/inlet', fingerprint: geometryFingerprint(context.items.find(i => i.id === 'plug/core/inlet')!.geometry), label: 'Plug core inlet' });
     expect(entityPoints(line)).toContain(atPoint.id);
     expect(atFace.sketch.entities).toHaveLength(initial.sketch.entities.length + 1);
     const solver = toSolverSketch(atFace.sketch, []);
@@ -193,5 +199,41 @@ describe('associative dimensions with the real solver', () => {
     const next = withSourceLimit(initial, { kind: 'throat', radius: 13, hard: true });
     expect(next.sketch.points.find(p => p.id === 'rim')!.x).toBe(13);
     expect(lower(next.sketch, next.meta)).toMatchObject({ ok: true, document: { contour: { points: [{ r_mm: 0 }, { r_mm: 13 }] } } });
+  });
+});
+
+describe('fix-round reference lifecycle', () => {
+  it('drops a materialised line and its missing warning with its last constraint, including endpoint constraints', () => {
+    for (const endpoint of [false, true]) {
+      const initial = seed(INITIAL_SOURCE), context = horn();
+      const picked = materialiseContext(initial.sketch, context, endpoint ? 'plug/core/inlet.outer' : 'plug/core/inlet');
+      const result = applySourceCommand(picked.sketch, initial.meta, { kind: 'addConstraint', constraint: endpoint
+        ? { kind: 'distanceY', a: 'pole', b: picked.id, value: 2, driving: true }
+        : { kind: 'pointLineDistance', point: 'pole', line: picked.id, value: 2, driving: true } });
+      if ('error' in result) throw new Error(result.error);
+      const missing = withSourceContext(result, hornAssemblyContext(d, [], undefined, 12.7));
+      expect(rules(missing.sketch, missing.meta).some(p => p.code === 'missing-context')).toBe(true);
+      const constraint = result.sketch.constraints.at(-1)!;
+      const cleaned = applySourceCommand(missing.sketch, missing.meta, { kind: 'removeConstraint', id: constraint.id });
+      if ('error' in cleaned) throw new Error(cleaned.error);
+      expect(cleaned.sketch.entities.some(e => contextData(e))).toBe(false);
+      expect(rules(cleaned.sketch, cleaned.meta).some(p => p.code === 'missing-context')).toBe(false);
+      expect(cleaned.sketch.points).toHaveLength(initial.sketch.points.length);
+    }
+  });
+  it('keeps a disappeared enclosure item label instead of showing its raw id', () => {
+    const initial = seed(INITIAL_SOURCE), context = horn();
+    const picked = materialiseContext(initial.sketch, context, 'box.side.near');
+    const changed = withSourceContext({ ...initial, sketch: picked.sketch }, standaloneContext(undefined, 8));
+    expect(rules(changed.sketch, changed.meta)).toContainEqual(expect.objectContaining({ message: `${context.items.find(i => i.id === 'box.side.near')!.label} no longer exists. Re-attach or delete the constraint` }));
+  });
+  it.each([-1e-6, 0, 1e-6])('uses zero strict margin for conical front/back clearance at delta %s', delta => {
+    for (const front of [true, false]) {
+      const document = structuredClone(INITIAL_SOURCE); document.contour.points[0].z_mm = front ? 1 : -1;
+      const context = standaloneContext({ kind: 'horn', dimensions: { length_mm: front ? 1 + delta : 30, backing_depth_mm: front ? 12 : 1 + delta, mouth_radius_mm: 20, housing_radius_mm: 22 } }, 8);
+      const state = withSourceContext(seed(document), context);
+      expect(state.meta.clearances?.margin).toBe(0);
+      expect(rules(state.sketch, state.meta).some(p => p.code === (front ? 'front-clearance' : 'back-clearance'))).toBe(delta <= 0);
+    }
   });
 });

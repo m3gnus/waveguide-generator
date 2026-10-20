@@ -381,14 +381,23 @@ class HornWallRequest(WireModel):
     horn_config: dict[str, Any]
 
 
-def resolve_horn_wall(config=None, *, wall=None):
+def resolve_horn_wall(config=None, *, wall=None, samples=257, design=None):
     """One resolver/sampler for copied profiles and independent sketch context."""
     try:
+        if design is not None:
+            from server.preview.translate import design_to_mesher_config
+            config = design_to_mesher_config(design)
+            config["mode"] = "bare"
+            config.pop("enclosure", None)
+            config["mesh"]["wallThickness"] = 0
+            config["mesh"]["quadrants"] = 1234
+            config["mesh"]["verticalOffset"] = 0
         if wall is None:
             from hornlab_mesher.general_horn import GeneralHornWall
             wall = GeneralHornWall.from_config(config)
         return {
-            "wall_mm": wall.evaluate([j / 256 for j in range(257)]).tolist(),
+            **({"horn_config": config} if design is not None else {}),
+            **({"wall_mm": wall.evaluate([j / (samples - 1) for j in range(samples)]).tolist()} if samples else {}),
             "throat_radius_mm": wall.throat_radius_mm,
             "horn_length_mm": wall.length_mm,
             "mouth_radius_mm": wall.mouth_radius_mm,
@@ -420,21 +429,7 @@ def create_router(data_dir: Path) -> APIRouter:
                 422, f"{design.formula} cannot be attached to a source assembly "
                 "as a general horn profile. Use a legacy horn formula."
             )
-        try:
-            from server.preview.translate import design_to_mesher_config
-            from hornlab_mesher.general_horn import GeneralHornWall  # noqa: F401 - availability probe: an older mesher answers 503
-            config = design_to_mesher_config(design)
-            config["mode"] = "bare"
-            config.pop("enclosure", None)
-            config["mesh"]["wallThickness"] = 0
-            config["mesh"]["quadrants"] = 1234
-            config["mesh"]["verticalOffset"] = 0
-            resolved = resolve_horn_wall(config)
-            return {"horn_config": config, **{key: value for key, value in resolved.items() if key != "wall_mm"}}
-        except ImportError as exc:
-            raise HTTPException(503, "This mesher does not support general horn attachment. Update the mesher.") from exc
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(422, str(exc)) from exc
+        return resolve_horn_wall(design=design, samples=0)
 
     @router.post("/assembly/horn-wall")
     def assembly_horn_wall_endpoint(body: HornWallRequest) -> dict[str, Any]:
