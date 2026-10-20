@@ -234,27 +234,6 @@ def _solve_session(
         return native
 
 
-def solve_official_beat_from_msh_text(
-    msh_text: str, context: SolverContext, *, backend: str = "cpu", precision: str = "float32",
-    worker_manager: WorkerManager | None = None, julia_executable: str | None = None,
-    mesh_scale_to_m: float = 1.0, **callbacks: Any,
-) -> dict[str, Any]:
-    """Explicit official entry point using the production parametric path."""
-    from .beat import BeatUnavailable, solve_beat_from_msh_text
-
-    try:
-        return solve_beat_from_msh_text(
-            msh_text, context, backend=backend,
-            _worker_manager=worker_manager, _julia_executable=julia_executable,
-            _precision=precision, _mesh_scale_to_m=mesh_scale_to_m, **callbacks,
-        )
-    except BeatUnavailable as exc:
-        raise OfficialBeatUnavailable(str(exc)) from exc
-
-
-# The explicit entry above replaces the former standalone prototype port.
-
-
 @warm_cache.signature_scope
 def solve_transducer_compiled(
     request, *, worker_manager: WorkerManager | None = None,

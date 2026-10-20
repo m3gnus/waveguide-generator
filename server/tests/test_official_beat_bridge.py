@@ -661,8 +661,8 @@ def test_explicit_scaled_mesh_and_precision_reach_response_artifacts(runtime, mo
                     content_base64=base64.b64encode(data.tobytes()).decode("ascii"))
 
     monkeypatch.setitem(globals(), "_wire", double_wire)
-    response = bridge.solve_official_beat_from_msh_text(
-        text, context, mesh_scale_to_m=.001, precision="float64")
+    response = beat.solve_beat_from_msh_text(
+        text, context, backend="cpu", _mesh_scale_to_m=.001, _precision="float64")
     monkeypatch.setitem(globals(), "_wire", real_wire)
     artifact = response["_field_traces"]
     np.testing.assert_allclose(read_surface(artifact.mesh_text).points_m,

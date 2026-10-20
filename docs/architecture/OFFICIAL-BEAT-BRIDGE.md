@@ -24,7 +24,7 @@ its lease. A monitor requests cooperative cancellation and retires blocked work
 after its grace period; caller exceptions propagate unchanged. Idle workers
 remain reusable. Runtime and host directories live outside swept solve sessions.
 
-The explicit `solve_official_beat_from_msh_text` entry uses this production
+The `beat.solve_beat_from_msh_text` entry uses this production
 route and supports an input mesh scale; frames, response artifacts and retained
 mesh coordinates are metres while polar distance stays in metres.
 
