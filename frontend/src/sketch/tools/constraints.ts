@@ -11,6 +11,8 @@ const pointCurve = (kind: 'midpoint' | 'pointOnLine' | 'pointOnArc'): SelectionR
   const curve = sketch.entities.find(e => ids.includes(e.id) && e.kind === (kind === 'pointOnArc' ? 'arc' : 'line'));
   if (point && curve) return kind === 'pointOnArc' ? { kind, point, arc: curve.id } : { kind, point, line: curve.id };
 };
+const editableLines = (match: SelectionRule['match']): SelectionRule['match'] => (sketch, ids) =>
+  sketch.entities.some(e => ids.includes(e.id) && e.kind === 'line' && e.reference) ? undefined : match(sketch, ids);
 /** The single selection/label policy; solver capabilities decide which entries are offered. */
 const rules: Record<SelectionConstraint, SelectionRule> = {
   horizontal: { label: 'Horizontal', key: 'h', match: (_, ids) => ids.length === 1 ? { kind: 'horizontal', line: ids[0] } : ids.length === 2 ? { kind: 'horizontal', a: ids[0], b: ids[1] } : undefined },
@@ -18,10 +20,10 @@ const rules: Record<SelectionConstraint, SelectionRule> = {
   coincident: { label: 'Coincident', match: pair('coincident') },
   tangent: { label: 'Tangent', match: pair('tangent') },
   fix: { label: 'Fix', match: (_, ids) => ids.length === 1 ? { kind: 'fix', point: ids[0] } : undefined },
-  equal: { label: 'Equal', match: pair('equal') },
+  equal: { label: 'Equal', match: editableLines(pair('equal')) },
   parallel: { label: 'Parallel', key: 'p', match: pair('parallel') },
   perpendicular: { label: 'Perpendicular', key: 'n', match: pair('perpendicular') },
-  midpoint: { label: 'Midpoint', key: 'm', match: pointCurve('midpoint') },
+  midpoint: { label: 'Midpoint', key: 'm', match: editableLines(pointCurve('midpoint')) },
   pointOnLine: { label: 'Point on', match: pointCurve('pointOnLine') },
   pointOnArc: { label: 'Point on', match: pointCurve('pointOnArc') },
 };

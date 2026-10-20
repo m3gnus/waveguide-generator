@@ -153,4 +153,43 @@ describe('authoring session transactions', () => {
     } finally { controller.destroy(); }
   });
 
+  it.each(['movePoint', 'splitAt'] as const)('reports a %s convergence failure without inventing a conflict', async kind => {
+    const controller = generic();
+    try {
+      await controller.metadata(null);
+      const before = controller.current;
+      const failure = vi.spyOn(sessions.SketchSession.prototype, 'solveFull').mockResolvedValueOnce({
+        ...controller.diagnosis!, status: 'failed', reason: undefined, conflicting: [], redundant: [], hasRedundancy: false,
+      });
+      try {
+        const command = kind === 'movePoint' ? { kind, id: 'q', x: 12, y: 0 } : { kind, entity: 'line', x: 5, y: 0 };
+        await expect(controller.command(command)).rejects.toThrow('Could not solve this change');
+        expect(controller.rejection).not.toHaveProperty('overconstrained', true);
+        expect(controller.rejection).not.toHaveProperty('conflicting');
+        expect(controller.current).toBe(before);
+        expect(controller.diagnosis?.status).toBe('ok');
+      } finally { failure.mockRestore(); }
+    } finally { controller.destroy(); }
+  });
+  it.each(['dismiss', 'publish', 'undo', 'redo', 'drag'] as const)('clears a retained rejection on %s', async action => {
+    const controller = generic();
+    try {
+      await controller.constraint({ kind: 'distance', a: 'p', b: 'q', value: 10, driving: true });
+      await controller.constraint({ kind: 'distance', a: 'p', b: 'q', value: 10, driving: false });
+      const id = controller.current.sketch.constraints.at(-1)!.id;
+      if (action === 'redo') { await controller.metadata(null); await controller.undo(); }
+      await expect(controller.command({ kind: 'setDriving', id, driving: true })).rejects.toHaveProperty('overconstrained', true);
+      expect(controller.rejection).toBeDefined();
+      if (action === 'dismiss') controller.dismissRejection();
+      else if (action === 'publish') await controller.metadata(null);
+      else if (action === 'undo' || action === 'redo') await controller.undo(action === 'redo');
+      else {
+        const before = controller.current;
+        await controller.beginDrag('q'); await controller.dragTo('q', { x: 8, y: 6 }); await controller.endDrag();
+        expect(controller.current).not.toBe(before);
+      }
+      expect(controller.rejection).toBeUndefined();
+    } finally { controller.destroy(); }
+  });
+
 });

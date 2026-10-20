@@ -128,6 +128,7 @@ export function refreshReferenceDimensions(s: Sketch): Sketch {
     } else if (c.kind === 'angle') {
       const [a, b] = line(c.a), [d, e] = line(c.b), ax = b.x - a.x, ay = b.y - a.y, bx = e.x - d.x, by = e.y - d.y;
       value = Math.atan2(ax * by - ay * bx, ax * bx + ay * by);
+      if (c.supplementary) value = Math.PI - value;
     } else if (c.kind === 'pointLineDistance') {
       const [a, b] = line(c.line), q = p.get(c.point)!;
       value = Math.abs((q.x - a.x) * (b.y - a.y) - (q.y - a.y) * (b.x - a.x)) / distance(a, b);

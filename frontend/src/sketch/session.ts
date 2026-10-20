@@ -13,7 +13,7 @@ export function toSolverSketch(sketch: Sketch, references: Reference[]): SolverS
     ...sketch.entities.map(e => e.kind === 'arc' ? { kind: 'arc' as const, id: e.id, center: e.center,
       start: e.ccw ? e.start : e.end, end: e.ccw ? e.end : e.start, direction: 'ccw' as const }
       : e.kind === 'line' ? { kind: 'line' as const, id: e.id, p1: e.p1, p2: e.p2 } : { kind: e.kind, id: e.id }),
-  ], constraints: sketch.constraints.map(({ placement, ...c }) => c) };
+  ], constraints: sketch.constraints.map(({ placement, supplementary, ...c }) => c.kind === 'angle' && supplementary ? { ...c, value: Math.PI - c.value } : c) };
 }
 export interface Diagnosis extends SolveResult {
   sketch: Sketch; constraintStates: Record<string, 'ok' | 'redundant' | 'conflicting'>;
@@ -25,7 +25,7 @@ export type SolverFactory = () => Promise<SketchSolver>;
 export interface SessionOptions { solverFactory?: SolverFactory; references: Reference[]; dragTolerance?: number }
 export type DragResult = { sketch: Sketch; stopped: boolean; steps: number; result?: SolveResult; reason?: string };
 export type ConstraintAttempt = { ok: true; sketch: Sketch; id: string; diagnosis: Diagnosis }
-  | { ok: false; sketch: Sketch; reason: string; conflicting: string[]; redundant: string[]; constraints?: Constraint[] };
+  | { ok: false; sketch: Sketch; reason: string; conflicting: string[]; redundant: string[]; hasRedundancy?: boolean; constraints?: Constraint[] };
 type DimensionResult = { ok: boolean; sketch: Sketch; reason?: string };
 type Pending<T, R> = { value: T; waiting: { resolve: (result: R) => void; reject: (error: unknown) => void }[] };
 export class SketchSession {
@@ -106,15 +106,15 @@ export class SketchSession {
   }
   private async performConstraintChange(sketch: Sketch, candidate: Sketch, id: string, options: { ifRedundant?: 'refuse' | 'reference' }): Promise<ConstraintAttempt> {
     const constraint = candidate.constraints.find(c => c.id === id)!;
-    const refuse = (reason: string, conflicting: string[] = [], redundant: string[] = []): ConstraintAttempt => {
+    const refuse = (reason: string, conflicting: string[] = [], redundant: string[] = [], hasRedundancy = false): ConstraintAttempt => {
       this.sketch = sketch; this.load();
       const ids = new Set([id, ...conflicting, ...redundant]);
-      return { ok: false, sketch, reason, conflicting, redundant, constraints: candidate.constraints.filter(c => ids.has(c.id)) };
+      return { ok: false, sketch, reason, conflicting, redundant, hasRedundancy, constraints: candidate.constraints.filter(c => ids.has(c.id)) };
     };
     if ('driving' in constraint && !constraint.driving) {
       this.sketch = candidate;
       const diagnosis = await this.performFull();
-      if (diagnosis.status !== 'ok') return refuse(diagnosis.reason ?? 'Reference dimension could not be added.', diagnosis.conflicting ?? []);
+      if (diagnosis.status !== 'ok') return refuse(diagnosis.reason ?? 'Reference dimension could not be added.', diagnosis.conflicting, diagnosis.redundant, diagnosis.hasRedundancy);
       return { ok: true, sketch: this.sketch, id, diagnosis };
     }
     // Of mutually redundant constraints, SolveSpace may flag either one, and its choice is not
@@ -124,7 +124,7 @@ export class SketchSession {
     const before = await this.performFull(), baseline = new Set(before.redundant ?? []);
     this.sketch = candidate;
     const diagnosis = await this.performFull();
-    if (diagnosis.status !== 'ok' || diagnosis.conflicting?.includes(id)) return refuse(diagnosis.reason ?? 'The constraint conflicts with the sketch.', diagnosis.conflicting ?? []);
+    if (diagnosis.status !== 'ok' || diagnosis.conflicting?.includes(id)) return refuse(diagnosis.reason ?? 'The change could not be solved.', diagnosis.conflicting, diagnosis.redundant, diagnosis.hasRedundancy);
     // SolveSpace can also report redundancy against an internal equation only, so use the
     // solver's flag and the DOF as well: a constraint that removes no freedom is redundant.
     const implicated = diagnosis.redundant?.some(r => r === id || !baseline.has(r))
@@ -136,7 +136,7 @@ export class SketchSession {
       if ('error' in reference) return refuse(reference.error);
       this.sketch = reference.sketch;
       const checked = await this.performFull();
-      if (checked.status !== 'ok') return refuse(checked.reason ?? 'Reference dimension could not be added.', checked.conflicting ?? []);
+      if (checked.status !== 'ok') return refuse(checked.reason ?? 'Reference dimension could not be added.', checked.conflicting, checked.redundant, checked.hasRedundancy);
       return { ok: true, sketch: this.sketch, id, diagnosis: checked };
     }
     return { ok: true, sketch: this.sketch, id, diagnosis };

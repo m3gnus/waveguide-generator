@@ -48,6 +48,7 @@ export function withSourceLimit(state: { sketch: Sketch; meta: SourceMeta }, lim
     line.reference = true; line.construction = true;
   }
   if (line.kind !== 'line') throw new Error('Expected a limit line.');
+  line.data = { name: limit.hard ? 'Throat lock' : limit.kind === 'mouth' ? 'Mouth limit' : 'Aperture limit' };
   const referencePoints = referencePointIds(sketch);
   const radius = sketch.points.find(p => p.id === rim)?.x;
   // When attaching an existing contour to a new throat, preserve its shape and circles.
@@ -311,5 +312,7 @@ export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Co
 /** Refresh only materialised geometry. The display context never enters SourceMeta. */
 export function withSourceContext(state: { sketch: Sketch; meta: SourceMeta }, context: SketchContext): { sketch: Sketch; meta: SourceMeta } {
   const refreshed = refreshContext(state.sketch, context);
-  return { sketch: refreshed.sketch, meta: { ...state.meta, clearances: contextClearances(context), missingContext: refreshed.missing } };
+  const rimPlane = state.meta.references.find(r => r.kind === 'baffle')?.id;
+  const sketch = { ...refreshed.sketch, entities: refreshed.sketch.entities.map(e => e.id === rimPlane ? { ...e, data: { name: context.rimPlaneLabel } } : e) };
+  return { sketch, meta: { ...state.meta, clearances: contextClearances(context), missingContext: refreshed.missing } };
 }

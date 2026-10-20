@@ -16,6 +16,7 @@ import { dimensionLabelBox, labelsOverlap, type LabelBox, dimensionHelper, dimen
 import { contextLabelLayout } from './contextLabels';
 import { geometryHit } from './geometryHit';
 import { displayName } from './displayName';
+import { isConstraintConflict } from './controller';
 import { readSketchView, saveSketchView } from './viewPreferences';
 import './sketchCanvas.css';
 
@@ -24,6 +25,7 @@ export interface CanvasSession {
   readonly rejection?: unknown;
   readonly notice?: string;
   readonly lastSolveMs?: number;
+  dismissRejection?(): void;
   materialiseContext?(context: SketchContext, itemId: string): Promise<{ sketch: Sketch; id: string }>;
   command(command: Command | Command[], dimensions?: { length: number; angle?: number }): Promise<Sketch>;
   constraint(constraint: NewConstraint, reference?: boolean, placement?: boolean): Promise<Sketch>;
@@ -177,14 +179,10 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
   }
   function error(reason: unknown) {
     if (!alive.current) return;
-    setMessage(reasonText(reason));
-    if (reason && typeof reason === 'object' && ('conflicting' in reason || 'overconstrained' in reason)) {
-      const detail = reason as { conflicting?: string[]; constraints?: Constraint[]; overconstrained?: boolean };
-      if (detail.overconstrained || detail.conflicting?.length) {
-        setShowConflict(false);
-        setRejected({ constraints: detail.constraints ?? sketch.constraints.filter(c => detail.conflicting?.includes(c.id)), reason: reasonText(reason), sketch });
-      }
-    }
+    if (isConstraintConflict(reason)) {
+      setMessage(''); setPickReason(''); setShowConflict(false);
+      setRejected({ constraints: reason.constraints, reason: reasonText(reason), sketch });
+    } else setMessage(reasonText(reason));
   }
   // Table and canvas commands share the same rejection display.
   useEffect(() => { if (session?.rejection) error(session.rejection); }, [session, session?.rejection]);
@@ -366,7 +364,7 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
         }
       } catch (reason) {
         if (!alive.current || generation !== dimensionGeneration.current || toolRef.current !== 'dimension') return;
-        if (!reference && reason && typeof reason === 'object' && 'overconstrained' in reason && reason.overconstrained) setDimensionPrompt(candidate);
+        if (!reference && isConstraintConflict(reason)) setDimensionPrompt(candidate);
         else throw reason;
       }
     });
@@ -662,7 +660,7 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
     {(rejected || conflictConstraints.length > 0) && <div role="alert" className="sketch-conflict-banner">
       <span>{rejected?.reason || `Conflicting constraints: ${conflictNames}${diagnosis?.reason ? `. ${diagnosis.reason}` : ''}`}</span>
       <button type="button" onClick={() => { setShowConflict(true); setSelection(conflicts.filter(id => sketch.constraints.some(c => c.id === id))); svg.current?.focus({ preventScroll: true }); }}>Show</button>
-      <button type="button" onClick={() => { setRejected(undefined); setDismissedDiagnosis(diagnosis); setMessage(''); setPickReason(''); }}>Dismiss</button>
+      <button type="button" onClick={() => { session?.dismissRejection?.(); setRejected(undefined); setDismissedDiagnosis(diagnosis); setMessage(''); setPickReason(''); }}>Dismiss</button>
     </div>}
     <div className="sketch-surface">
     {selection.length > 0 && tool !== 'dimension' && <div role="toolbar" aria-label="Selection constraints" className="sketch-context sketch-selection-context">

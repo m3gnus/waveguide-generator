@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { displayName } from './displayName';
-import { seed } from './adapters/sourceContour';
+import { seed, withSourceContext, withSourceLimit } from './adapters/sourceContour';
 import { expandedPreset } from './adapters/presetTestSupport';
 import { importedSketch } from './ops';
+import { materialiseContext, type SketchContext } from './context';
 
 describe('displayName', () => {
   it('names every preset patch and contour point without changing its identifier', () => {
@@ -45,4 +46,30 @@ it('names constraints with their geometry and preserves custom labels', () => {
   expect(displayName(sketch, 'opaque')).toBe('Parallel (Cone, Axis of revolution)');
   sketch.constraints[sketch.constraints.length - 1].label = 'Cone direction';
   expect(displayName(sketch, 'opaque')).toBe('Cone direction (Cone, Axis of revolution)');
+});
+
+it.each([
+  { kind: 'throat' as const, hard: true, label: 'Throat lock' },
+  { kind: 'aperture' as const, hard: false, label: 'Aperture limit' },
+  { kind: 'mouth' as const, hard: false, label: 'Mouth limit' },
+])('names $label geometry, endpoints and constraints through displayName', ({ kind, hard, label }) => {
+  const state = withSourceLimit(seed(expandedPreset('cone')), { kind, hard, radius: 12 });
+  const id = state.meta.references.find(r => r.kind === 'limit')!.id;
+  const line = state.sketch.entities.find(e => e.id === id)!;
+  if (line.kind !== 'line') throw new Error('Expected line');
+  expect(displayName(state.sketch, id)).toBe(label);
+  expect(displayName(state.sketch, line.p1)).toBe(label);
+  state.sketch.constraints.push({ id: 'test-ref', kind: 'pointOnLine', point: 'rim', line: id });
+  expect(displayName(state.sketch, 'test-ref')).toBe(`Point on line (Rim, ${label})`);
+});
+it('names materialised context lines and the host rim plane', () => {
+  const context: SketchContext = { fingerprint: '1', rimPlaneLabel: 'Throat plane (z = 0)', items: [{ id: 'box.back', kind: 'segment', geometry: [{ x: 0, y: -20 }, { x: 20, y: -20 }], role: 'enclosure', label: 'Enclosure back', pickable: true }] };
+  const state = withSourceContext(seed(expandedPreset('cone')), context);
+  expect(displayName(state.sketch, 'axis')).toBe('Axis of revolution');
+  expect(displayName(state.sketch, 'baffle')).toBe(context.rimPlaneLabel);
+  const picked = materialiseContext(state.sketch, context, 'box.back');
+  expect(displayName(picked.sketch, picked.id)).toBe('Enclosure back');
+  const line = picked.sketch.entities.find(e => e.id === picked.id)!;
+  if (line.kind !== 'line') throw new Error('Expected line');
+  expect(displayName(picked.sketch, line.p1)).toBe('Enclosure back');
 });

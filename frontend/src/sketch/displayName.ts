@@ -16,9 +16,9 @@ export function displayName(sketch: Sketch, id: string): string {
     return `${constraint.label?.trim() || kind[0].toUpperCase() + kind.slice(1)} (${constraintRefs(constraint).map(ref => displayName(sketch, ref)).join(', ')})`;
   }
   const entity = sketch.entities.find(e => e.id === id);
-  const data = entity?.data;
-  if (data && typeof data === 'object' && !Array.isArray(data) && typeof data.name === 'string' && data.name.trim()) return data.name.trim();
   const reference = entity ?? sketch.entities.find(e => e.reference && e.kind === 'line' && [e.p1, e.p2].includes(id));
+  const data = reference?.data;
+  if (data && typeof data === 'object' && !Array.isArray(data) && typeof data.name === 'string' && data.name.trim()) return data.name.trim();
   const label = reference && contextData(reference)?.label;
   if (label) return label;
   if (names[id]) return names[id];

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { importedSketch, applyCommand } from './ops';
 import { SketchController } from './controller';
-import type { NewConstraint, Sketch } from './model';
+import { parseSketch, type NewConstraint, type Sketch } from './model';
 import { createSession } from './session';
 import { selectionConstraints } from './tools/constraints';
 import { candidateDimension, dimensionPicks } from './tools/dimension';
@@ -44,6 +44,26 @@ describe('constraint basics with the active solver', () => {
       capabilities.constraints.parallel = { support: 'unsupported', detail: 'test alternate solver' };
       expect(menu(['cone', 'other'])).not.toContain('parallel');
       expect(selectionConstraints(sketch, ['cone', 'other'])).toEqual([]);
+    } finally { session.destroy(); }
+  });
+  it('never offers Equal or Midpoint for reference lines, while retaining directional constraints', async () => {
+    const context: SketchContext = { fingerprint: '1', rimPlaneLabel: 'Rim plane', items: [{ id: 'wall', kind: 'segment', geometry: [{ x: 5, y: 0 }, { x: 5, y: 1 }], role: 'wall', label: 'Wall', pickable: true }] };
+    const picked = materialiseContext(initial(), context, 'wall');
+    const session = await createSession(picked.sketch, { references: [] });
+    try {
+      const menu = (ids: string[]) => selectionConstraints(picked.sketch, ids, session.capabilities).map(c => c.kind);
+      for (const id of ['axis', 'baffle', picked.id]) {
+        for (const ids of [['cone', id], [id, 'cone']]) {
+          expect(menu(ids)).not.toContain('equal');
+          expect(menu(ids)).toEqual(expect.arrayContaining(['parallel', 'perpendicular']));
+        }
+        for (const ids of [['p', id], [id, 'p']]) {
+          expect(menu(ids)).not.toContain('midpoint');
+          expect(menu(ids)).toContain('pointOnLine');
+        }
+      }
+      expect(menu(['cone', 'other'])).toContain('equal');
+      expect(menu(['p', 'other'])).toContain('midpoint');
     } finally { session.destroy(); }
   });
   it.each(['parallel', 'perpendicular', 'midpoint', 'pointOnLine'] as const)('applies %s and checks solved geometry', async kind => {
@@ -104,11 +124,12 @@ describe('constraint basics with the active solver', () => {
       await c.undo(); expect(c.current).toBe(held);
     } finally { c.destroy(); }
   });
-  it.each(['axis', 'baffle', 'context'])('sets a cone angle to 30 degrees against %s and keeps the reference fixed', async referenceId => {
+  it.each(['axis', 'baffle', 'context'].flatMap(referenceId => [false, true].flatMap(reverseCone => [false, true].map(reverseReference => ({ referenceId, reverseCone, reverseReference })))))('sets a cone angle to 30 degrees against $referenceId (cone reversed: $reverseCone, reference reversed: $reverseReference)', async ({ referenceId, reverseCone, reverseReference }) => {
     let sketch = initial();
     if (referenceId === 'context') {
       sketch = { ...sketch, entities: [...sketch.entities, { kind: 'line', id: 'context', p1: 'r', p2: 's', reference: true, construction: true, data: { context: 'wall', fingerprint: '1', label: 'Wall' } }] };
     }
+    sketch.entities = sketch.entities.map(e => e.kind === 'line' && (e.id === 'cone' && reverseCone || e.id === referenceId && reverseReference) ? { ...e, p1: e.p2, p2: e.p1 } : e);
     const references = [{ id: 'axis', kind: 'axis' as const }, { id: 'baffle', kind: 'baffle' as const }];
     const ref = sketch.entities.find(e => e.id === referenceId)!;
     if (ref.kind !== 'line') throw new Error('Expected line');
@@ -116,14 +137,23 @@ describe('constraint basics with the active solver', () => {
     try {
       const candidate = candidateDimension(dimensionPicks(sketch, ['cone', referenceId], references), { x: 4, y: 8 });
       expect(candidate?.kind).toBe('angle');
+      expect(candidate!.value).toBeLessThanOrEqual(Math.PI / 2);
       await c.constraint(candidate as NewConstraint);
       const id = c.current.sketch.constraints.at(-1)!.id;
       await c.dimension(id, Math.PI / 6);
       const s = c.current.sketch, a = vector(s, 'p', 'q'), b = vector(s, ref.p1, ref.p2);
-      const angle = Math.acos((a.x * b.x + a.y * b.y) / (Math.hypot(a.x, a.y) * Math.hypot(b.x, b.y)));
+      const angle = Math.acos(Math.abs(a.x * b.x + a.y * b.y) / (Math.hypot(a.x, a.y) * Math.hypot(b.x, b.y)));
       expect(angle).toBeCloseTo(Math.PI / 6, 8);
       expect(s.points).not.toEqual(sketch.points);
       expect([at(s, ref.p1), at(s, ref.p2)]).toEqual(fixed);
+      // The branch is authoring metadata and survives persistence and both toggles.
+      const parsed = parseSketch(JSON.parse(JSON.stringify(s)));
+      expect(parsed.ok).toBe(true);
+      expect(parsed.ok && parsed.sketch.constraints.at(-1)).toEqual(s.constraints.at(-1));
+      await c.command({ kind: 'setDriving', id, driving: false });
+      expect(c.current.sketch.constraints.at(-1)).toMatchObject({ kind: 'angle', value: expect.closeTo(Math.PI / 6, 8), driving: false });
+      await c.command({ kind: 'setDriving', id, driving: true });
+      expect(c.current.sketch.constraints.at(-1)).toMatchObject({ kind: 'angle', value: expect.closeTo(Math.PI / 6, 8), driving: true });
     } finally { c.destroy(); }
   });
 });

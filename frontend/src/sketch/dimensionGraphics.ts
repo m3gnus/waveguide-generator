@@ -49,7 +49,7 @@ function angleFrame(sketch: Sketch, c: Constraint) {
   const p = point(a.p1), q = point(a.p2), r = point(b.p1), s = point(b.p2);
   const dx = q.x - p.x, dy = q.y - p.y, ex = s.x - r.x, ey = s.y - r.y, cross = dx * ey - dy * ex;
   const t = Math.abs(cross) > 1e-12 ? ((r.x - p.x) * ey - (r.y - p.y) * ex) / cross : 0;
-  return { center: { x: p.x + t * dx, y: p.y + t * dy }, start: Math.atan2(dy, dx), sweep: c.value };
+  return { center: { x: p.x + t * dx, y: p.y + t * dy }, start: Math.atan2(dy, dx) + (c.supplementary ? Math.PI : 0), sweep: c.supplementary ? -c.value : c.value };
 }
 /** Geometry-relative defaults; only colliding labels advance to an outward lane. */
 export function dimensionLayout(sketch: Sketch, c: Constraint, xy: (id: string) => XY, bounds: DimensionBounds, lane = 0, scale = 1): DimensionLayout | undefined {

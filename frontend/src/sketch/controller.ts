@@ -12,10 +12,15 @@ function constraintError(sketch: Sketch, result: { reason?: string; conflicting?
   const ids = [...result.conflicting ?? [], ...result.redundant ?? []];
   const constraints = result.constraints ?? sketch.constraints.filter(c => ids.includes(c.id));
   const named = { ...sketch, constraints: [...sketch.constraints.filter(c => !constraints.some(v => v.id === c.id)), ...constraints] };
-  const reason = result.reason ?? 'The constraint conflicts with the sketch.';
+  if (!ids.length && !result.hasRedundancy) return new Error(`Could not solve this change${result.reason ? `: ${result.reason}` : '.'}`);
+  const reason = result.reason ?? 'The solver reports conflicting or redundant constraints.';
   const error = new Error(`Conflicts with ${constraints.map(c => displayName(named, c.id)).join('; ') || 'the sketch'}: ${reason}`);
   return Object.assign(error, { conflicting: constraints.map(c => c.id), constraints,
-    overconstrained: ids.length > 0 || result.hasRedundancy || /redundan|conflict|inconsisten|over.?constrain/i.test(reason) });
+    overconstrained: true });
+}
+
+export function isConstraintConflict(reason: unknown): reason is Error & { overconstrained: true; conflicting: string[]; constraints: Constraint[] } {
+  return !!reason && typeof reason === 'object' && 'overconstrained' in reason && reason.overconstrained === true;
 }
 
 export interface Authoring<T> { sketch: Sketch; meta: T }
@@ -70,13 +75,14 @@ export class SketchController<T> {
     this.diagnosis = diagnosis;
     return { ...state, sketch: session.sketch };
   }
-  private publish(state: Authoring<T>) { if (!this.destroyed) this.changed(state, this.diagnosis); }
-  private async transaction(session: SketchSession, label: string, edit: () => Promise<Authoring<T>>, mergePrevious = false) {
+  dismissRejection() { this.rejection = undefined; }
+  private publish(state: Authoring<T>) { this.dismissRejection(); if (!this.destroyed) this.changed(state, this.diagnosis); }
+  private async transaction(session: SketchSession, label: string, edit: () => Promise<Authoring<T>>, mergePrevious = false, reportRejection = true) {
     const diagnosis = this.diagnosis; this.notice = undefined;
     this.history.begin(label);
     try {
-      const next = await edit(); this.rejection = undefined; this.history.update(next); this.history.commit(mergePrevious); this.publish(next); return next.sketch;
-    } catch (e) { this.rejection = e; session.sketch = this.history.cancel().sketch; this.diagnosis = diagnosis; throw e; }
+      const next = await edit(); this.history.update(next); this.history.commit(mergePrevious); this.publish(next); return next.sketch;
+    } catch (e) { this.rejection = reportRejection ? e : undefined; session.sketch = this.history.cancel().sketch; this.diagnosis = diagnosis; throw e; }
   }
   /** A function is resolved against the state the queued command actually runs on, so fields
    *  it does not change (e.g. the other coordinate of a point) are never stale. */
@@ -151,7 +157,7 @@ export class SketchController<T> {
         const result = await session.tryAddConstraint(this.current.sketch, constraint, { ifRedundant: reference ? 'reference' : 'refuse' });
         if (!result.ok) throw constraintError(this.current.sketch, result);
         this.diagnosis = result.diagnosis; return { ...this.current, sketch: result.sketch };
-      });
+      }, false, !placement);
       const added = sketch.constraints.find(c => !before.sketch.constraints.some(old => old.id === c.id));
       this.placedDimension = placement && added ? { id: added.id, state: this.current } : undefined;
       return sketch;
@@ -253,7 +259,7 @@ export class SketchController<T> {
   }
   undo(redo = false) {
     return this.queue(async session => {
-      this.notice = undefined;
+      this.notice = undefined; this.dismissRejection();
       let state = this.history.peek(redo);
       if (state === this.current) return;
       const next = await createSession(state.sketch, { references: this.getReferences(state) });

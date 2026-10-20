@@ -215,8 +215,12 @@ describe('dimension pick → preview → place → type with the real solver', (
     await pick('line'); await pointer('pointermove', screen({ x: -4, y: 18 })); await pointer('pointerdown', screen({ x: -4, y: 18 })); await pointer('pointerup', screen({ x: -4, y: 18 }));
     expect(host.querySelector('[aria-label="Over-constrained dimension"]')!.textContent).toContain('This dimension would over-constrain the sketch.');
     expect(current).toBe(measured); expect(field()).toBeNull();
+    expect(controller.rejection).toBeUndefined();
+    expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
     await act(async () => button(choice === 'reference' ? 'Make it a reference (driven) dimension' : 'Cancel').click());
     expect(host.querySelector('[aria-label="Over-constrained dimension"]')).toBeNull();
+    expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
+    expect(controller.rejection).toBeUndefined();
     if (choice === 'cancel') expect(current).toBe(measured);
     else {
       expect(current.constraints.at(-1)).toMatchObject({ driving: false, placement: expect.any(Object) });
@@ -411,8 +415,9 @@ describe('hand-drawn cone dimensions', () => {
 });
 
 
-it('picks a cone slope and the axis, places 30 degrees, and undoes the whole dimension', async () => {
+it.each([false, true])('picks a cone slope and the axis, places 30 degrees, and undoes the whole dimension (rim-first: %s)', async reversed => {
   const initial = fixture('axis');
+  if (reversed) initial.entities = initial.entities.map(e => e.id === 'line' && e.kind === 'line' ? { ...e, p1: e.p2, p2: e.p1 } : e);
   await mount(initial);
   await pick('line'); await pick('axis');
   const place = screen({ x: 18, y: 16 });
@@ -426,4 +431,19 @@ it('picks a cone slope and the axis, places 30 degrees, and undoes the whole dim
   expect(current.points.find(p => p.id === 'up')).toEqual(initial.points.find(p => p.id === 'up'));
   await act(async () => button('Undo').click());
   expect(current).toEqual(initial);
+});
+
+it('offers the axis as an angle second pick when moving a single-line distance placement cursor', async () => {
+  await mount(fixture('axis')); await pick('line');
+  const before = current;
+  await pointer('pointermove', screen({ x: 18, y: 16 }));
+  expect(host.querySelector('.sketch-dimension-preview')?.getAttribute('aria-label')).toBe('Preview distance');
+  const axis = screen({ x: 0, y: 8 });
+  await pointer('pointermove', axis);
+  expect(host.querySelector('[data-reference-id="axis"]')?.classList.contains('hovered')).toBe(true);
+  expect(host.querySelector('.sketch-dimension-preview')).toBeNull();
+  await pointer('pointerdown', axis); await pointer('pointerup', axis);
+  await pointer('pointermove', screen({ x: 18, y: 16 }));
+  expect(host.querySelector('.sketch-dimension-preview')?.getAttribute('aria-label')).toBe('Preview angle');
+  expect(current).toBe(before); expect(field()).toBeNull();
 });

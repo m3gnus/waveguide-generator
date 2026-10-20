@@ -9,7 +9,7 @@ import { dimensionName } from '../sketch/dimensionGraphics';
 import { drawnSource, editPatch, editPoint, identityProblem, INITIAL_SOURCE, removePoint } from './sourceContourEditing';
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
-import { SketchController, type Authoring } from '../sketch/controller';
+import { isConstraintConflict, SketchController, type Authoring } from '../sketch/controller';
 import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, withSourceLimit, withSourceContext, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
 import { presetDefaults as defaults, presetLabels, seedPreset, fitPresetDimensions } from '../sketch/adapters/sourcePreset';
 import { presetDimensionActive, presetDimensionProblem, presetTopologyMessage, reapplyPresetMessage } from '../sketch/adapters/sourcePresetMapping';
@@ -280,7 +280,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     authorRef.current = next; setAuthor(next); setPreview(undefined); setGeneration(v => v + 1); setDiagnosis(undefined); setCanvasSelection([]);
   }
   function sketchCommand(command: Command | ((state: Authoring<SourceMeta>) => Command)) {
-    void controller.current?.command(command).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)));
+    void controller.current?.command(command).catch(reason => { if (!isConstraintConflict(reason)) setError(reason instanceof Error ? reason.message : String(reason)); });
   }
   useEffect(() => {
     let current = true;

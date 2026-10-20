@@ -5,7 +5,7 @@ import { SketchCanvas } from './SketchCanvas';
 import { SketchController } from './controller';
 import { applyCommand, importedSketch } from './ops';
 import type { Sketch } from './model';
-import type { Diagnosis } from './session';
+import { SketchSession, type Diagnosis } from './session';
 import { initialDiagnosis, realSessionReady } from './testSupport';
 import { readFileSync } from 'node:fs';
 import { seed } from './adapters/sourceContour';
@@ -653,8 +653,24 @@ describe('constraint context controls', () => {
     expect(host.querySelector('[data-constraint-id="measured"] .reference')).not.toBeNull();
     expect(host.querySelector('.sketch-conflict-banner')?.textContent).toContain('Measured length');
     expect(button('Make driving')).toBeDefined();
+    expect(host.querySelectorAll('[role="alert"]')).toHaveLength(1);
+    expect(host.querySelector('.sketch-status')?.textContent).not.toContain('Conflicts with');
     await act(async () => button('Dismiss').click());
     expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
+  });
+  it('shows a convergence failure as a solve error without a conflict banner', async () => {
+    const initial = base();
+    await mount(initial);
+    vi.spyOn(SketchSession.prototype, 'solveFull').mockResolvedValueOnce({
+      ...initialDiagnosis(initial), status: 'failed', conflicting: [], redundant: [], hasRedundancy: false,
+    });
+    await key('s');
+    const line = host.querySelector('.sketch-entity[data-id="line"]')!;
+    const [x1, y1, x2, y2] = line.getAttribute('d')!.match(/[\d.e+-]+/g)!.map(Number);
+    await pointer(line, 'pointerdown', (x1 + x2) / 2, (y1 + y2) / 2);
+    expect(host.querySelector('.sketch-status')?.textContent).toContain('Could not solve this change');
+    expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
+    expect(host.querySelectorAll('.sketch-entity')).toHaveLength(1);
   });
   it('clears a diagnosed conflict when the host resolves it', async () => {
     const initial = base();

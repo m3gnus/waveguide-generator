@@ -9,7 +9,9 @@ export type Entity = Line | Arc | (Base & { kind: 'circle' | 'ellipse' | 'bsplin
 /** Distances use a signed world-mm perpendicular offset and an unbounded fraction.
  * Radius labels use a world angle (radians) and an offset from the arc radius. */
 export type DimensionPlacement = { offset: number; along: number } | { offset: number; angle: number };
-export type Constraint = SolverConstraint & { label?: string; placement?: DimensionPlacement };
+export type Constraint = SolverConstraint & { label?: string; placement?: DimensionPlacement;
+  /** Selected acute branch against a reference: the directed solver angle is pi - value. */
+  supplementary?: boolean };
 export type NewConstraint = Constraint extends infer C ? C extends Constraint ? Omit<C, 'id'> : never : never;
 export interface Sketch {
   version: 'wg-sketch-v1'; points: Point[]; entities: Entity[]; constraints: Constraint[]; nextId: number;
@@ -48,6 +50,7 @@ export function constraintProblem(s: Sketch, c: Constraint | NewConstraint): str
     case 'radius': valid = kind(c.arc) === 'arc'; break;
   }
   if (c.label !== undefined && typeof c.label !== 'string') return 'Constraint labels must be strings.';
+  if (c.supplementary !== undefined && (c.kind !== 'angle' || typeof c.supplementary !== 'boolean')) return 'Invalid angle branch.';
   if (c.placement !== undefined) {
     const p = c.placement;
     if (!('value' in c) || !object(p) || !Number.isFinite(p.offset)

@@ -6,7 +6,7 @@ import { dimensionHelper } from '../dimensionGraphics';
 import { geometryHit } from '../geometryHit';
 
 export type DimensionPick = { kind: 'point'; point: Point; id: string }
-  | { kind: 'line'; id: string; a: Point; b: Point; reference?: 'axis' | 'baffle' }
+  | { kind: 'line'; id: string; a: Point; b: Point; reference?: 'axis' | 'baffle' | 'context' }
   | { kind: 'arc'; id: string; center: XY; radius: number };
 export type CandidateDimension = Extract<NewConstraint, { value: number }>;
 export function dimensionPicks(sketch: Sketch, ids: string[], references: Reference[] = []): DimensionPick[] {
@@ -17,7 +17,7 @@ export function dimensionPicks(sketch: Sketch, ids: string[], references: Refere
     const e = sketch.entities.find(e => e.id === id);
     const reference = references.find(r => r.id === id);
     if (!e || dimensionHelper(e) || reference?.kind === 'limit') return [];
-    if (e.kind === 'line') return [{ kind: 'line', id, a: point(e.p1), b: point(e.p2), reference: reference?.kind === 'axis' || reference?.kind === 'baffle' ? reference.kind : undefined }];
+    if (e.kind === 'line') return [{ kind: 'line', id, a: point(e.p1), b: point(e.p2), reference: reference?.kind === 'axis' || reference?.kind === 'baffle' ? reference.kind : e.reference ? 'context' : undefined }];
     if (e.kind === 'arc') return [{ kind: 'arc', id, ...arcGeometry(sketch, e) }];
     return [];
   });
@@ -60,7 +60,7 @@ export function candidateDimension(picks: DimensionPick[], cursor: XY): Candidat
   const p = a.kind === 'point' ? a : b.kind === 'point' ? b : undefined;
   const line = a.kind === 'line' ? a : b.kind === 'line' ? b : undefined;
   if (p && line) {
-    if (line.reference) {
+    if (line.reference === 'axis' || line.reference === 'baffle') {
       const kind = line.reference === 'axis' ? 'distanceX' : 'distanceY';
       const delta = kind === 'distanceX' ? p.point.x - line.a.x : p.point.y - line.a.y;
       const [a, b] = delta < 0 ? [p.point, line.a] : [line.a, p.point];
@@ -81,19 +81,22 @@ export function candidateDimension(picks: DimensionPick[], cursor: XY): Candidat
       placement: placement('distance', b.a, foot, cursor) };
   }
   if (cross < 0) return candidateDimension([b, a], cursor);
-  const value = Math.atan2(cross, dx * ex + dy * ey), start = Math.atan2(dy, dx);
+  const directed = Math.atan2(cross, dx * ex + dy * ey);
+  const supplementary = !!(a.reference || b.reference) && directed > Math.PI / 2;
+  const value = supplementary ? Math.PI - directed : directed;
+  const start = Math.atan2(dy, dx) + (supplementary ? Math.PI : 0), sweep = supplementary ? -value : value;
   const t = ((b.a.x - a.a.x) * ey - (b.a.y - a.a.y) * ex) / cross;
   const center = { x: a.a.x + t * dx, y: a.a.y + t * dy };
   const delta = Math.atan2(cursor.y - center.y, cursor.x - center.x) - start;
-  return { kind: 'angle', a: a.id, b: b.id, value, driving: true,
-    placement: { offset: distance(cursor, center), along: Math.atan2(Math.sin(delta), Math.cos(delta)) / value } };
+  return { kind: 'angle', a: a.id, b: b.id, value, driving: true, ...(supplementary ? { supplementary: true } : {}),
+    placement: { offset: distance(cursor, center), along: Math.atan2(Math.sin(delta), Math.cos(delta)) / sweep } };
 }
 /** Geometry hit testing, including infinite axis/baffle lines. Points always win. */
 export function hitDimension(sketch: Sketch, references: Reference[], cursor: XY, tolerance: number, hidden: string[] = []): string | undefined {
   const excluded = new Set([...hidden, ...sketch.entities.filter(e => e.reference || references.some(r => r.id === e.id) || dimensionHelper(e)).flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : e.kind === 'arc' ? [e.center, e.start, e.end] : [])]);
   const points = sketch.points.filter(p => !excluded.has(p.id)).map(p => ({ kind: 'point', id: p.id, gap: distance(p, cursor) }));
   const curves = dimensionPicks(sketch, sketch.entities.map(e => e.id), references).map(p => {
-    const at = p.kind === 'line' && p.reference ? projection(cursor, p.a, p.b) : projectToEntity(sketch, p.id, cursor.x, cursor.y);
+    const at = p.kind === 'line' && (p.reference === 'axis' || p.reference === 'baffle') ? projection(cursor, p.a, p.b) : projectToEntity(sketch, p.id, cursor.x, cursor.y);
     return { kind: p.kind, id: p.id, gap: distance(cursor, at) };
   });
   return geometryHit([...points, ...curves], tolerance)?.id;

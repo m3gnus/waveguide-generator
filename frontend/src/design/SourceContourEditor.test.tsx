@@ -960,13 +960,16 @@ describe('source editor interactions', () => {
     expect(button('Make driving Cone depth')).toBeDefined();
     expect(constraint()).toMatchObject({ id, driving: false });
   });
-  it('refuses a table toggle that conflicts with another dimension and keeps it reference', async () => {
+  it.each(['dismiss', 'undo'] as const)('keeps a refused table toggle in one place, and never revives it after %s and Refresh presets', async clear => {
     vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
     await mount(); await act(async () => button('Apply shape').click()); await settle();
     const envelope = JSON.parse(storage.getItem('')!);
     const depth = envelope.sketch.constraints.find((c: { label?: string }) => c.label === 'Cone depth');
     envelope.sketch.constraints.push({ ...depth, id: 'measured-depth', label: 'Measured depth', driving: false });
     await act(async () => root.render(null)); storage.setItem('', JSON.stringify(envelope)); await mount();
+    // Give Undo a real edit to restore after the refused toggle.
+    await act(async () => button('Make reference Cone depth').click()); await settle();
+    await act(async () => button('Make driving Cone depth').click()); await settle();
     const before = storage.getItem('');
     await act(async () => button('Make driving Measured depth').click()); await settle();
     expect(readSourceAuthoring(readSourceDraft()).sketch.constraints.find(c => c.id === 'measured-depth')).toMatchObject({ driving: false });
@@ -974,6 +977,13 @@ describe('source editor interactions', () => {
     expect(host.querySelector('.sketch-conflict-banner')?.textContent).toContain('Measured depth');
     expect(host.querySelector('.sketch-conflict-banner')?.textContent).toContain('Conflicts with');
     expect(host.querySelector('.sketch-conflict-banner')?.textContent).not.toContain('measured-depth');
+    expect(host.querySelector('.sketch-status')?.textContent).not.toContain('Conflicts with');
+    expect(host.querySelector('footer [role="alert"]')).toBeNull();
+    expect(host.querySelectorAll('[role="alert"]')).toHaveLength(1);
+    await act(async () => button(clear === 'dismiss' ? 'Dismiss' : 'Undo').click()); await settle();
+    expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
+    await act(async () => button('Refresh presets').click()); await settle();
+    expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
   });
   async function rename(label: string, value: string, gesture: 'F2' | 'dblclick' = 'F2', cancel = false) {
     const cell = [...host.querySelectorAll('button')].find(b => b.getAttribute('aria-label')?.startsWith(`${label}:`))!;
