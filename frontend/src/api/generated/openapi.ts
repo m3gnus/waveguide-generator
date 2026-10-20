@@ -2029,6 +2029,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/source-editor/assembly/horn-wall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assembly Horn Wall Endpoint */
+        post: operations["assembly_horn_wall_endpoint_api_source_editor_assembly_horn_wall_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/source-editor/assembly/ingest": {
         parameters: {
             query?: never;
@@ -4196,6 +4213,13 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HornWallRequest */
+        HornWallRequest: {
+            /** Horn Config */
+            horn_config: {
+                [key: string]: unknown;
+            };
+        };
         /** ICWConfig */
         ICWConfig: {
             L?: components["schemas"]["Expr"] | null;
@@ -5487,6 +5511,8 @@ export interface components {
         };
         /** PresetWrite */
         PresetWrite: {
+            /** Authoring */
+            authoring?: unknown;
             document: components["schemas"]["SourceDocument"];
             /** Expected Revision */
             expected_revision?: string | null;
@@ -10092,6 +10118,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["DesignConfig"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assembly_horn_wall_endpoint_api_source_editor_assembly_horn_wall_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HornWallRequest"];
             };
         };
         responses: {
