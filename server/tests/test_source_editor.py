@@ -320,3 +320,107 @@ def test_assembly_horn_profile_refuses_native_formulas_explicitly(client, formul
         f"{formula} cannot be attached to a source assembly as a general horn profile. "
         "Use a legacy horn formula."
     )
+
+
+def test_preset_authoring_is_opaque_beside_legacy_library_and_deleted(client, tmp_path):
+    doc = shape(client)["document"]
+    authoring = {"version": "future-opaque", "sketch": {"constraints": [1, "x"]}, "pending": False}
+    response = client.post("/api/source-editor/presets", json={"name": "Authored", "document": doc, "authoring": authoring})
+    assert response.status_code == 200
+    saved = response.json()
+    assert saved["document"] == doc
+    assert saved["authoring"] == authoring
+    library = json.loads((tmp_path / "source_presets.json").read_text())
+    assert set(library["presets"][saved["id"]]) == {"id", "revision", "name", "document"}
+    companion_path = tmp_path / "source_preset_authoring.json"
+    assert json.loads(companion_path.read_text()) == {saved["id"]: {"revision": saved["revision"], "authoring": authoring}}
+    assert PresetStore(tmp_path / "source_presets.json").list() == [saved]
+    url = "/api/source-editor/presets/" + saved["id"]
+    updated = client.put(url, json={"name": "Updated", "document": doc, "expected_revision": saved["revision"], "authoring": [None, {"renamed": True}]}).json()
+    assert updated["authoring"] == [None, {"renamed": True}]
+    assert client.get("/api/source-editor/presets").json() == [updated]
+    assert client.delete(url, params={"revision": updated["revision"]}).status_code == 200
+    assert json.loads(companion_path.read_text()) == {}
+
+
+@pytest.mark.parametrize("companion", [None, "{broken", "[]", '{"x":null}', '{"x":{"revision":"old","authoring":1}}'])
+def test_optional_or_corrupt_preset_authoring_never_breaks_library(client, tmp_path, companion):
+    saved = client.post("/api/source-editor/presets", json={"name": "Legacy", "document": shape(client)["document"]}).json()
+    path = tmp_path / "source_preset_authoring.json"
+    if companion is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_text(companion)
+    assert client.get("/api/source-editor/presets").json() == [saved]
+    assert client.put("/api/source-editor/presets/" + saved["id"], json={"name": "Still editable", "document": saved["document"], "expected_revision": saved["revision"]}).status_code == 200
+    assert json.loads(path.read_text()) == {}
+
+
+def test_stale_authoring_revision_is_ignored_and_pruned_on_write(client, tmp_path):
+    saved = client.post("/api/source-editor/presets", json={"name": "Legacy", "document": shape(client)["document"]}).json()
+    path = tmp_path / "source_preset_authoring.json"
+    path.write_text(json.dumps({saved["id"]: {"revision": "stale", "authoring": {"ignored": True}}}))
+    assert client.get("/api/source-editor/presets").json() == [saved]
+    client.post("/api/source-editor/presets", json={"name": "Second", "document": saved["document"]})
+    assert json.loads(path.read_text()) == {}
+
+
+def test_authoring_entry_cap_and_failed_atomic_replace_preserve_library(client, tmp_path, monkeypatch):
+    import server.source_editor as editor
+
+    doc = shape(client)["document"]
+    path = tmp_path / "source_presets.json"
+    companion = tmp_path / "source_preset_authoring.json"
+    saved = client.post("/api/source-editor/presets", json={"name": "Saved", "document": doc, "authoring": {"a": 1}}).json()
+    before, before_companion = path.read_bytes(), companion.read_bytes()
+    url = "/api/source-editor/presets/" + saved["id"]
+    body = {"name": "Replacement", "document": doc, "expected_revision": saved["revision"]}
+    assert client.put(url, json={**body, "authoring": "x" * (256 * 1024)}).status_code == 422
+    assert path.read_bytes() == before and companion.read_bytes() == before_companion
+    replace = editor.os.replace
+    observed = []
+
+    def inspect_atomic(source, destination):
+        assert source != str(destination)
+        assert Path(source).parent == tmp_path
+        assert json.loads(Path(source).read_text()) is not None
+        observed.append(destination)
+        if destination == path:
+            raise OSError("interrupted library replace")
+        replace(source, destination)
+
+    from pathlib import Path
+    monkeypatch.setattr(editor.os, "replace", inspect_atomic)
+    assert client.put(url, json={**body, "authoring": {"a": 2}}).status_code == 503
+    assert observed == [companion, path]
+    assert path.read_bytes() == before
+    # A crash between the atomic replacements can lose only optional authoring;
+    # it must never attach a new sketch to an old document revision.
+    assert client.get("/api/source-editor/presets").json() == [{k: v for k, v in saved.items() if k != "authoring"}]
+    assert not list(tmp_path.glob(".source-presets-*"))
+
+
+def test_authoring_companion_has_128_entry_cap_and_drops_stale_entries(tmp_path):
+    store = PresetStore(tmp_path / "source_presets.json")
+    values = {str(i): {"id": str(i), "revision": str(i)} for i in range(129)}
+    entries = {key: {"revision": item["revision"], "authoring": {}} for key, item in values.items()}
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        store._write(values, entries)
+    assert exc.value.status_code == 422
+    assert not store.path.exists()
+    values.pop("128")
+    store._write(values, entries)
+    assert len(json.loads(store.authoring_path.read_text())) == 128
+    assert len(store._read_authoring(values)) == 128
+    store.authoring_path.write_text(json.dumps(entries))
+    assert store._read_authoring(values) == {}  # refuse an oversized companion on read
+
+
+@pytest.mark.parametrize("authoring", [None, 0, False, "opaque", [1, 2], {"future": True}])
+def test_preset_authoring_accepts_any_json_value(client, authoring):
+    response = client.post("/api/source-editor/presets", json={"name": "Opaque", "document": shape(client, "flat")["document"], "authoring": authoring})
+    assert response.status_code == 200
+    assert "authoring" in response.json()
+    assert response.json()["authoring"] == authoring
+    assert client.get("/api/source-editor/presets").json()[0]["authoring"] == authoring

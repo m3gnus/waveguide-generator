@@ -7,6 +7,7 @@ import { NumberField } from './NumberField';
 import { serializeDesign, useDesignStore } from '../stores/design';
 import { hornAssemblyContext, wooferAssemblyContext } from '../sketch/adapters/sourceContext';
 import type { HornWall } from '../api/sourceEditor';
+import { parseSourceAuthoring, serializeSourceAuthoring } from '../sketch/adapters/sourceAuthoring';
 import { Editor } from './SourceContourEditor';
 import { identityProblem, INITIAL_SOURCE } from './sourceContourEditing';
 import { prepareNativeAssembly } from './nativeAssemblyPreparation';
@@ -14,6 +15,22 @@ import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import './sourceContourEditor.css';
 
 const storage = namespaceStorage('sourceAssemblyDraft');
+const authoringStorage = namespaceStorage('sourceAssemblyAuthoring');
+type AssemblyAuthoring = Partial<Record<'horn' | 'woofer', unknown>>;
+function readAssemblyAuthoring(): AssemblyAuthoring {
+  try {
+    const value: unknown = JSON.parse(authoringStorage.getItem('') ?? '{}');
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch { return {}; }
+}
+function reconcileAuthoring(document: SourceAssemblyDocument) {
+  const saved = readAssemblyAuthoring();
+  const next: AssemblyAuthoring = {};
+  for (const source of ['horn', 'woofer'] as const) {
+    if (document[source] && parseSourceAuthoring(saved[source], document[source])) next[source] = saved[source];
+  }
+  if (JSON.stringify(next) !== JSON.stringify(saved)) authoringStorage.setItem('', JSON.stringify(next));
+}
 function flatSource(id: string, radius: number): SourceDocument {
   const document = structuredClone(INITIAL_SOURCE);
   document.contour.physical_source_id = id; document.contour.rim_id = `${id}.rim`;
@@ -101,7 +118,13 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   const identityIssue = identityProblem(validationError, draft.phase_plugs.map((p) => p.id));
   useEffect(() => { if (identityIssue) setIdentifiersOpen(true); }, [identityIssue]);
   function change(next: SourceAssemblyDocument) { draftRef.current = next; setDraft(next); storage.setItem('', JSON.stringify(next)); setError(''); setNotice(''); }
-  useEffect(() => durableSettings.subscribe('sourceAssemblyDraft', () => { const restored = readDraft(); draftRef.current = restored; setDraft(restored); setHornText(JSON.stringify(restored.horn_config ?? {}, null, 2)); setEditing(null); setNotice('Restored source assembly draft.'); }), []);
+  useEffect(() => durableSettings.subscribe('sourceAssemblyDraft', () => {
+    const restored = readDraft();
+    // Hydration adopts sibling namespaces in order. Reconcile after that batch,
+    // so stale cached authoring cannot overwrite the companion arriving with it.
+    queueMicrotask(() => reconcileAuthoring(draftRef.current));
+    draftRef.current = restored; setDraft(restored); setHornText(JSON.stringify(restored.horn_config ?? {}, null, 2)); setEditing(null); setNotice('Restored source assembly draft.');
+  }), []);
   useEffect(() => {
     if (storage.getItem('') !== null) return;
     const initial = draftRef.current;
@@ -160,7 +183,8 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   function download(blob: Blob, name: string) { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000); }
   // Publish nested edits to the assembly namespace immediately: the settings
   // owner protects genuine local changes from an in-flight hydration reply.
-  if (editing) return <Editor context={editing === 'horn' ? hornContext : wooferContext} contextStale={editing === 'horn' && (wallStale || !!draft.horn_config && wall?.config !== configKey)} key={editing} initialDocument={draft[editing]!}
+  if (editing) return <Editor context={editing === 'horn' ? hornContext : wooferContext} contextStale={editing === 'horn' && (wallStale || !!draft.horn_config && wall?.config !== configKey)} key={editing} initialDocument={draft[editing]!} initialAuthoring={readAssemblyAuthoring()[editing]}
+    onAuthoringChange={(envelope: ReturnType<typeof serializeSourceAuthoring>) => authoringStorage.setItem('', JSON.stringify({ ...readAssemblyAuthoring(), [editing]: envelope }))}
     limit={editing === 'woofer' ? { kind: 'aperture', radius: draft.dimensions.aperture_radius_mm }
       : draft.horn_config ? { kind: 'throat', radius: throat ?? draft.horn.contour.points.at(-1)!.r_mm, hard: true } : { kind: 'mouth', radius: draft.dimensions.mouth_radius_mm }}
     onLimitChange={radius => change({ ...draftRef.current, dimensions: { ...draftRef.current.dimensions, [editing === 'woofer' ? 'aperture_radius_mm' : 'mouth_radius_mm']: radius } })}

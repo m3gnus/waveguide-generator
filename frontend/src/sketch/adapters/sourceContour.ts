@@ -1,4 +1,4 @@
-import type { SourceAttachment, SourceDocument, SourcePatch } from '../../api/sourceEditor';
+import type { SourceDocument, SourcePatch } from '../../api/sourceEditor';
 import type { DomainProblem, Lowered, Reference, SketchAdapter } from '../adapter';
 import { constraintRefs, entityPoints, validateSketch, type Entity, type Sketch } from '../model';
 import { applyCommand, importedSketch, removeEntity } from '../ops';
@@ -312,9 +312,4 @@ export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Co
 export function withSourceContext(state: { sketch: Sketch; meta: SourceMeta }, context: SketchContext): { sketch: Sketch; meta: SourceMeta } {
   const refreshed = refreshContext(state.sketch, context);
   return { sketch: refreshed.sketch, meta: { ...state.meta, clearances: contextClearances(context), missingContext: refreshed.missing } };
-}
-/** Only authoring entities and provenance persist; live host data is installed afresh. */
-export function sourceAuthoringEnvelope(state: { sketch: Sketch; meta: SourceMeta }, document: SourceDocument, pending = false, attachment?: SourceAttachment) {
-  const { clearances: _clearances, missingContext: _missing, ...meta } = state.meta;
-  return { version: 'wg-source-authoring-v2', document, sketch: state.sketch, meta, pending, ...(attachment ? { attachment } : {}) };
 }

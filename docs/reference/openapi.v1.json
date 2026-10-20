@@ -9969,6 +9969,9 @@
       "PresetWrite": {
         "additionalProperties": false,
         "properties": {
+          "authoring": {
+            "title": "Authoring"
+          },
           "document": {
             "$ref": "#/components/schemas/SourceDocument"
           },

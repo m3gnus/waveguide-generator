@@ -10,13 +10,14 @@ import { drawnSource, editPatch, editPoint, identityProblem, INITIAL_SOURCE, rem
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
 import { SketchController, type Authoring } from '../sketch/controller';
-import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, withSourceLimit, withSourceContext, sourceAuthoringEnvelope, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
+import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, withSourceLimit, withSourceContext, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
 import { presetDefaults as defaults, presetLabels, seedPreset, fitPresetDimensions } from '../sketch/adapters/sourcePreset';
 import { presetDimensionActive, presetDimensionProblem, presetTopologyMessage, reapplyPresetMessage } from '../sketch/adapters/sourcePresetMapping';
-import { contextData, refreshContext, type SketchContext } from '../sketch/context';
+import { refreshContext, type SketchContext } from '../sketch/context';
 import { contextClearances, standaloneContext } from '../sketch/adapters/sourceContext';
 import { displayName } from '../sketch/displayName';
 import { uniqueProblems } from '../sketch/adapter';
+import { parseSourceAuthoring, serializeSourceAuthoring, sameSourceDocument } from '../sketch/adapters/sourceAuthoring';
 import { parseSketch } from '../sketch/model';
 import type { Command } from '../sketch/commands';
 import type { Diagnosis } from '../sketch/session';
@@ -58,32 +59,14 @@ export function readSourceDraft(): SourceDocument {
   } catch { return structuredClone(INITIAL_SOURCE); }
 }
 
-function sameDocument(a: SourceDocument, b: SourceDocument) {
-  const canonical = (value: unknown): string => JSON.stringify(value, (_, v: unknown) => v && typeof v === 'object' && !Array.isArray(v)
-    ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v);
-  return canonical(a) === canonical(b);
-}
 export function readSourceAuthoring(document: SourceDocument): Authoring<SourceMeta> {
-  const fallback = seed(document); fallback.meta.weights = movingWeights(fallback.sketch, fallback.meta.weights);
   try {
-    const envelope = JSON.parse(storage.getItem('') ?? 'null');
-    if (!['wg-source-authoring-v1', 'wg-source-authoring-v2'].includes(envelope?.version)) return fallback;
-    const parsed = parseSketch(envelope.sketch), meta = envelope.meta as SourceMeta;
-    if (!parsed.ok || !meta || !meta.weights || !Object.values(meta.weights).every(Number.isFinite)
-      || !Array.isArray(meta.references) || ['axis', 'baffle'].some(kind => meta.references.filter(r => r.kind === kind).length !== 1)
-      || new Set(meta.references.map(r => r.kind)).size !== meta.references.length
-      || !meta.references.every(r => ['axis', 'baffle', 'limit'].includes(r.kind) && parsed.sketch.entities.some(e => e.id === r.id && e.reference && e.construction && e.kind === 'line'))
-      || ![meta.physical_source_id, meta.rim_id, meta.channel_id].every(v => typeof v === 'string') || !['normal', 'axial'].includes(meta.motion)) return fallback;
-    if (parsed.sketch.entities.some(e => e.reference && (!e.construction || e.kind !== 'line' || !meta.references.some(r => r.id === e.id) && !contextData(e)))) return fallback;
-    if (meta.preset && (!['flat', 'dome', 'cone'].includes(meta.preset.shape) || !meta.preset.dimensions
-      || meta.preset.values !== undefined && (!meta.preset.values || typeof meta.preset.values !== 'object'
-        || Array.isArray(meta.preset.values) || !Object.values(meta.preset.values).every(Number.isFinite))
-      || typeof meta.preset.dimensions !== 'object' || Array.isArray(meta.preset.dimensions)
-      || !Object.values(meta.preset.dimensions).every(id => typeof id === 'string'))) return fallback;
-    const lowered = lower(parsed.sketch, meta);
-    return envelope.pending === true || lowered.ok && sameDocument(lowered.document, document)
-      ? { sketch: parsed.sketch, meta: { ...meta, weights: movingWeights(parsed.sketch, meta.weights) } } : fallback;
-  } catch { return fallback; }
+    const restored = parseSourceAuthoring(JSON.parse(storage.getItem('') ?? 'null'), document);
+    if (restored) return restored;
+  } catch { /* fall back to the document */ }
+  const fallback = seed(document);
+  fallback.meta.weights = movingWeights(fallback.sketch, fallback.meta.weights);
+  return fallback;
 }
 
 /** Install diagnostics on open; moved references go through replaceContext's solve and notice. */
@@ -135,7 +118,7 @@ export function SourceContourDialog() {
   return open ? createPortal(<Editor onClose={close}/>, document.body) : null;
 }
 
-export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange, limit: hostLimit, onLimitChange, context: hostContext, contextStale = false }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; onDraftChange?: (document: SourceDocument) => void; limit?: SourceLimit; onLimitChange?: (radius: number) => void; context?: SketchContext; contextStale?: boolean }) {
+export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange, limit: hostLimit, onLimitChange, context: hostContext, contextStale = false, initialAuthoring, onAuthoringChange }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; onDraftChange?: (document: SourceDocument) => void; limit?: SourceLimit; onLimitChange?: (radius: number) => void; context?: SketchContext; contextStale?: boolean; initialAuthoring?: unknown; onAuthoringChange?: (envelope: ReturnType<typeof serializeSourceAuthoring>) => void }) {
   const [attachment, setAttachment] = useState<SourceAttachment>(() => initialDocument ? structuredClone(defaultAttachment) : readSourceAttachment());
   const limit: SourceLimit = hostLimit ?? attachmentLimit(attachment);
   const attachmentRef = useRef(attachment); attachmentRef.current = attachment;
@@ -144,7 +127,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const context = useMemo(() => hostContext ?? standaloneContext(hostLimit ? undefined : attachment, draft.contour.points.at(-1)?.r_mm ?? 0), [hostContext, attachment, !!hostLimit, draft.contour.points.at(-1)?.r_mm]);
   const contextRef = useRef(context); contextRef.current = context;
   const [author, setAuthor] = useState(() => {
-    const next = initialDocument ? seed(draft) : readSourceAuthoring(draft);
+    const next = initialDocument ? parseSourceAuthoring(initialAuthoring, draft) ?? seed(draft) : readSourceAuthoring(draft);
     return openingSourceContext(withSourceLimit({ ...next, meta: { ...next.meta, weights: movingWeights(next.sketch, next.meta.weights) } }, limit), context);
   });
   const authorRef = useRef(author); authorRef.current = author;
@@ -167,6 +150,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     if (author.sketch.constraints.some(c => c.id === id && 'value' in c)) setDimensionsOpen(true);
     rows.current.get(id)?.scrollIntoView?.({ block: 'nearest' });
   }, [canvasSelection, pointsOpen]);
+  const authoringCallback = useRef(onAuthoringChange); authoringCallback.current = onAuthoringChange;
   const draftCallback = useRef(onDraftChange); draftCallback.current = onDraftChange;
   const controller = useRef<SketchController<SourceMeta> | undefined>(undefined);
   const [sketchReady, setSketchReady] = useState(false);
@@ -245,13 +229,13 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     }, (state, result) => {
       if (!current) return;
       setDiagnosis(result); setSketchReady(true);
-      if (opening) { opening = false; const opened = lower(state.sketch, state.meta); if (opened.ok && sameDocument(draftRef.current, opened.document)) return; }
+      if (opening) { opening = false; const opened = lower(state.sketch, state.meta); if (opened.ok && sameSourceDocument(draftRef.current, opened.document)) return; }
       authorRef.current = state; setAuthor(state); setPreview(undefined);
       const lowered = lower(state.sketch, state.meta); lowering.current = { state, result: lowered };
       if (lowered.ok) {
         draftRef.current = lowered.document; setDraft(lowered.document); draftCallback.current?.(lowered.document);
       }
-      if (!initialDocument) storage.setItem('', JSON.stringify(sourceAuthoringEnvelope(state, lowered.ok ? lowered.document : draftRef.current, !lowered.ok, attachmentRef.current)));
+      persistAuthoring(state, lowered.ok ? lowered.document : draftRef.current, !lowered.ok);
       setNotice(next.notice ?? ''); setError('');
     }, reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }, active => { if (current) { editingIntent.current = active; setSketchPending(active); if (!active && deferredHydration.current) { deferredHydration.current = false; hydrateRef.current(); } } }, (state, result) => { if (current) { setPreview(state === authorRef.current ? undefined : state); setDiagnosis(result); } }, (state, id, value) => presetDimensionProblem(state.sketch, state.meta, id, value));
     controller.current = next;
@@ -263,7 +247,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     const key = JSON.stringify(attachment);
     if (key === savedAttachment.current) return;
     savedAttachment.current = key;
-    if (!initialDocument && !newer) storage.setItem('', JSON.stringify(sourceAuthoringEnvelope(authorRef.current, draftRef.current, !lower(authorRef.current.sketch, authorRef.current.meta).ok, attachment)));
+    if (!initialDocument && !newer) persistAuthoring(authorRef.current, draftRef.current, !lower(authorRef.current.sketch, authorRef.current.meta).ok);
   }, [attachment]);
   const installedContext = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -289,6 +273,11 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   }
   const draftRef = useRef(draft); draftRef.current = draft;
   const editingIntent = useRef(false);
+  function persistAuthoring(state: Authoring<SourceMeta>, document: SourceDocument, pending: boolean) {
+    const envelope = serializeSourceAuthoring(state, pending);
+    if (initialDocument) authoringCallback.current?.(envelope);
+    else storage.setItem('', JSON.stringify({ ...envelope, document, attachment: attachmentRef.current }));
+  }
   function replaceAuthor(next: Authoring<SourceMeta>) {
     installedContext.current = undefined;
     setFitRequest(v => v + 1);
@@ -314,20 +303,22 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         channel_id: next.drive.channel_id, motion: next.drive.motion })).catch(reason => setError(String(reason))); return;
     }
     if (recordUndo) setUndo((history) => [...history.slice(-19), structuredClone(draft)]);
-    setDraft(next); if (!initialDocument) storage.setItem('', JSON.stringify(newer ? { ...newer, document: next } : sourceAuthoringEnvelope(classic ? seed(next) : authorRef.current, next, false, attachmentRef.current))); onDraftChange?.(next); setNotice(''); setError('');
+    setDraft(next); if (!initialDocument && newer) storage.setItem('', JSON.stringify({ ...newer, document: next })); else persistAuthoring(classic ? seed(next) : authorRef.current, next, false); onDraftChange?.(next); setNotice(''); setError('');
   }
   async function run(action: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
     try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   }
-  async function adopt(value: SourceValidation, preset?: { shape: typeof shape; dimensions: Record<string, number> }) {
-    const next = withSourceContext(withSourceLimit(preset ? seedPreset(value.document, preset.shape, preset.dimensions) : seed(value.document), limitRef.current), contextRef.current);
+  async function adopt(value: SourceValidation, preset?: { shape: typeof shape; dimensions: Record<string, number> }, savedAuthoring?: unknown) {
+    const restored = parseSourceAuthoring(savedAuthoring, value.document);
+    const next = withSourceContext(withSourceLimit(preset ? seedPreset(value.document, preset.shape, preset.dimensions) : restored ?? seed(value.document), limitRef.current), contextRef.current);
     if (!classic && controller.current) { await controller.current.adopt(next); }
     else { replaceAuthor(next); const lowered = lower(next.sketch, next.meta); change(lowered.ok ? lowered.document : value.document); }
     if (preset) setDimensions({ ...preset.dimensions });
+    else if (restored?.meta.preset) { setShape(restored.meta.preset.shape); setDimensions({ ...defaults[restored.meta.preset.shape], ...restored.meta.preset.values }); }
     setTopologyDimensions({});
-    setFitRequest(v => v + 1); setNotice(next.meta.preset ? 'Named dimensions drive this shape.' : 'Constraints were reset for the loaded contour.');
+    setFitRequest(v => v + 1); setNotice(restored ? 'Restored source preset authoring.' : next.meta.preset ? 'Named dimensions drive this shape.' : 'Constraints were reset for the loaded contour.');
     setView(fit(value.document.contour.points, value.meridian)); setAccepted({ key: JSON.stringify(value.document), value }); setSelectedPatch(0); setDrawPoints(null); setCanvasSelection([]);
   }
 
@@ -465,11 +456,11 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
           await adopt(await sourceEditorApi.expand(shape, fitted, draft), { shape, dimensions: fitted }); setDimensions(fitted); setSelected(undefined);
         })}>Fit to limit</button>
         <h3>Saved presets</h3><label>Preset name<input aria-label="Preset name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)}/></label><div className="source-editor-toolbar">
-          <button type="button" disabled={!valid || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft); setPresets([...presets, item]); setSelected(item); setNotice('Saved new preset.'); })}>Save new preset</button>
-          <button type="button" disabled={!valid || !selected || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, selected); setPresets(presets.map((p) => p.id === item.id ? item : p)); setSelected(item); setNotice('Updated preset.'); })}>Update loaded preset</button>
+          <button type="button" disabled={!valid || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, undefined, serializeSourceAuthoring(classic ? seed(draft) : authorRef.current, false)); setPresets([...presets, item]); setSelected(item); setNotice('Saved new preset.'); })}>Save new preset</button>
+          <button type="button" disabled={!valid || !selected || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, selected, serializeSourceAuthoring(classic ? seed(draft) : authorRef.current, false)); setPresets(presets.map((p) => p.id === item.id ? item : p)); setSelected(item); setNotice('Updated preset.'); })}>Update loaded preset</button>
           <button type="button" onClick={() => void run(async () => { setPresets(await sourceEditorApi.presets()); setNotice('Preset library refreshed. Load a preset to use its latest revision.'); })}>Refresh presets</button>
         </div>
-        {presets.map((preset) => <div key={preset.id} className="source-preset"><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.validate(preset.document)); setName(preset.name); setSelected(preset); })}>Load {preset.name}</button><button type="button" aria-label={`Delete preset ${preset.name}`} onClick={() => void run(async () => { await sourceEditorApi.delete(preset); setPresets(presets.filter((p) => p.id !== preset.id)); if (selected?.id === preset.id) setSelected(undefined); setNotice('Deleted preset. Current contour retained.'); })}>Delete</button></div>)}
+        {presets.map((preset) => <div key={preset.id} className="source-preset"><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.validate(preset.document), undefined, preset.authoring); setName(preset.name); setSelected(preset); })}>Load {preset.name}</button><button type="button" aria-label={`Delete preset ${preset.name}`} onClick={() => void run(async () => { await sourceEditorApi.delete(preset); setPresets(presets.filter((p) => p.id !== preset.id)); if (selected?.id === preset.id) setSelected(undefined); setNotice('Deleted preset. Current contour retained.'); })}>Delete</button></div>)}
         {!hostLimit && <><h3>Export geometry</h3>
         <div className="source-fields">{fields(Object.fromEntries(Object.entries(attachment.dimensions).filter((entry): entry is [string, number] => typeof entry[1] === 'number')), (next) => setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, ...next } }), 'attachment')}
           {attachment.kind === 'baffle' && ([0, 1, 2] as const).map((axis) => <NumberField key={axis} label={`Source center ${['X', 'Y', 'Z'][axis]}`} value={(attachment.dimensions.center_mm as [number, number, number])[axis]} precision={6} displayPrecision={2} unit="mm" step={.1} onCommit={(v) => { const center = [...attachment.dimensions.center_mm as [number, number, number]] as [number, number, number]; center[axis] = v; setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, center_mm: center } }); }}/>) }

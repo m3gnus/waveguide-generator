@@ -231,13 +231,18 @@ class PresetWrite(WireModel):
     name: Annotated[str, Field(min_length=1, max_length=80)]
     document: SourceDocument
     expected_revision: str | None = None
+    authoring: Any = None
 
 
 class PresetStore:
     """One process-owned library; immutable revisions reject stale replacements."""
 
+    AUTHORING_ENTRY_BYTES = 256 * 1024
+    MAX_ENTRIES = 128
+
     def __init__(self, path: Path):
         self.path = path
+        self.authoring_path = path.with_name("source_preset_authoring.json")
         self.lock = threading.Lock()
 
     def _read(self):
@@ -249,7 +254,7 @@ class PresetStore:
             value = json.loads(self.path.read_text(encoding="utf-8"))
             if value["version"] != 1 or not isinstance(value["presets"], dict):
                 raise ValueError("unknown library version")
-            if len(value["presets"]) > 128:
+            if len(value["presets"]) > self.MAX_ENTRIES:
                 raise ValueError("oversized library")
             for key, item in value["presets"].items():
                 if (
@@ -266,29 +271,62 @@ class PresetStore:
                 500, "Source preset library is unreadable; recover it before editing."
             ) from exc
 
-    def _write(self, presets):
-        raw = json.dumps({"version": 1, "presets": presets}, allow_nan=False).encode()
-        if len(raw) > 8 * 1024 * 1024:
-            raise HTTPException(422, "Source preset library exceeds 8 MiB.")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, name = tempfile.mkstemp(dir=self.path.parent, prefix=".source-presets-")
+    # The companion is optional, untrusted authoring data. It cannot make a
+    # canonical library unreadable, including after an older app rewrites it.
+    def _read_authoring(self, presets):
         try:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(name, self.path)
+            if self.authoring_path.stat().st_size > self.MAX_ENTRIES * (self.AUTHORING_ENTRY_BYTES + 1024):
+                return {}
+            values = json.loads(self.authoring_path.read_text(encoding="utf-8"))
+            if not isinstance(values, dict) or len(values) > self.MAX_ENTRIES:
+                return {}
+            return {
+                key: entry for key, entry in values.items()
+                if key in presets and isinstance(entry, dict)
+                and entry.get("revision") == presets[key]["revision"]
+                and "authoring" in entry
+                and len(json.dumps(entry, allow_nan=False).encode()) <= self.AUTHORING_ENTRY_BYTES
+            }
+        except (OSError, ValueError, TypeError, RecursionError):
+            return {}
+
+    def _write(self, presets, authoring):
+        library = json.dumps({"version": 1, "presets": presets}, allow_nan=False).encode()
+        if len(library) > 8 * 1024 * 1024:
+            raise HTTPException(422, "Source preset library exceeds 8 MiB.")
+        # Revisions make a torn pair safe: commit the companion first. If the
+        # library replace fails, readers ignore the new unmatched revision.
+        authoring = {key: entry for key, entry in authoring.items()
+                     if key in presets and entry["revision"] == presets[key]["revision"]}
+        if len(authoring) > self.MAX_ENTRIES:
+            raise HTTPException(422, "At most 128 source authoring entries are supported.")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        pending = []
+        try:
+            for path, raw in ((self.authoring_path, json.dumps(authoring, allow_nan=False).encode()), (self.path, library)):
+                fd, name = tempfile.mkstemp(dir=self.path.parent, prefix=".source-presets-")
+                pending.append((name, path))
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(raw)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            for name, path in pending:
+                os.replace(name, path)
         except OSError as exc:
             raise HTTPException(
                 503,
                 "Source preset could not be persisted. Try again after restoring storage access.",
             ) from exc
         finally:
-            Path(name).unlink(missing_ok=True)
+            for name, _ in pending:
+                Path(name).unlink(missing_ok=True)
 
     def list(self):
         with self.lock:
-            return list(self._read().values())
+            presets = self._read()
+            authoring = self._read_authoring(presets)
+            return [{**item, **({"authoring": authoring[key]["authoring"]} if key in authoring else {})}
+                    for key, item in presets.items()]
 
     def put(self, body: PresetWrite, preset_id: str | None = None):
         result = validated(body.document)
@@ -297,6 +335,7 @@ class PresetStore:
             raise HTTPException(422, "Name the preset.")
         with self.lock:
             values = self._read()
+            authoring = self._read_authoring(values)
             if preset_id is not None:
                 previous = values.get(preset_id)
                 if previous is None:
@@ -305,7 +344,7 @@ class PresetStore:
                     raise HTTPException(409, "Preset changed. Reload it before replacing.")
             elif body.expected_revision is not None:
                 raise HTTPException(422, "A new preset cannot replace a revision.")
-            elif len(values) >= 128:
+            elif len(values) >= self.MAX_ENTRIES:
                 raise HTTPException(422, "At most 128 saved source presets are supported.")
             preset_id = preset_id or uuid4().hex
             item = {
@@ -315,18 +354,29 @@ class PresetStore:
                 "document": result["document"],
             }
             values[preset_id] = item
-            self._write(values)
-            return item
+            authoring.pop(preset_id, None)
+            if "authoring" in body.model_fields_set:
+                entry = {"revision": item["revision"], "authoring": body.authoring}
+                try:
+                    entry_size = len(json.dumps(entry, allow_nan=False).encode())
+                except (ValueError, TypeError, RecursionError) as exc:
+                    raise HTTPException(422, "Source authoring must be finite JSON.") from exc
+                if entry_size > self.AUTHORING_ENTRY_BYTES:
+                    raise HTTPException(422, "Source preset authoring exceeds 256 KiB.")
+                authoring[preset_id] = entry
+            self._write(values, authoring)
+            return {**item, **({"authoring": body.authoring} if preset_id in authoring else {})}
 
     def delete(self, preset_id: str, revision: str):
         with self.lock:
             values = self._read()
+            authoring = self._read_authoring(values)
             if preset_id not in values:
                 raise HTTPException(404, "Preset no longer exists.")
             if values[preset_id]["revision"] != revision:
                 raise HTTPException(409, "Preset changed. Reload it before deleting.")
             del values[preset_id]
-            self._write(values)
+            self._write(values, authoring)
 
 
 class Attachment(WireModel):

@@ -59,6 +59,7 @@ export const SETTINGS_NAMESPACES = {
   designDraft: 'wg2.autosave.v1',
   sourceContourDraft: 'wg2.source-contour-draft.v1',
   sourceAssemblyDraft: 'wg2.source-assembly-draft.v1',
+  sourceAssemblyAuthoring: 'wg2.source-assembly-authoring.v1',
   /** Sketch canvas view toggles: dimensions, names, constraints. */
   sketchView: 'wg2.sketch.view.v1',
 } as const;

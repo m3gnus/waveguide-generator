@@ -14,7 +14,7 @@ export interface SourceValidation {
   document: SourceDocument; geometry_sha256: string; excitation_sha256: string;
   meridian: Record<string, [number, number][]>;
 }
-export interface SourcePreset { id: string; revision: string; name: string; document: SourceDocument }
+export interface SourcePreset { id: string; revision: string; name: string; document: SourceDocument; authoring?: unknown }
 export interface SourceAttachment { kind: 'baffle' | 'horn'; dimensions: Record<string, number | [number, number, number]> }
 export interface PhasePlug {
   id: string; z0_mm: number; z1_mm: number; inner0_mm: number; outer0_mm: number; inner1_mm: number; outer1_mm: number;
@@ -62,8 +62,8 @@ export const sourceEditorApi = {
   })).json(),
   split: async (document: SourceDocument, segment_index: number): Promise<SourceValidation> => (await response('/split', 'POST', { document, segment_index })).json(),
   presets: async (): Promise<SourcePreset[]> => (await response('/presets')).json(),
-  save: async (name: string, document: SourceDocument, previous?: SourcePreset): Promise<SourcePreset> => (await response(previous ? `/presets/${encodeURIComponent(previous.id)}` : '/presets', previous ? 'PUT' : 'POST', {
-    name, document, expected_revision: previous?.revision ?? null,
+  save: async (name: string, document: SourceDocument, previous?: SourcePreset, authoring?: unknown): Promise<SourcePreset> => (await response(previous ? `/presets/${encodeURIComponent(previous.id)}` : '/presets', previous ? 'PUT' : 'POST', {
+    name, document, ...(authoring === undefined ? {} : { authoring }), expected_revision: previous?.revision ?? null,
   })).json(),
   delete: async (preset: SourcePreset): Promise<void> => { await response(`/presets/${encodeURIComponent(preset.id)}?revision=${encodeURIComponent(preset.revision)}`, 'DELETE'); },
   export: async (document: SourceDocument, attachment: SourceAttachment, mesh_size_mm: number): Promise<Blob> => (await response('/export', 'POST', { document, attachment, mesh_size_mm })).blob(),

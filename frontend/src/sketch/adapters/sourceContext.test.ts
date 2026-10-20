@@ -1,6 +1,7 @@
+import { serializeSourceAuthoring } from './sourceAuthoring';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { hornAssemblyContext, standaloneContext, wooferAssemblyContext } from './sourceContext';
-import { lower, rules, seed, sourceAuthoringEnvelope, withSourceContext, withSourceLimit } from './sourceContour';
+import { lower, rules, seed, withSourceContext, withSourceLimit } from './sourceContour';
 import { contextData, geometryFingerprint, materialiseContext } from '../context';
 import { entityPoints } from '../model';
 import { toSolverSketch } from '../session';
@@ -108,7 +109,7 @@ describe('context ownership and canonical separation', () => {
     expect(readSourceAuthoring(INITIAL_SOURCE)).toEqual(initial);
     const result = materialiseContext(initial.sketch, context, 'plug/core/inlet');
     const state = withSourceContext({ ...initial, sketch: result.sketch }, context);
-    const envelope = sourceAuthoringEnvelope(state, INITIAL_SOURCE);
+    const envelope = serializeSourceAuthoring(state);
     expect(envelope.version).toBe('wg-source-authoring-v2');
     expect(envelope.meta).not.toHaveProperty('clearances'); expect(envelope).not.toHaveProperty('context');
     expect(context.fingerprint).toMatch(/^[0-9a-f]{16}$/);

@@ -98,6 +98,7 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   designDraft: 'solve-affecting',
   sourceContourDraft: 'inert',
   sourceAssemblyDraft: 'inert',
+  sourceAssemblyAuthoring: 'inert',
   // Display only: which annotations the sketch canvas draws.
   sketchView: 'inert',
 };

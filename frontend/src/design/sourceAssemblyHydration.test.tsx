@@ -5,6 +5,8 @@ import { sourceEditorApi, type SourceAssemblyDocument } from '../api/sourceEdito
 import { durableSettings, SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { AssemblyEditor, INITIAL_ASSEMBLY, parseAssemblyDraft } from './SourceAssemblyEditor';
 
+import { seed } from '../sketch/adapters/sourceContour';
+import { serializeSourceAuthoring } from '../sketch/adapters/sourceAuthoring';
 import { realSessionReady } from '../sketch/testSupport';
 beforeAll(realSessionReady);
 
@@ -49,8 +51,8 @@ async function deferredHydration() {
   await act(async () => root.render(<AssemblyEditor onClose={() => {}}/>)); await settle();
   const remote = structuredClone(INITIAL_ASSEMBLY); remote.dimensions.width_mm = 82;
   remote.horn.drive.weights.piston = .75; remote.woofer!.drive.weights.piston = .5;
-  return { remote, uploads, unrelated, reply: async () => act(async () => {
-    resolve({ ok: true, json: async () => ({ namespaces: { sourceAssemblyDraft: JSON.stringify(remote) } }) } as Response);
+  return { remote, uploads, unrelated, reply: async (authoring?: unknown) => act(async () => {
+    resolve({ ok: true, json: async () => ({ namespaces: { sourceAssemblyDraft: JSON.stringify(remote), ...(authoring ? { sourceAssemblyAuthoring: JSON.stringify(authoring) } : {}) } }) } as Response);
     await Promise.resolve(); await Promise.resolve();
   }) };
 }
@@ -86,4 +88,19 @@ it.each(['horn', 'woofer'] as const)('preserves nested %s edits, undo and subseq
   // Hydration may migrate the independent cache, but nested edits never alter it.
   expect(pending.uploads.filter((u) => u.url === '/api/settings/sourceContourDraft')
     .every((u) => JSON.parse(String(u.body)) === pending.unrelated)).toBe(true);
+});
+
+it('adopts matching authoring with a late restored assembly before reconciling stale cached authoring', async () => {
+  const cached = seed(INITIAL_ASSEMBLY.horn);
+  cached.sketch.entities.find(e => e.id === 'piston')!.data = { name: 'Cached name' };
+  localStorage.setItem(SETTINGS_NAMESPACES.sourceAssemblyAuthoring, JSON.stringify({ horn: serializeSourceAuthoring(cached) }));
+  const pending = await deferredHydration();
+  const remote = seed(pending.remote.horn);
+  remote.sketch.entities.find(e => e.id === 'piston')!.data = { name: 'Remote diaphragm' };
+  const companion = { horn: serializeSourceAuthoring(remote) };
+  await pending.reply(companion); await settle();
+  expect(JSON.parse(localStorage.getItem(SETTINGS_NAMESPACES.sourceAssemblyAuthoring)!)).toEqual(companion);
+  await act(async () => button('Edit horn contour…').click()); await settle();
+  expect(host.querySelector('[data-row-id="piston"]')!.textContent).toContain('Remote diaphragm');
+  expect(Number(weightInput().value)).toBe(.75);
 });

@@ -8,6 +8,9 @@ import { serializeDesign, useDesignStore } from '../stores/design';
 import { prepareNativeAssembly } from './nativeAssemblyPreparation';
 import { AssemblyEditor, INITIAL_ASSEMBLY, parseAssemblyDraft } from './SourceAssemblyEditor';
 
+import { parseSourceAuthoring, serializeSourceAuthoring } from '../sketch/adapters/sourceAuthoring';
+import { seed } from '../sketch/adapters/sourceContour';
+import { expandedPreset } from '../sketch/adapters/presetTestSupport';
 import { realSessionReady } from '../sketch/testSupport';
 beforeAll(realSessionReady);
 
@@ -17,7 +20,7 @@ const storage = namespaceStorage('sourceAssemblyDraft');
 describe('shared source and passage authoring', () => {
   let host:HTMLDivElement; let root:Root;
   beforeEach(() => {
-    vi.useFakeTimers(); vi.clearAllMocks(); storage.removeItem('');
+    vi.useFakeTimers(); vi.clearAllMocks(); storage.removeItem(''); namespaceStorage('sourceAssemblyAuthoring').removeItem(''); namespaceStorage('sketchView').removeItem('');
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT:boolean }).IS_REACT_ACT_ENVIRONMENT=true;
     vi.mocked(sourceEditorApi.validateAssembly).mockResolvedValue({ geometry_sha256:'geometry', passage_contract:null, horn_section_mm:{} });
     vi.mocked(sourceEditorApi.hornWall).mockImplementation(async config => { const p = config.profile as { r0_mm?: number; L_mm?: number }; const radius = p?.r0_mm ?? 4, length = p?.L_mm ?? 24, mouth = length === 130 ? 80 : 10; return { wall_mm: [[radius, 0], [mouth, length]], throat_radius_mm: radius, horn_length_mm: length, mouth_radius_mm: mouth }; });
@@ -29,7 +32,7 @@ describe('shared source and passage authoring', () => {
   afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); });
   const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(200); }); };
   const mount = async () => { await act(async () => root.render(<AssemblyEditor onClose={() => {}}/>)); await settle(); };
-  const button = (text:string) => [...host.querySelectorAll('button')].find((b) => b.textContent===text)!;
+  const button = (text:string) => [...host.querySelectorAll('button')].find((b) => (b.getAttribute('aria-label') ?? b.textContent)===text)!;
   const read = () => parseAssemblyDraft(storage.getItem('')!);
   const field = (label:string) => {
     const owner=[...host.querySelectorAll('label')].find((l) => l.querySelector('.field-name')?.textContent===label)!;
@@ -64,6 +67,111 @@ describe('shared source and passage authoring', () => {
     expect(host.querySelector('.sketch-limit')).toBeNull();
     expect(host.textContent).toContain('Limit radius must be positive');
     expect(host.querySelector('[aria-label="Sketch drawing"]')).not.toBeNull();
+  });
+  const authoringStorage = namespaceStorage('sourceAssemblyAuthoring');
+  const svg = () => host.querySelector('[aria-label="Sketch drawing"]')!;
+  const pointer = async (target: Element, type = 'pointerdown', x = 0, y = 0) => act(async () => target.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, buttons: type === 'pointerup' ? 0 : 1 })));
+  const envelopeFor = (source: 'horn' | 'woofer') => JSON.parse(authoringStorage.getItem('')!)[source];
+  it.each(['horn', 'woofer'] as const)('keeps %s constraints, names, placement and construction through closing and remounting', async source => {
+    storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY)); await mount();
+    await act(async () => button(`Edit ${source} contour…`).click()); await settle();
+    await act(async () => button('Dimension (D)').click());
+    await pointer(host.querySelector('.sketch-entity[data-id="piston"]')!); await settle();
+    await pointer(svg(), 'pointermove', 400, 80); await pointer(svg(), 'pointerdown', 400, 80); await pointer(svg(), 'pointerup', 400, 80); await settle();
+    await act(async () => svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    const dimension = envelopeFor(source).sketch.constraints.find((c: { value?: number }) => c.value !== undefined);
+    expect(dimension.placement).toBeDefined();
+    const cell = [...host.querySelectorAll('button')].find(b => b.getAttribute('aria-label')?.startsWith(`Dimension ${dimension.id} name:`))!;
+    await act(async () => cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true })));
+    const name = host.querySelector<HTMLInputElement>(`[aria-label="Dimension ${dimension.id} name"]`)!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Diaphragm width');
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => name.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))); await settle();
+    await act(async () => button('Line (L)').click());
+    await pointer(svg(), 'pointerdown', 370, 220); await pointer(svg(), 'pointerup', 370, 220);
+    await pointer(svg(), 'pointerdown', 480, 260); await pointer(svg(), 'pointerup', 480, 260); await settle();
+    await act(async () => svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    const added = envelopeFor(source).sketch.entities.find((e: { id: string; reference?: boolean }) => !e.reference && e.id !== 'piston');
+    expect(added).toBeDefined();
+    await pointer(host.querySelector(`.sketch-entity[data-id="${added.id}"]`)!); await pointer(svg(), 'pointerup'); await settle();
+    await act(async () => button('Construction (X)').click()); await settle();
+    const before = envelopeFor(source);
+    expect(before.pending).toBe(false);
+    expect(before.sketch.entities.find((e: { id: string }) => e.id === added.id).construction).toBe(true);
+    const beforeDocument = read()[source]!;
+    expect(beforeDocument).toEqual(INITIAL_ASSEMBLY[source]);
+    expect(parseSourceAuthoring(before, beforeDocument)).not.toBeNull();
+    await act(async () => button('Close').click()); await settle();
+    await act(async () => root.render(null)); await mount();
+    await act(async () => button(`Edit ${source} contour…`).click()); await settle();
+    expect(host.querySelector(`[data-row-id="${dimension.id}"]`)!.textContent).toContain('Diaphragm width');
+    expect(host.querySelector(`.sketch-entity[data-id="${added.id}"]`)!.classList.contains('construction')).toBe(true);
+    await enter('Patch 1 weight', '.5'); await settle(); // Inspect the reopened controller's published sketch.
+    expect(envelopeFor(source).sketch).toEqual(before.sketch);
+    expect(read()[source]!.contour).toEqual(beforeDocument.contour);
+    expect(envelopeFor(source).meta.weights.piston).toBe(.5);
+  });
+  it.each(['horn', 'woofer'] as const)('keeps a pending invalid %s sketch beside the last canonical document', async source => {
+    storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY)); await mount();
+    await act(async () => button(`Edit ${source} contour…`).click()); await settle();
+    await pointer(host.querySelector('.sketch-entity[data-id="piston"]')!); await pointer(svg(), 'pointerup');
+    await act(async () => button('Delete selection').click()); await settle();
+    const before = envelopeFor(source);
+    expect(before.pending).toBe(true);
+    expect(before.sketch.entities.some((e: { id: string }) => e.id === 'piston')).toBe(false);
+    expect(read()[source]).toEqual(INITIAL_ASSEMBLY[source]);
+    await act(async () => button('Close').click()); await settle();
+    await act(async () => button(`Edit ${source} contour…`).click()); await settle();
+    expect(host.querySelector('.sketch-entity[data-id="piston"]')).toBeNull();
+    expect(button('Use contour in assembly').disabled).toBe(true);
+    expect(envelopeFor(source).sketch).toEqual(before.sketch);
+  });
+  it('seeds when a companion no longer lowers to the current nested document', async () => {
+    const state = seed(INITIAL_ASSEMBLY.horn); state.sketch.entities[0].data = { name: 'Stale name' };
+    authoringStorage.setItem('', JSON.stringify({ horn: serializeSourceAuthoring(state) }));
+    const changed = structuredClone(INITIAL_ASSEMBLY); changed.horn.drive.motion = 'axial';
+    storage.setItem('', JSON.stringify(changed)); await mount();
+    await act(async () => button('Edit horn contour…').click()); await settle();
+    expect(host.textContent).not.toContain('Stale name');
+    await enter('Patch 1 weight', '.5'); await settle();
+    expect(envelopeFor('horn').meta.motion).toBe('axial');
+    expect(envelopeFor('horn').sketch.entities[0].data?.name).toBeUndefined();
+  });
+  it('restores a plug dimension after closing, then follows the changed assembly host with a notice', async () => {
+    const saved = structuredClone(INITIAL_ASSEMBLY);
+    saved.horn = expandedPreset('dome', { radius_mm: 4, height_mm: 1, surround_width_mm: 0, surround_depth_mm: 0, land_width_mm: 0 });
+    saved.phase_plugs = [{ id: 'core', z0_mm: 2, z1_mm: 6, inner0_mm: 0, outer0_mm: 2, inner1_mm: 0, outer1_mm: 3 }];
+    storage.setItem('', JSON.stringify(saved)); await mount();
+    await act(async () => button('Edit horn contour…').click()); await settle();
+    await act(async () => button('Dimension (D)').click());
+    const pole = host.querySelector('.sketch-point[data-id="pole"]')!;
+    await pointer(pole, 'pointerdown', Number(pole.getAttribute('cx')), Number(pole.getAttribute('cy'))); await pointer(svg(), 'pointerup');
+    await pointer(host.querySelector('[data-context-id="plug/core/inlet"] .sketch-context-hit')!); await settle();
+    await pointer(svg(), 'pointermove', 300, 110); await pointer(svg(), 'pointerdown', 300, 110); await pointer(svg(), 'pointerup', 300, 110); await settle();
+    await act(async () => svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(envelopeFor('horn').sketch.constraints.some((c: { kind: string }) => c.kind === 'pointLineDistance')).toBe(true);
+    await act(async () => button('Close').click()); await settle();
+    await enter('Plug inlet Z', '3');
+    await act(async () => button('Edit horn contour…').click()); await settle();
+    expect(host.textContent).toContain('Reference context changed; contour updated');
+    expect(read().horn.contour.points[0].z_mm).toBeCloseTo(2, 8);
+    const envelope = envelopeFor('horn');
+    const reference = envelope.sketch.entities.find((e: { data?: { context?: string } }) => e.data?.context === 'plug/core/inlet');
+    expect(envelope.sketch.points.find((p: { id: string }) => p.id === reference.p1).y).toBe(3);
+  });
+  it('reconciles companions when the restored assembly subscription adopts a different document', async () => {
+    let restore!: (raw: string | null) => void;
+    vi.spyOn(durableSettings, 'subscribe').mockImplementation((namespace, listener) => { if (namespace === 'sourceAssemblyDraft') restore = listener; return () => {}; });
+    const horn = seed(INITIAL_ASSEMBLY.horn), woofer = seed(INITIAL_ASSEMBLY.woofer!);
+    authoringStorage.setItem('', JSON.stringify({ horn: serializeSourceAuthoring(horn), woofer: serializeSourceAuthoring(woofer) }));
+    storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY)); await mount();
+    const changed = structuredClone(INITIAL_ASSEMBLY); changed.horn.drive.motion = 'axial';
+    localStorage.setItem(SETTINGS_NAMESPACES.sourceAssemblyDraft, JSON.stringify(changed));
+    await act(async () => restore(JSON.stringify(changed))); await settle();
+    expect(host.textContent).toContain('Restored source assembly draft.');
+    expect(JSON.parse(authoringStorage.getItem('')!)).toEqual({ woofer: serializeSourceAuthoring(woofer) });
   });
   it('passes the resolved current-horn throat into the nested editor as an exact read-only limit', async () => {
     vi.mocked(sourceEditorApi.hornProfile).mockResolvedValue(profile);
