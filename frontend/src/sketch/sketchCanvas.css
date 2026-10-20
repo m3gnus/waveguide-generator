@@ -73,8 +73,8 @@
 .sketch-context-item .sketch-context-hit { stroke: transparent; stroke-width: 14; fill: none; pointer-events: stroke; }
 .sketch-context-stale { color: var(--fg3); font-size: 11px; }
 
-.sketch-context-item.hovered > path:not(.sketch-context-hit) { stroke: var(--sketch-selected); stroke-width: 2; }
-.sketch-context-item.selected > path:not(.sketch-context-hit) { stroke: var(--sketch-selected); stroke-width: 3.5; }
+.sketch-context-item.hovered > path:not(.sketch-context-hit) { stroke: var(--sketch-selected); stroke-width: 2; stroke-opacity: .55; }
+.sketch-context-item.selected > path:not(.sketch-context-hit) { stroke: var(--sketch-selected); stroke-width: 3.5; stroke-opacity: 1; }
 .sketch-context-item.selected text { fill: var(--sketch-selected); }
 
 .sketch-conflict-banner { display: flex; align-items: center; gap: .5rem; padding: .5rem; border: 1px solid var(--red); border-radius: 4px; }
@@ -89,10 +89,19 @@
 .sketch-entity.projected { stroke: var(--sketch-context-color); stroke-width: 1; }
 .sketch-surface svg.sketch-pan, .sketch-surface svg.sketch-pan * { cursor: grab; }
 .sketch-surface svg.sketch-pan.grabbing, .sketch-surface svg.sketch-pan.grabbing * { cursor: grabbing; }
-svg:not(.sketch-constraint-tool) .sketch-curve:hover .sketch-entity,
-svg:not(.sketch-constraint-tool) .sketch-handle:hover .sketch-point,
-.sketch-entity.hovered, .sketch-point.hovered { stroke: var(--sketch-selected); stroke-width: 3.5; }
-svg:not(.sketch-constraint-tool) .sketch-curve:hover .sketch-entity.rigid,
-.sketch-entity.rigid.hovered { stroke-width: 4.5; }
-.sketch-entity.selected, .sketch-point.selected { stroke: var(--sketch-selected); stroke-width: 3.5; }
+/* Keep native pointer hover and tool candidates identical; a completed pick wins. */
+:where(svg:not(.sketch-constraint-tool) .sketch-curve:hover) .sketch-entity:not(.selected),
+:where(svg:not(.sketch-constraint-tool) .sketch-handle:hover) .sketch-point:not(.selected),
+.sketch-entity.hovered:not(.selected), .sketch-point.hovered:not(.selected) { stroke: var(--sketch-selected); stroke-width: 3; stroke-opacity: .55; }
+:where(svg:not(.sketch-constraint-tool) .sketch-curve:hover) .sketch-entity.rigid:not(.selected),
+.sketch-entity.rigid.hovered:not(.selected) { stroke-width: 4.5; }
+:where(svg:not(.sketch-constraint-tool) .sketch-curve:hover) .sketch-entity.construction:not(.selected),
+.sketch-entity.construction.hovered:not(.selected),
+:where(svg:not(.sketch-constraint-tool) .sketch-handle:hover) .sketch-point:not(.selected),
+.sketch-point.hovered:not(.selected) { stroke-width: 2.5; }
+:where(svg:not(.sketch-constraint-tool) .sketch-curve:hover) .sketch-entity.projected:not(.selected),
+.sketch-entity.projected.hovered:not(.selected) { stroke-width: 2; }
+:where(svg:not(.sketch-constraint-tool) .sketch-handle:hover) .sketch-point.valid-start:not(.selected),
+.sketch-point.valid-start.hovered:not(.selected) { stroke-width: 4; }
+.sketch-entity.selected, .sketch-point.selected { stroke: var(--sketch-selected); stroke-width: 3.5; stroke-opacity: 1; }
 .sketch-entity.rigid.selected { stroke-width: 4.5; }

@@ -21,9 +21,41 @@ function resolveToken(tokens: Record<string, string>, name: string, seen = new S
   seen.add(name);
   const value = tokens[name];
   if (!value) throw new Error(`Missing token: ${name}`);
-  const reference = value.match(/^var\((--[\w-]+)\)$/)?.[1];
-  return reference ? resolveToken(tokens, reference, seen) : value;
+  return value.replace(/var\((--[\w-]+)\)/g, (_, reference: string) => resolveToken(tokens, reference, new Set(seen)));
 }
+
+function rgb(colour: string): number[] {
+  if (/^#[\da-f]{6}$/i.test(colour)) return colour.slice(1).match(/../g)!.map(part => Number.parseInt(part, 16));
+  const channels = colour.match(/^rgb\(([\d,\s]+)\)$/)?.[1];
+  if (!channels) throw new Error(`Expected an RGB colour, got ${colour}`);
+  return channels.split(',').map(Number);
+}
+
+function hue(colour: string): number {
+  const [r, g, b] = rgb(colour), max = Math.max(r, g, b), delta = max - Math.min(r, g, b);
+  if (!delta) throw new Error(`Expected a chromatic colour, got ${colour}`);
+  return ((max === r ? (g - b) / delta : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4) * 60 + 360) % 360;
+}
+
+describe('sketch selection colour', () => {
+  it.each(Object.entries(themes))('%s selection is cyan and distinct from every sketch status', (_theme, tokens) => {
+    const selected = resolveToken(tokens, '--sketch-selected');
+    expect(hue(selected)).toBeGreaterThanOrEqual(175);
+    expect(hue(selected)).toBeLessThanOrEqual(195);
+    for (const status of ['--sketch-conflicting', '--sketch-under', '--sketch-determined', '--sketch-construction', '--sketch-context-color', '--green']) {
+      expect(rgb(selected), status).not.toEqual(rgb(resolveToken(tokens, status)));
+    }
+    const difference = Math.abs(hue(selected) - hue(resolveToken(tokens, '--sketch-under')));
+    expect(Math.min(difference, 360 - difference), 'cyan must stay clearly apart from under-constrained blue').toBeGreaterThan(40);
+  });
+
+  it('defines selection once per theme, without an accent alias', () => {
+    for (const block of [rootBlock, lightBlock]) {
+      expect(block.match(/--sketch-selected\s*:/g)).toHaveLength(1);
+      expect(declarations(block)['--sketch-selected']).not.toBe('var(--acc)');
+    }
+  });
+});
 
 function luminance(hex: string): number {
   const channels = hex.match(/[\da-f]{2}/gi)?.map((part) => Number.parseInt(part, 16) / 255);

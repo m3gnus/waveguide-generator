@@ -14,7 +14,7 @@
   --source-moving: #69d4ce;
   --sketch-under: var(--blue);
   --sketch-determined: var(--fg);
-  --sketch-selected: var(--acc);
+  --sketch-selected: #2ed3cf;
   --sketch-conflicting: var(--red);
   --sketch-construction: #f3a64b;
   --sketch-context-color: #c38ab3;
@@ -205,7 +205,7 @@
 
 [data-theme="light"] {
   --source-moving: #176d68;
-  --sketch-selected: var(--acc);
+  --sketch-selected: #0b9691;
   --sketch-construction: #a34e00;
   --sketch-context-color: #985a88;
   --sketch-context-hatch: #b578a0;

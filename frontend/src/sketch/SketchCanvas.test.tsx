@@ -709,6 +709,46 @@ describe('constraint context controls', () => {
 
 
 describe('navigation and line legend', () => {
+  it.each([
+    ['sketch-entity moving', '2', '3', '3.5'],
+    ['sketch-entity rigid', '3.5', '4.5', '4.5'],
+    ['sketch-entity construction', '1.5', '2.5', '3.5'],
+    ['sketch-entity rigid construction', '1.5', '2.5', '4.5'],
+    ['sketch-entity projected', '1', '2', '3.5'],
+    ['sketch-point', '1.5', '2.5', '3.5'],
+    ['sketch-point valid-start', '3', '4', '3.5'],
+  ])('adds one pixel on %s hover and keeps a hovered pick fully selected', (classes, normal, hover, selected) => {
+    const style = document.createElement('style'); style.textContent = new TextDecoder().decode(readFileSync('src/sketch/sketchCanvas.css')); document.head.append(style);
+    try {
+      host.innerHTML = `<svg><path class="${classes}"/></svg>`;
+      const path = host.querySelector('path')!;
+      expect(getComputedStyle(path).strokeWidth).toBe(normal);
+      path.classList.add('hovered');
+      expect(getComputedStyle(path).stroke).toBe('var(--sketch-selected)');
+      expect(getComputedStyle(path).strokeWidth).toBe(hover);
+      expect(getComputedStyle(path).strokeOpacity).toBe('0.55');
+      path.classList.add('selected');
+      expect(getComputedStyle(path).stroke).toBe('var(--sketch-selected)');
+      expect(getComputedStyle(path).strokeWidth).toBe(selected);
+      expect(getComputedStyle(path).strokeOpacity).toBe('1');
+    } finally { style.remove(); }
+  });
+  it('distinguishes projected context hover from a pick without highlighting its hit path', () => {
+    const style = document.createElement('style'); style.textContent = new TextDecoder().decode(readFileSync('src/sketch/sketchCanvas.css')); document.head.append(style);
+    try {
+      host.innerHTML = '<svg><g class="sketch-context-item hovered"><path/><path class="sketch-context-hit"/></g></svg>';
+      const item = host.querySelector('g')!, path = item.querySelector('path')!, hit = item.querySelector('.sketch-context-hit')!;
+      expect(getComputedStyle(path).stroke).toBe('var(--sketch-selected)');
+      expect(getComputedStyle(path).strokeWidth).toBe('2');
+      expect(getComputedStyle(path).strokeOpacity).toBe('0.55');
+      expect(getComputedStyle(hit).stroke).toBe('rgba(0, 0, 0, 0)');
+      item.classList.add('selected');
+      expect(getComputedStyle(path).stroke).toBe('var(--sketch-selected)');
+      expect(getComputedStyle(path).strokeWidth).toBe('3.5');
+      expect(getComputedStyle(path).strokeOpacity).toBe('1');
+      expect(getComputedStyle(hit).stroke).toBe('rgba(0, 0, 0, 0)');
+    } finally { style.remove(); }
+  });
   it('keeps Undo and Redo outside View and before Fit, with working history actions', async () => {
     await mount();
     const toolbar = host.querySelector('[aria-label="Sketch tools"]')!, view = toolbar.querySelector('[aria-label="View"]')!;
@@ -722,7 +762,7 @@ describe('navigation and line legend', () => {
     await act(async () => button('Undo').click()); await act(async () => button('Redo').click());
     expect(undo).toHaveBeenCalledTimes(2); expect(undo).toHaveBeenNthCalledWith(1, false); expect(undo).toHaveBeenNthCalledWith(2, true);
   });
-  it.each(['moving', 'rigid'])('uses the accent for fully constrained %s selections and pending constraint picks', async role => {
+  it.each(['moving', 'rigid'])('distinguishes cyan hover from fully constrained %s selections and pending constraint picks', async role => {
     const style = document.createElement('style'); style.textContent = new TextDecoder().decode(readFileSync('src/sketch/sketchCanvas.css')); document.head.append(style);
     try {
       const sketch = base();
@@ -736,6 +776,7 @@ describe('navigation and line legend', () => {
       expect(line().classList.contains('selected')).toBe(true);
       expect(getComputedStyle(line()).stroke).toBe('var(--sketch-selected)');
       expect(getComputedStyle(line()).strokeWidth).toBe(role === 'rigid' ? '4.5' : '3.5');
+      expect(getComputedStyle(line()).strokeOpacity).toBe('1');
       await key('Escape');
       expect(getComputedStyle(line()).stroke).toBe('var(--sketch-determined)');
       await act(async () => button('Parallel').click());
@@ -743,18 +784,25 @@ describe('navigation and line legend', () => {
       await pointer(line(), 'pointermove', (p.x + q.x) / 2, (p.y + q.y) / 2, { buttons: 0 });
       expect(line().classList.contains('hovered')).toBe(true);
       expect(getComputedStyle(line()).stroke).toBe('var(--sketch-selected)');
+      expect(getComputedStyle(line()).strokeWidth).toBe(role === 'rigid' ? '4.5' : '3');
+      expect(getComputedStyle(line()).strokeOpacity).toBe('0.55');
       await pointer(line(), 'pointerdown', (p.x + q.x) / 2, (p.y + q.y) / 2); await pointer(svg(), 'pointerup');
       expect(line().classList.contains('selected')).toBe(true);
       expect(getComputedStyle(line()).stroke).toBe('var(--sketch-selected)');
+      expect(getComputedStyle(line()).strokeWidth).toBe(role === 'rigid' ? '4.5' : '3.5');
+      expect(getComputedStyle(line()).strokeOpacity).toBe('1');
       await key('Escape'); await key('Escape');
       await act(async () => button('Coincident').click());
       const point = () => host.querySelector('.sketch-point.determined[data-id="q"]')!;
       await pointer(point(), 'pointermove', q.x, q.y, { buttons: 0 });
       expect(getComputedStyle(point()).stroke).toBe('var(--sketch-selected)');
+      expect(getComputedStyle(point()).strokeWidth).toBe('2.5');
+      expect(getComputedStyle(point()).strokeOpacity).toBe('0.55');
       await pointer(point(), 'pointerdown', q.x, q.y); await pointer(svg(), 'pointerup');
       expect(point().classList.contains('selected')).toBe(true);
       expect(getComputedStyle(point()).stroke).toBe('var(--sketch-selected)');
       expect(getComputedStyle(point()).strokeWidth).toBe('3.5');
+      expect(getComputedStyle(point()).strokeOpacity).toBe('1');
     } finally { style.remove(); }
   });
   it('pans with Hand over geometry and dimension labels without selecting or editing, then Esc selects', async () => {
