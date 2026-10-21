@@ -1,6 +1,7 @@
 import type { SourceDocument } from '../api/sourceEditor';
 
-export const sketchPerfEnabled = () => new URLSearchParams(window.location.search).get('sketchPerf') === '1';
+// Development builds only: the packaged app must not reopen the hidden sketch editor from a URL.
+export const sketchPerfEnabled = () => import.meta.env.DEV && new URLSearchParams(window.location.search).get('sketchPerf') === '1';
 const painted = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
 let loader: ((document: SourceDocument) => Promise<void>) | undefined;
 const waiting = new Set<() => void>();
