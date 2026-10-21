@@ -101,7 +101,7 @@ describe('SettingsDialog', () => {
       if (path === '/api/acl-repair/status') return new Response(JSON.stringify({
         platform: 'windows',
         roots: [
-          { scope: 'appData', source: 'current', repaired: 2, remaining: 0, unreadable: 0, failed: 0, truncated: false, administratorMayHelp: 0 },
+          { scope: 'appData', source: 'current', repaired: 2, remaining: 1, unreadable: 1, failed: 0, truncated: false, administratorMayHelp: 0 },
           { scope: 'workspace', source: 'previous', repaired: 4, remaining: 3, unreadable: 3, failed: 0, truncated: false, administratorMayHelp: 3 },
         ],
       }), { status: 200 });
@@ -115,6 +115,7 @@ describe('SettingsDialog', () => {
     expect(status.textContent).toContain('restored access to 2 items in application data during this start');
     expect(status.textContent).toContain('A previous repair left 3 items in the Runs folder checked at startup');
     expect(status.textContent).toContain('Run as administrator');
+    expect(status.textContent).toContain('download a problem report using Report a problem in the top bar or command palette.');
     expect(status.textContent).not.toContain('restored access to 4');
   });
 

@@ -117,7 +117,7 @@ export function WindowsFileAccessStatus() {
         Starting WG once with <b>Run as administrator</b> may let it repair more. Close WG first, then return to normal starts afterward.
       </p>}
       {root.remaining > 0 && root.administratorMayHelp === 0 && <p>
-        WG has already tried with administrator access. Check that your account can modify this folder; if the problem continues, download a problem report from Help.
+        WG has already tried with administrator access. Check that your account can modify this folder; if the problem continues, download a problem report using Report a problem in the top bar or command palette.
       </p>}
       {root.truncated && <p>
         This folder contains more items than WG checks at startup, so some items may not have been checked.
