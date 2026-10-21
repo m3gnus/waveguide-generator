@@ -43,7 +43,7 @@ export class SketchController<T> {
   private placedDimension?: { id: string; state: Authoring<T> };
   private busy = false;
   private context?: { replace: (state: Authoring<T>) => Authoring<T>; conflictPrefix?: string };
-  constructor(initial: Authoring<T>, private references: Reference[] | ((state: Authoring<T>) => Reference[]), private apply: Apply<T>, private changed: (state: Authoring<T>, diagnosis?: Diagnosis) => void, failed?: (reason: unknown) => void, private activity?: (busy: boolean) => void, private preview?: (state: Authoring<T>, diagnosis?: Diagnosis) => void, private dimensionProblem?: (state: Authoring<T>, id: string, value: number) => string | undefined) {
+  constructor(initial: Authoring<T>, private references: Reference[] | ((state: Authoring<T>) => Reference[]), private apply: Apply<T>, private changed: (state: Authoring<T>, diagnosis?: Diagnosis) => void, failed?: (reason: unknown) => void, private activity?: (busy: boolean) => void, private preview?: (state: Authoring<T>, diagnosis?: Diagnosis) => void, private dimensionProblem?: (state: Authoring<T>, id: string, value: number) => string | undefined, private historyNavigation?: () => void) {
     this.history = new History(initial);
     this.ready = createSession(initial.sketch, { references: this.getReferences(initial) }).then(async session => {
       if (this.destroyed) { session.destroy(); return; }
@@ -179,13 +179,18 @@ export class SketchController<T> {
       return sketch;
     });
   }
-  adopt(state: Authoring<T>, label = 'Load contour', requireSolved = false) {
-    return this.queue(session => this.transaction(session, label, async () => {
-      const next = await createSession(state.sketch, { references: this.getReferences(state) });
-      try { const diagnosis = await next.solveFull(); if (requireSolved && diagnosis.status !== 'ok') throw constraintError(state.sketch, diagnosis); this.diagnosis = diagnosis; }
-      catch (e) { next.destroy(); throw e; }
-      next.sketch = state.sketch; session.destroy(); this.session = next; return state;
-    }));
+  /** Resolve offers when queued work starts, so intervening edits can invalidate them. */
+  adopt(state: Authoring<T> | ((current: Authoring<T>) => Authoring<T> | undefined), label = 'Load contour', requireSolved = false) {
+    return this.queue(async session => {
+      const candidate = typeof state === 'function' ? state(this.current) : state;
+      if (!candidate) return;
+      return this.transaction(session, label, async () => {
+        const next = await createSession(candidate.sketch, { references: this.getReferences(candidate) });
+        try { const diagnosis = await next.solveFull(); if (requireSolved && diagnosis.status !== 'ok') throw constraintError(candidate.sketch, diagnosis); this.diagnosis = diagnosis; }
+        catch (e) { next.destroy(); throw e; }
+        next.sketch = candidate.sketch; session.destroy(); this.session = next; return candidate;
+      });
+    });
   }
   materialiseContext(context: SketchContext, itemId: string) {
     return this.queue(async session => {
@@ -267,6 +272,7 @@ export class SketchController<T> {
   }
   undo(redo = false) {
     return this.queue(async session => {
+      this.historyNavigation?.();
       this.notice = undefined; this.dismissRejection();
       const state = this.history.peek(redo);
       if (state === this.current) return;
@@ -276,7 +282,8 @@ export class SketchController<T> {
         diagnosis = await next.solveFull();
         if (diagnosis.status !== 'ok') throw new Error(diagnosis.reason ?? 'The history state cannot be solved.');
       } catch (e) { next.destroy(); throw e; }
-      next.sketch = state.sketch; session.destroy(); this.session = next; this.diagnosis = diagnosis;
+      const previousDiagnosis = this.diagnosis;
+      next.sketch = state.sketch; this.session = next; this.diagnosis = diagnosis;
       if (redo) this.history.redo(); else this.history.undo();
       this.history.current = state;
       // Remember even a rejected host update. Historical sketches try the current
@@ -285,10 +292,16 @@ export class SketchController<T> {
         const { replace, conflictPrefix } = this.context;
         try { await this.installContext(next, replace, undefined, conflictPrefix); }
         catch (reason) {
-          if (!isConstraintConflict(reason)) throw reason;
+          if (!isConstraintConflict(reason)) {
+            // The host could not be installed: keep the published state and history aligned.
+            if (redo) this.history.undo(); else this.history.redo();
+            this.session = session; this.diagnosis = previousDiagnosis; next.destroy();
+            throw reason;
+          }
           if (!this.destroyed) this.changed(state, this.diagnosis);
         }
       } else this.publish(state);
+      session.destroy();
     });
   }
   destroy() { this.destroyed = true; void this.ready.catch(() => {}).then(() => this.work).finally(() => this.session?.destroy()); }

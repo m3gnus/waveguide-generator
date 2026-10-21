@@ -174,6 +174,37 @@ describe('authoring session transactions', () => {
     } finally { controller.destroy(); }
   });
 
+  it.each([false, true])('restores history, publication and the live session when context installation fails during redo=%s', async redo => {
+    const changed = vi.fn();
+    const controller = new SketchController({ sketch: base(), meta: null }, [], (s, c) => {
+      const r = applyCommand(s.sketch, c); return 'error' in r ? r : { ...s, sketch: r.sketch };
+    }, changed);
+    try {
+      await controller.command({ kind: 'movePoint', id: 'q', x: 12, y: 0 });
+      await controller.replaceContext(state => state);
+      if (redo) await controller.undo();
+      const before = controller.current, diagnosis = controller.diagnosis;
+      const target = controller.history.peek(redo), canUndo = controller.history.canUndo, canRedo = controller.history.canRedo;
+      const create = sessions.createSession;
+      const failure = vi.spyOn(sessions, 'createSession').mockImplementationOnce(create).mockRejectedValueOnce(new Error('Context creation failed'));
+      changed.mockClear();
+      try { await expect(controller.undo(redo)).rejects.toThrow('Context creation failed'); }
+      finally { failure.mockRestore(); }
+      expect(controller.current).toBe(before); expect(controller.diagnosis).toBe(diagnosis);
+      expect(controller.history.canUndo).toBe(canUndo); expect(controller.history.canRedo).toBe(canRedo);
+      expect(controller.history.peek(redo)).toBe(target);
+      expect(changed).not.toHaveBeenCalled();
+      await controller.beginDrag('q'); await controller.endDrag(true);
+      expect(controller.current).toBe(before);
+      // A second attempt still visits the same history state and publishes it.
+      await controller.undo(redo);
+      expect(controller.current).toEqual(target);
+      expect(changed).toHaveBeenLastCalledWith(target, expect.anything());
+      await controller.command({ kind: 'movePoint', id: 'q', x: 13, y: 0 });
+      expect(controller.current.sketch.points.find(p => p.id === 'q')!.x).toBeCloseTo(13);
+    } finally { controller.destroy(); }
+  });
+
   it.each(['movePoint', 'splitAt'] as const)('reports a %s convergence failure without inventing a conflict', async kind => {
     const controller = generic();
     try {

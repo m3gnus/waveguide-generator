@@ -155,6 +155,8 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const progress = sourceProgress(displayAuthor.sketch, displayAuthor.meta);
   const [throatConflict, setThroatConflict] = useState(false);
   const pendingLoad = useRef<Authoring<SourceMeta> | undefined>(undefined);
+  const [loadOffer, setLoadOffer] = useState(false);
+  function clearLoadOffer() { pendingLoad.current = undefined; setLoadOffer(false); }
   const [hoverId, setHoverId] = useState<string>();
   const [pointsOpen, setPointsOpen] = useState(false);
   const [dimensionsOpen, setDimensionsOpen] = useState(false);
@@ -199,8 +201,6 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const rimMismatch = !!limit.hard && (rimRadius !== undefined && Math.abs(rimRadius - limit.radius) > 1e-8
     || JSON.stringify(author.meta.limit) !== JSON.stringify(limit));
   const throatMismatch = rimMismatch || throatConflict;
-  const pendingRim = pendingLoad.current && contourPointOrder(pendingLoad.current.sketch, pendingLoad.current.meta).at(-1);
-  const mismatchRadius = pendingLoad.current?.sketch.points.find(p => p.id === pendingRim)?.x ?? rimRadius;
   const valid = !throatMismatch && accepted?.key === key && drawPoints === null && (classic || sketchReady && !sketchPending && sketchProblems.every(p => p.severity === 'warning'));
   const [identifiersOpen, setIdentifiersOpen] = useState(false);
   const identityIssue = identityProblem(validationError, [draft.contour.physical_source_id, draft.contour.rim_id]) || draft.drive.channel_id.trim() === '';
@@ -240,6 +240,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
       if (!current) return;
       setDiagnosis(result); setSketchReady(true);
       if (opening) { opening = false; const opened = lower(state.sketch, state.meta); if (opened.ok && sameSourceDocument(draftRef.current, opened.document)) return; }
+      clearLoadOffer();
       authorRef.current = state; setAuthor(state); setPreview(undefined);
       const lowered = lower(state.sketch, state.meta); lowering.current = { state, result: lowered };
       if (lowered.ok) {
@@ -247,7 +248,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
       }
       persistAuthoring(state, lowered.ok ? lowered.document : draftRef.current, !lowered.ok);
       setNotice(next.notice ?? ''); setError('');
-    }, reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }, active => { if (current) { editingIntent.current = active; setSketchPending(active); if (!active && deferredHydration.current) { deferredHydration.current = false; hydrateRef.current(); } } }, (state, result) => { if (current) { setPreview(state === authorRef.current ? undefined : state); setDiagnosis(result); } }, (state, id, value) => presetDimensionProblem(state.sketch, state.meta, id, value));
+    }, reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }, active => { if (current) { editingIntent.current = active; setSketchPending(active); if (!active && deferredHydration.current) { deferredHydration.current = false; hydrateRef.current(); } } }, (state, result) => { if (current) { setPreview(state === authorRef.current ? undefined : state); setDiagnosis(result); } }, (state, id, value) => presetDimensionProblem(state.sketch, state.meta, id, value), clearLoadOffer);
     controller.current = next;
     // Initialization errors are reported by queued operations as well.
     return () => { current = false; next.destroy(); controller.current = undefined; };
@@ -261,6 +262,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   }, [attachment]);
   const installedContext = useRef<string | undefined>(undefined);
   useEffect(() => {
+    clearLoadOffer();
     if (classic || !controller.current) return;
     const current = controller.current.current;
     if (JSON.stringify(current.meta.limit) === JSON.stringify(limit) && installedContext.current === context.fingerprint) return;
@@ -276,11 +278,15 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     try { void controller.current.replaceContext(state => withSourceContext(withSourceLimit(state, limit), context), notice, limit.hard ? 'The new throat conflicts with: ' : undefined).then(() => setThroatConflict(false)).catch(reason => { setThroatConflict(!!limit.hard); if (!isConstraintConflict(reason)) setError(String(reason)); }); }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   }, [limit.kind, limit.radius, limit.hard, context.fingerprint, classic, generation]);
-  function scaleToFitThroat() {
+  function scaleToFitThroat(fromLoad = false) {
     void run(async () => {
-      if (!controller.current) return;
-      await controller.current.adopt(withSourceContext(scaleSourceToLimit(pendingLoad.current ?? controller.current.current, limitRef.current), contextRef.current), 'Scale to fit throat', true);
-      pendingLoad.current = undefined;
+      if (!controller.current || fromLoad && !pendingLoad.current) return;
+      const adopted = await controller.current.adopt(current => {
+        const source = fromLoad ? pendingLoad.current : current;
+        return source && withSourceContext(scaleSourceToLimit(source, limitRef.current), contextRef.current);
+      }, 'Scale to fit throat', true);
+      if (!adopted) return;
+      clearLoadOffer();
       setThroatConflict(false);
     });
   }
@@ -297,6 +303,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     else storage.setItem('', JSON.stringify(newer ? envelope : { ...envelope, attachment: attachmentRef.current }));
   }
   function replaceAuthor(next: Authoring<SourceMeta>) {
+    clearLoadOffer();
     installedContext.current = undefined;
     setFitRequest(v => v + 1);
     authorRef.current = next; setAuthor(next); setPreview(undefined); setGeneration(v => v + 1); setDiagnosis(undefined); setCanvasSelection([]);
@@ -337,18 +344,21 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
       catch (reason) {
         if (limitRef.current.hard && isConstraintConflict(reason)) {
           // Retain the real loaded rim, before withSourceLimit forced it onto the host.
-          pendingLoad.current = loaded; setThroatConflict(true);
+          pendingLoad.current = loaded; setLoadOffer(true);
+          controller.current.dismissRejection();
+          return false;
         }
         throw reason;
       }
     }
     else { replaceAuthor(next); const lowered = lower(next.sketch, next.meta); change(lowered.ok ? lowered.document : value.document); }
-    pendingLoad.current = undefined; setThroatConflict(false);
+    clearLoadOffer(); setThroatConflict(false);
     if (preset) setDimensions({ ...preset.dimensions });
     else if (restored?.meta.preset) { setShape(restored.meta.preset.shape); setDimensions({ ...defaults[restored.meta.preset.shape], ...restored.meta.preset.values }); }
     setTopologyDimensions({});
     setFitRequest(v => v + 1); setNotice(restored ? 'Restored source preset authoring.' : next.meta.preset ? 'Named dimensions drive this shape.' : 'Constraints were reset for the loaded contour.');
     setView(fit(value.document.contour.points, value.meridian)); setAccepted({ key: JSON.stringify(value.document), value }); setSelectedPatch(0); setDrawPoints(null); setCanvasSelection([]);
+    return true;
   }
 
   const loadForTest = useRef(adopt); loadForTest.current = adopt;
@@ -459,7 +469,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
           <button type="button" disabled={drawPoints !== null} onClick={() => setDrawPoints([])}>Draw lines</button>
           {drawPoints !== null && <><button type="button" disabled={drawPoints.length < 2} onClick={() => { change(drawnSource(draft, drawPoints, id)); setSelectedPatch(0); setDrawPoints(null); }}>Finish at rim</button><button type="button" onClick={() => setDrawPoints(null)}>Cancel drawing</button></>}
         </div>}
-        {!classic && <SketchCanvas slots={{ toolbar: toolbarHost, status: statusHost, properties: commandHost }} workflow={progress} scaleToFit={throatConflict ? scaleToFitThroat : undefined} context={context} contextStale={contextStale} fitRequest={fitRequest} sketch={displayAuthor.sketch} diagnosis={diagnosis} references={displayAuthor.meta.references} problems={validationError && !hasSketchProblems ? [...sketchProblems, { code: 'server', ids: [], message: validationError }] : sketchProblems} session={sketchReady && !busy ? controller.current : undefined}
+        {!classic && <SketchCanvas slots={{ toolbar: toolbarHost, status: statusHost, properties: commandHost }} workflow={progress} scaleToFit={throatConflict ? () => scaleToFitThroat() : undefined} context={context} contextStale={contextStale} fitRequest={fitRequest} sketch={displayAuthor.sketch} diagnosis={diagnosis} references={displayAuthor.meta.references} problems={validationError && !hasSketchProblems ? [...sketchProblems, { code: 'server', ids: [], message: validationError }] : sketchProblems} session={sketchReady && !busy ? controller.current : undefined}
           entityClassName={entity => entity.data && typeof entity.data === 'object' && !Array.isArray(entity.data) && entity.data.role === 'rigid' ? 'rigid' : 'moving'}
           hoverId={hoverId} onHoverChange={setHoverId} nameFor={id => displayName(displayAuthor.sketch, id)} onLimitChange={editLimit}
           selection={canvasSelection} onSelectionChange={ids => { setCanvasSelection(ids); const index = tablePatches.findIndex(p => ids.includes(p.id)); if (index >= 0) setSelectedPatch(index); }}
@@ -491,25 +501,25 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         {selectedDimension && !dimensionsOpen && <section aria-label="Dimension properties"><h3>Dimension</h3><table><tbody>{dimensionRow(selectedDimension)}</tbody></table></section>}
         {canvasSelection.length > 1 && <section aria-label="Selection properties"><h3>Selection</h3><p>{canvasSelection.filter(id => author.sketch.points.some(p => p.id === id)).length} points · {canvasSelection.filter(id => author.sketch.entities.some(e => e.id === id)).length} segments · {canvasSelection.filter(id => author.sketch.constraints.some(c => c.id === id && 'value' in c)).length} dimensions</p></section>}
         <div hidden={!classic && canvasSelection.length > 0}>
-        <details className="source-summary"><summary>Source summary</summary><p className={`source-progress ${progress.state}`}>{progress.state} · {tablePatches.length} patches · rim r {rimRadius?.toFixed(2) ?? '—'} mm</p>{(rimMismatch || throatConflict) && <button type="button" onClick={scaleToFitThroat}>Scale to fit throat</button>}</details>
+        <details className="source-summary"><summary>Source summary</summary><p className={`source-progress ${progress.state}`}>{progress.state} · {tablePatches.length} patches · rim r {rimRadius?.toFixed(2) ?? '—'} mm</p>{(rimMismatch || throatConflict) && <button type="button" onClick={() => scaleToFitThroat()}>Scale to fit throat</button>}</details>
         <details className="source-identifiers" open={identifiersOpen} onToggle={(e) => setIdentifiersOpen(e.currentTarget.open)}><summary>Identifiers</summary>
         {(['physical_source_id', 'rim_id'] as const).map((field) => <label key={field}>{field === 'rim_id' ? 'Rim ID' : 'Physical source ID'}<input aria-label={field === 'rim_id' ? 'Rim ID' : 'Physical source ID'} value={draft.contour[field]} onChange={(e) => change({ ...draft, contour: { ...draft.contour, [field]: e.target.value } })}/></label>)}
         <label>Drive channel ID<input aria-label="Drive channel ID" value={draft.drive.channel_id} onChange={(e) => change({ ...draft, drive: { ...draft.drive, channel_id: e.target.value } })}/></label>
         </details>
         <details><summary>Motion</summary><label>Prescribed motion<select aria-label="Prescribed motion" value={draft.drive.motion} onChange={(e) => change({ ...draft, drive: { ...draft.drive, motion: e.target.value as 'normal' | 'axial' } })}><option value="normal">Normal</option><option value="axial">Axial +Z</option></select></label></details>
         <details open={tablePatches.length === 0 || undefined}><summary>Start from a shape</summary>{hostLimit ? <p>{limit.kind === 'throat' ? 'Fits into the horn design' : limit.kind === 'aperture' ? 'Fits into the woofer baffle' : 'Fits into the conical horn'}</p> : <label>Fits into<select aria-label="Source attachment" value={attachment.kind} onChange={(e) => setAttachment(e.target.value === 'baffle' ? structuredClone(defaultAttachment) : { kind: 'horn', dimensions: { mouth_radius_mm: 20, length_mm: 30, housing_radius_mm: 22, backing_depth_mm: 12 } })}><option value="baffle">Front baffle woofer</option><option value="horn">Circular conical horn</option></select></label>}<label>Shape<select aria-label="Source shape" value={shape} onChange={(e) => { const s = e.target.value as typeof shape; setShape(s); setDimensions({ ...defaults[s] }); setTopologyDimensions({}); }}><option value="flat">Flat</option><option value="dome">Dome and surround</option><option value="cone">Cone and dust cap</option></select></label>
-        <div className="source-fields">{fields(presetDimensions, editPresetDimensions, 'preset')}</div><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.expand(shape, presetDimensions, draft), { shape, dimensions: presetDimensions }); setSelected(undefined); })}>Apply shape</button>
+        <div className="source-fields">{fields(presetDimensions, editPresetDimensions, 'preset')}</div><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { if (await adopt(await sourceEditorApi.expand(shape, presetDimensions, draft), { shape, dimensions: presetDimensions })) setSelected(undefined); })}>Apply shape</button>
         <p>Rim radius {((presetDimensions.radius_mm ?? 0) + (presetDimensions.surround_width_mm ?? 0) + (presetDimensions.land_width_mm ?? 0)).toFixed(2)} mm</p>
         <button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => {
           const fitted = fitPresetDimensions(presetDimensions, sourceLimitTarget(limit));
-          await adopt(await sourceEditorApi.expand(shape, fitted, draft), { shape, dimensions: fitted }); setDimensions(fitted); setSelected(undefined);
+          if (await adopt(await sourceEditorApi.expand(shape, fitted, draft), { shape, dimensions: fitted })) { setDimensions(fitted); setSelected(undefined); }
         })}>Fit to limit</button>
         </details><details><summary>Saved presets</summary><label>Preset name<input aria-label="Preset name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)}/></label><div className="source-editor-toolbar">
           <button type="button" disabled={!valid || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, undefined, serializeSourceAuthoring(classic ? seed(draft) : authorRef.current, false)); setPresets([...presets, item]); setSelected(item); setNotice('Saved new preset.'); })}>Save new preset</button>
           <button type="button" disabled={!valid || !selected || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, selected, serializeSourceAuthoring(classic ? seed(draft) : authorRef.current, false)); setPresets(presets.map((p) => p.id === item.id ? item : p)); setSelected(item); setNotice('Updated preset.'); })}>Update loaded preset</button>
           <button type="button" onClick={() => void run(async () => { setPresets(await sourceEditorApi.presets()); setNotice('Preset library refreshed. Load a preset to use its latest revision.'); })}>Refresh presets</button>
         </div>
-        {presets.map((preset) => <div key={preset.id} className="source-preset"><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.validate(preset.document), undefined, preset.authoring); setName(preset.name); setSelected(preset); })}>Load {preset.name}</button><button type="button" aria-label={`Delete preset ${preset.name}`} onClick={() => void run(async () => { await sourceEditorApi.delete(preset); setPresets(presets.filter((p) => p.id !== preset.id)); if (selected?.id === preset.id) setSelected(undefined); setNotice('Deleted preset. Current contour retained.'); })}>Delete</button></div>)}
+        {presets.map((preset) => <div key={preset.id} className="source-preset"><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { if (await adopt(await sourceEditorApi.validate(preset.document), undefined, preset.authoring)) { setName(preset.name); setSelected(preset); } })}>Load {preset.name}</button><button type="button" aria-label={`Delete preset ${preset.name}`} onClick={() => void run(async () => { await sourceEditorApi.delete(preset); setPresets(presets.filter((p) => p.id !== preset.id)); if (selected?.id === preset.id) setSelected(undefined); setNotice('Deleted preset. Current contour retained.'); })}>Delete</button></div>)}
         </details>{!hostLimit && <details><summary>Attachment and export</summary>
         <div className="source-fields">{fields(Object.fromEntries(Object.entries(attachment.dimensions).filter((entry): entry is [string, number] => typeof entry[1] === 'number')), (next) => setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, ...next } }), 'attachment')}
           {attachment.kind === 'baffle' && ([0, 1, 2] as const).map((axis) => <NumberField key={axis} label={`Source center ${['X', 'Y', 'Z'][axis]}`} value={(attachment.dimensions.center_mm as [number, number, number])[axis]} precision={6} displayPrecision={2} unit="mm" step={.1} onCommit={(v) => { const center = [...attachment.dimensions.center_mm as [number, number, number]] as [number, number, number]; center[axis] = v; setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, center_mm: center } }); }}/>) }
@@ -533,13 +543,13 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
           <label>Arc direction<select aria-label="Arc direction" value={draft.contour.segments[selectedPatch].direction} onChange={(e) => change(editPatch(draft, selectedPatch, { direction: e.target.value as 'cw' | 'ccw' }))}><option value="cw">Clockwise</option><option value="ccw">Counterclockwise</option></select></label>
         </div>}
         <button type="button" disabled={!valid || tablePatches.length >= 256} onClick={() => {
-          if (classic) { void run(async () => await adopt(await sourceEditorApi.split(draft, selectedPatch))); return; }
+          if (classic) { void run(async () => { await adopt(await sourceEditorApi.split(draft, selectedPatch)); }); return; }
           const e = author.sketch.entities.find(e => e.id === tablePatches[selectedPatch]?.id);
           if (e?.kind === 'line') { const a = author.sketch.points.find(p => p.id === e.p1)!, b = author.sketch.points.find(p => p.id === e.p2)!; sketchCommand({ kind: 'splitAt', entity: e.id, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }); }
           if (e?.kind === 'arc') { const g = arcGeometry(author.sketch, e), angle = g.start + g.sweep / 2; sketchCommand({ kind: 'splitAt', entity: e.id, x: g.center.x + g.radius * Math.cos(angle), y: g.center.y + g.radius * Math.sin(angle) }); }
         }}>Split selected patch at midpoint</button>
       </aside></div>
     </fieldset>
-    <footer>{throatMismatch && <div role="status" className="source-throat-mismatch">Rim does not meet the horn throat ({mismatchRadius?.toFixed(2) ?? '—'} vs {limit.radius.toFixed(2)}) <button type="button" disabled={busy || sketchPending} onClick={scaleToFitThroat}>Scale to fit throat</button></div>}{(!throatMismatch && (classic || sketchProblems.every(p => p.severity === 'warning') && !validationError)) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}<div ref={setStatusHost} className="source-status-host"/>{!onUseDocument && <button type="button" disabled={busy || !valid} onClick={close}>Done</button>}{onUseDocument && <button type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour</button>}{onUseDocument && <button type="button" disabled={busy} onClick={close}>Back to assembly</button>}{busy && <p role="status">Working…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>{onDraftChange ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours. Names are stored in the sketch only.</small></footer>
+    <footer>{loadOffer && <div role="status" className="source-load-offer">Loaded preset conflicts with the throat: <button type="button" disabled={busy || sketchPending} onClick={() => scaleToFitThroat(true)}>Scale it to fit</button> <button type="button" disabled={busy || sketchPending} onClick={clearLoadOffer}>Discard</button></div>}{throatMismatch && <div role="status" className="source-throat-mismatch">Rim does not meet the horn throat ({rimRadius?.toFixed(2) ?? '—'} vs {limit.radius.toFixed(2)}) <button type="button" disabled={busy || sketchPending} onClick={() => scaleToFitThroat()}>Scale to fit throat</button></div>}{(!throatMismatch && (classic || sketchProblems.every(p => p.severity === 'warning') && !validationError)) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}<div ref={setStatusHost} className="source-status-host"/>{!onUseDocument && <button type="button" disabled={busy || !valid} onClick={close}>Done</button>}{onUseDocument && <button type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour</button>}{onUseDocument && <button type="button" disabled={busy} onClick={close}>Back to assembly</button>}{busy && <p role="status">Working…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>{onDraftChange ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours. Names are stored in the sketch only.</small></footer>
   </div></div>;
 }

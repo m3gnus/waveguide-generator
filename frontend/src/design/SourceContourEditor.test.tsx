@@ -1270,7 +1270,7 @@ describe('source editor interactions', () => {
     expect(button(primaryAction).disabled).toBe(false);
   });
 
-  it.each(['mouth', 'aperture', 'throat'] as const)('loads a preset saved with a %s limit into a throat host', async kind => {
+  async function mountPresetInThroat(kind: 'mouth' | 'aperture' | 'throat', nested = true) {
     const { seedPreset } = await import('../sketch/adapters/sourcePreset');
     const { serializeSourceAuthoring } = await import('../sketch/adapters/sourceAuthoring');
     const dimensions = { ...presetDefaults.cone, radius_mm: kind === 'throat' ? 14 : 12.7 };
@@ -1278,30 +1278,110 @@ describe('source editor interactions', () => {
     const state = kind === 'throat' ? sourceAdapter.fitSourcePreset(source, {kind,radius:14,hard:true})
       : sourceAdapter.withSourceLimit(source, {kind,radius:20});
     const lowered = sourceAdapter.lower(state.sketch,state.meta);
-    expect(lowered.ok).toBe(true); if (!lowered.ok) return;
+    expect(lowered.ok).toBe(true); if (!lowered.ok) throw new Error('Invalid preset fixture');
     vi.mocked(sourceEditorApi.presets).mockResolvedValue([{id:'loaded',revision:'r1',name:'Loaded shape',document:lowered.document,authoring:serializeSourceAuthoring(state,false)}]);
     const changed = vi.fn(), use = vi.fn();
-    await act(async () => root.render(<Editor initialDocument={INITIAL_SOURCE} onClose={() => {}} onUseDocument={use} onDraftChange={changed} limit={{kind:'throat',radius:14,hard:true}}/>)); await settle();
+    const render = async (radius = 14) => { await act(async () => root.render(<Editor initialDocument={INITIAL_SOURCE} onClose={() => {}} onUseDocument={nested ? use : undefined} onDraftChange={changed} limit={{kind:'throat',radius,hard:true}}/>)); await settle(); };
+    await render();
     const before = changed.mock.calls.at(-1)![0];
+    return { changed, use, before, loadedDocument: lowered.document, render };
+  }
+
+  it.each(['mouth', 'aperture', 'throat'] as const)('loads a preset saved with a %s limit into a throat host', async kind => {
+    const { changed, use, before, loadedDocument } = await mountPresetInThroat(kind);
     await act(async () => button('Load Loaded shape').click()); await settle();
     if (kind !== 'throat') {
       expect(changed.mock.calls.at(-1)![0]).toEqual(before);
-      expect(host.querySelector('.sketch-conflict-banner')).not.toBeNull();
-      expect(button('Use contour').disabled).toBe(true);
-      await act(async () => host.querySelector<HTMLButtonElement>('.source-throat-mismatch button')!.click()); await settle();
+      expect(host.querySelector('.source-load-offer')?.textContent).toContain('Loaded preset conflicts with the throat:');
+      expect(host.querySelector('.source-throat-mismatch')).toBeNull();
+      expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
+      expect(button('Use contour').disabled).toBe(false);
+      await act(async () => button('Scale it to fit').click()); await settle();
     }
+    expect(host.querySelector('.source-load-offer')).toBeNull();
     expect(host.querySelector('.source-throat-mismatch')).toBeNull();
     expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
     expect(button('Use contour').disabled).toBe(false);
     const loaded = changed.mock.calls.at(-1)![0] as SourceDocument;
-    expect(loaded.contour.segments.map(p => p.id)).toEqual(lowered.document.contour.segments.map(p => p.id));
+    expect(loaded.contour.segments.map(p => p.id)).toEqual(loadedDocument.contour.segments.map(p => p.id));
     expect(loaded.contour.points.at(-1)!.r_mm).toBeCloseTo(14,9);
-    const factor = kind === 'throat' ? 1 : 14 / lowered.document.contour.points.at(-1)!.r_mm;
-    expect(loaded.contour.points[0].z_mm).toBeCloseTo(lowered.document.contour.points[0].z_mm * factor,8);
+    const factor = kind === 'throat' ? 1 : 14 / loadedDocument.contour.points.at(-1)!.r_mm;
+    expect(loaded.contour.points[0].z_mm).toBeCloseTo(loadedDocument.contour.points[0].z_mm * factor,8);
     await act(async () => button('Use contour').click());
     expect(use).toHaveBeenCalledWith(loaded);
     await act(async () => button('Undo').click()); await settle();
     expect(changed.mock.calls.at(-1)![0]).toEqual(before);
+  });
+
+  it.each([true, false])('keeps acceptance enabled after a conflicting Load (nested: %s)', async nested => {
+    const { changed, before } = await mountPresetInThroat('mouth', nested);
+    await act(async () => button('Load Loaded shape').click()); await settle();
+    expect(changed.mock.calls.at(-1)![0]).toEqual(before);
+    expect(button(nested ? 'Use contour' : 'Done').disabled).toBe(false);
+    expect(button('Update loaded preset').disabled).toBe(true);
+    expect(host.querySelector('.source-validation')?.textContent).toContain('Valid contour');
+    expect(host.querySelector('.source-throat-mismatch')).toBeNull();
+    expect(host.querySelector('.source-load-offer')).not.toBeNull();
+    await act(async () => button('Discard').click()); await settle();
+    expect(host.querySelector('.source-load-offer')).toBeNull();
+    expect(changed.mock.calls.at(-1)![0]).toEqual(before);
+  });
+
+  it.each(['edit', 'undo', 'redo', 'context'] as const)('clears a rejected Load on %s and cannot adopt a stale offer', async action => {
+    const { changed, render } = await mountPresetInThroat('aperture');
+    await enter('Patch 1 weight', '.5'); await settle();
+    if (action === 'redo') { await act(async () => button('Undo').click()); await settle(); }
+    await act(async () => button('Load Loaded shape').click()); await settle();
+    const staleScale = button('Scale it to fit');
+    expect(staleScale).toBeDefined();
+    if (action === 'edit') { await enter('Patch 1 weight', '.25'); await settle(); }
+    else if (action === 'context') await render(15);
+    else { await act(async () => button(action === 'undo' ? 'Undo' : 'Redo').click()); await settle(); }
+    expect(host.querySelector('.source-load-offer')).toBeNull();
+    const after = changed.mock.calls.at(-1)![0];
+    const count = changed.mock.calls.length;
+    await act(async () => staleScale.click()); await settle();
+    expect(changed.mock.calls).toHaveLength(count);
+    expect(changed.mock.calls.at(-1)![0]).toEqual(after);
+    expect(after.contour.segments.map((p: { id: string }) => p.id)).toEqual(INITIAL_SOURCE.contour.segments.map(p => p.id));
+  });
+
+  it('clears the Load offer and surfaces a context error when Undo cannot finish', async () => {
+    const { changed, render } = await mountPresetInThroat('mouth');
+    await render(15);
+    await enter('Patch 1 weight', '.25'); await settle();
+    await act(async () => button('Load Loaded shape').click()); await settle();
+    expect(host.querySelector('.source-load-offer')).not.toBeNull();
+    const before = changed.mock.calls.at(-1)![0], count = changed.mock.calls.length;
+    const solve = SketchSession.prototype.solveFull;
+    const failure = vi.spyOn(SketchSession.prototype, 'solveFull').mockImplementationOnce(solve).mockRejectedValueOnce(new Error('Context solve failed'));
+    try { await act(async () => button('Undo').click()); await settle(); }
+    finally { failure.mockRestore(); }
+    expect(host.querySelector('.source-load-offer')).toBeNull();
+    expect(host.textContent).toContain('Context solve failed');
+    expect(changed.mock.calls).toHaveLength(count);
+    expect(changed.mock.calls.at(-1)![0]).toEqual(before);
+    expect(Number(input('Patch 1 weight').value)).toBe(.25);
+    await act(async () => button('Redo').click()); await settle();
+    expect(changed.mock.calls).toHaveLength(count);
+    await act(async () => button('Undo').click()); await settle();
+    expect(Number(input('Patch 1 weight').value)).toBe(1);
+  });
+
+  it('does not scale a stale Load when a field commit is queued before the scale click', async () => {
+    const { changed } = await mountPresetInThroat('mouth');
+    await act(async () => button('Load Loaded shape').click()); await settle();
+    const scale = button('Scale it to fit'), field = input('Patch 1 weight');
+    await act(async () => {
+      field.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, '.25');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => { field.blur(); scale.click(); }); await settle();
+    expect(host.querySelector('.source-load-offer')).toBeNull();
+    const after = changed.mock.calls.at(-1)![0] as SourceDocument;
+    expect(after.contour.segments.map(p => p.id)).toEqual(INITIAL_SOURCE.contour.segments.map(p => p.id));
+    expect(after.drive.weights.piston).toBe(.25);
   });
 
   it('rolls back an infeasible first throat attachment to existing typed authoring', async () => {
