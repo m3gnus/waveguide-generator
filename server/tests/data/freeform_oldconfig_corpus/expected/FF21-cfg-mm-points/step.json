@@ -1,0 +1,1 @@
+{"error":{"message":"FREEFORM outward wall offset fails the surface-curvature guard near t=0.6936, phi=270.12 deg: max(0, -wallThickness*kappa_i)=1.882 >= margin=0.400 (kappa=[0.0259635, -0.376434] 1/mm)","type":"ConfigError"}}

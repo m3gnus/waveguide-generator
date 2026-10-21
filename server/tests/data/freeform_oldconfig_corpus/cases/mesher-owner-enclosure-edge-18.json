@@ -1,0 +1,75 @@
+{
+  "formula": "FREEFORM",
+  "profile_h": {
+    "points": [
+      {
+        "z": 0.0,
+        "r": 12.7
+      },
+      {
+        "z": 60.0,
+        "r": 80.0
+      },
+      {
+        "z": 120.0,
+        "r": 160.0
+      }
+    ],
+    "throat_angle_deg": 15.5,
+    "mouth_angle_deg": 70.0
+  },
+  "profile_v": {
+    "points": [
+      {
+        "z": 0.0,
+        "r": 12.7
+      },
+      {
+        "z": 60.0,
+        "r": 60.0
+      },
+      {
+        "z": 120.0,
+        "r": 110.0
+      }
+    ],
+    "throat_angle_deg": 15.5,
+    "mouth_angle_deg": 60.0
+  },
+  "cross_sections": [
+    {
+      "t": 0.0,
+      "shape": "circle"
+    },
+    {
+      "t": 0.4,
+      "shape": "rounded_rectangle",
+      "corner_radius_mm": 5.9
+    },
+    {
+      "t": 1.0,
+      "shape": "rounded_rectangle",
+      "corner_radius_mm": 5.9
+    }
+  ],
+  "mesh": {
+    "angular_segments": 32,
+    "length_segments": 8,
+    "throat_resolution": 8,
+    "mouth_resolution": 20,
+    "rear_resolution": 20,
+    "wall_thickness": 0,
+    "sampling_mode": "uniform"
+  },
+  "enclosure": {
+    "depth": 150,
+    "edge_radius": 18,
+    "edge_type": 1,
+    "space_l": 25,
+    "space_r": 25,
+    "space_t": 25,
+    "space_b": 25,
+    "front_resolution": 25,
+    "back_resolution": 25
+  }
+}

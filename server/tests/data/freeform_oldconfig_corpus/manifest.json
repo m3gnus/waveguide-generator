@@ -1,0 +1,257 @@
+{
+  "reference": {
+    "waveguide_generator": "47ce742d1178369ffcfa416af09232899163a9cb",
+    "mesher": "1702cfd5c3bf23060b864af824023710936d7861"
+  },
+  "cases": [
+    {
+      "name": "FF01-default",
+      "file": "cases/FF01-default.json",
+      "source": "compat-audit/corpus/FF01-default.json: frontend designForFamily('FREEFORM') v0.3.5",
+      "features": "frontend designForFamily('FREEFORM') v0.3.5",
+      "slow_mesh": false
+    },
+    {
+      "name": "FF02-hv-stations-angles",
+      "file": "cases/FF02-hv-stations-angles.json",
+      "source": "compat-audit/corpus/FF02-hv-stations-angles.json: authored: separate H/V, interior anchors + angle, distinct throat/mouth angles",
+      "features": "authored: separate H/V, interior anchors + angle, distinct throat/mouth angles",
+      "slow_mesh": false
+    },
+    {
+      "name": "FF03-superellipse",
+      "file": "cases/FF03-superellipse.json",
+      "source": "compat-audit/corpus/FF03-superellipse.json: authored: FF02 + superellipse stations (exponent 4 -> 6)",
+      "features": "authored: FF02 + superellipse stations (exponent 4 -> 6)",
+      "slow_mesh": false
+    },
+    {
+      "name": "FF04-rounded-rect-morph",
+      "file": "cases/FF04-rounded-rect-morph.json",
+      "source": "compat-audit/corpus/FF04-rounded-rect-morph.json: authored: FF02 + ellipse->rounded-rectangle station morph",
+      "features": "authored: FF02 + ellipse->rounded-rectangle station morph",
+      "slow_mesh": false
+    },
+    {
+      "name": "FF05-enclosure-rounded",
+      "file": "cases/FF05-enclosure-rounded.json",
+      "source": "compat-audit/corpus/FF05-enclosure-rounded.json: authored: FF04 + rear enclosure with rounded edges",
+      "features": "authored: FF04 + rear enclosure with rounded edges",
+      "slow_mesh": false
+    },
+    {
+      "name": "FF06-thick-wall-scale",
+      "file": "cases/FF06-thick-wall-scale.json",
+      "source": "compat-audit/corpus/FF06-thick-wall-scale.json: authored: FF03 + 8 mm wall + Scale 1.5",
+      "features": "authored: FF03 + 8 mm wall + Scale 1.5",
+      "slow_mesh": false
+    },
+    {
+      "name": "FF07-infinite-baffle",
+      "file": "cases/FF07-infinite-baffle.json",
+      "source": "compat-audit/corpus/FF07-infinite-baffle.json: authored: FF04 on an infinite baffle",
+      "features": "authored: FF04 on an infinite baffle",
+      "slow_mesh": false
+    },
+    {
+      "name": "FF08-quarter-domain",
+      "file": "cases/FF08-quarter-domain.json",
+      "source": "compat-audit/corpus/FF08-quarter-domain.json: authored: FF04 with Mesh.Quadrants = 1",
+      "features": "authored: FF04 with Mesh.Quadrants = 1",
+      "slow_mesh": false
+    },
+    {
+      "name": "FF09-superellipse-enclosure-chamfer",
+      "file": "cases/FF09-superellipse-enclosure-chamfer.json",
+      "source": "compat-audit/corpus/FF09-superellipse-enclosure-chamfer.json: authored: FF03 + enclosure, edge_type 2",
+      "features": "authored: FF03 + enclosure, edge_type 2",
+      "slow_mesh": false
+    },
+    {
+      "name": "FF11-axis-fixture-interior-angle-non-unit-scale",
+      "file": "cases/FF11-axis-fixture-interior-angle-non-unit-scale.json",
+      "source": "compat-audit/corpus/FF11-axis-fixture-interior-angle-non-unit-scale.json: wg v0.3.5 server/tests/data/freeform-axis-payloads.json (legacy mm z)",
+      "features": "wg v0.3.5 server/tests/data/freeform-axis-payloads.json (legacy mm z)",
+      "slow_mesh": false
+    },
+    {
+      "name": "FF12-axis-fixture-fractional-anchor-half-scale",
+      "file": "cases/FF12-axis-fixture-fractional-anchor-half-scale.json",
+      "source": "compat-audit/corpus/FF12-axis-fixture-fractional-anchor-half-scale.json: wg v0.3.5 server/tests/data/freeform-axis-payloads.json (legacy mm z)",
+      "features": "wg v0.3.5 server/tests/data/freeform-axis-payloads.json (legacy mm z)",
+      "slow_mesh": false
+    },
+    {
+      "name": "FF20-cfg-basic",
+      "file": "cases/FF20-cfg-basic.cfg",
+      "source": "compat-audit/corpus/FF20-cfg-basic.json: wg v0.3.5 server/tests/test_textcfg.py FREEFORM_SOURCE",
+      "features": "wg v0.3.5 server/tests/test_textcfg.py FREEFORM_SOURCE",
+      "slow_mesh": false,
+      "duplicate_sources": [
+        "compat-audit/corpus/FF10-axis-fixture-two-anchor-unit-scale.json: wg v0.3.5 server/tests/data/freeform-axis-payloads.json (legacy mm z)",
+        "server/tests/data/freeform-axis-payloads.json: two-anchor-unit-scale"
+      ]
+    },
+    {
+      "name": "FF21-cfg-mm-points",
+      "file": "cases/FF21-cfg-mm-points.cfg",
+      "source": "compat-audit/corpus/FF21-cfg-mm-points.json: wg v0.3.5 test_textcfg mm point rows",
+      "features": "wg v0.3.5 test_textcfg mm point rows",
+      "slow_mesh": false
+    },
+    {
+      "name": "FF22-cfg-legacy-controls",
+      "file": "cases/FF22-cfg-legacy-controls.cfg",
+      "source": "compat-audit/corpus/FF22-cfg-legacy-controls.json: wg v0.3.5 test_textcfg legacy freeform controls (tangent scales, OvershootPolicy)",
+      "features": "wg v0.3.5 test_textcfg legacy freeform controls (tangent scales, OvershootPolicy)",
+      "slow_mesh": false
+    },
+    {
+      "name": "FF23-cfg-per-axis-throat-angle",
+      "file": "cases/FF23-cfg-per-axis-throat-angle.cfg",
+      "source": "compat-audit/corpus/FF23-cfg-per-axis-throat-angle.json: wg v0.3.5 test_textcfg per-axis ThroatAngle",
+      "features": "wg v0.3.5 test_textcfg per-axis ThroatAngle",
+      "slow_mesh": false
+    },
+    {
+      "name": "mesher-example-freeform-bare",
+      "file": "cases/mesher-example-freeform-bare.json",
+      "source": "hornlab-waveguide-mesher/examples/freeform-bare.toml",
+      "features": "bare; circle; separate H/V; rounded-rectangle stations",
+      "slow_mesh": false
+    },
+    {
+      "name": "mesher-owner-bare",
+      "file": "cases/mesher-owner-bare.json",
+      "source": "hornlab-waveguide-mesher/tests/test_freeform_builds.py::_owner_config (WG saved equivalent)",
+      "features": "coarse bare; circle; rounded rectangle",
+      "slow_mesh": false
+    },
+    {
+      "name": "mesher-owner-enclosure-edge-0",
+      "file": "cases/mesher-owner-enclosure-edge-0.json",
+      "source": "hornlab-waveguide-mesher/tests/test_freeform_builds.py::test_owner_freeform_closed_acoustic_builds_are_watertight (WG equivalent; saved edge variant)",
+      "features": "enclosure; edge_mm=0; circle; rounded rectangle",
+      "slow_mesh": false
+    },
+    {
+      "name": "mesher-owner-enclosure-edge-18",
+      "file": "cases/mesher-owner-enclosure-edge-18.json",
+      "source": "hornlab-waveguide-mesher/tests/test_freeform_builds.py::test_owner_freeform_closed_acoustic_builds_are_watertight (WG equivalent; saved edge variant)",
+      "features": "enclosure; edge_mm=18; circle; rounded rectangle",
+      "slow_mesh": false
+    },
+    {
+      "name": "mesher-rectangle-morph-dispatch",
+      "file": "cases/mesher-rectangle-morph-dispatch.json",
+      "source": "hornlab-waveguide-mesher/tests/test_freeform_rectangle_morph_dispatch.py::_config(60,32)",
+      "features": "rectangle morph target; separate H/V; bare",
+      "slow_mesh": false
+    },
+    {
+      "name": "docs-cfg-format-freeform",
+      "file": "cases/docs-cfg-format-freeform.cfg",
+      "source": "docs/reference/CFG-FORMAT.md: FREEFORM disk example",
+      "features": "text config; interior angle; superellipse; rounded rectangle",
+      "slow_mesh": false
+    },
+    {
+      "name": "schema-discriminator-freeform",
+      "file": "cases/schema-discriminator-freeform.json",
+      "source": "server/tests/test_schema.py::test_formula_discriminator",
+      "features": "normalized t; ellipse; default freestanding wall",
+      "slow_mesh": false
+    },
+    {
+      "name": "shared-profile-equal",
+      "file": "cases/shared-profile-equal.json",
+      "source": "shared/profile-inspection/mesher-profiles.json: equal",
+      "features": "profile inspection saved design; equal",
+      "slow_mesh": false
+    },
+    {
+      "name": "shared-profile-unequal",
+      "file": "cases/shared-profile-unequal.json",
+      "source": "shared/profile-inspection/mesher-profiles.json: unequal",
+      "features": "profile inspection saved design; unequal",
+      "slow_mesh": false
+    },
+    {
+      "name": "shared-profile-interior-angle",
+      "file": "cases/shared-profile-interior-angle.json",
+      "source": "shared/profile-inspection/mesher-profiles.json: interior-angle",
+      "features": "profile inspection saved design; interior-angle",
+      "slow_mesh": false
+    },
+    {
+      "name": "shared-profile-transitions",
+      "file": "cases/shared-profile-transitions.json",
+      "source": "shared/profile-inspection/mesher-profiles.json: transitions",
+      "features": "profile inspection saved design; transitions",
+      "slow_mesh": false
+    },
+    {
+      "name": "shared-profile-morphed-scaled-extended",
+      "file": "cases/shared-profile-morphed-scaled-extended.json",
+      "source": "shared/profile-inspection/mesher-profiles.json: morphed-scaled-extended",
+      "features": "profile inspection saved design; morphed-scaled-extended",
+      "slow_mesh": false
+    },
+    {
+      "name": "docs-cfg-format-freeform-complete",
+      "file": "cases/docs-cfg-format-freeform-complete.cfg",
+      "source": "docs/reference/CFG-FORMAT.md: FREEFORM excerpt with required V block supplied",
+      "features": "ellipse; superellipse; rounded rectangle; interior angles; text input",
+      "slow_mesh": false
+    },
+    {
+      "name": "v1-jobs-freeform-with-snapshot",
+      "file": "cases/v1-jobs-freeform-with-snapshot.json",
+      "source": "server/tests/fixtures/v1_jobs.json: freeform-with-snapshot waveguide_params saved as WG design",
+      "features": "legacy mm points; circle; rounded rectangle; corner_ratio migration",
+      "slow_mesh": false
+    },
+    {
+      "name": "v1-jobs-freeform-no-snapshot",
+      "file": "cases/v1-jobs-freeform-no-snapshot.json",
+      "source": "server/tests/fixtures/v1_jobs.json: freeform-no-snapshot waveguide_params saved as WG design",
+      "features": "legacy mm points; circle; rounded rectangle; interior angles; curved source",
+      "slow_mesh": false
+    },
+    {
+      "name": "textcfg-per-axis-throat-angles",
+      "file": "cases/textcfg-per-axis-throat-angles.cfg",
+      "source": "server/tests/test_textcfg.py::test_freeform_per_axis_throat_angles_round_trip_exactly",
+      "features": "distinct H/V throat angles; text save",
+      "slow_mesh": false
+    },
+    {
+      "name": "textcfg-top-level-throat-angle",
+      "file": "cases/textcfg-top-level-throat-angle.cfg",
+      "source": "server/tests/test_textcfg.py::test_legacy_top_level_freeform_throat_angle_applies_to_both_axes",
+      "features": "legacy shared throat angle",
+      "slow_mesh": false
+    },
+    {
+      "name": "textcfg-legacy-circle-controls",
+      "file": "cases/textcfg-legacy-circle-controls.cfg",
+      "source": "server/tests/test_textcfg.py::test_legacy_freeform_controls_load_and_rewrite_without_removed_keys",
+      "features": "circle spelling; removed tangent scales and strengths; interior angles",
+      "slow_mesh": false
+    },
+    {
+      "name": "preview-translate-superellipse-morph",
+      "file": "cases/preview-translate-superellipse-morph.json",
+      "source": "server/tests/test_preview_ws_translate.py::test_freeform_morph_reshapes_the_preview_mouth",
+      "features": "superellipse morph target with explicit extent",
+      "slow_mesh": false
+    },
+    {
+      "name": "profile-inspection-station-precision",
+      "file": "cases/profile-inspection-station-precision.cfg",
+      "source": "server/tests/test_profile_inspection.py::test_freeform_load_save_keeps_station_positions_and_file_bytes",
+      "features": "saved text; full-precision normalized station t; ellipse; freestanding wall",
+      "slow_mesh": false
+    }
+  ]
+}

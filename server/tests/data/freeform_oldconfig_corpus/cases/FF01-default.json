@@ -1,0 +1,108 @@
+{
+  "scale": 1,
+  "throat_ext_angle": 0,
+  "throat_ext_length": 0,
+  "slot_length": 0,
+  "length_mode": "profile",
+  "coverage_mode": "auto",
+  "morph": {
+    "target_shape": 0,
+    "target_width": 0,
+    "target_height": 0,
+    "corner_radius": 0,
+    "rate": 3,
+    "fixed_part": 0,
+    "allow_shrinkage": 0
+  },
+  "source": {
+    "shape": 1,
+    "radius": -1,
+    "curvature": 0,
+    "velocity": 1,
+    "contours": "",
+    "velocity_convention": "normal"
+  },
+  "enclosure": {
+    "depth": 0,
+    "edge_radius": 18,
+    "edge_type": 1,
+    "space_l": 25,
+    "space_t": 25,
+    "space_r": 25,
+    "space_b": 25,
+    "front_resolution": 25,
+    "back_resolution": 40
+  },
+  "mesh": {
+    "angular_segments": 40,
+    "corner_segments": 4,
+    "throat_segments": 0,
+    "length_segments": 20,
+    "throat_resolution": 6,
+    "mouth_resolution": 15,
+    "throat_slice_density": 0.5,
+    "sampling_mode": "uniform",
+    "z_map_points": "",
+    "vertical_offset": 0,
+    "quadrants": 1234,
+    "wall_thickness": 5,
+    "rear_resolution": 40,
+    "aperture_resolution_scale": 1,
+    "max_triangles": 50000,
+    "allow_large_mesh": 0
+  },
+  "simulation": {
+    "f1": 100,
+    "f2": 16000,
+    "num_frequencies": 32,
+    "sim_type": "freestanding"
+  },
+  "output": {
+    "stl": 0,
+    "msh": 0
+  },
+  "extra_keys": {},
+  "extra_blocks": {},
+  "formula": "FREEFORM",
+  "length": 120,
+  "profile_h": {
+    "points": [
+      {
+        "t": 0,
+        "r": 12.7
+      },
+      {
+        "t": 1,
+        "r": 140
+      }
+    ],
+    "throat_angle_deg": 15.5,
+    "mouth_angle_deg": 60
+  },
+  "profile_v": {
+    "points": [
+      {
+        "t": 0,
+        "r": 12.7
+      },
+      {
+        "t": 1,
+        "r": 140
+      }
+    ],
+    "throat_angle_deg": 15.5,
+    "mouth_angle_deg": 60
+  },
+  "cross_sections": [
+    {
+      "t": 0,
+      "shape": "ellipse"
+    },
+    {
+      "t": 1,
+      "shape": "ellipse"
+    }
+  ],
+  "inflection_policy": "warn",
+  "corner_grids": []
+}

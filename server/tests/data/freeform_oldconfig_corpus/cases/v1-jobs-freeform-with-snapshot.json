@@ -1,0 +1,87 @@
+{
+  "formula": "FREEFORM",
+  "profile_h": {
+    "points": [
+      [
+        0.0,
+        12.7
+      ],
+      [
+        60.0,
+        80.0
+      ],
+      [
+        120.0,
+        160.0
+      ]
+    ],
+    "throat_angle_deg": 15.5,
+    "mouth_angle_deg": 70.0,
+    "throat_tangent_scale": 1.0,
+    "mouth_tangent_scale": 1.0
+  },
+  "profile_v": {
+    "points": [
+      [
+        0.0,
+        12.7
+      ],
+      [
+        60.0,
+        60.0
+      ],
+      [
+        120.0,
+        110.0
+      ]
+    ],
+    "throat_angle_deg": 15.5,
+    "mouth_angle_deg": 60.0,
+    "throat_tangent_scale": 1.0,
+    "mouth_tangent_scale": 1.0
+  },
+  "cross_sections": [
+    {
+      "t": 0.0,
+      "shape": "circle",
+      "exponent": null,
+      "corner_ratio": null
+    },
+    {
+      "t": 0.4,
+      "shape": "rounded_rectangle",
+      "exponent": null,
+      "corner_ratio": 0.12
+    },
+    {
+      "t": 1.0,
+      "shape": "rounded_rectangle",
+      "exponent": null,
+      "corner_ratio": 0.12
+    }
+  ],
+  "inflection_policy": "warn",
+  "scale": 1,
+  "mesh": {
+    "angular_segments": 40,
+    "length_segments": 20,
+    "wall_thickness": 0.0,
+    "throat_resolution": 6.0,
+    "mouth_resolution": 20.0,
+    "rear_resolution": 40.0,
+    "quadrants": 1234,
+    "corner_segments": 4,
+    "aperture_resolution_scale": 1.5,
+    "vertical_offset": 0.0,
+    "max_triangles": 50000
+  },
+  "source": {
+    "shape": 1,
+    "radius": -1.0,
+    "curvature": 0,
+    "velocity": 1
+  },
+  "simulation": {
+    "sim_type": "freestanding"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "formula": "FREEFORM",
+  "length": 120,
+  "profile_h": {
+    "points": [
+      {
+        "t": 0,
+        "r": 12.7
+      },
+      {
+        "t": 1,
+        "r": 140
+      }
+    ],
+    "throat_angle_deg": 15.5,
+    "mouth_angle_deg": 60
+  },
+  "profile_v": {
+    "points": [
+      {
+        "t": 0,
+        "r": 12.7
+      },
+      {
+        "t": 1,
+        "r": 100
+      }
+    ],
+    "throat_angle_deg": 15.5,
+    "mouth_angle_deg": 60
+  },
+  "cross_sections": [
+    {
+      "t": 0,
+      "shape": "ellipse"
+    },
+    {
+      "t": 0.5,
+      "shape": "superellipse",
+      "exponent": 4
+    },
+    {
+      "t": 1,
+      "shape": "rounded_rectangle",
+      "corner_radius_mm": 50
+    }
+  ],
+  "mesh": {
+    "angular_segments": 16,
+    "length_segments": 24
+  }
+}

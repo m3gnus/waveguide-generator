@@ -1,0 +1,44 @@
+{
+  "formula": "FREEFORM",
+  "length": 120,
+  "profile_h": {
+    "points": [
+      {
+        "t": 0,
+        "r": 12.7
+      },
+      {
+        "t": 1,
+        "r": 100
+      }
+    ]
+  },
+  "profile_v": {
+    "points": [
+      {
+        "t": 0,
+        "r": 12.7
+      },
+      {
+        "t": 1,
+        "r": 80
+      }
+    ]
+  },
+  "cross_sections": [
+    {
+      "t": 0,
+      "shape": "ellipse"
+    },
+    {
+      "t": 1,
+      "shape": "ellipse"
+    }
+  ],
+  "morph": {
+    "target_shape": 3,
+    "target_exponent": 2,
+    "target_width": 400,
+    "target_height": 400
+  }
+}

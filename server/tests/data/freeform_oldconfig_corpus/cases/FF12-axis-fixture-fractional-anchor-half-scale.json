@@ -1,0 +1,51 @@
+{
+  "formula": "FREEFORM",
+  "scale": 0.5,
+  "profile_h": {
+    "points": [
+      {
+        "z": 0,
+        "r": 8
+      },
+      {
+        "z": 37.5,
+        "r": 15
+      },
+      {
+        "z": 150,
+        "r": 60
+      }
+    ]
+  },
+  "profile_v": {
+    "points": [
+      {
+        "z": 0,
+        "r": 8
+      },
+      {
+        "z": 90,
+        "r": 30,
+        "angle_deg": -10
+      },
+      {
+        "z": 150,
+        "r": 45
+      }
+    ]
+  },
+  "cross_sections": [
+    {
+      "t": 0,
+      "shape": "ellipse"
+    },
+    {
+      "t": 1,
+      "shape": "ellipse"
+    }
+  ],
+  "mesh": {
+    "wall_thickness": 3,
+    "vertical_offset": 4
+  }
+}
