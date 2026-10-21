@@ -126,6 +126,7 @@ export function SourceAssemblyDialog() {
 export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   const [draft, setDraft] = useState(readDraft);
   const draftRef = useRef(draft);
+  const disabledWoofer = useRef<{ document: SourceDocument; xy: [number, number]; aperture: number } | undefined>(undefined);
   const seedAllowed = useRef(true);
   const wallCache = useRef(new Map<string, Promise<HornWall>>());
   const [wall, setWall] = useState<{ config: string; value: HornWall }>();
@@ -144,11 +145,11 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   useEffect(() => { if (identityIssue) setIdentifiersOpen(true); }, [identityIssue]);
   function change(next: SourceAssemblyDocument, sourceEdit = false) {
     // Nested edits publish their paired envelope immediately after the document.
-    if (!sourceEdit) reconcileAuthoring(next);
+    if (!sourceEdit) reconcileAuthoring(next.woofer || !disabledWoofer.current ? next : { ...next, woofer: disabledWoofer.current.document });
     draftRef.current = next; setDraft(next); storage.setItem('', JSON.stringify(next)); setError(''); setNotice('');
   }
   useEffect(() => durableSettings.subscribe('sourceAssemblyDraft', () => {
-    const restored = readDraft();
+    const restored = readDraft(); disabledWoofer.current = undefined;
     // Hydration adopts sibling namespaces in order. Reconcile after that batch,
     // so stale cached authoring cannot overwrite the companion arriving with it.
     queueMicrotask(() => reconcileAuthoring(draftRef.current));
@@ -229,8 +230,13 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       <h3>Sources</h3><p>Each diaphragm keeps one physical identity and drive channel, including its patch weights.</p>
       <div className="source-editor-toolbar"><button type="button" onClick={() => editSource('horn')}>Edit horn contour…</button>{draft.woofer && <button type="button" onClick={() => editSource('woofer')}>Edit woofer contour…</button>}</div>
       <p>Horn: {draft.horn.contour.physical_source_id} · {draft.horn.drive.channel_id}. {draft.woofer ? <>Woofer: {draft.woofer.contour.physical_source_id} · {draft.woofer.drive.channel_id}.</> : "Horn only."}</p>
-      <label className="source-toggle-row"><span>Include woofer</span><input type="checkbox" checked={!!draft.woofer} onChange={(e) => change({ ...draft, woofer: e.target.checked ? flatSource('woofer', 8) : null,
-        dimensions: { ...draft.dimensions, woofer_xy_mm: e.target.checked ? [9, -15] : [0, 0], aperture_radius_mm: e.target.checked ? 8 : 0 } })}/></label>
+      <label className="source-toggle-row"><span>Include woofer</span><input type="checkbox" checked={!!draft.woofer} onChange={(e) => {
+        if (!e.target.checked && draft.woofer) disabledWoofer.current = { document: draft.woofer, xy: draft.dimensions.woofer_xy_mm, aperture: draft.dimensions.aperture_radius_mm };
+        const saved = disabledWoofer.current;
+        change({ ...draft, woofer: e.target.checked ? saved?.document ?? flatSource('woofer', 8) : null,
+          dimensions: { ...draft.dimensions, woofer_xy_mm: e.target.checked ? saved?.xy ?? [9, -15] : [0, 0], aperture_radius_mm: e.target.checked ? saved?.aperture ?? 8 : 0 } });
+        if (e.target.checked) disabledWoofer.current = undefined;
+      }}/></label>
       <h3>Horn profile</h3>
       <button type="button" onClick={() => void run(async () => {
         const profile = await sourceEditorApi.hornProfile(serializeDesign(useDesignStore.getState().design));
@@ -284,7 +290,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       <button type="button" disabled={!valid} onClick={() => void run(async () => { const record = await prepareNativeAssembly(() => sourceEditorApi.ingestAssembly(draft)); storage.setItem('', JSON.stringify(draft)); setNotice(`Prepared ${record.mesh?.stats.triangle_count ?? ''} triangles. The imported workspace now uses this assembly and its physical source channels.`); })}>Prepare assembly in WG</button>
       <button type="button" disabled={!valid} onClick={() => void run(async () => { download(await sourceEditorApi.exportAssembly(draft), 'native-assembly.zip'); storage.setItem('', JSON.stringify(draft)); setNotice('Exported shared STEP shell, preview mesh and source recipe.'); })}>Export assembly STEP + mesh</button>
       <button type="button" disabled={!valid} onClick={() => download(new Blob([JSON.stringify(assemblyDraftFile(draft),null,2)], { type:'application/json' }), 'source-assembly.json')}>Save assembly draft</button>
-      <label>Load assembly draft<input aria-label="Load assembly draft" type="file" accept=".json,application/json" onChange={(e) => { const file = e.target.files?.[0]; if (!file) return; void run(async () => { if (file.size > 2*1024*1024) throw new Error('Assembly draft exceeds 2 MiB.'); const loaded = loadAssemblyDraftFile(await file.text()); setHornText(JSON.stringify(loaded.horn_config ?? {}, null, 2)); change(loaded); }); e.target.value=''; }}/></label>
+      <label>Load assembly draft<input aria-label="Load assembly draft" type="file" accept=".json,application/json" onChange={(e) => { const file = e.target.files?.[0]; if (!file) return; void run(async () => { if (file.size > 2*1024*1024) throw new Error('Assembly draft exceeds 2 MiB.'); const loaded = loadAssemblyDraftFile(await file.text()); disabledWoofer.current = undefined; setHornText(JSON.stringify(loaded.horn_config ?? {}, null, 2)); change(loaded); }); e.target.value=''; }}/></label>
       <p>Source editing includes drawing, arcs and the saved source-preset library. Assembly drafts also retain placement, passive bodies and density.</p>
     </aside></div></fieldset><footer>{busy && <p role="status">Preparing geometry…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>Draft changes are remembered. Preparing selects the immutable mesh and Metal, the supported native contour consumer.</small></footer>
   </div></div>;

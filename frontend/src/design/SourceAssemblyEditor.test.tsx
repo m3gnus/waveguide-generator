@@ -113,6 +113,37 @@ describe('shared source and passage authoring', () => {
     expect(read()[source]!.contour).toEqual(beforeDocument.contour);
     expect(envelopeFor(source).meta.weights.piston).toBe(.5);
   });
+  it('restores the custom woofer, placement and authoring after disabling and enabling it', async () => {
+    storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY)); await mount();
+    await enter('Woofer X', '18'); await enter('Woofer Y', '-19'); await enter('Woofer aperture radius', '10');
+    await act(async () => button('Edit woofer contour…').click()); await settle();
+    await enter('Point 1 z', '2');
+    await enter('Patch 1 weight', '.6');
+    await act(async () => button('Close').click()); await settle();
+    const before = read(), authoring = envelopeFor('woofer');
+    expect(before.woofer!.contour.points[0].z_mm).toBe(2);
+    const toggle = () => [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(input => input.closest('label')?.textContent === 'Include woofer')!;
+    await act(async () => toggle().click()); await settle();
+    const off = { ...before, woofer: null, dimensions: { ...before.dimensions, woofer_xy_mm: [0, 0], aperture_radius_mm: 0 } };
+    expect(read()).toEqual(off);
+    expect(sourceEditorApi.validateAssembly).toHaveBeenLastCalledWith(off);
+    expect(envelopeFor('woofer')).toEqual(authoring);
+    // Other assembly edits while disabled must not reconcile away the companion.
+    await enter('Enclosure width', '95');
+    expect(envelopeFor('woofer')).toEqual(authoring);
+    await act(async () => toggle().click()); await settle();
+    expect(Number(field('Woofer X').value)).toBe(18);
+    expect(Number(field('Woofer Y').value)).toBe(-19);
+    expect(Number(field('Woofer aperture radius').value)).toBe(10);
+    expect(read().woofer).toEqual(before.woofer);
+    expect(envelopeFor('woofer')).toEqual(authoring);
+    expect(read().dimensions.width_mm).toBe(95);
+    await act(async () => button('Edit woofer contour…').click()); await settle();
+    expect(Number(field('Point 1 z').value)).toBe(2);
+    expect(Number(field('Patch 1 weight').value)).toBe(.6);
+    expect(envelopeFor('woofer')).toEqual(authoring);
+  });
+
   it('saves a portable envelope and restores names, constraints and placements after clearing authoring', async () => {
     const state = seed(INITIAL_ASSEMBLY.horn);
     state.sketch.entities.find(e => e.id === 'piston')!.data = { name: 'Portable diaphragm' };

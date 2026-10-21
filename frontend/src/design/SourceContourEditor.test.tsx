@@ -1270,6 +1270,36 @@ describe('source editor interactions', () => {
     expect(button(primaryAction).disabled).toBe(false);
   });
 
+  it('blocks acceptance when the current context cannot install even though the throat still matches', async () => {
+    const { wooferAssemblyContext } = await import('../sketch/adapters/sourceContext');
+    const { materialiseContext } = await import('../sketch/context');
+    const { serializeSourceAuthoring } = await import('../sketch/adapters/sourceAuthoring');
+    const { INITIAL_ASSEMBLY } = await import('./SourceAssemblyEditor');
+    const context = (depth: number) => wooferAssemblyContext({ ...INITIAL_ASSEMBLY.dimensions, depth_mm: depth }, 12.7);
+    const doc = structuredClone(INITIAL_SOURCE);
+    doc.contour.points = [{ id: 'pole', r_mm: 0, z_mm: 0 }, { id: 'mid', r_mm: 6.35, z_mm: -Math.sqrt(7.5 ** 2 - 6.35 ** 2) }, { id: 'rim', r_mm: 12.7, z_mm: 0 }];
+    doc.contour.segments = [{ ...doc.contour.segments[0], id: 'inner', end: 'mid' }, { ...doc.contour.segments[0], id: 'outer', start: 'mid' }];
+    doc.drive.weights = { inner: 1, outer: 1 };
+    const state = sourceAdapter.withSourceContext(sourceAdapter.withSourceLimit(sourceAdapter.seed(doc), { kind: 'throat', radius: 12.7, hard: true }), context(40));
+    const back = materialiseContext(state.sketch, context(40), 'box.back'); state.sketch = back.sketch;
+    state.sketch.constraints.push(
+      { id: 'inner-length', kind: 'distance', a: 'pole', b: 'mid', value: 7.5, driving: true },
+      { id: 'outer-length', kind: 'distance', a: 'mid', b: 'rim', value: 7.5, driving: true },
+      { id: 'back-distance', kind: 'pointLineDistance', point: 'pole', line: back.id, value: 40, driving: true },
+    );
+    const authoring = serializeSourceAuthoring(state), changed = vi.fn();
+    const render = async (depth: number) => {
+      await act(async () => root.render(<Editor onClose={() => {}} initialDocument={doc} initialAuthoring={authoring} context={context(depth)} limit={{ kind: 'throat', radius: 12.7, hard: true }} onDraftChange={changed}/>)); await settle();
+    };
+    await render(40); expect(button('Done').disabled).toBe(false);
+    await render(60);
+    expect(host.querySelector('.sketch-conflict-banner')?.textContent).toContain('The new throat conflicts with:');
+    expect(Number(input('Point 3 radius').value)).toBe(12.7);
+    expect(host.querySelector('.source-throat-mismatch')).toBeNull();
+    expect(button('Done').disabled).toBe(true);
+    await render(40); expect(button('Done').disabled).toBe(false);
+  });
+
   async function mountPresetInThroat(kind: 'mouth' | 'aperture' | 'throat', nested = true) {
     const { seedPreset } = await import('../sketch/adapters/sourcePreset');
     const { serializeSourceAuthoring } = await import('../sketch/adapters/sourceAuthoring');
@@ -1325,6 +1355,80 @@ describe('source editor interactions', () => {
     await act(async () => button('Discard').click()); await settle();
     expect(host.querySelector('.source-load-offer')).toBeNull();
     expect(changed.mock.calls.at(-1)![0]).toEqual(before);
+  });
+
+  it.each(['Scale it to fit', 'Discard'] as const)('keeps the loaded preset identity through %s', async action => {
+    const { seedPreset } = await import('../sketch/adapters/sourcePreset');
+    const { serializeSourceAuthoring } = await import('../sketch/adapters/sourceAuthoring');
+    const makePreset = (id: string, radius: number) => {
+      const dimensions = { ...presetDefaults.cone, radius_mm: radius };
+      const source = seedPreset(expandedPreset('cone', dimensions), 'cone', dimensions);
+      const state = id === 'A' ? sourceAdapter.fitSourcePreset(source, { kind: 'throat', radius: 14, hard: true }) : source;
+      state.sketch.entities[0].data = { ...state.sketch.entities[0].data as object, name: `Contour ${id}` };
+      const lowered = sourceAdapter.lower(state.sketch, state.meta);
+      if (!lowered.ok) throw new Error('Invalid preset fixture');
+      return { id, revision: `revision-${id}`, name: `Preset ${id}`, document: lowered.document, authoring: serializeSourceAuthoring(state) };
+    };
+    const a = makePreset('A', 14), b = makePreset('B', 12.7);
+    vi.mocked(sourceEditorApi.presets).mockResolvedValue([a, b]);
+    const { sourceEditorApi: realApi } = await vi.importActual<typeof import('../api/sourceEditor')>('../api/sourceEditor');
+    vi.mocked(sourceEditorApi.save).mockImplementation(realApi.save);
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(init!.body as string);
+      return new Response(JSON.stringify({ ...(action === 'Discard' ? a : b), ...body }), { status: 200 });
+    });
+    const changed = vi.fn();
+    await act(async () => root.render(<Editor onClose={() => {}} initialDocument={INITIAL_SOURCE} limit={{ kind: 'throat', radius: 14, hard: true }} onDraftChange={changed}/>)); await settle();
+    await act(async () => button('Load Preset A').click()); await settle();
+    expect(input('Preset name').value).toBe('Preset A');
+    const before = changed.mock.calls.at(-1)![0];
+    await act(async () => button('Load Preset B').click()); await settle();
+    expect(input('Preset name').value).toBe('Preset A');
+    expect(changed.mock.calls.at(-1)![0]).toEqual(before);
+    await act(async () => button(action).click()); await settle();
+    const expected = action === 'Discard' ? a : b;
+    expect(input('Preset name').value).toBe(expected.name);
+    expect(button('Update loaded preset').disabled).toBe(false);
+    expect(host.querySelector('.source-load-offer')).toBeNull();
+    await act(async () => button('Update loaded preset').click()); await settle();
+    expect(fetch).toHaveBeenCalledWith(`/api/source-editor/presets/${expected.id}`, expect.objectContaining({ method: 'PUT' }));
+    const body = JSON.parse(fetch.mock.calls.at(-1)![1]!.body as string);
+    expect(body).toMatchObject({ name: expected.name, expected_revision: expected.revision });
+    expect(body.document).toEqual(changed.mock.calls.at(-1)![0]);
+    expect(body.authoring.sketch.entities[0].data.name).toBe(`Contour ${expected.id}`);
+    expect(body.document.contour.points.at(-1).r_mm).toBeCloseTo(14, 8);
+    if (action === 'Discard') expect(body.document).toEqual(before);
+  });
+
+  it('recovers acceptance when Undo removes a dimension that rejected the current throat', async () => {
+    const doc = structuredClone(INITIAL_SOURCE);
+    doc.contour.points[1].r_mm = 12.7; doc.contour.points[0].z_mm = Math.sqrt(13 ** 2 - 12.7 ** 2);
+    const changed = vi.fn(), authoring = vi.fn();
+    const render = async (radius: number) => {
+      await act(async () => root.render(<Editor onClose={() => {}} initialDocument={doc} limit={{ kind: 'throat', radius, hard: true }} onDraftChange={changed} onAuthoringChange={authoring}/>)); await settle();
+    };
+    await render(12.7);
+    await act(async () => button('Dimension (D)').click());
+    await pointer(host.querySelector('.sketch-entity[data-id="piston"]')!); await settle();
+    const canvas = host.querySelector('[aria-label="Sketch drawing"]')!;
+    await pointer(canvas, 'pointermove', 400, 80); await pointer(canvas, 'pointerdown', 400, 80); await pointer(canvas, 'pointerup', 400, 80); await settle();
+    await act(async () => canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))); await settle();
+    const constraints = authoring.mock.calls.at(-1)![0].sketch.constraints as { kind: string; value?: number; driving?: boolean }[];
+    expect(constraints.find(c => c.kind === 'distance')).toMatchObject({ value: expect.closeTo(13, 8), driving: true });
+    await render(14);
+    expect(button('Done').disabled).toBe(true);
+    expect(host.querySelector('.sketch-conflict-banner')).not.toBeNull();
+    await act(async () => button('Undo').click()); await settle();
+    expect(changed.mock.calls.at(-1)![0].contour.points.at(-1).r_mm).toBeCloseTo(14, 8);
+    expect(button('Done').disabled).toBe(false);
+    expect(host.querySelector('.source-throat-mismatch')).toBeNull();
+    expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
+    // Redo restores the incompatible chord; Undo recovers again against the same host.
+    await act(async () => button('Redo').click()); await settle();
+    expect(button('Done').disabled).toBe(true);
+    await act(async () => button('Undo').click()); await settle();
+    expect(button('Done').disabled).toBe(false);
+    expect(host.querySelector('.source-throat-mismatch')).toBeNull();
   });
 
   it.each(['edit', 'undo', 'redo', 'context'] as const)('clears a rejected Load on %s and cannot adopt a stale offer', async action => {

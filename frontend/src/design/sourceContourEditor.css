@@ -1,14 +1,16 @@
 .source-editor-launch { display: grid; gap: 6px; padding: 12px; border-bottom: 1px solid var(--hair); }
 .source-editor-launch small { color: var(--fg3); }
 .source-editor-backdrop { position: fixed; inset: 0; z-index: 1200; background: #0009; display: grid; place-items: center; padding: 20px; }
-.source-editor { width: min(1400px, 96vw); height: 94vh; max-height: 94vh; overflow: hidden; display: flex; flex-direction: column; box-sizing: border-box; background: var(--surface-panel); color: var(--fg); border: 1px solid var(--border-control); border-radius: 10px; box-shadow: 0 12px 60px #0008; padding: 18px; font-size: 13px; }
+.source-editor { width: min(1400px, 96vw); max-height: 94vh; overflow: auto; box-sizing: border-box; background: var(--surface-panel); color: var(--fg); border: 1px solid var(--border-control); border-radius: 10px; box-shadow: 0 12px 60px #0008; padding: 18px; font-size: 13px; }
+.source-editor.source-sketch-editor { height: 94vh; overflow: hidden; display: flex; flex-direction: column; }
 .source-editor header { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
 .source-editor header > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .source-editor header p { margin: 0; font-size: 11px; }
 .source-editor h2 { font-size: 20px; margin: 0; }
 .source-editor h3 { margin: 20px 0 8px; font-size: 14px; }
 .source-editor p { color: var(--fg3); margin: 6px 0 10px; }
-.source-editor fieldset { flex: 1; min-height: 0; overflow: hidden; border: 0; padding: 0; margin: 0; min-width: 0; }
+.source-editor fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.source-sketch-editor > fieldset { flex: 1; min-height: 0; overflow: hidden; }
 .source-editor button, .source-editor select, .source-editor input { font: inherit; color: inherit; background: var(--surface-field); border: 1px solid var(--border-control); border-radius: 4px; padding: 5px 8px; }
 .source-editor button { cursor: pointer; background: var(--ctl-grad); }
 .source-editor button:hover:enabled { background: var(--ctl-grad-h); }
@@ -21,7 +23,8 @@
 .source-editor summary { cursor: pointer; }
 .source-identifiers { margin: 8px 0; }
 .source-identifiers[open] summary { margin-bottom: 8px; }
-.source-editor-columns { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; height: 100%; min-height: 0; }
+.source-editor-columns { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; }
+.source-sketch-editor .source-editor-columns { height: 100%; min-height: 0; }
 .source-editor aside { min-height: 0; overflow: auto; overscroll-behavior: contain; border-left: 1px solid var(--hair); padding-left: 12px; }
 .source-editor-toolbar, .source-preset { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 .source-fields { display: grid; grid-template-columns: 1fr; gap: 6px; }
@@ -64,9 +67,16 @@
 .source-progress.unfinished { color: var(--fg3); }
 .source-progress.invalid { color: var(--red); }
 @media (max-width: 899px) {
-  .source-editor-columns { grid-template-columns: 1fr; grid-template-rows: minmax(360px, 1fr) minmax(0, 1fr); gap: 8px; }
+  .source-editor-columns { grid-template-columns: 1fr; gap: 8px; }
+  .source-sketch-editor .source-editor-columns { grid-template-rows: minmax(360px, 1fr) minmax(0, 1fr); }
   .source-editor aside { border: 0; padding: 0; }
   .source-workspace { min-height: 360px; }
+}
+@media (max-height: 699px) {
+  .source-sketch-editor > fieldset { overflow: auto; }
+  .source-sketch-editor .source-editor-columns { height: auto; min-height: 100%; grid-template-columns: 1fr; grid-template-rows: minmax(220px, 40vh) auto; gap: 8px; }
+  .source-sketch-editor .source-workspace { min-height: 220px; }
+  .source-sketch-editor .source-properties { overflow: visible; border: 0; padding: 0; }
 }
 .assembly-preview { width: 100%; height: 260px; display: block; }
 .source-table tr[aria-selected="true"] { background: var(--raise); box-shadow: inset 3px 0 var(--acc); }
