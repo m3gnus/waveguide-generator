@@ -4791,7 +4791,7 @@
       "step": null,
       "precision": null,
       "options": [],
-      "description": "Legacy ATH Source.Contours is preserved for round-trip only; a non-empty value stops waveguide preview and solve meshing. For native custom contours, use “Edit source contour…” (Experimental) on the Geometry tab."
+      "description": "Legacy ATH Source.Contours is preserved for round-trip only; a non-empty value stops waveguide preview and solve meshing."
     },
     {
       "id": "cross_section.exponent",

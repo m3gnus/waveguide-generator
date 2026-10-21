@@ -611,26 +611,41 @@ describe('ParamPanel inventory UX', () => {
     expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
   });
 
-  it('switches to experimental LOOKUP and shows its whole-meridian editor', () => {
-    act(() => {
-      useDesignStore.getState().updateValue('throat_ext_length', 20);
-      const family = host.querySelector<HTMLSelectElement>('#family')!;
-      family.value = 'LOOKUP'; family.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    expect(host.querySelector('option[value="LOOKUP"]')?.textContent).toBe('LOOKUP (EXPERIMENTAL)');
+  it('omits LOOKUP from the family picker for a new OSSE design', () => {
+    act(() => useDesignStore.getState().replaceDocument(designForFamily('OSSE')));
+    const family = host.querySelector<HTMLSelectElement>('#family')!;
+    expect(family.value).toBe('OSSE');
+    expect([...family.options].map((option) => option.value)).toEqual(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES]);
+    expect(host.querySelector('[data-parameter-id="lookup.profile"]')).toBeNull();
+  });
+
+  it('keeps a loaded LOOKUP design selected with its whole-meridian editor', () => {
+    const loaded = hydrateDesignDocument({ ...serializeDesign(designForFamily('LOOKUP')), lookup_profile: [[0, 18], [50, 40], [160, 150]] });
+    act(() => useDesignStore.getState().replaceDocument(loaded));
+    const family = host.querySelector<HTMLSelectElement>('#family')!;
+    const option = family.querySelector<HTMLOptionElement>('option[value="LOOKUP"]')!;
+    expect(option.textContent).toBe('LOOKUP (EXPERIMENTAL)');
+    expect(option.selected).toBe(true);
+    expect(family.value).toBe('LOOKUP');
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(serializeDesign(loaded));
     expect(host.querySelector('.experimental-badge')).not.toBeNull();
-    expect(host.querySelector('.conversion-notice')?.textContent).toContain('conical table');
-    expect(useDesignStore.getState().design.throat_ext_length).toBe(0);
+    expect(host.querySelector('.conversion-notice')).toBeNull();
     const table = host.querySelector('[data-parameter-id="lookup.profile"]')!;
     expect(table.closest('section')?.getAttribute('data-section')).toBe('Profile');
-    expect(table.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(table.querySelectorAll('tbody tr')).toHaveLength(3);
     expect(host.querySelector('[data-parameter-id="common.throat_ext_length"]')).toBeNull();
     expect(host.querySelector('[data-parameter-id="rosse.R"]')).toBeNull();
     expect(host.querySelector('[data-parameter-id="guide.curve_type"]')).toBeNull();
     expect(host.querySelector('[data-parameter-id="morph.target_shape"]')).not.toBeNull();
+    act(() => {
+      family.value = 'OSSE'; family.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(family.value).toBe('OSSE');
+    expect(family.querySelector('option[value="LOOKUP"]')).toBeNull();
     act(() => useDesignStore.getState().undo());
-    expect(useDesignStore.getState().design.formula).toBe('R-OSSE');
-    expect(useDesignStore.getState().design.throat_ext_length).toBe(20);
+    expect(family.value).toBe('LOOKUP');
+    expect(family.querySelector<HTMLOptionElement>('option[value="LOOKUP"]')?.selected).toBe(true);
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(serializeDesign(loaded));
   });
 
   it('disables base section controls only while an OSSE guiding curve is active', () => {
@@ -936,7 +951,7 @@ describe('ParamPanel inventory UX', () => {
   it('preserves the complete parametric section set', () => {
     act(() => useDesignStore.getState().setFamily('OSSE'));
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
-    expect(titles()).toEqual(['Model Type', 'Profile', 'Throat', 'Mouth', 'Cross-section', 'Mounting', 'Experimental']);
+    expect(titles()).toEqual(['Model Type', 'Profile', 'Throat', 'Mouth', 'Cross-section', 'Mounting']);
     expect(host.querySelector('[data-section="Realized dimensions"]')).toBeNull();
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     expect(titles()).toEqual(['Frequency sweep', 'Directivity map', 'Source excitation', 'Solver', 'Mesh', 'Export']);
@@ -1893,18 +1908,36 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[data-parameter-id="enclosure.depth"] input')?.hasAttribute('disabled')).toBe(false);
   });
 
-  it('keeps Experimental and Export collapsed by default, with normal labelled launcher rows', () => {
-    const section = host.querySelector('[data-section="Experimental"]')!;
-    expect(section.classList.contains('closed')).toBe(true);
-    act(() => section.querySelector<HTMLButtonElement>('.section-head')!.click());
-    const rows = section.querySelectorAll('.source-editor-launch');
-    expect(rows).toHaveLength(2);
-    expect(rows[0].querySelector('.experimental-launch-label > span:first-child')?.textContent).toBe('Source contour');
-    expect(rows[1].querySelector('.experimental-launch-label > span:first-child')?.textContent).toBe('Horn + woofer assembly');
-    for (const row of rows) {
-      expect(row.querySelector('button')?.getAttribute('aria-haspopup')).toBe('dialog');
-      expect(row.textContent).toContain('Experimental');
+  it.each(['parametric', 'cad'] as const)('hides unfinished launchers from the %s rail, search and palette', (mode) => {
+    act(() => {
+      if (mode === 'cad') setCadReady();
+      workspaceModeStore.setMode(mode);
+    });
+    const assertHidden = () => {
+      expect(host.querySelector('[data-section="Experimental"]')).toBeNull();
+      expect(host.querySelector('.source-editor-launch')).toBeNull();
+      expect(host.querySelector('[data-control-reveal-id="source-contour-launch"], [data-control-reveal-id="assembly-launch"]')).toBeNull();
+      expect(host.textContent).not.toContain('Edit source contour');
+      expect(host.textContent).not.toContain('Edit horn + woofer assembly');
+    };
+    assertHidden();
+    for (const query of ['source contour', 'assembly', 'sketch']) {
+      act(() => {
+        const filter = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(filter, query);
+        filter.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      assertHidden();
     }
+    const design = useDesignStore.getState().design;
+    const entries = buildParameterPaletteEntries(design.formula, { mode, design, cadReturnReady: true });
+    expect(entries.some((entry) => ['parametric-control-source-contour', 'parametric-control-assembly'].includes(entry.id))).toBe(false);
+    expect(entries.some((entry) => /Edit source contour|Edit horn \+ woofer assembly/.test(entry.label))).toBe(false);
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    assertHidden();
+  });
+
+  it('keeps Export collapsed by default', () => {
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     expect(host.querySelector('[data-section="Export"]')?.classList.contains('closed')).toBe(true);
   });

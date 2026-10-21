@@ -56,8 +56,6 @@ export const PARAMETRIC_CONTROL_DESCRIPTORS: readonly ParametricControlDescripto
     ['field-plane', 'Keep field plane data', 'Directivity map', 'simulation', 'polar-field-plane'],
     ['validation', 'Mesh validation policy', 'Mesh', 'simulation', 'mesh-validation-mode'],
     ['directivity', 'Directivity map', 'Directivity map', 'simulation', 'parametric.section.Directivity map'],
-    ['source-contour', 'Edit source contour…', 'Experimental', 'geometry', 'source-contour-launch'],
-    ['assembly', 'Edit horn + woofer assembly…', 'Experimental', 'geometry', 'assembly-launch'],
   ] as const).map(([id, label, section, tab, revealId]) => ({ id, label, section, tab, keywords: [], reveal: { id: revealId, target: 'control' as const } })),
 ];
 

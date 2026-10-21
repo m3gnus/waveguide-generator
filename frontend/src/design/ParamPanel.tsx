@@ -38,8 +38,6 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { AdaptiveFrequencyControls, FrequencySweepControls, MeshValidationControl, DirectivityMapControls, SolveOptionsControls, ToggleRow } from './SolveOptionsSections';
 import { ExperimentalBadge } from './ExperimentalBadge';
 import { EditableLookupTable, EditablePointTable, EditableStationTable } from './FreeformEditors';
-import { SourceContourEditor } from './SourceContourEditor';
-import { SourceAssemblyLauncher } from './SourceAssemblyEditor';
 import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
 import { SelectRow } from './SelectRow';
@@ -1334,8 +1332,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       && (workspaceMode === 'cad' || !searching || matchingParametricSections.has('Mounting') || fields.some((field) => field.id === 'simulation.sim_type'));
     const hasCustomMode = (showOuterBodyMode && (workspaceMode !== 'cad' || !searching)) || showSolveDomain;
     const showCustom = workspaceMode === 'parametric' && (!searching || matchingParametricSections.has(definition.title));
-    const custom = showCustom ? definition.title === 'Experimental' ? <><SourceContourEditor row /><SourceAssemblyLauncher row /></>
-      : definition.title === 'Directivity map' ? <DirectivityMapControls />
+    const custom = showCustom ? definition.title === 'Directivity map' ? <DirectivityMapControls />
       : definition.title === 'Solver' ? <SolveOptionsControls includeSampling={false} showOpenclGuidance />
       : definition.title === 'Frequency sweep' ? <><FrequencySweepControls idPrefix="design-solve" context="design" /><AdaptiveFrequencyControls /></>
       : null : null;
@@ -1393,7 +1390,8 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         if (family === 'FREEFORM' && design.formula !== 'FREEFORM') setFreeformChoice(true);
         else { setFreeformChoice(false); setFamily(family); setConversionNotice(family === 'LOOKUP' ? 'LOOKUP starts with a conical table defining the whole meridian (12.7 mm throat to 140 mm mouth over 120 mm, scaled by the current Scale). Edit or paste [z, r] samples in Profile. Analytic coefficients, throat extensions, slots, adapters and imported ATH geometry controls were removed.' : sectionResetNotice(family)); }
       }}>
-        <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option>FREEFORM</option><option value="LOOKUP">LOOKUP (EXPERIMENTAL)</option>
+        <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option>FREEFORM</option>
+        {design.formula === 'LOOKUP' && <option value="LOOKUP">LOOKUP (EXPERIMENTAL)</option>}
         {NATIVE_FAMILIES.map((family) => <option key={family}>{family}</option>)}
       </select>
     </SelectRow>
@@ -1451,8 +1449,6 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       </div>
       {workspaceMode === 'cad' && tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.linkedDesign.section) && <LinkedDesignCard forceOpen={searching}/>}
       {workspaceMode === 'parametric' && !searching && tab === 'geometry' && modelTypeSection}
-      {workspaceMode === 'cad' && !searching && tab === 'geometry' && <SourceContourEditor />}
-      {workspaceMode === 'cad' && !searching && tab === 'geometry' && <SourceAssemblyLauncher />}
       {workspaceMode === 'parametric' ? definitions.map(renderRegistrySection)
         : <>
           {definitions.map(renderRegistrySection)}

@@ -367,11 +367,12 @@ describe('complete parameter registry', () => {
     expect(PARAMETER_REGISTRY.filter((item) => fieldMatchesQuery(item, 'tmax')).map((item) => item.id)).toEqual(['rosse.tmax']);
   });
 
-  it('points legacy source-contour users to the native Experimental editor', () => {
+  it('explains legacy source-contour limitations without advertising the hidden editor', () => {
     const text = PARAMETER_REGISTRY.find((item) => item.id === 'source.contours')!.description!;
     expect(text).toContain('Legacy ATH Source.Contours');
-    expect(text).toContain('“Edit source contour…” (Experimental) on the Geometry tab');
-    expect(text).not.toContain('not implemented');
+    expect(text).toContain('round-trip only');
+    expect(text).toContain('stops waveguide preview and solve meshing');
+    expect(text).not.toContain('Edit source contour');
   });
 
   it('documents ATH\'s omitted wall-thickness default', () => {
