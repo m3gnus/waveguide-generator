@@ -3,6 +3,8 @@ import type { SketchViewPreferences } from './viewPreferences';
 import type { constraintPalette, SelectionConstraint } from './tools/constraints';
 
 export type Tool = 'select' | 'hand' | 'line' | 'tangent' | 'arc3' | 'dimension' | 'split' | 'constraint';
+export const drawingIcons = { select: 'M4 2 13 10 8 10 6 14Z', hand: 'M5 8V3a1 1 0 0 1 2 0v4-5a1 1 0 0 1 2 0v5-4a1 1 0 0 1 2 0v4-2a1 1 0 0 1 2 0v5q0 5-4 5H8q-2 0-3-2L2 8q1-2 3 0Z', line: 'M3 13 13 3', arc: 'M2 13Q2 2 14 3', dimension: 'M2 5V13M14 5V13M2 9H14M5 6 2 9 5 12M11 6 14 9 11 12', split: 'M2 12 7 7M10 4 14 0M6 2 14 10' };
+
 type PaletteEntry = ReturnType<typeof constraintPalette>[number] & { disabled: boolean; title?: string };
 interface Props {
   tool: Tool; arcTool: 'tangent' | 'arc3'; enabled: boolean; palette: PaletteEntry[]; activeConstraint?: SelectionConstraint;
@@ -16,8 +18,7 @@ export function SketchToolbar({ tool, arcTool, enabled, palette, activeConstrain
   const drawingButton = (t: 'select' | 'hand' | 'line' | 'arc' | 'dimension' | 'split') => {
     const next = t === 'arc' ? arcTool : t;
     const label = { select: 'Select (Esc)', hand: 'Pan (hold Space)', line: 'Line (L)', arc: arcTool === 'tangent' ? 'Tangent arc (A)' : '3-point arc (A)', dimension: 'Dimension (D)', split: 'Split (S)' }[t];
-    const icons = { select: 'M4 2 13 10 8 10 6 14Z', hand: 'M5 8V3a1 1 0 0 1 2 0v4-5a1 1 0 0 1 2 0v5-4a1 1 0 0 1 2 0v4-2a1 1 0 0 1 2 0v5q0 5-4 5H8q-2 0-3-2L2 8q1-2 3 0Z', line: 'M3 13 13 3', arc: 'M2 13Q2 2 14 3', dimension: 'M2 5V13M14 5V13M2 9H14M5 6 2 9 5 12M11 6 14 9 11 12', split: 'M2 12 7 7M10 4 14 0M6 2 14 10' };
-    return <Fragment key={t}><button type="button" aria-label={label} title={label} aria-pressed={tool === next} disabled={!enabled && t !== 'select' && t !== 'hand'} onClick={() => { setArcMenu(false); choose(next); }}><svg aria-hidden="true" viewBox="0 0 16 16"><path d={icons[t]}/></svg><span className="sketch-tool-label">{t === 'arc' ? 'Arc' : t[0].toUpperCase() + t.slice(1)}</span></button>{t === 'arc' && <div className="sketch-menu-anchor"><button type="button" aria-label="Arc options" aria-expanded={arcMenu} onClick={() => setArcMenu(!arcMenu)}>⌄</button>
+    return <Fragment key={t}><button type="button" aria-label={label} title={label} aria-pressed={tool === next} disabled={!enabled && t !== 'select' && t !== 'hand'} onClick={() => { setArcMenu(false); choose(next); }}><svg aria-hidden="true" viewBox="0 0 16 16"><path d={drawingIcons[t]}/></svg><span className="sketch-tool-label">{t === 'arc' ? 'Arc' : t[0].toUpperCase() + t.slice(1)}</span></button>{t === 'arc' && <div className="sketch-menu-anchor"><button type="button" aria-label="Arc options" aria-expanded={arcMenu} onClick={() => setArcMenu(!arcMenu)}>⌄</button>
       {arcMenu && <div className="sketch-menu" role="group" aria-label="Arc modes">{(['tangent', 'arc3'] as const).map(mode => <button type="button" key={mode} aria-pressed={arcTool === mode} onClick={() => { setArcMenu(false); choose(mode); }}>{mode === 'tangent' ? 'Tangent arc (A)' : '3-point arc (A)'}</button>)}</div>}
     </div>}</Fragment>;
   };

@@ -1,14 +1,13 @@
 import type { Reference } from './adapter';
 import { entityPoints, type Line, type Sketch } from './model';
 import { applyCommand } from './ops';
-import { formatValue } from './formatValue';
 import type { XY } from './solver/types';
 
 export interface ContextItem {
   id: string;
   kind: 'point' | 'segment' | 'polyline';
   geometry: XY[];
-  role: 'axis' | 'rim-plane' | 'throat' | 'wall' | 'mouth' | 'baffle' | 'enclosure' | 'plug' | 'aperture' | 'collar' | 'keepout' | 'limit';
+  role: string;
   label: string;
   pickable: boolean;
   emphasis?: 'near' | 'far';
@@ -80,23 +79,5 @@ export function refreshContext(sketch: Sketch, context: SketchContext): { sketch
     sketch = { ...sketch, entities: sketch.entities.map(line => line.id === e.id ? { ...line, data: { context: data.context, fingerprint, label: target.label } } : line) };
   }
   return { sketch, missing, moved };
-}
-/** Convert the legacy solver references once, then render every datum with the same layer. */
-export function referenceContext(references: Reference[], context: SketchContext | undefined, bounds: { low: number; high: number; left: number; right: number }): ContextDrawingItem[] {
-  const items = [...context?.items ?? []];
-  for (const r of references) {
-    if (r.kind === 'axis') items.push({ id: 'axis', kind: 'segment', geometry: [{ x: 0, y: bounds.low }, { x: 0, y: bounds.high }], role: 'axis', label: `Axis (r = ${formatValue(0)})`, pickable: true });
-    else if (r.kind === 'baffle' && !items.some(i => i.role === 'rim-plane')) items.push({ id: 'rim-plane', kind: 'segment', geometry: [{ x: bounds.left, y: 0 }, { x: bounds.right, y: 0 }], role: 'rim-plane', label: context?.rimPlaneLabel ?? `Rim plane (z = ${formatValue(0)})`, pickable: true });
-    else if (r.kind === 'limit' && !items.some(i => i.role === (r.locked ? 'throat' : r.label.startsWith('Mouth') ? 'mouth' : 'aperture'))) {
-      items.push({ id: 'limit', kind: 'point', geometry: [{ x: r.radius, y: 0 }], role: 'limit', label: `${r.label}${r.locked ? ' 🔒' : ''}`, pickable: false });
-    }
-  }
-  return items.map(item => {
-    const reference = references.find(r => item.role === 'axis' ? r.kind === 'axis' : item.role === 'rim-plane' ? r.kind === 'baffle'
-      : item.kind === 'point' && r.kind === 'limit' && (r.locked ? item.role === 'throat' || item.role === 'limit' : item.role === 'mouth' || item.role === 'aperture' || item.role === 'limit'));
-    return { ...item, referenceId: reference?.id, ...(reference?.kind === 'limit' ? {
-      label: `${reference.label}${reference.locked ? ' 🔒' : ''}`, sourceLimit: { radius: reference.radius, locked: reference.locked },
-    } : {}) };
-  });
 }
 export const referencePointIds = (sketch: Sketch, references: Reference[] = []) => new Set(sketch.entities.filter(e => e.reference || references.some(r => r.id === e.id)).flatMap(entityPoints));

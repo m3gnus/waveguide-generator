@@ -1,17 +1,17 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
-import { contextData, materialiseContext, referenceContext, referencePointIds, type ContextDrawingItem, type SketchContext } from './context';
+import { materialiseContext, referencePointIds, type ContextDrawingItem, type SketchContext } from './context';
 import type { DomainProblem, Reference } from './adapter';
 import type { Command, PointRef } from './commands';
 import { constraintRefs, entityPoints, type Constraint, type DimensionPlacement, type Entity, type NewConstraint, type Sketch } from './model';
 import type { Diagnosis, DragResult } from './session';
 import { DETERMINATION_ENTITY_LIMIT, type Capabilities, type XY } from './solver/types';
-import { arcGeometry, arcThrough, onArc, positiveAngle, projectToEntity, tangentArc, tangentIncoming, tau } from './geometry';
+import { arcGeometry, arcThrough, positiveAngle, projectToEntity, tangentArc, tangentIncoming, tau } from './geometry';
 import { findSnap, snapLimitTarget, type SnapResult } from './snap';
-import { fit, gridStep, pan, screenToWorld, worldToScreen, zoomAt, wheelGesture, type View } from './view';
+import { gridStep, pan, screenToWorld, worldToScreen, zoomAt, wheelGesture } from './view';
 import { continueLine, lineState, placeLine, prospectiveLine, type LineState } from './tools/line';
 import { combineSelection, cycleHit, dragPointIds, finishSelect, moveSelect, selectHits, startSelect, type Cycle, type SelectState, coalesceTargets, select } from './tools/select';
-import { candidateDimension, dimensionPicks, hitDimension, type CandidateDimension } from './tools/dimension';
+import { candidateDimension, dimensionSecondPick, dimensionPicks, hitDimension, type CandidateDimension } from './tools/dimension';
 import { constraintPalette, selectionConstraints, selectionCanConstrain, pickPatterns, rules } from './tools/constraints';
 import { acceptsConstraintPick, constraintTool, pickConstraint, escapeConstraint, constraintHint, hitConstraint, type ConstraintToolState } from './tools/constraintTool';
 import { SketchToolbar, type Tool } from './SketchToolbar';
@@ -20,6 +20,12 @@ import { dimensionLabelBox, internalHelper, dimensionLabel, dimensionLayout, dim
 import { displayName } from './displayName';
 import { isConstraintConflict } from './controller';
 import { readSketchView, saveSketchView } from './viewPreferences';
+import { contourScreenPoints, contourDimensionBounds } from './displayGeometry';
+import { sketchToolHints } from './tools/workspaceTools';
+import { SelectionProperties } from './SelectionProperties';
+import { removeCommands } from './tools/remove';
+import { sketchGeometry, selectedConstraintRefs } from './sketchGeometry';
+import { referenceContext, sourceInitialView } from './adapters/sourceDisplay';
 import './sketchCanvas.css';
 
 export interface CanvasSession {
@@ -51,41 +57,6 @@ export interface SketchCanvasProps {
   fitRequest?: number; selection?: string[]; onSelectionChange?: (selection: string[]) => void;
 }
 declare global { interface Window { __sketchPerf?: { frames: number[]; solveMs: number[]; reset(): void } } }
-const hints: Record<Tool, string> = {
-  select: 'Select or drag · Shift adds · Delete removes · Esc cancels',
-  hand: 'Drag to pan · Esc: Select', constraint: '',
-  line: 'Click to chain lines · type length, Tab angle · double-click ends · Ctrl/Cmd suppresses snaps',
-  tangent: 'Choose a highlighted chain end, or click empty space to start a 3-point arc · A: 3-point arc',
-  arc3: 'Click start, end, then a point on the arc · A: tangent arc',
-  dimension: 'Click a line, arc or point; click a second item if needed; move to choose; click to place; type the value', split: 'Click inside a curve to split',
-};
-function initialView(sketch: Sketch, width = 640, height = 360, context?: SketchContext, all = false): View {
-  const ids = new Set(sketch.entities.filter(e => !e.reference && !internalHelper(e)).flatMap(e => e.kind === 'arc' ? [e.start, e.end] : entityPoints(e)));
-  const pts = sketch.points.filter(p => ids.has(p.id));
-  // Include only extrema on the finite arc, including major arcs.
-  for (const e of sketch.entities) if (e.kind === 'arc' && !internalHelper(e)) {
-    const g = arcGeometry(sketch, e);
-    for (const angle of [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2]) {
-      const p = { id: '', x: g.center.x + g.radius * Math.cos(angle), y: g.center.y + g.radius * Math.sin(angle) };
-      if (onArc(sketch, e, p)) pts.push(p);
-    }
-  }
-  for (const e of sketch.entities) if (e.reference && !contextData(e) && e.kind === 'line') {
-    const a = sketch.points.find(p => p.id === e.p1)!;
-    if (a.x > 0) pts.push(a);
-  }
-  const extent = Math.max(1, ...pts.map(p => Math.abs(p.x)), ...pts.map(p => Math.abs(p.y)));
-  const boxPoints = context?.items.filter(i => i.role === 'enclosure' || i.role === 'baffle').flatMap(i => i.geometry) ?? [];
-  const nearbyBox = boxPoints.every(p => Math.max(Math.abs(p.x), Math.abs(p.y)) <= 3 * extent);
-  for (const item of context?.items ?? []) if (all || ['throat', 'plug', 'rim-plane'].includes(item.role)
-    || nearbyBox && ['enclosure', 'baffle', 'wall', 'mouth', 'aperture', 'collar'].includes(item.role)) pts.push(...item.geometry.map(p => ({ ...p, id: '' })));
-  const named = sketch.constraints.filter(c => c.label && 'value' in c);
-  const bottom = named.filter(c => c.kind === 'distanceX').length * 24;
-  const top = named.filter(c => c.kind === 'distanceY').length * 24;
-  const right = named.length ? 170 : 0;
-  const fitted = fit({ minX: Math.min(0, ...pts.map(p => p.x)), maxX: Math.max(1, ...pts.map(p => p.x)), minY: Math.min(0, ...pts.map(p => p.y)), maxY: Math.max(1, ...pts.map(p => p.y)) }, { width: Math.max(100, width - right), height: Math.max(100, height - bottom - top) }, 32);
-  return { ...fitted, offsetX: fitted.offsetX + (named.length ? 48 : 0), offsetY: fitted.offsetY + top };
-}
 export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStale = false, sketch, diagnosis, references, problems, session, entityStyle, problemAction, selection: controlled, onSelectionChange, fitRequest, entityClassName, hoverId, onHoverChange, nameFor, onLimitChange }: SketchCanvasProps) {
   const svg = useRef<SVGSVGElement>(null);
   const dimensionInput = useRef<HTMLInputElement>(null);
@@ -97,7 +68,7 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
   const [dimensionPreview, setDimensionPreview] = useState<{ id: string; placement: DimensionPlacement }>();
   const labelDown = useRef<{ id: string; time: number } | undefined>(undefined);
   const [size, setSize] = useState({ width: 640, height: 360 });
-  const [view, setView] = useState(() => initialView(sketch));
+  const [view, setView] = useState(() => sourceInitialView(sketch));
   const [dimensionIds, setDimensionIds] = useState<string[]>([]);
   const [dimensionHover, setDimensionHover] = useState<string>();
   const [dimensionPrompt, setDimensionPrompt] = useState<CandidateDimension>();
@@ -170,25 +141,16 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
   const fullyConstrained = diagnosis?.status === 'ok' && diagnosis.dof === 0;
   const determined = (id: string) => fixed.has(id) ? true : diagnosis?.status !== 'ok' ? undefined : diagnosis.pointDetermined?.[id]
     ?? (sketch.points.length + sketch.entities.length > DETERMINATION_ENTITY_LIMIT ? undefined : fullyConstrained);
-  const selectedConstraintRefs = sketch.constraints.filter(c => selection.includes(c.id) || conflicts.includes(c.id)).flatMap(constraintRefs);
-  const highlighted = new Set([...(constraintState?.ids ?? []), ...selection, ...selectedConstraintRefs, ...(showConflict ? conflictConstraints.flatMap(constraintRefs) : [])]);
+  const constraintSelection = selectedConstraintRefs(sketch, [...selection, ...conflicts]);
+  const highlighted = new Set([...(constraintState?.ids ?? []), ...selection, ...constraintSelection, ...(showConflict ? conflictConstraints.flatMap(constraintRefs) : [])]);
   const conflictRefs = new Set([...sketch.constraints.filter(c => diagnosis?.constraintStates[c.id] === 'conflicting'), ...conflictConstraints].flatMap(c => constraintRefs(c).flatMap(id => [id, ...entityPoints(sketch.entities.find(e => e.id === id) ?? { kind: 'circle', id: '' })])));
   const color = (ids: string[]) => ids.some(id => conflictRefs.has(id)) ? 'conflicting' : ids.every(id => determined(id) === true) ? 'determined' : ids.some(id => determined(id) === undefined) ? 'not-analysed' : 'under';
-  const arcs = sketch.entities.filter(e => e.kind === 'arc');
-  const endpoints = new Set(sketch.entities.flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : e.kind === 'arc' ? [e.start, e.end] : []));
-  const hiddenCentres = arcs.map(e => e.center).filter(id => !endpoints.has(id) && !selection.includes(id) && hoveredPoint !== id
-    && !(tool === 'constraint' && constraintState && acceptsConstraintPick(sketch, constraintState, id))
-    && !arcs.some(e => e.center === id && (selection.includes(e.id) || (hoveredArc === e.id || hoverId === e.id))));
-  const helperPoints = new Set(sketch.entities.filter(internalHelper).flatMap(entityPoints).filter(id => !sketch.entities.some(e => !internalHelper(e) && entityPoints(e).includes(id))));
-  const drawingSnapHidden = [...hiddenCentres.filter(id => !arcs.some(e => e.construction && e.center === id)), ...helperPoints];
-  const visiblePoints = sketch.points.filter(p => !fixedPoints.has(p.id) && !hiddenCentres.includes(p.id) && !helperPoints.has(p.id));
+  const { arcs, endpoints, hiddenCentres, helperPoints, drawingSnapHidden, visiblePoints } = sketchGeometry(sketch, references, selection, hoverId, hoveredPoint, hoveredArc,
+    tool === 'constraint' && constraintState ? id => acceptsConstraintPick(sketch, constraintState, id) : undefined);
   const validStarts = new Set(drawing && tool !== 'line' ? visiblePoints.filter(p => {
     try { tangentIncoming(sketch, p.id); return true; } catch { return false; }
   }).map(p => p.id) : []);
-  const convertible = selection.length === 1 ? sketch.entities.find(e => e.id === selection[0] && !e.reference
-    && !references.some(r => r.id === e.id) && (e.kind === 'line' || e.kind === 'arc')) : undefined;
   const offeredConstraints = selectionConstraints(sketch, selection, session?.capabilities);
-  const selectedDimension = selection.length === 1 ? sketch.constraints.find(c => c.id === selection[0] && 'value' in c) : undefined;
   function reasonText(reason: unknown) {
     return reason instanceof Error ? reason.message : String(reason);
   }
@@ -264,11 +226,11 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
     let previous = { width: 640, height: 360 }, measured = false;
     const observer = new ResizeObserver(entries => {
       const { width, height } = entries[0].contentRect;
-      if (width > 64 && height > 64) { const dx = (width - previous.width) / 2, dy = (height - previous.height) / 2; previous = { width, height }; const first = !measured; measured = true; setSize(previous); setView(view => first ? initialView(latest.current.sketch, width, height) : pan(view, dx, dy)); }
+      if (width > 64 && height > 64) { const dx = (width - previous.width) / 2, dy = (height - previous.height) / 2; previous = { width, height }; const first = !measured; measured = true; setSize(previous); setView(view => first ? sourceInitialView(latest.current.sketch, width, height) : pan(view, dx, dy)); }
     }); observer.observe(svg.current); return () => observer.disconnect();
   }, []);
   useLayoutEffect(() => {
-    if (fitRequest !== undefined) { setView(initialView(latest.current.sketch, size.width, size.height)); setEditing(undefined); setDimensionIds([]); setDimensionPrompt(undefined); }
+    if (fitRequest !== undefined) { setView(sourceInitialView(latest.current.sketch, size.width, size.height)); setEditing(undefined); setDimensionIds([]); setDimensionPrompt(undefined); }
   }, [fitRequest]);
   useLayoutEffect(() => {
     // Opening or changing mode starts from the live value, without overwriting typing.
@@ -375,23 +337,8 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
     });
   }
   function removeSelection() {
-    const commands: Command[] = [];
-    for (const id of selection) {
-      if (sketch.constraints.some(c => c.id === id)) commands.push({ kind: 'removeConstraint', id });
-      else {
-        const entity = sketch.entities.find(e => e.id === id);
-        if (entity && !entity.reference) commands.push({ kind: 'deleteEntity', id });
-        else if (sketch.points.some(p => p.id === id) && !fixedPoints.has(id)) {
-          if (!sketch.entities.some(e => selection.includes(e.id) && entityPoints(e).includes(id))) commands.push({ kind: 'deletePoint', id });
-        }
-      }
-    }
-    const unique = [...new Map(commands.map(c => ['id' in c ? c.id : '', c])).values()];
-    // Geometry deletion also removes dangling constraints.
-    const deleting = unique.filter(c => c.kind === 'deleteEntity');
-    const removedRefs = new Set([...deleting.flatMap(c => c.kind === 'deleteEntity' ? [c.id, ...entityPoints(sketch.entities.find(e => e.id === c.id)!)] : []), ...unique.flatMap(c => c.kind === 'deletePoint' ? [c.id] : [])]);
-    const filtered = unique.filter(c => c.kind !== 'removeConstraint' || !constraintRefs(sketch.constraints.find(v => v.id === c.id)!).some(id => removedRefs.has(id)));
-    if (filtered.length) void run(async () => { await session!.command(filtered.sort((a, b) => Number(b.kind === 'removeConstraint') - Number(a.kind === 'removeConstraint'))); setSelection([]); svg.current?.focus({ preventScroll: true }); });
+    const filtered = removeCommands(sketch, selection, references);
+    if (filtered.length) void run(async () => { await session!.command(filtered); setSelection([]); svg.current?.focus({ preventScroll: true }); });
   }
   function editDimension(c: Constraint, placed?: boolean) {
     if ('value' in c) setEditing({ id: c.id, value: String(c.kind === 'angle' ? c.value * 180 / Math.PI : c.value), placed });
@@ -482,7 +429,7 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
     else if (key === 'a') choose(tool === 'tangent' ? 'arc3' : tool === 'arc3' ? 'tangent' : arcTool);
     else if (key === 'd') choose('dimension');
     else if (key === 's') choose('split');
-    else if (key === 'f') setView(initialView(sketch, size.width, size.height, context, event.shiftKey));
+    else if (key === 'f') setView(sourceInitialView(sketch, size.width, size.height, context, event.shiftKey));
     else if (key === 'delete' || key === 'backspace') { event.preventDefault(); removeSelection(); }
     else if (key === 'x') {
       const commands = sketch.entities.filter(e => selection.includes(e.id) && !e.reference).map(e => ({ kind: 'setConstruction' as const, id: e.id, construction: !e.construction }));
@@ -563,7 +510,7 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
         if (hit) { setDimensionIds([hit]); setSelection([hit]); }
         return;
       }
-      const second = dimensionSecondPick(hit, at);
+      const second = dimensionSecondPick(sketch, references, dimensionIds, hit, at);
       if (second) { setDimensionIds(second); setSelection(second); return; }
       dimensionPlacement.current = candidateDimension(dimensionPicks(sketch, dimensionIds, references), at);
       if (dimensionPlacement.current) event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -582,11 +529,6 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
     setSelection(next);
     if (tool === 'select' && next.includes(id)) selecting.current = startSelect(screen, id, next, modifiers);
 
-  }
-  function dimensionSecondPick(hit: string | undefined, at: XY): string[] | undefined {
-    if (dimensionIds.length !== 1 || !hit || hit === dimensionIds[0]) return;
-    const pair = [dimensionIds[0], hit];
-    if (candidateDimension(dimensionPicks(sketch, pair, references), at)) return pair;
   }
   function pointerMove(event: PointerEvent<SVGSVGElement>) {
     const start = perfEnabled && (drag.current || selecting.current) ? performance.now() : undefined;
@@ -611,7 +553,7 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
     }
     if (tool === 'dimension' && !editing && !dimensionPrompt) {
       const hit = hitDimension(sketch, references, at, 12 / view.scale, hiddenCentres);
-      const pick = !dimensionIds.length || dimensionSecondPick(hit, at) ? hit : undefined;
+      const pick = !dimensionIds.length || dimensionSecondPick(sketch, references, dimensionIds, hit, at) ? hit : undefined;
       setDimensionHover(pick); onHoverChange?.(pick);
       return;
     }
@@ -673,15 +615,8 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
     const points = ids.filter(id => !fixedPoints.has(id)).map(xy);
     return { x: (points.reduce((v, p) => v + p.x, 0) / points.length || 24) + 8, y: (points.reduce((v, p) => v + p.y, 0) / points.length || 24) - 12 - i % 3 * 14 };
   };
-  const contourPoints = sketch.entities.filter(e => !e.construction).flatMap(e => e.kind === 'arc' ? [e.start, e.end] : entityPoints(e)).map(xy);
-  for (const e of sketch.entities) if (e.kind === 'arc' && !e.construction) {
-    const g = arcGeometry(sketch, e);
-    for (const angle of [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2]) {
-      const p = { x: g.center.x + g.radius * Math.cos(angle), y: g.center.y + g.radius * Math.sin(angle) };
-      if (onArc(sketch, e, p)) contourPoints.push(worldToScreen(view, p));
-    }
-  }
-  const dimensionBounds = { height: size.height, left: Math.min(size.width, ...contourPoints.map(p => p.x)), right: Math.max(0, ...contourPoints.map(p => p.x)), bottom: Math.max(0, ...contourPoints.map(p => p.y)), top: Math.min(size.height, ...contourPoints.map(p => p.y)) };
+  const contourPoints = contourScreenPoints(sketch, view);
+  const dimensionBounds = contourDimensionBounds(contourPoints, size);
   const dimensionSketch = dimensionPreview ? { ...sketch, constraints: sketch.constraints.map(c => c.id === dimensionPreview.id ? { ...c, placement: dimensionPreview.placement } : c) } : sketch;
   const constraintVisibility = (c: Constraint) => {
     const related = new Set([c.id, ...constraintRefs(c).flatMap(id => [id, ...entityPoints(sketch.entities.find(e => e.id === id) ?? { kind: 'circle', id: '' })])]);
@@ -692,7 +627,7 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
   const renderedDimensionLabel = (c: Constraint & { value: number; driving: boolean }) => dimensionLabel(c, viewOptions.names || constraintVisibility(c).active ? 'name' : 'value');
   // Reserve full names so hovering/selecting a label never changes its automatic lane.
   const layouts = dimensionLayouts(dimensionSketch, xy, dimensionBounds, view.scale, c => dimensionLabel(c, 'name'));
-  const draft = dimensionPrompt ?? (tool === 'dimension' && !editing && !dimensionSecondPick(dimensionHover, cursor) ? candidateDimension(dimensionPicks(sketch, dimensionIds, references), cursor) : undefined);
+  const draft = dimensionPrompt ?? (tool === 'dimension' && !editing && !dimensionSecondPick(sketch, references, dimensionIds, dimensionHover, cursor) ? candidateDimension(dimensionPicks(sketch, dimensionIds, references), cursor) : undefined);
   const draftConstraint = draft && { ...draft, id: '__dimension_preview' };
   const draftLayout = draftConstraint && dimensionLayout(sketch, draftConstraint, xy, dimensionBounds, 0, view.scale);
   const dimensionBoxes = [...layouts].flatMap(([id, layout]) => {
@@ -750,12 +685,12 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
       } finally { queueMicrotask(() => { contextPicking.current = false; }); }
     });
   }
-  const arcHint = tool === 'constraint' && constraintState ? constraintHint(sketch, constraintState) : tool === 'arc3' ? `3-point arc: ${!chain.from ? 'start 1' : !chain.end ? 'end 2' : 'point on arc 3'} of 3 · A: tangent arc` : hints[tool];
+  const arcHint = tool === 'constraint' && constraintState ? constraintHint(sketch, constraintState) : tool === 'arc3' ? `3-point arc: ${!chain.from ? 'start 1' : !chain.end ? 'end 2' : 'point on arc 3'} of 3 · A: tangent arc` : sketchToolHints[tool];
   const slot = (node: React.ReactNode, host?: HTMLElement | null) => host ? createPortal(node, host) : node;
   return <div className="sketch-canvas" aria-busy={pending} onKeyDown={keyboard} onKeyUp={e => { if (e.key === ' ') space.current = false; }} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) space.current = false; }}>
     {slot(<SketchToolbar tool={tool} arcTool={arcTool} enabled={!!session} palette={palette} activeConstraint={constraintState?.kinds[0]}
       viewOptions={viewOptions} choose={choose} constrain={activateConstraint} undo={redo => void undo(redo)} zoom={zoom}
-      fit={all => setView(initialView(sketch, size.width, size.height, context, all))}
+      fit={all => setView(sourceInitialView(sketch, size.width, size.height, context, all))}
       toggle={key => setViewOptions(previous => { const next = { ...previous, [key]: !previous[key] }; saveSketchView(next); return next; })}/>, slots?.toolbar)}
     {contextStale && <p role="status" className="sketch-context-stale">Context out of date</p>}
     {(rejected || conflictConstraints.length > 0) && <div role="alert" className="sketch-conflict-banner">
@@ -766,11 +701,8 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
     </div>}
     <div className="sketch-surface">
     {slot(<>{tool !== 'select' && <p className="sketch-command-step" role="status">{arcHint}</p>}{selection.length > 0 && tool !== 'dimension' && tool !== 'constraint' && tool !== 'hand' && <div role="toolbar" aria-label="Selection actions" className="sketch-context sketch-selection-context">
-      {!slots?.properties && selectedDimension && 'driving' in selectedDimension && <button type="button" disabled={!session || pending} onClick={() => void run(() => session!.command({ kind: 'setDriving', id: selectedDimension.id, driving: !selectedDimension.driving }))}>{selectedDimension.driving ? 'Make reference' : 'Make driving'}</button>}
-      {sketch.entities.some(e => selection.includes(e.id) && !e.reference && !references.some(r => r.id === e.id)) && <button type="button" disabled={!session} onClick={() => void run(() => session!.command(sketch.entities.filter(e => selection.includes(e.id) && !e.reference).map(e => ({ kind: 'setConstruction', id: e.id, construction: !e.construction }))))}>Construction (X)</button>}
-      {convertible && <button type="button" disabled={!session} onClick={() => void run(() => session!.command({ kind: 'convertEntity', id: convertible.id, to: convertible.kind === 'line' ? 'arc' : 'line' }))}>{convertible.kind === 'line' ? 'Make arc' : 'Make line'}</button>}
-      {sketch.constraints.some(c => selection.includes(c.id) && 'value' in c) && <button type="button" disabled={!session} onClick={() => void run(() => session!.command(sketch.constraints.filter(c => selection.includes(c.id) && 'value' in c).map(c => ({ kind: 'setDimensionPlacement', id: c.id }))))}>Reset position</button>}
-      <button type="button" disabled={!session} onClick={removeSelection}>Delete selection</button>
+      <SelectionProperties sketch={sketch} references={references} selection={selection} enabled={!!session} pending={pending} showDriving={!slots?.properties}
+        command={commands => run(() => session!.command(commands))} removeSelection={removeSelection}/>
     </div>}</>, slots?.properties)}
       <svg ref={svg} viewBox={`0 0 ${size.width} ${size.height}`} preserveAspectRatio="xMidYMid meet" className={tool === 'hand' || panActive ? `sketch-pan${panActive ? ' grabbing' : ''}` : tool === 'constraint' ? 'sketch-constraint-tool' : undefined} tabIndex={0} role="application" aria-label="Sketch drawing" onPointerEnter={() => { hovered.current = true; }} onPointerLeave={() => { hovered.current = false; setContextPointer(undefined); setHoveredConstraint(undefined); setHoveredArc(undefined); setHoveredPoint(undefined); setDimensionHover(undefined); setConstraintHover(undefined); onHoverChange?.(undefined); setPickReason(''); }} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={event => pointerUp(false, event)} onPointerCancel={() => pointerUp(true)} onLostPointerCapture={() => pointerUp(true)} onDoubleClick={() => { if (drawing) choose('select'); }}>
         <g className="sketch-grid" aria-hidden="true">{gridX.map(x => <line key={`x${x}`} x1={worldToScreen(view, { x, y: 0 }).x} x2={worldToScreen(view, { x, y: 0 }).x} y1={0} y2={size.height}/>)}{gridY.map(y => <line key={`y${y}`} x1={0} x2={size.width} y1={worldToScreen(view, { x: 0, y }).y} y2={worldToScreen(view, { x: 0, y }).y}/>)}</g>

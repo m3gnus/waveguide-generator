@@ -8,7 +8,7 @@ import { displayName } from './displayName';
 import type { XY } from './solver/types';
 
 /** Carry the rejected candidate too: it is rolled back and has no live glyph to name. */
-function constraintError(sketch: Sketch, result: { reason?: string; conflicting?: string[]; redundant?: string[]; constraints?: Constraint[]; hasRedundancy?: boolean }) {
+export function constraintError(sketch: Sketch, result: { reason?: string; conflicting?: string[]; redundant?: string[]; constraints?: Constraint[]; hasRedundancy?: boolean }) {
   const ids = [...result.conflicting ?? [], ...result.redundant ?? []];
   const constraints = result.constraints ?? sketch.constraints.filter(c => ids.includes(c.id));
   const named = { ...sketch, constraints: [...sketch.constraints.filter(c => !constraints.some(v => v.id === c.id)), ...constraints] };
@@ -25,6 +25,13 @@ export function isConstraintConflict(reason: unknown): reason is Error & { overc
 
 export interface Authoring<T> { sketch: Sketch; meta: T }
 export type Apply<T> = (state: Authoring<T>, command: Command) => Authoring<T> | { error: string };
+/** Shared full-solve policy; opening diagnosis still leaves imported bytes untouched. */
+export async function diagnoseSketch<T>(session: SketchSession, state: Authoring<T>) {
+  session.sketch = state.sketch;
+  const diagnosis = await session.solveFull();
+  if (diagnosis.status !== 'ok') throw constraintError(state.sketch, diagnosis);
+  return { state: { ...state, sketch: session.sketch }, diagnosis };
+}
 /** Serialises gestures and keeps geometry and consumer metadata in the same history. */
 export class SketchController<T> {
   readonly history: History<Authoring<T>>;
@@ -69,11 +76,9 @@ export class SketchController<T> {
     this.work = result.catch(() => {}); return result;
   }
   private async diagnose(session: SketchSession, state: Authoring<T>) {
-    session.sketch = state.sketch;
-    const diagnosis = await session.solveFull();
-    if (diagnosis.status !== 'ok') throw constraintError(state.sketch, diagnosis);
-    this.diagnosis = diagnosis;
-    return { ...state, sketch: session.sketch };
+    const result = await diagnoseSketch(session, state);
+    this.diagnosis = result.diagnosis;
+    return result.state;
   }
   dismissRejection() { this.rejection = undefined; }
   private publish(state: Authoring<T>) { this.dismissRejection(); if (!this.destroyed) this.changed(state, this.diagnosis); }

@@ -99,3 +99,9 @@ export function hitDimension(sketch: Sketch, references: Reference[], cursor: XY
   const eligible = new Set(dimensionPicks(sketch, sketch.entities.map(e => e.id), references).map(p => p.id));
   return geometryHit(geometryCandidates(sketch, cursor, hidden, references, e => eligible.has(e.id)), tolerance)?.id;
 }
+
+export function dimensionSecondPick(sketch: Sketch, references: Reference[], dimensionIds: string[], hit: string | undefined, at: XY): string[] | undefined {
+  if (dimensionIds.length !== 1 || !hit || hit === dimensionIds[0]) return;
+  const pair = [dimensionIds[0], hit];
+  if (candidateDimension(dimensionPicks(sketch, pair, references), at)) return pair;
+}

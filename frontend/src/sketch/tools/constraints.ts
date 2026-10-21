@@ -54,9 +54,14 @@ export function selectionConstraints(sketch: Sketch, ids: string[], capabilities
 
 /** Palette entries come only from supported rules; Point on combines line/arc support. */
 export function constraintPalette(capabilities?: Capabilities) {
+  return constraintToolEntries(kind => !!capabilities && capabilities.constraints[kind].support !== 'unsupported');
+}
+
+/** Tool descriptors exist before a solver opens; the kit filters by live capabilities. */
+export function constraintToolEntries(supported: (kind: SelectionConstraint) => boolean = () => true) {
   const entries: { kind: SelectionConstraint; kinds: SelectionConstraint[]; label: string; key?: string; symbol: string }[] = [];
   for (const [kind, rule] of Object.entries(rules) as [SelectionConstraint, SelectionRule][]) {
-    if (!capabilities || capabilities.constraints[kind].support === 'unsupported') continue;
+    if (!supported(kind)) continue;
     const existing = entries.find(entry => entry.label === rule.label);
     if (existing) existing.kinds.push(kind);
     else entries.push({ kind, kinds: [kind], label: rule.label, key: rule.key, symbol: rule.symbol });

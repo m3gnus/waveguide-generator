@@ -1,5 +1,6 @@
 import type { SourceDocument, SourcePatch } from '../../api/sourceEditor';
-import type { DomainProblem, Lowered, Reference, SketchAdapter } from '../adapter';
+import { uniqueProblems } from '../adapter';
+import type { DomainProblem, Lowered, Reference } from '../adapter';
 import { constraintRefs, entityPoints, validateSketch, type Entity, type Sketch } from '../model';
 import { applyCommand, importedSketch, removeEntity } from '../ops';
 import type { Command } from '../commands';
@@ -7,6 +8,19 @@ import { arcGeometry, onArc } from '../geometry';
 import { contextData, moveReferenceLine, referencePointIds, refreshContext, type SketchContext } from '../context';
 import { SOURCE_CLEARANCE_MM, SOURCE_LIMIT_INSET_MM, contextClearances, type SourceClearances } from './sourceContext';
 import { formatValue } from '../formatValue';
+import { createElement } from 'react';
+import type { Authoring } from '../controller';
+import type { DomainAdapter } from '../workspace/types';
+import { sketchSolver } from '../workspace/sketchSolver';
+import { SelectionProperties } from '../SelectionProperties';
+import { sketchGeometry } from '../sketchGeometry';
+import { geometryCandidates, rankedGeometryHits } from '../geometryHit';
+import { dragPointIds, marqueeSelection } from '../tools/select';
+import { removeCommands } from '../tools/remove';
+import { sketchTools } from '../tools/workspaceTools';
+import { parseSourceAuthoring, serializeSourceAuthoring } from './sourceAuthoring';
+import { sourceDisplay } from './sourceDisplay';
+import { presetDimensionProblem } from './sourcePresetMapping';
 import { presetDimensionActive } from './sourcePresetMapping';
 
 export interface SourceMeta {
@@ -287,7 +301,51 @@ export function lower(sketch: Sketch, meta: SourceMeta): Lowered<SourceDocument>
   return { ok: true, document: { contour: { version: 1, physical_source_id: meta.physical_source_id, rim_id: meta.rim_id, points, segments },
     drive: { channel_id: meta.channel_id, motion: meta.motion, weights: { ...meta.weights } } } };
 }
-export const sourceContourAdapter: SketchAdapter<SourceDocument, SourceMeta> = { id: 'source-contour-v1', references, seed, lower, rules };
+/** Source wire functions above remain the single implementation of seed/lower/rules. */
+export const sourceContourAdapter: DomainAdapter<SourceDocument, Authoring<SourceMeta>, Command> = {
+  id: 'source-contour-v1',
+  axes: { x: { label: 'x', unit: 'mm' }, y: { label: 'y', unit: 'mm' } },
+  seed: (document, authoring) => parseSourceAuthoring(authoring, document) ?? seed(document),
+  lower: state => lower(state.sketch, state.meta),
+  status(state) {
+    const progress = sourceProgress(state.sketch, state.meta);
+    if (progress.state === 'unfinished') return { kind: 'unfinished', hint: progress.hint };
+    const lowered = lower(state.sketch, state.meta);
+    const problems = uniqueProblems([...rules(state.sketch, state.meta), ...(!lowered.ok ? lowered.problems : [])]);
+    return problems.some(p => p.severity !== 'warning') ? { kind: 'invalid', problems } : { kind: 'valid' };
+  },
+  serializeAuthoring: state => serializeSourceAuthoring(state, !lower(state.sketch, state.meta).ok),
+  apply(state, command) {
+    const result = applySourceCommand(state.sketch, state.meta, command);
+    return 'error' in result ? result : { sketch: result.sketch, meta: result.meta };
+  },
+  remove: (state, selection) => removeCommands(state.sketch, selection, state.meta.references),
+  display: (state, ui) => sourceDisplay(state, ui, rules(state.sketch, state.meta)),
+  hits(state, at, tolerance) {
+    const geometry = sketchGeometry(state.sketch, state.meta.references, []);
+    return rankedGeometryHits(geometryCandidates(state.sketch, at, [...geometry.hiddenCentres, ...geometry.helperPoints], state.meta.references), tolerance)
+      .map(hit => ({ id: hit.id, kind: hit.kind === 'point' ? 'point' : 'curve', gap: hit.gap }));
+  },
+  marquee(state, box, crossing) {
+    const geometry = sketchGeometry(state.sketch, state.meta.references, []);
+    return marqueeSelection(state.sketch, { x: crossing ? box.maxX : box.minX, y: box.minY },
+      { x: crossing ? box.minX : box.maxX, y: box.maxY }, [...geometry.hiddenCentres, ...geometry.helperPoints]);
+  },
+  dragSet(state, selection, hit) {
+    const ids = dragPointIds(state.sketch, selection.includes(hit) ? selection : [hit]);
+    if (!ids.length) return;
+    return { ids, move: (current, delta) => ids.flatMap(id => {
+      const point = current.sketch.points.find(p => p.id === id);
+      return point ? [{ kind: 'movePoint' as const, id, x: point.x + delta.x, y: point.y + delta.y }] : [];
+    }) };
+  },
+  tools: sketchTools<SourceMeta>(),
+  properties: (state, selection, session) => selection.length ? [{ id: 'selection', title: 'Selection', render: () => createElement(SelectionProperties, {
+    sketch: state.sketch, references: state.meta.references, selection, enabled: !session.busy, pending: session.busy, showDriving: true,
+    command: commands => session.command(commands), removeSelection: () => { const commands = removeCommands(state.sketch, selection, state.meta.references); if (commands.length) void session.command(commands); },
+  }) }] : [],
+  solver: sketchSolver(state => state.meta.references, (state, id, value) => presetDimensionProblem(state.sketch, state.meta, id, value)),
+};
 
 export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Command) {
   if (meta.limit?.hard && command.kind === 'removeConstraint' && sketch.constraints.some(c => c.id === command.id && c.kind === 'pointOnLine' && meta.references.some(r => r.kind === 'limit' && r.id === c.line))) return { error: 'Set by the horn design' };
