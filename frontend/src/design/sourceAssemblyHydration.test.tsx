@@ -69,12 +69,12 @@ it.each(['horn', 'woofer'] as const)('preserves nested %s edits, undo and subseq
   expect(read()[source]!.drive.weights.piston).toBe(-.25);
   await pending.reply(); await settle();
   expect(Number(weightInput().value)).toBe(-.25);
-  expect(button('Use contour in assembly').disabled).toBe(false);
+  expect(button('Use contour').disabled).toBe(false);
   expect(read().dimensions.width_mm).toBe(INITIAL_ASSEMBLY.dimensions.width_mm);
   await act(async () => button('Undo').click()); await settle();
   expect(Number(weightInput().value)).toBe(1);
   await editWeight('-.5');
-  await act(async () => button('Use contour in assembly').click()); await settle();
+  await act(async () => button('Use contour').click()); await settle();
   expect(button('Prepare assembly in WG').disabled).toBe(false);
   await act(async () => button(`Edit ${source} contour…`).click()); await settle();
   expect(Number(weightInput().value)).toBe(-.5);

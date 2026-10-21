@@ -953,4 +953,108 @@ describe('navigation and line legend', () => {
       await act(async () => button('Line styles').click()); expect(host.querySelector('[aria-label="Line styles legend"]')).toBeNull();
     } finally { style.remove(); }
   });
+  it('marquees window and crossing sets, adds with Shift, and draws crossing with a dashed outline', async () => {
+    const initial = importedSketch([{id:'a',x:0,y:0},{id:'b',x:10,y:0},{id:'c',x:5,y:3},{id:'d',x:5,y:7}],[{id:'long',kind:'line',p1:'a',p2:'b'},{id:'short',kind:'line',p1:'c',p2:'d'}]);
+    await mount(initial);
+    const a = coordinate('a'), b = coordinate('b'), c = coordinate('c'), d = coordinate('d');
+    const x1 = c.x-20, x2 = c.x+20, y1 = Math.min(c.y,d.y)-20, y2 = Math.max(c.y,d.y)+20;
+    await pointer(svg(),'pointerdown',x1,y1); await pointer(svg(),'pointermove',x2,y2);
+    expect(host.querySelector('.sketch-marquee.window')).not.toBeNull();
+    await pointer(svg(),'pointerup',x2,y2);
+    expect(host.querySelector('.sketch-entity[data-id="short"]')!.classList.contains('selected')).toBe(true);
+    expect(host.querySelector('.sketch-entity[data-id="long"]')!.classList.contains('selected')).toBe(false);
+    await pointer(svg(),'pointerdown',(a.x+b.x)/2+20,a.y-15,{shiftKey:true});
+    await pointer(svg(),'pointermove',(a.x+b.x)/2-20,a.y+15,{shiftKey:true});
+    expect(host.querySelector('.sketch-marquee.crossing')).not.toBeNull();
+    await pointer(svg(),'pointerup',(a.x+b.x)/2-20,a.y+15,{shiftKey:true});
+    expect(host.querySelectorAll('.sketch-entity.selected')).toHaveLength(2);
+    expect(new TextDecoder().decode(readFileSync('src/sketch/sketchCanvas.css'))).toContain('.sketch-marquee.crossing { stroke-dasharray: 5 4; }');
+  });
+  it('click jitter never starts a solve drag; a body drag translates both ends and is undone once', async () => {
+    const initial = base(); initial.constraints.push({id:'horizontal',kind:'horizontal',line:'line'},{id:'length',kind:'distance',a:'p',b:'q',value:10,driving:true});
+    await mount(initial);
+    const p = coordinate('p'), q = coordinate('q'), x = (p.x+q.x)/2, y = p.y;
+    const curve = host.querySelector('.sketch-entity[data-id="line"]')!, begin = vi.spyOn(SketchController.prototype,'beginDrag');
+    await pointer(curve,'pointerdown',x,y); await pointer(svg(),'pointermove',x+3,y); await pointer(svg(),'pointerup',x+3,y);
+    expect(begin).not.toHaveBeenCalled(); expect(coordinate('p').x).toBe(p.x);
+    await pointer(curve,'pointerdown',x,y); await pointer(svg(),'pointermove',x+24,y-20);
+    await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)); });
+    await pointer(svg(),'pointerup',x+24,y-20);
+    expect(begin).toHaveBeenCalledWith(['p','q']);
+    expect(coordinate('p').x).toBeCloseTo(p.x+24,6); expect(coordinate('q').x).toBeCloseTo(q.x+24,6);
+    expect(coordinate('p').y).toBeCloseTo(p.y-20,6); expect(coordinate('q').y).toBeCloseTo(q.y-20,6);
+    await act(async () => button('Undo').click());
+    expect(coordinate('p').x).toBeCloseTo(p.x,6); expect(coordinate('q').x).toBeCloseTo(q.x,6);
+  });
+  it('drags any member of a multi-selection together, and Ctrl-click only deselects', async () => {
+    const initial = importedSketch([{id:'a',x:0,y:0},{id:'b',x:4,y:0},{id:'c',x:4,y:3}], [{id:'first',kind:'line',p1:'a',p2:'b'},{id:'second',kind:'line',p1:'b',p2:'c'}]);
+    await mount(initial);
+    const a = coordinate('a'), b = coordinate('b'), c = coordinate('c');
+    await pointer(svg(),'pointerdown',a.x-20,c.y-20); await pointer(svg(),'pointermove',c.x+20,a.y+20); await pointer(svg(),'pointerup');
+    const x = (a.x+b.x)/2, y = a.y;
+    await pointer(host.querySelector('.sketch-entity[data-id="first"]')!,'pointerdown',x,y);
+    await pointer(svg(),'pointermove',x+20,y-15); await pointer(svg(),'pointerup',x+20,y-15);
+    for (const [id, before] of [['a',a],['b',b],['c',c]] as const) {
+      expect(coordinate(id).x).toBeCloseTo(before.x+20,6); expect(coordinate(id).y).toBeCloseTo(before.y-15,6);
+    }
+    await key('z',{ctrlKey:true});
+    expect(coordinate('a').x).toBeCloseTo(a.x,6); expect(coordinate('c').y).toBeCloseTo(c.y,6);
+    const begin = vi.spyOn(SketchController.prototype,'beginDrag');
+    await pointer(coordinate('c').element,'pointerdown',c.x,c.y,{ctrlKey:true});
+    await pointer(svg(),'pointermove',c.x+20,c.y-15,{ctrlKey:true}); await pointer(svg(),'pointerup');
+    expect(begin).not.toHaveBeenCalled();
+    await pointer(svg(),'pointerdown',600,320); await pointer(svg(),'pointerup',600,320);
+    expect(host.querySelectorAll('.sketch-entity.selected, .sketch-point.selected')).toHaveLength(0);
+  });
+  it('translates an arc body with its centre and ends in one undo gesture', async () => {
+    const initial = importedSketch([{id:'center',x:0,y:0},{id:'start',x:2,y:0},{id:'end',x:0,y:2}], [{id:'arc',kind:'arc',center:'center',start:'start',end:'end',ccw:true}]);
+    initial.constraints.push({id:'radius',kind:'radius',arc:'arc',value:2,driving:true});
+    await mount(initial);
+    const a = coordinate('start'), b = coordinate('end');
+    const x = b.x+(a.x-b.x)/Math.sqrt(2), y = a.y-(a.y-b.y)/Math.sqrt(2);
+    const begin = vi.spyOn(SketchController.prototype,'beginDrag');
+    await pointer(host.querySelector('.sketch-entity[data-id="arc"]')!,'pointerdown',x,y);
+    await pointer(svg(),'pointermove',x+18,y-12); await pointer(svg(),'pointerup',x+18,y-12);
+    expect(begin).toHaveBeenCalledWith(['center','start','end']);
+    expect(coordinate('start').x).toBeCloseTo(a.x+18,6); expect(coordinate('end').y).toBeCloseTo(b.y-12,6);
+    await key('z',{ctrlKey:true}); expect(coordinate('start').x).toBeCloseTo(a.x,6);
+  });
+  it('cycles overlapping points and curves and reports the candidate index', async () => {
+    await mount(); const p = coordinate('p');
+    await pointer(p.element,'pointerdown',p.x,p.y); await pointer(svg(),'pointerup',p.x,p.y);
+    expect(host.querySelector('.sketch-status')!.textContent).toContain('1 of 2');
+    await pointer(p.element,'pointerdown',p.x,p.y); await pointer(svg(),'pointerup',p.x,p.y);
+    expect(host.querySelector('.sketch-entity[data-id="line"]')!.classList.contains('selected')).toBe(true);
+    expect(host.querySelector('.sketch-status')!.textContent).toContain('2 of 2');
+  });
+  it('cycles a point, its curve, and an overlapping dimension label in that order', async () => {
+    const initial = base();
+    initial.constraints.push({id:'length',kind:'distance',a:'p',b:'q',value:10,driving:true,placement:{offset:0,along:0}});
+    await mount(initial); const p = coordinate('p');
+    const label = host.querySelector('[data-constraint-id="length"] text')!;
+    const selected: string[] = [];
+    for (let index=1; index<=3; index++) {
+      await pointer(label,'pointerdown',p.x,p.y); await pointer(svg(),'pointerup',p.x,p.y);
+      expect(host.querySelector('.sketch-status')!.textContent).toContain(`${index} of 3`);
+      selected.push(index === 1 ? host.querySelector('.sketch-point.selected')!.getAttribute('data-id')! : index === 2 ? host.querySelector('.sketch-entity.selected')!.getAttribute('data-id')! : host.querySelector('.sketch-glyph.selected')!.getAttribute('data-id')!);
+    }
+    expect(selected).toEqual(['p','line','length']);
+  });
+  it('keeps the view centre and scale stable when a panel resizes the canvas', async () => {
+    let resize: ResizeObserverCallback | undefined;
+    vi.stubGlobal('ResizeObserver',class { constructor(callback: ResizeObserverCallback) { resize = callback; } observe() {} disconnect() {} });
+    await mount();
+    const resized = async (width:number,height:number) => {
+      vi.mocked(svg().getBoundingClientRect).mockReturnValue({left:0,top:0,width,height} as DOMRect);
+      await act(async () => resize!([{contentRect:{width,height}} as ResizeObserverEntry],{} as ResizeObserver));
+    };
+    await resized(1000,600);
+    const p = coordinate('p'), q = coordinate('q');
+    await resized(680,600);
+    expect(coordinate('p').x-340).toBeCloseTo(p.x-500,8);
+    expect(coordinate('q').x-coordinate('p').x).toBeCloseTo(q.x-p.x,8);
+    await resized(1000,600);
+    expect(coordinate('p').x).toBeCloseTo(p.x,8);
+  });
+
 });

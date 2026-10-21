@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { seed, withSourceLimit, rules, lower, applySourceCommand, type SourceLimit } from './sourceContour';
+import { seed, withSourceLimit, fitSourcePreset, rules, lower, applySourceCommand, type SourceLimit } from './sourceContour';
 import { fitPresetDimensions, presetDefaults, seedPreset } from './sourcePreset';
 import { expandedPreset } from './presetTestSupport';
 import { createSession } from '../session';
@@ -34,7 +34,7 @@ describe('source context limits', () => {
   it.each(['flat', 'dome', 'cone'] as const)('locks the %s rim through real solver drags and lowers bit-exact throat radii', async shape => {
     const throat = 12.7;
     const dimensions = fitPresetDimensions(presetDefaults[shape], throat);
-    const state = withSourceLimit(seedPreset(expandedPreset(shape, dimensions), shape, dimensions), { kind: 'throat', radius: throat, hard: true });
+    const state = fitSourcePreset(seedPreset(expandedPreset(shape, dimensions), shape, dimensions), { kind: 'throat', radius: throat, hard: true });
     const session = await createSession(state.sketch, { references: state.meta.references });
     try {
       expect((await session.solveFull()).status).toBe('ok');

@@ -10,7 +10,7 @@ import { drawnSource, editPatch, editPoint, identityProblem, INITIAL_SOURCE, rem
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
 import { isConstraintConflict, SketchController, type Authoring } from '../sketch/controller';
-import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, withSourceLimit, withSourceContext, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
+import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, sourceProgress, scaleSourceToLimit, fitSourcePreset, withSourceLimit, withSourceContext, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
 import { presetDefaults as defaults, presetLabels, seedPreset, fitPresetDimensions } from '../sketch/adapters/sourcePreset';
 import { presetDimensionActive, presetDimensionProblem, presetTopologyMessage, reapplyPresetMessage } from '../sketch/adapters/sourcePresetMapping';
 import { refreshContext, type SketchContext } from '../sketch/context';
@@ -18,6 +18,7 @@ import { contextClearances, standaloneContext } from '../sketch/adapters/sourceC
 import { displayName } from '../sketch/displayName';
 import { uniqueProblems } from '../sketch/adapter';
 import { newerEnvelope, parseSourceAuthoring, serializeSourceAuthoring, sameSourceDocument } from '../sketch/adapters/sourceAuthoring';
+import { constraintRefs, entityPoints, type Entity, type Sketch, type Constraint } from '../sketch/model';
 import type { Command } from '../sketch/commands';
 import type { Diagnosis } from '../sketch/session';
 import { arcGeometry } from '../sketch/geometry';
@@ -37,6 +38,15 @@ export function readSourceAttachment(): SourceAttachment {
     if (!fields.every(key => Number.isFinite(attachment.dimensions[key])) || attachment.kind === 'baffle' && (!Array.isArray(attachment.dimensions.center_mm) || attachment.dimensions.center_mm.length !== 3 || !attachment.dimensions.center_mm.every(Number.isFinite))) return structuredClone(defaultAttachment);
     return attachment;
   } catch { return structuredClone(defaultAttachment); }
+}
+/** One projection serves both the full patch table and contextual construction/curve rows. */
+function sourcePatchRow(e: Entity, sketch: Sketch): SourcePatch[] {
+  return e.kind !== 'line' && e.kind !== 'arc' ? [] : [{
+    id: e.id, kind: e.kind, start: e.kind === 'line' ? e.p1 : e.start, end: e.kind === 'line' ? e.p2 : e.end,
+    center_mm: e.kind === 'arc' ? [sketch.points.find(p => p.id === e.center)!.x, sketch.points.find(p => p.id === e.center)!.y] : null,
+    direction: e.kind === 'arc' && !e.ccw ? 'cw' : 'ccw',
+    role: e.data && typeof e.data === 'object' && !Array.isArray(e.data) && e.data.role === 'rigid' ? 'rigid' : 'moving',
+  }];
 }
 const attachmentLimit = (attachment: SourceAttachment): SourceLimit => ({ kind: attachment.kind === 'baffle' ? 'aperture' : 'mouth', radius: Number(attachment.dimensions[attachment.kind === 'baffle' ? 'aperture_radius_mm' : 'mouth_radius_mm']) });
 
@@ -123,8 +133,11 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const context = useMemo(() => hostContext ?? standaloneContext(hostLimit ? undefined : attachment, draft.contour.points.at(-1)?.r_mm ?? 0), [hostContext, attachment, !!hostLimit, draft.contour.points.at(-1)?.r_mm]);
   const contextRef = useRef(context); contextRef.current = context;
   const [author, setAuthor] = useState(() => {
-    const next = initialDocument ? parseSourceAuthoring(initialAuthoring, draft) ?? seed(draft) : readSourceAuthoring(draft);
-    return openingSourceContext(withSourceLimit({ ...next, meta: { ...next.meta, weights: movingWeights(next.sketch, next.meta.weights) } }, limit), context);
+    const restored = initialDocument ? parseSourceAuthoring(initialAuthoring, draft) : readSourceAuthoring(draft);
+    const next = restored ?? fitSourcePreset(seed(draft), limit);
+    const normalised = { ...next, meta: { ...next.meta, weights: movingWeights(next.sketch, next.meta.weights) } };
+    // An existing limit must follow through the controller, where an infeasible host edit can roll back.
+    return openingSourceContext(restored && limit.hard ? normalised : withSourceLimit(normalised, limit), context);
   });
   const authorRef = useRef(author); authorRef.current = author;
   const [generation, setGeneration] = useState(0);
@@ -135,9 +148,15 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const [diagnosis, setDiagnosis] = useState<Diagnosis>();
   const [fitRequest, setFitRequest] = useState(0);
   const [canvasSelection, setCanvasSelection] = useState<string[]>([]);
+  const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null);
+  const [statusHost, setStatusHost] = useState<HTMLDivElement | null>(null);
+  const [commandHost, setCommandHost] = useState<HTMLDivElement | null>(null);
+  const panel = useRef<HTMLElement>(null);
+  const progress = sourceProgress(displayAuthor.sketch, displayAuthor.meta);
+  const [throatConflict, setThroatConflict] = useState(false);
   const [hoverId, setHoverId] = useState<string>();
   const [pointsOpen, setPointsOpen] = useState(false);
-  const [dimensionsOpen, setDimensionsOpen] = useState(true);
+  const [dimensionsOpen, setDimensionsOpen] = useState(false);
   const authoringCallback = useRef(onAuthoringChange); authoringCallback.current = onAuthoringChange;
   const draftCallback = useRef(onDraftChange); draftCallback.current = onDraftChange;
   const controller = useRef<SketchController<SourceMeta> | undefined>(undefined);
@@ -152,12 +171,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   if (!preview) committedProblemCount.current = sketchProblems.filter(p => p.severity !== 'warning').length;
   const hasSketchProblems = !classic && committedProblemCount.current > 0;
   const tablePoints = useMemo(() => classic ? draft.contour.points : contourPointOrder(author.sketch, author.meta).map(id => author.sketch.points.find(p => p.id === id)!).map(p => ({ id: p.id, r_mm: p.x, z_mm: p.y })), [classic, draft.contour.points, author]);
-  const tablePatches: SourcePatch[] = useMemo(() => classic ? draft.contour.segments : author.sketch.entities.flatMap(e => e.construction || e.kind !== 'line' && e.kind !== 'arc' ? [] : [{
-    id: e.id, kind: e.kind, start: e.kind === 'line' ? e.p1 : e.start, end: e.kind === 'line' ? e.p2 : e.end,
-    center_mm: e.kind === 'arc' ? [author.sketch.points.find(p => p.id === e.center)!.x, author.sketch.points.find(p => p.id === e.center)!.y] : null,
-    direction: e.kind === 'arc' && !e.ccw ? 'cw' : 'ccw',
-    role: e.data && typeof e.data === 'object' && !Array.isArray(e.data) && e.data.role === 'rigid' ? 'rigid' : 'moving',
-  }]), [classic, draft.contour.segments, author]);
+  const tablePatches: SourcePatch[] = useMemo(() => classic ? draft.contour.segments : author.sketch.entities.flatMap(e => e.construction ? [] : sourcePatchRow(e, author.sketch)), [classic, draft.contour.segments, author]);
   const [undo, setUndo] = useState<SourceDocument[]>([]);
   const [view, setView] = useState(() => fit(draft.contour.points));
   const [accepted, setAccepted] = useState<{ key: string; value: SourceValidation }>();
@@ -192,7 +206,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     setAttachment(restoredAttachment);
     const restoredLimit = hostLimit ?? attachmentLimit(restoredAttachment), restoredContext = hostContext ?? standaloneContext(restoredAttachment, restored.contour.points.at(-1)?.r_mm ?? 0);
     const moved = refreshContext(next.sketch, restoredContext).moved;
-    setDraft(restored); replaceAuthor(openingSourceContext(withSourceLimit(next, restoredLimit), restoredContext)); setUndo([]); setSelected(undefined); setSelectedPatch(0);
+    setDraft(restored); replaceAuthor(openingSourceContext(next.meta.limit ? next : withSourceLimit(next, restoredLimit), restoredContext)); setUndo([]); setSelected(undefined); setSelectedPatch(0);
     fitted.current = false; drag.current = null;
     setNotice(envelope ? 'Newer sketch data is read-only. Classic drawing edits preserve it unchanged.' : moved ? 'Reference context changed; contour updated' : restorationNotice(next) || 'Restored source draft from saved settings.');
   };
@@ -249,11 +263,18 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     if (sameLimit && sameReferences && JSON.stringify(current.meta.clearances) === JSON.stringify(contextClearances(context))) { installedContext.current = context.fingerprint; return; }
     const oldThroat = current.meta.limit?.kind === 'throat' ? current.meta.limit.radius : undefined;
     const notice = limit.kind === 'throat' && oldThroat !== undefined && oldThroat !== limit.radius
-      ? `Throat changed ${oldThroat.toFixed(2)} → ${limit.radius.toFixed(2)} mm; contour updated` : usedContext ? 'Reference context changed; contour updated' : undefined;
+      ? `Throat changed ${oldThroat.toFixed(2)} → ${limit.radius.toFixed(2)} mm; dimensions kept` : usedContext ? 'Reference context changed; contour updated' : undefined;
     installedContext.current = context.fingerprint;
-    try { void controller.current.replaceContext(state => withSourceContext(withSourceLimit(state, limit), context), notice).catch(reason => setError(String(reason))); }
+    try { void controller.current.replaceContext(state => withSourceContext(withSourceLimit(state, limit), context), notice, limit.hard ? 'The new throat conflicts with: ' : undefined).then(() => setThroatConflict(false)).catch(reason => { setThroatConflict(!!limit.hard); if (!isConstraintConflict(reason)) setError(String(reason)); }); }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   }, [limit.kind, limit.radius, limit.hard, context.fingerprint, classic, generation]);
+  function scaleToFitThroat() {
+    void run(async () => {
+      if (!controller.current) return;
+      await controller.current.adopt(withSourceContext(scaleSourceToLimit(controller.current.current, limitRef.current), contextRef.current), 'Scale to fit throat', true);
+      setThroatConflict(false);
+    });
+  }
   function editLimit(radius: number) {
     if (limit.hard) return;
     if (hostLimit) onLimitChange?.(radius);
@@ -300,7 +321,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   }
   async function adopt(value: SourceValidation, preset?: { shape: typeof shape; dimensions: Record<string, number> }, savedAuthoring?: unknown) {
     const restored = parseSourceAuthoring(savedAuthoring, value.document);
-    const next = withSourceContext(withSourceLimit(preset ? seedPreset(value.document, preset.shape, preset.dimensions) : restored ?? seed(value.document), limitRef.current), contextRef.current);
+    const next = withSourceContext(preset ? fitSourcePreset(seedPreset(value.document, preset.shape, preset.dimensions), limitRef.current) : withSourceLimit(restored ?? seed(value.document), limitRef.current), contextRef.current);
     if (!classic && controller.current) { await controller.current.adopt(next); }
     else { replaceAuthor(next); const lowered = lower(next.sketch, next.meta); change(lowered.ok ? lowered.document : value.document); }
     if (preset) setDimensions({ ...preset.dimensions });
@@ -354,17 +375,70 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
       precision={6} displayPrecision={2} step={.1} onCommit={(v) => write({ ...values, [field]: v })}/>;
   });
 
+  const pointHeld = (id: string) => diagnosis?.pointDetermined?.[id] === true || diagnosis?.status === 'ok' && diagnosis.dof === 0 || author.sketch.constraints.some(c => c.kind === 'fix' && c.point === id);
+  function segmentMeasure(id: string) {
+    const e = author.sketch.entities.find(e => e.id === id);
+    if (e?.kind === 'arc') return `radius ${arcGeometry(author.sketch, e).radius.toFixed(2)} mm`;
+    if (e?.kind === 'line') { const a = author.sketch.points.find(p => p.id === e.p1)!, b = author.sketch.points.find(p => p.id === e.p2)!; return `length ${Math.hypot(b.x-a.x,b.y-a.y).toFixed(2)} mm`; }
+    return '';
+  }
+  const pointRow = (point: typeof tablePoints[number], i: number) => <tr key={point.id} data-row-id={point.id} aria-selected={canvasSelection.includes(point.id)} className={hoverId === point.id ? 'hovered' : ''}
+          onPointerEnter={() => setHoverId(point.id)} onPointerLeave={() => setHoverId(undefined)} onClick={() => { if (!classic) setCanvasSelection([point.id]); }}><td title={point.id}><button type="button" aria-label={`Select point ${i + 1}`} onClick={() => setCanvasSelection([point.id])}>{displayName(nameSketch, point.id)}</button></td>
+          <td><NumberField label={`Point ${i + 1} radius`} value={point.r_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === 0 || drawPoints !== null || !classic && pointHeld(point.id)} onCommit={(v) => classic ? change(editPoint(draft, i, v, point.z_mm)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: v, y: state.sketch.points.find(p => p.id === point.id)!.y }))}/></td>
+          <td><NumberField label={`Point ${i + 1} z`} value={point.z_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === draft.contour.points.length - 1 || drawPoints !== null || !classic && pointHeld(point.id)} onCommit={(v) => classic ? change(editPoint(draft, i, point.r_mm, v)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: state.sketch.points.find(p => p.id === point.id)!.x, y: v }))}/></td>
+          <td>{classic && i > 0 && i < draft.contour.points.length - 1 && <button type="button" aria-label={`Remove point ${i + 1}`} disabled={drawPoints !== null} onClick={() => { try { change(removePoint(draft, i)); setSelectedPatch(0); } catch (reason) { setError(String(reason)); } }}>Remove</button>}</td></tr>;
+  const dimensionRow = (c: Constraint) => 'value' in c && <tr key={c.id} data-row-id={c.id}
+              aria-selected={canvasSelection.includes(c.id)} className={hoverId === c.id ? 'hovered' : ''}
+              onClick={() => setCanvasSelection([c.id])} onPointerEnter={() => setHoverId(c.id)} onPointerLeave={() => setHoverId(undefined)}>
+              <td title={c.id}><SketchNameCell value={dimensionName(c)} label={`Dimension ${c.id} name`} id={c.id} maxLength={40} disabled={!sketchReady}
+                onCommit={label => sketchCommand(state => {
+                  // An empty name reverts to the default: the preset's name for a preset dimension.
+                  const parameter = Object.entries(state.meta.preset?.dimensions ?? {}).find(([, id]) => id === c.id)?.[0];
+                  return { kind: 'setConstraintLabel', id: c.id, label: label.trim() || (parameter ? presetLabels[parameter] ?? '' : '') };
+                })}/></td>
+              <td><NumberField label={`Dimension ${c.id} value`} value={c.kind === 'angle' ? c.value * 180 / Math.PI : c.value} unit={c.kind === 'angle' ? '°' : 'mm'}
+                precision={9} displayPrecision={2} step={.1} disabled={!sketchReady || !c.driving} disabledReason={!c.driving ? 'Reference dimension' : undefined}
+                onCommit={value => void controller.current?.dimension(c.id, value * (c.kind === 'angle' ? Math.PI / 180 : 1)).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}/></td>
+              <td><button type="button" aria-label={`${c.driving ? 'Make reference' : 'Make driving'} ${dimensionName(c)}`} disabled={!sketchReady || sketchPending} onClick={() => sketchCommand({ kind: 'setDriving', id: c.id, driving: !c.driving })}>{c.driving ? 'Make reference' : 'Make driving'}</button></td>
+            </tr>;
+  const patchRow = (patch: SourcePatch, i: number) => <tr key={patch.id} data-row-id={patch.id} aria-selected={canvasSelection.includes(patch.id)} className={hoverId === patch.id ? 'hovered' : ''}
+          onPointerEnter={() => setHoverId(patch.id)} onPointerLeave={() => setHoverId(undefined)} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}><td title={patch.id}><button type="button" aria-label={`Select patch ${i + 1}`} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}>{i + 1}</button></td>
+          <td title={patch.id}>{classic ? displayName(nameSketch, patch.id) : <SketchNameCell value={displayName(nameSketch, patch.id)} label={`Patch ${i + 1} name`} id={patch.id} maxLength={60} disabled={!sketchReady} onCommit={name => sketchCommand({ kind: 'setEntityName', id: patch.id, name })}/>}</td>
+          <td>{classic && <select aria-label={`Patch ${i + 1} curve`} value={patch.kind} onChange={(e) => change(editPatch(draft, i, { kind: e.target.value as 'line' | 'arc' }))}><option value="line">Line</option><option value="arc">Arc</option></select>}{!classic && <>{patch.kind} · {segmentMeasure(patch.id)}</>}</td>
+          <td><select aria-label={`Patch ${i + 1} role`} value={patch.role} onChange={(e) => classic ? change(editPatch(draft, i, { role: e.target.value as 'moving' | 'rigid' })) : sketchCommand({ kind: 'setEntityData', id: patch.id, data: { role: e.target.value } })}><option value="moving">Moving</option><option value="rigid">Rigid</option></select></td>
+          <td>{patch.role === 'moving' ? <NumberField label={`Patch ${i + 1} weight`} value={classic ? draft.drive.weights[patch.id] : author.meta.weights[patch.id] ?? 1} precision={6} displayPrecision={3} step={.1} onCommit={(v) => { if (classic) change({ ...draft, drive: { ...draft.drive, weights: { ...draft.drive.weights, [patch.id]: v } } }); else { void controller.current?.metadata(meta => ({ ...meta, weights: { ...meta.weights, [patch.id]: v } })).catch(reason => setError(String(reason))); } }}/> : '—'}</td></tr>;
+  const selectedId = canvasSelection.length === 1 ? canvasSelection[0] : undefined;
+  const selectedPoint = tablePoints.find(p => p.id === selectedId) ?? (() => { const p = author.sketch.points.find(p => p.id === selectedId); return p ? { id: p.id, r_mm: p.x, z_mm: p.y } : undefined; })();
+  const selectedEntity = author.sketch.entities.find(e => e.id === selectedId && !e.reference);
+  const selectedSegment = tablePatches.find(p => p.id === selectedId) ?? (selectedEntity && sourcePatchRow(selectedEntity, author.sketch)[0]);
+  const selectedDimension = author.sketch.constraints.find(c => c.id === selectedId && 'value' in c);
+  const related = selectedId ? author.sketch.constraints.filter(c => {
+    const refs = constraintRefs(c), e = author.sketch.entities.find(e => e.id === selectedId);
+    return refs.includes(selectedId) || !!e && refs.some(id => entityPoints(e).includes(id))
+      || !!selectedPoint && author.sketch.entities.some(entity => entityPoints(entity).includes(selectedId) && refs.includes(entity.id));
+  }) : [];
+  const constraintsList = <ul aria-label="Constraints on selection">{related.map(c => <li key={c.id}>{displayName(author.sketch, c.id)}</li>)}</ul>;
+  const rimRadius = tablePoints.at(-1)?.r_mm;
+  const rimMismatch = !!limit.hard && rimRadius !== undefined && Math.abs(rimRadius - limit.radius) > 1e-8;
+  function revealRow(id: string) {
+    // Only this panel is a scroll owner. Never scrollIntoView(), which scrolls ancestors too.
+    const row = [...panel.current?.querySelectorAll<HTMLElement>('[data-row-id]') ?? []].find(row => row.dataset.rowId === id && row.closest('details')?.open);
+    if (row && panel.current) { const bounds = panel.current.getBoundingClientRect(), at = row.getBoundingClientRect(); if (at.top < bounds.top) panel.current.scrollTop += at.top-bounds.top; else if (at.bottom > bounds.bottom) panel.current.scrollTop += at.bottom-bounds.bottom; }
+  }
+  useEffect(() => { if (canvasSelection.length === 1) revealRow(canvasSelection[0]); }, [canvasSelection]);
+
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Source contour editor" className="source-editor">
     <header><div><h2>Source contour</h2><ExperimentalBadge/><p>{EXPERIMENTAL_NOTE}</p><p>Full circular source · dimensions in mm · aligned +Z</p></div><button type="button" disabled={busy} onClick={close}>Close</button></header>
+    <div ref={setToolbarHost} className="source-toolbar-host"/>
     <fieldset disabled={busy}>
-      <div className="source-editor-columns"><div>
+      <div className="source-editor-columns"><div className="source-workspace">
         {classic && <div className="source-editor-toolbar">
           <button type="button" onClick={() => setView(fit(draft.contour.points, valid ? accepted!.value.meridian : {}))}>Fit drawing</button>
           <button type="button" disabled={!undo.length || drawPoints !== null} onClick={() => { const previous = undo.at(-1)!; setUndo(undo.slice(0, -1)); change(previous, false); }}>Undo edit</button>
           <button type="button" disabled={drawPoints !== null} onClick={() => setDrawPoints([])}>Draw lines</button>
           {drawPoints !== null && <><button type="button" disabled={drawPoints.length < 2} onClick={() => { change(drawnSource(draft, drawPoints, id)); setSelectedPatch(0); setDrawPoints(null); }}>Finish at rim</button><button type="button" onClick={() => setDrawPoints(null)}>Cancel drawing</button></>}
         </div>}
-        {!classic && <SketchCanvas context={context} contextStale={contextStale} fitRequest={fitRequest} sketch={displayAuthor.sketch} diagnosis={diagnosis} references={displayAuthor.meta.references} problems={validationError && !hasSketchProblems ? [...sketchProblems, { code: 'server', ids: [], message: validationError }] : sketchProblems} session={sketchReady && !busy ? controller.current : undefined}
+        {!classic && <SketchCanvas slots={{ toolbar: toolbarHost, status: statusHost, properties: commandHost }} workflow={progress} scaleToFit={throatConflict ? scaleToFitThroat : undefined} context={context} contextStale={contextStale} fitRequest={fitRequest} sketch={displayAuthor.sketch} diagnosis={diagnosis} references={displayAuthor.meta.references} problems={validationError && !hasSketchProblems ? [...sketchProblems, { code: 'server', ids: [], message: validationError }] : sketchProblems} session={sketchReady && !busy ? controller.current : undefined}
           entityClassName={entity => entity.data && typeof entity.data === 'object' && !Array.isArray(entity.data) && entity.data.role === 'rigid' ? 'rigid' : 'moving'}
           hoverId={hoverId} onHoverChange={setHoverId} nameFor={id => displayName(displayAuthor.sketch, id)} onLimitChange={editLimit}
           selection={canvasSelection} onSelectionChange={ids => { setCanvasSelection(ids); const index = tablePatches.findIndex(p => ids.includes(p.id)); if (index >= 0) setSelectedPatch(index); }}
@@ -387,36 +461,51 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
           {(drawPoints ?? draft.contour.points).map((point, i) => <circle key={point.id} cx={xy(point)[0]} cy={xy(point)[1]} r={5} className="source-handle" onPointerDown={(event) => { if (busy || drawPoints !== null) return; event.stopPropagation(); setUndo((history) => [...history.slice(-19), structuredClone(draft)]); drag.current = i; event.currentTarget.setPointerCapture(event.pointerId); }}><title>{point.id}: r {point.r_mm}, z {point.z_mm}</title></circle>)}
         </svg>
         </>}
-        {(classic || sketchProblems.every(p => p.severity === 'warning') && !validationError) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}
-        <details className="source-points" open={classic || pointsOpen} onToggle={e => setPointsOpen(e.currentTarget.open)}><summary>Points</summary><div className="source-table"><table><thead><tr><th>Point</th><th>r mm</th><th>z mm</th><th/></tr></thead><tbody>{tablePoints.map((point, i) => <tr key={point.id} data-row-id={point.id} aria-selected={canvasSelection.includes(point.id)} className={hoverId === point.id ? 'hovered' : ''}
-          onPointerEnter={() => setHoverId(point.id)} onPointerLeave={() => setHoverId(undefined)} onClick={() => { if (!classic) setCanvasSelection([point.id]); }}><td title={point.id}><button type="button" aria-label={`Select point ${i + 1}`} onClick={() => setCanvasSelection([point.id])}>{displayName(nameSketch, point.id)}</button></td>
-          <td><NumberField label={`Point ${i + 1} radius`} value={point.r_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === 0 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, v, point.z_mm)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: v, y: state.sketch.points.find(p => p.id === point.id)!.y }))}/></td>
-          <td><NumberField label={`Point ${i + 1} z`} value={point.z_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === draft.contour.points.length - 1 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, point.r_mm, v)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: state.sketch.points.find(p => p.id === point.id)!.x, y: v }))}/></td>
-          <td>{classic && i > 0 && i < draft.contour.points.length - 1 && <button type="button" aria-label={`Remove point ${i + 1}`} disabled={drawPoints !== null} onClick={() => { try { change(removePoint(draft, i)); setSelectedPatch(0); } catch (reason) { setError(String(reason)); } }}>Remove</button>}</td></tr>)}</tbody></table></div></details>
-        {!classic && <details className="source-dimensions" open={dimensionsOpen} onToggle={event => setDimensionsOpen(event.currentTarget.open)}><summary>Dimensions</summary>
+
+
+      </div><aside ref={panel} aria-label="Sketch properties" className="source-properties">
+        <div ref={setCommandHost} className="source-command-properties"/>
+        {selectedPoint && <section aria-label="Point properties"><h3>Point</h3><table><tbody>{pointRow(selectedPoint, tablePoints.findIndex(p => p.id === selectedPoint.id))}</tbody></table>{constraintsList}<p>{pointHeld(selectedPoint.id) ? 'No remaining freedom' : diagnosis?.pointDetermined?.[selectedPoint.id] === false ? 'Point can still move' : 'Remaining freedom not analysed'}</p></section>}
+        {selectedSegment && <section aria-label="Segment properties"><h3>Segment</h3><table><tbody>{patchRow(selectedSegment, tablePatches.indexOf(selectedSegment))}</tbody></table>{constraintsList}</section>}
+        {selectedDimension && <section aria-label="Dimension properties"><h3>Dimension</h3><table><tbody>{dimensionRow(selectedDimension)}</tbody></table></section>}
+        {canvasSelection.length > 1 && <section aria-label="Selection properties"><h3>Selection</h3><p>{canvasSelection.filter(id => author.sketch.points.some(p => p.id === id)).length} points · {canvasSelection.filter(id => author.sketch.entities.some(e => e.id === id)).length} segments · {canvasSelection.filter(id => author.sketch.constraints.some(c => c.id === id && 'value' in c)).length} dimensions</p></section>}
+        <div hidden={!classic && canvasSelection.length > 0}>
+        <details className="source-summary"><summary>Source summary</summary><p className={`source-progress ${progress.state}`}>{progress.state} · {tablePatches.length} patches · rim r {rimRadius?.toFixed(2) ?? '—'} mm</p>{(rimMismatch || throatConflict) && <button type="button" onClick={scaleToFitThroat}>Scale to fit throat</button>}</details>
+        <details className="source-identifiers" open={identifiersOpen} onToggle={(e) => setIdentifiersOpen(e.currentTarget.open)}><summary>Identifiers</summary>
+        {(['physical_source_id', 'rim_id'] as const).map((field) => <label key={field}>{field === 'rim_id' ? 'Rim ID' : 'Physical source ID'}<input aria-label={field === 'rim_id' ? 'Rim ID' : 'Physical source ID'} value={draft.contour[field]} onChange={(e) => change({ ...draft, contour: { ...draft.contour, [field]: e.target.value } })}/></label>)}
+        <label>Drive channel ID<input aria-label="Drive channel ID" value={draft.drive.channel_id} onChange={(e) => change({ ...draft, drive: { ...draft.drive, channel_id: e.target.value } })}/></label>
+        </details>
+        <details><summary>Motion</summary><label>Prescribed motion<select aria-label="Prescribed motion" value={draft.drive.motion} onChange={(e) => change({ ...draft, drive: { ...draft.drive, motion: e.target.value as 'normal' | 'axial' } })}><option value="normal">Normal</option><option value="axial">Axial +Z</option></select></label></details>
+        <details open={tablePatches.length === 0 || undefined}><summary>Start from a shape</summary>{hostLimit ? <p>{limit.kind === 'throat' ? 'Fits into the horn design' : limit.kind === 'aperture' ? 'Fits into the woofer baffle' : 'Fits into the conical horn'}</p> : <label>Fits into<select aria-label="Source attachment" value={attachment.kind} onChange={(e) => setAttachment(e.target.value === 'baffle' ? structuredClone(defaultAttachment) : { kind: 'horn', dimensions: { mouth_radius_mm: 20, length_mm: 30, housing_radius_mm: 22, backing_depth_mm: 12 } })}><option value="baffle">Front baffle woofer</option><option value="horn">Circular conical horn</option></select></label>}<label>Shape<select aria-label="Source shape" value={shape} onChange={(e) => { const s = e.target.value as typeof shape; setShape(s); setDimensions({ ...defaults[s] }); setTopologyDimensions({}); }}><option value="flat">Flat</option><option value="dome">Dome and surround</option><option value="cone">Cone and dust cap</option></select></label>
+        <div className="source-fields">{fields(presetDimensions, editPresetDimensions, 'preset')}</div><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.expand(shape, presetDimensions, draft), { shape, dimensions: presetDimensions }); setSelected(undefined); })}>Apply shape</button>
+        <p>Rim radius {((presetDimensions.radius_mm ?? 0) + (presetDimensions.surround_width_mm ?? 0) + (presetDimensions.land_width_mm ?? 0)).toFixed(2)} mm</p>
+        <button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => {
+          const fitted = fitPresetDimensions(presetDimensions, sourceLimitTarget(limit));
+          await adopt(await sourceEditorApi.expand(shape, fitted, draft), { shape, dimensions: fitted }); setDimensions(fitted); setSelected(undefined);
+        })}>Fit to limit</button>
+        </details><details><summary>Saved presets</summary><label>Preset name<input aria-label="Preset name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)}/></label><div className="source-editor-toolbar">
+          <button type="button" disabled={!valid || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, undefined, serializeSourceAuthoring(classic ? seed(draft) : authorRef.current, false)); setPresets([...presets, item]); setSelected(item); setNotice('Saved new preset.'); })}>Save new preset</button>
+          <button type="button" disabled={!valid || !selected || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, selected, serializeSourceAuthoring(classic ? seed(draft) : authorRef.current, false)); setPresets(presets.map((p) => p.id === item.id ? item : p)); setSelected(item); setNotice('Updated preset.'); })}>Update loaded preset</button>
+          <button type="button" onClick={() => void run(async () => { setPresets(await sourceEditorApi.presets()); setNotice('Preset library refreshed. Load a preset to use its latest revision.'); })}>Refresh presets</button>
+        </div>
+        {presets.map((preset) => <div key={preset.id} className="source-preset"><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.validate(preset.document), undefined, preset.authoring); setName(preset.name); setSelected(preset); })}>Load {preset.name}</button><button type="button" aria-label={`Delete preset ${preset.name}`} onClick={() => void run(async () => { await sourceEditorApi.delete(preset); setPresets(presets.filter((p) => p.id !== preset.id)); if (selected?.id === preset.id) setSelected(undefined); setNotice('Deleted preset. Current contour retained.'); })}>Delete</button></div>)}
+        </details>{!hostLimit && <details><summary>Attachment and export</summary>
+        <div className="source-fields">{fields(Object.fromEntries(Object.entries(attachment.dimensions).filter((entry): entry is [string, number] => typeof entry[1] === 'number')), (next) => setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, ...next } }), 'attachment')}
+          {attachment.kind === 'baffle' && ([0, 1, 2] as const).map((axis) => <NumberField key={axis} label={`Source center ${['X', 'Y', 'Z'][axis]}`} value={(attachment.dimensions.center_mm as [number, number, number])[axis]} precision={6} displayPrecision={2} unit="mm" step={.1} onCommit={(v) => { const center = [...attachment.dimensions.center_mm as [number, number, number]] as [number, number, number]; center[axis] = v; setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, center_mm: center } }); }}/>) }
+          <NumberField label="Mesh size" value={meshSize} min={.001} precision={6} displayPrecision={3} unit="mm" step={.1} onCommit={setMeshSize}/>
+        </div><button type="button" disabled={!valid} onClick={() => void run(async () => {
+          const blob = await sourceEditorApi.export(draft, attachment, meshSize); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'native-source.zip'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000); setNotice('Exported native source bundle: STEP, mesh and hash-bound source recipe.');
+        })}>Export STEP + mesh bundle</button>
+        <p>Source presets store the contour and drive. Attachment and mesh size apply to this export.</p></details>}
+        </div>
+        <details className="source-points" open={classic || pointsOpen} onToggle={e => setPointsOpen(e.currentTarget.open)}><summary>All points</summary><div className="source-table"><table><thead><tr><th>Point</th><th>r mm</th><th>z mm</th><th/></tr></thead><tbody>{tablePoints.map(pointRow)}</tbody></table></div></details>
+        {!classic && <details className="source-dimensions" open={dimensionsOpen} onToggle={event => setDimensionsOpen(event.currentTarget.open)}><summary>All dimensions</summary>
           <div className="source-table"><table aria-label="Dimensions"><thead><tr><th>Name</th><th>Value</th><th>Driving</th></tr></thead><tbody>
-            {author.sketch.constraints.filter(c => 'value' in c).map(c => 'value' in c && <tr key={c.id} data-row-id={c.id}
-              aria-selected={canvasSelection.includes(c.id)} className={hoverId === c.id ? 'hovered' : ''}
-              onClick={() => setCanvasSelection([c.id])} onPointerEnter={() => setHoverId(c.id)} onPointerLeave={() => setHoverId(undefined)}>
-              <td title={c.id}><SketchNameCell value={dimensionName(c)} label={`Dimension ${c.id} name`} id={c.id} maxLength={40} disabled={!sketchReady}
-                onCommit={label => sketchCommand(state => {
-                  // An empty name reverts to the default: the preset's name for a preset dimension.
-                  const parameter = Object.entries(state.meta.preset?.dimensions ?? {}).find(([, id]) => id === c.id)?.[0];
-                  return { kind: 'setConstraintLabel', id: c.id, label: label.trim() || (parameter ? presetLabels[parameter] ?? '' : '') };
-                })}/></td>
-              <td><NumberField label={`Dimension ${c.id} value`} value={c.kind === 'angle' ? c.value * 180 / Math.PI : c.value} unit={c.kind === 'angle' ? '°' : 'mm'}
-                precision={9} displayPrecision={2} step={.1} disabled={!sketchReady || !c.driving} disabledReason={!c.driving ? 'Reference dimension' : undefined}
-                onCommit={value => void controller.current?.dimension(c.id, value * (c.kind === 'angle' ? Math.PI / 180 : 1)).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}/></td>
-              <td><button type="button" aria-label={`${c.driving ? 'Make reference' : 'Make driving'} ${dimensionName(c)}`} disabled={!sketchReady || sketchPending} onClick={() => sketchCommand({ kind: 'setDriving', id: c.id, driving: !c.driving })}>{c.driving ? 'Make reference' : 'Make driving'}</button></td>
-            </tr>)}
+            {author.sketch.constraints.filter(c => 'value' in c).map(dimensionRow)}
           </tbody></table></div>
         </details>}
-        <h3>Patches</h3><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch</th><th>Name</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{tablePatches.map((patch, i) => <tr key={patch.id} data-row-id={patch.id} aria-selected={canvasSelection.includes(patch.id)} className={hoverId === patch.id ? 'hovered' : ''}
-          onPointerEnter={() => setHoverId(patch.id)} onPointerLeave={() => setHoverId(undefined)} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}><td title={patch.id}><button type="button" aria-label={`Select patch ${i + 1}`} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}>{i + 1}</button></td>
-          <td title={patch.id}>{classic ? displayName(nameSketch, patch.id) : <SketchNameCell value={displayName(nameSketch, patch.id)} label={`Patch ${i + 1} name`} id={patch.id} maxLength={60} disabled={!sketchReady} onCommit={name => sketchCommand({ kind: 'setEntityName', id: patch.id, name })}/>}</td>
-          <td>{classic && <select aria-label={`Patch ${i + 1} curve`} value={patch.kind} onChange={(e) => change(editPatch(draft, i, { kind: e.target.value as 'line' | 'arc' }))}><option value="line">Line</option><option value="arc">Arc</option></select>}{!classic && patch.kind}</td>
-          <td><select aria-label={`Patch ${i + 1} role`} value={patch.role} onChange={(e) => classic ? change(editPatch(draft, i, { role: e.target.value as 'moving' | 'rigid' })) : sketchCommand({ kind: 'setEntityData', id: patch.id, data: { role: e.target.value } })}><option value="moving">Moving</option><option value="rigid">Rigid</option></select></td>
-          <td>{patch.role === 'moving' ? <NumberField label={`Patch ${i + 1} weight`} value={classic ? draft.drive.weights[patch.id] : author.meta.weights[patch.id] ?? 1} precision={6} displayPrecision={3} step={.1} onCommit={(v) => { if (classic) change({ ...draft, drive: { ...draft.drive, weights: { ...draft.drive.weights, [patch.id]: v } } }); else { void controller.current?.metadata(meta => ({ ...meta, weights: { ...meta.weights, [patch.id]: v } })).catch(reason => setError(String(reason))); } }}/> : '—'}</td></tr>)}</tbody></table></div>
+        <details className="source-patches"><summary>All patches</summary><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch</th><th>Name</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{tablePatches.map(patchRow)}</tbody></table></div>
+        </details>
         {classic && draft.contour.segments[selectedPatch]?.kind === 'arc' && <div className="source-fields">
           <NumberField label="Arc center radius" unit="mm" precision={9} displayPrecision={2} step={.1} value={draft.contour.segments[selectedPatch].center_mm![0]} onCommit={(v) => change(editPatch(draft, selectedPatch, { center_mm: [v, draft.contour.segments[selectedPatch].center_mm![1]] }))}/>
           <NumberField label="Arc center z" unit="mm" precision={9} displayPrecision={2} step={.1} value={draft.contour.segments[selectedPatch].center_mm![1]} onCommit={(v) => change(editPatch(draft, selectedPatch, { center_mm: [draft.contour.segments[selectedPatch].center_mm![0], v] }))}/>
@@ -428,36 +517,8 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
           if (e?.kind === 'line') { const a = author.sketch.points.find(p => p.id === e.p1)!, b = author.sketch.points.find(p => p.id === e.p2)!; sketchCommand({ kind: 'splitAt', entity: e.id, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }); }
           if (e?.kind === 'arc') { const g = arcGeometry(author.sketch, e), angle = g.start + g.sweep / 2; sketchCommand({ kind: 'splitAt', entity: e.id, x: g.center.x + g.radius * Math.cos(angle), y: g.center.y + g.radius * Math.sin(angle) }); }
         }}>Split selected patch at midpoint</button>
-      </div><aside>
-        <h3>Motion</h3>
-        <details className="source-identifiers" open={identifiersOpen} onToggle={(e) => setIdentifiersOpen(e.currentTarget.open)}><summary>Identifiers</summary>
-        {(['physical_source_id', 'rim_id'] as const).map((field) => <label key={field}>{field === 'rim_id' ? 'Rim ID' : 'Physical source ID'}<input aria-label={field === 'rim_id' ? 'Rim ID' : 'Physical source ID'} value={draft.contour[field]} onChange={(e) => change({ ...draft, contour: { ...draft.contour, [field]: e.target.value } })}/></label>)}
-        <label>Drive channel ID<input aria-label="Drive channel ID" value={draft.drive.channel_id} onChange={(e) => change({ ...draft, drive: { ...draft.drive, channel_id: e.target.value } })}/></label>
-        </details>
-        <label>Prescribed motion<select aria-label="Prescribed motion" value={draft.drive.motion} onChange={(e) => change({ ...draft, drive: { ...draft.drive, motion: e.target.value as 'normal' | 'axial' } })}><option value="normal">Normal</option><option value="axial">Axial +Z</option></select></label>
-        <h3>Start from a shape</h3>{hostLimit ? <p>{limit.kind === 'throat' ? 'Fits into the horn design' : limit.kind === 'aperture' ? 'Fits into the woofer baffle' : 'Fits into the conical horn'}</p> : <label>Fits into<select aria-label="Source attachment" value={attachment.kind} onChange={(e) => setAttachment(e.target.value === 'baffle' ? structuredClone(defaultAttachment) : { kind: 'horn', dimensions: { mouth_radius_mm: 20, length_mm: 30, housing_radius_mm: 22, backing_depth_mm: 12 } })}><option value="baffle">Front baffle woofer</option><option value="horn">Circular conical horn</option></select></label>}<label>Shape<select aria-label="Source shape" value={shape} onChange={(e) => { const s = e.target.value as typeof shape; setShape(s); setDimensions({ ...defaults[s] }); setTopologyDimensions({}); }}><option value="flat">Flat</option><option value="dome">Dome and surround</option><option value="cone">Cone and dust cap</option></select></label>
-        <div className="source-fields">{fields(presetDimensions, editPresetDimensions, 'preset')}</div><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.expand(shape, presetDimensions, draft), { shape, dimensions: presetDimensions }); setSelected(undefined); })}>Apply shape</button>
-        <p>Rim radius {((presetDimensions.radius_mm ?? 0) + (presetDimensions.surround_width_mm ?? 0) + (presetDimensions.land_width_mm ?? 0)).toFixed(2)} mm</p>
-        <button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => {
-          const fitted = fitPresetDimensions(presetDimensions, sourceLimitTarget(limit));
-          await adopt(await sourceEditorApi.expand(shape, fitted, draft), { shape, dimensions: fitted }); setDimensions(fitted); setSelected(undefined);
-        })}>Fit to limit</button>
-        <h3>Saved presets</h3><label>Preset name<input aria-label="Preset name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)}/></label><div className="source-editor-toolbar">
-          <button type="button" disabled={!valid || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, undefined, serializeSourceAuthoring(classic ? seed(draft) : authorRef.current, false)); setPresets([...presets, item]); setSelected(item); setNotice('Saved new preset.'); })}>Save new preset</button>
-          <button type="button" disabled={!valid || !selected || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, selected, serializeSourceAuthoring(classic ? seed(draft) : authorRef.current, false)); setPresets(presets.map((p) => p.id === item.id ? item : p)); setSelected(item); setNotice('Updated preset.'); })}>Update loaded preset</button>
-          <button type="button" onClick={() => void run(async () => { setPresets(await sourceEditorApi.presets()); setNotice('Preset library refreshed. Load a preset to use its latest revision.'); })}>Refresh presets</button>
-        </div>
-        {presets.map((preset) => <div key={preset.id} className="source-preset"><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.validate(preset.document), undefined, preset.authoring); setName(preset.name); setSelected(preset); })}>Load {preset.name}</button><button type="button" aria-label={`Delete preset ${preset.name}`} onClick={() => void run(async () => { await sourceEditorApi.delete(preset); setPresets(presets.filter((p) => p.id !== preset.id)); if (selected?.id === preset.id) setSelected(undefined); setNotice('Deleted preset. Current contour retained.'); })}>Delete</button></div>)}
-        {!hostLimit && <><h3>Export geometry</h3>
-        <div className="source-fields">{fields(Object.fromEntries(Object.entries(attachment.dimensions).filter((entry): entry is [string, number] => typeof entry[1] === 'number')), (next) => setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, ...next } }), 'attachment')}
-          {attachment.kind === 'baffle' && ([0, 1, 2] as const).map((axis) => <NumberField key={axis} label={`Source center ${['X', 'Y', 'Z'][axis]}`} value={(attachment.dimensions.center_mm as [number, number, number])[axis]} precision={6} displayPrecision={2} unit="mm" step={.1} onCommit={(v) => { const center = [...attachment.dimensions.center_mm as [number, number, number]] as [number, number, number]; center[axis] = v; setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, center_mm: center } }); }}/>) }
-          <NumberField label="Mesh size" value={meshSize} min={.001} precision={6} displayPrecision={3} unit="mm" step={.1} onCommit={setMeshSize}/>
-        </div><button type="button" disabled={!valid} onClick={() => void run(async () => {
-          const blob = await sourceEditorApi.export(draft, attachment, meshSize); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'native-source.zip'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000); setNotice('Exported native source bundle: STEP, mesh and hash-bound source recipe.');
-        })}>Export STEP + mesh bundle</button>
-        <p>Source presets store the contour and drive. Attachment and mesh size apply to this export.</p></>}
       </aside></div>
     </fieldset>
-    <footer>{onUseDocument && <button type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour in assembly</button>}{busy && <p role="status">Working…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>{onDraftChange ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours. Names are stored in the sketch only.</small></footer>
+    <footer>{(classic || sketchProblems.every(p => p.severity === 'warning') && !validationError) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}<div ref={setStatusHost} className="source-status-host"/>{!onUseDocument && <button type="button" disabled={busy} onClick={close}>Done</button>}{onUseDocument && <button type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour</button>}{onUseDocument && <button type="button" disabled={busy} onClick={close}>Back to assembly</button>}{busy && <p role="status">Working…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>{onDraftChange ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours. Names are stored in the sketch only.</small></footer>
   </div></div>;
 }

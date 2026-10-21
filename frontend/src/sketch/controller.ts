@@ -179,10 +179,10 @@ export class SketchController<T> {
       return sketch;
     });
   }
-  adopt(state: Authoring<T>) {
-    return this.queue(session => this.transaction(session, 'Load contour', async () => {
+  adopt(state: Authoring<T>, label = 'Load contour', requireSolved = false) {
+    return this.queue(session => this.transaction(session, label, async () => {
       const next = await createSession(state.sketch, { references: this.getReferences(state) });
-      try { this.diagnosis = await next.solveFull(); }
+      try { const diagnosis = await next.solveFull(); if (requireSolved && diagnosis.status !== 'ok') throw constraintError(state.sketch, diagnosis); this.diagnosis = diagnosis; }
       catch (e) { next.destroy(); throw e; }
       next.sketch = state.sketch; session.destroy(); this.session = next; return state;
     }));
@@ -200,15 +200,24 @@ export class SketchController<T> {
     });
   }
   /** External attachment context belongs to every undo/redo state, not sketch history. */
-  replaceContext(replace: (state: Authoring<T>) => Authoring<T>, notice?: string) {
+  replaceContext(replace: (state: Authoring<T>) => Authoring<T>, notice?: string, conflictPrefix?: string) {
     return this.queue(async session => {
       const current = this.current, state = replace(current);
       const next = await createSession(state.sketch, { references: this.getReferences(state) });
-      try { this.diagnosis = await next.solveFull(); }
-      catch (e) { next.destroy(); throw e; }
+      try {
+        const diagnosis = await next.solveFull();
+        if (conflictPrefix && diagnosis.status !== 'ok') {
+          const cause = constraintError(state.sketch, diagnosis);
+          const constraints = state.sketch.constraints.filter(c => diagnosis.constraintStates[c.id] === 'conflicting');
+          const named = constraints.length ? constraints : state.sketch.constraints.filter(c => 'driving' in c && c.driving);
+          const conflict = Object.assign(cause, { message: `${conflictPrefix}${named.map(c => displayName(state.sketch, c.id)).join('; ') || cause.message}`, overconstrained: true, constraints: named, conflicting: named.map(c => c.id) });
+          this.rejection = conflict; throw conflict;
+        }
+        this.diagnosis = diagnosis;
+      } catch (e) { next.destroy(); throw e; }
       const referenceMoved = (before: Sketch, after: Sketch) => [...referencePointIds(after)].some(id => {
         const a = before.points.find(p => p.id === id), b = after.points.find(p => p.id === id)!;
-        return a && (a.x !== b.x || a.y !== b.y);
+        return !a || a.x !== b.x || a.y !== b.y;
       });
       // A display/clearance refresh must not perturb exact imported contour coordinates.
       const solved = { ...state, sketch: this.diagnosis.status === 'ok' && referenceMoved(current.sketch, state.sketch) ? next.sketch : state.sketch };
@@ -226,17 +235,17 @@ export class SketchController<T> {
   metadata(meta: T | ((current: T) => T)) {
     return this.queue(session => this.transaction(session, 'Metadata', async () => ({ ...this.current, meta: typeof meta === 'function' ? (meta as (current: T) => T)(this.current.meta) : meta })));
   }
-  beginDrag(id: string) {
+  beginDrag(id: string | string[]) {
     return this.queue(async session => {
       this.notice = undefined; this.dragStart = this.current; this.history.begin('Drag'); session.sketch = this.current.sketch;
-      try { await session.beginDrag([id]); this.dragging = true; }
+      try { await session.beginDrag(typeof id === 'string' ? [id] : id); this.dragging = true; }
       catch (e) { this.history.cancel(); throw e; }
     });
   }
-  dragTo(id: string, target: XY) {
+  dragTo(id: string, target: XY, targets?: { pointId: string; x: number; y: number }[]) {
     return this.queue(async session => {
       const start = this.measureDrag ? performance.now() : 0;
-      const result = await session.dragTo({ pointId: id, ...target });
+      const result = await session.dragTo(targets ?? { pointId: id, ...target });
       if (this.measureDrag) this.lastSolveMs = performance.now() - start;
       this.history.update({ ...this.current, sketch: result.sketch });
       if (!this.destroyed) this.preview?.(this.current, this.diagnosis); return result;

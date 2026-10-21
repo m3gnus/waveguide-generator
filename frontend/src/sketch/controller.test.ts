@@ -214,3 +214,48 @@ describe('authoring session transactions', () => {
   });
 
 });
+
+describe('body and selection drags', () => {
+  it.each(['horizontal', 'vertical'] as const)('translates a %s dimensioned line through soft multi-point drags in one undo step', async kind => {
+    const initial = kind === 'horizontal' ? base() : importedSketch([{ id:'p',x:0,y:0 },{ id:'q',x:0,y:10 }],[{id:'line',kind:'line',p1:'p',p2:'q'}]);
+    const controller = generic(initial);
+    try {
+      await controller.constraint({kind,line:'line'});
+      await controller.constraint({kind:'distance',a:'p',b:'q',value:10,driving:true});
+      const before = controller.current;
+      await controller.beginDrag(['p','q']);
+      for (const offset of [1,2,3]) await controller.dragTo('p',{x:offset,y:offset},before.sketch.points.map(p => ({pointId:p.id,x:p.x+offset,y:p.y+offset})));
+      await controller.endDrag();
+      for (const p of before.sketch.points) expect(controller.current.sketch.points.find(v => v.id === p.id)).toMatchObject({x:expect.closeTo(p.x+3,7),y:expect.closeTo(p.y+3,7)});
+      expect(controller.current.sketch.constraints).toEqual(before.sketch.constraints);
+      await controller.undo(); expect(controller.current).toBe(before);
+      await controller.undo(true); expect(controller.current).not.toBe(before);
+    } finally { controller.destroy(); }
+  });
+  it('moves two selected curves and all their points together in one undo step', async () => {
+    const initial = importedSketch([{id:'a',x:0,y:0},{id:'b',x:4,y:0},{id:'c',x:4,y:3}],[{id:'first',kind:'line',p1:'a',p2:'b'},{id:'second',kind:'line',p1:'b',p2:'c'}]);
+    const controller = generic(initial);
+    try {
+      await controller.beginDrag(['a','b','c']);
+      await controller.dragTo('a',{x:2,y:1},initial.points.map(p => ({pointId:p.id,x:p.x+2,y:p.y+1})));
+      await controller.endDrag();
+      for (const p of initial.points) expect(controller.current.sketch.points.find(v => v.id === p.id)).toMatchObject({x:expect.closeTo(p.x+2,7),y:expect.closeTo(p.y+1,7)});
+      await controller.undo(); expect(controller.current.sketch).toBe(initial);
+    } finally { controller.destroy(); }
+  });
+  it('translates an arc centre and both ends together, preserving its radius', async () => {
+    const initial = importedSketch([{id:'center',x:0,y:0},{id:'start',x:2,y:0},{id:'end',x:0,y:2}],[{id:'arc',kind:'arc',center:'center',start:'start',end:'end',ccw:true}]);
+    const controller = generic(initial);
+    try {
+      await controller.constraint({kind:'radius',arc:'arc',value:2,driving:true});
+      const before = controller.current;
+      await controller.beginDrag(['center','start','end']);
+      await controller.dragTo('center',{x:3,y:1},initial.points.map(p => ({pointId:p.id,x:p.x+3,y:p.y+1})));
+      await controller.endDrag();
+      for (const p of initial.points) expect(controller.current.sketch.points.find(v => v.id === p.id)).toMatchObject({x:expect.closeTo(p.x+3,7),y:expect.closeTo(p.y+1,7)});
+      expect(controller.current.sketch.constraints).toEqual(before.sketch.constraints);
+      await controller.undo(); expect(controller.current).toBe(before);
+    } finally { controller.destroy(); }
+  });
+
+});

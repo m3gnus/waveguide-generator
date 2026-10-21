@@ -109,3 +109,9 @@
 
 .sketch-inline label.locked::after { content: 'Locked'; font-size: .75rem; }
 .sketch-inline label.locked input { border-color: var(--blue); }
+
+.sketch-marquee { fill: var(--blue); fill-opacity: .08; stroke: var(--blue); stroke-width: 1; pointer-events: none; }
+.sketch-marquee.crossing { stroke-dasharray: 5 4; }
+.sketch-domain-problem.unfinished { color: var(--fg3); }
+.sketch-domain-problem.invalid { color: var(--red); }
+.sketch-problem.unfinished { stroke: var(--fg3); }

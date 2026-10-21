@@ -5,7 +5,7 @@ import { drawnSource, editPatch, editPoint, INITIAL_SOURCE, removePoint } from '
 import { applyCommand } from '../ops';
 import { uniqueProblems } from '../adapter';
 import { validateSketch } from '../model';
-import { applySourceCommand, lower, rules, seed } from './sourceContour';
+import { applySourceCommand, lower, rules, seed, sourceProgress, withSourceLimit } from './sourceContour';
 
 function document(points: SourcePoint[], segments: SourcePatch[]): SourceDocument {
   return { contour: { version: 1, physical_source_id: 'diaphragm', rim_id: 'horn.throat', points, segments },
@@ -175,5 +175,25 @@ describe('analytic mesher rule agreement table', () => {
         Array.from({ length: n }, (_, i) => line(`segment${i}`, `point${i}`, `point${i + 1}`)));
       const { sketch, meta } = seed(doc); expect(rules(sketch, meta).some(p => p.code === 'patch-count')).toBe(n === 257);
     }
+  });
+});
+
+
+describe('axis-to-rim guidance', () => {
+  it('guides an empty sketch, a new pole, an open chain, and completion using domain diagnoses', () => {
+    const state = withSourceLimit(seed(INITIAL_SOURCE),{kind:'throat',radius:12.7});
+    const axis = state.meta.references.find(r => r.kind === 'axis')!.id;
+    const baffle = state.meta.references.find(r => r.kind === 'baffle')!.id;
+    const empty = { ...state.sketch, entities: state.sketch.entities.filter(e => e.construction), points: state.sketch.points.filter(p => !['pole','rim'].includes(p.id)), constraints: [] };
+    expect(sourceProgress(empty,state.meta)).toEqual({state:'unfinished',hint:'Start at the axis'});
+    const noPole = {...state.sketch,constraints:state.sketch.constraints.filter(c => !(c.kind === 'pointOnLine' && c.line === axis))};
+    expect(sourceProgress(noPole,state.meta)).toEqual({state:'unfinished',hint:'Start at the axis'});
+    const open = {...state.sketch, points:state.sketch.points.map(p => p.id === 'rim' ? {...p,x:5,y:2} : p),constraints:state.sketch.constraints.filter(c => !(c.kind === 'pointOnLine' && c.line === baffle))};
+    expect(sourceProgress(open,state.meta)).toEqual({state:'unfinished',hint:'Continue toward the rim (throat r 12.70)'});
+    const near = {...open,points:open.points.map(p => p.id === 'rim' ? {...p,x:12.7} : p)};
+    expect(sourceProgress(near,state.meta)).toEqual({state:'unfinished',hint:'Connect the last point to the rim plane'});
+    expect(sourceProgress(state.sketch,state.meta)).toEqual({state:'valid',hint:'Contour complete'});
+    const invalid = {...state.sketch,points:state.sketch.points.map(p => p.id === 'rim' ? {...p,x:-1} : p)};
+    expect(sourceProgress(invalid,state.meta)).toEqual({state:'invalid',hint:'Contour complete'});
   });
 });

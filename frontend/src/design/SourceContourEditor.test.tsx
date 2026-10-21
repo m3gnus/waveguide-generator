@@ -190,7 +190,7 @@ describe('source editor interactions', () => {
     expect(readSourceDraft().contour.points.at(-1)!.r_mm).toBe(14);
     expect(Number(input('Radius preset').value)).toBe(11);
   });
-  it('shows a read-only horn throat, holds its rim exactly, and rejects coordinate edits away from it', async () => {
+  it('shows a read-only horn throat, holds its rim exactly, and disables determined coordinates', async () => {
     const used = vi.fn();
     await act(async () => root.render(<Editor initialDocument={INITIAL_SOURCE} onClose={() => {}} onDraftChange={used} limit={{ kind: 'throat', radius: 12.7, hard: true }}/>)); await settle();
     const label = host.querySelector('.sketch-limit text')!;
@@ -199,8 +199,7 @@ describe('source editor interactions', () => {
     await act(async () => label.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
     expect(host.querySelector('[aria-label="Edit limit"]')).toBeNull();
     expect(Number(input('Point 2 radius').value)).toBe(12.7);
-    await enter('Point 2 radius', '13'); await settle();
-    expect(Number(input('Point 2 radius').value)).toBe(12.7);
+    expect(input('Point 2 radius').disabled).toBe(true);
     expect(used.mock.calls.at(-1)![0].contour.points.at(-1).r_mm).toBe(12.7);
     vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
     await act(async () => button('Fit to limit').click()); await settle();
@@ -635,15 +634,17 @@ describe('source editor interactions', () => {
     const close = vi.fn();
     await act(async () => root.render(<Editor onClose={close}/>)); await settle();
     expect(document.activeElement).toBe(button('Close'));
-    const last = button('Export STEP + mesh bundle');
+    const last = button('Done');
     await act(async () => { last.focus(); last.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })); });
     expect(document.activeElement).toBe(button('Close'));
     await act(async () => { input('Rim ID').closest('details')!.open = true; input('Rim ID').focus(); input('Rim ID').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it('edits table coordinates, keeps IDs, persists draft, and can undo', async () => {
-    await mount(); await enter('Point 2 radius', '10'); await settle();
+  it('edits contextual point coordinates, keeps IDs, persists draft, and can undo', async () => {
+    await mount(); await act(async () => button('Select point 2').click());
+    expect(host.querySelector('[aria-label="Point properties"]')).not.toBeNull();
+    await enter('Point 2 radius', '10'); await settle();
     expect(sourceEditorApi.validate).toHaveBeenLastCalledWith(expect.objectContaining({ contour: expect.objectContaining({ points: [{ id: 'pole', r_mm: 0, z_mm: 0 }, { id: 'rim', r_mm: 10, z_mm: 0 }] }) }));
     expect(readSourceDraft().contour.points[1].r_mm).toBe(10);
     await act(async () => button('Undo').click()); await settle();
@@ -755,7 +756,7 @@ describe('source editor interactions', () => {
     await act(async () => host.querySelector('[data-id="piston"]')!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })));
     await act(async () => button('Delete selection').click()); await settle();
     expect(readSourceDraft()).toEqual(INITIAL_SOURCE);
-    expect(host.querySelector('.sketch-status')?.textContent).toContain('1 problem');
+    expect(host.querySelector('.sketch-status')?.textContent).toContain('unfinished');
     expect(host.querySelectorAll('.sketch-domain-problem')).toHaveLength(1);
     expect(host.querySelector('.source-validation')).toBeNull();
     expect(button('Save new preset').disabled).toBe(true);
@@ -796,7 +797,7 @@ describe('source editor interactions', () => {
     expect(readSourceDraft()).toEqual(INITIAL_SOURCE);
     expect(host.querySelector('[aria-label^="Dimension distance"]')).not.toBeNull();
   });
-  it('shows adapter and lowering diagnoses once per code and entity, with only a status count', async () => {
+  it('shows adapter and lowering diagnoses once and treats a missing pole/rim as unfinished', async () => {
     const doc = structuredClone(INITIAL_SOURCE);
     doc.contour.points[0].r_mm = 1; doc.contour.points[1].z_mm = 1;
     storage.setItem('', JSON.stringify(doc));
@@ -805,7 +806,8 @@ describe('source editor interactions', () => {
     expect(problems).toHaveLength(2);
     expect(problems.filter(p => p.textContent?.includes('pole'))).toHaveLength(1);
     expect(problems.filter(p => p.textContent?.includes('rim'))).toHaveLength(1);
-    expect(host.querySelector('.sketch-status')?.textContent).toContain('2 problems');
+    expect(host.querySelector('.sketch-status')?.textContent).toContain('unfinished');
+    expect(problems.every(problem => problem.classList.contains('unfinished'))).toBe(true);
     expect(host.querySelector('.source-validation')).toBeNull();
     expect(sourceEditorApi.validate).not.toHaveBeenCalled();
   });
@@ -1023,7 +1025,7 @@ describe('source editor interactions', () => {
     await mount(); await act(async () => button('Apply shape').click()); await settle();
     const before = readSourceAuthoring(readSourceDraft()), id = before.meta.preset!.dimensions.depth_mm;
     const requests = vi.mocked(sourceEditorApi.validate).mock.calls.map(([doc]) => JSON.stringify(doc));
-    expect(host.querySelector<HTMLDetailsElement>('.source-dimensions')!.open).toBe(true);
+    expect(host.querySelector<HTMLDetailsElement>('.source-dimensions')!.open).toBe(false);
     await rename('Patch 1 name', '  Phase cap  ');
     expect(host.querySelector('[data-row-id="dust-cap"]')!.textContent).toContain('Phase cap');
     expect(host.querySelector('[data-row-id="dust-cap"] td[title="dust-cap"]')).not.toBeNull();
@@ -1120,6 +1122,122 @@ describe('source editor interactions', () => {
     expect(readSourceAttachment()).toEqual(before);
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Source attachment"]')!.value).toBe('horn');
     expect(Number(input('Backing depth attachment').value)).toBe(25);
+  });
+
+  it('switches the properties panel by selection and edits through the existing point, metadata and dimension commands', async () => {
+    const doc = expandedPreset('cone', presetDefaults.cone);
+    const state = sourceAdapter.fitSourcePreset((await import('../sketch/adapters/sourcePreset')).seedPreset(doc,'cone',presetDefaults.cone), {kind:'aperture',radius:14});
+    const envelope = (await import('../sketch/adapters/sourceAuthoring')).serializeSourceAuthoring(state,false);
+    await act(async () => root.render(<Editor onClose={() => {}} initialDocument={doc} initialAuthoring={envelope}/>)); await settle();
+    const panel = host.querySelector('[aria-label="Sketch properties"]')!;
+    expect(panel.querySelector('.source-summary')).not.toBeNull();
+    expect(panel.querySelector('[aria-label="Point properties"]')).toBeNull();
+    for (const section of panel.querySelectorAll<HTMLDetailsElement>('details')) expect(section.open).toBe(false);
+    await act(async () => button('Select point 2').click());
+    expect(panel.querySelector('[aria-label="Point properties"]')).not.toBeNull();
+    expect(panel.querySelector('[aria-label="Constraints on selection"]')?.textContent).toContain('Dust-cap radius');
+    expect(panel.querySelector('[aria-label="Point properties"]')?.textContent).toMatch(/remaining freedom|still move/);
+    await act(async () => button('Select patch 2').click());
+    expect(panel.querySelector('[aria-label="Point properties"]')).toBeNull();
+    expect(panel.querySelector('[aria-label="Segment properties"]')?.textContent).toContain('length');
+    await enter('Patch 2 weight','.25'); await settle();
+    const field = panel.querySelector<HTMLSelectElement>('[aria-label="Segment properties"] select[aria-label="Patch 2 role"]')!;
+    expect(field.value).toBe('moving');
+    const dimension = state.sketch.constraints.find(c => c.label === 'Surround width')!;
+    await act(async () => host.querySelector(`[data-row-id="${dimension.id}"]`)!.dispatchEvent(new MouseEvent('click',{bubbles:true})));
+    expect(panel.querySelector('[aria-label="Segment properties"]')).toBeNull();
+    expect(panel.querySelector('[aria-label="Dimension properties"]')).not.toBeNull();
+    await enter(`Dimension ${dimension.id} value`,'2.5'); await settle();
+    expect(Number(input(`Dimension ${dimension.id} value`).value)).toBe(2.5);
+    expect(panel.querySelector('[aria-label="Selection actions"]')?.textContent).toContain('Reset position');
+    await act(async () => button('Make reference Surround width').click()); await settle();
+    expect(input(`Dimension ${dimension.id} value`).disabled).toBe(true);
+    await act(async () => host.querySelector('[aria-label="Sketch drawing"]')!.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})));
+    expect(panel.querySelector('[aria-label="Dimension properties"]')).toBeNull();
+    expect((panel.querySelector('.source-summary')!.parentElement as HTMLElement).hidden).toBe(false);
+  });
+  it('keeps a height-filling workspace with an independent panel and persistent toolbar/status at mocked 1440 × 900', async () => {
+    let resized: ResizeObserverCallback | undefined;
+    vi.stubGlobal('ResizeObserver', class { constructor(callback: ResizeObserverCallback) { resized = callback; } observe() {} disconnect() {} });
+    const style = document.createElement('style'); style.textContent = editorCss + canvasCss; document.head.append(style);
+    try {
+      await mount();
+      const editor = host.querySelector<HTMLElement>('.source-editor')!, canvas = host.querySelector<SVGSVGElement>('[aria-label="Sketch drawing"]')!, panel = host.querySelector<HTMLElement>('.source-properties')!;
+      vi.spyOn(editor,'getBoundingClientRect').mockReturnValue({width:1400,height:846,top:27,bottom:873,left:20,right:1420} as DOMRect);
+      vi.spyOn(canvas,'getBoundingClientRect').mockReturnValue({width:1026,height:600,top:100,bottom:700,left:38,right:1064} as DOMRect);
+      await act(async () => resized!([{contentRect:canvas.getBoundingClientRect()} as ResizeObserverEntry],{} as ResizeObserver));
+      expect(canvas.getBoundingClientRect().height / editor.getBoundingClientRect().height).toBeGreaterThanOrEqual(.6);
+      expect(canvas.getAttribute('viewBox')).toBe('0 0 1026 600');
+      expect(getComputedStyle(editor).overflow).toBe('hidden');
+      expect(getComputedStyle(panel).overflow).toBe('auto');
+      expect(getComputedStyle(host.querySelector('.source-editor fieldset')!).minHeight).toBe('0px');
+      expect(getComputedStyle(host.querySelector('.sketch-surface')!).flexGrow).toBe('1');
+      expect(host.querySelector('.source-toolbar-host .sketch-toolbar')).not.toBeNull();
+      expect(host.querySelector('footer .sketch-status')).not.toBeNull();
+      expect(host.querySelector('footer')!.contains(button('Done'))).toBe(true);
+      expect(editorCss).toContain('@media (max-width: 899px)');
+      expect(editorCss).toContain('grid-template-rows: minmax(360px, 1fr)');
+    } finally { style.remove(); vi.unstubAllGlobals(); }
+  });
+  it('offers explicit scaling in the conflict banner and summary after an infeasible host change', async () => {
+    const doc = structuredClone(INITIAL_SOURCE); doc.contour.points[1].r_mm = 12.7; doc.contour.points[0].z_mm = Math.sqrt(13**2-12.7**2);
+    let state = sourceAdapter.withSourceLimit(sourceAdapter.seed(doc),{kind:'throat',radius:12.7,hard:true});
+    const result = sourceAdapter.applySourceCommand(state.sketch,state.meta,{kind:'addConstraint',constraint:{kind:'distance',a:'pole',b:'rim',value:13,driving:true,label:'Typed chord'}});
+    if ('error' in result) throw new Error(result.error); state = result;
+    const authoring = (await import('../sketch/adapters/sourceAuthoring')).serializeSourceAuthoring(state,false);
+    const changed = vi.fn();
+    const render = async (radius: number) => { await act(async () => root.render(<Editor onClose={() => {}} initialDocument={doc} initialAuthoring={authoring} limit={{kind:'throat',radius,hard:true}} onDraftChange={changed}/>)); await settle(); };
+    await render(12.7); await render(14);
+    const banner = host.querySelector('.sketch-conflict-banner')!;
+    expect(banner.textContent).toContain('The new throat conflicts with:');
+    expect(banner.textContent).toContain('Typed chord');
+    expect(banner.querySelector('button')!.textContent).toBe('Scale to fit throat');
+    expect(host.querySelector('.source-summary')!.textContent).toContain('Scale to fit throat');
+    expect(Number(input('Point 2 radius').value)).toBe(12.7);
+    await act(async () => banner.querySelector('button')!.click()); await settle();
+    expect(changed.mock.calls.at(-1)![0].contour.points.at(-1).r_mm).toBe(14);
+    expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
+    await act(async () => button('Undo').click()); await settle();
+    expect(Number(input('Point 2 radius').value)).toBe(12.7);
+  });
+
+  it('rolls back an infeasible first throat attachment to existing typed authoring', async () => {
+    const doc = structuredClone(INITIAL_SOURCE); doc.contour.points[1].r_mm = 12.7;
+    doc.contour.points[0].z_mm = Math.sqrt(13**2-12.7**2);
+    const state = sourceAdapter.seed(doc);
+    state.sketch.constraints.push({id:'typed-chord',kind:'distance',a:'pole',b:'rim',value:13,driving:true,label:'Typed chord'});
+    const authoring = (await import('../sketch/adapters/sourceAuthoring')).serializeSourceAuthoring(state,false);
+    await act(async () => root.render(<Editor onClose={() => {}} initialDocument={doc} initialAuthoring={authoring} limit={{kind:'throat',radius:14,hard:true}}/>)); await settle();
+    expect(Number(input('Point 2 radius').value)).toBe(12.7);
+    expect(Number(input('Dimension typed-chord value').value)).toBe(13);
+    const banner = host.querySelector('.sketch-conflict-banner')!;
+    expect(banner.textContent).toContain('The new throat conflicts with:');
+    expect(banner.querySelector('button')!.textContent).toBe('Scale to fit throat');
+  });
+  it('keeps unfinished diagnostics neutral in the panel and finished failures in error style', async () => {
+    await mount(); await deletePoleLock();
+    const problem = host.querySelector('.sketch-domain-problem')!;
+    expect(problem.classList.contains('unfinished')).toBe(true);
+    expect(host.querySelector('.source-properties')!.contains(problem)).toBe(true);
+    expect(host.querySelector('footer .sketch-status')!.textContent).toContain('Start at the axis');
+    expect(host.querySelectorAll('.sketch-problem:not(.unfinished)')).toHaveLength(0);
+    await act(async () => button('Lock pole to axis').click()); await settle();
+    const bad = structuredClone(INITIAL_SOURCE); bad.contour.points[1].r_mm = -1;
+    await act(async () => root.render(null));
+    await act(async () => root.render(<Editor onClose={() => {}} initialDocument={bad}/>)); await settle();
+    expect(host.querySelector('.sketch-domain-problem.invalid')).not.toBeNull();
+    expect(host.querySelector('footer .sketch-status')!.textContent).toContain('invalid');
+  });
+
+  it('shows active command steps in the panel and length/angle fields once at the cursor', async () => {
+    await mount();
+    await act(async () => button('Line (L)').click());
+    expect(host.querySelector('.source-command-properties')?.textContent).toContain('Click to chain lines');
+    const canvas = host.querySelector('[aria-label="Sketch drawing"]')!;
+    await pointer(canvas,'pointerdown',100,100);
+    await act(async () => canvas.dispatchEvent(new KeyboardEvent('keydown',{key:'2',bubbles:true})));
+    expect(host.querySelectorAll('[aria-label="Line length"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[aria-label="Line angle"]')).toHaveLength(1);
   });
 
 });

@@ -89,7 +89,7 @@ it('lets the selection constraint menu use materialised context points', async (
 });
 it('shows the throat-update notice and holds the contour to the new hard radius', async () => {
   await render(2, 12.7); await render(2, 13);
-  expect(host.textContent).toContain('Throat changed 12.70 → 13.00 mm; contour updated');
+  expect(host.textContent).toContain('Throat changed 12.70 → 13.00 mm; dimensions kept');
   expect(changed.mock.calls.at(-1)![0].contour.points.at(-1).r_mm).toBe(13);
 });
 it('fits nearby datums and plugs while excluding a distant box, and includes a nearby box', async () => {

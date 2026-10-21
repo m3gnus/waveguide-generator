@@ -49,14 +49,6 @@ export function withSourceLimit(state: { sketch: Sketch; meta: SourceMeta }, lim
   }
   if (line.kind !== 'line') throw new Error('Expected a limit line.');
   line.data = { name: limit.hard ? 'Throat lock' : limit.kind === 'mouth' ? 'Mouth limit' : 'Aperture limit' };
-  const referencePoints = referencePointIds(sketch);
-  const radius = sketch.points.find(p => p.id === rim)?.x;
-  // When attaching an existing contour to a new throat, preserve its shape and circles.
-  if (limit.hard && radius && radius !== limit.radius) {
-    const scale = limit.radius / radius;
-    sketch.points = sketch.points.map(p => referencePoints.has(p.id) ? p : { ...p, x: p.x * scale, y: p.y * scale });
-    sketch.constraints = sketch.constraints.map(c => 'value' in c && c.kind !== 'angle' ? { ...c, value: c.value * scale } : c);
-  }
   sketch = moveReferenceLine(sketch, line, [{ x: limit.radius, y: 0 }, { x: limit.radius, y: 1 }]);
   sketch.points = sketch.points.map(p => limit.hard && p.id === rim ? { ...p, x: limit.radius } : p);
   sketch.constraints = sketch.constraints.filter(c => !(c.kind === 'pointOnLine' && c.line === line.id));
@@ -64,14 +56,46 @@ export function withSourceLimit(state: { sketch: Sketch; meta: SourceMeta }, lim
     const result = applyCommand(sketch, { kind: 'addConstraint', constraint: { kind: 'pointOnLine', point: rim, line: line.id } });
     if ('error' in result) throw new Error(result.error);
     sketch = result.sketch;
-    // Rim = radius + surround + land. The locked rim drives radius instead.
-    const radiusDimension = state.meta.preset?.dimensions.radius_mm;
-    sketch.constraints = sketch.constraints.map(c => c.id === radiusDimension && 'driving' in c ? { ...c, driving: false } : c);
+    // Fresh presets release their derived radius in fitSourcePreset; existing driving dimensions stay unchanged.
   }
   const reference: Reference = { id: line.id, kind: 'limit', radius: limit.radius,
     label: `${limit.kind[0].toUpperCase()}${limit.kind.slice(1)} r ${formatValue(limit.radius)}${limit.kind === 'mouth' ? ` · max rim r = mouth − ${formatValue(SOURCE_CLEARANCE_MM)} mm` : ''}`,
     snapRadius: sourceLimitTarget(limit), locked: !!limit.hard, ...(rim ? { point: rim } : {}) };
   return { sketch, meta: { ...state.meta, limit, references: [...state.meta.references.filter(r => r.kind !== 'limit'), reference] } };
+}
+/** The single scaling path, used by the explicit action and by fresh preset seeding only. */
+export function scaleSourceToLimit(state: { sketch: Sketch; meta: SourceMeta }, limit: SourceLimit) {
+  const rim = contourPointOrder(state.sketch, state.meta).at(-1);
+  const radius = state.sketch.points.find(p => p.id === rim)?.x;
+  if (!radius || !validLimit(limit)) throw new Error('A nonzero rim and a positive throat are required to scale.');
+  const scale = sourceLimitTarget(limit) / radius, referencePoints = referencePointIds(state.sketch);
+  const sketch = { ...state.sketch,
+    points: state.sketch.points.map(p => referencePoints.has(p.id) ? p : { ...p, x: p.x * scale, y: p.y * scale }),
+    constraints: state.sketch.constraints.map(c => 'value' in c && c.kind !== 'angle' ? { ...c, value: c.value * scale } : c),
+  };
+  return withSourceLimit({ ...state, sketch }, limit);
+}
+/** No typed intent exists when a preset is first seeded, so this is the only automatic fit. */
+export function fitSourcePreset(state: { sketch: Sketch; meta: SourceMeta }, limit: SourceLimit) {
+  if (!limit.hard) return withSourceLimit(state, limit);
+  const radius = state.meta.preset?.dimensions.radius_mm;
+  return scaleSourceToLimit({ ...state, sketch: { ...state.sketch, constraints: state.sketch.constraints.map(c => c.id === radius && 'driving' in c ? { ...c, driving: false } : c) } }, limit);
+}
+/** Domain codes come from chain()/rules(); unfinished drafts are neutral, finished failures are errors. */
+export function sourceProgress(sketch: Sketch, meta: SourceMeta) {
+  const problems = rules(sketch, meta);
+  const draftProblem = problems.find(problem => ['chain', 'pole', 'rim'].includes(problem.code));
+  const unfinished = !!draftProblem;
+  const axis = meta.references.find(r => r.kind === 'axis')?.id;
+  const hasPole = sketch.constraints.some(c => c.kind === 'pointOnLine' && c.line === axis);
+  const empty = !sketch.entities.some(e => !e.construction);
+  const throat = meta.limit?.radius;
+  const rim = draftProblem?.code === 'rim' ? sketch.points.find(p => p.id === draftProblem.ids[0]) : undefined;
+  const continueHint = `Continue toward the rim${throat !== undefined ? ` (throat r ${throat.toFixed(2)})` : ''}`;
+  const hint = empty || unfinished && (!hasPole || draftProblem?.code === 'pole') ? 'Start at the axis'
+    : unfinished && rim && (throat === undefined || rim.x >= throat * .9) ? 'Connect the last point to the rim plane'
+    : unfinished ? continueHint : 'Contour complete';
+  return { state: unfinished ? 'unfinished' : problems.some(p => p.severity !== 'warning') ? 'invalid' : 'valid', hint } as const;
 }
 export const references: Reference[] = [{ id: 'axis', kind: 'axis' }, { id: 'baffle', kind: 'baffle' }];
 export function seed(document: SourceDocument): { sketch: Sketch; meta: SourceMeta } {

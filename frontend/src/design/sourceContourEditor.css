@@ -1,12 +1,14 @@
 .source-editor-launch { display: grid; gap: 6px; padding: 12px; border-bottom: 1px solid var(--hair); }
 .source-editor-launch small { color: var(--fg3); }
 .source-editor-backdrop { position: fixed; inset: 0; z-index: 1200; background: #0009; display: grid; place-items: center; padding: 20px; }
-.source-editor { width: min(1120px, 96vw); max-height: 94vh; overflow: auto; background: var(--surface-panel); color: var(--fg); border: 1px solid var(--border-control); border-radius: 10px; box-shadow: 0 12px 60px #0008; padding: 18px; font-size: 13px; }
+.source-editor { width: min(1400px, 96vw); height: 94vh; max-height: 94vh; overflow: hidden; display: flex; flex-direction: column; box-sizing: border-box; background: var(--surface-panel); color: var(--fg); border: 1px solid var(--border-control); border-radius: 10px; box-shadow: 0 12px 60px #0008; padding: 18px; font-size: 13px; }
 .source-editor header { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
+.source-editor header > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.source-editor header p { margin: 0; font-size: 11px; }
 .source-editor h2 { font-size: 20px; margin: 0; }
 .source-editor h3 { margin: 20px 0 8px; font-size: 14px; }
 .source-editor p { color: var(--fg3); margin: 6px 0 10px; }
-.source-editor fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.source-editor fieldset { flex: 1; min-height: 0; overflow: hidden; border: 0; padding: 0; margin: 0; min-width: 0; }
 .source-editor button, .source-editor select, .source-editor input { font: inherit; color: inherit; background: var(--surface-field); border: 1px solid var(--border-control); border-radius: 4px; padding: 5px 8px; }
 .source-editor button { cursor: pointer; background: var(--ctl-grad); }
 .source-editor button:hover:enabled { background: var(--ctl-grad-h); }
@@ -19,8 +21,8 @@
 .source-editor summary { cursor: pointer; }
 .source-identifiers { margin: 8px 0; }
 .source-identifiers[open] summary { margin-bottom: 8px; }
-.source-editor-columns { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(250px, 1fr); gap: 24px; }
-.source-editor aside { border-left: 1px solid var(--hair); padding-left: 20px; }
+.source-editor-columns { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; height: 100%; min-height: 0; }
+.source-editor aside { min-height: 0; overflow: auto; overscroll-behavior: contain; border-left: 1px solid var(--hair); padding-left: 12px; }
 .source-editor-toolbar, .source-preset { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 .source-fields { display: grid; grid-template-columns: 1fr; gap: 6px; }
 .source-fields .field-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(110px, 1fr); gap: 8px; }
@@ -46,9 +48,26 @@
 .source-handle { fill: var(--fg); stroke: var(--surface-raised); stroke-width: 2; cursor: grab; }
 .source-validation { margin-top: 6px; color: var(--amber); }
 .source-validation.valid { color: var(--source-moving); }
-.source-editor footer { border-top: 1px solid var(--hair); margin-top: 16px; padding-top: 10px; }
+.source-editor footer { border-top: 1px solid var(--hair); margin-top: 6px; padding-top: 6px; flex-shrink: 0; }
 .source-editor [role="alert"] { color: var(--amber); }
-@media (max-width: 800px) { .source-editor-columns { grid-template-columns: 1fr; } .source-editor aside { border: 0; padding: 0; } }
+.source-workspace { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.source-workspace .sketch-canvas { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.source-workspace .sketch-surface { flex: 1; height: auto; min-height: 0; resize: none; }
+.source-properties details { margin: 8px 0; }
+.source-properties section > table, .source-properties section tbody, .source-properties section tr, .source-properties section td { display: block; width: 100%; }
+.source-properties section td { margin: 6px 0; }
+.source-properties section .field-row { display: grid; }
+.source-properties section .field-label { white-space: normal; }
+.source-properties .sketch-selection-context { position: static; max-width: none; }
+.source-status-host .sketch-status { margin: 0 0 4px; }
+.source-editor footer small { display: block; margin-top: 4px; }
+.source-progress.unfinished { color: var(--fg3); }
+.source-progress.invalid { color: var(--red); }
+@media (max-width: 899px) {
+  .source-editor-columns { grid-template-columns: 1fr; grid-template-rows: minmax(360px, 1fr) minmax(0, 1fr); gap: 8px; }
+  .source-editor aside { border: 0; padding: 0; }
+  .source-workspace { min-height: 360px; }
+}
 .assembly-preview { width: 100%; height: 260px; display: block; }
 .source-table tr[aria-selected="true"] { background: var(--raise); box-shadow: inset 3px 0 var(--acc); }
 .source-table tr.hovered { background: var(--surface-raised); outline: 1px solid var(--acc); }

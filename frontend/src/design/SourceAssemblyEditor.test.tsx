@@ -192,7 +192,7 @@ describe('shared source and passage authoring', () => {
     await act(async () => button('Close').click()); await settle();
     await act(async () => button(`Edit ${source} contour…`).click()); await settle();
     expect(host.querySelector('.sketch-entity[data-id="piston"]')).toBeNull();
-    expect(button('Use contour in assembly').disabled).toBe(true);
+    expect(button('Use contour').disabled).toBe(true);
     expect(envelopeFor(source).sketch).toEqual(before.sketch);
   });
   it.each(['horn', 'woofer'] as const)('clears pending %s authoring when a different assembly is loaded or hydrated', async source => {
@@ -471,7 +471,7 @@ describe('shared source and passage authoring', () => {
     await act(async () => button('Edit horn contour…').click()); await settle();
     await act(async () => resolve(profile)); await settle();
     await enter('Patch 1 weight', '.5');
-    await act(async () => button('Use contour in assembly').click()); await settle();
+    await act(async () => button('Use contour').click()); await settle();
     expect(read().horn_config).toBeUndefined();
     expect(read().dimensions).toEqual(INITIAL_ASSEMBLY.dimensions);
     expect(read().horn.drive.weights.piston).toBe(.5);
@@ -524,7 +524,7 @@ describe('shared source and passage authoring', () => {
   it('uses the canonical point/arc editor for each physical source and preserves literal weights', async () => {
     await mount(); await act(async () => button('Edit horn contour…').click()); await settle();
     await enter('Patch 1 weight','-.5');
-    await act(async () => button('Use contour in assembly').click()); await settle();
+    await act(async () => button('Use contour').click()); await settle();
     expect(read().horn.drive.weights.piston).toBe(-.5);
     expect(read().woofer!.drive.weights.piston).toBe(1);
     expect(button('Prepare assembly in WG').disabled).toBe(false);
@@ -566,7 +566,7 @@ describe('shared source and passage authoring', () => {
     await enter('Patch 1 weight', '-.5');
     expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Throat r 4.00 🔒');
     expect(read().horn.contour.points.at(-1)!.r_mm).toBe(4);
-    await act(async () => button('Use contour in assembly').click()); await settle();
+    await act(async () => button('Use contour').click()); await settle();
     expect(read().woofer).toBeNull(); expect(read().horn.drive.weights.piston).toBe(-.5);
     expect(read().horn_config).toEqual(value.horn_config);
   });
