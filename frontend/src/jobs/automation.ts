@@ -4,7 +4,7 @@ import type { ExportFormat } from '../prefs/preferences';
 import { needsArchiving } from './runArchive';
 
 export interface AutomationDependencies {
-  downloadMesh(job: JobItem): Promise<string>;
+  downloadMesh(job: JobItem, reportNotice: (message: string) => void): Promise<string>;
   markMeshDownloaded(job: JobItem, filename: string): Promise<void>;
   exportCompleted(job: JobItem, formats: ExportFormat[]): Promise<{ files: string[]; failures: Array<{ format: ExportFormat; reason: string; blocked?: boolean }> } | null>;
   markExported(job: JobItem, files: string[], formats: JobItem['auto_export_formats'], completedAt: string | null): Promise<void>;
@@ -39,7 +39,7 @@ export class JobAutomation {
       tasks.push(this.enqueue(async () => {
         let filename: string;
         try {
-          filename = await dependencies.downloadMesh(job);
+          filename = await dependencies.downloadMesh(job, dependencies.reportError);
         } catch (error) {
           // Nothing was saved, so a later job update may safely retry.
           this.meshStarted.delete(job.id);

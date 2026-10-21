@@ -771,19 +771,24 @@ describe('result exporters', () => {
     })).toEqual(['123_asro68_summary.txt']);
   });
 
-  it('renames only the stored mesh download while preserving its bytes', async () => {
+  it.each([false, true])('downloads a mesh with regenerated=%s while preserving its bytes', async (regenerated) => {
     const saveBlob = vi.fn();
+    const reportNotice = vi.fn();
+    const expectedName = `123_asro68${regenerated ? '-regenerated' : ''}.msh`;
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('stored mesh bytes', {
       status: 200,
-      headers: { 'Content-Disposition': 'attachment; filename="artifact-uuid.msh"' },
+      headers: { 'Content-Disposition': 'attachment; filename="artifact-uuid.msh"', ...(regenerated ? { 'X-WG2-Mesh-Regenerated': '1' } : {}) },
     }));
     const filename = await downloadMeshArtifact({
       id: 'artifact-uuid', run_number: 123, label: 'asro68', config_summary: {},
-    }, fetcher, saveBlob);
+    }, reportNotice, fetcher, saveBlob);
 
     expect(fetcher).toHaveBeenCalledWith('/api/mesh-artifact/artifact-uuid', { signal: expect.any(AbortSignal) });
-    expect(filename).toBe('123_asro68.msh');
-    expect(saveBlob.mock.calls[0][1]).toBe('123_asro68.msh');
+    expect(filename).toBe(expectedName);
+    expect(saveBlob).toHaveBeenCalledTimes(1);
+    expect(saveBlob.mock.calls[0][1]).toBe(expectedName);
+    expect(reportNotice).toHaveBeenCalledTimes(regenerated ? 1 : 0);
+    if (regenerated) expect(reportNotice).toHaveBeenCalledWith("This run's original mesh was no longer stored, so it was rebuilt with the current mesher and may differ from the mesh that was solved.");
     expect(await (saveBlob.mock.calls[0][0] as Blob).text()).toBe('stored mesh bytes');
   });
 
@@ -990,20 +995,29 @@ describe('result exporters', () => {
     expect(Array.from(new Uint8Array(await payload.members[2].blob.arrayBuffer()))).toEqual([4, 5, 6]);
   });
 
-  it('auto-saves the mesh into the same per-run Workspace directory', async () => {
+  it.each([false, true])('auto-saves a mesh with regenerated=%s into the same per-run Workspace directory', async (regenerated) => {
+    const reportNotice = vi.fn();
+    const expectedName = `123_asro68${regenerated ? '-regenerated' : ''}.msh`;
     const fetcher = vi.fn<typeof fetch>(async (input) => {
-      if (String(input) === '/api/mesh-artifact/artifact-uuid') return new Response('mesh bytes', { status: 200 });
+      if (String(input) === '/api/mesh-artifact/artifact-uuid') return new Response('mesh bytes', { status: 200, headers: regenerated ? { 'X-WG2-Mesh-Regenerated': '1' } : {} });
+      expect(reportNotice).not.toHaveBeenCalled();
       return new Response(JSON.stringify({
         directory: 'C:/output/123_asro68',
-        files: ['C:/output/123_asro68/123_asro68.msh'],
+        files: [`C:/output/123_asro68/${expectedName}`],
       }), { status: 200 });
     });
 
     const saved = await saveMeshArtifactToWorkspace({
       id: 'artifact-uuid', run_number: 123, label: 'asro68', config_summary: {},
-    }, fetcher);
+    }, reportNotice, fetcher);
 
-    expect(saved).toBe('C:/output/123_asro68/123_asro68.msh');
+    expect(saved).toBe(`C:/output/123_asro68/${expectedName}`);
+    const payload = workspacePayload(fetcher.mock.calls[1][1]);
+    expect(payload.subdirectory).toBe('asro68/123_asro68');
+    expect(payload.members[0].relative_path).toBe(expectedName);
+    expect(await payload.members[0].blob.text()).toBe('mesh bytes');
+    expect(reportNotice).toHaveBeenCalledTimes(regenerated ? 1 : 0);
+    if (regenerated) expect(reportNotice).toHaveBeenCalledWith("This run's original mesh was no longer stored, so it was rebuilt with the current mesher and may differ from the mesh that was solved.");
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
       '/api/mesh-artifact/artifact-uuid', '/api/workspace/write-export',
     ]);

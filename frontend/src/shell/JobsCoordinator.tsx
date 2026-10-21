@@ -578,7 +578,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [automation]);
   useEffect(() => {
     void automation.process(jobs, preferences, {
-      downloadMesh: (job) => saveMeshArtifactToWorkspace(job),
+      downloadMesh: (job, reportNotice) => saveMeshArtifactToWorkspace(job, reportNotice),
       markMeshDownloaded: (job, filename) => jobsSocket.patchMetadata(job.id, { mesh_artifact_file: filename }),
       exportCompleted: (job, formats) => ownedAutoExport(job, formats, (job, formats, fetcher) => exportRunAutomatically(job, formats, {
         fetcher,

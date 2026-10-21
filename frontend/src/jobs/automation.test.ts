@@ -3,6 +3,7 @@ import type { JobItem } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
 import type { ExportFormat, Preferences } from '../prefs/preferences';
 import { JobAutomation } from './automation';
+import { saveMeshArtifactToWorkspace } from '../results/exporters';
 
 const job: JobItem = { id: 'abcdef123', run_number: 1, parent_job_id: null, status: 'complete', progress: 1, stage: null, stage_message: null, created_at: '2026-08-04T10:00:00Z', queued_at: '2026-08-04T10:00:00Z', started_at: null, completed_at: '2026-08-04T10:01:00Z', config_summary: {}, solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: true, label: null, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null, design_revision: 0, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null, auto_export_formats: {}, archived_at: null, raw_results_file: null, mesh_artifact_file: null, log_tail: [] };
 
@@ -20,6 +21,33 @@ describe('job completion automation', () => {
     expect(dependencies.markExported).toHaveBeenCalledWith(job, ['result.csv'], {
       csv: { status: 'complete', attempted_at: '2026-08-04T12:00:00Z' },
     }, '2026-08-04T12:00:00Z');
+  });
+
+  it.each([false, true])('records the saved mesh and reports regeneration once when regenerated=%s', async (regenerated) => {
+    const automation = new JobAutomation();
+    const filename = `1_design${regenerated ? '-regenerated' : ''}.msh`;
+    const savedPath = `design/1_design/${filename}`;
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).startsWith('/api/mesh-artifact/')) {
+        return new Response('mesh bytes', { headers: regenerated ? { 'X-WG2-Mesh-Regenerated': '1' } : {} });
+      }
+      expect(String(input)).toBe('/api/workspace/write-export');
+      expect((init!.body as FormData).get('file')).toHaveProperty('name', filename);
+      return new Response(JSON.stringify({ directory: 'design/1_design', files: [savedPath] }));
+    });
+    const reportError = vi.fn();
+    const dependencies = {
+      downloadMesh: (item: JobItem, reportNotice: (message: string) => void) => saveMeshArtifactToWorkspace(item, reportNotice, fetcher),
+      markMeshDownloaded: vi.fn().mockResolvedValue(undefined),
+      exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn(), markArchived: vi.fn(), reportError,
+    };
+    const preferences = { ...preferencesStore.getSnapshot(), autoDownloadMesh: true, autoExportOnComplete: false, archiveRunsOnComplete: false };
+    await automation.process([job], preferences, dependencies);
+    await automation.process([job], preferences, dependencies);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(dependencies.markMeshDownloaded).toHaveBeenCalledExactlyOnceWith(job, savedPath);
+    expect(reportError).toHaveBeenCalledTimes(regenerated ? 1 : 0);
+    if (regenerated) expect(reportError).toHaveBeenCalledWith("This run's original mesh was no longer stored, so it was rebuilt with the current mesher and may differ from the mesh that was solved.");
   });
 
   it('holds a partial export failure for the session and retries only failed formats after restart', async () => {

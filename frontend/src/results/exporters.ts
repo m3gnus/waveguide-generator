@@ -1002,27 +1002,35 @@ export async function runAutomaticWorkspaceExport(
   return directory === undefined ? { files, failures } : { files, failures, directory };
 }
 
+export const REGENERATED_MESH_NOTICE = "This run's original mesh was no longer stored, so it was rebuilt with the current mesher and may differ from the mesh that was solved.";
+
 export async function downloadMeshArtifact(
   job: Pick<JobItem, 'id' | 'run_number' | 'label' | 'config_summary'>,
+  reportNotice: (message: string) => void,
   fetcher: typeof fetch = fetch,
   saveBlob: (blob: Blob, filename: string) => void = downloadBlob,
 ): Promise<string> {
   const response = await deadlineFetch(fetcher, `/api/mesh-artifact/${encodeURIComponent(job.id)}`);
   if (!response.ok) throw await responseError(response);
-  const filename = `${exportStemForJob(job)}.msh`;
+  const regenerated = response.headers.get('X-WG2-Mesh-Regenerated') === '1';
+  const filename = `${exportStemForJob(job)}${regenerated ? '-regenerated' : ''}.msh`;
   saveBlob(await response.blob(), filename);
+  if (regenerated) reportNotice(REGENERATED_MESH_NOTICE);
   return filename;
 }
 
 export async function saveMeshArtifactToWorkspace(
   job: Pick<JobItem, 'id' | 'run_number' | 'label' | 'config_summary' | 'cad_source'>,
+  reportNotice: (message: string) => void,
   fetcher: typeof fetch = fetch,
 ): Promise<string> {
   let prepared: WorkspaceFile | null = null;
-  await downloadMeshArtifact(job, fetcher, (blob, filename) => { prepared = { blob, filename }; });
+  let notice: string | undefined;
+  await downloadMeshArtifact(job, (message) => { notice = message; }, fetcher, (blob, filename) => { prepared = { blob, filename }; });
   if (!prepared) throw new Error('Mesh artifact returned no file.');
   const written = await writeWorkspaceFiles(exportSubdirectoryForJob(job), [prepared], fetcher);
   if (!written.files[0]) throw new Error('Workspace returned no saved mesh path.');
+  if (notice) reportNotice(notice);
   return written.files[0];
 }
 
