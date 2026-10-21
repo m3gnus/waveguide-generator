@@ -281,7 +281,10 @@ export async function convertDesignToFreeform(
   design: DesignDocument,
   fetcher: typeof fetch = fetch,
 ): Promise<FreeformConversion> {
-  const profileText = await exportProfileCsv(design, 0, undefined, 'freeform-conversion', fetcher).catch(() => null);
+  const profileText = await exportProfileCsv(design, 0, undefined, 'freeform-conversion', fetcher).catch((error: unknown) => {
+    if (error instanceof ProfileExportError) return null;
+    throw error;
+  });
   if (profileText !== null) {
     let converted: FreeformConversion | null = null;
     try { converted = freeformFromProfileCsv(profileText, design); } catch { /* use endpoint fallback */ }
@@ -310,6 +313,11 @@ export async function convertDesignToFreeform(
   return { design: fallback, notice: athFreeformNotice(design) };
 }
 
+/** An HTTP refusal of the profile export, distinct from a failed request. */
+export class ProfileExportError extends Error {
+  override name = 'ProfileExportError';
+}
+
 /** One profile-export request for conversion and read-only inspection. */
 export async function exportProfileCsv(
   design: DesignDocument, designRevision: number, signal?: AbortSignal,
@@ -319,7 +327,7 @@ export async function exportProfileCsv(
     method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
     body: JSON.stringify({ design: serializeDesign(design), designRevision, baseName }),
   });
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Profile export failed'));
+  if (!response.ok) throw new ProfileExportError(await httpErrorMessage(response, 'Profile export failed'));
   return response.text();
 }
 

@@ -241,7 +241,7 @@ export function EditablePointTable({ field, points }: { field: ParameterDefiniti
   };
   return <div className="editable-parameter-table" aria-label={field.label}>
     <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{interior.length} / 62 interior</span></div>
-    <p className="position-note">Changing length moves point and station positions proportionally.</p>
+    <p className="position-note">Positions are along the design length, before Scale. Changing length moves point and station positions proportionally.</p>
     <label><input type="checkbox" checked={showDistance} onChange={(event) => setShowDistance(event.target.checked)} /> Distance from previous point</label>
     <table><thead><tr><th>z mm</th>{showDistance && <th>distance mm</th>}<th>r mm</th><th>angle</th><th /></tr></thead>
       <tbody>{interior.map((point, index) => <tr key={index}>
@@ -320,7 +320,7 @@ export function EditableStationTable({ field, stations }: { field: ParameterDefi
   };
   return <div className="editable-parameter-table" aria-label={field.label}>
     <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{stations.length} / 32 stations</span></div>
-    <p className="position-note">Changing length moves point and station positions proportionally.</p>
+    <p className="position-note">Positions are along the design length, before Scale. Changing length moves point and station positions proportionally.</p>
     <table><thead><tr><th>mm from throat / %</th><th>shape</th><th>n / radius</th><th /></tr></thead><tbody>
       {stations.map((station, index) => <tr key={index}>
         <td><NumberField label={`Station ${index + 1} position`} value={positionMm(station.t, length)} min={0} max={length} step={.1} precision={15} displayPrecision={4} unit="mm" disabled={index === 0 || index === stations.length - 1}

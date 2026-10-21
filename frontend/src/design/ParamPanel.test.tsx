@@ -2109,7 +2109,7 @@ describe('ParamPanel inventory UX', () => {
     expect(useDesignStore.getState().design.length).toBe(60);
     expect(useDesignStore.getState().design.profile_h!.points).toEqual(before);
     expect(useDesignStore.getState().design.cross_sections).toEqual(stationsBefore);
-    expect(host.textContent).toContain('Changing length moves point and station positions proportionally.');
+    expect(host.textContent).toContain('Positions are along the design length, before Scale. Changing length moves point and station positions proportionally.');
   });
 });
 

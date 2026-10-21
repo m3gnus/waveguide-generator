@@ -5,6 +5,8 @@ import type { EChartsOption } from 'echarts';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, type JobResults, type RadiationImpedancePresentation, type ResultData } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
+import { axes, LABEL_FONT, type ChartDensity } from '../results/chartAxes';
+export type { ChartDensity } from '../results/chartAxes';
 import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, hasZeroRadiationRear, impedanceComparable, impedanceSeries, impedanceSubtitle, isOutsideHalfSpace, nearestFrequencyIndex, OUTSIDE_HALF_SPACE_LABEL, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
 import { runWorkspaceExportBundle } from '../results/exporters';
@@ -153,15 +155,12 @@ export const COMPARABLE_CHARTS = new Set<ChartType>([
  * padding are therefore scaled to the panel, and the identifying labels the
  * compact charts drop are carried by the card's own title chip instead.
  */
-export type ChartDensity = 'compact' | 'regular' | 'full';
-
 export function chartDensity(width: number, height: number): ChartDensity {
   if (height >= 300 && width >= 440) return 'full';
   if (height >= 172 && width >= 300) return 'regular';
   return 'compact';
 }
 
-const LABEL_FONT: Record<ChartDensity, number> = { compact: 11, regular: 11, full: 12 };
 /** `top` is the band reserved for the floating title chip and the legend. */
 const LINE_GRID: Record<ChartDensity, { left: number; right: number; top: number; bottom: number }> = {
   compact: { left: 30, right: 8, top: 16, bottom: 17 },
@@ -177,18 +176,6 @@ const MAP_GRID: Record<ChartDensity, { left: number; right: number; top: number;
 const MAP_RAMP: Record<ChartDensity, number> = { compact: 38, regular: 74, full: 150 };
 /** Legend clears copy/download/expand/close buttons in the same band. */
 const LEGEND_INSET = 88;
-
-function axes(tokens: ChartTokens, density: ChartDensity = 'regular') {
-  return {
-    axisLine: { lineStyle: { color: tokens.spine ?? tokens.grid } },
-    axisTick: { lineStyle: { color: tokens.muted } },
-    // Log-frequency ticks crowd as soon as a card narrows; dropping the
-    // colliding ones beats printing "4001,000".
-    axisLabel: { color: tokens.muted, fontSize: LABEL_FONT[density], margin: density === 'compact' ? 5 : 8, hideOverlap: true },
-    splitLine: { lineStyle: { color: tokens.grid, width: .7 } },
-    minorSplitLine: { show: true, lineStyle: { color: tokens.gridMinor, width: .5 } },
-  };
-}
 
 type CartesianSeries = { data?: Array<number[] | { value?: number[] }> };
 

@@ -27,7 +27,17 @@ describe('generated bore profile coordinates', () => {
         expect(point.r).toBeCloseTo(fixture.expected[axis][index].r, 4);
       });
     }
-    const option = profileChartOption(samples, 'both', 420, 260, readChartTokens());
+    const tokens = readChartTokens();
+    const option = profileChartOption(samples, 'both', 420, 260, tokens);
+    for (const axis of [option.xAxis, option.yAxis]) {
+      expect(axis).toMatchObject({
+        axisLine: { lineStyle: { color: tokens.spine ?? tokens.grid } },
+        axisTick: { lineStyle: { color: tokens.muted } },
+        axisLabel: { color: tokens.muted },
+        splitLine: { lineStyle: { color: tokens.grid } },
+        minorSplitLine: { lineStyle: { color: tokens.gridMinor } },
+      });
+    }
     const traces = series(option);
     expect(traces).toHaveLength(fixture.name === 'equal' ? 1 : 2);
     expect(traces[0].name).toBe(fixture.name === 'equal' ? 'H = V' : 'H');
@@ -78,6 +88,14 @@ describe('profile freshness', () => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   });
   afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  it.each([1, 1.7, 0.5])('labels scaled plot coordinates when Scale is %s', (scale) => {
+    act(() => root.render(<ProfileInspection design={{ ...design, scale }} identity="a" revision={1} />));
+    const caption = host.querySelector('p')!.textContent;
+    expect(caption).toContain('Generated bore profile — scaling, morph and supported extensions applied. Inspection only.');
+    if (scale === 1) expect(caption).not.toContain('Plot in scaled mm');
+    else expect(caption).toContain(`Plot in scaled mm (Scale = ${scale}).`);
+  });
 
   it('debounces edits, aborts superseded requests and drops late edit responses', async () => {
     render('a', 1); render('a', 2);

@@ -141,6 +141,7 @@ describe('FREEFORM numeric tables', () => {
     const points: FreeformPoint[] = [{ t: 0, r: 12.7 }, { t: .5, r: 60 }, { t: 1, r: 140 }];
     const updateValue = vi.spyOn(useDesignStore.getState(), 'updateValue');
     act(() => root.render(<EditablePointTable field={pointField} points={points}/>));
+    expect(host.querySelector('.position-note')?.textContent).toBe('Positions are along the design length, before Scale. Changing length moves point and station positions proportionally.');
     const z = inputWithLabel(host, 'H point 1 z');
 
     act(() => enterDraft(z, '999'));
@@ -164,6 +165,7 @@ describe('FREEFORM numeric tables', () => {
     ];
     const updateValue = vi.spyOn(useDesignStore.getState(), 'updateValue');
     act(() => root.render(<EditableStationTable field={stationField} stations={stations}/>));
+    expect(host.querySelector('.position-note')?.textContent).toBe('Positions are along the design length, before Scale. Changing length moves point and station positions proportionally.');
     const exponent = inputWithLabel(host, 'Station 2 exponent');
 
     act(() => enterDraft(exponent, '20'));

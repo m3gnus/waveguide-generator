@@ -3,6 +3,7 @@ import type { EChartsOption } from 'echarts';
 import { inspectProfileSamples } from '../api/designIo';
 import type { ProfileSamples } from '../api/profileSamples';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
+import { axes } from '../results/chartAxes';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { parameterPanelValidity } from './parameterPanelValidity';
 
@@ -27,8 +28,8 @@ export function profileChartOption(samples: ProfileSamples, plane: Plane, width:
     grid: { left: 55, top: 30, width: (zMax - zMin) * pixelsPerMm, height: rMax * pixelsPerMm, containLabel: false },
     legend: { textStyle: { color: tokens.foreground } },
     tooltip: { trigger: 'axis', valueFormatter: (value) => `${Number(value).toFixed(3)} mm` },
-    xAxis: { type: 'value', name: 'z (mm)', nameLocation: 'middle', nameGap: 25, min: zMin, max: zMax, axisLabel: { color: tokens.muted }, nameTextStyle: { color: tokens.foreground } },
-    yAxis: { type: 'value', name: 'r (mm)', min: 0, max: rMax, axisLabel: { color: tokens.muted }, nameTextStyle: { color: tokens.foreground } },
+    xAxis: { type: 'value', name: 'z (mm)', nameLocation: 'middle', nameGap: 25, min: zMin, max: zMax, ...axes(tokens), nameTextStyle: { color: tokens.foreground } },
+    yAxis: { type: 'value', name: 'r (mm)', min: 0, max: rMax, ...axes(tokens), nameTextStyle: { color: tokens.foreground } },
     series: planes.map((axis) => ({
       type: 'line', name: equal && plane === 'both' ? 'H = V' : axis,
       data: samples[axis].map(({ z, r }) => [z, r]),
@@ -80,7 +81,7 @@ export function ProfileInspection({ design, identity, revision, invalidDraft = f
   const stale = visible?.key !== key || invalidDraft || Boolean(error);
   const option = useMemo(() => visible ? profileChartOption(visible.samples, plane, width, 260, tokens) : null, [visible, plane, width, tokens]);
   return <div ref={host} className="profile-inspection" aria-label="Generated bore profile">
-    <p>Generated bore profile — scaling, morph and supported extensions applied. Inspection only.</p>
+    <p>Generated bore profile — scaling, morph and supported extensions applied. Inspection only.{design.scale !== 1 && ` Plot in scaled mm (Scale = ${design.scale}).`}</p>
     <label>Show <select aria-label="Profile planes" value={plane} onChange={(event) => setPlane(event.target.value as Plane)}>
       <option value="both">H and V</option><option value="H">Horizontal (H)</option><option value="V">Vertical (V)</option>
     </select></label>

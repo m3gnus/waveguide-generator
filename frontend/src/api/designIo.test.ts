@@ -92,6 +92,25 @@ describe('FREEFORM conversion of a rolled-back profile', () => {
   ].join('\r\n');
   const increasing = (values: number[]) => values.every((value, index) => index === 0 || value > values[index - 1]);
 
+  it.each([
+    new TypeError('Failed to fetch'),
+    new DOMException('The operation was aborted', 'AbortError'),
+    new Error('Unexpected request failure'),
+  ])('propagates a rejected profile request: $name', async (error) => {
+    const fetcher = vi.fn<typeof fetch>().mockRejectedValue(error);
+    await expect(convertDesignToFreeform(designForFamily('OSSE'), fetcher)).rejects.toBe(error);
+  });
+
+  it('falls back to the current endpoints when profile export returns 422', async () => {
+    const source = { ...designForFamily('OSSE'), L: 217, R: 151, r0: 14 };
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ detail: 'Cannot export profile' }), { status: 422 }));
+    const { design } = await convertDesignToFreeform(source, fetcher);
+    expect(design.formula).toBe('FREEFORM');
+    expect(design.length).toBe(source.L);
+    expect(design.profile_h!.points).toEqual([{ t: 0, r: source.r0 }, { t: 1, r: source.R }]);
+    expect(design.profile_v!.points).toEqual(design.profile_h!.points);
+  });
+
   it.each(['profiles', 'fallback'] as const)('removes ATH controls and their sidecars in %s conversion with a notice', async (mode) => {
     const source = hydrateDesignDocument({
       formula: 'OSSE', text_import_version: 'ath-2026-09a-v2',
