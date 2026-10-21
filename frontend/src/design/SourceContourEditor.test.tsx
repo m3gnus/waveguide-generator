@@ -221,7 +221,7 @@ describe('source editor interactions', () => {
     await pointer(curve, 'pointermove');
     expect(row.classList.contains('hovered')).toBe(true);
     await pointer(curve);
-    expect(row.getAttribute('aria-selected')).toBe('true');
+    expect(host.querySelector('[data-row-id="piston"]')!.getAttribute('aria-selected')).toBe('true');
     expect(scrolled).not.toHaveBeenCalled();
     await act(async () => button('Select point 2').click());
     expect(points.open).toBe(false);
@@ -236,7 +236,7 @@ describe('source editor interactions', () => {
     await pointer(pole); await pointer(host.querySelector('[aria-label="Sketch drawing"]')!, 'pointerup'); await settle();
     expect(host.querySelector('[data-row-id="pole"]')!.getAttribute('aria-selected')).toBe('true');
     await act(async () => button('Select patch 1').click());
-    expect(row.getAttribute('aria-selected')).toBe('true');
+    expect(host.querySelector('[data-row-id="piston"]')!.getAttribute('aria-selected')).toBe('true');
     expect(host.querySelector('.sketch-entity[data-id="piston"]')!.classList.contains('selected')).toBe(true);
   });
 
@@ -797,7 +797,7 @@ describe('source editor interactions', () => {
     expect(readSourceDraft()).toEqual(INITIAL_SOURCE);
     expect(host.querySelector('[aria-label^="Dimension distance"]')).not.toBeNull();
   });
-  it('shows adapter and lowering diagnoses once and treats a missing pole/rim as unfinished', async () => {
+  it('shows exactness diagnoses once and treats a locked, inexact pole/rim as invalid', async () => {
     const doc = structuredClone(INITIAL_SOURCE);
     doc.contour.points[0].r_mm = 1; doc.contour.points[1].z_mm = 1;
     storage.setItem('', JSON.stringify(doc));
@@ -806,8 +806,8 @@ describe('source editor interactions', () => {
     expect(problems).toHaveLength(2);
     expect(problems.filter(p => p.textContent?.includes('pole'))).toHaveLength(1);
     expect(problems.filter(p => p.textContent?.includes('rim'))).toHaveLength(1);
-    expect(host.querySelector('.sketch-status')?.textContent).toContain('unfinished');
-    expect(problems.every(problem => problem.classList.contains('unfinished'))).toBe(true);
+    expect(host.querySelector('.sketch-status')?.textContent).toContain('invalid');
+    expect(problems.every(problem => problem.classList.contains('invalid'))).toBe(true);
     expect(host.querySelector('.source-validation')).toBeNull();
     expect(sourceEditorApi.validate).not.toHaveBeenCalled();
   });
@@ -1173,6 +1173,45 @@ describe('source editor interactions', () => {
     expect(panel.querySelector('[aria-label="Dimension properties"]')).toBeNull();
     expect((panel.querySelector('.source-summary')!.parentElement as HTMLElement).hidden).toBe(false);
   });
+  it('uses displayName for a selected arc centre outside the contour point table', async () => {
+    const { displayName } = await import('../sketch/displayName');
+    await mount(); await act(async () => button('Apply shape').click()); await settle();
+    const state = readSourceAuthoring(readSourceDraft());
+    const arc = state.sketch.entities.find(e => e.kind === 'arc' && !e.construction)!;
+    if (arc.kind !== 'arc') throw new Error('Expected preset arc');
+    await pointer(host.querySelector(`.sketch-entity[data-id="${arc.id}"]`)!);
+    await pointer(host.querySelector('[aria-label="Sketch drawing"]')!,'pointerup'); await settle();
+    await pointer(host.querySelector(`.sketch-point[data-id="${arc.center}"]`)!);
+    await pointer(host.querySelector('[aria-label="Sketch drawing"]')!,'pointerup'); await settle();
+    const properties = host.querySelector('[aria-label="Point properties"]')!;
+    expect(properties.textContent).toContain(`${displayName(state.sketch,arc.center)} radius`);
+    expect(properties.textContent).not.toContain('Point 0');
+  });
+
+  it('renders each selected row and field once as All tables open and close', async () => {
+    await mount(); await act(async () => button('Apply shape').click()); await settle();
+    for (const [selector, table, panel] of [
+      ['.sketch-point[data-id="rim"]','.source-points','Point properties'],
+      ['.sketch-entity:not(.construction)','.source-patches','Segment properties'],
+      ['.sketch-dimension text','.source-dimensions','Dimension properties'],
+    ]) {
+      const target = host.querySelector(selector)!;
+      const id = target.getAttribute('data-id')!;
+      await pointer(target); await pointer(host.querySelector('[aria-label="Sketch drawing"]')!,'pointerup'); await settle();
+      expect(host.querySelectorAll(`[data-row-id="${id}"]`)).toHaveLength(1);
+      expect(host.querySelector(`[aria-label="${panel}"]`)).not.toBeNull();
+      const details = host.querySelector<HTMLDetailsElement>(table)!;
+      await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')); });
+      expect(host.querySelector(`[aria-label="${panel}"]`)).toBeNull();
+      expect(host.querySelectorAll(`[data-row-id="${id}"]`)).toHaveLength(1);
+      const labels = [...host.querySelectorAll('input[aria-label], select[aria-label]')].map(e => e.getAttribute('aria-label'));
+      expect(new Set(labels).size).toBe(labels.length);
+      await act(async () => { details.open = false; details.dispatchEvent(new Event('toggle')); });
+      expect(host.querySelectorAll(`[data-row-id="${id}"]`)).toHaveLength(1);
+      expect(host.querySelector(`[aria-label="${panel}"]`)).not.toBeNull();
+    }
+  });
+
   it('keeps a height-filling workspace with an independent panel and persistent toolbar/status at mocked 1440 × 900', async () => {
     let resized: ResizeObserverCallback | undefined;
     vi.stubGlobal('ResizeObserver', class { constructor(callback: ResizeObserverCallback) { resized = callback; } observe() {} disconnect() {} });
@@ -1196,15 +1235,18 @@ describe('source editor interactions', () => {
       expect(editorCss).toContain('grid-template-rows: minmax(360px, 1fr)');
     } finally { style.remove(); vi.unstubAllGlobals(); }
   });
-  it('offers explicit scaling in the conflict banner and summary after an infeasible host change', async () => {
+  it.each([false,true])('blocks acceptance and offers explicit scaling after an infeasible host change (nested: %s)', async nested => {
+    const primaryAction = nested ? 'Use contour' : 'Done';
     const doc = structuredClone(INITIAL_SOURCE); doc.contour.points[1].r_mm = 12.7; doc.contour.points[0].z_mm = Math.sqrt(13**2-12.7**2);
     let state = sourceAdapter.withSourceLimit(sourceAdapter.seed(doc),{kind:'throat',radius:12.7,hard:true});
     const result = sourceAdapter.applySourceCommand(state.sketch,state.meta,{kind:'addConstraint',constraint:{kind:'distance',a:'pole',b:'rim',value:13,driving:true,label:'Typed chord'}});
     if ('error' in result) throw new Error(result.error); state = result;
     const authoring = (await import('../sketch/adapters/sourceAuthoring')).serializeSourceAuthoring(state,false);
     const changed = vi.fn();
-    const render = async (radius: number) => { await act(async () => root.render(<Editor onClose={() => {}} initialDocument={doc} initialAuthoring={authoring} limit={{kind:'throat',radius,hard:true}} onDraftChange={changed}/>)); await settle(); };
-    await render(12.7); await render(14);
+    const render = async (radius: number) => { await act(async () => root.render(<Editor onClose={() => {}} initialDocument={doc} initialAuthoring={authoring} limit={{kind:'throat',radius,hard:true}} onDraftChange={changed} onUseDocument={nested ? vi.fn() : undefined}/>)); await settle(); };
+    await render(12.7); expect(button(primaryAction).disabled).toBe(false); await render(14);
+    expect(button(primaryAction).disabled).toBe(true);
+    expect(host.querySelector('.source-throat-mismatch')!.textContent).toContain('Rim does not meet the horn throat (12.70 vs 14.00)');
     const banner = host.querySelector('.sketch-conflict-banner')!;
     expect(banner.textContent).toContain('The new throat conflicts with:');
     expect(banner.textContent).toContain('Typed chord');
@@ -1214,8 +1256,52 @@ describe('source editor interactions', () => {
     await act(async () => banner.querySelector('button')!.click()); await settle();
     expect(changed.mock.calls.at(-1)![0].contour.points.at(-1).r_mm).toBe(14);
     expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
+    expect(button(primaryAction).disabled).toBe(false);
     await act(async () => button('Undo').click()); await settle();
     expect(Number(input('Point 2 radius').value)).toBe(12.7);
+    expect(button(primaryAction).disabled).toBe(true);
+    expect(host.querySelector('.source-throat-mismatch')!.textContent).toContain('(12.70 vs 14.00)');
+    // Dismissing the solver banner cannot dismiss the host mismatch or enable acceptance.
+    await act(async () => button('Dismiss').click()); await settle();
+    expect(host.querySelector('.source-throat-mismatch')).not.toBeNull();
+    expect(button(primaryAction).disabled).toBe(true);
+    await act(async () => button('Redo').click()); await settle();
+    expect(Number(input('Point 2 radius').value)).toBe(14);
+    expect(button(primaryAction).disabled).toBe(false);
+  });
+
+  it.each(['mouth', 'aperture', 'throat'] as const)('loads a preset saved with a %s limit into a throat host', async kind => {
+    const { seedPreset } = await import('../sketch/adapters/sourcePreset');
+    const { serializeSourceAuthoring } = await import('../sketch/adapters/sourceAuthoring');
+    const dimensions = { ...presetDefaults.cone, radius_mm: kind === 'throat' ? 14 : 12.7 };
+    const source = seedPreset(expandedPreset('cone', dimensions), 'cone', dimensions);
+    const state = kind === 'throat' ? sourceAdapter.fitSourcePreset(source, {kind,radius:14,hard:true})
+      : sourceAdapter.withSourceLimit(source, {kind,radius:20});
+    const lowered = sourceAdapter.lower(state.sketch,state.meta);
+    expect(lowered.ok).toBe(true); if (!lowered.ok) return;
+    vi.mocked(sourceEditorApi.presets).mockResolvedValue([{id:'loaded',revision:'r1',name:'Loaded shape',document:lowered.document,authoring:serializeSourceAuthoring(state,false)}]);
+    const changed = vi.fn(), use = vi.fn();
+    await act(async () => root.render(<Editor initialDocument={INITIAL_SOURCE} onClose={() => {}} onUseDocument={use} onDraftChange={changed} limit={{kind:'throat',radius:14,hard:true}}/>)); await settle();
+    const before = changed.mock.calls.at(-1)![0];
+    await act(async () => button('Load Loaded shape').click()); await settle();
+    if (kind !== 'throat') {
+      expect(changed.mock.calls.at(-1)![0]).toEqual(before);
+      expect(host.querySelector('.sketch-conflict-banner')).not.toBeNull();
+      expect(button('Use contour').disabled).toBe(true);
+      await act(async () => host.querySelector<HTMLButtonElement>('.source-throat-mismatch button')!.click()); await settle();
+    }
+    expect(host.querySelector('.source-throat-mismatch')).toBeNull();
+    expect(host.querySelector('.sketch-conflict-banner')).toBeNull();
+    expect(button('Use contour').disabled).toBe(false);
+    const loaded = changed.mock.calls.at(-1)![0] as SourceDocument;
+    expect(loaded.contour.segments.map(p => p.id)).toEqual(lowered.document.contour.segments.map(p => p.id));
+    expect(loaded.contour.points.at(-1)!.r_mm).toBeCloseTo(14,9);
+    const factor = kind === 'throat' ? 1 : 14 / lowered.document.contour.points.at(-1)!.r_mm;
+    expect(loaded.contour.points[0].z_mm).toBeCloseTo(lowered.document.contour.points[0].z_mm * factor,8);
+    await act(async () => button('Use contour').click());
+    expect(use).toHaveBeenCalledWith(loaded);
+    await act(async () => button('Undo').click()); await settle();
+    expect(changed.mock.calls.at(-1)![0]).toEqual(before);
   });
 
   it('rolls back an infeasible first throat attachment to existing typed authoring', async () => {

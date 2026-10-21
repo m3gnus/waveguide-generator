@@ -154,9 +154,11 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const panel = useRef<HTMLElement>(null);
   const progress = sourceProgress(displayAuthor.sketch, displayAuthor.meta);
   const [throatConflict, setThroatConflict] = useState(false);
+  const pendingLoad = useRef<Authoring<SourceMeta> | undefined>(undefined);
   const [hoverId, setHoverId] = useState<string>();
   const [pointsOpen, setPointsOpen] = useState(false);
   const [dimensionsOpen, setDimensionsOpen] = useState(false);
+  const [patchesOpen, setPatchesOpen] = useState(false);
   const authoringCallback = useRef(onAuthoringChange); authoringCallback.current = onAuthoringChange;
   const draftCallback = useRef(onDraftChange); draftCallback.current = onDraftChange;
   const controller = useRef<SketchController<SourceMeta> | undefined>(undefined);
@@ -193,7 +195,13 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const close = useCallback(() => { if (!busy) onClose(); }, [busy, onClose]);
   const dialog = useModalDialogFocus<HTMLDivElement>({ open: true, onClose: close });
   const key = useMemo(() => JSON.stringify(draft), [draft]);
-  const valid = accepted?.key === key && drawPoints === null && (classic || sketchReady && !sketchPending && sketchProblems.every(p => p.severity === 'warning'));
+  const rimRadius = tablePoints.at(-1)?.r_mm;
+  const rimMismatch = !!limit.hard && (rimRadius !== undefined && Math.abs(rimRadius - limit.radius) > 1e-8
+    || JSON.stringify(author.meta.limit) !== JSON.stringify(limit));
+  const throatMismatch = rimMismatch || throatConflict;
+  const pendingRim = pendingLoad.current && contourPointOrder(pendingLoad.current.sketch, pendingLoad.current.meta).at(-1);
+  const mismatchRadius = pendingLoad.current?.sketch.points.find(p => p.id === pendingRim)?.x ?? rimRadius;
+  const valid = !throatMismatch && accepted?.key === key && drawPoints === null && (classic || sketchReady && !sketchPending && sketchProblems.every(p => p.severity === 'warning'));
   const [identifiersOpen, setIdentifiersOpen] = useState(false);
   const identityIssue = identityProblem(validationError, [draft.contour.physical_source_id, draft.contour.rim_id]) || draft.drive.channel_id.trim() === '';
   useEffect(() => { if (identityIssue) setIdentifiersOpen(true); }, [identityIssue]);
@@ -271,7 +279,8 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   function scaleToFitThroat() {
     void run(async () => {
       if (!controller.current) return;
-      await controller.current.adopt(withSourceContext(scaleSourceToLimit(controller.current.current, limitRef.current), contextRef.current), 'Scale to fit throat', true);
+      await controller.current.adopt(withSourceContext(scaleSourceToLimit(pendingLoad.current ?? controller.current.current, limitRef.current), contextRef.current), 'Scale to fit throat', true);
+      pendingLoad.current = undefined;
       setThroatConflict(false);
     });
   }
@@ -321,9 +330,20 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   }
   async function adopt(value: SourceValidation, preset?: { shape: typeof shape; dimensions: Record<string, number> }, savedAuthoring?: unknown) {
     const restored = parseSourceAuthoring(savedAuthoring, value.document);
-    const next = withSourceContext(preset ? fitSourcePreset(seedPreset(value.document, preset.shape, preset.dimensions), limitRef.current) : withSourceLimit(restored ?? seed(value.document), limitRef.current), contextRef.current);
-    if (!classic && controller.current) { await controller.current.adopt(next); }
+    const loaded = preset ? seedPreset(value.document, preset.shape, preset.dimensions) : restored ?? seed(value.document);
+    const next = withSourceContext(preset ? fitSourcePreset(loaded, limitRef.current) : withSourceLimit(loaded, limitRef.current), contextRef.current);
+    if (!classic && controller.current) {
+      try { await controller.current.adopt(next, 'Load contour', true); }
+      catch (reason) {
+        if (limitRef.current.hard && isConstraintConflict(reason)) {
+          // Retain the real loaded rim, before withSourceLimit forced it onto the host.
+          pendingLoad.current = loaded; setThroatConflict(true);
+        }
+        throw reason;
+      }
+    }
     else { replaceAuthor(next); const lowered = lower(next.sketch, next.meta); change(lowered.ok ? lowered.document : value.document); }
+    pendingLoad.current = undefined; setThroatConflict(false);
     if (preset) setDimensions({ ...preset.dimensions });
     else if (restored?.meta.preset) { setShape(restored.meta.preset.shape); setDimensions({ ...defaults[restored.meta.preset.shape], ...restored.meta.preset.values }); }
     setTopologyDimensions({});
@@ -382,11 +402,14 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     if (e?.kind === 'line') { const a = author.sketch.points.find(p => p.id === e.p1)!, b = author.sketch.points.find(p => p.id === e.p2)!; return `length ${Math.hypot(b.x-a.x,b.y-a.y).toFixed(2)} mm`; }
     return '';
   }
-  const pointRow = (point: typeof tablePoints[number], i: number) => <tr key={point.id} data-row-id={point.id} aria-selected={canvasSelection.includes(point.id)} className={hoverId === point.id ? 'hovered' : ''}
-          onPointerEnter={() => setHoverId(point.id)} onPointerLeave={() => setHoverId(undefined)} onClick={() => { if (!classic) setCanvasSelection([point.id]); }}><td title={point.id}><button type="button" aria-label={`Select point ${i + 1}`} onClick={() => setCanvasSelection([point.id])}>{displayName(nameSketch, point.id)}</button></td>
-          <td><NumberField label={`Point ${i + 1} radius`} value={point.r_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === 0 || drawPoints !== null || !classic && pointHeld(point.id)} onCommit={(v) => classic ? change(editPoint(draft, i, v, point.z_mm)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: v, y: state.sketch.points.find(p => p.id === point.id)!.y }))}/></td>
-          <td><NumberField label={`Point ${i + 1} z`} value={point.z_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === draft.contour.points.length - 1 || drawPoints !== null || !classic && pointHeld(point.id)} onCommit={(v) => classic ? change(editPoint(draft, i, point.r_mm, v)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: state.sketch.points.find(p => p.id === point.id)!.x, y: v }))}/></td>
+  const pointRow = (point: typeof tablePoints[number], i: number) => {
+    const label = i < 0 ? displayName(nameSketch, point.id) : `Point ${i + 1}`;
+    return <tr key={point.id} data-row-id={point.id} aria-selected={canvasSelection.includes(point.id)} className={hoverId === point.id ? 'hovered' : ''}
+          onPointerEnter={() => setHoverId(point.id)} onPointerLeave={() => setHoverId(undefined)} onClick={() => { if (!classic) setCanvasSelection([point.id]); }}><td title={point.id}><button type="button" aria-label={`Select ${label.toLowerCase()}`} onClick={() => setCanvasSelection([point.id])}>{displayName(nameSketch, point.id)}</button></td>
+          <td><NumberField label={`${label} radius`} value={point.r_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === 0 || drawPoints !== null || !classic && pointHeld(point.id)} onCommit={(v) => classic ? change(editPoint(draft, i, v, point.z_mm)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: v, y: state.sketch.points.find(p => p.id === point.id)!.y }))}/></td>
+          <td><NumberField label={`${label} z`} value={point.z_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === draft.contour.points.length - 1 || drawPoints !== null || !classic && pointHeld(point.id)} onCommit={(v) => classic ? change(editPoint(draft, i, point.r_mm, v)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: state.sketch.points.find(p => p.id === point.id)!.x, y: v }))}/></td>
           <td>{classic && i > 0 && i < draft.contour.points.length - 1 && <button type="button" aria-label={`Remove point ${i + 1}`} disabled={drawPoints !== null} onClick={() => { try { change(removePoint(draft, i)); setSelectedPatch(0); } catch (reason) { setError(String(reason)); } }}>Remove</button>}</td></tr>;
+  };
   const dimensionRow = (c: Constraint) => 'value' in c && <tr key={c.id} data-row-id={c.id}
               aria-selected={canvasSelection.includes(c.id)} className={hoverId === c.id ? 'hovered' : ''}
               onClick={() => setCanvasSelection([c.id])} onPointerEnter={() => setHoverId(c.id)} onPointerLeave={() => setHoverId(undefined)}>
@@ -418,8 +441,6 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
       || !!selectedPoint && author.sketch.entities.some(entity => entityPoints(entity).includes(selectedId) && refs.includes(entity.id));
   }) : [];
   const constraintsList = <ul aria-label="Constraints on selection">{related.map(c => <li key={c.id}>{displayName(author.sketch, c.id)}</li>)}</ul>;
-  const rimRadius = tablePoints.at(-1)?.r_mm;
-  const rimMismatch = !!limit.hard && rimRadius !== undefined && Math.abs(rimRadius - limit.radius) > 1e-8;
   function revealRow(id: string) {
     // Only this panel is a scroll owner. Never scrollIntoView(), which scrolls ancestors too.
     const row = [...panel.current?.querySelectorAll<HTMLElement>('[data-row-id]') ?? []].find(row => row.dataset.rowId === id && row.closest('details')?.open);
@@ -465,9 +486,9 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
 
       </div><aside ref={panel} aria-label="Sketch properties" className="source-properties">
         <div ref={setCommandHost} className="source-command-properties"/>
-        {selectedPoint && <section aria-label="Point properties"><h3>Point</h3><table><tbody>{pointRow(selectedPoint, tablePoints.findIndex(p => p.id === selectedPoint.id))}</tbody></table>{constraintsList}<p>{pointHeld(selectedPoint.id) ? 'No remaining freedom' : diagnosis?.status === 'ok' && diagnosis.pointDetermined?.[selectedPoint.id] === false ? 'Point can still move' : 'Remaining freedom not analysed'}</p></section>}
-        {selectedSegment && <section aria-label="Segment properties"><h3>Segment</h3><table><tbody>{patchRow(selectedSegment, tablePatches.indexOf(selectedSegment))}</tbody></table>{constraintsList}</section>}
-        {selectedDimension && <section aria-label="Dimension properties"><h3>Dimension</h3><table><tbody>{dimensionRow(selectedDimension)}</tbody></table></section>}
+        {selectedPoint && (!pointsOpen || !tablePoints.some(p => p.id === selectedPoint.id)) && <section aria-label="Point properties"><h3>Point</h3><table><tbody>{pointRow(selectedPoint, tablePoints.findIndex(p => p.id === selectedPoint.id))}</tbody></table>{constraintsList}<p>{pointHeld(selectedPoint.id) ? 'No remaining freedom' : diagnosis?.status === 'ok' && diagnosis.pointDetermined?.[selectedPoint.id] === false ? 'Point can still move' : 'Remaining freedom not analysed'}</p></section>}
+        {selectedSegment && !patchesOpen && <section aria-label="Segment properties"><h3>Segment</h3><table><tbody>{patchRow(selectedSegment, tablePatches.indexOf(selectedSegment))}</tbody></table>{constraintsList}</section>}
+        {selectedDimension && !dimensionsOpen && <section aria-label="Dimension properties"><h3>Dimension</h3><table><tbody>{dimensionRow(selectedDimension)}</tbody></table></section>}
         {canvasSelection.length > 1 && <section aria-label="Selection properties"><h3>Selection</h3><p>{canvasSelection.filter(id => author.sketch.points.some(p => p.id === id)).length} points · {canvasSelection.filter(id => author.sketch.entities.some(e => e.id === id)).length} segments · {canvasSelection.filter(id => author.sketch.constraints.some(c => c.id === id && 'value' in c)).length} dimensions</p></section>}
         <div hidden={!classic && canvasSelection.length > 0}>
         <details className="source-summary"><summary>Source summary</summary><p className={`source-progress ${progress.state}`}>{progress.state} · {tablePatches.length} patches · rim r {rimRadius?.toFixed(2) ?? '—'} mm</p>{(rimMismatch || throatConflict) && <button type="button" onClick={scaleToFitThroat}>Scale to fit throat</button>}</details>
@@ -498,13 +519,13 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         })}>Export STEP + mesh bundle</button>
         <p>Source presets store the contour and drive. Attachment and mesh size apply to this export.</p></details>}
         </div>
-        <details className="source-points" open={classic || pointsOpen} onToggle={e => setPointsOpen(e.currentTarget.open)}><summary>All points</summary><div className="source-table"><table><thead><tr><th>Point</th><th>r mm</th><th>z mm</th><th/></tr></thead><tbody>{tablePoints.map(pointRow)}</tbody></table></div></details>
+        <details className="source-points" open={classic || pointsOpen} onToggle={e => setPointsOpen(e.currentTarget.open)}><summary>All points</summary><div className="source-table"><table><thead><tr><th>Point</th><th>r mm</th><th>z mm</th><th/></tr></thead><tbody>{tablePoints.filter(p => pointsOpen || classic || p.id !== selectedPoint?.id).map(p => pointRow(p, tablePoints.indexOf(p)))}</tbody></table></div></details>
         {!classic && <details className="source-dimensions" open={dimensionsOpen} onToggle={event => setDimensionsOpen(event.currentTarget.open)}><summary>All dimensions</summary>
           <div className="source-table"><table aria-label="Dimensions"><thead><tr><th>Name</th><th>Value</th><th>Driving</th></tr></thead><tbody>
-            {author.sketch.constraints.filter(c => 'value' in c).map(dimensionRow)}
+            {author.sketch.constraints.filter(c => 'value' in c && (dimensionsOpen || c.id !== selectedDimension?.id)).map(dimensionRow)}
           </tbody></table></div>
         </details>}
-        <details className="source-patches"><summary>All patches</summary><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch</th><th>Name</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{tablePatches.map(patchRow)}</tbody></table></div>
+        <details className="source-patches" open={patchesOpen} onToggle={e => setPatchesOpen(e.currentTarget.open)}><summary>All patches</summary><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch</th><th>Name</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{tablePatches.filter(p => patchesOpen || p.id !== selectedSegment?.id).map(p => patchRow(p, tablePatches.indexOf(p)))}</tbody></table></div>
         </details>
         {classic && draft.contour.segments[selectedPatch]?.kind === 'arc' && <div className="source-fields">
           <NumberField label="Arc center radius" unit="mm" precision={9} displayPrecision={2} step={.1} value={draft.contour.segments[selectedPatch].center_mm![0]} onCommit={(v) => change(editPatch(draft, selectedPatch, { center_mm: [v, draft.contour.segments[selectedPatch].center_mm![1]] }))}/>
@@ -519,6 +540,6 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         }}>Split selected patch at midpoint</button>
       </aside></div>
     </fieldset>
-    <footer>{(classic || sketchProblems.every(p => p.severity === 'warning') && !validationError) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}<div ref={setStatusHost} className="source-status-host"/>{!onUseDocument && <button type="button" disabled={busy} onClick={close}>Done</button>}{onUseDocument && <button type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour</button>}{onUseDocument && <button type="button" disabled={busy} onClick={close}>Back to assembly</button>}{busy && <p role="status">Working…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>{onDraftChange ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours. Names are stored in the sketch only.</small></footer>
+    <footer>{throatMismatch && <div role="status" className="source-throat-mismatch">Rim does not meet the horn throat ({mismatchRadius?.toFixed(2) ?? '—'} vs {limit.radius.toFixed(2)}) <button type="button" disabled={busy || sketchPending} onClick={scaleToFitThroat}>Scale to fit throat</button></div>}{(!throatMismatch && (classic || sketchProblems.every(p => p.severity === 'warning') && !validationError)) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}<div ref={setStatusHost} className="source-status-host"/>{!onUseDocument && <button type="button" disabled={busy || !valid} onClick={close}>Done</button>}{onUseDocument && <button type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour</button>}{onUseDocument && <button type="button" disabled={busy} onClick={close}>Back to assembly</button>}{busy && <p role="status">Working…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>{onDraftChange ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours. Names are stored in the sketch only.</small></footer>
   </div></div>;
 }

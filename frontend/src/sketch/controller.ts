@@ -42,7 +42,7 @@ export class SketchController<T> {
   private pending = 0;
   private placedDimension?: { id: string; state: Authoring<T> };
   private busy = false;
-  private contextSnapshots = new WeakSet<Authoring<T>>();
+  private context?: { replace: (state: Authoring<T>) => Authoring<T>; conflictPrefix?: string };
   constructor(initial: Authoring<T>, private references: Reference[] | ((state: Authoring<T>) => Reference[]), private apply: Apply<T>, private changed: (state: Authoring<T>, diagnosis?: Diagnosis) => void, failed?: (reason: unknown) => void, private activity?: (busy: boolean) => void, private preview?: (state: Authoring<T>, diagnosis?: Diagnosis) => void, private dimensionProblem?: (state: Authoring<T>, id: string, value: number) => string | undefined) {
     this.history = new History(initial);
     this.ready = createSession(initial.sketch, { references: this.getReferences(initial) }).then(async session => {
@@ -201,36 +201,35 @@ export class SketchController<T> {
   }
   /** External attachment context belongs to every undo/redo state, not sketch history. */
   replaceContext(replace: (state: Authoring<T>) => Authoring<T>, notice?: string, conflictPrefix?: string) {
-    return this.queue(async session => {
-      const current = this.current, state = replace(current);
-      const next = await createSession(state.sketch, { references: this.getReferences(state) });
-      try {
-        const diagnosis = await next.solveFull();
-        if (conflictPrefix && diagnosis.status !== 'ok') {
-          const cause = constraintError(state.sketch, diagnosis);
-          const constraints = state.sketch.constraints.filter(c => diagnosis.constraintStates[c.id] === 'conflicting');
-          const named = constraints.length ? constraints : state.sketch.constraints.filter(c => 'driving' in c && c.driving);
-          const conflict = Object.assign(cause, { message: `${conflictPrefix}${named.map(c => displayName(state.sketch, c.id)).join('; ') || cause.message}`, overconstrained: true, constraints: named, conflicting: named.map(c => c.id) });
-          this.rejection = conflict; throw conflict;
-        }
-        this.diagnosis = diagnosis;
-      } catch (e) { next.destroy(); throw e; }
-      const referenceMoved = (before: Sketch, after: Sketch) => [...referencePointIds(after)].some(id => {
-        const a = before.points.find(p => p.id === id), b = after.points.find(p => p.id === id)!;
-        return !a || a.x !== b.x || a.y !== b.y;
-      });
-      // A display/clearance refresh must not perturb exact imported contour coordinates.
-      const solved = { ...state, sketch: this.diagnosis.status === 'ok' && referenceMoved(current.sketch, state.sketch) ? next.sketch : state.sketch };
-      session.destroy(); this.session = next;
-      next.sketch = solved.sketch;
-      this.notice = this.diagnosis.status === 'ok' ? notice ?? (referenceMoved(current.sketch, state.sketch) ? 'Reference context changed; contour updated' : undefined) : 'Context changed; contour could not be solved';
-      this.history.map(snapshot => {
-        if (snapshot === current) return solved;
-        const updated = replace(snapshot); if (referenceMoved(snapshot.sketch, updated.sketch)) this.contextSnapshots.add(updated); return updated;
-      });
-      if (this.dragStart) this.dragStart = replace(this.dragStart);
-      this.publish(this.current);
+    this.context = { replace, conflictPrefix };
+    return this.queue(session => this.installContext(session, replace, notice, conflictPrefix));
+  }
+  private async installContext(session: SketchSession, replace: (state: Authoring<T>) => Authoring<T>, notice?: string, conflictPrefix?: string) {
+    const current = this.current, state = replace(current);
+    const next = await createSession(state.sketch, { references: this.getReferences(state) });
+    try {
+      const diagnosis = await next.solveFull();
+      if (conflictPrefix && diagnosis.status !== 'ok') {
+        const cause = constraintError(state.sketch, diagnosis);
+        const constraints = state.sketch.constraints.filter(c => diagnosis.constraintStates[c.id] === 'conflicting');
+        const named = constraints.length ? constraints : state.sketch.constraints.filter(c => 'driving' in c && c.driving);
+        const conflict = Object.assign(cause, { message: `${conflictPrefix}${named.map(c => displayName(state.sketch, c.id)).join('; ') || cause.message}`, overconstrained: true, constraints: named, conflicting: named.map(c => c.id) });
+        this.rejection = conflict; throw conflict;
+      }
+      this.diagnosis = diagnosis;
+    } catch (e) { next.destroy(); throw e; }
+    const referenceMoved = (before: Sketch, after: Sketch) => [...referencePointIds(after)].some(id => {
+      const a = before.points.find(p => p.id === id), b = after.points.find(p => p.id === id)!;
+      return !a || a.x !== b.x || a.y !== b.y;
     });
+    // A display/clearance refresh must not perturb exact imported contour coordinates.
+    const solved = { ...state, sketch: this.diagnosis.status === 'ok' && referenceMoved(current.sketch, state.sketch) ? next.sketch : state.sketch };
+    session.destroy(); this.session = next;
+    next.sketch = solved.sketch;
+    this.notice = this.diagnosis.status === 'ok' ? notice ?? (referenceMoved(current.sketch, state.sketch) ? 'Reference context changed; contour updated' : undefined) : 'Context changed; contour could not be solved';
+    this.history.current = solved;
+    if (this.dragStart) this.dragStart = replace(this.dragStart);
+    this.publish(this.current);
   }
   metadata(meta: T | ((current: T) => T)) {
     return this.queue(session => this.transaction(session, 'Metadata', async () => ({ ...this.current, meta: typeof meta === 'function' ? (meta as (current: T) => T)(this.current.meta) : meta })));
@@ -269,7 +268,7 @@ export class SketchController<T> {
   undo(redo = false) {
     return this.queue(async session => {
       this.notice = undefined; this.dismissRejection();
-      let state = this.history.peek(redo);
+      const state = this.history.peek(redo);
       if (state === this.current) return;
       const next = await createSession(state.sketch, { references: this.getReferences(state) });
       let diagnosis: Diagnosis;
@@ -277,11 +276,19 @@ export class SketchController<T> {
         diagnosis = await next.solveFull();
         if (diagnosis.status !== 'ok') throw new Error(diagnosis.reason ?? 'The history state cannot be solved.');
       } catch (e) { next.destroy(); throw e; }
-      if (this.contextSnapshots.has(state)) state = { ...state, sketch: next.sketch };
       next.sketch = state.sketch; session.destroy(); this.session = next; this.diagnosis = diagnosis;
       if (redo) this.history.redo(); else this.history.undo();
       this.history.current = state;
-      this.publish(state);
+      // Remember even a rejected host update. Historical sketches try the current
+      // attachment before publishing; an infeasible one stays rolled back for repair.
+      if (this.context) {
+        const { replace, conflictPrefix } = this.context;
+        try { await this.installContext(next, replace, undefined, conflictPrefix); }
+        catch (reason) {
+          if (!isConstraintConflict(reason)) throw reason;
+          if (!this.destroyed) this.changed(state, this.diagnosis);
+        }
+      } else this.publish(state);
     });
   }
   destroy() { this.destroyed = true; void this.ready.catch(() => {}).then(() => this.work).finally(() => this.session?.destroy()); }

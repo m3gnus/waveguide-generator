@@ -1,10 +1,8 @@
 import { entityPoints, type Sketch } from '../model';
-import { arcGeometry, onArc, projectToEntity } from '../geometry';
+import { arcGeometry, onArc } from '../geometry';
 import { internalHelper } from '../dimensionGraphics';
-import { referencePointIds } from '../context';
+import { excludedGeometryPoints, geometryCandidates, rankedGeometryHits } from '../geometryHit';
 import type { XY } from '../solver/types';
-
-const selectionExcluded = (sketch: Sketch, hidden: string[] = []) => new Set([...referencePointIds(sketch), ...sketch.entities.filter(internalHelper).flatMap(entityPoints), ...hidden]);
 
 export interface Modifiers { shift?: boolean; toggle?: boolean }
 export function combineSelection(selection: string[], ids: string[], modifiers: Modifiers = {}): string[] {
@@ -22,8 +20,8 @@ export function moveSelect(state: SelectState, current: XY): SelectState {
   return { ...state, current, phase: state.phase === 'pending' && Math.hypot(current.x - state.start.x, current.y - state.start.y) >= 4 ? state.hit ? 'drag' : 'marquee' : state.phase };
 }
 /** Preserve a group while dragging a member; a plain click resolves to just that member. */
-export function finishSelect(state: SelectState, sketch: Sketch, start: XY, end: XY): string[] {
-  if (state.phase === 'marquee') return combineSelection(state.selection, marqueeSelection(sketch, start, end), state.modifiers);
+export function finishSelect(state: SelectState, sketch: Sketch, start: XY, end: XY, hidden: string[] = []): string[] {
+  if (state.phase === 'marquee') return combineSelection(state.selection, marqueeSelection(sketch, start, end, hidden), state.modifiers);
   if (state.phase === 'pending' && !state.modifiers.shift && !state.modifiers.toggle) return state.hit ? [state.hit] : [];
   return state.selection;
 }
@@ -34,26 +32,21 @@ export function cycleHit(previous: Cycle | undefined, at: XY, time: number, ids:
 }
 /** Geometry candidates are ordered by kind, then distance, independently of SVG paint order. */
 export function selectHits(sketch: Sketch, at: XY, tolerance: number, hidden: string[] = [], dimensions: string[] = []): string[] {
-  const excluded = selectionExcluded(sketch, hidden);
-  const points = sketch.points.filter(p => !excluded.has(p.id)).map(p => ({ id: p.id, gap: Math.hypot(p.x - at.x, p.y - at.y) }));
-  const curves = sketch.entities.filter(e => !e.reference && !internalHelper(e) && (e.kind === 'line' || e.kind === 'arc')).map(e => {
-    const p = projectToEntity(sketch, e.id, at.x, at.y); return { id: e.id, gap: Math.hypot(p.x - at.x, p.y - at.y) };
-  });
-  return [...points.filter(p => p.gap <= tolerance).sort((a,b) => a.gap-b.gap), ...curves.filter(p => p.gap <= tolerance).sort((a,b) => a.gap-b.gap)].map(p => p.id).concat(dimensions);
+  return rankedGeometryHits(geometryCandidates(sketch, at, hidden), tolerance).map(hit => hit.id).concat(dimensions);
 }
 export function dragPointIds(sketch: Sketch, selection: string[]): string[] {
-  const fixed = selectionExcluded(sketch);
+  const fixed = excludedGeometryPoints(sketch);
   return [...new Set(selection.flatMap(id => {
     const entity = sketch.entities.find(e => e.id === id);
     return entity ? entity.reference || internalHelper(entity) ? [] : entityPoints(entity) : sketch.points.some(p => p.id === id) ? [id] : [];
   }))].filter(id => !fixed.has(id));
 }
 /** Exact finite line/arc intersections; arc extrema make a window require the entire curve. */
-export function marqueeSelection(sketch: Sketch, start: XY, end: XY): string[] {
+export function marqueeSelection(sketch: Sketch, start: XY, end: XY, hidden: string[] = []): string[] {
   const left = Math.min(start.x,end.x), right = Math.max(start.x,end.x), bottom = Math.min(start.y,end.y), top = Math.max(start.y,end.y);
   const inside = (p: XY) => p.x >= left && p.x <= right && p.y >= bottom && p.y <= top;
   const crossing = end.x < start.x;
-  const fixed = selectionExcluded(sketch), point = (id: string) => sketch.points.find(p => p.id === id)!;
+  const fixed = excludedGeometryPoints(sketch, hidden), point = (id: string) => sketch.points.find(p => p.id === id)!;
   const ids = sketch.points.filter(p => !fixed.has(p.id) && inside(p)).map(p => p.id);
   for (const e of sketch.entities) {
     if (e.reference || internalHelper(e)) continue;

@@ -504,7 +504,12 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
     const screen = position(event), at = screenToWorld(view, screen);
     let selectedHit: string | undefined;
     if (tool === 'select' && event.button === 0) {
-      const dimensions = viewOptions.dimensions ? [...layouts].filter(([id, layout]) => { const c = sketch.constraints.find(c => c.id === id); if (!c || !('value' in c)) return false; const box = dimensionLabelBox(layout, dimensionLabel(c)); return screen.x >= box.x && screen.x <= box.x + box.width && screen.y >= box.y && screen.y <= box.y + box.height; }).map(([id]) => id) : [];
+      const dimensions = [...layouts].filter(([id, layout]) => {
+        const c = sketch.constraints.find(c => c.id === id);
+        if (!c || !('value' in c) || !constraintVisibility(c).visible) return false;
+        const box = dimensionLabelBox(layout, renderedDimensionLabel(c));
+        return screen.x >= box.x && screen.x <= box.x + box.width && screen.y >= box.y && screen.y <= box.y + box.height;
+      }).map(([id]) => id);
       const targetId = (event.target as Element).closest('[data-id]')?.getAttribute('data-id');
       const ids = selectHits(sketch, at, 8 / view.scale, [...hiddenCentres, ...helperPoints], dimensions);
       // Explicit SVG targets also support keyboard/test-dispatched pointer events.
@@ -641,7 +646,7 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
   }
   function pointerUp(cancel = false, event?: PointerEvent<SVGSVGElement>) {
     const selectionGesture = selecting.current; selecting.current = undefined; setMarquee(undefined);
-    if (!cancel && selectionGesture) setSelection(finishSelect(selectionGesture, sketch, screenToWorld(view, selectionGesture.start), screenToWorld(view, selectionGesture.current)));
+    if (!cancel && selectionGesture) setSelection(finishSelect(selectionGesture, sketch, screenToWorld(view, selectionGesture.start), screenToWorld(view, selectionGesture.current), [...hiddenCentres, ...helperPoints]));
     const candidate = dimensionPlacement.current; dimensionPlacement.current = undefined;
     if (candidate && event && event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     if (candidate && !cancel) placeDimension(candidate);
@@ -684,6 +689,7 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
     const active = selection.includes(c.id) || hoveredConstraint === c.id || hoverId === c.id;
     return { problem, active, visible: ('value' in c ? viewOptions.dimensions : viewOptions.constraints) || problem || active };
   };
+  const renderedDimensionLabel = (c: Constraint & { value: number; driving: boolean }) => dimensionLabel(c, viewOptions.names || constraintVisibility(c).active ? 'name' : 'value');
   // Reserve full names so hovering/selecting a label never changes its automatic lane.
   const layouts = dimensionLayouts(dimensionSketch, xy, dimensionBounds, view.scale, c => dimensionLabel(c, 'name'));
   const draft = dimensionPrompt ?? (tool === 'dimension' && !editing && !dimensionSecondPick(dimensionHover, cursor) ? candidateDimension(dimensionPicks(sketch, dimensionIds, references), cursor) : undefined);
@@ -691,7 +697,7 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
   const draftLayout = draftConstraint && dimensionLayout(sketch, draftConstraint, xy, dimensionBounds, 0, view.scale);
   const dimensionBoxes = [...layouts].flatMap(([id, layout]) => {
     const c = dimensionSketch.constraints.find(c => c.id === id)!;
-    return 'value' in c && constraintVisibility(c).visible ? [dimensionLabelBox(layout, dimensionLabel(c, 'name'))] : [];
+    return 'value' in c && constraintVisibility(c).visible ? [dimensionLabelBox(layout, renderedDimensionLabel(c))] : [];
   });
   if (draftConstraint && draftLayout) dimensionBoxes.push(dimensionLabelBox(draftLayout, dimensionLabel(draftConstraint, 'name')));
   const editingAt = editing && layouts.get(editing.id)?.at;
@@ -795,10 +801,11 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
           if (!visible) return null;
           const layout = layouts.get(c.id);
           const at = layout?.at ?? constraintPosition(c, i);
-          const label = dimension ? dimensionLabel(c, viewOptions.names || active ? 'name' : 'value') : (c.kind in rules ? rules[c.kind as keyof typeof rules].symbol : undefined) ?? c.kind;
+          const label = dimension ? renderedDimensionLabel(c) : (c.kind in rules ? rules[c.kind as keyof typeof rules].symbol : undefined) ?? c.kind;
+          const labelBox = layout ? dimensionLabelBox({ ...layout, rotation: 0 }, label) : { x: at.x - 6, y: at.y - 17, width: 24, height: 28 };
           return <g key={c.id} onPointerEnter={() => setHoveredConstraint(c.id)} onPointerLeave={() => setHoveredConstraint(undefined)} data-constraint-id={c.id} className={dimension ? 'sketch-dimension' : undefined}>
             {layout && <g className="sketch-dimension-lines" aria-hidden="true"><path className="sketch-extension-lines" d={layout.path}/><path className="sketch-dimension-arrows" d={layout.arrows}/></g>}
-            <g transform={layout?.rotation ? `rotate(${layout.rotation} ${at.x} ${at.y})` : undefined}><rect data-id={c.id} x={at.x - (layout ? label.length * 3.2 : 0) - 6} y={at.y - 17} width={dimension ? label.length * 6.4 + 12 : 24} height={28} className="sketch-label-hit"/><text textAnchor={layout ? 'middle' : undefined} data-id={c.id} x={at.x} y={at.y} tabIndex={-1} role="button" aria-label={`${dimension ? 'Dimension' : 'Constraint'} ${c.kind} ${c.id}${dimension ? ` ${dimensionLabel(c, 'name')}` : c.label ? ` ${c.label}` : ''}${diagnosis?.constraintStates[c.id] === 'redundant' ? ' implied' : ''}`} className={`sketch-glyph ${dimension && !c.driving ? 'reference' : ''} ${diagnosis?.constraintStates[c.id] ?? ''} ${conflicts.includes(c.id) ? 'conflicting' : ''} ${problem ? 'problem' : ''} ${active ? 'selected' : ''}`} onDoubleClick={event => { event.stopPropagation(); if (dimension && tool !== 'constraint' && tool !== 'hand') editDimension(c); }}><title>{dimension ? dimensionLabel(c, 'name') : c.kind} {c.id}{diagnosis?.constraintStates[c.id] === 'redundant' ? ' (implied)' : ''}</title>{label}</text></g></g>;
+            <g transform={layout?.rotation ? `rotate(${layout.rotation} ${at.x} ${at.y})` : undefined}><rect data-id={c.id} {...labelBox} className="sketch-label-hit"/><text textAnchor={layout ? 'middle' : undefined} data-id={c.id} x={at.x} y={at.y} tabIndex={-1} role="button" aria-label={`${dimension ? 'Dimension' : 'Constraint'} ${c.kind} ${c.id}${dimension ? ` ${dimensionLabel(c, 'name')}` : c.label ? ` ${c.label}` : ''}${diagnosis?.constraintStates[c.id] === 'redundant' ? ' implied' : ''}`} className={`sketch-glyph ${dimension && !c.driving ? 'reference' : ''} ${diagnosis?.constraintStates[c.id] ?? ''} ${conflicts.includes(c.id) ? 'conflicting' : ''} ${problem ? 'problem' : ''} ${active ? 'selected' : ''}`} onDoubleClick={event => { event.stopPropagation(); if (dimension && tool !== 'constraint' && tool !== 'hand') editDimension(c); }}><title>{dimension ? dimensionLabel(c, 'name') : c.kind} {c.id}{diagnosis?.constraintStates[c.id] === 'redundant' ? ' (implied)' : ''}</title>{label}</text></g></g>;
         })}
         {draftConstraint && draftLayout && <g className="sketch-dimension-preview" aria-label={`Preview ${draftConstraint.kind}`}>
           <path d={draftLayout.path}/><path d={draftLayout.arrows}/>

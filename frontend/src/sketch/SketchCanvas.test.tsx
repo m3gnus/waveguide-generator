@@ -1040,6 +1040,37 @@ describe('navigation and line legend', () => {
     }
     expect(selected).toEqual(['p','line','length']);
   });
+  it.each(['distanceX','distanceY'] as const)('hits %s labels using the rendered name size, rotation and visibility', async kind => {
+    const initial = kind === 'distanceX' ? base() : importedSketch([{id:'p',x:0,y:0},{id:'q',x:0,y:10}], [{id:'line',kind:'line',p1:'p',p2:'q'}]);
+    initial.constraints.push({id:'length',kind,a:'p',b:'q',value:10,driving:true,label:'A long authored dimension name',placement:{offset:3,along:.5}});
+    await mount(initial);
+    const label = () => host.querySelector<SVGTextElement>('[data-constraint-id="length"] text')!;
+    const tail = () => {
+      const rect = host.querySelector('[data-constraint-id="length"] rect')!;
+      const x = Number(rect.getAttribute('x')) + Number(rect.getAttribute('width')) * .9;
+      const y = Number(rect.getAttribute('y')) + 14;
+      const ax = Number(label().getAttribute('x')), ay = Number(label().getAttribute('y'));
+      return kind === 'distanceY' ? {x:ax+y-ay,y:ay-x+ax} : {x,y};
+    };
+    await act(async () => button('Names').click());
+    expect(label().textContent).toContain('A long authored dimension name');
+    const named = tail();
+    await act(async () => button('Names').click());
+    await pointer(svg(),'pointerdown',named.x,named.y); await pointer(svg(),'pointerup',named.x,named.y);
+    expect(label().classList.contains('selected')).toBe(false);
+    await act(async () => button('Names').click());
+    await pointer(svg(),'pointerdown',named.x,named.y); await pointer(svg(),'pointerup',named.x,named.y);
+    expect(label().classList.contains('selected')).toBe(true);
+    // Active labels stay visible and pickable even with the Dimensions switch off.
+    await act(async () => button('Dimensions').click());
+    await pointer(svg(),'pointerdown',named.x,named.y); await pointer(svg(),'pointerup',named.x,named.y);
+    expect(label().classList.contains('selected')).toBe(true);
+    await key('Escape'); await key('Escape');
+    expect(label()).toBeNull();
+    await pointer(svg(),'pointerdown',named.x,named.y); await pointer(svg(),'pointerup',named.x,named.y);
+    expect(label()).toBeNull();
+  });
+
   it('keeps the view centre and scale stable when a panel resizes the canvas', async () => {
     let resize: ResizeObserverCallback | undefined;
     vi.stubGlobal('ResizeObserver',class { constructor(callback: ResizeObserverCallback) { resize = callback; } observe() {} disconnect() {} });

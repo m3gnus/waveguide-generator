@@ -1,9 +1,9 @@
 import type { Reference } from '../adapter';
 import type { NewConstraint, Point, Sketch } from '../model';
 import type { XY } from '../solver/types';
-import { arcGeometry, distance, projectToLine, projectToEntity } from '../geometry';
+import { arcGeometry, distance, projectToLine } from '../geometry';
 import { internalHelper } from '../dimensionGraphics';
-import { geometryHit } from '../geometryHit';
+import { geometryCandidates, geometryHit } from '../geometryHit';
 
 export type DimensionPick = { kind: 'point'; point: Point; id: string }
   | { kind: 'line'; id: string; a: Point; b: Point; reference?: 'axis' | 'baffle' | 'context' }
@@ -96,11 +96,6 @@ export function candidateDimension(picks: DimensionPick[], cursor: XY): Candidat
 }
 /** Geometry hit testing, including infinite axis/baffle lines. Points always win. */
 export function hitDimension(sketch: Sketch, references: Reference[], cursor: XY, tolerance: number, hidden: string[] = []): string | undefined {
-  const excluded = new Set([...hidden, ...sketch.entities.filter(e => e.reference || references.some(r => r.id === e.id) || internalHelper(e)).flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : e.kind === 'arc' ? [e.center, e.start, e.end] : [])]);
-  const points = sketch.points.filter(p => !excluded.has(p.id)).map(p => ({ kind: 'point', id: p.id, gap: distance(p, cursor) }));
-  const curves = dimensionPicks(sketch, sketch.entities.map(e => e.id), references).map(p => {
-    const at = p.kind === 'line' && (p.reference === 'axis' || p.reference === 'baffle') ? projectToLine(cursor, p.a, p.b) : projectToEntity(sketch, p.id, cursor.x, cursor.y);
-    return { kind: p.kind, id: p.id, gap: distance(cursor, at) };
-  });
-  return geometryHit([...points, ...curves], tolerance)?.id;
+  const eligible = new Set(dimensionPicks(sketch, sketch.entities.map(e => e.id), references).map(p => p.id));
+  return geometryHit(geometryCandidates(sketch, cursor, hidden, references, e => eligible.has(e.id)), tolerance)?.id;
 }

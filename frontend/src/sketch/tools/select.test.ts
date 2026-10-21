@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
+import { hitDimension } from './dimension';
 import { importedSketch } from '../ops';
 import { combineSelection, cycleHit, dragPointIds, finishSelect, marqueeSelection, moveSelect, selectHits, startSelect } from './select';
 const sketch = () => importedSketch([
@@ -66,4 +67,17 @@ describe('Select state machine', () => {
     expect(selectHits(s,{x:1,y:1},.01)).toEqual(['a','inside']);
     expect(dragPointIds(s,['inside','helper','helper.a'])).toEqual(['a','b']);
   });
+});
+
+
+it('shares point priority, nearest curves, and hidden centres with dimension and marquee', () => {
+  const s = importedSketch([{id:'center',x:0,y:0},{id:'start',x:-2,y:0},{id:'end',x:2,y:0}],
+    [{id:'arc',kind:'arc',center:'center',start:'start',end:'end',ccw:false}]);
+  const hidden = ['center'];
+  for (const at of [{x:0,y:0},{x:1.99,y:.01},{x:0,y:2}]) {
+    expect(selectHits(s,at,.1,hidden)[0]).toBe(hitDimension(s,[],at,.1,hidden));
+  }
+  expect(marqueeSelection(s,{x:-3,y:-3},{x:3,y:3},hidden)).toEqual(['start','end','arc']);
+  const gesture = moveSelect(startSelect({x:-3,y:-3},undefined,[],{}),{x:3,y:3});
+  expect(finishSelect(gesture,s,gesture.start,gesture.current,hidden)).not.toContain('center');
 });

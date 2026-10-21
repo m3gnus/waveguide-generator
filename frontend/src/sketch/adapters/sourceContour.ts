@@ -51,8 +51,9 @@ export function withSourceLimit(state: { sketch: Sketch; meta: SourceMeta }, lim
   line.data = { name: limit.hard ? 'Throat lock' : limit.kind === 'mouth' ? 'Mouth limit' : 'Aperture limit' };
   sketch = moveReferenceLine(sketch, line, [{ x: limit.radius, y: 0 }, { x: limit.radius, y: 1 }]);
   sketch.points = sketch.points.map(p => limit.hard && p.id === rim ? { ...p, x: limit.radius } : p);
-  sketch.constraints = sketch.constraints.filter(c => !(c.kind === 'pointOnLine' && c.line === line.id));
-  if (limit.hard && rim) {
+  const rimLock = limit.hard && sketch.constraints.find(c => c.kind === 'pointOnLine' && c.line === line.id && c.point === rim);
+  sketch.constraints = sketch.constraints.filter(c => !(c.kind === 'pointOnLine' && c.line === line.id) || c === rimLock);
+  if (limit.hard && rim && !rimLock) {
     const result = applyCommand(sketch, { kind: 'addConstraint', constraint: { kind: 'pointOnLine', point: rim, line: line.id } });
     if ('error' in result) throw new Error(result.error);
     sketch = result.sketch;
@@ -84,7 +85,8 @@ export function fitSourcePreset(state: { sketch: Sketch; meta: SourceMeta }, lim
 /** Domain codes come from chain()/rules(); unfinished drafts are neutral, finished failures are errors. */
 export function sourceProgress(sketch: Sketch, meta: SourceMeta) {
   const problems = rules(sketch, meta);
-  const draftProblem = problems.find(problem => ['chain', 'pole', 'rim'].includes(problem.code));
+  const topology = chain(sketch, meta);
+  const draftProblem = 'code' in topology ? topology : undefined;
   const unfinished = !!draftProblem;
   const axis = meta.references.find(r => r.kind === 'axis')?.id;
   const hasPole = sketch.constraints.some(c => c.kind === 'pointOnLine' && c.line === axis);

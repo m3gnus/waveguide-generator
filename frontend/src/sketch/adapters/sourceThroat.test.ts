@@ -41,8 +41,14 @@ describe('throat intent policy', () => {
       const scaled = controller.current;
       expect(scaled.sketch.constraints.find(c => c.label === 'Typed chord')).toMatchObject({value:13*14/12.7,driving:true});
       expect(scaled.sketch.points.find(p => p.id === 'rim')!.x).toBeCloseTo(14,9);
-      await controller.undo(); expect(controller.current).toBe(before);
-      await controller.undo(true); expect(controller.current).toBe(scaled);
+      await controller.undo();
+      // Undo restores typed intent, but retries the authoritative 14 mm host.
+      expect(controller.current).toBe(before);
+      expect(controller.rejection).toMatchObject({overconstrained:true,message:expect.stringContaining('Typed chord')});
+      expect(controller.current.meta.limit).not.toEqual(limit(14));
+      await controller.undo(true); expect(controller.current).toEqual(scaled);
+      expect(controller.current.meta.limit).toEqual(limit(14));
+      expect(controller.rejection).toBeUndefined();
     } finally { controller.destroy(); }
   });
   it('only fresh preset seeding automatically scales, preserving construction references and angles', () => {

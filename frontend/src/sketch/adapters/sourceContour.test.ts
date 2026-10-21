@@ -197,3 +197,20 @@ describe('axis-to-rim guidance', () => {
     expect(sourceProgress(invalid,state.meta)).toEqual({state:'invalid',hint:'Contour complete'});
   });
 });
+
+
+describe('progress diagnosis codes', () => {
+  it.each(['pole', 'rim'])('treats an inexact %s on a locked complete chain as invalid', id => {
+    const { sketch, meta } = seed(INITIAL_SOURCE);
+    const point = sketch.points.find(p => p.id === id)!;
+    if (id === 'pole') point.x = .01; else point.y = .01;
+    expect(rules(sketch, meta).map(p => p.code)).toContain(id);
+    expect(sourceProgress(sketch, meta)).toEqual({state:'invalid',hint:'Contour complete'});
+  });
+  it('keeps a stray drafting point unfinished', () => {
+    const { sketch, meta } = seed(INITIAL_SOURCE);
+    sketch.points.push({id:'draft-point',x:3,y:2});
+    expect(rules(sketch, meta).map(p => p.code)).toContain('stray-point');
+    expect(sourceProgress(sketch, meta).state).toBe('unfinished');
+  });
+});
