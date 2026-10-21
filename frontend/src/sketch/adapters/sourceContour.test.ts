@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import type { SourceDocument, SourcePatch, SourcePoint } from '../../api/sourceEditor';
-import { drawnSource, editPatch, editPoint, INITIAL_SOURCE, removePoint } from '../../design/sourceContourEditing';
+import { INITIAL_SOURCE } from '../../design/sourceContourEditing';
+import { editorFixtures } from './sourceContourTestSupport';
 import { applyCommand } from '../ops';
 import { uniqueProblems } from '../adapter';
 import { validateSketch } from '../model';
@@ -26,21 +27,6 @@ function shape(kind: 'dome' | 'cone', width = 2, depth = .5, land = 1): SourceDo
   return document(points, segments);
 }
 const copy = () => structuredClone(INITIAL_SOURCE);
-function editorFixtures(): SourceDocument[] {
-  const drawn = drawnSource(INITIAL_SOURCE, [{ id: 'a', r_mm: 3, z_mm: -4 }, { id: 'b', r_mm: 5, z_mm: -2 }, { id: 'c', r_mm: 9, z_mm: 1 }], (() => { let i = 0; return () => `patch-${++i}`; })());
-  const merged = drawnSource(INITIAL_SOURCE, [{ id: 'a', r_mm: 0, z_mm: 0 }, { id: 'b', r_mm: 4, z_mm: 1 }, { id: 'c', r_mm: 8, z_mm: 0 }], (() => { let i = 0; return () => `${++i}`; })());
-  const exact = copy(); exact.contour.points[1].r_mm = 8.123456789; exact.drive.weights.piston = .123456789;
-  exact.contour.segments[0] = { ...exact.contour.segments[0], kind: 'arc', center_mm: [4.0617283945, .000123456], direction: 'ccw' };
-  const arc = copy(); arc.contour.segments[0] = { ...arc.contour.segments[0], kind: 'arc', center_mm: [4, 0] };
-  const typed = copy(); typed.contour.points[1].r_mm = 9.525;
-  typed.contour.segments[0] = { ...arc.contour.segments[0], center_mm: [6.123457, -.000123] };
-  const remote = copy(); remote.contour.physical_source_id = 'remote-source'; remote.contour.points[1].r_mm = 24;
-  return [INITIAL_SOURCE, drawn, merged, removePoint(merged, 1), exact, arc, typed, remote,
-    editPoint(INITIAL_SOURCE, 0, 5, 2), editPoint(INITIAL_SOURCE, 1, 10, 7), editPatch(INITIAL_SOURCE, 0, { kind: 'arc' }),
-    { ...INITIAL_SOURCE, drive: { ...INITIAL_SOURCE.drive, weights: { piston: -.5 } } },
-    { ...INITIAL_SOURCE, drive: { ...INITIAL_SOURCE.drive, weights: { piston: 0 } } },
-    editPatch(INITIAL_SOURCE, 0, { role: 'rigid' })];
-}
 describe('source contour exact import and lowering', () => {
   it.each([0, -.5, .123456789])('converts piston to an arc and back with literal weight %s, lowering a valid default bulge', weight => {
     const doc = copy(); doc.drive.weights.piston = weight;

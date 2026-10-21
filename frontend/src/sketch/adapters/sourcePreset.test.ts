@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { presetDefaults, presetLabels, seedPreset, type PresetShape } from './sourcePreset';
-import { expandedPreset } from './presetTestSupport';
+import { expandedPreset, optionalPresetCorpus, presetCorpus } from './presetTestSupport';
 import { applySourceCommand, lower, rules } from './sourceContour';
 import { createSession } from '../session';
 import { applyCommand } from '../ops';
@@ -70,8 +70,7 @@ describe('named parametric presets', () => {
     expect(next.meta.preset!.dimensions.surround_width_mm).toBe(before.meta.preset!.dimensions.surround_width_mm);
   });
   for (const shape of ['flat', 'dome', 'cone'] as PresetShape[]) {
-    it.each<Record<string, number>>([{}, { radius_mm: 12, height_mm: 4, depth_mm: 5, cap_radius_mm: 4, cap_height_mm: 1.5, surround_width_mm: 4, surround_depth_mm: .8, land_width_mm: 2 },
-      { radius_mm: 15.123, height_mm: 2.3, depth_mm: 3.1, cap_radius_mm: 2.4, cap_height_mm: 1.1, surround_width_mm: 3, surround_depth_mm: -.7, land_width_mm: .75 }])(`${shape} keeps the exact expanded document and names its parameters (%j)`, async overrides => {
+    it.each(presetCorpus)(`${shape} keeps the exact expanded document and names its parameters (%j)`, async overrides => {
       const dims = { ...presetDefaults[shape], ...overrides }, document = expandedPreset(shape, overrides), before = structuredClone(document);
       const { sketch, meta } = seedPreset(document, shape, dims);
       expect(lower(sketch, meta)).toEqual({ ok: true, document }); expect(document).toEqual(before);
@@ -115,8 +114,7 @@ describe('named parametric presets', () => {
     } finally { session.destroy(); }
   });
   it.each(['dome', 'cone'] as const)('%s preserves omitted and flat optional patches without changing topology', async shape => {
-    const cases: Record<string, number>[] = [{ surround_width_mm: 0, surround_depth_mm: 0, land_width_mm: 0 }, { surround_depth_mm: 0 }];
-    for (const overrides of cases) {
+    for (const overrides of optionalPresetCorpus) {
       const document = expandedPreset(shape, overrides), state = seedPreset(document, shape, { ...presetDefaults[shape], ...overrides });
       expect(lower(state.sketch, state.meta)).toEqual({ ok: true, document });
       const session = await createSession(state.sketch, { references: state.meta.references });

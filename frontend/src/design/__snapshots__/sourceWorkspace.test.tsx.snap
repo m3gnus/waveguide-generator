@@ -1,0 +1,2764 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`W0 nested editor host publishes at 77c641c8 > command publishes document then authoring with the complete payloads 1`] = `
+[
+  {
+    "callback": "onDraftChange",
+    "payload": {
+      "contour": {
+        "physical_source_id": "diaphragm",
+        "points": [
+          {
+            "id": "pole",
+            "r_mm": 0,
+            "z_mm": 0,
+          },
+          {
+            "id": "p10",
+            "r_mm": 4,
+            "z_mm": 0,
+          },
+          {
+            "id": "rim",
+            "r_mm": 8,
+            "z_mm": 0,
+          },
+        ],
+        "rim_id": "source.rim",
+        "segments": [
+          {
+            "center_mm": null,
+            "direction": "ccw",
+            "end": "p10",
+            "id": "piston",
+            "kind": "line",
+            "role": "moving",
+            "start": "pole",
+          },
+          {
+            "center_mm": null,
+            "direction": "ccw",
+            "end": "rim",
+            "id": "l11",
+            "kind": "line",
+            "role": "moving",
+            "start": "p10",
+          },
+        ],
+        "version": 1,
+      },
+      "drive": {
+        "channel_id": "motor",
+        "motion": "normal",
+        "weights": {
+          "l11": 1,
+          "piston": 1,
+        },
+      },
+    },
+  },
+  {
+    "callback": "onAuthoringChange",
+    "payload": {
+      "document": {
+        "contour": {
+          "physical_source_id": "diaphragm",
+          "points": [
+            {
+              "id": "pole",
+              "r_mm": 0,
+              "z_mm": 0,
+            },
+            {
+              "id": "p10",
+              "r_mm": 4,
+              "z_mm": 0,
+            },
+            {
+              "id": "rim",
+              "r_mm": 8,
+              "z_mm": 0,
+            },
+          ],
+          "rim_id": "source.rim",
+          "segments": [
+            {
+              "center_mm": null,
+              "direction": "ccw",
+              "end": "p10",
+              "id": "piston",
+              "kind": "line",
+              "role": "moving",
+              "start": "pole",
+            },
+            {
+              "center_mm": null,
+              "direction": "ccw",
+              "end": "rim",
+              "id": "l11",
+              "kind": "line",
+              "role": "moving",
+              "start": "p10",
+            },
+          ],
+          "version": 1,
+        },
+        "drive": {
+          "channel_id": "motor",
+          "motion": "normal",
+          "weights": {
+            "l11": 1,
+            "piston": 1,
+          },
+        },
+      },
+      "meta": {
+        "channel_id": "motor",
+        "limit": {
+          "kind": "aperture",
+          "radius": 14,
+        },
+        "motion": "normal",
+        "physical_source_id": "diaphragm",
+        "references": [
+          {
+            "id": "axis",
+            "kind": "axis",
+          },
+          {
+            "id": "baffle",
+            "kind": "baffle",
+          },
+          {
+            "id": "l9",
+            "kind": "limit",
+            "label": "Aperture r 14.00",
+            "locked": false,
+            "point": "rim",
+            "radius": 14,
+            "snapRadius": 14,
+          },
+        ],
+        "rim_id": "source.rim",
+        "weights": {
+          "l11": 1,
+          "piston": 1,
+        },
+      },
+      "pending": false,
+      "sketch": {
+        "constraints": [
+          {
+            "id": "c5",
+            "kind": "pointOnLine",
+            "line": "axis",
+            "point": "pole",
+          },
+          {
+            "id": "c6",
+            "kind": "pointOnLine",
+            "line": "baffle",
+            "point": "rim",
+          },
+        ],
+        "entities": [
+          {
+            "data": {
+              "role": "moving",
+            },
+            "id": "piston",
+            "kind": "line",
+            "p1": "pole",
+            "p2": "p10",
+          },
+          {
+            "data": {
+              "role": "moving",
+            },
+            "id": "l11",
+            "kind": "line",
+            "p1": "p10",
+            "p2": "rim",
+          },
+          {
+            "construction": true,
+            "id": "axis",
+            "kind": "line",
+            "p1": "p1",
+            "p2": "p2",
+            "reference": true,
+          },
+          {
+            "construction": true,
+            "id": "baffle",
+            "kind": "line",
+            "p1": "p3",
+            "p2": "p4",
+            "reference": true,
+          },
+          {
+            "construction": true,
+            "data": {
+              "name": "Aperture limit",
+            },
+            "id": "l9",
+            "kind": "line",
+            "p1": "p7",
+            "p2": "p8",
+            "reference": true,
+          },
+        ],
+        "nextId": 12,
+        "points": [
+          {
+            "id": "pole",
+            "x": 0,
+            "y": 0,
+          },
+          {
+            "id": "rim",
+            "x": 8,
+            "y": 0,
+          },
+          {
+            "id": "p1",
+            "x": 0,
+            "y": 0,
+          },
+          {
+            "id": "p2",
+            "x": 0,
+            "y": 1,
+          },
+          {
+            "id": "p3",
+            "x": 0,
+            "y": 0,
+          },
+          {
+            "id": "p4",
+            "x": 1,
+            "y": 0,
+          },
+          {
+            "id": "p7",
+            "x": 14,
+            "y": 0,
+          },
+          {
+            "id": "p8",
+            "x": 14,
+            "y": 1,
+          },
+          {
+            "id": "p10",
+            "x": 4,
+            "y": 0,
+          },
+        ],
+        "version": "wg-sketch-v1",
+      },
+      "version": "wg-source-authoring-v2",
+    },
+  },
+]
+`;
+
+exports[`W0 nested editor host publishes at 77c641c8 > multi-frame drag publishes only at release, document then authoring 1`] = `
+[
+  {
+    "callback": "onDraftChange",
+    "payload": {
+      "contour": {
+        "physical_source_id": "diaphragm",
+        "points": [
+          {
+            "id": "pole",
+            "r_mm": 0,
+            "z_mm": 0,
+          },
+          {
+            "id": "rim",
+            "r_mm": 8.364583333333334,
+            "z_mm": 0,
+          },
+        ],
+        "rim_id": "source.rim",
+        "segments": [
+          {
+            "center_mm": null,
+            "direction": "ccw",
+            "end": "rim",
+            "id": "piston",
+            "kind": "line",
+            "role": "moving",
+            "start": "pole",
+          },
+        ],
+        "version": 1,
+      },
+      "drive": {
+        "channel_id": "motor",
+        "motion": "normal",
+        "weights": {
+          "piston": 1,
+        },
+      },
+    },
+  },
+  {
+    "callback": "onAuthoringChange",
+    "payload": {
+      "document": {
+        "contour": {
+          "physical_source_id": "diaphragm",
+          "points": [
+            {
+              "id": "pole",
+              "r_mm": 0,
+              "z_mm": 0,
+            },
+            {
+              "id": "rim",
+              "r_mm": 8.364583333333334,
+              "z_mm": 0,
+            },
+          ],
+          "rim_id": "source.rim",
+          "segments": [
+            {
+              "center_mm": null,
+              "direction": "ccw",
+              "end": "rim",
+              "id": "piston",
+              "kind": "line",
+              "role": "moving",
+              "start": "pole",
+            },
+          ],
+          "version": 1,
+        },
+        "drive": {
+          "channel_id": "motor",
+          "motion": "normal",
+          "weights": {
+            "piston": 1,
+          },
+        },
+      },
+      "meta": {
+        "channel_id": "motor",
+        "limit": {
+          "kind": "aperture",
+          "radius": 14,
+        },
+        "motion": "normal",
+        "physical_source_id": "diaphragm",
+        "references": [
+          {
+            "id": "axis",
+            "kind": "axis",
+          },
+          {
+            "id": "baffle",
+            "kind": "baffle",
+          },
+          {
+            "id": "l9",
+            "kind": "limit",
+            "label": "Aperture r 14.00",
+            "locked": false,
+            "point": "rim",
+            "radius": 14,
+            "snapRadius": 14,
+          },
+        ],
+        "rim_id": "source.rim",
+        "weights": {
+          "piston": 1,
+        },
+      },
+      "pending": false,
+      "sketch": {
+        "constraints": [
+          {
+            "id": "c5",
+            "kind": "pointOnLine",
+            "line": "axis",
+            "point": "pole",
+          },
+          {
+            "id": "c6",
+            "kind": "pointOnLine",
+            "line": "baffle",
+            "point": "rim",
+          },
+        ],
+        "entities": [
+          {
+            "data": {
+              "role": "moving",
+            },
+            "id": "piston",
+            "kind": "line",
+            "p1": "pole",
+            "p2": "rim",
+          },
+          {
+            "construction": true,
+            "id": "axis",
+            "kind": "line",
+            "p1": "p1",
+            "p2": "p2",
+            "reference": true,
+          },
+          {
+            "construction": true,
+            "id": "baffle",
+            "kind": "line",
+            "p1": "p3",
+            "p2": "p4",
+            "reference": true,
+          },
+          {
+            "construction": true,
+            "data": {
+              "name": "Aperture limit",
+            },
+            "id": "l9",
+            "kind": "line",
+            "p1": "p7",
+            "p2": "p8",
+            "reference": true,
+          },
+        ],
+        "nextId": 10,
+        "points": [
+          {
+            "id": "pole",
+            "x": 0,
+            "y": 0,
+          },
+          {
+            "id": "rim",
+            "x": 8.364583333333334,
+            "y": 0,
+          },
+          {
+            "id": "p1",
+            "x": 0,
+            "y": 0,
+          },
+          {
+            "id": "p2",
+            "x": 0,
+            "y": 1,
+          },
+          {
+            "id": "p3",
+            "x": 0,
+            "y": 0,
+          },
+          {
+            "id": "p4",
+            "x": 1,
+            "y": 0,
+          },
+          {
+            "id": "p7",
+            "x": 14,
+            "y": 0,
+          },
+          {
+            "id": "p8",
+            "x": 14,
+            "y": 1,
+          },
+        ],
+        "version": "wg-sketch-v1",
+      },
+      "version": "wg-source-authoring-v2",
+    },
+  },
+]
+`;
+
+exports[`W0 nested editor host publishes at 77c641c8 > placed dimension and its first value each publish a pair but merge into one undo step 1`] = `
+[
+  {
+    "callback": "onDraftChange",
+    "payload": {
+      "contour": {
+        "physical_source_id": "diaphragm",
+        "points": [
+          {
+            "id": "pole",
+            "r_mm": 0,
+            "z_mm": 0,
+          },
+          {
+            "id": "rim",
+            "r_mm": 8,
+            "z_mm": 0,
+          },
+        ],
+        "rim_id": "source.rim",
+        "segments": [
+          {
+            "center_mm": null,
+            "direction": "ccw",
+            "end": "rim",
+            "id": "piston",
+            "kind": "line",
+            "role": "moving",
+            "start": "pole",
+          },
+        ],
+        "version": 1,
+      },
+      "drive": {
+        "channel_id": "motor",
+        "motion": "normal",
+        "weights": {
+          "piston": 1,
+        },
+      },
+    },
+  },
+  {
+    "callback": "onAuthoringChange",
+    "payload": {
+      "document": {
+        "contour": {
+          "physical_source_id": "diaphragm",
+          "points": [
+            {
+              "id": "pole",
+              "r_mm": 0,
+              "z_mm": 0,
+            },
+            {
+              "id": "rim",
+              "r_mm": 8,
+              "z_mm": 0,
+            },
+          ],
+          "rim_id": "source.rim",
+          "segments": [
+            {
+              "center_mm": null,
+              "direction": "ccw",
+              "end": "rim",
+              "id": "piston",
+              "kind": "line",
+              "role": "moving",
+              "start": "pole",
+            },
+          ],
+          "version": 1,
+        },
+        "drive": {
+          "channel_id": "motor",
+          "motion": "normal",
+          "weights": {
+            "piston": 1,
+          },
+        },
+      },
+      "meta": {
+        "channel_id": "motor",
+        "limit": {
+          "kind": "aperture",
+          "radius": 14,
+        },
+        "motion": "normal",
+        "physical_source_id": "diaphragm",
+        "references": [
+          {
+            "id": "axis",
+            "kind": "axis",
+          },
+          {
+            "id": "baffle",
+            "kind": "baffle",
+          },
+          {
+            "id": "l9",
+            "kind": "limit",
+            "label": "Aperture r 14.00",
+            "locked": false,
+            "point": "rim",
+            "radius": 14,
+            "snapRadius": 14,
+          },
+        ],
+        "rim_id": "source.rim",
+        "weights": {
+          "piston": 1,
+        },
+      },
+      "pending": false,
+      "sketch": {
+        "constraints": [
+          {
+            "id": "c5",
+            "kind": "pointOnLine",
+            "line": "axis",
+            "point": "pole",
+          },
+          {
+            "id": "c6",
+            "kind": "pointOnLine",
+            "line": "baffle",
+            "point": "rim",
+          },
+          {
+            "a": "pole",
+            "b": "rim",
+            "driving": true,
+            "id": "c10",
+            "kind": "distanceX",
+            "placement": {
+              "along": 0.5,
+              "offset": 1.2152777777777777,
+            },
+            "value": 8,
+          },
+        ],
+        "entities": [
+          {
+            "data": {
+              "role": "moving",
+            },
+            "id": "piston",
+            "kind": "line",
+            "p1": "pole",
+            "p2": "rim",
+          },
+          {
+            "construction": true,
+            "id": "axis",
+            "kind": "line",
+            "p1": "p1",
+            "p2": "p2",
+            "reference": true,
+          },
+          {
+            "construction": true,
+            "id": "baffle",
+            "kind": "line",
+            "p1": "p3",
+            "p2": "p4",
+            "reference": true,
+          },
+          {
+            "construction": true,
+            "data": {
+              "name": "Aperture limit",
+            },
+            "id": "l9",
+            "kind": "line",
+            "p1": "p7",
+            "p2": "p8",
+            "reference": true,
+          },
+        ],
+        "nextId": 11,
+        "points": [
+          {
+            "id": "pole",
+            "x": 0,
+            "y": 0,
+          },
+          {
+            "id": "rim",
+            "x": 8,
+            "y": 0,
+          },
+          {
+            "id": "p1",
+            "x": 0,
+            "y": 0,
+          },
+          {
+            "id": "p2",
+            "x": 0,
+            "y": 1,
+          },
+          {
+            "id": "p3",
+            "x": 0,
+            "y": 0,
+          },
+          {
+            "id": "p4",
+            "x": 1,
+            "y": 0,
+          },
+          {
+            "id": "p7",
+            "x": 14,
+            "y": 0,
+          },
+          {
+            "id": "p8",
+            "x": 14,
+            "y": 1,
+          },
+        ],
+        "version": "wg-sketch-v1",
+      },
+      "version": "wg-source-authoring-v2",
+    },
+  },
+]
+`;
+
+exports[`W0 nested editor host publishes at 77c641c8 > placed dimension and its first value each publish a pair but merge into one undo step 2`] = `
+[
+  {
+    "callback": "onDraftChange",
+    "payload": {
+      "contour": {
+        "physical_source_id": "diaphragm",
+        "points": [
+          {
+            "id": "pole",
+            "r_mm": 0,
+            "z_mm": 0,
+          },
+          {
+            "id": "rim",
+            "r_mm": 10,
+            "z_mm": 0,
+          },
+        ],
+        "rim_id": "source.rim",
+        "segments": [
+          {
+            "center_mm": null,
+            "direction": "ccw",
+            "end": "rim",
+            "id": "piston",
+            "kind": "line",
+            "role": "moving",
+            "start": "pole",
+          },
+        ],
+        "version": 1,
+      },
+      "drive": {
+        "channel_id": "motor",
+        "motion": "normal",
+        "weights": {
+          "piston": 1,
+        },
+      },
+    },
+  },
+  {
+    "callback": "onAuthoringChange",
+    "payload": {
+      "document": {
+        "contour": {
+          "physical_source_id": "diaphragm",
+          "points": [
+            {
+              "id": "pole",
+              "r_mm": 0,
+              "z_mm": 0,
+            },
+            {
+              "id": "rim",
+              "r_mm": 10,
+              "z_mm": 0,
+            },
+          ],
+          "rim_id": "source.rim",
+          "segments": [
+            {
+              "center_mm": null,
+              "direction": "ccw",
+              "end": "rim",
+              "id": "piston",
+              "kind": "line",
+              "role": "moving",
+              "start": "pole",
+            },
+          ],
+          "version": 1,
+        },
+        "drive": {
+          "channel_id": "motor",
+          "motion": "normal",
+          "weights": {
+            "piston": 1,
+          },
+        },
+      },
+      "meta": {
+        "channel_id": "motor",
+        "limit": {
+          "kind": "aperture",
+          "radius": 14,
+        },
+        "motion": "normal",
+        "physical_source_id": "diaphragm",
+        "references": [
+          {
+            "id": "axis",
+            "kind": "axis",
+          },
+          {
+            "id": "baffle",
+            "kind": "baffle",
+          },
+          {
+            "id": "l9",
+            "kind": "limit",
+            "label": "Aperture r 14.00",
+            "locked": false,
+            "point": "rim",
+            "radius": 14,
+            "snapRadius": 14,
+          },
+        ],
+        "rim_id": "source.rim",
+        "weights": {
+          "piston": 1,
+        },
+      },
+      "pending": false,
+      "sketch": {
+        "constraints": [
+          {
+            "id": "c5",
+            "kind": "pointOnLine",
+            "line": "axis",
+            "point": "pole",
+          },
+          {
+            "id": "c6",
+            "kind": "pointOnLine",
+            "line": "baffle",
+            "point": "rim",
+          },
+          {
+            "a": "pole",
+            "b": "rim",
+            "driving": true,
+            "id": "c10",
+            "kind": "distanceX",
+            "placement": {
+              "along": 0.5,
+              "offset": 1.2152777777777777,
+            },
+            "value": 10,
+          },
+        ],
+        "entities": [
+          {
+            "data": {
+              "role": "moving",
+            },
+            "id": "piston",
+            "kind": "line",
+            "p1": "pole",
+            "p2": "rim",
+          },
+          {
+            "construction": true,
+            "id": "axis",
+            "kind": "line",
+            "p1": "p1",
+            "p2": "p2",
+            "reference": true,
+          },
+          {
+            "construction": true,
+            "id": "baffle",
+            "kind": "line",
+            "p1": "p3",
+            "p2": "p4",
+            "reference": true,
+          },
+          {
+            "construction": true,
+            "data": {
+              "name": "Aperture limit",
+            },
+            "id": "l9",
+            "kind": "line",
+            "p1": "p7",
+            "p2": "p8",
+            "reference": true,
+          },
+        ],
+        "nextId": 11,
+        "points": [
+          {
+            "id": "pole",
+            "x": -1.0947644252537633e-47,
+            "y": 0,
+          },
+          {
+            "id": "rim",
+            "x": 10,
+            "y": 0,
+          },
+          {
+            "id": "p1",
+            "x": 0,
+            "y": 0,
+          },
+          {
+            "id": "p2",
+            "x": 0,
+            "y": 1,
+          },
+          {
+            "id": "p3",
+            "x": 0,
+            "y": 0,
+          },
+          {
+            "id": "p4",
+            "x": 1,
+            "y": 0,
+          },
+          {
+            "id": "p7",
+            "x": 14,
+            "y": 0,
+          },
+          {
+            "id": "p8",
+            "x": 14,
+            "y": 1,
+          },
+        ],
+        "version": "wg-sketch-v1",
+      },
+      "version": "wg-source-authoring-v2",
+    },
+  },
+]
+`;
+
+exports[`W0 workspace DOM at 77c641c8 > HF contour 1`] = `
+{
+  "svg": "<svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet" tabindex="0" role="application" aria-label="Sketch drawing">
+<g class="sketch-grid" aria-hidden="true">
+<line x1="0.5818181818181749" x2="0.5818181818181749" y1="0" y2="360">
+</line>
+<line x1="11.054545454545451" x2="11.054545454545451" y1="0" y2="360">
+</line>
+<line x1="21.527272727272724" x2="21.527272727272724" y1="0" y2="360">
+</line>
+<line x1="32" x2="32" y1="0" y2="360">
+</line>
+<line x1="42.472727272727276" x2="42.472727272727276" y1="0" y2="360">
+</line>
+<line x1="52.94545454545455" x2="52.94545454545455" y1="0" y2="360">
+</line>
+<line x1="63.41818181818182" x2="63.41818181818182" y1="0" y2="360">
+</line>
+<line x1="73.8909090909091" x2="73.8909090909091" y1="0" y2="360">
+</line>
+<line x1="84.36363636363637" x2="84.36363636363637" y1="0" y2="360">
+</line>
+<line x1="94.83636363636364" x2="94.83636363636364" y1="0" y2="360">
+</line>
+<line x1="105.30909090909093" x2="105.30909090909093" y1="0" y2="360">
+</line>
+<line x1="115.7818181818182" x2="115.7818181818182" y1="0" y2="360">
+</line>
+<line x1="126.25454545454546" x2="126.25454545454546" y1="0" y2="360">
+</line>
+<line x1="136.72727272727275" x2="136.72727272727275" y1="0" y2="360">
+</line>
+<line x1="147.20000000000002" x2="147.20000000000002" y1="0" y2="360">
+</line>
+<line x1="157.6727272727273" x2="157.6727272727273" y1="0" y2="360">
+</line>
+<line x1="168.14545454545456" x2="168.14545454545456" y1="0" y2="360">
+</line>
+<line x1="178.61818181818185" x2="178.61818181818185" y1="0" y2="360">
+</line>
+<line x1="189.0909090909091" x2="189.0909090909091" y1="0" y2="360">
+</line>
+<line x1="199.5636363636364" x2="199.5636363636364" y1="0" y2="360">
+</line>
+<line x1="210.03636363636366" x2="210.03636363636366" y1="0" y2="360">
+</line>
+<line x1="220.50909090909093" x2="220.50909090909093" y1="0" y2="360">
+</line>
+<line x1="230.9818181818182" x2="230.9818181818182" y1="0" y2="360">
+</line>
+<line x1="241.45454545454547" x2="241.45454545454547" y1="0" y2="360">
+</line>
+<line x1="251.92727272727274" x2="251.92727272727274" y1="0" y2="360">
+</line>
+<line x1="262.40000000000003" x2="262.40000000000003" y1="0" y2="360">
+</line>
+<line x1="272.8727272727273" x2="272.8727272727273" y1="0" y2="360">
+</line>
+<line x1="283.3454545454546" x2="283.3454545454546" y1="0" y2="360">
+</line>
+<line x1="293.8181818181818" x2="293.8181818181818" y1="0" y2="360">
+</line>
+<line x1="304.2909090909091" x2="304.2909090909091" y1="0" y2="360">
+</line>
+<line x1="314.7636363636364" x2="314.7636363636364" y1="0" y2="360">
+</line>
+<line x1="325.2363636363637" x2="325.2363636363637" y1="0" y2="360">
+</line>
+<line x1="335.70909090909095" x2="335.70909090909095" y1="0" y2="360">
+</line>
+<line x1="346.1818181818182" x2="346.1818181818182" y1="0" y2="360">
+</line>
+<line x1="356.6545454545455" x2="356.6545454545455" y1="0" y2="360">
+</line>
+<line x1="367.1272727272728" x2="367.1272727272728" y1="0" y2="360">
+</line>
+<line x1="377.6" x2="377.6" y1="0" y2="360">
+</line>
+<line x1="388.0727272727273" x2="388.0727272727273" y1="0" y2="360">
+</line>
+<line x1="398.54545454545456" x2="398.54545454545456" y1="0" y2="360">
+</line>
+<line x1="409.01818181818186" x2="409.01818181818186" y1="0" y2="360">
+</line>
+<line x1="419.49090909090916" x2="419.49090909090916" y1="0" y2="360">
+</line>
+<line x1="429.9636363636364" x2="429.9636363636364" y1="0" y2="360">
+</line>
+<line x1="440.4363636363637" x2="440.4363636363637" y1="0" y2="360">
+</line>
+<line x1="450.90909090909093" x2="450.90909090909093" y1="0" y2="360">
+</line>
+<line x1="461.3818181818183" x2="461.3818181818183" y1="0" y2="360">
+</line>
+<line x1="471.8545454545455" x2="471.8545454545455" y1="0" y2="360">
+</line>
+<line x1="482.3272727272727" x2="482.3272727272727" y1="0" y2="360">
+</line>
+<line x1="492.80000000000007" x2="492.80000000000007" y1="0" y2="360">
+</line>
+<line x1="503.2727272727273" x2="503.2727272727273" y1="0" y2="360">
+</line>
+<line x1="513.7454545454545" x2="513.7454545454545" y1="0" y2="360">
+</line>
+<line x1="524.2181818181818" x2="524.2181818181818" y1="0" y2="360">
+</line>
+<line x1="534.6909090909091" x2="534.6909090909091" y1="0" y2="360">
+</line>
+<line x1="545.1636363636364" x2="545.1636363636364" y1="0" y2="360">
+</line>
+<line x1="555.6363636363636" x2="555.6363636363636" y1="0" y2="360">
+</line>
+<line x1="566.109090909091" x2="566.109090909091" y1="0" y2="360">
+</line>
+<line x1="576.5818181818182" x2="576.5818181818182" y1="0" y2="360">
+</line>
+<line x1="587.0545454545455" x2="587.0545454545455" y1="0" y2="360">
+</line>
+<line x1="597.5272727272728" x2="597.5272727272728" y1="0" y2="360">
+</line>
+<line x1="608" x2="608" y1="0" y2="360">
+</line>
+<line x1="618.4727272727274" x2="618.4727272727274" y1="0" y2="360">
+</line>
+<line x1="628.9454545454546" x2="628.9454545454546" y1="0" y2="360">
+</line>
+<line x1="639.4181818181819" x2="639.4181818181819" y1="0" y2="360">
+</line>
+<line x1="649.8909090909092" x2="649.8909090909092" y1="0" y2="360">
+</line>
+<line x1="0" x2="640" y1="352.8" y2="352.8">
+</line>
+<line x1="0" x2="640" y1="342.32727272727277" y2="342.32727272727277">
+</line>
+<line x1="0" x2="640" y1="331.8545454545455" y2="331.8545454545455">
+</line>
+<line x1="0" x2="640" y1="321.38181818181823" y2="321.38181818181823">
+</line>
+<line x1="0" x2="640" y1="310.90909090909093" y2="310.90909090909093">
+</line>
+<line x1="0" x2="640" y1="300.43636363636364" y2="300.43636363636364">
+</line>
+<line x1="0" x2="640" y1="289.9636363636364" y2="289.9636363636364">
+</line>
+<line x1="0" x2="640" y1="279.4909090909091" y2="279.4909090909091">
+</line>
+<line x1="0" x2="640" y1="269.01818181818186" y2="269.01818181818186">
+</line>
+<line x1="0" x2="640" y1="258.54545454545456" y2="258.54545454545456">
+</line>
+<line x1="0" x2="640" y1="248.0727272727273" y2="248.0727272727273">
+</line>
+<line x1="0" x2="640" y1="237.60000000000002" y2="237.60000000000002">
+</line>
+<line x1="0" x2="640" y1="227.12727272727273" y2="227.12727272727273">
+</line>
+<line x1="0" x2="640" y1="216.65454545454546" y2="216.65454545454546">
+</line>
+<line x1="0" x2="640" y1="206.1818181818182" y2="206.1818181818182">
+</line>
+<line x1="0" x2="640" y1="195.70909090909092" y2="195.70909090909092">
+</line>
+<line x1="0" x2="640" y1="185.23636363636365" y2="185.23636363636365">
+</line>
+<line x1="0" x2="640" y1="174.76363636363635" y2="174.76363636363635">
+</line>
+<line x1="0" x2="640" y1="164.2909090909091" y2="164.2909090909091">
+</line>
+<line x1="0" x2="640" y1="153.8181818181818" y2="153.8181818181818">
+</line>
+<line x1="0" x2="640" y1="143.34545454545454" y2="143.34545454545454">
+</line>
+<line x1="0" x2="640" y1="132.87272727272727" y2="132.87272727272727">
+</line>
+<line x1="0" x2="640" y1="122.4" y2="122.4">
+</line>
+<line x1="0" x2="640" y1="111.92727272727271" y2="111.92727272727271">
+</line>
+<line x1="0" x2="640" y1="101.45454545454547" y2="101.45454545454547">
+</line>
+<line x1="0" x2="640" y1="90.98181818181817" y2="90.98181818181817">
+</line>
+<line x1="0" x2="640" y1="80.5090909090909" y2="80.5090909090909">
+</line>
+<line x1="0" x2="640" y1="70.03636363636363" y2="70.03636363636363">
+</line>
+<line x1="0" x2="640" y1="59.56363636363636" y2="59.56363636363636">
+</line>
+<line x1="0" x2="640" y1="49.09090909090909" y2="49.09090909090909">
+</line>
+<line x1="0" x2="640" y1="38.618181818181824" y2="38.618181818181824">
+</line>
+<line x1="0" x2="640" y1="28.145454545454527" y2="28.145454545454527">
+</line>
+<line x1="0" x2="640" y1="17.672727272727258" y2="17.672727272727258">
+</line>
+<line x1="0" x2="640" y1="7.19999999999996" y2="7.19999999999996">
+</line>
+<line x1="0" x2="640" y1="-3.272727272727252" y2="-3.272727272727252">
+</line>
+<line x1="0" x2="640" y1="-13.74545454545455" y2="-13.74545454545455">
+</line>
+</g>
+<g class="sketch-context-layer" aria-label="Reference context">
+<defs>
+<pattern id="sketch-context-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+<line x1="0" y1="0" x2="0" y2="6" class="sketch-keepout-hatch">
+</line>
+</pattern>
+</defs>
+<g data-context-id="limit" data-reference-id="l11" class="sketch-context-item role-limit  sketch-limit" style="pointer-events: none;">
+<title>Throat r 11.00 🔒 · Set by the horn design</title>
+<path d="M608,254.54545454545456 l4,4 -4,4 -4,-4 Z">
+</path>
+<text x="608" y="264.54545454545456" text-anchor="end" dominant-baseline="text-before-edge" data-anchor-x="608" data-anchor-y="258.54545454545456">
+<title>Set by the horn design</title>Throat r 11.00 🔒</text>
+</g>
+<g data-context-id="axis" data-reference-id="axis" class="sketch-context-item role-axis " style="pointer-events: auto;">
+<title>Axis (r = 0.00)</title>
+<path d="M32,360 L32,0" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M32,360 L32,0">
+</path>
+</g>
+<g data-context-id="rim-plane" data-reference-id="baffle" class="sketch-context-item role-rim-plane " style="pointer-events: auto;">
+<title>Rim plane (z = 0.00)</title>
+<path d="M0,258.54545454545456 L640,258.54545454545456" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M0,258.54545454545456 L640,258.54545454545456">
+</path>
+</g>
+</g>
+<g class="sketch-curve">
+<path data-id="dome" d="M32,101.45454545454547 A637.0909090909091,637.0909090909091 0 0 1 450.90909090909093,258.54545454545456" class="sketch-curve-hit">
+</path>
+<path data-id="dome" d="M32,101.45454545454547 A637.0909090909091,637.0909090909091 0 0 1 450.90909090909093,258.54545454545456" tabindex="-1" role="button" aria-label="Select arc Dome" class="sketch-entity moving under   ">
+<title>Dome (dome)</title>
+</path>
+</g>
+<g class="sketch-curve">
+<path data-id="surround" d="M450.90909090909093,258.54545454545456 A65.45454545454545,65.45454545454545 0 0 1 555.6363636363636,258.54545454545456" class="sketch-curve-hit">
+</path>
+<path data-id="surround" d="M450.90909090909093,258.54545454545456 A65.45454545454545,65.45454545454545 0 0 1 555.6363636363636,258.54545454545456" tabindex="-1" role="button" aria-label="Select arc Surround" class="sketch-entity moving under   ">
+<title>Surround (surround)</title>
+</path>
+</g>
+<g class="sketch-curve">
+<path data-id="land" d="M555.6363636363636,258.54545454545456 L608,258.54545454545456" class="sketch-curve-hit">
+</path>
+<path data-id="land" d="M555.6363636363636,258.54545454545456 L608,258.54545454545456" tabindex="-1" role="button" aria-label="Select line Land" class="sketch-entity rigid under   ">
+<title>Land (land)</title>
+</path>
+</g>
+<g class="sketch-handle">
+<circle data-id="pole" cx="32" cy="101.45454545454547" r="10" class="sketch-point-hit">
+</circle>
+<circle data-id="pole" cx="32" cy="101.45454545454547" r="4" tabindex="-1" role="button" aria-label="Select point Pole" class="sketch-point under   ">
+<title>pole: 0, 3 mm</title>
+</circle>
+</g>
+<g class="sketch-handle">
+<circle data-id="dome.rim" cx="450.90909090909093" cy="258.54545454545456" r="10" class="sketch-point-hit">
+</circle>
+<circle data-id="dome.rim" cx="450.90909090909093" cy="258.54545454545456" r="4" tabindex="-1" role="button" aria-label="Select point Dome edge" class="sketch-point under   ">
+<title>dome.rim: 8, 0 mm</title>
+</circle>
+</g>
+<g class="sketch-handle">
+<circle data-id="surround.rim" cx="555.6363636363636" cy="258.54545454545456" r="10" class="sketch-point-hit">
+</circle>
+<circle data-id="surround.rim" cx="555.6363636363636" cy="258.54545454545456" r="4" tabindex="-1" role="button" aria-label="Select point Surround edge" class="sketch-point under   ">
+<title>surround.rim: 10, 0 mm</title>
+</circle>
+</g>
+<g class="sketch-handle">
+<circle data-id="rim" cx="608" cy="258.54545454545456" r="10" class="sketch-point-hit">
+</circle>
+<circle data-id="rim" cx="608" cy="258.54545454545456" r="4" tabindex="-1" role="button" aria-label="Select point Rim" class="sketch-point determined   ">
+<title>rim: 11, 0 mm</title>
+</circle>
+</g>
+<g data-constraint-id="c7">
+<g>
+<rect data-id="c7" x="34" y="72.45454545454547" width="24" height="28" class="sketch-label-hit">
+</rect>
+<text data-id="c7" x="40" y="89.45454545454547" tabindex="-1" role="button" aria-label="Constraint pointOnLine c7" class="sketch-glyph  ok   ">
+<title>pointOnLine c7</title>⊙</text>
+</g>
+</g>
+<g data-constraint-id="c8">
+<g>
+<rect data-id="c8" x="610" y="215.54545454545456" width="24" height="28" class="sketch-label-hit">
+</rect>
+<text data-id="c8" x="616" y="232.54545454545456" tabindex="-1" role="button" aria-label="Constraint pointOnLine c8" class="sketch-glyph  ok   ">
+<title>pointOnLine c8</title>⊙</text>
+</g>
+</g>
+<g data-constraint-id="c12">
+<g>
+<rect data-id="c12" x="610" y="201.54545454545456" width="24" height="28" class="sketch-label-hit">
+</rect>
+<text data-id="c12" x="616" y="218.54545454545456" tabindex="-1" role="button" aria-label="Constraint pointOnLine c12" class="sketch-glyph  ok   ">
+<title>pointOnLine c12</title>⊙</text>
+</g>
+</g>
+</svg>",
+  "toolbar": "<div role="toolbar" aria-label="Sketch tools" class="sketch-toolbar">
+<div class="sketch-toolbar-group" role="group" aria-label="Navigate">
+<span class="sketch-group-caption">Navigate</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Select (Esc)" title="Select (Esc)" aria-pressed="true">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M4 2 13 10 8 10 6 14Z">
+</path>
+</svg>
+<span class="sketch-tool-label">Select</span>
+</button>
+<button type="button" aria-label="Pan (hold Space)" title="Pan (hold Space)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M5 8V3a1 1 0 0 1 2 0v4-5a1 1 0 0 1 2 0v5-4a1 1 0 0 1 2 0v4-2a1 1 0 0 1 2 0v5q0 5-4 5H8q-2 0-3-2L2 8q1-2 3 0Z">
+</path>
+</svg>
+<span class="sketch-tool-label">Hand</span>
+</button>
+</div>
+</div>
+<div class="sketch-toolbar-group" role="group" aria-label="Sketch">
+<span class="sketch-group-caption">Sketch</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Line (L)" title="Line (L)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M3 13 13 3">
+</path>
+</svg>
+<span class="sketch-tool-label">Line</span>
+</button>
+<button type="button" aria-label="3-point arc (A)" title="3-point arc (A)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 13Q2 2 14 3">
+</path>
+</svg>
+<span class="sketch-tool-label">Arc</span>
+</button>
+<div class="sketch-menu-anchor">
+<button type="button" aria-label="Arc options" aria-expanded="false">⌄</button>
+</div>
+<button type="button" aria-label="Dimension (D)" title="Dimension (D)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 5V13M14 5V13M2 9H14M5 6 2 9 5 12M11 6 14 9 11 12">
+</path>
+</svg>
+<span class="sketch-tool-label">Dimension</span>
+</button>
+<button type="button" aria-label="Split (S)" title="Split (S)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 12 7 7M10 4 14 0M6 2 14 10">
+</path>
+</svg>
+<span class="sketch-tool-label">Split</span>
+</button>
+</div>
+</div>
+<div class="sketch-toolbar-group" role="group" aria-label="Constraints">
+<span class="sketch-group-caption">Constraints</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Horizontal" title="Horizontal (H)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">H</span>
+</button>
+<button type="button" aria-label="Vertical" title="Vertical (V)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">V</span>
+</button>
+<button type="button" aria-label="Coincident" title="Coincident" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">●</span>
+</button>
+<button type="button" aria-label="Tangent" title="Tangent" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">⌒</span>
+</button>
+<button type="button" aria-label="Fix" title="Fix" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">▣</span>
+</button>
+<button type="button" aria-label="Equal" title="Equal" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">=</span>
+</button>
+<button type="button" aria-label="Parallel" title="Parallel (P)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">∥</span>
+</button>
+<button type="button" aria-label="Perpendicular" title="Perpendicular (N)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">⊥</span>
+</button>
+<button type="button" aria-label="Midpoint" title="Midpoint (M)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">M</span>
+</button>
+<button type="button" aria-label="Point on" title="Point on" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">⊙</span>
+</button>
+</div>
+</div>
+<button type="button">Undo</button>
+<button type="button">Redo</button>
+<div class="sketch-view-tools" role="group" aria-label="View">
+<span class="sketch-group-caption">View</span>
+<button type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
+<button type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
+<button type="button" title="Fit (F)">Fit (F)</button>
+<button type="button" title="Fit all (Shift+F)">Fit all (Shift+F)</button>
+<button type="button" aria-pressed="true">Dimensions</button>
+<button type="button" aria-pressed="false">Names</button>
+<button type="button" aria-pressed="true">Constraints</button>
+<div class="sketch-menu-anchor">
+<button type="button" aria-label="Line styles" title="Line styles" aria-expanded="false">?</button>
+</div>
+</div>
+</div>",
+}
+`;
+
+exports[`W0 workspace DOM at 77c641c8 > conflict state 1`] = `
+{
+  "svg": "<svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet" tabindex="0" role="application" aria-label="Sketch drawing">
+<g class="sketch-grid" aria-hidden="true">
+<line x1="8.949999999999989" x2="8.949999999999989" y1="0" y2="360">
+</line>
+<line x1="19.099999999999994" x2="19.099999999999994" y1="0" y2="360">
+</line>
+<line x1="29.25" x2="29.25" y1="0" y2="360">
+</line>
+<line x1="39.4" x2="39.4" y1="0" y2="360">
+</line>
+<line x1="49.55" x2="49.55" y1="0" y2="360">
+</line>
+<line x1="59.7" x2="59.7" y1="0" y2="360">
+</line>
+<line x1="69.85" x2="69.85" y1="0" y2="360">
+</line>
+<line x1="80" x2="80" y1="0" y2="360">
+</line>
+<line x1="90.15" x2="90.15" y1="0" y2="360">
+</line>
+<line x1="100.3" x2="100.3" y1="0" y2="360">
+</line>
+<line x1="110.45" x2="110.45" y1="0" y2="360">
+</line>
+<line x1="120.6" x2="120.6" y1="0" y2="360">
+</line>
+<line x1="130.75" x2="130.75" y1="0" y2="360">
+</line>
+<line x1="140.9" x2="140.9" y1="0" y2="360">
+</line>
+<line x1="151.05" x2="151.05" y1="0" y2="360">
+</line>
+<line x1="161.2" x2="161.2" y1="0" y2="360">
+</line>
+<line x1="171.35000000000002" x2="171.35000000000002" y1="0" y2="360">
+</line>
+<line x1="181.5" x2="181.5" y1="0" y2="360">
+</line>
+<line x1="191.65" x2="191.65" y1="0" y2="360">
+</line>
+<line x1="201.8" x2="201.8" y1="0" y2="360">
+</line>
+<line x1="211.95000000000002" x2="211.95000000000002" y1="0" y2="360">
+</line>
+<line x1="222.10000000000002" x2="222.10000000000002" y1="0" y2="360">
+</line>
+<line x1="232.25" x2="232.25" y1="0" y2="360">
+</line>
+<line x1="242.4" x2="242.4" y1="0" y2="360">
+</line>
+<line x1="252.55" x2="252.55" y1="0" y2="360">
+</line>
+<line x1="262.70000000000005" x2="262.70000000000005" y1="0" y2="360">
+</line>
+<line x1="272.85" x2="272.85" y1="0" y2="360">
+</line>
+<line x1="283" x2="283" y1="0" y2="360">
+</line>
+<line x1="293.15" x2="293.15" y1="0" y2="360">
+</line>
+<line x1="303.3" x2="303.3" y1="0" y2="360">
+</line>
+<line x1="313.45000000000005" x2="313.45000000000005" y1="0" y2="360">
+</line>
+<line x1="323.6" x2="323.6" y1="0" y2="360">
+</line>
+<line x1="333.75" x2="333.75" y1="0" y2="360">
+</line>
+<line x1="343.90000000000003" x2="343.90000000000003" y1="0" y2="360">
+</line>
+<line x1="354.05" x2="354.05" y1="0" y2="360">
+</line>
+<line x1="364.20000000000005" x2="364.20000000000005" y1="0" y2="360">
+</line>
+<line x1="374.35" x2="374.35" y1="0" y2="360">
+</line>
+<line x1="384.5" x2="384.5" y1="0" y2="360">
+</line>
+<line x1="394.65000000000003" x2="394.65000000000003" y1="0" y2="360">
+</line>
+<line x1="404.8" x2="404.8" y1="0" y2="360">
+</line>
+<line x1="414.95000000000005" x2="414.95000000000005" y1="0" y2="360">
+</line>
+<line x1="425.1" x2="425.1" y1="0" y2="360">
+</line>
+<line x1="435.25" x2="435.25" y1="0" y2="360">
+</line>
+<line x1="445.40000000000003" x2="445.40000000000003" y1="0" y2="360">
+</line>
+<line x1="455.55" x2="455.55" y1="0" y2="360">
+</line>
+<line x1="465.70000000000005" x2="465.70000000000005" y1="0" y2="360">
+</line>
+<line x1="475.85" x2="475.85" y1="0" y2="360">
+</line>
+<line x1="486" x2="486" y1="0" y2="360">
+</line>
+<line x1="496.15000000000003" x2="496.15000000000003" y1="0" y2="360">
+</line>
+<line x1="506.3" x2="506.3" y1="0" y2="360">
+</line>
+<line x1="516.45" x2="516.45" y1="0" y2="360">
+</line>
+<line x1="526.6" x2="526.6" y1="0" y2="360">
+</line>
+<line x1="536.75" x2="536.75" y1="0" y2="360">
+</line>
+<line x1="546.9000000000001" x2="546.9000000000001" y1="0" y2="360">
+</line>
+<line x1="557.05" x2="557.05" y1="0" y2="360">
+</line>
+<line x1="567.2" x2="567.2" y1="0" y2="360">
+</line>
+<line x1="577.35" x2="577.35" y1="0" y2="360">
+</line>
+<line x1="587.5" x2="587.5" y1="0" y2="360">
+</line>
+<line x1="597.6500000000001" x2="597.6500000000001" y1="0" y2="360">
+</line>
+<line x1="607.8000000000001" x2="607.8000000000001" y1="0" y2="360">
+</line>
+<line x1="617.95" x2="617.95" y1="0" y2="360">
+</line>
+<line x1="628.1" x2="628.1" y1="0" y2="360">
+</line>
+<line x1="638.25" x2="638.25" y1="0" y2="360">
+</line>
+<line x1="648.4000000000001" x2="648.4000000000001" y1="0" y2="360">
+</line>
+<line x1="658.5500000000001" x2="658.5500000000001" y1="0" y2="360">
+</line>
+<line x1="0" x2="640" y1="355.775" y2="355.775">
+</line>
+<line x1="0" x2="640" y1="345.625" y2="345.625">
+</line>
+<line x1="0" x2="640" y1="335.475" y2="335.475">
+</line>
+<line x1="0" x2="640" y1="325.32500000000005" y2="325.32500000000005">
+</line>
+<line x1="0" x2="640" y1="315.175" y2="315.175">
+</line>
+<line x1="0" x2="640" y1="305.025" y2="305.025">
+</line>
+<line x1="0" x2="640" y1="294.875" y2="294.875">
+</line>
+<line x1="0" x2="640" y1="284.725" y2="284.725">
+</line>
+<line x1="0" x2="640" y1="274.575" y2="274.575">
+</line>
+<line x1="0" x2="640" y1="264.425" y2="264.425">
+</line>
+<line x1="0" x2="640" y1="254.275" y2="254.275">
+</line>
+<line x1="0" x2="640" y1="244.125" y2="244.125">
+</line>
+<line x1="0" x2="640" y1="233.975" y2="233.975">
+</line>
+<line x1="0" x2="640" y1="223.825" y2="223.825">
+</line>
+<line x1="0" x2="640" y1="213.675" y2="213.675">
+</line>
+<line x1="0" x2="640" y1="203.525" y2="203.525">
+</line>
+<line x1="0" x2="640" y1="193.375" y2="193.375">
+</line>
+<line x1="0" x2="640" y1="183.225" y2="183.225">
+</line>
+<line x1="0" x2="640" y1="173.075" y2="173.075">
+</line>
+<line x1="0" x2="640" y1="162.925" y2="162.925">
+</line>
+<line x1="0" x2="640" y1="152.775" y2="152.775">
+</line>
+<line x1="0" x2="640" y1="142.625" y2="142.625">
+</line>
+<line x1="0" x2="640" y1="132.475" y2="132.475">
+</line>
+<line x1="0" x2="640" y1="122.32499999999999" y2="122.32499999999999">
+</line>
+<line x1="0" x2="640" y1="112.175" y2="112.175">
+</line>
+<line x1="0" x2="640" y1="102.02499999999999" y2="102.02499999999999">
+</line>
+<line x1="0" x2="640" y1="91.875" y2="91.875">
+</line>
+<line x1="0" x2="640" y1="81.725" y2="81.725">
+</line>
+<line x1="0" x2="640" y1="71.57499999999999" y2="71.57499999999999">
+</line>
+<line x1="0" x2="640" y1="61.42499999999998" y2="61.42499999999998">
+</line>
+<line x1="0" x2="640" y1="51.27499999999998" y2="51.27499999999998">
+</line>
+<line x1="0" x2="640" y1="41.125" y2="41.125">
+</line>
+<line x1="0" x2="640" y1="30.974999999999994" y2="30.974999999999994">
+</line>
+<line x1="0" x2="640" y1="20.82499999999999" y2="20.82499999999999">
+</line>
+<line x1="0" x2="640" y1="10.674999999999983" y2="10.674999999999983">
+</line>
+<line x1="0" x2="640" y1="0.5249999999999773" y2="0.5249999999999773">
+</line>
+<line x1="0" x2="640" y1="-9.625" y2="-9.625">
+</line>
+</g>
+<g class="sketch-context-layer" aria-label="Reference context">
+<defs>
+<pattern id="sketch-context-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+<line x1="0" y1="0" x2="0" y2="6" class="sketch-keepout-hatch">
+</line>
+</pattern>
+</defs>
+<g data-context-id="limit" data-reference-id="l9" class="sketch-context-item role-limit  sketch-limit selected" style="pointer-events: none;">
+<title>Throat r 8.00 🔒 · Set by the horn design</title>
+<path d="M486,189.375 l4,4 -4,4 -4,-4 Z">
+</path>
+<text x="492" y="193.375" text-anchor="start" dominant-baseline="central" data-anchor-x="486" data-anchor-y="193.375">
+<title>Set by the horn design</title>Throat r 8.00 🔒</text>
+</g>
+<g data-context-id="axis" data-reference-id="axis" class="sketch-context-item role-axis  selected" style="pointer-events: auto;">
+<title>Axis (r = 0.00)</title>
+<path d="M80,360 L80,0" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M80,360 L80,0">
+</path>
+<text x="86" y="180" text-anchor="start" dominant-baseline="central" data-anchor-x="80" data-anchor-y="180">
+<title>Axis (r = 0.00)</title>Axis (r = 0.00)</text>
+</g>
+<g data-context-id="rim-plane" data-reference-id="baffle" class="sketch-context-item role-rim-plane " style="pointer-events: auto;">
+<title>Rim plane (z = 0.00)</title>
+<path d="M0,193.375 L640,193.375" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M0,193.375 L640,193.375">
+</path>
+</g>
+</g>
+<g class="sketch-curve">
+<path data-id="piston" d="M80,193.375 L486,193.375" class="sketch-curve-hit">
+</path>
+<path data-id="piston" d="M80,193.375 L486,193.375" tabindex="-1" role="button" aria-label="Select line Piston" class="sketch-entity moving conflicting   selected">
+<title>Piston (piston)</title>
+</path>
+</g>
+<g class="sketch-handle">
+<circle data-id="pole" cx="80" cy="193.375" r="10" class="sketch-point-hit">
+</circle>
+<circle data-id="pole" cx="80" cy="193.375" r="4" tabindex="-1" role="button" aria-label="Select point Pole" class="sketch-point conflicting  selected ">
+<title>pole: 0, 0 mm</title>
+</circle>
+</g>
+<g class="sketch-handle">
+<circle data-id="rim" cx="486" cy="193.375" r="10" class="sketch-point-hit">
+</circle>
+<circle data-id="rim" cx="486" cy="193.375" r="4" tabindex="-1" role="button" aria-label="Select point Rim" class="sketch-point conflicting  selected ">
+<title>rim: 8, 0 mm</title>
+</circle>
+</g>
+<g data-constraint-id="c5">
+<g>
+<rect data-id="c5" x="82" y="164.375" width="24" height="28" class="sketch-label-hit">
+</rect>
+<text data-id="c5" x="88" y="181.375" tabindex="-1" role="button" aria-label="Constraint pointOnLine c5 implied" class="sketch-glyph  redundant conflicting problem ">
+<title>pointOnLine c5 (implied)</title>⊙</text>
+</g>
+</g>
+<g data-constraint-id="c6">
+<g>
+<rect data-id="c6" x="488" y="150.375" width="24" height="28" class="sketch-label-hit">
+</rect>
+<text data-id="c6" x="494" y="167.375" tabindex="-1" role="button" aria-label="Constraint pointOnLine c6" class="sketch-glyph  ok   ">
+<title>pointOnLine c6</title>⊙</text>
+</g>
+</g>
+<g data-constraint-id="radius" class="sketch-dimension">
+<g class="sketch-dimension-lines" aria-hidden="true">
+<path class="sketch-extension-lines" d="M80,193.375 L80,225.375 M486,193.375 L486,225.375 M80,219.375 L486,219.375">
+</path>
+<path class="sketch-dimension-arrows" d="M85.40268261411606,221.98479320466737 L80,219.375 M80,219.375 L85.40268261411606,216.76520679533263 M480.5973173858839,216.76520679533263 L486,219.375 M486,219.375 L480.5973173858839,221.98479320466737">
+</path>
+</g>
+<g>
+<rect data-id="radius" x="254.6" y="196.375" width="56.800000000000004" height="28" class="sketch-label-hit">
+</rect>
+<text text-anchor="middle" data-id="radius" x="283" y="213.375" tabindex="-1" role="button" aria-label="Dimension distanceX radius Typed radius 8.00 mm implied" class="sketch-glyph  redundant conflicting problem ">
+<title>Typed radius 8.00 mm radius (implied)</title>8.00 mm</text>
+</g>
+</g>
+<g data-constraint-id="c10">
+<g>
+<rect data-id="c10" x="488" y="164.375" width="24" height="28" class="sketch-label-hit">
+</rect>
+<text data-id="c10" x="494" y="181.375" tabindex="-1" role="button" aria-label="Constraint pointOnLine c10 implied" class="sketch-glyph  redundant conflicting problem ">
+<title>pointOnLine c10 (implied)</title>⊙</text>
+</g>
+</g>
+</svg>",
+  "toolbar": "<div role="toolbar" aria-label="Sketch tools" class="sketch-toolbar">
+<div class="sketch-toolbar-group" role="group" aria-label="Navigate">
+<span class="sketch-group-caption">Navigate</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Select (Esc)" title="Select (Esc)" aria-pressed="true">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M4 2 13 10 8 10 6 14Z">
+</path>
+</svg>
+<span class="sketch-tool-label">Select</span>
+</button>
+<button type="button" aria-label="Pan (hold Space)" title="Pan (hold Space)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M5 8V3a1 1 0 0 1 2 0v4-5a1 1 0 0 1 2 0v5-4a1 1 0 0 1 2 0v4-2a1 1 0 0 1 2 0v5q0 5-4 5H8q-2 0-3-2L2 8q1-2 3 0Z">
+</path>
+</svg>
+<span class="sketch-tool-label">Hand</span>
+</button>
+</div>
+</div>
+<div class="sketch-toolbar-group" role="group" aria-label="Sketch">
+<span class="sketch-group-caption">Sketch</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Line (L)" title="Line (L)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M3 13 13 3">
+</path>
+</svg>
+<span class="sketch-tool-label">Line</span>
+</button>
+<button type="button" aria-label="3-point arc (A)" title="3-point arc (A)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 13Q2 2 14 3">
+</path>
+</svg>
+<span class="sketch-tool-label">Arc</span>
+</button>
+<div class="sketch-menu-anchor">
+<button type="button" aria-label="Arc options" aria-expanded="false">⌄</button>
+</div>
+<button type="button" aria-label="Dimension (D)" title="Dimension (D)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 5V13M14 5V13M2 9H14M5 6 2 9 5 12M11 6 14 9 11 12">
+</path>
+</svg>
+<span class="sketch-tool-label">Dimension</span>
+</button>
+<button type="button" aria-label="Split (S)" title="Split (S)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 12 7 7M10 4 14 0M6 2 14 10">
+</path>
+</svg>
+<span class="sketch-tool-label">Split</span>
+</button>
+</div>
+</div>
+<div class="sketch-toolbar-group" role="group" aria-label="Constraints">
+<span class="sketch-group-caption">Constraints</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Horizontal" title="Horizontal (H)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">H</span>
+</button>
+<button type="button" aria-label="Vertical" title="Vertical (V)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">V</span>
+</button>
+<button type="button" aria-label="Coincident" title="Coincident" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">●</span>
+</button>
+<button type="button" aria-label="Tangent" title="Tangent" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">⌒</span>
+</button>
+<button type="button" aria-label="Fix" title="Fix" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">▣</span>
+</button>
+<button type="button" aria-label="Equal" title="Equal" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">=</span>
+</button>
+<button type="button" aria-label="Parallel" title="Parallel (P)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">∥</span>
+</button>
+<button type="button" aria-label="Perpendicular" title="Perpendicular (N)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">⊥</span>
+</button>
+<button type="button" aria-label="Midpoint" title="Midpoint (M)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">M</span>
+</button>
+<button type="button" aria-label="Point on" title="Point on" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">⊙</span>
+</button>
+</div>
+</div>
+<button type="button">Undo</button>
+<button type="button">Redo</button>
+<div class="sketch-view-tools" role="group" aria-label="View">
+<span class="sketch-group-caption">View</span>
+<button type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
+<button type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
+<button type="button" title="Fit (F)">Fit (F)</button>
+<button type="button" title="Fit all (Shift+F)">Fit all (Shift+F)</button>
+<button type="button" aria-pressed="true">Dimensions</button>
+<button type="button" aria-pressed="false">Names</button>
+<button type="button" aria-pressed="true">Constraints</button>
+<div class="sketch-menu-anchor">
+<button type="button" aria-label="Line styles" title="Line styles" aria-expanded="false">?</button>
+</div>
+</div>
+</div>",
+}
+`;
+
+exports[`W0 workspace DOM at 77c641c8 > dimension editing with the value box open 1`] = `
+{
+  "svg": "<svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet" tabindex="0" role="application" aria-label="Sketch drawing">
+<g class="sketch-grid" aria-hidden="true">
+<line x1="7.31428571428571" x2="7.31428571428571" y1="0" y2="360">
+</line>
+<line x1="15.542857142857141" x2="15.542857142857141" y1="0" y2="360">
+</line>
+<line x1="23.771428571428572" x2="23.771428571428572" y1="0" y2="360">
+</line>
+<line x1="32" x2="32" y1="0" y2="360">
+</line>
+<line x1="40.22857142857143" x2="40.22857142857143" y1="0" y2="360">
+</line>
+<line x1="48.457142857142856" x2="48.457142857142856" y1="0" y2="360">
+</line>
+<line x1="56.68571428571429" x2="56.68571428571429" y1="0" y2="360">
+</line>
+<line x1="64.91428571428571" x2="64.91428571428571" y1="0" y2="360">
+</line>
+<line x1="73.14285714285714" x2="73.14285714285714" y1="0" y2="360">
+</line>
+<line x1="81.37142857142858" x2="81.37142857142858" y1="0" y2="360">
+</line>
+<line x1="89.60000000000001" x2="89.60000000000001" y1="0" y2="360">
+</line>
+<line x1="97.82857142857144" x2="97.82857142857144" y1="0" y2="360">
+</line>
+<line x1="106.05714285714286" x2="106.05714285714286" y1="0" y2="360">
+</line>
+<line x1="114.28571428571429" x2="114.28571428571429" y1="0" y2="360">
+</line>
+<line x1="122.51428571428573" x2="122.51428571428573" y1="0" y2="360">
+</line>
+<line x1="130.74285714285716" x2="130.74285714285716" y1="0" y2="360">
+</line>
+<line x1="138.9714285714286" x2="138.9714285714286" y1="0" y2="360">
+</line>
+<line x1="147.20000000000002" x2="147.20000000000002" y1="0" y2="360">
+</line>
+<line x1="155.42857142857144" x2="155.42857142857144" y1="0" y2="360">
+</line>
+<line x1="163.65714285714287" x2="163.65714285714287" y1="0" y2="360">
+</line>
+<line x1="171.8857142857143" x2="171.8857142857143" y1="0" y2="360">
+</line>
+<line x1="180.11428571428573" x2="180.11428571428573" y1="0" y2="360">
+</line>
+<line x1="188.34285714285716" x2="188.34285714285716" y1="0" y2="360">
+</line>
+<line x1="196.57142857142858" x2="196.57142857142858" y1="0" y2="360">
+</line>
+<line x1="204.8" x2="204.8" y1="0" y2="360">
+</line>
+<line x1="213.02857142857147" x2="213.02857142857147" y1="0" y2="360">
+</line>
+<line x1="221.2571428571429" x2="221.2571428571429" y1="0" y2="360">
+</line>
+<line x1="229.48571428571432" x2="229.48571428571432" y1="0" y2="360">
+</line>
+<line x1="237.71428571428572" x2="237.71428571428572" y1="0" y2="360">
+</line>
+<line x1="245.94285714285718" x2="245.94285714285718" y1="0" y2="360">
+</line>
+<line x1="254.1714285714286" x2="254.1714285714286" y1="0" y2="360">
+</line>
+<line x1="262.40000000000003" x2="262.40000000000003" y1="0" y2="360">
+</line>
+<line x1="270.6285714285715" x2="270.6285714285715" y1="0" y2="360">
+</line>
+<line x1="278.8571428571429" x2="278.8571428571429" y1="0" y2="360">
+</line>
+<line x1="287.0857142857143" x2="287.0857142857143" y1="0" y2="360">
+</line>
+<line x1="295.31428571428575" x2="295.31428571428575" y1="0" y2="360">
+</line>
+<line x1="303.5428571428572" x2="303.5428571428572" y1="0" y2="360">
+</line>
+<line x1="311.7714285714286" x2="311.7714285714286" y1="0" y2="360">
+</line>
+<line x1="320" x2="320" y1="0" y2="360">
+</line>
+<line x1="328.22857142857146" x2="328.22857142857146" y1="0" y2="360">
+</line>
+<line x1="336.4571428571429" x2="336.4571428571429" y1="0" y2="360">
+</line>
+<line x1="344.6857142857143" x2="344.6857142857143" y1="0" y2="360">
+</line>
+<line x1="352.91428571428577" x2="352.91428571428577" y1="0" y2="360">
+</line>
+<line x1="361.14285714285717" x2="361.14285714285717" y1="0" y2="360">
+</line>
+<line x1="369.3714285714286" x2="369.3714285714286" y1="0" y2="360">
+</line>
+<line x1="377.6" x2="377.6" y1="0" y2="360">
+</line>
+<line x1="385.8285714285714" x2="385.8285714285714" y1="0" y2="360">
+</line>
+<line x1="394.05714285714294" x2="394.05714285714294" y1="0" y2="360">
+</line>
+<line x1="402.28571428571433" x2="402.28571428571433" y1="0" y2="360">
+</line>
+<line x1="410.5142857142858" x2="410.5142857142858" y1="0" y2="360">
+</line>
+<line x1="418.7428571428572" x2="418.7428571428572" y1="0" y2="360">
+</line>
+<line x1="426.97142857142865" x2="426.97142857142865" y1="0" y2="360">
+</line>
+<line x1="435.20000000000005" x2="435.20000000000005" y1="0" y2="360">
+</line>
+<line x1="443.42857142857144" x2="443.42857142857144" y1="0" y2="360">
+</line>
+<line x1="451.65714285714296" x2="451.65714285714296" y1="0" y2="360">
+</line>
+<line x1="459.88571428571436" x2="459.88571428571436" y1="0" y2="360">
+</line>
+<line x1="468.1142857142858" x2="468.1142857142858" y1="0" y2="360">
+</line>
+<line x1="476.3428571428572" x2="476.3428571428572" y1="0" y2="360">
+</line>
+<line x1="484.5714285714286" x2="484.5714285714286" y1="0" y2="360">
+</line>
+<line x1="492.80000000000007" x2="492.80000000000007" y1="0" y2="360">
+</line>
+<line x1="501.02857142857147" x2="501.02857142857147" y1="0" y2="360">
+</line>
+<line x1="509.2571428571429" x2="509.2571428571429" y1="0" y2="360">
+</line>
+<line x1="517.4857142857143" x2="517.4857142857143" y1="0" y2="360">
+</line>
+<line x1="525.7142857142858" x2="525.7142857142858" y1="0" y2="360">
+</line>
+<line x1="533.9428571428573" x2="533.9428571428573" y1="0" y2="360">
+</line>
+<line x1="542.1714285714286" x2="542.1714285714286" y1="0" y2="360">
+</line>
+<line x1="550.4000000000001" x2="550.4000000000001" y1="0" y2="360">
+</line>
+<line x1="558.6285714285715" x2="558.6285714285715" y1="0" y2="360">
+</line>
+<line x1="566.8571428571429" x2="566.8571428571429" y1="0" y2="360">
+</line>
+<line x1="575.0857142857144" x2="575.0857142857144" y1="0" y2="360">
+</line>
+<line x1="583.3142857142858" x2="583.3142857142858" y1="0" y2="360">
+</line>
+<line x1="591.5428571428572" x2="591.5428571428572" y1="0" y2="360">
+</line>
+<line x1="599.7714285714286" x2="599.7714285714286" y1="0" y2="360">
+</line>
+<line x1="608" x2="608" y1="0" y2="360">
+</line>
+<line x1="616.2285714285715" x2="616.2285714285715" y1="0" y2="360">
+</line>
+<line x1="624.4571428571429" x2="624.4571428571429" y1="0" y2="360">
+</line>
+<line x1="632.6857142857144" x2="632.6857142857144" y1="0" y2="360">
+</line>
+<line x1="640.9142857142858" x2="640.9142857142858" y1="0" y2="360">
+</line>
+<line x1="649.1428571428572" x2="649.1428571428572" y1="0" y2="360">
+</line>
+<line x1="0" x2="640" y1="356.9142857142857" y2="356.9142857142857">
+</line>
+<line x1="0" x2="640" y1="348.6857142857143" y2="348.6857142857143">
+</line>
+<line x1="0" x2="640" y1="340.4571428571429" y2="340.4571428571429">
+</line>
+<line x1="0" x2="640" y1="332.22857142857146" y2="332.22857142857146">
+</line>
+<line x1="0" x2="640" y1="324" y2="324">
+</line>
+<line x1="0" x2="640" y1="315.7714285714286" y2="315.7714285714286">
+</line>
+<line x1="0" x2="640" y1="307.5428571428572" y2="307.5428571428572">
+</line>
+<line x1="0" x2="640" y1="299.31428571428575" y2="299.31428571428575">
+</line>
+<line x1="0" x2="640" y1="291.0857142857143" y2="291.0857142857143">
+</line>
+<line x1="0" x2="640" y1="282.8571428571429" y2="282.8571428571429">
+</line>
+<line x1="0" x2="640" y1="274.62857142857143" y2="274.62857142857143">
+</line>
+<line x1="0" x2="640" y1="266.40000000000003" y2="266.40000000000003">
+</line>
+<line x1="0" x2="640" y1="258.1714285714286" y2="258.1714285714286">
+</line>
+<line x1="0" x2="640" y1="249.94285714285718" y2="249.94285714285718">
+</line>
+<line x1="0" x2="640" y1="241.71428571428572" y2="241.71428571428572">
+</line>
+<line x1="0" x2="640" y1="233.4857142857143" y2="233.4857142857143">
+</line>
+<line x1="0" x2="640" y1="225.25714285714287" y2="225.25714285714287">
+</line>
+<line x1="0" x2="640" y1="217.02857142857144" y2="217.02857142857144">
+</line>
+<line x1="0" x2="640" y1="208.8" y2="208.8">
+</line>
+<line x1="0" x2="640" y1="200.57142857142858" y2="200.57142857142858">
+</line>
+<line x1="0" x2="640" y1="192.34285714285716" y2="192.34285714285716">
+</line>
+<line x1="0" x2="640" y1="184.11428571428573" y2="184.11428571428573">
+</line>
+<line x1="0" x2="640" y1="175.8857142857143" y2="175.8857142857143">
+</line>
+<line x1="0" x2="640" y1="167.65714285714287" y2="167.65714285714287">
+</line>
+<line x1="0" x2="640" y1="159.42857142857144" y2="159.42857142857144">
+</line>
+<line x1="0" x2="640" y1="151.2" y2="151.2">
+</line>
+<line x1="0" x2="640" y1="142.9714285714286" y2="142.9714285714286">
+</line>
+<line x1="0" x2="640" y1="134.74285714285713" y2="134.74285714285713">
+</line>
+<line x1="0" x2="640" y1="126.51428571428572" y2="126.51428571428572">
+</line>
+<line x1="0" x2="640" y1="118.28571428571429" y2="118.28571428571429">
+</line>
+<line x1="0" x2="640" y1="110.05714285714285" y2="110.05714285714285">
+</line>
+<line x1="0" x2="640" y1="101.82857142857142" y2="101.82857142857142">
+</line>
+<line x1="0" x2="640" y1="93.6" y2="93.6">
+</line>
+<line x1="0" x2="640" y1="85.37142857142857" y2="85.37142857142857">
+</line>
+<line x1="0" x2="640" y1="77.14285714285714" y2="77.14285714285714">
+</line>
+<line x1="0" x2="640" y1="68.91428571428571" y2="68.91428571428571">
+</line>
+<line x1="0" x2="640" y1="60.68571428571428" y2="60.68571428571428">
+</line>
+<line x1="0" x2="640" y1="52.457142857142856" y2="52.457142857142856">
+</line>
+<line x1="0" x2="640" y1="44.22857142857143" y2="44.22857142857143">
+</line>
+<line x1="0" x2="640" y1="36" y2="36">
+</line>
+<line x1="0" x2="640" y1="27.771428571428572" y2="27.771428571428572">
+</line>
+<line x1="0" x2="640" y1="19.542857142857116" y2="19.542857142857116">
+</line>
+<line x1="0" x2="640" y1="11.314285714285688" y2="11.314285714285688">
+</line>
+<line x1="0" x2="640" y1="3.0857142857142605" y2="3.0857142857142605">
+</line>
+<line x1="0" x2="640" y1="-5.142857142857139" y2="-5.142857142857139">
+</line>
+</g>
+<g class="sketch-context-layer" aria-label="Reference context">
+<defs>
+<pattern id="sketch-context-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+<line x1="0" y1="0" x2="0" y2="6" class="sketch-keepout-hatch">
+</line>
+</pattern>
+</defs>
+<g data-context-id="woofer.aperture" data-reference-id="l9" class="sketch-context-item role-aperture  sketch-limit" style="pointer-events: auto;">
+<title>Aperture r 14.00 · Double-click to edit limit</title>
+<path d="M608,196.57142857142858 l4,4 -4,4 -4,-4 Z" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M608,196.57142857142858 l4,4 -4,4 -4,-4 Z">
+</path>
+<text x="608" y="206.57142857142858" text-anchor="end" dominant-baseline="text-before-edge" data-anchor-x="608" data-anchor-y="200.57142857142858" role="button" tabindex="0">
+<title>Double-click to edit limit</title>Aperture r 14.00</text>
+</g>
+<g data-context-id="rim-plane" data-reference-id="baffle" class="sketch-context-item role-rim-plane " style="pointer-events: auto;">
+<title>Front baffle (z = 0.00)</title>
+<path d="M32,200.57142857142858 L361.14285714285717,200.57142857142858" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M32,200.57142857142858 L361.14285714285717,200.57142857142858">
+</path>
+</g>
+<g data-context-id="baffle.front" class="sketch-context-item role-baffle " style="pointer-events: auto;">
+<title>Front baffle (z = 0.00)</title>
+<path d="M608,200.57142857142858 L937.1428571428572,200.57142857142858" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M608,200.57142857142858 L937.1428571428572,200.57142857142858">
+</path>
+</g>
+<g data-context-id="box.back" class="sketch-context-item role-enclosure " style="pointer-events: auto;">
+<title>Enclosure back</title>
+<path d="M32,694.2857142857143 L1142.857142857143,694.2857142857143" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M32,694.2857142857143 L1142.857142857143,694.2857142857143">
+</path>
+</g>
+<g data-context-id="box.side.near" class="sketch-context-item role-enclosure near" style="pointer-events: auto;">
+<title>Enclosure side (nearest, +x) 22.00 mm</title>
+<path d="M937.1428571428572,694.2857142857143 L937.1428571428572,200.57142857142858" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M937.1428571428572,694.2857142857143 L937.1428571428572,200.57142857142858">
+</path>
+</g>
+<g data-context-id="box.side.far" class="sketch-context-item role-enclosure far" style="pointer-events: none;">
+<title>Enclosure side (farthest, −y) 27.00 mm</title>
+<path d="M1142.857142857143,694.2857142857143 L1142.857142857143,200.57142857142858">
+</path>
+</g>
+<g data-context-id="keepout.back" class="sketch-context-item role-keepout " style="pointer-events: none;">
+<title>Minimum clearance 0.10 mm</title>
+<path d="M32,694.2857142857143 L1142.857142857143,694.2857142857143 L1142.857142857143,690.1714285714286 L32,690.1714285714286 L32,694.2857142857143" fill="url(#sketch-context-hatch)">
+</path>
+</g>
+<g data-context-id="woofer.collar" class="sketch-context-item role-collar " style="pointer-events: none;">
+<title>Mounting collar</title>
+<path d="M361.14285714285717,200.57142857142858 L608,200.57142857142858">
+</path>
+</g>
+<g data-context-id="axis" data-reference-id="axis" class="sketch-context-item role-axis " style="pointer-events: auto;">
+<title>Axis (r = 0.00)</title>
+<path d="M32,360 L32,0" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M32,360 L32,0">
+</path>
+</g>
+</g>
+<g class="sketch-curve">
+<path data-id="piston" d="M32,200.57142857142858 L361.14285714285717,200.57142857142858" class="sketch-curve-hit">
+</path>
+<path data-id="piston" d="M32,200.57142857142858 L361.14285714285717,200.57142857142858" tabindex="-1" role="button" aria-label="Select line Piston" class="sketch-entity moving under   ">
+<title>Piston (piston)</title>
+</path>
+</g>
+<g class="sketch-handle">
+<circle data-id="pole" cx="32" cy="200.57142857142858" r="10" class="sketch-point-hit">
+</circle>
+<circle data-id="pole" cx="32" cy="200.57142857142858" r="4" tabindex="-1" role="button" aria-label="Select point Pole" class="sketch-point under   ">
+<title>pole: 0, 0 mm</title>
+</circle>
+</g>
+<g class="sketch-handle">
+<circle data-id="rim" cx="361.14285714285717" cy="200.57142857142858" r="10" class="sketch-point-hit">
+</circle>
+<circle data-id="rim" cx="361.14285714285717" cy="200.57142857142858" r="4" tabindex="-1" role="button" aria-label="Select point Rim" class="sketch-point determined   ">
+<title>rim: 8, 0 mm</title>
+</circle>
+</g>
+<g data-constraint-id="c5">
+<g>
+<rect data-id="c5" x="34" y="171.57142857142858" width="24" height="28" class="sketch-label-hit">
+</rect>
+<text data-id="c5" x="40" y="188.57142857142858" tabindex="-1" role="button" aria-label="Constraint pointOnLine c5" class="sketch-glyph  ok   ">
+<title>pointOnLine c5</title>⊙</text>
+</g>
+</g>
+<g data-constraint-id="c6">
+<g>
+<rect data-id="c6" x="363.14285714285717" y="157.57142857142858" width="24" height="28" class="sketch-label-hit">
+</rect>
+<text data-id="c6" x="369.14285714285717" y="174.57142857142858" tabindex="-1" role="button" aria-label="Constraint pointOnLine c6" class="sketch-glyph  ok   ">
+<title>pointOnLine c6</title>⊙</text>
+</g>
+</g>
+<g data-constraint-id="c10" class="sketch-dimension">
+<g class="sketch-dimension-lines" aria-hidden="true">
+<path class="sketch-extension-lines" d="M32,200.57142857142858 L32,144.57142857142858 M361.14285714285717,200.57142857142858 L361.14285714285717,144.57142857142858 M32,150.57142857142858 L361.14285714285717,150.57142857142858">
+</path>
+<path class="sketch-dimension-arrows" d="M37.40268261411606,153.18122177609595 L32,150.57142857142858 M32,150.57142857142858 L37.40268261411606,147.96163536676121 M355.7401745287411,147.96163536676121 L361.14285714285717,150.57142857142858 M361.14285714285717,150.57142857142858 L355.7401745287411,153.18122177609595">
+</path>
+</g>
+<g>
+<rect data-id="c10" x="168.17142857142858" y="127.57142857142858" width="56.800000000000004" height="28" class="sketch-label-hit">
+</rect>
+<text text-anchor="middle" data-id="c10" x="196.57142857142858" y="144.57142857142858" tabindex="-1" role="button" aria-label="Dimension distanceX c10 Horizontal distance 8.00 mm" class="sketch-glyph  ok   ">
+<title>Horizontal distance 8.00 mm c10</title>8.00 mm</text>
+</g>
+</g>
+</svg>",
+  "toolbar": "<div role="toolbar" aria-label="Sketch tools" class="sketch-toolbar">
+<div class="sketch-toolbar-group" role="group" aria-label="Navigate">
+<span class="sketch-group-caption">Navigate</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Select (Esc)" title="Select (Esc)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M4 2 13 10 8 10 6 14Z">
+</path>
+</svg>
+<span class="sketch-tool-label">Select</span>
+</button>
+<button type="button" aria-label="Pan (hold Space)" title="Pan (hold Space)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M5 8V3a1 1 0 0 1 2 0v4-5a1 1 0 0 1 2 0v5-4a1 1 0 0 1 2 0v4-2a1 1 0 0 1 2 0v5q0 5-4 5H8q-2 0-3-2L2 8q1-2 3 0Z">
+</path>
+</svg>
+<span class="sketch-tool-label">Hand</span>
+</button>
+</div>
+</div>
+<div class="sketch-toolbar-group" role="group" aria-label="Sketch">
+<span class="sketch-group-caption">Sketch</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Line (L)" title="Line (L)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M3 13 13 3">
+</path>
+</svg>
+<span class="sketch-tool-label">Line</span>
+</button>
+<button type="button" aria-label="3-point arc (A)" title="3-point arc (A)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 13Q2 2 14 3">
+</path>
+</svg>
+<span class="sketch-tool-label">Arc</span>
+</button>
+<div class="sketch-menu-anchor">
+<button type="button" aria-label="Arc options" aria-expanded="false">⌄</button>
+</div>
+<button type="button" aria-label="Dimension (D)" title="Dimension (D)" aria-pressed="true">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 5V13M14 5V13M2 9H14M5 6 2 9 5 12M11 6 14 9 11 12">
+</path>
+</svg>
+<span class="sketch-tool-label">Dimension</span>
+</button>
+<button type="button" aria-label="Split (S)" title="Split (S)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 12 7 7M10 4 14 0M6 2 14 10">
+</path>
+</svg>
+<span class="sketch-tool-label">Split</span>
+</button>
+</div>
+</div>
+<div class="sketch-toolbar-group" role="group" aria-label="Constraints">
+<span class="sketch-group-caption">Constraints</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Horizontal" title="Horizontal (H)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">H</span>
+</button>
+<button type="button" aria-label="Vertical" title="Vertical (V)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">V</span>
+</button>
+<button type="button" aria-label="Coincident" title="Coincident" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">●</span>
+</button>
+<button type="button" aria-label="Tangent" title="Tangent" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">⌒</span>
+</button>
+<button type="button" aria-label="Fix" title="Fix" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">▣</span>
+</button>
+<button type="button" aria-label="Equal" title="Equal" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">=</span>
+</button>
+<button type="button" aria-label="Parallel" title="Parallel (P)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">∥</span>
+</button>
+<button type="button" aria-label="Perpendicular" title="Perpendicular (N)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">⊥</span>
+</button>
+<button type="button" aria-label="Midpoint" title="Midpoint (M)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">M</span>
+</button>
+<button type="button" aria-label="Point on" title="Point on" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">⊙</span>
+</button>
+</div>
+</div>
+<button type="button">Undo</button>
+<button type="button">Redo</button>
+<div class="sketch-view-tools" role="group" aria-label="View">
+<span class="sketch-group-caption">View</span>
+<button type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
+<button type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
+<button type="button" title="Fit (F)">Fit (F)</button>
+<button type="button" title="Fit all (Shift+F)">Fit all (Shift+F)</button>
+<button type="button" aria-pressed="true">Dimensions</button>
+<button type="button" aria-pressed="false">Names</button>
+<button type="button" aria-pressed="true">Constraints</button>
+<div class="sketch-menu-anchor">
+<button type="button" aria-label="Line styles" title="Line styles" aria-expanded="false">?</button>
+</div>
+</div>
+</div>",
+}
+`;
+
+exports[`W0 workspace DOM at 77c641c8 > woofer with aperture context 1`] = `
+{
+  "svg": "<svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet" tabindex="0" role="application" aria-label="Sketch drawing">
+<g class="sketch-grid" aria-hidden="true">
+<line x1="7.31428571428571" x2="7.31428571428571" y1="0" y2="360">
+</line>
+<line x1="15.542857142857141" x2="15.542857142857141" y1="0" y2="360">
+</line>
+<line x1="23.771428571428572" x2="23.771428571428572" y1="0" y2="360">
+</line>
+<line x1="32" x2="32" y1="0" y2="360">
+</line>
+<line x1="40.22857142857143" x2="40.22857142857143" y1="0" y2="360">
+</line>
+<line x1="48.457142857142856" x2="48.457142857142856" y1="0" y2="360">
+</line>
+<line x1="56.68571428571429" x2="56.68571428571429" y1="0" y2="360">
+</line>
+<line x1="64.91428571428571" x2="64.91428571428571" y1="0" y2="360">
+</line>
+<line x1="73.14285714285714" x2="73.14285714285714" y1="0" y2="360">
+</line>
+<line x1="81.37142857142858" x2="81.37142857142858" y1="0" y2="360">
+</line>
+<line x1="89.60000000000001" x2="89.60000000000001" y1="0" y2="360">
+</line>
+<line x1="97.82857142857144" x2="97.82857142857144" y1="0" y2="360">
+</line>
+<line x1="106.05714285714286" x2="106.05714285714286" y1="0" y2="360">
+</line>
+<line x1="114.28571428571429" x2="114.28571428571429" y1="0" y2="360">
+</line>
+<line x1="122.51428571428573" x2="122.51428571428573" y1="0" y2="360">
+</line>
+<line x1="130.74285714285716" x2="130.74285714285716" y1="0" y2="360">
+</line>
+<line x1="138.9714285714286" x2="138.9714285714286" y1="0" y2="360">
+</line>
+<line x1="147.20000000000002" x2="147.20000000000002" y1="0" y2="360">
+</line>
+<line x1="155.42857142857144" x2="155.42857142857144" y1="0" y2="360">
+</line>
+<line x1="163.65714285714287" x2="163.65714285714287" y1="0" y2="360">
+</line>
+<line x1="171.8857142857143" x2="171.8857142857143" y1="0" y2="360">
+</line>
+<line x1="180.11428571428573" x2="180.11428571428573" y1="0" y2="360">
+</line>
+<line x1="188.34285714285716" x2="188.34285714285716" y1="0" y2="360">
+</line>
+<line x1="196.57142857142858" x2="196.57142857142858" y1="0" y2="360">
+</line>
+<line x1="204.8" x2="204.8" y1="0" y2="360">
+</line>
+<line x1="213.02857142857147" x2="213.02857142857147" y1="0" y2="360">
+</line>
+<line x1="221.2571428571429" x2="221.2571428571429" y1="0" y2="360">
+</line>
+<line x1="229.48571428571432" x2="229.48571428571432" y1="0" y2="360">
+</line>
+<line x1="237.71428571428572" x2="237.71428571428572" y1="0" y2="360">
+</line>
+<line x1="245.94285714285718" x2="245.94285714285718" y1="0" y2="360">
+</line>
+<line x1="254.1714285714286" x2="254.1714285714286" y1="0" y2="360">
+</line>
+<line x1="262.40000000000003" x2="262.40000000000003" y1="0" y2="360">
+</line>
+<line x1="270.6285714285715" x2="270.6285714285715" y1="0" y2="360">
+</line>
+<line x1="278.8571428571429" x2="278.8571428571429" y1="0" y2="360">
+</line>
+<line x1="287.0857142857143" x2="287.0857142857143" y1="0" y2="360">
+</line>
+<line x1="295.31428571428575" x2="295.31428571428575" y1="0" y2="360">
+</line>
+<line x1="303.5428571428572" x2="303.5428571428572" y1="0" y2="360">
+</line>
+<line x1="311.7714285714286" x2="311.7714285714286" y1="0" y2="360">
+</line>
+<line x1="320" x2="320" y1="0" y2="360">
+</line>
+<line x1="328.22857142857146" x2="328.22857142857146" y1="0" y2="360">
+</line>
+<line x1="336.4571428571429" x2="336.4571428571429" y1="0" y2="360">
+</line>
+<line x1="344.6857142857143" x2="344.6857142857143" y1="0" y2="360">
+</line>
+<line x1="352.91428571428577" x2="352.91428571428577" y1="0" y2="360">
+</line>
+<line x1="361.14285714285717" x2="361.14285714285717" y1="0" y2="360">
+</line>
+<line x1="369.3714285714286" x2="369.3714285714286" y1="0" y2="360">
+</line>
+<line x1="377.6" x2="377.6" y1="0" y2="360">
+</line>
+<line x1="385.8285714285714" x2="385.8285714285714" y1="0" y2="360">
+</line>
+<line x1="394.05714285714294" x2="394.05714285714294" y1="0" y2="360">
+</line>
+<line x1="402.28571428571433" x2="402.28571428571433" y1="0" y2="360">
+</line>
+<line x1="410.5142857142858" x2="410.5142857142858" y1="0" y2="360">
+</line>
+<line x1="418.7428571428572" x2="418.7428571428572" y1="0" y2="360">
+</line>
+<line x1="426.97142857142865" x2="426.97142857142865" y1="0" y2="360">
+</line>
+<line x1="435.20000000000005" x2="435.20000000000005" y1="0" y2="360">
+</line>
+<line x1="443.42857142857144" x2="443.42857142857144" y1="0" y2="360">
+</line>
+<line x1="451.65714285714296" x2="451.65714285714296" y1="0" y2="360">
+</line>
+<line x1="459.88571428571436" x2="459.88571428571436" y1="0" y2="360">
+</line>
+<line x1="468.1142857142858" x2="468.1142857142858" y1="0" y2="360">
+</line>
+<line x1="476.3428571428572" x2="476.3428571428572" y1="0" y2="360">
+</line>
+<line x1="484.5714285714286" x2="484.5714285714286" y1="0" y2="360">
+</line>
+<line x1="492.80000000000007" x2="492.80000000000007" y1="0" y2="360">
+</line>
+<line x1="501.02857142857147" x2="501.02857142857147" y1="0" y2="360">
+</line>
+<line x1="509.2571428571429" x2="509.2571428571429" y1="0" y2="360">
+</line>
+<line x1="517.4857142857143" x2="517.4857142857143" y1="0" y2="360">
+</line>
+<line x1="525.7142857142858" x2="525.7142857142858" y1="0" y2="360">
+</line>
+<line x1="533.9428571428573" x2="533.9428571428573" y1="0" y2="360">
+</line>
+<line x1="542.1714285714286" x2="542.1714285714286" y1="0" y2="360">
+</line>
+<line x1="550.4000000000001" x2="550.4000000000001" y1="0" y2="360">
+</line>
+<line x1="558.6285714285715" x2="558.6285714285715" y1="0" y2="360">
+</line>
+<line x1="566.8571428571429" x2="566.8571428571429" y1="0" y2="360">
+</line>
+<line x1="575.0857142857144" x2="575.0857142857144" y1="0" y2="360">
+</line>
+<line x1="583.3142857142858" x2="583.3142857142858" y1="0" y2="360">
+</line>
+<line x1="591.5428571428572" x2="591.5428571428572" y1="0" y2="360">
+</line>
+<line x1="599.7714285714286" x2="599.7714285714286" y1="0" y2="360">
+</line>
+<line x1="608" x2="608" y1="0" y2="360">
+</line>
+<line x1="616.2285714285715" x2="616.2285714285715" y1="0" y2="360">
+</line>
+<line x1="624.4571428571429" x2="624.4571428571429" y1="0" y2="360">
+</line>
+<line x1="632.6857142857144" x2="632.6857142857144" y1="0" y2="360">
+</line>
+<line x1="640.9142857142858" x2="640.9142857142858" y1="0" y2="360">
+</line>
+<line x1="649.1428571428572" x2="649.1428571428572" y1="0" y2="360">
+</line>
+<line x1="0" x2="640" y1="356.9142857142857" y2="356.9142857142857">
+</line>
+<line x1="0" x2="640" y1="348.6857142857143" y2="348.6857142857143">
+</line>
+<line x1="0" x2="640" y1="340.4571428571429" y2="340.4571428571429">
+</line>
+<line x1="0" x2="640" y1="332.22857142857146" y2="332.22857142857146">
+</line>
+<line x1="0" x2="640" y1="324" y2="324">
+</line>
+<line x1="0" x2="640" y1="315.7714285714286" y2="315.7714285714286">
+</line>
+<line x1="0" x2="640" y1="307.5428571428572" y2="307.5428571428572">
+</line>
+<line x1="0" x2="640" y1="299.31428571428575" y2="299.31428571428575">
+</line>
+<line x1="0" x2="640" y1="291.0857142857143" y2="291.0857142857143">
+</line>
+<line x1="0" x2="640" y1="282.8571428571429" y2="282.8571428571429">
+</line>
+<line x1="0" x2="640" y1="274.62857142857143" y2="274.62857142857143">
+</line>
+<line x1="0" x2="640" y1="266.4" y2="266.4">
+</line>
+<line x1="0" x2="640" y1="258.1714285714286" y2="258.1714285714286">
+</line>
+<line x1="0" x2="640" y1="249.94285714285715" y2="249.94285714285715">
+</line>
+<line x1="0" x2="640" y1="241.71428571428572" y2="241.71428571428572">
+</line>
+<line x1="0" x2="640" y1="233.4857142857143" y2="233.4857142857143">
+</line>
+<line x1="0" x2="640" y1="225.25714285714287" y2="225.25714285714287">
+</line>
+<line x1="0" x2="640" y1="217.02857142857144" y2="217.02857142857144">
+</line>
+<line x1="0" x2="640" y1="208.8" y2="208.8">
+</line>
+<line x1="0" x2="640" y1="200.57142857142856" y2="200.57142857142856">
+</line>
+<line x1="0" x2="640" y1="192.34285714285716" y2="192.34285714285716">
+</line>
+<line x1="0" x2="640" y1="184.1142857142857" y2="184.1142857142857">
+</line>
+<line x1="0" x2="640" y1="175.8857142857143" y2="175.8857142857143">
+</line>
+<line x1="0" x2="640" y1="167.65714285714284" y2="167.65714285714284">
+</line>
+<line x1="0" x2="640" y1="159.42857142857142" y2="159.42857142857142">
+</line>
+<line x1="0" x2="640" y1="151.2" y2="151.2">
+</line>
+<line x1="0" x2="640" y1="142.97142857142856" y2="142.97142857142856">
+</line>
+<line x1="0" x2="640" y1="134.74285714285713" y2="134.74285714285713">
+</line>
+<line x1="0" x2="640" y1="126.5142857142857" y2="126.5142857142857">
+</line>
+<line x1="0" x2="640" y1="118.28571428571428" y2="118.28571428571428">
+</line>
+<line x1="0" x2="640" y1="110.05714285714285" y2="110.05714285714285">
+</line>
+<line x1="0" x2="640" y1="101.82857142857142" y2="101.82857142857142">
+</line>
+<line x1="0" x2="640" y1="93.6" y2="93.6">
+</line>
+<line x1="0" x2="640" y1="85.37142857142857" y2="85.37142857142857">
+</line>
+<line x1="0" x2="640" y1="77.14285714285714" y2="77.14285714285714">
+</line>
+<line x1="0" x2="640" y1="68.9142857142857" y2="68.9142857142857">
+</line>
+<line x1="0" x2="640" y1="60.68571428571427" y2="60.68571428571427">
+</line>
+<line x1="0" x2="640" y1="52.45714285714284" y2="52.45714285714284">
+</line>
+<line x1="0" x2="640" y1="44.22857142857141" y2="44.22857142857141">
+</line>
+<line x1="0" x2="640" y1="35.999999999999986" y2="35.999999999999986">
+</line>
+<line x1="0" x2="640" y1="27.771428571428544" y2="27.771428571428544">
+</line>
+<line x1="0" x2="640" y1="19.542857142857116" y2="19.542857142857116">
+</line>
+<line x1="0" x2="640" y1="11.314285714285688" y2="11.314285714285688">
+</line>
+<line x1="0" x2="640" y1="3.0857142857142605" y2="3.0857142857142605">
+</line>
+<line x1="0" x2="640" y1="-5.142857142857167" y2="-5.142857142857167">
+</line>
+</g>
+<g class="sketch-context-layer" aria-label="Reference context">
+<defs>
+<pattern id="sketch-context-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+<line x1="0" y1="0" x2="0" y2="6" class="sketch-keepout-hatch">
+</line>
+</pattern>
+</defs>
+<g data-context-id="woofer.aperture" data-reference-id="l11" class="sketch-context-item role-aperture  sketch-limit" style="pointer-events: auto;">
+<title>Aperture r 14.00 · Double-click to edit limit</title>
+<path d="M608,114.28571428571428 l4,4 -4,4 -4,-4 Z" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M608,114.28571428571428 l4,4 -4,4 -4,-4 Z">
+</path>
+<text x="608" y="124.28571428571428" text-anchor="end" dominant-baseline="text-before-edge" data-anchor-x="608" data-anchor-y="118.28571428571428" role="button" tabindex="0">
+<title>Double-click to edit limit</title>Aperture r 14.00</text>
+</g>
+<g data-context-id="rim-plane" data-reference-id="baffle" class="sketch-context-item role-rim-plane " style="pointer-events: auto;">
+<title>Front baffle (z = 0.00)</title>
+<path d="M32,118.28571428571428 L566.8571428571429,118.28571428571428" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M32,118.28571428571428 L566.8571428571429,118.28571428571428">
+</path>
+</g>
+<g data-context-id="baffle.front" class="sketch-context-item role-baffle " style="pointer-events: auto;">
+<title>Front baffle (z = 0.00)</title>
+<path d="M608,118.28571428571428 L4146.285714285715,118.28571428571428" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M608,118.28571428571428 L4146.285714285715,118.28571428571428">
+</path>
+</g>
+<g data-context-id="box.back" class="sketch-context-item role-enclosure " style="pointer-events: auto;">
+<title>Enclosure back</title>
+<path d="M32,3409.714285714286 L6203.428571428572,3409.714285714286" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M32,3409.714285714286 L6203.428571428572,3409.714285714286">
+</path>
+</g>
+<g data-context-id="box.side.near" class="sketch-context-item role-enclosure near" style="pointer-events: auto;">
+<title>Enclosure side (nearest, +x) 100.00 mm</title>
+<path d="M4146.285714285715,3409.714285714286 L4146.285714285715,118.28571428571428" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M4146.285714285715,3409.714285714286 L4146.285714285715,118.28571428571428">
+</path>
+</g>
+<g data-context-id="box.side.far" class="sketch-context-item role-enclosure far" style="pointer-events: none;">
+<title>Enclosure side (farthest, −y) 150.00 mm</title>
+<path d="M6203.428571428572,3409.714285714286 L6203.428571428572,118.28571428571428">
+</path>
+</g>
+<g data-context-id="keepout.back" class="sketch-context-item role-keepout " style="pointer-events: none;">
+<title>Minimum clearance 0.10 mm</title>
+<path d="M32,3409.714285714286 L6203.428571428572,3409.714285714286 L6203.428571428572,3405.6000000000004 L32,3405.6000000000004 L32,3409.714285714286" fill="url(#sketch-context-hatch)">
+</path>
+</g>
+<g data-context-id="woofer.collar" class="sketch-context-item role-collar " style="pointer-events: none;">
+<title>Mounting collar</title>
+<path d="M566.8571428571429,118.28571428571428 L608,118.28571428571428">
+</path>
+</g>
+<g data-context-id="axis" data-reference-id="axis" class="sketch-context-item role-axis " style="pointer-events: auto;">
+<title>Axis (r = 0.00)</title>
+<path d="M32,360 L32,0" class="sketch-context-hit" style="pointer-events: stroke;">
+</path>
+<path d="M32,360 L32,0">
+</path>
+</g>
+</g>
+<g class="sketch-curve">
+<path data-id="dust-cap" d="M32,200.57142857142856 A133.71428571428572,133.71428571428572 0 0 1 155.42857142857144,282.8571428571429" class="sketch-curve-hit">
+</path>
+<path data-id="dust-cap" d="M32,200.57142857142856 A133.71428571428572,133.71428571428572 0 0 1 155.42857142857144,282.8571428571429" tabindex="-1" role="button" aria-label="Select arc Dust cap" class="sketch-entity moving under   ">
+<title>Dust cap (dust-cap)</title>
+</path>
+</g>
+<g class="sketch-curve">
+<path data-id="cone" d="M155.42857142857144,282.8571428571429 L443.42857142857144,118.28571428571428" class="sketch-curve-hit">
+</path>
+<path data-id="cone" d="M155.42857142857144,282.8571428571429 L443.42857142857144,118.28571428571428" tabindex="-1" role="button" aria-label="Select line Cone" class="sketch-entity moving under   ">
+<title>Cone (cone)</title>
+</path>
+</g>
+<g class="sketch-curve">
+<path data-id="surround" d="M443.42857142857144,118.28571428571428 A46.62857142857143,46.62857142857143 0 0 1 525.7142857142858,118.28571428571428" class="sketch-curve-hit">
+</path>
+<path data-id="surround" d="M443.42857142857144,118.28571428571428 A46.62857142857143,46.62857142857143 0 0 1 525.7142857142858,118.28571428571428" tabindex="-1" role="button" aria-label="Select arc Surround" class="sketch-entity moving under   ">
+<title>Surround (surround)</title>
+</path>
+</g>
+<g class="sketch-curve">
+<path data-id="land" d="M525.7142857142858,118.28571428571428 L566.8571428571429,118.28571428571428" class="sketch-curve-hit">
+</path>
+<path data-id="land" d="M525.7142857142858,118.28571428571428 L566.8571428571429,118.28571428571428" tabindex="-1" role="button" aria-label="Select line Land" class="sketch-entity rigid under   ">
+<title>Land (land)</title>
+</path>
+</g>
+<g class="sketch-handle">
+<circle data-id="pole" cx="32" cy="200.57142857142856" r="10" class="sketch-point-hit">
+</circle>
+<circle data-id="pole" cx="32" cy="200.57142857142856" r="4" tabindex="-1" role="button" aria-label="Select point Pole" class="sketch-point under   ">
+<title>pole: 0, -2 mm</title>
+</circle>
+</g>
+<g class="sketch-handle">
+<circle data-id="cap.rim" cx="155.42857142857144" cy="282.8571428571429" r="10" class="sketch-point-hit">
+</circle>
+<circle data-id="cap.rim" cx="155.42857142857144" cy="282.8571428571429" r="4" tabindex="-1" role="button" aria-label="Select point Dust-cap edge" class="sketch-point under   ">
+<title>cap.rim: 3, -4 mm</title>
+</circle>
+</g>
+<g class="sketch-handle">
+<circle data-id="cone.rim" cx="443.42857142857144" cy="118.28571428571428" r="10" class="sketch-point-hit">
+</circle>
+<circle data-id="cone.rim" cx="443.42857142857144" cy="118.28571428571428" r="4" tabindex="-1" role="button" aria-label="Select point Cone edge" class="sketch-point under   ">
+<title>cone.rim: 10, 0 mm</title>
+</circle>
+</g>
+<g class="sketch-handle">
+<circle data-id="surround.rim" cx="525.7142857142858" cy="118.28571428571428" r="10" class="sketch-point-hit">
+</circle>
+<circle data-id="surround.rim" cx="525.7142857142858" cy="118.28571428571428" r="4" tabindex="-1" role="button" aria-label="Select point Surround edge" class="sketch-point under   ">
+<title>surround.rim: 12, 0 mm</title>
+</circle>
+</g>
+<g class="sketch-handle">
+<circle data-id="rim" cx="566.8571428571429" cy="118.28571428571428" r="10" class="sketch-point-hit">
+</circle>
+<circle data-id="rim" cx="566.8571428571429" cy="118.28571428571428" r="4" tabindex="-1" role="button" aria-label="Select point Rim" class="sketch-point under   ">
+<title>rim: 13, 0 mm</title>
+</circle>
+</g>
+<g data-constraint-id="c7">
+<g>
+<rect data-id="c7" x="34" y="171.57142857142856" width="24" height="28" class="sketch-label-hit">
+</rect>
+<text data-id="c7" x="40" y="188.57142857142856" tabindex="-1" role="button" aria-label="Constraint pointOnLine c7" class="sketch-glyph  ok   ">
+<title>pointOnLine c7</title>⊙</text>
+</g>
+</g>
+<g data-constraint-id="c8">
+<g>
+<rect data-id="c8" x="568.8571428571429" y="75.28571428571428" width="24" height="28" class="sketch-label-hit">
+</rect>
+<text data-id="c8" x="574.8571428571429" y="92.28571428571428" tabindex="-1" role="button" aria-label="Constraint pointOnLine c8" class="sketch-glyph  ok   ">
+<title>pointOnLine c8</title>⊙</text>
+</g>
+</g>
+</svg>",
+  "toolbar": "<div role="toolbar" aria-label="Sketch tools" class="sketch-toolbar">
+<div class="sketch-toolbar-group" role="group" aria-label="Navigate">
+<span class="sketch-group-caption">Navigate</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Select (Esc)" title="Select (Esc)" aria-pressed="true">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M4 2 13 10 8 10 6 14Z">
+</path>
+</svg>
+<span class="sketch-tool-label">Select</span>
+</button>
+<button type="button" aria-label="Pan (hold Space)" title="Pan (hold Space)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M5 8V3a1 1 0 0 1 2 0v4-5a1 1 0 0 1 2 0v5-4a1 1 0 0 1 2 0v4-2a1 1 0 0 1 2 0v5q0 5-4 5H8q-2 0-3-2L2 8q1-2 3 0Z">
+</path>
+</svg>
+<span class="sketch-tool-label">Hand</span>
+</button>
+</div>
+</div>
+<div class="sketch-toolbar-group" role="group" aria-label="Sketch">
+<span class="sketch-group-caption">Sketch</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Line (L)" title="Line (L)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M3 13 13 3">
+</path>
+</svg>
+<span class="sketch-tool-label">Line</span>
+</button>
+<button type="button" aria-label="3-point arc (A)" title="3-point arc (A)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 13Q2 2 14 3">
+</path>
+</svg>
+<span class="sketch-tool-label">Arc</span>
+</button>
+<div class="sketch-menu-anchor">
+<button type="button" aria-label="Arc options" aria-expanded="false">⌄</button>
+</div>
+<button type="button" aria-label="Dimension (D)" title="Dimension (D)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 5V13M14 5V13M2 9H14M5 6 2 9 5 12M11 6 14 9 11 12">
+</path>
+</svg>
+<span class="sketch-tool-label">Dimension</span>
+</button>
+<button type="button" aria-label="Split (S)" title="Split (S)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 12 7 7M10 4 14 0M6 2 14 10">
+</path>
+</svg>
+<span class="sketch-tool-label">Split</span>
+</button>
+</div>
+</div>
+<div class="sketch-toolbar-group" role="group" aria-label="Constraints">
+<span class="sketch-group-caption">Constraints</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Horizontal" title="Horizontal (H)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">H</span>
+</button>
+<button type="button" aria-label="Vertical" title="Vertical (V)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">V</span>
+</button>
+<button type="button" aria-label="Coincident" title="Coincident" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">●</span>
+</button>
+<button type="button" aria-label="Tangent" title="Tangent" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">⌒</span>
+</button>
+<button type="button" aria-label="Fix" title="Fix" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">▣</span>
+</button>
+<button type="button" aria-label="Equal" title="Equal" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">=</span>
+</button>
+<button type="button" aria-label="Parallel" title="Parallel (P)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">∥</span>
+</button>
+<button type="button" aria-label="Perpendicular" title="Perpendicular (N)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">⊥</span>
+</button>
+<button type="button" aria-label="Midpoint" title="Midpoint (M)" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">M</span>
+</button>
+<button type="button" aria-label="Point on" title="Point on" aria-pressed="false">
+<span aria-hidden="true" class="sketch-constraint-icon">⊙</span>
+</button>
+</div>
+</div>
+<button type="button">Undo</button>
+<button type="button">Redo</button>
+<div class="sketch-view-tools" role="group" aria-label="View">
+<span class="sketch-group-caption">View</span>
+<button type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
+<button type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
+<button type="button" title="Fit (F)">Fit (F)</button>
+<button type="button" title="Fit all (Shift+F)">Fit all (Shift+F)</button>
+<button type="button" aria-pressed="true">Dimensions</button>
+<button type="button" aria-pressed="false">Names</button>
+<button type="button" aria-pressed="true">Constraints</button>
+<div class="sketch-menu-anchor">
+<button type="button" aria-label="Line styles" title="Line styles" aria-expanded="false">?</button>
+</div>
+</div>
+</div>",
+}
+`;
