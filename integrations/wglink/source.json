@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "5b6c7213877e5e307595d1fe123587dec08ea093",
+  "commit": "a1178624dc39422d4815680c9c7f5540f42cb0b7",
   "license": "AGPL-3.0-or-later",
-  "addinVersion": "0.3.0",
-  "note": "WGLink 0.3.0 with immutable export bundles (latest locator, exportId check); protocol unchanged."
+  "addinVersion": "0.3.1",
+  "note": "WGLink 0.3.1 (tag v0.3.1): immutable export bundles; protocol unchanged."
 }
