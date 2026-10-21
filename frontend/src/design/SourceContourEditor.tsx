@@ -375,7 +375,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
       precision={6} displayPrecision={2} step={.1} onCommit={(v) => write({ ...values, [field]: v })}/>;
   });
 
-  const pointHeld = (id: string) => diagnosis?.pointDetermined?.[id] === true || diagnosis?.status === 'ok' && diagnosis.dof === 0 || author.sketch.constraints.some(c => c.kind === 'fix' && c.point === id);
+  const pointHeld = (id: string) => diagnosis?.status === 'ok' && (diagnosis.pointDetermined?.[id] === true || diagnosis.dof === 0) || author.sketch.constraints.some(c => c.kind === 'fix' && c.point === id);
   function segmentMeasure(id: string) {
     const e = author.sketch.entities.find(e => e.id === id);
     if (e?.kind === 'arc') return `radius ${arcGeometry(author.sketch, e).radius.toFixed(2)} mm`;
@@ -465,7 +465,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
 
       </div><aside ref={panel} aria-label="Sketch properties" className="source-properties">
         <div ref={setCommandHost} className="source-command-properties"/>
-        {selectedPoint && <section aria-label="Point properties"><h3>Point</h3><table><tbody>{pointRow(selectedPoint, tablePoints.findIndex(p => p.id === selectedPoint.id))}</tbody></table>{constraintsList}<p>{pointHeld(selectedPoint.id) ? 'No remaining freedom' : diagnosis?.pointDetermined?.[selectedPoint.id] === false ? 'Point can still move' : 'Remaining freedom not analysed'}</p></section>}
+        {selectedPoint && <section aria-label="Point properties"><h3>Point</h3><table><tbody>{pointRow(selectedPoint, tablePoints.findIndex(p => p.id === selectedPoint.id))}</tbody></table>{constraintsList}<p>{pointHeld(selectedPoint.id) ? 'No remaining freedom' : diagnosis?.status === 'ok' && diagnosis.pointDetermined?.[selectedPoint.id] === false ? 'Point can still move' : 'Remaining freedom not analysed'}</p></section>}
         {selectedSegment && <section aria-label="Segment properties"><h3>Segment</h3><table><tbody>{patchRow(selectedSegment, tablePatches.indexOf(selectedSegment))}</tbody></table>{constraintsList}</section>}
         {selectedDimension && <section aria-label="Dimension properties"><h3>Dimension</h3><table><tbody>{dimensionRow(selectedDimension)}</tbody></table></section>}
         {canvasSelection.length > 1 && <section aria-label="Selection properties"><h3>Selection</h3><p>{canvasSelection.filter(id => author.sketch.points.some(p => p.id === id)).length} points · {canvasSelection.filter(id => author.sketch.entities.some(e => e.id === id)).length} segments · {canvasSelection.filter(id => author.sketch.constraints.some(c => c.id === id && 'value' in c)).length} dimensions</p></section>}

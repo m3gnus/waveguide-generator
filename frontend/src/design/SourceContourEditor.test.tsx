@@ -1124,6 +1124,17 @@ describe('source editor interactions', () => {
     expect(Number(input('Backing depth attachment').value)).toBe(25);
   });
 
+  it.each([true, false])('keeps point freedom unanalysed after a failed solve with stale determination %s', async determined => {
+    const solve = SketchSession.prototype.solveFull;
+    vi.spyOn(SketchSession.prototype, 'solveFull').mockImplementation(async function (this: SketchSession) {
+      return { ...await solve.call(this), status: 'failed', dof: 0, pointDetermined: { rim: determined } };
+    });
+    await mount();
+    await act(async () => button('Select point 2').click());
+    const properties = host.querySelector('[aria-label="Point properties"]')!;
+    expect(properties.textContent).toContain('Remaining freedom not analysed');
+    expect(input('Point 2 radius').disabled).toBe(false);
+  });
   it('switches the properties panel by selection and edits through the existing point, metadata and dimension commands', async () => {
     const doc = expandedPreset('cone', presetDefaults.cone);
     const state = sourceAdapter.fitSourcePreset((await import('../sketch/adapters/sourcePreset')).seedPreset(doc,'cone',presetDefaults.cone), {kind:'aperture',radius:14});
@@ -1151,6 +1162,12 @@ describe('source editor interactions', () => {
     expect(Number(input(`Dimension ${dimension.id} value`).value)).toBe(2.5);
     expect(panel.querySelector('[aria-label="Selection actions"]')?.textContent).toContain('Reset position');
     await act(async () => button('Make reference Surround width').click()); await settle();
+    expect(input(`Dimension ${dimension.id} value`).disabled).toBe(true);
+    await act(async () => button('Delete selection').click()); await settle();
+    expect(panel.querySelector('[aria-label="Dimension properties"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Reference dimension readout"], [aria-label="Edit dimension"]')).toBeNull();
+    await act(async () => button('Undo').click()); await settle();
+    await act(async () => host.querySelector(`[data-row-id="${dimension.id}"]`)!.dispatchEvent(new MouseEvent('click',{bubbles:true})));
     expect(input(`Dimension ${dimension.id} value`).disabled).toBe(true);
     await act(async () => host.querySelector('[aria-label="Sketch drawing"]')!.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})));
     expect(panel.querySelector('[aria-label="Dimension properties"]')).toBeNull();

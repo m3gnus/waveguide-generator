@@ -1,10 +1,10 @@
 import { entityPoints, type Sketch } from '../model';
 import { arcGeometry, onArc, projectToEntity } from '../geometry';
-import { dimensionHelper } from '../dimensionGraphics';
+import { internalHelper } from '../dimensionGraphics';
 import { referencePointIds } from '../context';
 import type { XY } from '../solver/types';
 
-const selectionExcluded = (sketch: Sketch, hidden: string[] = []) => new Set([...referencePointIds(sketch), ...sketch.entities.filter(dimensionHelper).flatMap(entityPoints), ...hidden]);
+const selectionExcluded = (sketch: Sketch, hidden: string[] = []) => new Set([...referencePointIds(sketch), ...sketch.entities.filter(internalHelper).flatMap(entityPoints), ...hidden]);
 
 export interface Modifiers { shift?: boolean; toggle?: boolean }
 export function combineSelection(selection: string[], ids: string[], modifiers: Modifiers = {}): string[] {
@@ -36,16 +36,16 @@ export function cycleHit(previous: Cycle | undefined, at: XY, time: number, ids:
 export function selectHits(sketch: Sketch, at: XY, tolerance: number, hidden: string[] = [], dimensions: string[] = []): string[] {
   const excluded = selectionExcluded(sketch, hidden);
   const points = sketch.points.filter(p => !excluded.has(p.id)).map(p => ({ id: p.id, gap: Math.hypot(p.x - at.x, p.y - at.y) }));
-  const curves = sketch.entities.filter(e => !e.reference && !dimensionHelper(e) && (e.kind === 'line' || e.kind === 'arc')).map(e => {
+  const curves = sketch.entities.filter(e => !e.reference && !internalHelper(e) && (e.kind === 'line' || e.kind === 'arc')).map(e => {
     const p = projectToEntity(sketch, e.id, at.x, at.y); return { id: e.id, gap: Math.hypot(p.x - at.x, p.y - at.y) };
   });
   return [...points.filter(p => p.gap <= tolerance).sort((a,b) => a.gap-b.gap), ...curves.filter(p => p.gap <= tolerance).sort((a,b) => a.gap-b.gap)].map(p => p.id).concat(dimensions);
 }
 export function dragPointIds(sketch: Sketch, selection: string[]): string[] {
-  const fixed = referencePointIds(sketch);
+  const fixed = selectionExcluded(sketch);
   return [...new Set(selection.flatMap(id => {
     const entity = sketch.entities.find(e => e.id === id);
-    return entity ? entity.reference ? [] : entityPoints(entity) : sketch.points.some(p => p.id === id) ? [id] : [];
+    return entity ? entity.reference || internalHelper(entity) ? [] : entityPoints(entity) : sketch.points.some(p => p.id === id) ? [id] : [];
   }))].filter(id => !fixed.has(id));
 }
 /** Exact finite line/arc intersections; arc extrema make a window require the entire curve. */
@@ -56,7 +56,7 @@ export function marqueeSelection(sketch: Sketch, start: XY, end: XY): string[] {
   const fixed = selectionExcluded(sketch), point = (id: string) => sketch.points.find(p => p.id === id)!;
   const ids = sketch.points.filter(p => !fixed.has(p.id) && inside(p)).map(p => p.id);
   for (const e of sketch.entities) {
-    if (e.reference || dimensionHelper(e)) continue;
+    if (e.reference || internalHelper(e)) continue;
     let contained = false, touches = false;
     if (e.kind === 'line') {
       const a = point(e.p1), b = point(e.p2);

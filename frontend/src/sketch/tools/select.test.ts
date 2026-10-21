@@ -57,4 +57,13 @@ describe('Select state machine', () => {
     const s = sketch(); s.entities.push({id:'arc',kind:'arc',center:'c',start:'b',end:'d',ccw:true});
     expect(dragPointIds(s,['inside','arc','a'])).toEqual(['a','b','c','d']);
   });
+  it.each(['dimensionHelper', 'angleBaseline'])('excludes %s geometry and points from marquee, cycling and body drag', marker => {
+    const s = sketch();
+    s.points.push({id:'helper.a',x:1,y:1}, {id:'helper.b',x:3,y:1});
+    s.entities.push({id:'helper',kind:'line',p1:'helper.a',p2:'helper.b',construction:true,data:{[marker]:true}});
+    expect(marqueeSelection(s,{x:0,y:0},{x:4,y:4})).toEqual(['a','b','inside']);
+    expect(marqueeSelection(s,{x:4,y:4},{x:0,y:0})).toEqual(['a','b','inside','through']);
+    expect(selectHits(s,{x:1,y:1},.01)).toEqual(['a','inside']);
+    expect(dragPointIds(s,['inside','helper','helper.a'])).toEqual(['a','b']);
+  });
 });
