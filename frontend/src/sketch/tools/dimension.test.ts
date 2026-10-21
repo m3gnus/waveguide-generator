@@ -61,7 +61,7 @@ describe('dimension candidate policy', () => {
       expect(c).toMatchObject({ kind: 'angle', a: 'a', b: 'b' });
       const placement = c.placement!;
       if (!('along' in placement)) throw new Error('Expected angle placement');
-      const theta = Math.atan2(6, 8) + c.value * placement.along;
+      const theta = Math.atan2(6, 8) + (c.supplementary ? Math.PI : 0) + (c.supplementary ? -c.value : c.value) * placement.along;
       expect(10 + placement.offset * Math.cos(theta)).toBeCloseTo(cursor.x);
       expect(9 + placement.offset * Math.sin(theta)).toBeCloseTo(cursor.y);
     }

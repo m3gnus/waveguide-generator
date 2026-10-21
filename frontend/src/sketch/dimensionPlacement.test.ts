@@ -8,6 +8,8 @@ import { applySourceCommand, lower } from './adapters/sourceContour';
 import { SketchController } from './controller';
 import { SketchSession, toSolverSketch } from './session';
 import { sourceEditorApi } from '../api/sourceEditor';
+import { candidateDimension, dimensionPicks } from './tools/dimension';
+import { refreshReferenceDimensions } from './geometry';
 import { worldToScreen } from './view';
 
 const cone = () => seedPreset(expandedPreset('cone'), 'cone', presetDefaults.cone);
@@ -39,6 +41,32 @@ describe('dimension placement', () => {
     }
     expect(applyCommand(sketch, { kind: 'setDimensionPlacement', id: 'missing', placement })).toHaveProperty('error');
     expect(applyCommand(sketch, { kind: 'setDimensionPlacement', id: sketch.constraints.find(c => !('value' in c))!.id, placement })).toHaveProperty('error');
+  });
+  it.each([
+    [{ x: 8, y: 3 }, 45, false, 1], [{ x: -3, y: 8 }, 135, true, 1],
+    [{ x: -8, y: -3 }, 45, false, -1], [{ x: 3, y: -8 }, 135, true, -1],
+  ] as const)('selects the ordinary angle sector at %j and persists its branch through geometry changes', (cursor, degrees, supplementary, side) => {
+    const sketch = importedSketch([{ id: 'o', x: 0, y: 0 }, { id: 'x', x: 10, y: 0 }, { id: 'y', x: 10, y: 10 }],
+      [{ kind: 'line', id: 'a', p1: 'o', p2: 'x' }, { kind: 'line', id: 'b', p1: 'o', p2: 'y' }]);
+    const candidate = candidateDimension(dimensionPicks(sketch, ['a', 'b']), cursor)!;
+    expect(candidate.value * 180 / Math.PI).toBeCloseTo(degrees);
+    expect(!!candidate.supplementary).toBe(supplementary);
+    expect(Math.sign(candidate.placement!.offset)).toBe(side);
+    const dimension = { ...candidate, id: 'angle', driving: false } as Constraint;
+    sketch.constraints.push(dimension);
+    const layout = dimensionLayout(sketch, dimension, id => { const p = sketch.points.find(p => p.id === id)!; return { x: p.x, y: -p.y }; }, bounds)!;
+    expect(layout.at.x).toBeCloseTo(cursor.x); expect(layout.at.y).toBeCloseTo(-cursor.y);
+    const dragged = dragDimensionPlacement(sketch, dimension, candidate.placement!, { x: 0, y: 0 });
+    expect(dragged.offset).toBeCloseTo(candidate.placement!.offset);
+    expect('along' in dragged && dragged.along).toBeCloseTo('along' in candidate.placement! ? candidate.placement.along : NaN);
+    const moved = { ...sketch, points: sketch.points.map(p => p.id === 'y' ? { ...p, y: 10 * Math.sqrt(3) } : p) };
+    const refreshed = refreshReferenceDimensions(moved);
+    const c = refreshed.constraints[0];
+    expect(!!c.supplementary).toBe(supplementary); expect(c.placement).toEqual(candidate.placement);
+    expect('value' in c && c.value * 180 / Math.PI).toBeCloseTo(supplementary ? 120 : 60);
+    const solver = toSolverSketch({ ...refreshed, constraints: [{ ...c, driving: true } as Constraint] }, []).constraints[0];
+    expect('value' in solver && solver.value).toBeCloseTo(Math.PI / 3);
+    expect(parseSketch(toJSON(refreshed)).ok).toBe(true);
   });
   it('maps vertical text drags to perpendicular offset and signed along, including outside the extension lines', () => {
     const { sketch, meta } = cone(), c = sketch.constraints.find(c => c.id === meta.preset!.dimensions.depth_mm)!;

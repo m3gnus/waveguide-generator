@@ -111,6 +111,24 @@ describe('constraint palette wiring', () => {
     expect(popup.textContent).toContain('Construction'); expect(popup.textContent).not.toContain('Horizontal');
     await click('Horizontal'); expect(session.constraint).toHaveBeenCalledWith({ kind: 'horizontal', line: 'line' });
   });
+  it.each(sequences)('reuses complete or partial preselection for %s', async (kind, ids) => {
+    await pick(ids[0]); await pointer({ x: 50, y: 30 }, 'pointerup');
+    expect(button(rules[kind].label).disabled).toBe(false);
+    const expected = constraintFor(current, ids, kind);
+    await click(rules[kind].label);
+    if (ids.length > 1) {
+      expect(session.constraint).not.toHaveBeenCalled();
+      expect(host.querySelector(`[data-id="${ids[0]}"].selected`)).not.toBeNull();
+      await pick(ids[1]);
+    }
+    expect(session.constraint).toHaveBeenLastCalledWith(expected);
+  });
+  it('explains an incompatible command without losing the selection', async () => {
+    await pick('arc'); await key('p');
+    expect(host.textContent).toContain('Parallel: select line and line');
+    expect(host.querySelector('.sketch-entity[data-id="arc"].selected')).not.toBeNull();
+    expect(session.constraint).not.toHaveBeenCalled();
+  });
   it('uses the existing conflict banner on a rejected palette constraint', async () => {
     vi.mocked(session.constraint).mockRejectedValueOnce({ overconstrained: true, constraints: [{ kind: 'horizontal', line: 'line', id: 'h' }], reason: 'Conflicts with Horizontal' });
     await click('Horizontal'); await pick('line');

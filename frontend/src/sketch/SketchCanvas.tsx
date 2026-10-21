@@ -8,10 +8,10 @@ import type { Capabilities, XY } from './solver/types';
 import { arcGeometry, arcThrough, onArc, positiveAngle, projectToEntity, tangentArc, tangentIncoming, tau } from './geometry';
 import { findSnap, snapLimitTarget, type SnapResult } from './snap';
 import { fit, gridStep, pan, screenToWorld, worldToScreen, zoomAt, wheelGesture, type View } from './view';
-import { continueLine, lineState, placeLine, typedTarget, type LineState } from './tools/line';
+import { continueLine, lineState, placeLine, prospectiveLine, type LineState } from './tools/line';
 import { coalesceTargets, select } from './tools/select';
 import { candidateDimension, dimensionPicks, hitDimension, type CandidateDimension } from './tools/dimension';
-import { constraintPalette, selectionConstraints, rules } from './tools/constraints';
+import { constraintPalette, selectionConstraints, pickPatterns, rules } from './tools/constraints';
 import { acceptsConstraintPick, constraintTool, pickConstraint, escapeConstraint, constraintHint, hitConstraint, type ConstraintToolState } from './tools/constraintTool';
 import { SketchToolbar, type Tool } from './SketchToolbar';
 import { ContextLayer } from './SketchContextLayer';
@@ -28,7 +28,7 @@ export interface CanvasSession {
   readonly lastSolveMs?: number;
   dismissRejection?(): void;
   materialiseContext?(context: SketchContext, itemId: string): Promise<{ sketch: Sketch; id: string }>;
-  command(command: Command | Command[], dimensions?: { length: number; angle?: number }): Promise<Sketch>;
+  command(command: Command | Command[], dimensions?: { length?: number; angle?: number }): Promise<Sketch>;
   constraint(constraint: NewConstraint, reference?: boolean, placement?: boolean): Promise<Sketch>;
   dimension(id: string, value: number, mergePlacement?: boolean): Promise<Sketch>;
   beginDrag(id: string): Promise<void>;
@@ -86,7 +86,6 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
   const svg = useRef<SVGSVGElement>(null);
   const dimensionInput = useRef<HTMLInputElement>(null);
   const dimensionApplying = useRef(false);
-  const dimensionTabAway = useRef(false);
   const dimensionGeneration = useRef(0);
   const dimensionPlacement = useRef<CandidateDimension | undefined>(undefined);
   const toolRef = useRef<Tool>('select');
@@ -131,7 +130,7 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
   const conflictSketch = { ...sketch, constraints: [...sketch.constraints.filter(c => !conflicts.includes(c.id)), ...conflictConstraints] };
   const conflictNames = conflictConstraints.map(c => displayName(conflictSketch, c.id)).join('; ');
   const [typed, setTyped] = useState<{ length: string; angle: string }>();
-  const [editing, setEditing] = useState<{ id: string; value: string; reason?: string; placed?: boolean }>();
+  const [editing, setEditing] = useState<{ id: string; value: string; reason?: string; placed?: boolean; readout?: boolean }>();
   const cursorRef = useRef({ at: cursor, snap });
   const [pending, setPending] = useState(false);
   const pendingCount = useRef(0);
@@ -159,25 +158,27 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
   const drawing = tool === 'line' || tool === 'tangent' || tool === 'arc3';
   const fixedPoints = referencePointIds(sketch, references);
   const fixed = new Set([...fixedPoints, ...sketch.constraints.flatMap(c => c.kind === 'fix' ? [c.point] : [])]);
-  const determined = (id: string) => diagnosis?.pointDetermined?.[id] ?? (diagnosis?.dof === 0 || fixed.has(id));
+  const fullyConstrained = diagnosis?.status === 'ok' && diagnosis.dof === 0;
+  const determined = (id: string) => fixed.has(id) ? true : diagnosis?.pointDetermined?.[id]
+    ?? (sketch.points.length + sketch.entities.length > 64 ? undefined : fullyConstrained);
   const selectedConstraintRefs = sketch.constraints.filter(c => selection.includes(c.id) || conflicts.includes(c.id)).flatMap(constraintRefs);
   const highlighted = new Set([...(constraintState?.ids ?? []), ...selection, ...selectedConstraintRefs, ...(showConflict ? conflictConstraints.flatMap(constraintRefs) : [])]);
   const conflictRefs = new Set([...sketch.constraints.filter(c => diagnosis?.constraintStates[c.id] === 'conflicting'), ...conflictConstraints].flatMap(c => constraintRefs(c).flatMap(id => [id, ...entityPoints(sketch.entities.find(e => e.id === id) ?? { kind: 'circle', id: '' })])));
-  const color = (ids: string[]) => ids.some(id => conflictRefs.has(id)) ? 'conflicting' : ids.every(determined) ? 'determined' : 'under';
+  const color = (ids: string[]) => ids.some(id => conflictRefs.has(id)) ? 'conflicting' : ids.every(id => determined(id) === true) ? 'determined' : ids.some(id => determined(id) === undefined) ? 'not-analysed' : 'under';
   const arcs = sketch.entities.filter(e => e.kind === 'arc');
   const endpoints = new Set(sketch.entities.flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : e.kind === 'arc' ? [e.start, e.end] : []));
   const hiddenCentres = arcs.map(e => e.center).filter(id => !endpoints.has(id) && !selection.includes(id) && hoveredPoint !== id
     && !(tool === 'constraint' && constraintState && acceptsConstraintPick(sketch, constraintState, id))
     && !arcs.some(e => e.center === id && (selection.includes(e.id) || (hoveredArc === e.id || hoverId === e.id))));
   const helperPoints = new Set(sketch.entities.filter(dimensionHelper).flatMap(entityPoints).filter(id => !sketch.entities.some(e => !dimensionHelper(e) && entityPoints(e).includes(id))));
+  const drawingSnapHidden = [...hiddenCentres.filter(id => !arcs.some(e => e.construction && e.center === id)), ...helperPoints];
   const visiblePoints = sketch.points.filter(p => !fixedPoints.has(p.id) && !hiddenCentres.includes(p.id) && !helperPoints.has(p.id));
   const validStarts = new Set(drawing && tool !== 'line' ? visiblePoints.filter(p => {
     try { tangentIncoming(sketch, p.id); return true; } catch { return false; }
   }).map(p => p.id) : []);
   const convertible = selection.length === 1 ? sketch.entities.find(e => e.id === selection[0] && !e.reference
     && !references.some(r => r.id === e.id) && (e.kind === 'line' || e.kind === 'arc')) : undefined;
-  const offeredConstraints = selection.every(id => fixed.has(id) || sketch.entities.some(e => e.id === id && e.reference))
-    ? [] : selectionConstraints(sketch, selection, session?.capabilities);
+  const offeredConstraints = selectionConstraints(sketch, selection, session?.capabilities);
   const selectedDimension = selection.length === 1 ? sketch.constraints.find(c => c.id === selection[0] && 'value' in c) : undefined;
   function reasonText(reason: unknown) {
     return reason instanceof Error ? reason.message : String(reason);
@@ -263,8 +264,7 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
   useLayoutEffect(() => {
     // Run after the releasing event and React commit, once capture and SVG focus are done.
     let cancelled = false;
-    dimensionTabAway.current = false;
-    if (editing) queueMicrotask(() => {
+    if (editing && !editing.readout) queueMicrotask(() => {
       if (!cancelled) { dimensionInput.current?.focus({ preventScroll: true }); dimensionInput.current?.select(); }
     });
     return () => { cancelled = true; };
@@ -285,7 +285,7 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
   useEffect(() => {
     if (!editing) return;
     const dismiss = (event: globalThis.PointerEvent) => {
-      if (!(event.target instanceof Element) || !event.target.closest('[aria-label="Edit dimension"]')) setEditing(undefined);
+      if (!(event.target instanceof Element) || !event.target.closest('[data-dimension-dialog]')) setEditing(undefined);
     };
     document.addEventListener('pointerdown', dismiss);
     return () => document.removeEventListener('pointerdown', dismiss);
@@ -303,9 +303,13 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
   }
   function choose(next: Tool) {
     if (next === 'tangent' || next === 'arc3') setArcTool(next);
-    if (next === 'dimension') setSelection([]);
+    const picks = next === 'dimension' ? dimensionPicks(sketch, selection, references) : [];
+    if (next === 'dimension' && selection.length && (picks.length !== selection.length || picks.length > 2
+      || picks.length === 2 && !candidateDimension(picks, cursor))) {
+      setMessage('Dimension: select a line, arc, two points, a point and a line, or two lines.'); return;
+    }
     dimensionGeneration.current++; dimensionPlacement.current = undefined; toolRef.current = next;
-    labelDown.current = undefined; setDimensionIds([]); setDimensionPrompt(undefined); setDimensionHover(undefined);
+    labelDown.current = undefined; setDimensionIds(next === 'dimension' ? [...selection] : []); setDimensionPrompt(undefined); setDimensionHover(undefined);
     setConstraintState(undefined); setConstraintHover(undefined); setTool(next); setTyped(undefined); setEditing(undefined); setMessage(''); setPickReason(''); setSnap(null);
     const selectedEnd = selection.find(id => sketch.points.some(p => p.id === id) && !fixedPoints.has(id));
     const candidate = chain.from ?? selectedEnd;
@@ -315,13 +319,16 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
     svg.current?.focus({ preventScroll: true });
   }
   const palette = constraintPalette(session?.capabilities).map(entry => ({ ...entry,
-    disabled: !session || pending || selection.length > 0 && !offeredConstraints.some(c => entry.kinds.includes(c.kind)),
+    disabled: !session || pending || selection.length > 0 && !entry.kinds.some(kind => pickPatterns(sketch, selection, kind).length),
+    title: `${entry.label}: select ${entry.kinds.flatMap(kind => rules[kind].patterns.map(p => p.join(' and '))).join(' or ')}`,
   }));
-  function activateConstraint(entry: typeof palette[number]) {
-    if (entry.disabled) return;
+  function activateConstraint(entry: ReturnType<typeof constraintPalette>[number] & { disabled: boolean; title?: string }) {
+    if (entry.disabled) { setMessage(entry.title ?? entry.label); return; }
     const selected = offeredConstraints.find(c => entry.kinds.includes(c.kind));
     if (selected) { void run(() => session!.constraint(selected.constraint)); return; }
-    choose('constraint'); setSelection([]); setConstraintState(constraintTool(entry.kinds));
+    let state = constraintTool(entry.kinds);
+    for (const id of selection) state = pickConstraint(sketch, state, id).state;
+    choose('constraint'); setConstraintState(state);
   }
   function constraintPick(before: Sketch, id: string) {
     const state = constraintStateRef.current;
@@ -331,9 +338,11 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
     return result.constraint;
   }
   function zoom(factor: number) { setView(view => zoomAt(view, { x: size.width / 2, y: size.height / 2 }, factor)); }
-  function place(at: XY, snapping: SnapResult | null, dimensions?: { length: number; angle?: number }) {
+  function place(at: XY, snapping: SnapResult | null) {
+    const prospective = chainRef.current.mode === 'line' ? prospectiveLine(from(chainRef.current.from), at, snapping, typed) : { endpoint: at, snap: snapping };
+    if ('reason' in prospective && prospective.reason) { setMessage(prospective.reason); return Promise.resolve(); }
     return run(async () => {
-      const before = placementSketch.current, previous = chainRef.current, placed = placeLine(previous, at, snapping, before);
+      const before = placementSketch.current, previous = chainRef.current, placed = placeLine(previous, prospective.endpoint, prospective.snap, before);
       setPickReason(''); rejectionOrigin.current = worldToScreen(view, at);
       if (!placed.command) {
         setChain(placed.state);
@@ -342,7 +351,7 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
         return false;
       }
       let after: Sketch;
-      try { after = await session!.command(placed.command, dimensions); }
+      try { after = await session!.command(placed.command, 'dimensions' in prospective ? prospective.dimensions : undefined); }
       catch (reason) { setPickReason(reasonText(reason)); throw reason; }
       placementSketch.current = after;
       setChain(continueLine(placed.state, before, after)); setTyped(undefined); svg.current?.focus({ preventScroll: true });
@@ -368,7 +377,7 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
     if (filtered.length) void run(async () => { await session!.command(filtered.sort((a, b) => Number(b.kind === 'removeConstraint') - Number(a.kind === 'removeConstraint'))); setSelection([]); svg.current?.focus({ preventScroll: true }); });
   }
   function editDimension(c: Constraint) {
-    if ('value' in c) setEditing({ id: c.id, value: String(c.kind === 'angle' ? c.value * 180 / Math.PI : c.value) });
+    if ('value' in c) setEditing({ id: c.id, value: String(c.kind === 'angle' ? c.value * 180 / Math.PI : c.value), readout: !c.driving });
   }
   function placeDimension(candidate: CandidateDimension, reference = false) {
     if (pendingCount.current || toolRef.current !== 'dimension') return;
@@ -508,7 +517,7 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
           setChain({ from: id, mode: 'line' }); gesture.current = { id, screen }; event.currentTarget.setPointerCapture?.(event.pointerId); return;
         }
       }
-      const snapping = findSnap(sketch, references, at, 1 / view.scale, snap, { suppress: event.ctrlKey || event.metaKey, exclude: hiddenCentres, lastPoint: typeof chain.from === 'string' ? chain.from : undefined });
+      const snapping = findSnap(sketch, references, at, 1 / view.scale, snap, { suppress: event.ctrlKey || event.metaKey, exclude: drawingSnapHidden, lastPoint: typeof chain.from === 'string' ? chain.from : undefined });
       void place(at, snapping); return;
     }
     if (tool === 'dimension') {
@@ -579,7 +588,7 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
     if (gesture.current && Math.hypot(screen.x - gesture.current.screen.x, screen.y - gesture.current.screen.y) > 6) {
       setChain({ from: gesture.current.id, mode: 'tangent' }); setTool('tangent');
     }
-    if (drawing) { const next = findSnap(sketch, references, at, 1 / view.scale, snap, { suppress: event.ctrlKey || event.metaKey, exclude: hiddenCentres, lastPoint: typeof chain.from === 'string' ? chain.from : undefined }); setSnap(next); cursorRef.current.snap = next; }
+    if (drawing) { const next = findSnap(sketch, references, at, 1 / view.scale, snap, { suppress: event.ctrlKey || event.metaKey, exclude: drawingSnapHidden, lastPoint: typeof chain.from === 'string' ? chain.from : undefined }); setSnap(next); cursorRef.current.snap = next; }
   }
   function pointerUp(cancel = false, event?: PointerEvent<SVGSVGElement>) {
     const candidate = dimensionPlacement.current; dimensionPlacement.current = undefined;
@@ -636,7 +645,10 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
   if (draftConstraint && draftLayout) dimensionBoxes.push(dimensionLabelBox(draftLayout, dimensionLabel(draftConstraint, 'name')));
   const editingAt = editing && layouts.get(editing.id)?.at;
   const boxAt = (at?: XY, width = 180, height = 100) => ({ left: Math.max(4, Math.min(at?.x ?? 12, size.width - width)), top: Math.max(4, Math.min(at?.y ?? 12, size.height - height)) });
-  const start = from(chain.from), preview = worldToScreen(view, snap ?? cursor);
+  const start = from(chain.from);
+  const prospective = prospectiveLine(start, cursor, snap, tool === 'line' ? typed : undefined);
+  const preview = worldToScreen(view, prospective.endpoint);
+  const previewSnap = tool === 'line' ? prospective.snap : snap;
   let previewPath: string | undefined;
   if (drawing && start && (chain.mode === 'arc3' && chain.end || chain.mode === 'tangent' && typeof chain.from === 'string')) {
     try {
@@ -741,7 +753,7 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
         </g>}
         {previewPath && <path className="sketch-preview" d={previewPath}/>}
         {drawing && start && !previewPath && <line className="sketch-preview" x1={worldToScreen(view, start).x} y1={worldToScreen(view, start).y} x2={preview.x} y2={preview.y}/>}
-        {drawing && snap && <g className="sketch-pending" aria-label={`Pending ${snap.glyph} snap`}><circle cx={preview.x} cy={preview.y} r={7}/><text x={preview.x + 10} y={preview.y - 8}>{snap.glyph}</text></g>}
+        {drawing && previewSnap && <g className="sketch-pending" aria-label={`Pending ${previewSnap.glyph} snap`}><circle cx={preview.x} cy={preview.y} r={7}/><text x={preview.x + 10} y={preview.y - 8}>{previewSnap.glyph}</text></g>}
       </svg>
       {pickReason && <div role="tooltip" className="sketch-pick-tooltip" style={{ left: Math.max(4, Math.min(preview.x + 12, size.width - 252)), top: Math.max(4, Math.min(preview.y + 12, size.height - 60)) }}>{pickReason}</div>}
       {limitEditing !== undefined && <form className="sketch-inline" aria-label="Edit limit" onSubmit={event => {
@@ -749,13 +761,11 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
         if (Number.isFinite(value) && value > 0) { onLimitChange?.(value); setLimitEditing(undefined); }
       }}><label>Limit radius<input aria-label="Limit radius" autoFocus type="number" min="0.001" step="any" value={limitEditing} onChange={e => setLimitEditing(e.target.value)} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') setLimitEditing(undefined); }}/></label><button type="submit">Apply limit</button></form>}
       {typed && <div className="sketch-inline" style={{ left: Math.min(preview.x + 12, size.width - 170), top: Math.min(preview.y + 12, size.height - 80) }}>
-        {(['length', 'angle'] as const).map(field => <label key={field}>{field === 'length' ? 'Length (mm)' : 'Angle (°)'}<input aria-label={`Line ${field}`} autoFocus={field === 'length'} value={typed[field]} onChange={event => setTyped({ ...typed, [field]: event.target.value })} onKeyDown={event => {
+        {(['length', 'angle'] as const).map(field => <label key={field} className={typed[field].trim() ? 'locked' : undefined}>{field === 'length' ? 'Length (mm)' : 'Angle (°)'}<input aria-label={`Line ${field}`} autoFocus={field === 'length'} data-locked={!!typed[field].trim()} title={typed[field].trim() ? 'Locked; clear to unlock' : 'Unlocked'} value={typed[field]} onChange={event => setTyped({ ...typed, [field]: event.target.value })} onKeyDown={event => {
           event.stopPropagation();
           if (event.key === 'Escape') { event.preventDefault(); setTyped(undefined); svg.current?.focus({ preventScroll: true }); }
           if (event.key === 'Enter' && start) {
-            event.preventDefault(); const length = Number(typed.length), angle = typed.angle.trim() ? Number(typed.angle) : undefined;
-            if (!(length > 0) || !Number.isFinite(length) || angle !== undefined && !Number.isFinite(angle)) { setMessage('Enter a positive length and a finite angle.'); return; }
-            void place(typedTarget(start, cursor, length, angle), null, { length, angle });
+            event.preventDefault(); void place(cursor, snap);
           }
         }}/></label>)}
       </div>}
@@ -764,7 +774,24 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
         <button type="button" disabled={pending} onClick={() => placeDimension(dimensionPrompt, true)}>Make it a reference (driven) dimension</button>
         <button type="button" disabled={pending} onClick={() => { setDimensionPrompt(undefined); setSelection([]); svg.current?.focus({ preventScroll: true }); }}>Cancel</button>
       </div>}
-      {editing && <form className="sketch-inline" style={boxAt(editingAt)} aria-label="Edit dimension" onSubmit={event => {
+      {editing?.readout && <div role="dialog" aria-label="Reference dimension readout" data-dimension-dialog className="sketch-inline" style={boxAt(editingAt)}>
+        <p>Reference dimension: {dimensionLabel(sketch.constraints.find(c => c.id === editing.id)! as Constraint & { value: number; driving: boolean })}</p>
+        <button type="button" disabled={!session || pending} onClick={() => void run(async () => {
+          const after = await session!.command({ kind: 'setDriving', id: editing.id, driving: true });
+          const c = after.constraints.find(c => c.id === editing.id);
+          if (c && 'value' in c && c.driving) editDimension(c);
+        })}>Make driving</button>
+      </div>}
+      {editing && !editing.readout && <form className="sketch-inline" style={boxAt(editingAt)} aria-label="Edit dimension" data-dimension-dialog onKeyDown={event => {
+        event.stopPropagation();
+        if (event.key === 'Tab') {
+          event.preventDefault();
+          const controls = [...event.currentTarget.querySelectorAll<HTMLElement>('input, button:not(:disabled)')];
+          const index = controls.indexOf(document.activeElement as HTMLElement);
+          controls[(index + (event.shiftKey ? controls.length - 1 : 1)) % controls.length]?.focus({ preventScroll: true });
+        }
+        if (event.key === 'Escape') { event.preventDefault(); setEditing(undefined); svg.current?.focus({ preventScroll: true }); }
+      }} onSubmit={event => {
         event.preventDefault(); if (dimensionApplying.current) return;
         const c = sketch.constraints.find(c => c.id === editing.id), value = Number(editing.value) * (c?.kind === 'angle' ? Math.PI / 180 : 1);
         if (!session || !editing.value.trim() || !Number.isFinite(value)) { setEditing({ ...editing, reason: 'Enter a finite number.' }); setRefusals(v => v + 1); return; }
@@ -777,9 +804,9 @@ export function SketchCanvas({ context, contextStale = false, sketch, diagnosis,
             if (alive.current) { setEditing({ ...editing, reason: reason instanceof Error ? reason.message : String(reason) }); setRefusals(v => v + 1); }
           } finally { dimensionApplying.current = false; }
         });
-      }}><label>Dimension value<input ref={dimensionInput} aria-label="Dimension value" value={editing.value} onBlur={() => { if (dimensionTabAway.current) setEditing(undefined); }} onChange={event => setEditing({ ...editing, value: event.target.value })} onKeyDown={event => { event.stopPropagation(); if (event.key === 'Tab') dimensionTabAway.current = true; if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setEditing(undefined); svg.current?.focus({ preventScroll: true }); } }}/></label><button type="submit" disabled={pending}>Apply dimension value</button>{editing.reason && <span role="alert">{editing.reason}</span>}</form>}
+      }}><label>Dimension value<input ref={dimensionInput} aria-label="Dimension value" value={editing.value} onChange={event => setEditing({ ...editing, value: event.target.value })} onKeyDown={event => { if (event.key !== 'Tab') event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setEditing(undefined); svg.current?.focus({ preventScroll: true }); } }}/></label><button type="submit" disabled={pending}>Apply dimension value</button><button type="button" onClick={() => { setEditing(undefined); svg.current?.focus({ preventScroll: true }); }}>Cancel</button>{editing.reason && <span role="alert">{editing.reason}</span>}</form>}
     </div>
-    <div role="status" className="sketch-status"><span className={`sketch-dof ${diagnosis?.dof === 0 ? 'complete' : ''}`}>{diagnosis?.dof === 0 ? 'Fully constrained' : `${diagnosis?.dof ?? '…'} DOF`}</span>{problems.length > 0 && ` · ${problems.length} problem${problems.length === 1 ? '' : 's'}`} · x {cursor.x.toFixed(2)}, y {cursor.y.toFixed(2)} mm · Snap: {snap?.glyph ?? 'none'} · {message || arcHint}</div>
+    <div role="status" className="sketch-status"><span className={`sketch-dof ${fullyConstrained ? 'complete' : ''}`}>{fullyConstrained ? 'Fully constrained' : `${diagnosis?.dof ?? '…'} DOF`}</span>{problems.length > 0 && ` · ${problems.length} problem${problems.length === 1 ? '' : 's'}`} · x {cursor.x.toFixed(2)}, y {cursor.y.toFixed(2)} mm · Snap: {previewSnap?.glyph ?? 'none'} · {message || arcHint}<span> · Constraint state shown for sketches up to 64 entities</span></div>
     {diagnosis && sketch.constraints.some(c => diagnosis.constraintStates[c.id] === 'redundant') && <p>Implied: {sketch.constraints.filter(c => diagnosis.constraintStates[c.id] === 'redundant').map(c => c.id).join(', ')}</p>}
     {problems.map((problem, i) => { const action = problemAction?.(problem); return <div className="sketch-domain-problem" key={`${problem.code}${i}`}>{problem.message}{problem.ids.filter(id => { const data = sketch.entities.find(e => e.id === id)?.data; return data && typeof data === 'object' && !Array.isArray(data) && typeof data.name === 'string' && data.name.trim(); }).map(id => ` · ${nameFor?.(id) ?? displayName(sketch, id)}`)}{action && <button type="button" disabled={!session} onClick={() => void run(() => session!.constraint(action.constraint))}>{action.label}</button>}</div>; })}
   </div>;

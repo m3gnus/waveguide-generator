@@ -20,6 +20,7 @@
 .sketch-entity.moving { stroke-width: 2; }
 .sketch-entity.rigid { stroke-width: 3.5; }
 .sketch-entity.conflicting { stroke: var(--sketch-conflicting); }
+.sketch-entity.not-analysed, .sketch-point.not-analysed { stroke: var(--fg3); }
 .sketch-entity.construction { stroke: var(--sketch-construction); stroke-width: 1.5; stroke-dasharray: 6 4; }
 .sketch-curve-hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }
 .sketch-point-hit { fill: transparent; pointer-events: all; cursor: grab; }
@@ -105,3 +106,6 @@
 .sketch-point.valid-start.hovered:not(.selected) { stroke-width: 4; }
 .sketch-entity.selected, .sketch-point.selected { stroke: var(--sketch-selected); stroke-width: 3.5; stroke-opacity: 1; }
 .sketch-entity.rigid.selected { stroke-width: 4.5; }
+
+.sketch-inline label.locked::after { content: 'Locked'; font-size: .75rem; }
+.sketch-inline label.locked input { border-color: var(--blue); }

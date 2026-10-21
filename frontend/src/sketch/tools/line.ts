@@ -36,3 +36,22 @@ export function typedTarget(from: XY, cursor: XY, length: number, degrees?: numb
   const angle = degrees === undefined ? Math.atan2(cursor.y - from.y, cursor.x - from.x) : degrees * Math.PI / 180;
   return { x: from.x + length * Math.cos(angle), y: from.y + length * Math.sin(angle) };
 }
+
+/** One prospective segment for rendering and either confirmation gesture. Locks override snaps
+ * only in the coordinates they drive; retain a snap relationship when it still fits. */
+export function prospectiveLine(from: XY | undefined, cursor: XY, snap: SnapResult | null,
+  typed?: { length: string; angle: string }): { endpoint: XY; snap: SnapResult | null; dimensions?: { length?: number; angle?: number }; reason?: string } {
+  const target = snap ?? cursor;
+  if (!from || !typed) return { endpoint: target, snap };
+  const length = typed.length.trim() ? Number(typed.length) : undefined;
+  const angle = typed.angle.trim() ? Number(typed.angle) : undefined;
+  if (length !== undefined && (!(length > 0) || !Number.isFinite(length)) || angle !== undefined && !Number.isFinite(angle))
+    return { endpoint: target, snap: null, reason: 'Enter a positive length and a finite angle.' };
+  if (length === undefined && angle === undefined) return { endpoint: target, snap };
+  const endpoint = typedTarget(from, target, length ?? Math.hypot(target.x - from.x, target.y - from.y), angle);
+  const c = snap?.constraint;
+  const compatible = snap && (c?.kind === 'horizontal' ? Math.abs(endpoint.y - snap.y) < 1e-8
+    : c?.kind === 'vertical' || snap.glyph === 'axis' ? Math.abs(endpoint.x - snap.x) < 1e-8
+      : snap.glyph === 'baffle' ? Math.abs(endpoint.y - snap.y) < 1e-8 : Math.hypot(endpoint.x - snap.x, endpoint.y - snap.y) < 1e-8);
+  return { endpoint, snap: compatible ? { ...snap, ...endpoint } : null, dimensions: { length, angle } };
+}

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptySketch } from '../model';
 import { applyCommand, importedSketch } from '../ops';
-import { cancelLine, continueLine, lineState, placeLine, typedTarget } from './line';
+import { cancelLine, continueLine, lineState, placeLine, prospectiveLine, typedTarget } from './line';
 import { coalesceTargets, select } from './select';
 import { candidateDimension, dimensionPicks } from './dimension';
 import { constraintFor } from './constraints';
@@ -28,6 +28,19 @@ describe('pure sketch tools', () => {
     expect(typedTarget({ x: 2, y: 3 }, { x: 10, y: 3 }, 5)).toEqual({ x: 7, y: 3 });
     const p = typedTarget({ x: 2, y: 3 }, { x: 10, y: 3 }, 5, 90);
     expect(p.x).toBeCloseTo(2); expect(p.y).toBeCloseTo(8);
+  });
+  it('combines independent numeric locks with pointer direction and compatible snap relationships', () => {
+    const origin = { x: 0, y: 0 };
+    const horizontal = { x: 10, y: 0, glyph: 'horizontal' as const, constraint: { kind: 'horizontal' as const, point: 'p' } };
+    const lengthOnly = prospectiveLine(origin, { x: 10, y: .1 }, horizontal, { length: '20', angle: '' });
+    expect(lengthOnly).toMatchObject({ endpoint: { x: 20, y: 0 }, snap: { x: 20, y: 0, constraint: horizontal.constraint }, dimensions: { length: 20 } });
+    const both = prospectiveLine(origin, { x: 10, y: 0 }, horizontal, { length: '20', angle: '45' });
+    expect(both.endpoint.x).toBeCloseTo(20 / Math.sqrt(2)); expect(both.endpoint.y).toBeCloseTo(20 / Math.sqrt(2));
+    expect(both.snap).toBeNull(); expect(both.dimensions).toEqual({ length: 20, angle: 45 });
+    const angleOnly = prospectiveLine(origin, { x: 10, y: 0 }, null, { length: '', angle: '90' });
+    expect(angleOnly.endpoint.y).toBeCloseTo(10); expect(angleOnly.dimensions).toEqual({ length: undefined, angle: 90 });
+    expect(prospectiveLine(origin, { x: 10, y: 0 }, horizontal, { length: '', angle: '' }).snap).toBe(horizontal);
+    expect(prospectiveLine(origin, origin, null, { length: '-2', angle: '' }).reason).toContain('positive length');
   });
   it('starts a three-point arc on empty space in tangent mode and rejects invalid chain starts immediately', () => {
     const s = importedSketch([{ id: 'pole', x: 0, y: 0 }, { id: 'join', x: 4, y: 0 }, { id: 'end', x: 8, y: 0 }], [

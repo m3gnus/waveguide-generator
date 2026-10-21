@@ -59,9 +59,10 @@ export function dimensionLayout(sketch: Sketch, c: Constraint, xy: (id: string) 
   if (c.kind === 'angle') {
     const frame = angleFrame(sketch, c); if (!frame) return;
     const placement = c.placement && 'along' in c.placement ? c.placement : { offset: (28 + lane * 32) / scale, along: .5 };
-    const center = screen(frame.center), radius = placement.offset * scale;
+    const center = screen(frame.center), radius = Math.abs(placement.offset) * scale;
+    const start = frame.start + (placement.offset < 0 ? Math.PI : 0);
     const at = (along: number, extra = 0): XY => {
-      const angle = frame.start + frame.sweep * along;
+      const angle = start + frame.sweep * along;
       return { x: center.x + (radius + extra) * Math.cos(angle), y: center.y - (radius + extra) * Math.sin(angle) };
     };
     const lo = Math.min(0, placement.along), hi = Math.max(1, placement.along);
@@ -71,7 +72,7 @@ export function dimensionLayout(sketch: Sketch, c: Constraint, xy: (id: string) 
     const direction = frame.sweep >= 0 ? 1 : -1;
     return { at: at(placement.along), placement, rotation: 0,
       path: `${segment(center, at(0, 6))} ${segment(center, at(1, 6))} ${path}`,
-      arrows: `${arrow(at(0), -frame.start - direction * Math.PI / 2)} ${arrow(at(1), -frame.start - frame.sweep + direction * Math.PI / 2)}` };
+      arrows: `${arrow(at(0), -start - direction * Math.PI / 2)} ${arrow(at(1), -start - frame.sweep + direction * Math.PI / 2)}` };
   }
   if (c.kind === 'radius') {
     const arc = sketch.entities.find(e => e.id === c.arc);
@@ -150,10 +151,11 @@ export function dragDimensionPlacement(sketch: Sketch, c: Constraint, initial: D
   if (!('along' in initial)) return initial;
   if (c.kind === 'angle') {
     const frame = angleFrame(sketch, c); if (!frame) return initial;
-    const angle = frame.start + frame.sweep * initial.along;
-    const x = initial.offset * Math.cos(angle) + delta.x, y = initial.offset * Math.sin(angle) + delta.y;
+    const side = initial.offset < 0 ? -1 : 1;
+    const angle = frame.start + (side < 0 ? Math.PI : 0) + frame.sweep * initial.along;
+    const x = Math.abs(initial.offset) * Math.cos(angle) + delta.x, y = Math.abs(initial.offset) * Math.sin(angle) + delta.y;
     const turn = Math.atan2(Math.sin(Math.atan2(y, x) - angle), Math.cos(Math.atan2(y, x) - angle));
-    return { offset: Math.hypot(x, y), along: initial.along + turn / (frame.sweep || 1) };
+    return { offset: side * Math.hypot(x, y), along: initial.along + turn / (frame.sweep || 1) };
   }
   const points = distancePoints(sketch, c); if (!points) return initial;
   const [a, b] = points;

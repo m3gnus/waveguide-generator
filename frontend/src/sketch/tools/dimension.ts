@@ -78,14 +78,21 @@ export function candidateDimension(picks: DimensionPick[], cursor: XY): Candidat
   }
   if (cross < 0) return candidateDimension([b, a], cursor);
   const directed = Math.atan2(cross, dx * ex + dy * ey);
-  const supplementary = !!(a.reference || b.reference) && directed > Math.PI / 2;
-  const value = supplementary ? Math.PI - directed : directed;
-  const start = Math.atan2(dy, dx) + (supplementary ? Math.PI : 0), sweep = supplementary ? -value : value;
   const t = ((b.a.x - a.a.x) * ey - (b.a.y - a.a.y) * ex) / cross;
   const center = { x: a.a.x + t * dx, y: a.a.y + t * dy };
-  const delta = Math.atan2(cursor.y - center.y, cursor.x - center.x) - start;
+  const direction = Math.atan2(dy, dx);
+  const local = (Math.atan2(cursor.y - center.y, cursor.x - center.x) - direction + 2 * Math.PI) % (2 * Math.PI);
+  const opposite = local >= Math.PI;
+  const sector = local % Math.PI;
+  // The same persisted branch used for reference angles also selects ordinary sectors.
+  const reference = !!(a.reference || b.reference);
+  const supplementary = reference ? directed > Math.PI / 2 : sector > directed;
+  const value = supplementary ? Math.PI - directed : directed;
+  const sweep = supplementary ? -value : value;
+  const start = supplementary ? Math.PI : 0;
+  const delta = reference ? Math.atan2(Math.sin(local - start), Math.cos(local - start)) : sector - start;
   return { kind: 'angle', a: a.id, b: b.id, value, driving: true, ...(supplementary ? { supplementary: true } : {}),
-    placement: { offset: distance(cursor, center), along: Math.atan2(Math.sin(delta), Math.cos(delta)) / sweep } };
+    placement: { offset: distance(cursor, center) * (!reference && opposite ? -1 : 1), along: delta / sweep } };
 }
 /** Geometry hit testing, including infinite axis/baffle lines. Points always win. */
 export function hitDimension(sketch: Sketch, references: Reference[], cursor: XY, tolerance: number, hidden: string[] = []): string | undefined {

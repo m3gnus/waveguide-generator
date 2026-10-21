@@ -122,11 +122,12 @@ describe('SketchCanvas with real slvs', () => {
     expect(host.querySelector('[role="tooltip"]')).toBeNull();
     expect(host.querySelector('[aria-label^="Select arc"]')).not.toBeNull();
   });
-  it('hides centre handles and snaps at rest, revealing them on arc hover or selection', async () => {
+  it.each([false, true])('hides centre handles at rest while construction centres guide drawing (construction: %s)', async construction => {
     const result = applyCommand(base(), { kind: 'addArc3', start: { x: 2, y: 2 }, end: { x: 8, y: 2 }, through: { x: 5, y: 4 } });
     if ('error' in result) throw new Error(result.error);
     const arc = result.sketch.entities.find(e => e.kind === 'arc')!;
     if (arc.kind !== 'arc') throw new Error('Expected arc');
+    arc.construction = construction;
     await mount(result.sketch);
     expect(host.querySelector(`[data-id="${arc.center}"]`)).toBeNull();
     await pointer(host.querySelector(`[data-id="${arc.id}"]`)!, 'pointermove');
@@ -136,7 +137,7 @@ describe('SketchCanvas with real slvs', () => {
     expect(host.querySelector(`[data-id="${arc.center}"]`)).toBeNull();
     await act(async () => button('3-point arc (A)').click());
     await pointer(svg(), 'pointermove', centre.x, centre.y);
-    expect(host.querySelector('[aria-label="Pending center snap"]')).toBeNull();
+    expect(!!host.querySelector('[aria-label="Pending center snap"]')).toBe(construction);
     await key('Escape');
     await pointer(host.querySelector(`[data-id="${arc.id}"]`)!, 'pointerdown');
     expect(host.querySelector('.sketch-centre')).not.toBeNull();
@@ -209,7 +210,7 @@ describe('SketchCanvas with real slvs', () => {
     await pointer(svg(), 'pointerdown');
     await pointer(coordinate('p').element, 'pointerdown'); await pointer(svg(), 'pointerup');
     expect(labels()).toEqual(['Delete selection']);
-    expect(button('Fix').disabled).toBe(false); expect(button('Horizontal').disabled).toBe(true);
+    expect(button('Fix').disabled).toBe(false); expect(button('Horizontal').disabled).toBe(false);
     await pointer(coordinate('q').element, 'pointerdown', 0, 0, { shiftKey: true }); await pointer(svg(), 'pointerup');
     expect(labels()).toEqual(['Delete selection']);
     expect(button('Horizontal').disabled).toBe(false); expect(button('Coincident').disabled).toBe(false);
@@ -379,6 +380,50 @@ describe('SketchCanvas with real slvs', () => {
     expect(host.querySelectorAll('.sketch-entity:not(.construction)')).toHaveLength(2);
     await key('z', { metaKey: true }); expect(host.querySelectorAll('.sketch-entity')).toHaveLength(1);
   });
+  it.each(['click', 'Enter'] as const)('previews and confirms the same locked 20 mm at 45 degrees by %s', async confirm => {
+    await mount(); await key('l'); const q = coordinate('q'), p = coordinate('p');
+    const scale = (q.x - p.x) / 10;
+    await pointer(q.element, 'pointerdown', q.x, q.y); await pointer(svg(), 'pointerup');
+    await pointer(svg(), 'pointermove', q.x + 20, q.y);
+    await key('2');
+    const length = host.querySelector<HTMLInputElement>('[aria-label="Line length"]')!;
+    const angle = host.querySelector<HTMLInputElement>('[aria-label="Line angle"]')!;
+    for (const [field, value] of [[length, '20'], [angle, '45']] as const) await act(async () => {
+      field.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value); field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(length.dataset.locked).toBe('true'); expect(angle.dataset.locked).toBe('true');
+    const preview = host.querySelector('line.sketch-preview')!;
+    const end = { x: Number(preview.getAttribute('x2')), y: Number(preview.getAttribute('y2')) };
+    expect(end.x).toBeCloseTo(q.x + 20 / Math.sqrt(2) * scale);
+    expect(end.y).toBeCloseTo(q.y - 20 / Math.sqrt(2) * scale);
+    if (confirm === 'click') await pointer(svg(), 'pointerdown', q.x + 20, q.y);
+    else await act(async () => angle.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    const path = [...host.querySelectorAll('.sketch-entity:not(.construction)')].at(-1)!.getAttribute('d')!.match(/[\d.e+-]+/g)!.map(Number);
+    expect(path[2]).toBeCloseTo(end.x); expect(path[3]).toBeCloseTo(end.y);
+    expect(host.textContent).toContain('20.00 mm'); expect(host.textContent).toContain('45.00°');
+    await key('z', { ctrlKey: true }); expect(host.querySelectorAll('.sketch-entity')).toHaveLength(1);
+  });
+  it('unlocks a cleared line field and returns the preview to pointer and snap', async () => {
+    await mount(); await key('l'); const q = coordinate('q');
+    await pointer(q.element, 'pointerdown', q.x, q.y); await pointer(svg(), 'pointerup');
+    await pointer(svg(), 'pointermove', q.x + 50, q.y - 30); await key('2');
+    const field = host.querySelector<HTMLInputElement>('[aria-label="Line length"]')!;
+    const before = host.querySelector('line.sketch-preview')!.getAttribute('x2');
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, ''); field.dispatchEvent(new Event('input', { bubbles: true })); });
+    expect(field.dataset.locked).toBe('false'); expect(host.querySelector('line.sketch-preview')!.getAttribute('x2')).not.toBe(before);
+  });
+  it('draws uncomputed large-sketch states neutrally and never calls a failed zero-DOF solve fully constrained', async () => {
+    const sketch = importedSketch(Array.from({ length: 65 }, (_, i) => ({ id: `point${i}`, x: i, y: i % 2 })), []);
+    await act(async () => root.render(<SketchCanvas sketch={sketch} diagnosis={{ ...initialDiagnosis(sketch), dof: 4 }} references={[]} problems={[]}/>));
+    expect(host.querySelectorAll('.sketch-point.not-analysed')).toHaveLength(65);
+    expect(host.querySelector('.sketch-point.under')).toBeNull();
+    expect(host.textContent).toContain('Constraint state shown for sketches up to 64 entities');
+    await act(async () => root.render(<SketchCanvas sketch={sketch} diagnosis={{ ...initialDiagnosis(sketch), status: 'failed', dof: 0 }} references={[]} problems={[]}/>));
+    expect(host.textContent).not.toContain('Fully constrained'); expect(host.querySelector('.sketch-dof.complete')).toBeNull();
+    expect(host.querySelector('.sketch-point.determined')).toBeNull();
+    await act(async () => root.render(<SketchCanvas sketch={sketch} diagnosis={{ ...initialDiagnosis(sketch), dof: 0 }} references={[]} problems={[]}/>));
+    expect(host.textContent).toContain('Fully constrained'); expect(host.querySelectorAll('.sketch-point.not-analysed')).toHaveLength(65);
+  });
   it('records drag frame timing only when the performance flag is enabled', async () => {
     const old = window.location.href;
     window.history.replaceState(null, '', '?sketchPerf=1');
@@ -410,14 +455,15 @@ describe('SketchCanvas with real slvs', () => {
     await key('d'); expect(button('Dimension (D)').getAttribute('aria-pressed')).toBe('true');
   });
   it('fix 2: refocuses and selects the inline dimension value after every refusal', async () => {
-    const r = applyCommand(base(), { kind: 'addConstraint', constraint: { kind: 'distance', a: 'p', b: 'q', value: 10, driving: false } });
+    const r = applyCommand(base(), { kind: 'addConstraint', constraint: { kind: 'distance', a: 'p', b: 'q', value: 10, driving: true } });
     if ('error' in r) throw new Error(r.error);
     await mount(r.sketch);
     await pointer(host.querySelector('.sketch-glyph')!, 'dblclick');
     const field = host.querySelector<HTMLInputElement>('[aria-label="Dimension value"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, '-1'); field.dispatchEvent(new Event('input', { bubbles: true })); });
     for (let i = 0; i < 2; i++) {
       await act(async () => { button('Apply dimension value').focus(); button('Apply dimension value').click(); });
-      expect(host.querySelector('[role="alert"]')?.textContent).toContain('driving dimension');
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain('negative');
       expect(document.activeElement).toBe(field);
       expect(field.selectionStart).toBe(0); expect(field.selectionEnd).toBe(field.value.length);
     }
@@ -877,7 +923,8 @@ describe('navigation and line legend', () => {
       await act(async () => button('Line styles').click());
       const legend = host.querySelector('[aria-label="Line styles legend"]')!;
       expect(legend.textContent).toContain('Profile: under-constrained'); expect(legend.textContent).toContain('Profile: fully constrained');
-      expect(legend.querySelectorAll('svg')).toHaveLength(7);
+      expect(legend.querySelectorAll('svg')).toHaveLength(8);
+      expect(legend.textContent).toContain('Constraint state not analysed');
       expect(getComputedStyle(legend.querySelector('.construction')!).strokeDasharray).toBe('6 4');
       expect(getComputedStyle(legend.querySelector('.rigid')!).strokeWidth).toBe('3.5');
       await act(async () => button('Line styles').click()); expect(host.querySelector('[aria-label="Line styles legend"]')).toBeNull();

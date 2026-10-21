@@ -108,7 +108,7 @@ describe('source editor interactions', () => {
     expect(button('Export STEP + mesh bundle').disabled).toBe(false);
     expect(host.querySelector('.source-validation')?.textContent).toContain('Valid contour');
   });
-  it('scrolls table rows on selection only, including when another entity is hovered', async () => {
+  it('highlights table rows without scrolling on canvas selection or hover', async () => {
     await mount();
     const row = host.querySelector<HTMLTableRowElement>('[data-row-id="piston"]')!;
     const scrolled = vi.fn(); row.scrollIntoView = scrolled;
@@ -117,10 +117,27 @@ describe('source editor interactions', () => {
     expect(row.classList.contains('hovered')).toBe(true);
     expect(scrolled).not.toHaveBeenCalled();
     await pointer(curve);
-    expect(scrolled).toHaveBeenCalledWith({ block: 'nearest' });
+    expect(scrolled).not.toHaveBeenCalled();
     scrolled.mockClear();
     await pointer(host.querySelector('.sketch-point[data-id="rim"]')!, 'pointermove');
     expect(scrolled).not.toHaveBeenCalled();
+  });
+  it('selects point 8 of an 11-point contour without opening Points or moving the editor', async () => {
+    const doc = structuredClone(INITIAL_SOURCE);
+    doc.contour.points = Array.from({ length: 11 }, (_, i) => ({ id: `point${i}`, r_mm: i, z_mm: 0 }));
+    doc.contour.segments = doc.contour.points.slice(1).map((p, i) => ({ ...INITIAL_SOURCE.contour.segments[0], id: `segment${i}`, start: doc.contour.points[i].id, end: p.id }));
+    doc.drive.weights = Object.fromEntries(doc.contour.segments.map(s => [s.id, 1]));
+    storage.setItem('', JSON.stringify(doc)); await mount();
+    const editor = host.querySelector<HTMLElement>('.source-editor')!;
+    const canvas = host.querySelector('[aria-label="Sketch drawing"]')!;
+    const points = host.querySelector<HTMLDetailsElement>('.source-points')!;
+    const scroll = vi.fn();
+    for (const row of host.querySelectorAll<HTMLTableRowElement>('[data-row-id]')) row.scrollIntoView = scroll;
+    editor.scrollTop = 192; const top = canvas.getBoundingClientRect().top;
+    await pointer(host.querySelector('.sketch-point[data-id="point7"]')!); await pointer(canvas, 'pointerup');
+    expect(host.querySelector('[data-row-id="point7"]')!.getAttribute('aria-selected')).toBe('true');
+    expect(points.open).toBe(false); expect(scroll).not.toHaveBeenCalled();
+    expect(editor.scrollTop).toBe(192); expect(canvas.getBoundingClientRect().top).toBe(top);
   });
   it('renders an editable aperture limit above export and writes label edits back to the attachment', async () => {
     await mount();
@@ -191,7 +208,7 @@ describe('source editor interactions', () => {
     expect(input('Radius preset').disabled).toBe(true);
     expect(host.querySelector('.sketch-limit text')?.textContent).toContain('Throat r 12.70 🔒');
   });
-  it('links point and patch hover and selection between the table and canvas and scrolls the row', async () => {
+  it('links point and patch hover and selection without opening or scrolling tables', async () => {
     await mount();
     const points = host.querySelector<HTMLDetailsElement>('.source-points')!;
     expect(points.open).toBe(false);
@@ -206,9 +223,9 @@ describe('source editor interactions', () => {
     expect(row.classList.contains('hovered')).toBe(true);
     await pointer(curve);
     expect(row.getAttribute('aria-selected')).toBe('true');
-    expect(scrolled).toHaveBeenCalledWith({ block: 'nearest' });
+    expect(scrolled).not.toHaveBeenCalled();
     await act(async () => button('Select point 2').click());
-    expect(points.open).toBe(true);
+    expect(points.open).toBe(false);
     expect(host.querySelector('.sketch-point[data-id="rim"]')!.classList.contains('selected')).toBe(true);
     const pointRow = host.querySelector('[data-row-id="rim"]')!;
     await pointer(pointRow, 'pointerover');

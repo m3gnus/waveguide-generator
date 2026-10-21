@@ -1,5 +1,7 @@
 import type { Reference } from './adapter';
 import type { Sketch } from './model';
+import { dimensionHelper } from './dimensionGraphics';
+import { contextData } from './context';
 import { distance } from './geometry';
 import { gridStep } from './view';
 import type { XY } from './solver/types';
@@ -28,7 +30,7 @@ export function findSnap(sketch: Sketch, references: Reference[], cursorWorld: X
     if (held.glyph === 'baffle' || held.glyph === 'horizontal') held.x = cursor.x;
     if (exists && distance(cursor, held) <= 12 * pxToWorld) heldSnap = held;
   }
-  const geometry = sketch.entities.filter(e => !e.construction);
+  const geometry = sketch.entities.filter(e => !e.reference && !dimensionHelper(e) && !contextData(e) && !references.some(r => r.id === e.id));
   const ends = new Set(geometry.flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : e.kind === 'arc' ? [e.start, e.end] : []));
   const centers = new Set(geometry.flatMap(e => e.kind === 'arc' ? [e.center] : []));
   const candidates: SnapResult[][] = [

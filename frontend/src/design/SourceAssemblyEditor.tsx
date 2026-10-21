@@ -7,7 +7,7 @@ import { NumberField } from './NumberField';
 import { serializeDesign, useDesignStore } from '../stores/design';
 import { hornAssemblyContext, wooferAssemblyContext } from '../sketch/adapters/sourceContext';
 import type { HornWall } from '../api/sourceEditor';
-import { newerEnvelope, parseSourceAuthoring } from '../sketch/adapters/sourceAuthoring';
+import { newerEnvelope, parseSourceAuthoring, serializeSourceAuthoring } from '../sketch/adapters/sourceAuthoring';
 import { Editor } from './SourceContourEditor';
 import { identityProblem, INITIAL_SOURCE } from './sourceContourEditing';
 import { prepareNativeAssembly } from './nativeAssemblyPreparation';
@@ -58,8 +58,9 @@ function sourceShape(value: SourceDocument): boolean {
     && !!d.weights && typeof d.weights === 'object' && !Array.isArray(d.weights) && Object.values(d.weights).every(Number.isFinite);
 }
 export function parseAssemblyDraft(raw: string): SourceAssemblyDocument {
-  const value = JSON.parse(raw) as SourceAssemblyDocument;
-  if (!sourceShape(value.horn) || (value.woofer !== null && !sourceShape(value.woofer)) || !value.dimensions
+  const parsed = JSON.parse(raw);
+  const value = (parsed?.version === 'wg-source-assembly-file-v2' ? parsed.document : parsed) as SourceAssemblyDocument;
+  if (!value || !sourceShape(value.horn) || (value.woofer !== null && !sourceShape(value.woofer)) || !value.dimensions
       || !Object.entries(INITIAL_ASSEMBLY.dimensions).every(([key, initial]) => {
         const entry = value.dimensions[key as keyof typeof value.dimensions];
         return Array.isArray(initial) ? Array.isArray(entry) && entry.length === 2 && entry.every(Number.isFinite) : Number.isFinite(entry);
@@ -68,6 +69,25 @@ export function parseAssemblyDraft(raw: string): SourceAssemblyDocument {
       || (value.horn_config !== undefined && (!value.horn_config || typeof value.horn_config !== 'object' || Array.isArray(value.horn_config)))
       || !Number.isFinite(value.mesh_size_mm) || ![1, 2, 4].includes(value.passage_refinement)) throw new Error('This file is not a source assembly draft.');
   return value;
+}
+/** Portable files pair canonical source documents with their validated slice B authoring. */
+export function assemblyDraftFile(document: SourceAssemblyDocument, saved: AssemblyAuthoring = readAssemblyAuthoring()) {
+  const authoring: AssemblyAuthoring = {};
+  for (const source of ['horn', 'woofer'] as const) {
+    const state = document[source] && parseSourceAuthoring(saved[source], document[source]);
+    if (state) {
+      const pending = (saved[source] as { pending?: boolean }).pending === true;
+      authoring[source] = { ...serializeSourceAuthoring(state, pending), ...(pending ? { document: document[source] } : {}) };
+    }
+  }
+  return { version: 'wg-source-assembly-file-v2' as const, document, authoring };
+}
+function loadAssemblyDraftFile(raw: string) {
+  const document = parseAssemblyDraft(raw);
+  const parsed = JSON.parse(raw);
+  const file = assemblyDraftFile(document, parsed?.version === 'wg-source-assembly-file-v2' ? parsed.authoring ?? {} : readAssemblyAuthoring());
+  authoringStorage.setItem('', JSON.stringify(file.authoring));
+  return document;
 }
 function readDraft(): SourceAssemblyDocument {
   try { const raw = storage.getItem(''); return raw ? parseAssemblyDraft(raw) : structuredClone(INITIAL_ASSEMBLY); }
@@ -258,8 +278,8 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
     <p>Passages refine locally to preserve clearance. Smaller enclosure mesh sizes and finer passages use more triangles.</p>
       <button type="button" disabled={!valid} onClick={() => void run(async () => { const record = await prepareNativeAssembly(() => sourceEditorApi.ingestAssembly(draft)); storage.setItem('', JSON.stringify(draft)); setNotice(`Prepared ${record.mesh?.stats.triangle_count ?? ''} triangles. The imported workspace now uses this assembly and its physical source channels.`); })}>Prepare assembly in WG</button>
       <button type="button" disabled={!valid} onClick={() => void run(async () => { download(await sourceEditorApi.exportAssembly(draft), 'native-assembly.zip'); storage.setItem('', JSON.stringify(draft)); setNotice('Exported shared STEP shell, preview mesh and source recipe.'); })}>Export assembly STEP + mesh</button>
-      <button type="button" disabled={!valid} onClick={() => download(new Blob([JSON.stringify(draft,null,2)], { type:'application/json' }), 'source-assembly.json')}>Save assembly draft</button>
-      <label>Load assembly draft<input aria-label="Load assembly draft" type="file" accept=".json,application/json" onChange={(e) => { const file = e.target.files?.[0]; if (!file) return; void run(async () => { if (file.size > 2*1024*1024) throw new Error('Assembly draft exceeds 2 MiB.'); const loaded = parseAssemblyDraft(await file.text()); setHornText(JSON.stringify(loaded.horn_config ?? {}, null, 2)); change(loaded); }); e.target.value=''; }}/></label>
+      <button type="button" disabled={!valid} onClick={() => download(new Blob([JSON.stringify(assemblyDraftFile(draft),null,2)], { type:'application/json' }), 'source-assembly.json')}>Save assembly draft</button>
+      <label>Load assembly draft<input aria-label="Load assembly draft" type="file" accept=".json,application/json" onChange={(e) => { const file = e.target.files?.[0]; if (!file) return; void run(async () => { if (file.size > 2*1024*1024) throw new Error('Assembly draft exceeds 2 MiB.'); const loaded = loadAssemblyDraftFile(await file.text()); setHornText(JSON.stringify(loaded.horn_config ?? {}, null, 2)); change(loaded); }); e.target.value=''; }}/></label>
       <p>Source editing includes drawing, arcs and the saved source-preset library. Assembly drafts also retain placement, passive bodies and density.</p>
     </aside></div></fieldset><footer>{busy && <p role="status">Preparing geometry…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>Draft changes are remembered. Preparing selects the immutable mesh and Metal, the supported native contour consumer.</small></footer>
   </div></div>;

@@ -165,6 +165,36 @@ describe('dimension pick → preview → place → type with the real solver', (
     await key('z', svg(), { ctrlKey: true, shiftKey: true }); expect(current.constraints.at(-1)).toEqual(dimension);
   });
 
+  it.each([['line'], ['r', 'line'], ['r']])('reuses Dimension preselection %j', async (...ids) => {
+    await mount(fixture(ids.length === 1 && ids[0] === 'line' ? 'line' : 'pointLine')); await key('Escape');
+    for (const [index, id] of ids.entries()) {
+      const target = host.querySelector(`[data-id="${id}"]`)!;
+      const p = current.points.find(p => p.id === id);
+      await act(async () => target.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, shiftKey: index > 0 })));
+      if (p) await pointer('pointerup', screen(p));
+    }
+    await key('d');
+    if (ids.length === 1 && ids[0] === 'r') await pick('line');
+    await previewPlace(ids.length === 1 && ids[0] === 'line' ? { x: -4, y: 16 } : { x: 20, y: 8 }, ids.length === 1 && ids[0] === 'line' ? 'distance' : 'pointLineDistance');
+    expect(current.constraints.at(-1)).toMatchObject({ driving: true });
+  });
+  it.each(['Enter', 'double-click'] as const)('opens a reference readout with %s and edits only after Make driving', async how => {
+    const initial = fixture('line');
+    initial.constraints.push({ id: 'readout', kind: 'distance', a: 'p', b: 'q', value: Math.hypot(10, 6), driving: false });
+    await mount(initial); await key('Escape');
+    const label = host.querySelector('[data-constraint-id="readout"] text')!;
+    if (how === 'Enter') {
+      await pointer('pointerdown', { x: 500, y: 100 }, label); await pointer('pointerup', { x: 500, y: 100 }); await key('Enter');
+    } else await act(async () => label.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    expect(field()).toBeNull();
+    const readout = host.querySelector('[aria-label="Reference dimension readout"]')!;
+    expect(readout.textContent).toContain('11.66 mm');
+    await act(async () => (readout.querySelector('button') as HTMLButtonElement).click());
+    expect(field()).not.toBeNull();
+    expect(current.constraints.find(c => c.id === 'readout')).toMatchObject({ driving: true });
+    await input('15'); await key('Enter', field()!);
+    expect(current.constraints.find(c => c.id === 'readout')).toMatchObject({ value: 15 });
+  });
   it('cancels a pick before leaving the tool on the second Esc', async () => {
     await mount(fixture('line')); await pick('line');
     await pointer('pointermove', screen({ x: -4, y: 16 }));
@@ -325,13 +355,19 @@ describe('dimension interaction regressions', () => {
     else await key('z', svg(), { ctrlKey: true, shiftKey: how === 'redo' });
     expect(host.querySelector('.sketch-dimension-preview')).toBeNull();
   });
-  it('dismisses on Tab blur while ignoring incidental opening focus churn', async () => {
+  it('cycles Tab and Shift+Tab through the form and applies from Apply', async () => {
     await mount(fixture('line')); await pick('line'); await previewPlace({ x: -4, y: 16 }, 'distance');
     const measured = current;
     act(() => svg().focus()); expect(field()).not.toBeNull();
-    act(() => field()!.focus()); await key('Tab', field()!);
-    act(() => button('Apply dimension value').focus());
-    expect(field()).toBeNull(); expect(current).toBe(measured);
+    act(() => field()!.focus()); await input('14');
+    await key('Tab', field()!); expect(document.activeElement).toBe(button('Apply dimension value'));
+    await key('Tab', button('Apply dimension value')); expect(document.activeElement).toBe(button('Cancel'));
+    await key('Tab', button('Cancel')); expect(document.activeElement).toBe(field());
+    await key('Tab', field()!, { shiftKey: true }); expect(document.activeElement).toBe(button('Cancel'));
+    await key('Tab', button('Cancel'), { shiftKey: true }); expect(document.activeElement).toBe(button('Apply dimension value'));
+    expect(current).toBe(measured); expect(field()).not.toBeNull();
+    await act(async () => button('Apply dimension value').click());
+    expect(field()).toBeNull(); expect(current.constraints.at(-1)).toMatchObject({ value: 14 });
   });
   it.each(['Escape', 'tool change', 'overconstraint'])('does not reopen a box or prompt after %s during the add solve', async how => {
     await mount(fixture('line')); await pick('line');

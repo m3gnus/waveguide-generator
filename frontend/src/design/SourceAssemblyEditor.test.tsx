@@ -6,7 +6,7 @@ import { sourceEditorApi, type SourceAssemblyDocument } from '../api/sourceEdito
 import { durableSettings, namespaceStorage, SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { serializeDesign, useDesignStore } from '../stores/design';
 import { prepareNativeAssembly } from './nativeAssemblyPreparation';
-import { AssemblyEditor, INITIAL_ASSEMBLY, parseAssemblyDraft } from './SourceAssemblyEditor';
+import { AssemblyEditor, INITIAL_ASSEMBLY, parseAssemblyDraft, assemblyDraftFile } from './SourceAssemblyEditor';
 
 import { parseSourceAuthoring, serializeSourceAuthoring } from '../sketch/adapters/sourceAuthoring';
 import { seed } from '../sketch/adapters/sourceContour';
@@ -112,6 +112,43 @@ describe('shared source and passage authoring', () => {
     expect(envelopeFor(source).sketch).toEqual(before.sketch);
     expect(read()[source]!.contour).toEqual(beforeDocument.contour);
     expect(envelopeFor(source).meta.weights.piston).toBe(.5);
+  });
+  it('saves a portable envelope and restores names, constraints and placements after clearing authoring', async () => {
+    const state = seed(INITIAL_ASSEMBLY.horn);
+    state.sketch.entities.find(e => e.id === 'piston')!.data = { name: 'Portable diaphragm' };
+    state.sketch.constraints.push({ id: 'width', kind: 'distance', a: 'pole', b: 'rim', value: 4, driving: false,
+      label: 'Portable width', placement: { offset: 3, along: .4 } });
+    authoringStorage.setItem('', JSON.stringify({ horn: serializeSourceAuthoring(state) }));
+    storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY)); await mount();
+    let saved!: Blob;
+    URL.createObjectURL = vi.fn(blob => { saved = blob; return 'blob:saved'; }); URL.revokeObjectURL = vi.fn();
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await act(async () => button('Save assembly draft').click());
+    const reading = new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsText(saved); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+    const raw = await reading;
+    const file = JSON.parse(raw);
+    expect(file.version).toBe('wg-source-assembly-file-v2'); expect(file.document).toEqual(INITIAL_ASSEMBLY);
+    expect(file.authoring.horn).toEqual(serializeSourceAuthoring(state));
+    authoringStorage.removeItem('');
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Load assembly draft"]')!;
+    Object.defineProperty(input, 'files', { configurable: true, value: [{ size: raw.length, text: async () => raw }] });
+    await act(async () => input.dispatchEvent(new Event('change', { bubbles: true }))); await settle();
+    expect(envelopeFor('horn')).toEqual(file.authoring.horn);
+    expect(vi.mocked(sourceEditorApi.validateAssembly).mock.calls.at(-1)![0]).toEqual(INITIAL_ASSEMBLY);
+    await act(async () => button('Edit horn contour…').click()); await settle();
+    expect(host.querySelector('[data-row-id="piston"]')!.textContent).toContain('Portable diaphragm');
+    expect(host.querySelector('[data-row-id="width"]')!.textContent).toContain('Portable width');
+    expect(envelopeFor('horn').sketch.constraints.find((c: { id: string }) => c.id === 'width').placement).toEqual({ offset: 3, along: .4 });
+  });
+  it('accepts old bare files and rejects authoring that does not match the file document', () => {
+    expect(parseAssemblyDraft(JSON.stringify(INITIAL_ASSEMBLY))).toEqual(INITIAL_ASSEMBLY);
+    const state = seed(INITIAL_ASSEMBLY.horn);
+    const changed = structuredClone(INITIAL_ASSEMBLY); changed.horn.contour.points[1].r_mm += 1;
+    expect(assemblyDraftFile(changed, { horn: serializeSourceAuthoring(state) }).authoring).toEqual({});
+    const both = assemblyDraftFile(INITIAL_ASSEMBLY, { horn: serializeSourceAuthoring(state), woofer: serializeSourceAuthoring(seed(INITIAL_ASSEMBLY.woofer!)) });
+    expect(Object.keys(both.authoring)).toEqual(['horn', 'woofer']);
+    expect(parseAssemblyDraft(JSON.stringify(both))).toEqual(INITIAL_ASSEMBLY);
   });
   it.each(['horn', 'woofer'] as const)('keeps a pending invalid %s sketch beside the last canonical document', async source => {
     storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY)); await mount();

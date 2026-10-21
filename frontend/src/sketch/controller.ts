@@ -86,7 +86,7 @@ export class SketchController<T> {
   }
   /** A function is resolved against the state the queued command actually runs on, so fields
    *  it does not change (e.g. the other coordinate of a point) are never stale. */
-  command(commands: Command | Command[] | ((state: Authoring<T>) => Command | Command[]), dimensions?: { length: number; angle?: number }) {
+  command(commands: Command | Command[] | ((state: Authoring<T>) => Command | Command[]), dimensions?: { length?: number; angle?: number }) {
     return this.queue(session => this.transaction(session, 'Edit sketch', async () => {
       let state = this.current;
       const removed = new Set<string>();
@@ -115,7 +115,7 @@ export class SketchController<T> {
       if (dimensions) {
         const added = state.sketch.entities.find(e => !this.current.sketch.entities.some(old => old.id === e.id));
         if (added?.kind === 'line') {
-          const constraints: NewConstraint[] = [{ kind: 'distance', a: added.p1, b: added.p2, value: dimensions.length, driving: true }];
+          const constraints: NewConstraint[] = dimensions.length === undefined ? [] : [{ kind: 'distance', a: added.p1, b: added.p2, value: dimensions.length, driving: true }];
           if (dimensions.angle !== undefined) {
             // A fixed construction baseline provides a generic absolute angle reference.
             let baseline = state.sketch.entities.find(e => e.reference && e.kind === 'line' && (() => {
@@ -129,7 +129,7 @@ export class SketchController<T> {
               if (baseline?.kind !== 'line') throw new Error('Could not create an angle reference.');
               const construction = this.apply(line, { kind: 'setConstruction', id: baseline.id, construction: true });
               if ('error' in construction) throw new Error(construction.error);
-              state = construction;
+              state = { ...construction, sketch: { ...construction.sketch, entities: construction.sketch.entities.map(e => e.id === baseline!.id ? { ...e, data: { dimensionHelper: true } } : e) } };
               for (const point of [baseline.p1, baseline.p2]) {
                 const result = await session.tryAddConstraint(state.sketch, { kind: 'fix', point });
                 if (!result.ok) throw new Error(result.reason);

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { findSnap } from './snap';
 import { seed } from './adapters/sourceContour';
 import { INITIAL_SOURCE } from '../design/sourceContourEditing';
-import { importedSketch } from './ops';
+import { applyCommand, importedSketch } from './ops';
 
 describe('snap inference', () => {
   it('prioritizes endpoints, then centers, axis, baffle, alignment and grid', () => {
@@ -28,11 +28,28 @@ describe('snap inference', () => {
     expect(findSnap(sketch, meta.references, { x: .1, y: 9 }, .01, axis)).toMatchObject({ x: 0, y: 9, glyph: 'axis' });
     expect(findSnap(sketch, meta.references, { x: .01, y: 0 }, .01, previous, { suppress: true })).toBeNull();
   });
-  it('ignores construction endpoints and permits no snap outside tolerance', () => {
+  it('ignores reference endpoints and permits no snap outside tolerance', () => {
     const { sketch, meta } = seed(INITIAL_SOURCE);
     expect(findSnap(sketch, meta.references, { x: 0, y: 1 }, .01)?.glyph).toBe('axis');
     expect(findSnap(sketch, [], { x: 3, y: 3 }, .13)).toBeNull();
     expect(() => findSnap(sketch, [], { x: 0, y: 0 }, 0)).toThrow();
+  });
+  it('snaps to user construction endpoints and centres, persists coincidence and excludes helpers and context', () => {
+    const sketch = importedSketch([
+      { id: 'a', x: 3.13, y: 4.17 }, { id: 'b', x: 6.13, y: 4.17 }, { id: 'c', x: 9.13, y: 7.17 },
+      { id: 's', x: 11.13, y: 7.17 }, { id: 'e', x: 9.13, y: 9.17 },
+    ], [{ kind: 'line', id: 'guide', p1: 'a', p2: 'b', construction: true },
+      { kind: 'arc', id: 'guideArc', center: 'c', start: 's', end: 'e', ccw: true, construction: true }]);
+    const snap = findSnap(sketch, [], { x: 3.14, y: 4.18 }, .01)!;
+    expect(snap).toMatchObject({ glyph: 'endpoint', constraint: { kind: 'coincident', point: 'a' } });
+    expect(findSnap(sketch, [], { x: 9.14, y: 7.18 }, .01)).toMatchObject({ glyph: 'center', constraint: { kind: 'coincident', point: 'c' } });
+    const added = applyCommand(sketch, { kind: 'addLine', from: { x: 1, y: 1 }, to: { x: 3.14, y: 4.18, snap } });
+    if ('error' in added) throw new Error(added.error);
+    expect(added.sketch.constraints).toContainEqual(expect.objectContaining({ kind: 'coincident', b: 'a' }));
+    sketch.entities[0].data = { dimensionHelper: true };
+    expect(findSnap(sketch, [], { x: 3.14, y: 4.18 }, .01)?.glyph).not.toBe('endpoint');
+    sketch.entities[0].data = undefined; sketch.entities[0].reference = true;
+    expect(findSnap(sketch, [], { x: 3.14, y: 4.18 }, .01)?.glyph).not.toBe('endpoint');
   });
   it('refreshes held snap positions and releases a deleted target', () => {
     const { sketch } = seed(INITIAL_SOURCE), previous = findSnap(sketch, [], { x: 8, y: 0 }, .01)!;

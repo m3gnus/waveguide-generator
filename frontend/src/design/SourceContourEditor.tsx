@@ -138,14 +138,6 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const [hoverId, setHoverId] = useState<string>();
   const [pointsOpen, setPointsOpen] = useState(false);
   const [dimensionsOpen, setDimensionsOpen] = useState(true);
-  const rows = useRef(new Map<string, HTMLTableRowElement>());
-  useEffect(() => {
-    const id = canvasSelection.at(-1);
-    if (!id) return;
-    if (author.sketch.points.some(p => p.id === id) && canvasSelection.includes(id)) setPointsOpen(true);
-    if (author.sketch.constraints.some(c => c.id === id && 'value' in c)) setDimensionsOpen(true);
-    rows.current.get(id)?.scrollIntoView?.({ block: 'nearest' });
-  }, [canvasSelection, pointsOpen]);
   const authoringCallback = useRef(onAuthoringChange); authoringCallback.current = onAuthoringChange;
   const draftCallback = useRef(onDraftChange); draftCallback.current = onDraftChange;
   const controller = useRef<SketchController<SourceMeta> | undefined>(undefined);
@@ -396,7 +388,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         </svg>
         </>}
         {(classic || sketchProblems.every(p => p.severity === 'warning') && !validationError) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}
-        <details className="source-points" open={classic || pointsOpen} onToggle={e => setPointsOpen(e.currentTarget.open)}><summary>Points</summary><div className="source-table"><table><thead><tr><th>Point</th><th>r mm</th><th>z mm</th><th/></tr></thead><tbody>{tablePoints.map((point, i) => <tr key={point.id} ref={row => { if (row) rows.current.set(point.id, row); else rows.current.delete(point.id); }} data-row-id={point.id} aria-selected={canvasSelection.includes(point.id)} className={hoverId === point.id ? 'hovered' : ''}
+        <details className="source-points" open={classic || pointsOpen} onToggle={e => setPointsOpen(e.currentTarget.open)}><summary>Points</summary><div className="source-table"><table><thead><tr><th>Point</th><th>r mm</th><th>z mm</th><th/></tr></thead><tbody>{tablePoints.map((point, i) => <tr key={point.id} data-row-id={point.id} aria-selected={canvasSelection.includes(point.id)} className={hoverId === point.id ? 'hovered' : ''}
           onPointerEnter={() => setHoverId(point.id)} onPointerLeave={() => setHoverId(undefined)} onClick={() => { if (!classic) setCanvasSelection([point.id]); }}><td title={point.id}><button type="button" aria-label={`Select point ${i + 1}`} onClick={() => setCanvasSelection([point.id])}>{displayName(nameSketch, point.id)}</button></td>
           <td><NumberField label={`Point ${i + 1} radius`} value={point.r_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === 0 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, v, point.z_mm)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: v, y: state.sketch.points.find(p => p.id === point.id)!.y }))}/></td>
           <td><NumberField label={`Point ${i + 1} z`} value={point.z_mm} precision={9} displayPrecision={2} step={.1} disabled={classic && i === draft.contour.points.length - 1 || drawPoints !== null} onCommit={(v) => classic ? change(editPoint(draft, i, point.r_mm, v)) : sketchCommand(state => ({ kind: 'movePoint', id: point.id, x: state.sketch.points.find(p => p.id === point.id)!.x, y: v }))}/></td>
@@ -404,7 +396,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         {!classic && <details className="source-dimensions" open={dimensionsOpen} onToggle={event => setDimensionsOpen(event.currentTarget.open)}><summary>Dimensions</summary>
           <div className="source-table"><table aria-label="Dimensions"><thead><tr><th>Name</th><th>Value</th><th>Driving</th></tr></thead><tbody>
             {author.sketch.constraints.filter(c => 'value' in c).map(c => 'value' in c && <tr key={c.id} data-row-id={c.id}
-              ref={row => { if (row) rows.current.set(c.id, row); else rows.current.delete(c.id); }} aria-selected={canvasSelection.includes(c.id)} className={hoverId === c.id ? 'hovered' : ''}
+              aria-selected={canvasSelection.includes(c.id)} className={hoverId === c.id ? 'hovered' : ''}
               onClick={() => setCanvasSelection([c.id])} onPointerEnter={() => setHoverId(c.id)} onPointerLeave={() => setHoverId(undefined)}>
               <td title={c.id}><SketchNameCell value={dimensionName(c)} label={`Dimension ${c.id} name`} id={c.id} maxLength={40} disabled={!sketchReady}
                 onCommit={label => sketchCommand(state => {
@@ -419,7 +411,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
             </tr>)}
           </tbody></table></div>
         </details>}
-        <h3>Patches</h3><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch</th><th>Name</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{tablePatches.map((patch, i) => <tr key={patch.id} ref={row => { if (row) rows.current.set(patch.id, row); else rows.current.delete(patch.id); }} data-row-id={patch.id} aria-selected={canvasSelection.includes(patch.id)} className={hoverId === patch.id ? 'hovered' : ''}
+        <h3>Patches</h3><p>Weight is literal. A zero-weight moving patch keeps its moving role.</p><div className="source-table"><table><thead><tr><th>Patch</th><th>Name</th><th>Curve</th><th>Role</th><th>Weight</th></tr></thead><tbody>{tablePatches.map((patch, i) => <tr key={patch.id} data-row-id={patch.id} aria-selected={canvasSelection.includes(patch.id)} className={hoverId === patch.id ? 'hovered' : ''}
           onPointerEnter={() => setHoverId(patch.id)} onPointerLeave={() => setHoverId(undefined)} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}><td title={patch.id}><button type="button" aria-label={`Select patch ${i + 1}`} onClick={() => { setSelectedPatch(i); if (!classic) setCanvasSelection([patch.id]); }}>{i + 1}</button></td>
           <td title={patch.id}>{classic ? displayName(nameSketch, patch.id) : <SketchNameCell value={displayName(nameSketch, patch.id)} label={`Patch ${i + 1} name`} id={patch.id} maxLength={60} disabled={!sketchReady} onCommit={name => sketchCommand({ kind: 'setEntityName', id: patch.id, name })}/>}</td>
           <td>{classic && <select aria-label={`Patch ${i + 1} curve`} value={patch.kind} onChange={(e) => change(editPatch(draft, i, { kind: e.target.value as 'line' | 'arc' }))}><option value="line">Line</option><option value="arc">Arc</option></select>}{!classic && patch.kind}</td>

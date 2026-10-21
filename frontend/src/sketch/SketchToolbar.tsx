@@ -3,7 +3,7 @@ import type { SketchViewPreferences } from './viewPreferences';
 import type { constraintPalette, SelectionConstraint } from './tools/constraints';
 
 export type Tool = 'select' | 'hand' | 'line' | 'tangent' | 'arc3' | 'dimension' | 'split' | 'constraint';
-type PaletteEntry = ReturnType<typeof constraintPalette>[number] & { disabled: boolean };
+type PaletteEntry = ReturnType<typeof constraintPalette>[number] & { disabled: boolean; title?: string };
 interface Props {
   tool: Tool; arcTool: 'tangent' | 'arc3'; enabled: boolean; palette: PaletteEntry[]; activeConstraint?: SelectionConstraint;
   viewOptions: SketchViewPreferences;
@@ -24,7 +24,7 @@ export function SketchToolbar({ tool, arcTool, enabled, palette, activeConstrain
   return <div role="toolbar" aria-label="Sketch tools" className="sketch-toolbar" onKeyDown={event => { if (event.key === 'Escape') { setArcMenu(false); setLegend(false); } }}>
     <div className="sketch-toolbar-group" role="group" aria-label="Navigate"><span className="sketch-group-caption">Navigate</span><div className="sketch-tool-segment">{(['select', 'hand'] as const).map(drawingButton)}</div></div>
     <div className="sketch-toolbar-group" role="group" aria-label="Sketch"><span className="sketch-group-caption">Sketch</span><div className="sketch-tool-segment">{(['line', 'arc', 'dimension', 'split'] as const).map(drawingButton)}</div></div>
-    <div className="sketch-toolbar-group" role="group" aria-label="Constraints"><span className="sketch-group-caption">Constraints</span><div className="sketch-tool-segment">{palette.map(entry => <button type="button" key={entry.kind} aria-label={entry.label} title={entry.key ? `${entry.label} (${entry.key.toUpperCase()})` : entry.label} aria-pressed={tool === 'constraint' && activeConstraint === entry.kind} disabled={entry.disabled} onClick={() => constrain(entry)}><span aria-hidden="true" className="sketch-constraint-icon">{entry.symbol}</span></button>)}</div></div>
+    <div className="sketch-toolbar-group" role="group" aria-label="Constraints"><span className="sketch-group-caption">Constraints</span><div className="sketch-tool-segment">{palette.map(entry => <button type="button" key={entry.kind} aria-label={entry.label} title={entry.disabled && entry.title ? entry.title : entry.key ? `${entry.label} (${entry.key.toUpperCase()})` : entry.label} aria-pressed={tool === 'constraint' && activeConstraint === entry.kind} disabled={entry.disabled} onClick={() => constrain(entry)}><span aria-hidden="true" className="sketch-constraint-icon">{entry.symbol}</span></button>)}</div></div>
     <button type="button" disabled={!enabled} onClick={() => undo()}>Undo</button><button type="button" disabled={!enabled} onClick={() => undo(true)}>Redo</button>
     <div className="sketch-view-tools" role="group" aria-label="View"><span className="sketch-group-caption">View</span>
       <button type="button" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoom(1 / 1.25)}>−</button><button type="button" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoom(1.25)}>+</button>
@@ -32,7 +32,7 @@ export function SketchToolbar({ tool, arcTool, enabled, palette, activeConstrain
       {(['dimensions', 'names', 'constraints'] as const).map(key => <button type="button" key={key} aria-pressed={viewOptions[key]} onClick={() => toggle(key)}>{key[0].toUpperCase() + key.slice(1)}</button>)}
       <div className="sketch-menu-anchor"><button type="button" aria-label="Line styles" title="Line styles" aria-expanded={legend} onClick={() => setLegend(!legend)}>?</button>
         {legend && <div className="sketch-menu sketch-line-legend" role="dialog" aria-label="Line styles legend"><strong>Line styles</strong>{[
-          ['under', 'Profile: under-constrained'], ['determined', 'Profile: fully constrained'], ['construction', 'Construction'], ['projected', 'Projected context'], ['conflicting', 'Conflict'], ['under moving', 'Moving patch (2 px)'], ['under rigid', 'Rigid patch (3.5 px)'],
+          ['not-analysed', 'Constraint state not analysed'], ['under', 'Profile: under-constrained'], ['determined', 'Profile: fully constrained'], ['construction', 'Construction'], ['projected', 'Projected context'], ['conflicting', 'Conflict'], ['under moving', 'Moving patch (2 px)'], ['under rigid', 'Rigid patch (3.5 px)'],
         ].map(([style, label]) => <div key={label}><svg aria-hidden="true" viewBox="0 0 40 12"><path d="M0 6H40" className={`sketch-entity ${style}`}/></svg><span>{label}</span></div>)}</div>}
       </div>
     </div>
