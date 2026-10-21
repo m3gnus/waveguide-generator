@@ -57,6 +57,8 @@ describe('throat intent policy', () => {
     const followed = withSourceLimit(state,limit(20));
     for (const c of state.sketch.constraints.filter(c => 'value' in c && c.driving)) expect(followed.sketch.constraints.find(v => v.id === c.id)).toEqual(c);
     const fitted = fitSourcePreset(state,limit(20)), result = lower(fitted.sketch,fitted.meta);
+    const factor = 20 / (dimensions.radius_mm + dimensions.surround_width_mm + dimensions.land_width_mm);
+    for (const [key, value] of Object.entries(dimensions)) expect(fitted.meta.preset!.values![key]).toBeCloseTo(value * factor, 9);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.document.contour.points.at(-1)!.r_mm).toBeCloseTo(20,9);
     expect(state).toEqual(original);

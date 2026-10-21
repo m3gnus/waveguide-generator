@@ -64,6 +64,9 @@ export function withSourceLimit(state: { sketch: Sketch; meta: SourceMeta }, lim
     snapRadius: sourceLimitTarget(limit), locked: !!limit.hard, ...(rim ? { point: rim } : {}) };
   return { sketch, meta: { ...state.meta, limit, references: [...state.meta.references.filter(r => r.kind !== 'limit'), reference] } };
 }
+export function scaleSourceDimensions(dimensions: Record<string, number>, scale: number) {
+  return Object.fromEntries(Object.entries(dimensions).map(([key, value]) => [key, value * scale]));
+}
 /** The single scaling path, used by the explicit action and by fresh preset seeding only. */
 export function scaleSourceToLimit(state: { sketch: Sketch; meta: SourceMeta }, limit: SourceLimit) {
   const rim = contourPointOrder(state.sketch, state.meta).at(-1);
@@ -74,7 +77,9 @@ export function scaleSourceToLimit(state: { sketch: Sketch; meta: SourceMeta }, 
     points: state.sketch.points.map(p => referencePoints.has(p.id) ? p : { ...p, x: p.x * scale, y: p.y * scale }),
     constraints: state.sketch.constraints.map(c => 'value' in c && c.kind !== 'angle' ? { ...c, value: c.value * scale } : c),
   };
-  return withSourceLimit({ ...state, sketch }, limit);
+  const preset = state.meta.preset;
+  const meta = preset?.values ? { ...state.meta, preset: { ...preset, values: scaleSourceDimensions(preset.values, scale) } } : state.meta;
+  return withSourceLimit({ ...state, sketch, meta }, limit);
 }
 /** No typed intent exists when a preset is first seeded, so this is the only automatic fit. */
 export function fitSourcePreset(state: { sketch: Sketch; meta: SourceMeta }, limit: SourceLimit) {

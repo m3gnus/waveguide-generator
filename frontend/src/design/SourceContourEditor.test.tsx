@@ -468,6 +468,40 @@ describe('source editor interactions', () => {
     expect(writes).toHaveBeenCalledTimes(1); expect(callback).toHaveBeenCalledTimes(1); expect(lowering).toHaveBeenCalledTimes(1);
     expect(readSourceDraft().contour.points[1].r_mm).toBeGreaterThan(8);
   });
+  it.each([false, true])('restores acceptance after a rejected drag release (nested: %s)', async nested => {
+    const changed = vi.fn(), use = vi.fn();
+    await act(async () => root.render(<Editor onClose={() => {}} onDraftChange={changed} onUseDocument={nested ? use : undefined}/>)); await settle();
+    const before = readSourceDraft(), accept = nested ? 'Use contour' : 'Done';
+    expect(button(accept).disabled).toBe(false);
+    const endDrag = SketchSession.prototype.endDrag;
+    const release = vi.spyOn(SketchSession.prototype, 'endDrag').mockImplementationOnce(async function (this: SketchSession) {
+      return { ...await endDrag.call(this), status: 'failed', reason: 'Release would change branch.' };
+    });
+    const svg = host.querySelector('[aria-label="Sketch drawing"]')!, rim = host.querySelector('.sketch-point[data-id="rim"]')!;
+    const x = Number(rim.getAttribute('cx')), y = Number(rim.getAttribute('cy'));
+    await pointer(rim, 'pointerdown', x, y);
+    await pointer(svg, 'pointermove', x + 20, y); await settle();
+    expect(Number(host.querySelector('.sketch-point[data-id="rim"]')!.getAttribute('cx'))).toBeGreaterThan(x);
+    await pointer(svg, 'pointerup'); await settle();
+    expect(release).toHaveBeenCalledOnce();
+    expect(readSourceDraft()).toEqual(before);
+    expect(button(accept).disabled).toBe(false);
+    expect(changed.mock.calls.at(-1)![0]).toEqual(before);
+    expect(host.querySelector('.source-validation')?.textContent).toContain('Valid contour');
+    if (nested) { await act(async () => button(accept).click()); expect(use).toHaveBeenCalledWith(before); }
+  });
+  it('keeps acceptance blocked when a soft context install cannot be solved', async () => {
+    await mount();
+    expect(button('Done').disabled).toBe(false);
+    const solve = SketchSession.prototype.solveFull;
+    const failure = vi.spyOn(SketchSession.prototype, 'solveFull').mockImplementationOnce(async function (this: SketchSession) {
+      return { ...await solve.call(this), status: 'failed', reason: 'Context could not be solved.' };
+    });
+    await enter('Aperture radius attachment', '18'); await settle();
+    expect(failure).toHaveBeenCalledOnce();
+    expect(readSourceAuthoring(readSourceDraft()).meta.limit).toEqual({ kind: 'aperture', radius: 18 });
+    expect(button('Done').disabled).toBe(true);
+  });
   it('fix 12: distinguishes rigid sections by weight and solid projected references in both canvases', () => {
     expect(canvasCss).toContain('.sketch-entity.rigid { stroke-width: 3.5; }');
     expect(canvasCss).not.toContain('stroke-dasharray: 4 4');
@@ -1316,6 +1350,43 @@ describe('source editor interactions', () => {
     const before = changed.mock.calls.at(-1)![0];
     return { changed, use, before, loadedDocument: lowered.document, render };
   }
+
+  it.each(['Apply shape', 'Fit to limit'])('keeps shape fields aligned with scaled geometry after a rejected %s', async action => {
+    const changed = vi.fn();
+    const render = async (radius: number) => {
+      await act(async () => root.render(<Editor onClose={() => {}} initialDocument={INITIAL_SOURCE} onDraftChange={changed} limit={{ kind: 'throat', radius, hard: true }}/>)); await settle();
+    };
+    await render(16);
+    let finishExpand!: () => void;
+    // Older expansion responses use generic import semantics rather than named constraints.
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => {
+      const doc = expandedPreset(shape, dimensions);
+      doc.contour.segments[0].id = 'imported-cap';
+      doc.drive.weights['imported-cap'] = doc.drive.weights['dust-cap']; delete doc.drive.weights['dust-cap'];
+      return new Promise(resolve => { finishExpand = () => resolve(validation(doc)); });
+    });
+    await act(async () => button(action).click());
+    // The external host changes while expansion is in flight, including after Fit to limit.
+    await render(18);
+    const solve = SketchSession.prototype.solveFull;
+    vi.spyOn(SketchSession.prototype, 'solveFull').mockImplementationOnce(async function (this: SketchSession) {
+      const result = await solve.call(this);
+      return { ...result, status: 'failed', conflicting: [this.sketch.constraints[0].id] };
+    });
+    await act(async () => finishExpand()); await settle();
+    expect(host.querySelector('.source-load-offer')).not.toBeNull();
+    const [, dimensions] = vi.mocked(sourceEditorApi.expand).mock.calls.at(-1)!;
+    const radius = dimensions.radius_mm + dimensions.surround_width_mm + dimensions.land_width_mm;
+    const factor = 18 / radius;
+    await act(async () => button('Scale it to fit').click()); await settle();
+    expect(host.querySelector('.source-load-offer')).toBeNull();
+    expect(button('Done').disabled).toBe(false);
+    const document = changed.mock.calls.at(-1)![0] as SourceDocument;
+    expect(document.contour.points.at(-1)!.r_mm).toBeCloseTo(18, 8);
+    expect(document.contour.points.find(p => p.id === 'cone.rim')!.r_mm).toBeCloseTo(dimensions.radius_mm * factor, 8);
+    for (const [key, value] of Object.entries(dimensions)) expect(Number(input(`${presetLabels[key]} preset`).value)).toBe(Number((value * factor).toFixed(2)));
+    expect(document.contour.points[0].z_mm).toBeCloseTo((dimensions.cap_height_mm - dimensions.depth_mm) * factor, 8);
+  });
 
   it.each(['mouth', 'aperture', 'throat'] as const)('loads a preset saved with a %s limit into a throat host', async kind => {
     const { changed, use, before, loadedDocument } = await mountPresetInThroat(kind);

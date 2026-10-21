@@ -258,12 +258,16 @@ export class SketchController<T> {
   endDrag(cancel = false) {
     return this.queue(async session => {
       if (!this.dragging) return;
+      const diagnosis = this.diagnosis;
       try {
         this.diagnosis = await session.endDrag();
+        const rejected = this.diagnosis.status !== 'ok';
         const unchanged = this.current === this.dragStart || JSON.stringify(session.sketch) === JSON.stringify(this.dragStart!.sketch);
-        if (cancel || this.diagnosis.status !== 'ok' || unchanged) {
+        if (cancel || rejected || unchanged) {
           session.sketch = this.history.cancel().sketch;
-          if (!this.destroyed) this.preview?.(this.current, this.diagnosis);
+          this.diagnosis = diagnosis;
+          if (rejected && !cancel) this.publish(this.current);
+          else if (!this.destroyed) this.preview?.(this.current, this.diagnosis);
         } else {
           this.history.update({ ...this.current, sketch: session.sketch }); this.history.commit(); this.publish(this.current);
         }

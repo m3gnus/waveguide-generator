@@ -10,7 +10,7 @@ import { drawnSource, editPatch, editPoint, identityProblem, INITIAL_SOURCE, rem
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
 import { isConstraintConflict, SketchController, type Authoring } from '../sketch/controller';
-import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, sourceProgress, scaleSourceToLimit, fitSourcePreset, withSourceLimit, withSourceContext, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
+import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, sourceProgress, scaleSourceToLimit, scaleSourceDimensions, fitSourcePreset, withSourceLimit, withSourceContext, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
 import { presetDefaults as defaults, presetLabels, seedPreset, fitPresetDimensions } from '../sketch/adapters/sourcePreset';
 import { presetDimensionActive, presetDimensionProblem, presetTopologyMessage, reapplyPresetMessage } from '../sketch/adapters/sourcePresetMapping';
 import { refreshContext, type SketchContext } from '../sketch/context';
@@ -349,14 +349,17 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   }
   function completeLoad(load: ContourLoad, next: Authoring<SourceMeta>) {
     clearLoadOffer();
+    const lowered = lower(next.sketch, next.meta), value = load.validation;
+    const document = lowered.ok ? lowered.document : value.document;
     if (load.preset) { setSelected(load.preset); setName(load.preset.name); }
     else if (load.shape) setSelected(undefined);
-    if (load.shape) setDimensions({ ...load.shape.dimensions });
+    if (load.shape) {
+      const radius = value.document.contour.points.at(-1)!.r_mm;
+      setDimensions(scaleSourceDimensions(load.shape.dimensions, radius ? document.contour.points.at(-1)!.r_mm / radius : 1));
+    }
     else if (next.meta.preset) { setShape(next.meta.preset.shape); setDimensions({ ...defaults[next.meta.preset.shape], ...next.meta.preset.values }); }
     setTopologyDimensions({});
     setFitRequest(v => v + 1); setNotice(load.restored ? 'Restored source preset authoring.' : next.meta.preset ? 'Named dimensions drive this shape.' : 'Constraints were reset for the loaded contour.');
-    const lowered = lower(next.sketch, next.meta), value = load.validation;
-    const document = lowered.ok ? lowered.document : value.document;
     const unchanged = sameSourceDocument(document, value.document);
     setView(fit(document.contour.points, unchanged ? value.meridian : {}));
     setAccepted(unchanged ? { key: JSON.stringify(document), value } : undefined);
