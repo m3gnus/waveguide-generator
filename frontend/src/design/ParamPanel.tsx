@@ -1,3 +1,4 @@
+import { FreeformProfileInspection } from './ProfileInspection';
 import { registerParameterPanel } from './parameterPanelValidity';
 import { nativeCadLimitation, nativeSymmetryLimitation } from './nativeFamilies';
 import { EnclosureResolutionField } from './EnclosureResolutionField';
@@ -1345,6 +1346,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       forceOpen={searching || (definition.title === 'Imported ATH values' && design.text_import_version === 'ath-2026-09a-v2')}
       revealId={workspaceMode === 'parametric' ? `parametric.section.${definition.title}` : undefined}
     >
+      {workspaceMode === 'parametric' && design.formula === 'FREEFORM' && definition.title === 'Profile' && !searching && <FreeformProfileInspection />}
       {showOuterBodyMode && <WallEnclosureModeControl design={design} mounting={workspaceMode === 'parametric'} serverError={workspaceMode === 'parametric' ? previewErrorForParameter(PARAMETER_REGISTRY.find((field) => field.id === 'simulation.sim_type')!, currentPreviewFields) : undefined} />}
       {/* Domain is an execution option, not a saved design parameter. Keeping
           it independent of mesh.quadrants prevents the round-trip-only ATH

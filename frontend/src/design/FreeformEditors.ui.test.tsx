@@ -1,7 +1,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { designForFamily, resetDesignStore, useDesignStore, type CrossSectionStation, type FreeformPoint } from '../stores/design';
+import { designForFamily, resetDesignStore, serializeDesign, useDesignStore, type CrossSectionStation, type FreeformPoint } from '../stores/design';
 import type { ParameterDefinition } from './parameterRegistry';
 import { EditableLookupTable, EditablePointTable, EditableStationTable } from './FreeformEditors';
 
@@ -240,4 +240,109 @@ describe('FREEFORM numeric tables', () => {
     expect(inputWithLabel(host, 'Station 3 corner radius').value).toBe('');
     expect(host.querySelector('[role="alert"]')?.textContent).toBe('This value is required.');
   });
+  it('keeps loaded positions byte-identical through render, focus, blur and save; edits only one station', () => {
+    const stations: CrossSectionStation[] = [
+      { t: 0, shape: 'ellipse' }, { t: .35123456789123456, shape: 'ellipse' },
+      { t: .7123456789123456, shape: 'ellipse' }, { t: 1, shape: 'ellipse' },
+    ];
+    useDesignStore.getState().replaceDocument({ ...designForFamily('FREEFORM'), length: 200, cross_sections: stations });
+    const before = JSON.stringify(serializeDesign(useDesignStore.getState().design));
+    const render = () => act(() => root.render(<EditableStationTable field={stationField} stations={useDesignStore.getState().design.cross_sections!}/>));
+    render();
+    for (const label of ['Station 2 position', 'Station 2 position percent', 'Station 3 position']) {
+      const input = inputWithLabel(host, label);
+      act(() => input.focus()); act(() => input.blur());
+    }
+    expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(before);
+    const input = inputWithLabel(host, 'Station 2 position');
+    act(() => enterDraft(input, '70')); act(() => input.blur()); render();
+    expect(useDesignStore.getState().design.cross_sections![1].t).toBe(.35);
+    expect(useDesignStore.getState().design.cross_sections![2].t).toBe(stations[2].t);
+    expect(host.textContent).toContain('70 mm from the throat — 35%');
+    act(() => useDesignStore.getState().undo());
+    expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(before);
+  });
+
+  it.each([[74.795, 35], [75.0587058, 35.1234]])('stores identical t for equivalent %s mm and %s percent entries, each as one undo step', (mm, percent) => {
+    const initial = { ...designForFamily('FREEFORM'), length: 213.7, cross_sections: [
+      { t: 0, shape: 'ellipse' as const }, { t: .5, shape: 'ellipse' as const }, { t: 1, shape: 'ellipse' as const },
+    ] };
+    const results: number[] = [];
+    for (const [label, value] of [['Station 2 position', String(mm)], ['Station 2 position percent', String(percent)]]) {
+      act(() => useDesignStore.getState().replaceDocument(initial));
+      act(() => root.render(<EditableStationTable field={stationField} stations={useDesignStore.getState().design.cross_sections!}/>));
+      const input = inputWithLabel(host, label);
+      act(() => enterDraft(input, value)); act(() => input.blur());
+      results.push(useDesignStore.getState().design.cross_sections![1].t);
+      expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
+      act(() => useDesignStore.getState().undo());
+      expect(useDesignStore.getState().design).toEqual(initial);
+    }
+    expect(results[0]).toBe(results[1]);
+    expect(results[0]).toBe(percent / 100);
+  });
+
+  it('moves only the selected point by distance, rejects duplicates and crossings, and undoes the edit', () => {
+    const points: FreeformPoint[] = [{ t: 0, r: 12.7 }, { t: .25, r: 30 }, { t: .75, r: 80 }, { t: 1, r: 140 }];
+    useDesignStore.getState().replaceDocument({ ...designForFamily('FREEFORM'), length: 200, profile_h: { points } });
+    const before = JSON.stringify(serializeDesign(useDesignStore.getState().design));
+    const render = () => act(() => root.render(<EditablePointTable field={pointField} points={useDesignStore.getState().design.profile_h!.points}/>));
+    render();
+    const z = inputWithLabel(host, 'H point 1 z');
+    act(() => z.focus()); act(() => z.blur());
+    expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(before);
+    act(() => host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+    for (const [value, message] of [['150', 'match another point'], ['160', 'no crossing'], ['0', 'match another point']]) {
+      const distance = inputWithLabel(host, 'H point 1 distance from previous');
+      act(() => enterDraft(distance, value));
+      expect(host.textContent).toContain(message);
+      act(() => distance.blur());
+      expect(useDesignStore.getState().design.profile_h!.points).toEqual(points);
+    }
+    const distance = inputWithLabel(host, 'H point 1 distance from previous');
+    act(() => enterDraft(distance, '60')); act(() => distance.blur()); render();
+    expect(useDesignStore.getState().design.profile_h!.points).toEqual([points[0], { t: .3, r: 30 }, points[2], points[3]]);
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design.profile_h!.points).toEqual(points);
+  });
+
+  it.each(['station', 'point', 'distance', 'radius', 'angle'] as const)('applies the same limits to typed and scrubbed %s values and groups a scrub into one undo', (kind) => {
+    const points: FreeformPoint[] = [{ t: 0, r: 12.7 }, { t: .25, r: 30, angle_deg: 20 }, { t: .75, r: 80 }, { t: 1, r: 140 }];
+    const initial = { ...designForFamily('FREEFORM'), length: 200, profile_h: { points }, cross_sections: [
+      { t: 0, shape: 'ellipse' as const }, { t: .25, shape: 'ellipse' as const }, { t: .75, shape: 'ellipse' as const }, { t: 1, shape: 'ellipse' as const },
+    ] };
+    useDesignStore.getState().replaceDocument(initial);
+    const render = () => act(() => root.render(kind === 'station'
+      ? <EditableStationTable field={stationField} stations={useDesignStore.getState().design.cross_sections!}/>
+      : <EditablePointTable field={pointField} points={useDesignStore.getState().design.profile_h!.points}/>));
+    render();
+    if (kind === 'distance') act(() => host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+    const labelText = kind === 'station' ? 'Station 2 position' : `H point 1 ${kind === 'point' ? 'z' : kind === 'distance' ? 'distance from previous' : kind}`;
+    const bad = kind === 'radius' ? '0' : kind === 'angle' ? '90' : '150';
+    const input = inputWithLabel(host, labelText);
+    act(() => enterDraft(input, bad));
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    act(() => input.blur());
+    expect(useDesignStore.getState().design).toEqual(initial);
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => { frames.push(callback); return frames.length; });
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
+    const label = [...host.querySelectorAll('label')].find((item) => item.textContent === labelText)!;
+    Object.defineProperty(label, 'setPointerCapture', { value: vi.fn() });
+    const move = (clientX: number) => {
+      act(() => label.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX })));
+      act(() => frames.splice(0).forEach((frame) => frame(0))); render();
+    };
+    act(() => label.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientX: 0 })));
+    move(kind === 'radius' ? -300 : kind === 'angle' ? 700 : 1000);
+    expect(useDesignStore.getState().design).toEqual(initial);
+    move(10); move(20);
+    act(() => label.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 })));
+    expect(useDesignStore.getState().design).not.toEqual(initial);
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design).toEqual(initial);
+  });
+
 });

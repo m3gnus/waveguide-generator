@@ -2052,12 +2052,15 @@ describe('ParamPanel inventory UX', () => {
       useDesignStore.getState().setFamily('FREEFORM');
       root.render(withQueryClient(<ParamPanel tab="geometry" />));
     });
+    expect(host.querySelector('[aria-label="Generated bore profile"]')).not.toBeNull();
     expect(host.querySelectorAll('.editable-parameter-table')).toHaveLength(3);
     expect(host.querySelectorAll('.point-paste textarea')).toHaveLength(2);
     expect(host.textContent).not.toContain('tangent scale');
     expect(host.textContent).not.toContain('Spline overshoot');
     expect(host.querySelector('input[aria-label$=" strength"]')).toBeNull();
     expect(host.querySelector<HTMLSelectElement>('select[aria-label="Station 1 shape"]')?.value).toBe('ellipse');
+    act(() => useDesignStore.getState().setFamily('OSSE'));
+    expect(host.querySelector('[aria-label="Generated bore profile"]')).toBeNull();
   });
 
   it('states the λ/6 mesh limit for the sweep this design will actually solve', () => {
@@ -2095,6 +2098,7 @@ describe('ParamPanel inventory UX', () => {
       ]);
     });
     const before = structuredClone(useDesignStore.getState().design.profile_h!.points);
+    const stationsBefore = structuredClone(useDesignStore.getState().design.cross_sections);
     const input = host.querySelector<HTMLInputElement>('[data-parameter-id="freeform.length"] input')!;
     act(() => {
       input.focus();
@@ -2104,6 +2108,8 @@ describe('ParamPanel inventory UX', () => {
     act(() => input.blur());
     expect(useDesignStore.getState().design.length).toBe(60);
     expect(useDesignStore.getState().design.profile_h!.points).toEqual(before);
+    expect(useDesignStore.getState().design.cross_sections).toEqual(stationsBefore);
+    expect(host.textContent).toContain('Changing length moves point and station positions proportionally.');
   });
 });
 

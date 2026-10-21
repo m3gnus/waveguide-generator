@@ -1,3 +1,5 @@
+import { httpErrorMessage } from './httpError';
+import { profileSamples, profileSections, type ProfileSample } from './profileSamples';
 import { deadlineFetch } from './deadlineFetch';
 import {
   NATIVE_FAMILIES,
@@ -279,7 +281,7 @@ export async function convertDesignToFreeform(
   design: DesignDocument,
   fetcher: typeof fetch = fetch,
 ): Promise<FreeformConversion> {
-  const profileText = await exportProfileCsv(design, fetcher);
+  const profileText = await exportProfileCsv(design, 0, undefined, 'freeform-conversion', fetcher).catch(() => null);
   if (profileText !== null) {
     let converted: FreeformConversion | null = null;
     try { converted = freeformFromProfileCsv(profileText, design); } catch { /* use endpoint fallback */ }
@@ -308,13 +310,17 @@ export async function convertDesignToFreeform(
   return { design: fallback, notice: athFreeformNotice(design) };
 }
 
-async function exportProfileCsv(design: DesignDocument, fetcher: typeof fetch): Promise<string | null> {
+/** One profile-export request for conversion and read-only inspection. */
+export async function exportProfileCsv(
+  design: DesignDocument, designRevision: number, signal?: AbortSignal,
+  baseName = 'waveguide', fetcher: typeof fetch = fetch,
+): Promise<string> {
   const response = await fetcher('/api/export/profiles?kind=profiles', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ design: serializeDesign(design), designRevision: 0, baseName: 'freeform-conversion' }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+    body: JSON.stringify({ design: serializeDesign(design), designRevision, baseName }),
   });
-  return response.ok ? response.text() : null;
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Profile export failed'));
+  return response.text();
 }
 
 type MorphMouth =
@@ -379,8 +385,8 @@ async function morphStations(
   // Without a morph-free export to compare against, blend over the whole length.
   let blend: MorphBlend | null = { start: 0, half: .5 };
   try {
-    const plainCsv = await exportProfileCsv(withoutMorph(design), fetcher);
-    if (plainCsv !== null) blend = measureMorphBlend(morphedCsv, plainCsv, design, converted.length ?? 0);
+    const plainCsv = await exportProfileCsv(withoutMorph(design), 0, undefined, 'freeform-conversion', fetcher);
+    blend = measureMorphBlend(morphedCsv, plainCsv, design, converted.length ?? 0);
   } catch { /* keep the whole-length blend */ }
   return blend ? stationsForMorph(mouth, converted, blend) : null;
 }
@@ -529,33 +535,6 @@ function stationsForMorph(mouth: MorphMouth, converted: DesignDocument, blend: M
   ];
 }
 
-function profileSections(text: string): number[][][] {
-  return text.split(/\r?\n\s*\r?\n/).map((section) => section.split(/\r?\n/).flatMap((line) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) return [];
-    const values = trimmed.split(';').map(Number);
-    return values.length === 3 && values.every(Number.isFinite) ? [values] : [];
-  })).filter((rows) => rows.length >= 2);
-}
-
-function axisSection(sections: number[][][], axis: 'H' | 'V'): number[][] {
-  return sections.reduce<{ rows: number[][]; ratio: number; magnitude: number }>((best, rows) => {
-    const magnitude = rows.reduce((sum, [x, y]) => sum + Math.abs(axis === 'H' ? x : y), 0) / rows.length;
-    const cross = rows.reduce((sum, [x, y]) => sum + Math.abs(axis === 'H' ? y : x), 0) / rows.length;
-    const ratio = cross / Math.max(magnitude, Number.EPSILON);
-    return ratio < best.ratio || (ratio === best.ratio && magnitude > best.magnitude) ? { rows, ratio, magnitude } : best;
-  }, { rows: [], ratio: Infinity, magnitude: -Infinity }).rows;
-}
-
-interface ProfileSample {
-  z: number;
-  r: number;
-}
-
-function meridianSamples(rows: number[][], scale: number): ProfileSample[] {
-  return rows.map(([x, y, z]) => ({ z: z * 10 / scale, r: Math.hypot(x, y) * 10 / scale }));
-}
-
 /**
  * The part of a meridian a FREEFORM profile can hold: its samples up to the
  * first one that steps back toward the throat.
@@ -606,11 +585,8 @@ function tangentAngle(points: ProfileSample[], mouth = false): number {
  * instead reads each radius on the way out, far inside the real mouth.
  */
 export function freeformFromProfileCsv(text: string, source: DesignDocument): FreeformConversion {
-  const sections = profileSections(text);
-  if (sections.length < 2) throw new Error('Profile export did not contain horizontal and vertical meridians.');
   const scale = Number.isFinite(source.scale) && source.scale > 0 ? source.scale : 1;
-  const horizontal = meridianSamples(axisSection(sections, 'H'), scale);
-  const vertical = meridianSamples(axisSection(sections, 'V'), scale);
+  const { H: horizontal, V: vertical } = profileSamples(text, scale);
   const unfoldedH = unfoldedSamples(horizontal);
   const unfoldedV = unfoldedSamples(vertical);
   if (unfoldedH.points.length < 2 || unfoldedV.points.length < 2) throw new Error('Profile export did not contain usable meridians.');
@@ -808,4 +784,11 @@ export async function exportGeometryToOutputFolder(
     destination ? 'confirm' : 'overwrite', destination, confirmReplacements,
   );
   return warning ? { ...written, warning } : written;
+}
+
+/** Read the same generated bore samples as the profile file export, without writing a file. */
+export async function inspectProfileSamples(
+  design: DesignDocument, designRevision: number, signal: AbortSignal, fetcher: typeof fetch = fetch,
+) {
+  return profileSamples(await exportProfileCsv(design, designRevision, signal, undefined, fetcher));
 }

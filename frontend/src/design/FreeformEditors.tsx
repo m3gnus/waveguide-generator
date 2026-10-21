@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useDesignStore, type CrossSectionStation, type DesignValue, type FreeformPoint } from '../stores/design';
 import type { ParameterDefinition } from './parameterRegistry';
 import { HelpTipHeading } from './HelpTip';
-import { NumberField } from './NumberField';
+import { formatBound, NumberField } from './NumberField';
 
 function numericCells(line: string, delimiter: string | RegExp, index: number, rejectEmpty = false): number[] {
   const values = line.split(delimiter).map((item) => (!rejectEmpty || item.trim()) ? Number(item.trim()) : NaN);
@@ -205,22 +205,28 @@ export function EditablePointTable({ field, points }: { field: ParameterDefiniti
   const plane = field.id.endsWith('H') ? 'H' : 'V';
   const path = `profile_${plane.toLowerCase()}.points`;
   const interior = points.slice(1, -1);
+  const beginDrag = useDesignStore((state) => state.beginDrag);
+  const endDrag = useDesignStore((state) => state.endDrag);
+  const [showDistance, setShowDistance] = useState(false);
+  const positionMessage = (index: number, z: number) => {
+    const t = z / length;
+    if (points.some((point, item) => item !== index + 1 && Math.abs(point.t - t) < 1e-9)) return 'Position must not match another point.';
+    if (z < 1 || z > length - 1 || t <= points[index].t || t >= points[index + 2].t) return 'Position must stay between the previous and next points (no crossing).';
+    return undefined;
+  };
   const update = (index: number, key: 'z' | 'r' | 'angle_deg', value: number | undefined) => {
     const next = structuredClone(points);
     const target = next[index + 1];
     if (value === undefined) delete target.angle_deg;
     else if (key === 'z') {
+      if (positionMessage(index, value)) return;
       target.t = value / length;
-      next.sort((left, right) => left.t - right.t);
     }
-    else target[key] = value as never;
+    else {
+      if ((key === 'r' && value <= 0) || (key === 'angle_deg' && (value <= -90 || value >= 90))) return;
+      target[key] = value as never;
+    }
     updateValue(path, next);
-  };
-  const duplicatePositionMessage = (index: number, value: number) => {
-    const t = value / length;
-    return points.some((point, pointIndex) => pointIndex !== index + 1 && Math.abs(point.t - t) < 1e-9)
-      ? 'Position must not match another point.'
-      : undefined;
   };
   const add = () => {
     if (interior.length >= 62) return;
@@ -235,11 +241,16 @@ export function EditablePointTable({ field, points }: { field: ParameterDefiniti
   };
   return <div className="editable-parameter-table" aria-label={field.label}>
     <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{interior.length} / 62 interior</span></div>
-    <table><thead><tr><th>z mm</th><th>r mm</th><th>angle</th><th /></tr></thead>
-      <tbody>{interior.map((point, index) => <tr key={`${index}-${point.t}-${length}`}>
-        <td><NumberField label={`${plane} point ${index + 1} z`} value={Math.round(point.t * length * 10_000) / 10_000} min={1} max={length - 1} step={.1} precision={4} unit="mm" validate={(value) => duplicatePositionMessage(index, value)} onCommit={(value) => update(index, 'z', value)} /></td>
-        <td><NumberField label={`${plane} point ${index + 1} radius`} value={point.r} min={0} step={.1} precision={4} unit="mm" validate={(value) => value <= 0 ? 'Must be greater than 0 mm.' : undefined} onCommit={(value) => update(index, 'r', value)} /></td>
-        <td><NumberField label={`${plane} point ${index + 1} angle`} value={point.angle_deg} min={-90} max={90} step={.1} precision={2} unit="°" optional validate={(value) => value <= -90 || value >= 90 ? 'Must be greater than −90 and less than 90°.' : undefined} onClear={() => update(index, 'angle_deg', undefined)} onCommit={(value) => update(index, 'angle_deg', value)} /></td>
+    <p className="position-note">Changing length moves point and station positions proportionally.</p>
+    <label><input type="checkbox" checked={showDistance} onChange={(event) => setShowDistance(event.target.checked)} /> Distance from previous point</label>
+    <table><thead><tr><th>z mm</th>{showDistance && <th>distance mm</th>}<th>r mm</th><th>angle</th><th /></tr></thead>
+      <tbody>{interior.map((point, index) => <tr key={index}>
+        <td><NumberField label={`${plane} point ${index + 1} z`} value={positionMm(point.t, length)} min={1} max={length - 1} step={.1} precision={4} unit="mm" validate={(value) => positionMessage(index, value)} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, 'z', value)} /></td>
+        {showDistance && <td><NumberField label={`${plane} point ${index + 1} distance from previous`} value={positionMm(point.t - points[index].t, length)} step={.1} precision={4} unit="mm"
+          validate={(value) => positionMessage(index, positionMm(points[index].t, length) + value)}
+          onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, 'z', positionMm(points[index].t, length) + value)} /></td>}
+        <td><NumberField label={`${plane} point ${index + 1} radius`} value={point.r} min={0} step={.1} precision={4} unit="mm" validate={(value) => value <= 0 ? 'Must be greater than 0 mm.' : undefined} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, 'r', value)} /></td>
+        <td><NumberField label={`${plane} point ${index + 1} angle`} value={point.angle_deg} min={-90} max={90} step={.1} precision={2} unit="°" optional validate={(value) => value <= -90 || value >= 90 ? 'Must be greater than −90 and less than 90°.' : undefined} onClear={() => update(index, 'angle_deg', undefined)} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, 'angle_deg', value)} /></td>
         <td><button aria-label={`Remove ${plane} point ${index + 1}`} onClick={() => updateValue(path, points.filter((_point, pointIndex) => pointIndex !== index + 1))}>−</button></td>
       </tr>)}</tbody>
     </table>
@@ -273,18 +284,32 @@ export function withStationShape(station: CrossSectionStation, shape: CrossSecti
   return { ...rest, shape };
 }
 
+/** Authored axial positions use the same normalized length axis for points and stations. */
+function positionMm(t: number, span: number): number { return t * span; }
+
+/** Canonicalize only an edited ratio, removing unit-conversion roundoff. */
+export function stationPosition(value: number, span: number): number {
+  return Number((value / span).toPrecision(15));
+}
+
 export function EditableStationTable({ field, stations }: { field: ParameterDefinition; stations: CrossSectionStation[] }) {
   const updateValue = useDesignStore((state) => state.updateValue);
+  const length = useDesignStore((state) => state.design.length ?? 120);
+  const beginDrag = useDesignStore((state) => state.beginDrag);
+  const endDrag = useDesignStore((state) => state.endDrag);
   const write = (index: number, replacement: CrossSectionStation) => {
     const next = stations.map((station, item) => item === index ? replacement : station).sort((a, b) => a.t - b.t);
     updateValue('cross_sections', next);
   };
-  const update = (index: number, patch: Partial<CrossSectionStation>) => write(index, { ...stations[index], ...patch });
+  const update = (index: number, patch: Partial<CrossSectionStation>) => {
+    if (patch.t !== undefined && positionMessage(index, patch.t)) return;
+    write(index, { ...stations[index], ...patch });
+  };
   const positionMessage = (index: number, value: number) => {
-    if (value <= 0 || value >= 1) return 'Must be greater than 0 and less than 1.';
-    return stations.some((station, item) => item !== index && Math.abs(station.t - value) < 1e-9)
-      ? 'Position must not match another station.'
-      : undefined;
+    if (value <= 0 || value >= 1) return 'Position must be between the throat and mouth.';
+    if (stations.some((station, item) => item !== index && Math.abs(station.t - value) < 1e-9)) return 'Position must not match another station.';
+    if (value <= stations[index - 1]?.t || value >= stations[index + 1]?.t) return 'Position must stay between the previous and next stations (no crossing).';
+    return undefined;
   };
   const add = () => {
     if (stations.length >= 32) return;
@@ -295,14 +320,22 @@ export function EditableStationTable({ field, stations }: { field: ParameterDefi
   };
   return <div className="editable-parameter-table" aria-label={field.label}>
     <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{stations.length} / 32 stations</span></div>
-    <table><thead><tr><th>t</th><th>shape</th><th>n / radius</th><th /></tr></thead><tbody>
-      {stations.map((station, index) => <tr key={`${index}-${station.t}`}>
-        <td><NumberField label={`Station ${index + 1} position`} value={station.t} min={0} max={1} step={.01} precision={4} disabled={index === 0 || index === stations.length - 1} validate={index === 0 || index === stations.length - 1 ? undefined : (value) => positionMessage(index, value)} onCommit={(value) => update(index, { t: value })} /></td>
+    <p className="position-note">Changing length moves point and station positions proportionally.</p>
+    <table><thead><tr><th>mm from throat / %</th><th>shape</th><th>n / radius</th><th /></tr></thead><tbody>
+      {stations.map((station, index) => <tr key={index}>
+        <td><NumberField label={`Station ${index + 1} position`} value={positionMm(station.t, length)} min={0} max={length} step={.1} precision={15} displayPrecision={4} unit="mm" disabled={index === 0 || index === stations.length - 1}
+          validate={index === 0 || index === stations.length - 1 ? undefined : (value) => positionMessage(index, stationPosition(value, length))} onBeginDrag={beginDrag} onEndDrag={endDrag}
+          onCommit={(value) => update(index, { t: stationPosition(value, length) })} />
+          <NumberField label={`Station ${index + 1} position percent`} value={positionMm(station.t, 100)} min={0} max={100} step={.1} precision={15} displayPrecision={4} unit="%" disabled={index === 0 || index === stations.length - 1}
+            validate={index === 0 || index === stations.length - 1 ? undefined : (value) => positionMessage(index, stationPosition(value, 100))} onBeginDrag={beginDrag} onEndDrag={endDrag}
+            onCommit={(value) => update(index, { t: stationPosition(value, 100) })} />
+          <span className="station-position-readout">{formatBound(positionMm(station.t, length), 4)} mm from the throat — {formatBound(positionMm(station.t, 100), 4)}%</span>
+        </td>
         <td><select aria-label={`Station ${index + 1} shape`} value={station.shape} onChange={(event) => write(index, withStationShape(station, event.target.value as CrossSectionStation['shape']))}><option value="circle">Circle (local H/V radii)</option><option value="ellipse">Ellipse</option>{index > 0 && <><option value="superellipse">Superellipse</option><option value="rounded_rectangle">Rounded rectangle</option></>}</select></td>
         {/* A value missing from a loaded file shows what the mesher will use: its
             default exponent, or an empty required corner radius, which it has no
             default for and rejects the station without. */}
-        <td>{station.shape === 'superellipse' ? <NumberField label={`Station ${index + 1} exponent`} value={station.exponent ?? MESHER_SUPERELLIPSE_EXPONENT} min={2} max={16} step={.1} precision={2} onCommit={(value) => update(index, { exponent: value })} /> : station.shape === 'rounded_rectangle' ? <NumberField label={`Station ${index + 1} corner radius`} value={station.corner_radius_mm} min={1} step={1} precision={2} unit="mm" onCommit={(value) => update(index, { corner_radius_mm: value })} /> : '—'}</td>
+        <td>{station.shape === 'superellipse' ? <NumberField label={`Station ${index + 1} exponent`} value={station.exponent ?? MESHER_SUPERELLIPSE_EXPONENT} min={2} max={16} step={.1} precision={2} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, { exponent: value })} /> : station.shape === 'rounded_rectangle' ? <NumberField label={`Station ${index + 1} corner radius`} value={station.corner_radius_mm} min={1} step={1} precision={2} unit="mm" onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, { corner_radius_mm: value })} /> : '—'}</td>
         <td><button aria-label={`Remove station ${index + 1}`} disabled={stations.length <= 2 || index === 0 || index === stations.length - 1} onClick={() => updateValue('cross_sections', stations.filter((_station, item) => item !== index))}>−</button></td>
       </tr>)}
     </tbody></table>

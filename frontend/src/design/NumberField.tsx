@@ -2,8 +2,8 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ChangeEvent, 
 import type { ExprNumber } from '../stores/design';
 import { useHelpTip } from './HelpTip';
 
-/** Bounds read as limits, not as readings: trailing zeros here are noise. */
-function formatBound(value: number, precision: number): string {
+/** Compact numeric labels omit trailing zeroes. */
+export function formatBound(value: number, precision: number): string {
   return Number(value.toFixed(precision)).toString();
 }
 
