@@ -424,6 +424,29 @@ describe('SketchCanvas with real slvs', () => {
     await act(async () => root.render(<SketchCanvas sketch={sketch} diagnosis={{ ...initialDiagnosis(sketch), dof: 0 }} references={[]} problems={[]}/>));
     expect(host.textContent).toContain('Fully constrained'); expect(host.querySelectorAll('.sketch-point.not-analysed')).toHaveLength(65);
   });
+  it.each(['failed', 'unsupported'] as const)('draws a small %s solve as not analysed, ignoring stale determination', async status => {
+    const sketch = base();
+    await act(async () => root.render(<SketchCanvas sketch={sketch} diagnosis={{ ...initialDiagnosis(sketch), status, dof: 0, pointDetermined: { p: true, q: false } }} references={[]} problems={[]}/>));
+    expect(host.querySelectorAll('.sketch-point.not-analysed')).toHaveLength(2);
+    expect(host.querySelector('.sketch-point.under, .sketch-point.determined')).toBeNull();
+    expect(host.querySelector('.sketch-entity.not-analysed')).not.toBeNull();
+    expect(host.textContent).not.toContain('Fully constrained');
+  });
+  it.each([64, 65])('uses the solver entity count at the %s-entity determination boundary, ignoring constraint count', async count => {
+    const sketch = importedSketch(Array.from({ length: count - 1 }, (_, i) => ({ id: `p${i}`, x: i, y: 0 })), [{ id: 'edge', kind: 'line', p1: 'p0', p2: 'p1' }]);
+    sketch.constraints = Array.from({ length: 20 }, (_, i) => ({ id: `measured${i}`, kind: 'distance', a: 'p0', b: 'p1', value: 1, driving: false }));
+    await act(async () => root.render(<SketchCanvas sketch={sketch} diagnosis={initialDiagnosis(sketch)} references={[]} problems={[]}/>));
+    expect(host.querySelectorAll('.sketch-point.not-analysed')).toHaveLength(count > 64 ? count - 1 : 0);
+    expect(host.querySelectorAll('.sketch-point.under')).toHaveLength(count <= 64 ? count - 1 : 0);
+  });
+  it('hides angle baselines and their private points from canvas and dimension picking', async () => {
+    const sketch = base();
+    sketch.entities[0].construction = true; sketch.entities[0].data = { angleBaseline: true };
+    await mount(sketch);
+    expect(host.querySelector('.sketch-entity')).toBeNull(); expect(host.querySelector('.sketch-point')).toBeNull();
+    await key('d'); await pointer(svg(), 'pointerdown', 320, 180);
+    expect(host.querySelector('.sketch-dimension-preview')).toBeNull();
+  });
   it('records drag frame timing only when the performance flag is enabled', async () => {
     const old = window.location.href;
     window.history.replaceState(null, '', '?sketchPerf=1');

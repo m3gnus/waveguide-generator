@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { SketchController, type Authoring } from './controller';
 import { applyCommand, importedSketch } from './ops';
 import { seed, applySourceCommand } from './adapters/sourceContour';
+import { seedPreset, presetDefaults } from './adapters/sourcePreset';
+import { expandedPreset } from './adapters/presetTestSupport';
 import * as sessions from './session';
 import { INITIAL_SOURCE } from '../design/sourceContourEditing';
 const base = () => importedSketch([{ id: 'p', x: 0, y: 0 }, { id: 'q', x: 10, y: 0 }], [{ kind: 'line', id: 'line', p1: 'p', p2: 'q' }]);
@@ -59,6 +61,25 @@ describe('authoring session transactions', () => {
       await controller.undo(); expect(controller.current.sketch).toBe(initial);
       await controller.undo(true); expect(controller.current.sketch.entities.filter(e => !e.construction)).toHaveLength(2);
     } finally { controller.destroy(); }
+  });
+  it('keeps an auto angle baseline through preset cleanup without surround depth', async () => {
+    const initial = seedPreset(expandedPreset('flat'), 'flat', presetDefaults.flat);
+    // A reversed datum cannot serve as the positive-X absolute angle baseline.
+    initial.sketch.entities = initial.sketch.entities.map(e => e.id === 'baffle' && e.kind === 'line' ? { ...e, p1: e.p2, p2: e.p1 } : e);
+    const c = new SketchController(initial, initial.meta.references, (s, command) => {
+      const result = applySourceCommand(s.sketch, s.meta, command);
+      return 'error' in result ? result : { sketch: result.sketch, meta: result.meta };
+    }, () => {});
+    try {
+      await c.command({ kind: 'addLine', from: 'rim', to: { x: 11, y: 3 } }, { angle: 45 });
+      const angle = c.current.sketch.constraints.find(c => c.kind === 'angle')!;
+      const baseline = c.current.sketch.entities.find(e => e.data && typeof e.data === 'object' && !Array.isArray(e.data) && e.data.angleBaseline)!;
+      expect(baseline).toBeDefined(); expect(baseline.data).toEqual({ angleBaseline: true });
+      expect(c.current.meta.preset!.dimensions.surround_depth_mm).toBeUndefined();
+      await c.command({ kind: 'setEntityName', id: 'piston', name: 'Diaphragm' });
+      expect(c.current.sketch.constraints).toContainEqual(angle);
+      expect(c.current.sketch.entities).toContainEqual(baseline);
+    } finally { c.destroy(); }
   });
   it('refuses held coordinate edits and conflicting dimensions without creating undo entries', async () => {
     const controller = generic();

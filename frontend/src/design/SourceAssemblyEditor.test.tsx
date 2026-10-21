@@ -150,6 +150,35 @@ describe('shared source and passage authoring', () => {
     expect(Object.keys(both.authoring)).toEqual(['horn', 'woofer']);
     expect(parseAssemblyDraft(JSON.stringify(both))).toEqual(INITIAL_ASSEMBLY);
   });
+  it('refuses future assembly envelopes before treating their contents as a bare draft', async () => {
+    const future = JSON.stringify({ ...INITIAL_ASSEMBLY, version: 'wg-source-assembly-file-v9', document: INITIAL_ASSEMBLY });
+    const message = 'This assembly file was saved by a newer version of WG.';
+    expect(() => parseAssemblyDraft(future)).toThrow(message);
+    storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY)); await mount();
+    const before = storage.getItem(''), authoringBefore = authoringStorage.getItem('');
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Load assembly draft"]')!;
+    Object.defineProperty(input, 'files', { value: [{ size: future.length, text: async () => future }] });
+    await act(async () => input.dispatchEvent(new Event('change', { bubbles: true }))); await settle();
+    expect(host.textContent).toContain(message);
+    expect(storage.getItem('')).toBe(before); expect(authoringStorage.getItem('')).toBe(authoringBefore);
+  });
+  it.each(['bare', 'v2'] as const)('loads %s with one JSON parse and keeps opaque newer authoring', async format => {
+    storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY)); await mount();
+    const newer = { version: 'wg-source-authoring-v9', opaque: { names: ['Future name'] } };
+    authoringStorage.setItem('', JSON.stringify({ horn: newer }));
+    const raw = JSON.stringify(format === 'bare' ? INITIAL_ASSEMBLY : {
+      version: 'wg-source-assembly-file-v2', document: INITIAL_ASSEMBLY, authoring: { horn: newer, woofer: { version: 'invalid' } },
+    });
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Load assembly draft"]')!;
+    Object.defineProperty(input, 'files', { value: [{ size: raw.length, text: async () => raw }] });
+    const parse = vi.spyOn(JSON, 'parse');
+    await act(async () => input.dispatchEvent(new Event('change', { bubbles: true }))); await settle();
+    expect(parse.mock.calls.filter(([text]) => text === raw)).toHaveLength(1);
+    expect(envelopeFor('horn')).toEqual(newer);
+    expect(JSON.parse(authoringStorage.getItem('')!).woofer).toBeUndefined();
+    expect(read()).toEqual(INITIAL_ASSEMBLY);
+    expect(assemblyDraftFile(INITIAL_ASSEMBLY).authoring.horn).toEqual(newer);
+  });
   it.each(['horn', 'woofer'] as const)('keeps a pending invalid %s sketch beside the last canonical document', async source => {
     storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY)); await mount();
     await act(async () => button(`Edit ${source} contour…`).click()); await settle();

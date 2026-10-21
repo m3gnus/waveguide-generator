@@ -1,6 +1,6 @@
 import type { Entity as SEntity, SlvsModule } from 'slvs';
 import { Adapter, capabilities, emulated, entity, equivalent, pointsOf, unsupported, type NativeResult } from './common';
-import { Unsupported, type DragTarget, type SolveOptions, type Sketch } from './types';
+import { DETERMINATION_ENTITY_LIMIT, Unsupported, type DragTarget, type SolveOptions, type Sketch } from './types';
 import { wasmInput } from './wasm';
 // Adapters share one module instance: each instance reserves a large block of address
 // space for its growable memory, so creating one per adapter exhausts the browser's
@@ -150,7 +150,7 @@ class SolveSpace extends Adapter {
   protected run(options: SolveOptions): NativeResult {
     return this.native(() => {
       const result = this.runNative(options);
-      if (options.mode !== 'full' || result.status !== 'ok' || this.sketch.entities.length > 64) return result;
+      if (options.mode !== 'full' || result.status !== 'ok' || this.sketch.entities.length > DETERMINATION_ENTITY_LIMIT) return result;
       const solved = { ...this.sketch, entities: this.sketch.entities.map(e => e.kind === 'point' ? { ...e, ...result.points[e.id] } : e) };
       const key = JSON.stringify(solved);
       if (this.determinationCache?.key !== key) {

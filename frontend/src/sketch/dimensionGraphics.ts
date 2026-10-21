@@ -3,7 +3,7 @@ import { arcGeometry } from './geometry';
 import type { XY } from './solver/types';
 import { formatValue } from './formatValue';
 
-export const dimensionHelper = (e: Sketch['entities'][number]) => !!e.data && typeof e.data === 'object' && !Array.isArray(e.data) && e.data.dimensionHelper === true;
+export const internalHelper = (e: Sketch['entities'][number]) => !!e.data && typeof e.data === 'object' && !Array.isArray(e.data) && (e.data.dimensionHelper === true || e.data.angleBaseline === true);
 export function dimensionName(c: Constraint): string {
   const names: Record<string, string> = { distance: 'Distance', distanceX: 'Horizontal distance', distanceY: 'Vertical distance',
     radius: 'Radius', angle: 'Angle', pointLineDistance: 'Point-line distance' };

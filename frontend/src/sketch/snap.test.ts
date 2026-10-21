@@ -48,6 +48,8 @@ describe('snap inference', () => {
     expect(added.sketch.constraints).toContainEqual(expect.objectContaining({ kind: 'coincident', b: 'a' }));
     sketch.entities[0].data = { dimensionHelper: true };
     expect(findSnap(sketch, [], { x: 3.14, y: 4.18 }, .01)?.glyph).not.toBe('endpoint');
+    sketch.entities[0].data = { angleBaseline: true };
+    expect(findSnap(sketch, [], { x: 3.14, y: 4.18 }, .01)?.glyph).not.toBe('endpoint');
     sketch.entities[0].data = undefined; sketch.entities[0].reference = true;
     expect(findSnap(sketch, [], { x: 3.14, y: 4.18 }, .01)?.glyph).not.toBe('endpoint');
   });

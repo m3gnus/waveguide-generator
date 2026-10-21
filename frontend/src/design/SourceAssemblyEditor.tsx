@@ -23,13 +23,12 @@ function readAssemblyAuthoring(): AssemblyAuthoring {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   } catch { return {}; }
 }
-function reconcileAuthoring(document: SourceAssemblyDocument) {
-  const saved = readAssemblyAuthoring();
+function reconcileAuthoring(document: SourceAssemblyDocument, saved: AssemblyAuthoring = readAssemblyAuthoring()) {
   const next: AssemblyAuthoring = {};
   for (const source of ['horn', 'woofer'] as const) {
     if (newerEnvelope(saved[source]) || document[source] && parseSourceAuthoring(saved[source], document[source])) next[source] = saved[source];
   }
-  if (JSON.stringify(next) !== JSON.stringify(saved)) authoringStorage.setItem('', JSON.stringify(next));
+  if (JSON.stringify(next) !== authoringStorage.getItem('')) authoringStorage.setItem('', JSON.stringify(next));
 }
 function flatSource(id: string, radius: number): SourceDocument {
   const document = structuredClone(INITIAL_SOURCE);
@@ -58,8 +57,14 @@ function sourceShape(value: SourceDocument): boolean {
     && !!d.weights && typeof d.weights === 'object' && !Array.isArray(d.weights) && Object.values(d.weights).every(Number.isFinite);
 }
 export function parseAssemblyDraft(raw: string): SourceAssemblyDocument {
-  const parsed = JSON.parse(raw);
-  const value = (parsed?.version === 'wg-source-assembly-file-v2' ? parsed.document : parsed) as SourceAssemblyDocument;
+  return parseAssemblyDraftValue(JSON.parse(raw));
+}
+function parseAssemblyDraftValue(parsed: unknown): SourceAssemblyDocument {
+  const envelope = parsed as { version?: unknown; document?: unknown } | null;
+  if (typeof envelope?.version === 'string' && envelope.version.startsWith('wg-source-assembly-file-') && envelope.version !== 'wg-source-assembly-file-v2') {
+    throw new Error('This assembly file was saved by a newer version of WG.');
+  }
+  const value = (envelope?.version === 'wg-source-assembly-file-v2' ? envelope.document : parsed) as SourceAssemblyDocument;
   if (!value || !sourceShape(value.horn) || (value.woofer !== null && !sourceShape(value.woofer)) || !value.dimensions
       || !Object.entries(INITIAL_ASSEMBLY.dimensions).every(([key, initial]) => {
         const entry = value.dimensions[key as keyof typeof value.dimensions];
@@ -74,6 +79,7 @@ export function parseAssemblyDraft(raw: string): SourceAssemblyDocument {
 export function assemblyDraftFile(document: SourceAssemblyDocument, saved: AssemblyAuthoring = readAssemblyAuthoring()) {
   const authoring: AssemblyAuthoring = {};
   for (const source of ['horn', 'woofer'] as const) {
+    if (newerEnvelope(saved[source])) { authoring[source] = saved[source]; continue; }
     const state = document[source] && parseSourceAuthoring(saved[source], document[source]);
     if (state) {
       const pending = (saved[source] as { pending?: boolean }).pending === true;
@@ -83,10 +89,9 @@ export function assemblyDraftFile(document: SourceAssemblyDocument, saved: Assem
   return { version: 'wg-source-assembly-file-v2' as const, document, authoring };
 }
 function loadAssemblyDraftFile(raw: string) {
-  const document = parseAssemblyDraft(raw);
   const parsed = JSON.parse(raw);
-  const file = assemblyDraftFile(document, parsed?.version === 'wg-source-assembly-file-v2' ? parsed.authoring ?? {} : readAssemblyAuthoring());
-  authoringStorage.setItem('', JSON.stringify(file.authoring));
+  const document = parseAssemblyDraftValue(parsed);
+  reconcileAuthoring(document, parsed?.version === 'wg-source-assembly-file-v2' ? parsed.authoring ?? {} : readAssemblyAuthoring());
   return document;
 }
 function readDraft(): SourceAssemblyDocument {

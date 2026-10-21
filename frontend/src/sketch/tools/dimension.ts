@@ -2,7 +2,7 @@ import type { Reference } from '../adapter';
 import type { NewConstraint, Point, Sketch } from '../model';
 import type { XY } from '../solver/types';
 import { arcGeometry, distance, projectToLine, projectToEntity } from '../geometry';
-import { dimensionHelper } from '../dimensionGraphics';
+import { internalHelper } from '../dimensionGraphics';
 import { geometryHit } from '../geometryHit';
 
 export type DimensionPick = { kind: 'point'; point: Point; id: string }
@@ -16,7 +16,7 @@ export function dimensionPicks(sketch: Sketch, ids: string[], references: Refere
     if (p) return [{ kind: 'point', id, point: p }];
     const e = sketch.entities.find(e => e.id === id);
     const reference = references.find(r => r.id === id);
-    if (!e || dimensionHelper(e) || reference?.kind === 'limit') return [];
+    if (!e || internalHelper(e) || reference?.kind === 'limit') return [];
     if (e.kind === 'line') return [{ kind: 'line', id, a: point(e.p1), b: point(e.p2), reference: reference?.kind === 'axis' || reference?.kind === 'baffle' ? reference.kind : e.reference ? 'context' : undefined }];
     if (e.kind === 'arc') return [{ kind: 'arc', id, ...arcGeometry(sketch, e) }];
     return [];
@@ -96,7 +96,7 @@ export function candidateDimension(picks: DimensionPick[], cursor: XY): Candidat
 }
 /** Geometry hit testing, including infinite axis/baffle lines. Points always win. */
 export function hitDimension(sketch: Sketch, references: Reference[], cursor: XY, tolerance: number, hidden: string[] = []): string | undefined {
-  const excluded = new Set([...hidden, ...sketch.entities.filter(e => e.reference || references.some(r => r.id === e.id) || dimensionHelper(e)).flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : e.kind === 'arc' ? [e.center, e.start, e.end] : [])]);
+  const excluded = new Set([...hidden, ...sketch.entities.filter(e => e.reference || references.some(r => r.id === e.id) || internalHelper(e)).flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : e.kind === 'arc' ? [e.center, e.start, e.end] : [])]);
   const points = sketch.points.filter(p => !excluded.has(p.id)).map(p => ({ kind: 'point', id: p.id, gap: distance(p, cursor) }));
   const curves = dimensionPicks(sketch, sketch.entities.map(e => e.id), references).map(p => {
     const at = p.kind === 'line' && (p.reference === 'axis' || p.reference === 'baffle') ? projectToLine(cursor, p.a, p.b) : projectToEntity(sketch, p.id, cursor.x, cursor.y);

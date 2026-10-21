@@ -195,6 +195,56 @@ describe('dimension pick → preview → place → type with the real solver', (
     await input('15'); await key('Enter', field()!);
     expect(current.constraints.find(c => c.id === 'readout')).toMatchObject({ value: 15 });
   });
+  it('closes a reference readout when Delete removes its selected dimension', async () => {
+    const initial = fixture('line');
+    initial.constraints.push({ id: 'readout', kind: 'distance', a: 'p', b: 'q', value: Math.hypot(10, 6), driving: false });
+    await mount(initial); await key('Escape');
+    await pointer('pointerdown', { x: 500, y: 100 }, host.querySelector('[data-constraint-id="readout"] text')!);
+    await pointer('pointerup', { x: 500, y: 100 }); await key('Enter');
+    expect(host.querySelector('[aria-label="Reference dimension readout"]')).not.toBeNull();
+    expect(document.activeElement).toBe(svg());
+    await key('Delete');
+    expect(current.constraints.some(c => c.id === 'readout')).toBe(false);
+    expect(host.querySelector('[data-dimension-dialog]')).toBeNull();
+    expect(svg()).not.toBeNull();
+    // Undo restores the dimension without resurrecting stale editing state.
+    await act(async () => controller.undo());
+    expect(current.constraints.some(c => c.id === 'readout')).toBe(true);
+    expect(host.querySelector('[data-dimension-dialog]')).toBeNull();
+  });
+  it.each([false, true].flatMap(driving => ['remove', 'undo'].map(path => ({ driving, path }))))('closes the dimension dialog (driving: $driving) on external $path', async ({ driving, path }) => {
+    await mount(fixture('line')); await key('Escape');
+    await act(async () => controller.constraint({ kind: 'distance', a: 'p', b: 'q', value: Math.hypot(10, 6), driving }));
+    const dimension = current.constraints.at(-1)!;
+    await act(async () => host.querySelector(`[data-constraint-id="${dimension.id}"] text`)!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    expect(host.querySelector('[data-dimension-dialog]')).not.toBeNull();
+    // The table and host use the same publication path, outside canvas event handlers.
+    await act(async () => path === 'undo' ? controller.undo() : controller.command({ kind: 'removeConstraint', id: dimension.id }));
+    expect(host.querySelector('[data-dimension-dialog]')).toBeNull();
+    await act(async () => controller.undo(path === 'undo'));
+    expect(host.querySelector('[data-dimension-dialog]')).toBeNull();
+  });
+  it('updates an open readout and changes its mode when driving is toggled elsewhere', async () => {
+    const initial = fixture('line');
+    initial.constraints.push({ id: 'readout', kind: 'distance', a: 'p', b: 'q', value: Math.hypot(10, 6), driving: false });
+    await mount(initial); await key('Escape');
+    await act(async () => host.querySelector('[data-constraint-id="readout"] text')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    await act(async () => controller.command({ kind: 'setDriving', id: 'readout', driving: true }));
+    expect(host.querySelector('[aria-label="Reference dimension readout"]')).toBeNull();
+    expect(field()).not.toBeNull(); expect(document.activeElement).toBe(field());
+    await act(async () => controller.dimension('readout', 15));
+    await act(async () => controller.command({ kind: 'setDriving', id: 'readout', driving: false }));
+    expect(field()).toBeNull();
+    const readout = host.querySelector('[aria-label="Reference dimension readout"]')!;
+    expect(readout.textContent).toContain('15.00 mm');
+    await act(async () => controller.command({ kind: 'setDriving', id: 'readout', driving: true }));
+    expect(Number(field()!.value)).toBeCloseTo(15);
+    await act(async () => controller.command({ kind: 'setDriving', id: 'readout', driving: false }));
+    const makeDriving = host.querySelector('[aria-label="Reference dimension readout"] button') as HTMLButtonElement;
+    await act(async () => makeDriving.focus()); await key('Escape', makeDriving);
+    expect(host.querySelector('[data-dimension-dialog]')).toBeNull();
+    expect(closeDialog).not.toHaveBeenCalled(); expect(document.activeElement).toBe(svg());
+  });
   it('cancels a pick before leaving the tool on the second Esc', async () => {
     await mount(fixture('line')); await pick('line');
     await pointer('pointermove', screen({ x: -4, y: 16 }));

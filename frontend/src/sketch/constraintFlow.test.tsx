@@ -8,6 +8,9 @@ import { constraintFor, rules, type SelectionConstraint } from './tools/constrai
 import { materialiseContext, type SketchContext } from './context';
 import type { Sketch } from './model';
 import type { XY } from './solver/types';
+import { seed, withSourceLimit } from './adapters/sourceContour';
+import { INITIAL_SOURCE } from '../design/sourceContourEditing';
+import { selectionConstraints } from './tools/constraints';
 import { sketchViewKey } from './viewPreferences';
 
 let host: HTMLDivElement, root: Root, current: Sketch, session: CanvasSession;
@@ -110,6 +113,18 @@ describe('constraint palette wiring', () => {
     const popup = host.querySelector('[aria-label="Selection actions"]')!;
     expect(popup.textContent).toContain('Construction'); expect(popup.textContent).not.toContain('Horizontal');
     await click('Horizontal'); expect(session.constraint).toHaveBeenCalledWith({ kind: 'horizontal', line: 'line' });
+  });
+  it('offers no constraints for the throat lock alone or exclusively fixed points', async () => {
+    const state = withSourceLimit(seed(INITIAL_SOURCE), { kind: 'throat', radius: 8, hard: true });
+    const lock = state.meta.references.find(r => r.kind === 'limit')!;
+    for (const selection of [[lock.id], state.sketch.entities.filter(e => e.reference).flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : [])]) {
+      await act(async () => root.render(<SketchCanvas sketch={state.sketch} session={session} references={state.meta.references} problems={[]} selection={selection}/>));
+      expect(selectionConstraints(state.sketch, selection, session.capabilities)).toEqual([]);
+      for (const label of ['Horizontal', 'Vertical', 'Fix', 'Coincident']) expect(button(label).disabled).toBe(true);
+    }
+    current.constraints.push({ kind: 'fix', id: 'held-a', point: 'a' });
+    await act(async () => root.render(<SketchCanvas sketch={current} session={session} references={[]} problems={[]} selection={['a']}/>));
+    expect(button('Fix').disabled).toBe(true); expect(button('Coincident').disabled).toBe(true);
   });
   it.each(sequences)('reuses complete or partial preselection for %s', async (kind, ids) => {
     await pick(ids[0]); await pointer({ x: 50, y: 30 }, 'pointerup');

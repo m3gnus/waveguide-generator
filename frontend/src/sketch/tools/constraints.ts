@@ -1,3 +1,4 @@
+import { referencePointIds } from '../context';
 import { constraintProblem, type NewConstraint, type Sketch } from '../model';
 import type { Capabilities, ConstraintKind } from '../solver/types';
 
@@ -34,7 +35,16 @@ export function constraintFor(sketch: Sketch, ids: string[], kind: SelectionCons
   const c = rules[kind].match(sketch, ids);
   return c && !constraintProblem(sketch, c) ? c : undefined;
 }
+/** A constraint needs editable geometry, even when preselection is only a partial pick. */
+export function selectionCanConstrain(sketch: Sketch, ids: string[]) {
+  if (!ids.length) return true;
+  const fixed = referencePointIds(sketch);
+  for (const c of sketch.constraints) if (c.kind === 'fix') fixed.add(c.point);
+  return ids.some(id => sketch.points.some(p => p.id === id && !fixed.has(id))
+    || sketch.entities.some(e => e.id === id && !e.reference));
+}
 export function selectionConstraints(sketch: Sketch, ids: string[], capabilities?: Capabilities) {
+  if (!selectionCanConstrain(sketch, ids)) return [];
   return (Object.entries(rules) as [SelectionConstraint, SelectionRule][]).flatMap(([kind, rule]) => {
     if (!capabilities || capabilities.constraints[kind].support === 'unsupported') return [];
     const constraint = constraintFor(sketch, ids, kind);

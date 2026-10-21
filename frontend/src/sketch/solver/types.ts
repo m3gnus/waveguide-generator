@@ -1,4 +1,6 @@
 /** Solver contract. Coordinates and lengths are mm; angles are radians. */
+/** Maximum solver entities (points and curves) for per-point determination. */
+export const DETERMINATION_ENTITY_LIMIT = 64;
 export interface XY { x: number; y: number }
 export interface Point extends XY { kind: 'point'; id: string; fixed?: boolean }
 export interface Line { kind: 'line'; id: string; p1: string; p2: string }

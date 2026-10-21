@@ -3,7 +3,7 @@ import type { NewConstraint, Sketch } from '../model';
 import type { XY } from '../solver/types';
 import { distance, projectToLine, projectToEntity } from '../geometry';
 import { geometryHit } from '../geometryHit';
-import { dimensionHelper } from '../dimensionGraphics';
+import { internalHelper } from '../dimensionGraphics';
 import { constraintFor, pickPatterns, rules, type SelectionConstraint } from './constraints';
 
 export interface ConstraintToolState { kinds: SelectionConstraint[]; ids: string[] }
@@ -31,7 +31,7 @@ export function hitConstraint(sketch: Sketch, references: Reference[], state: Co
   const hits: { kind: string; id: string; gap: number }[] = sketch.points.filter(p => !hidden.includes(p.id) && acceptsConstraintPick(sketch, state, p.id))
     .map(p => ({ kind: 'point', id: p.id, gap: distance(p, at) }));
   for (const e of sketch.entities) {
-    if (dimensionHelper(e) || !acceptsConstraintPick(sketch, state, e.id)) continue;
+    if (internalHelper(e) || !acceptsConstraintPick(sketch, state, e.id)) continue;
     const reference = references.find(r => r.id === e.id);
     let projected: XY;
     if (e.kind === 'line' && (reference?.kind === 'axis' || reference?.kind === 'baffle')) {
