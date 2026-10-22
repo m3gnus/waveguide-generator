@@ -547,9 +547,10 @@ else:
         claimed = handoffs.claim_request(handoff)
         assert claimed is not None and handoffs.acknowledge_handoff(claimed)
     assert handoffs.next_pending_handoff(ipc, bundle_root=workspace / 'wglink') is None
-    status.write_fusion_status(ipc, session_id='pinned-session', adapter_version='0.3.0', document_name=None, links=[],
+    status.write_fusion_status(ipc, session_id='pinned-session', adapter_version=ADDIN_VERSION, document_name=None, links=[],
         diagnostics={'lastRequest': {'channel': 'returnRequest', 'correlationId': 'pinned-return', 'outcome': 'failed'}})
 '''
+    script = script.replace('ADDIN_VERSION', repr(PIN['addinVersion']))
     def child(mode):
         result = subprocess.run([sys.executable, '-c', script, str(packaged), str(ipc), str(workspace), str(bundle), mode],
                                 capture_output=True, text=True, timeout=30)
