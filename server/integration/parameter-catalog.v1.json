@@ -3135,7 +3135,7 @@
       "step": 1,
       "precision": 2,
       "options": [],
-      "description": "Axial length shared by the horizontal and vertical profiles, spanned by both splines from throat to mouth. Interior anchors are stored as fractions of it, so changing it moves them all proportionally."
+      "description": "Axial distance from the throat to the mouth, shared by both profile planes."
     },
     {
       "id": "freeform.throatRadius",
@@ -3985,7 +3985,7 @@
           "current_only": true
         }
       ],
-      "description": "OS-SE carries the wall from throat to mouth. Existing native designs can retain the legacy circular arc, driven by the two arc controls below. The legacy arc ignores a0, k, s, n and q; Shape factor h and Profile rotation still apply. For a terminating arc on a new design, use OSSE-ARC."
+      "description": "OS-SE carries the wall from throat to mouth. Existing native designs can retain the legacy circular arc, driven by the two arc controls below. The legacy arc ignores a0, k, s, n and q; Shape factor h and Profile rotation still apply. For a terminating arc on a new design, select OSSE features → Mouth end → Terminating arc."
     },
     {
       "id": "osse.rotation",
