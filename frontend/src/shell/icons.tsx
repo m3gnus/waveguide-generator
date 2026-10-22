@@ -23,7 +23,13 @@ const paths: Record<IconName, string[]> = {
   'field-plane': ['m2.2 9.2 5.8-3.4 5.8 3.4L8 12.6Z', 'M3.4 5.8c1.1-1.4 2.2-1.4 3.3 0s2.2 1.4 3.3 0 2.2-1.4 3.3 0'],
   // A source at the pivot, the measurement arc swept out in front of it, and
   // three microphones standing on that arc.
-  'microphone-arc': ['M4 13.2A9.2 9.2 0 0 1 4 2.8', 'M3 8h.1', 'M4.7 3.5h.1M6.5 8h.1M4.7 12.5h.1'],
+  'microphone-arc': [
+    'M3.8 8a.8.8 0 1 1-1.6 0 .8.8 0 0 1 1.6 0Z',
+    'M9.3 3.4A4.8 4.8 0 0 1 12.4 6.5M12.4 9.5A4.8 4.8 0 0 1 9.3 12.6',
+    'M8.65 3.2a.85.85 0 1 1-1.7 0 .85.85 0 0 1 1.7 0Z',
+    'M13.45 8a.85.85 0 1 1-1.7 0 .85.85 0 0 1 1.7 0Z',
+    'M8.65 12.8a.85.85 0 1 1-1.7 0 .85.85 0 0 1 1.7 0Z',
+  ],
   box: ['M8 2.4 13.4 5.6V11L8 14.2 2.6 11V5.6Z', 'M8 8.2l5.4-2.6M8 8.2 2.6 5.6M8 8.2v6'],
   close: ['m4 4 8 8M12 4l-8 8'],
   expand: ['M6.2 3H3v3.2M9.8 13H13V9.8M3 6.2 6.3 3M13 9.8 9.7 13'],
