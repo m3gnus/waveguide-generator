@@ -89,3 +89,14 @@ describe('measuredTraceLabel', () => {
     expect(measuredTraceLabel('.frd')).toBe('Measured');
   });
 });
+
+it.each([';', '\t'])('reads comma decimals in measurement cells separated by %s', (separator) => {
+  const trace = parseMeasuredTrace(`100,5${separator}90,2${separator}-12,5\n200,5${separator}91,2${separator}-10,5`, 'measured.frd');
+  expect(trace.points).toEqual([
+    { frequencyHz: 100.5, splDb: 90.2, phaseDeg: -12.5 },
+    { frequencyHz: 200.5, splDb: 91.2, phaseDeg: -10.5 },
+  ]);
+});
+it.each(['100;90,000\n200;91,000', '100\t1.234,5\n200\t1 234', '100,0 90\n200,0 91'])('refuses ambiguous or grouped measured cells', (text) => {
+  expect(() => parseMeasuredTrace(text, 'ambiguous.frd')).toThrow(/unreadable rows/);
+});

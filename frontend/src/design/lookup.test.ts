@@ -88,3 +88,10 @@ it('restores the LOOKUP table from autosave', () => {
   expect(useDesignStore.getState().design).toEqual(lookup);
   resetDesignStore();
 });
+
+it.each(['z;r\n0;12,7\n120,5;140,2', 'z\tr\n0\t12,7\n120,5\t140,2'])('reads comma decimals in lookup cells with explicit separators', (text) => {
+  expect(parseLookupPaste(text)).toEqual([[0, 12.7], [120.5, 140.2]]);
+});
+it.each(['0;1,000\n120;140', '0\t1 234\n120\t140', '1,000;2,000\n120;140\n130;150', '0 12,7\n120 140'])('refuses ambiguous lookup rows without treating them as headers', (text) => {
+  expect(() => parseLookupPaste(text)).toThrow();
+});

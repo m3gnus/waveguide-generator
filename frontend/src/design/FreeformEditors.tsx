@@ -3,11 +3,13 @@ import { useDesignStore, type CrossSectionStation, type DesignValue, type Freefo
 import type { ParameterDefinition } from './parameterRegistry';
 import { HelpTipHeading } from './HelpTip';
 import { formatBound, NumberField } from './NumberField';
+import { numericRowCells, parseNumericRow } from './decimalInput';
 
-function numericCells(line: string, delimiter: string | RegExp, index: number, rejectEmpty = false): number[] {
-  const values = line.split(delimiter).map((item) => (!rejectEmpty || item.trim()) ? Number(item.trim()) : NaN);
-  if (values.some((value) => !Number.isFinite(value))) throw new Error(`Line ${index + 1} contains a non-numeric value.`);
-  return values;
+function numericCells(line: string, index: number): number[] {
+  return parseNumericRow(line).map((cell) => {
+    if (cell.kind !== 'number') throw new Error(`Line ${index + 1} contains a non-numeric value. ${cell.kind === 'error' ? cell.message : 'Enter a valid number.'}`);
+    return cell.value;
+  });
 }
 
 export interface ParsedPointPaste {
@@ -21,7 +23,7 @@ export function parsePointPaste(text: string): ParsedPointPaste {
   if (rows.length < 1) throw new Error('Paste at least one point row.');
   const compact = rows[0].includes(';');
   const parsed = rows.map((line, index) => {
-    const values = numericCells(line, compact ? ';' : /[\s,]+/, index);
+    const values = numericCells(line, index);
     if (compact && values.length !== 3) throw new Error(`Line ${index + 1} must contain z, H, and V.`);
     if (!compact && values.length === 4) throw new Error(`Line ${index + 1}: per-anchor strength was removed; tangent speed is now solved automatically.`);
     if (!compact && (values.length < 2 || values.length > 3)) throw new Error(`Line ${index + 1} must contain 2 or 3 columns.`);
@@ -82,12 +84,11 @@ export function parseLookupPasteRows(text: string): { pairs: { z: number; r: num
   const rows = text.split(/\r?\n/)
     .map((raw, index) => ({ text: raw.trim(), line: index + 1 }))
     .filter((row) => row.text && !row.text.startsWith('#'));
-  const delimiter = (line: string) => (line.includes(';') ? ';' : line.includes(',') ? ',' : /\s+/);
   // A header is a first row with no numeric cell at all: "z,r", "z (mm), r (mm)".
-  if (rows.length && rows[0].text.split(delimiter(rows[0].text)).every((cell) => !Number.isFinite(Number(cell.trim())) || !cell.trim())) rows.shift();
+  if (rows.length && numericRowCells(rows[0].text).cells.every((cell) => /[a-df-z]/i.test(cell))) rows.shift();
   if (rows.length < 2) throw new Error('lookupProfile must be an array of at least two [z, r] pairs');
   const pairs = rows.map((row) => {
-    const values = numericCells(row.text, delimiter(row.text), row.line - 1, true);
+    const values = numericCells(row.text, row.line - 1);
     if (values.length !== 2) throw new Error(`Line ${row.line} must contain exactly z and r in mm.`);
     return { z: values[0], r: values[1], line: row.line };
   });

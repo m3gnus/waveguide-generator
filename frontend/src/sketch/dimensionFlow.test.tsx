@@ -133,6 +133,27 @@ async function previewPlace(at: XY, kind: string) {
 }
 
 describe('dimension pick → preview → place → type with the real solver', () => {
+  it.each(['line', 'angle'])('accepts comma decimals in the %s dimension editor', async (kind) => {
+    await mount(fixture(kind));
+    await pick('line');
+    if (kind === 'angle') await pick('other');
+    await previewPlace(kind === 'angle' ? { x: 18, y: 9 } : { x: -4, y: 16 }, kind === 'angle' ? 'angle' : 'distance');
+    await input(kind === 'angle' ? '70,5' : '14,5');
+    await key('Enter', field()!);
+    expect(field()).toBeNull();
+    expect((current.constraints.at(-1) as { value: number }).value).toBeCloseTo(kind === 'angle' ? 70.5 * Math.PI / 180 : 14.5);
+  });
+
+  it.each(['20,000', '1,234.5', '1.234,5', '1 234'])('refuses %s without applying a dimension', async (text) => {
+    await mount(fixture('line')); await pick('line');
+    await previewPlace({ x: -4, y: 16 }, 'distance');
+    const before = current;
+    await input(text); await key('Enter', field()!);
+    expect(field()).not.toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toMatch(/Ambiguous: write|Write 1234.5/);
+    expect(current).toBe(before);
+  });
+
   it.each([
     ['line', ['line'], { x: -4, y: 16 }, 'distance', 14],
     ['points', ['p', 'q'], { x: 0, y: 16 }, 'distance', 14],

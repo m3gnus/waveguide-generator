@@ -1,3 +1,5 @@
+import { parseDecimalInput } from '../design/decimalInput';
+
 /**
  * Parsing for an explicitly typed frequency sweep.
  *
@@ -29,8 +31,9 @@ export function parseFrequencyList(text: string): FrequencyListParse {
   }
   const frequencies: number[] = [];
   for (const token of tokens) {
-    const value = Number(token);
-    if (!Number.isFinite(value)) return { frequencies: null, error: `"${token}" is not a number.` };
+    const parsed = parseDecimalInput(token, { allowCommaDecimal: false });
+    if (parsed.kind !== 'number') return { frequencies: null, error: `"${token}" is not a number.` };
+    const value = parsed.value;
     if (value <= 0) return { frequencies: null, error: `Frequencies must be above 0 Hz ("${token}").` };
     frequencies.push(value);
   }

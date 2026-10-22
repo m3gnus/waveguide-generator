@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ChangeEvent, type CompositionEvent, type KeyboardEvent, type PointerEvent } from 'react';
 import type { ExprNumber } from '../stores/design';
 import { useHelpTip } from './HelpTip';
+import { parseDecimalInput } from './decimalInput';
 
 /** Compact numeric labels omit trailing zeroes. */
 export function formatBound(value: number, precision: number): string {
@@ -33,6 +34,7 @@ interface NumberFieldProps {
   onClear?: () => void;
   expression?: ExprNumber;
   allowExpression?: boolean;
+  expressionTupleSize?: number;
   onCommitExpression?: (value: ExprNumber) => void;
   onBeginDrag?: () => void;
   onEndDrag?: () => void;
@@ -65,6 +67,7 @@ export function NumberField({
   onClear,
   expression,
   allowExpression = false,
+  expressionTupleSize,
   onCommitExpression,
   onBeginDrag,
   onEndDrag,
@@ -100,7 +103,9 @@ export function NumberField({
   commitCallback.current = onCommit;
   endDragCallback.current = onEndDrag;
   currentValue.current = value;
-  const parsed = Number(draft);
+  const parseEntry = (text: string) => parseDecimalInput(text, { allowExpression, tupleSize: expressionTupleSize });
+  const entry = parseEntry(draft);
+  const parsed = entry.kind === 'number' ? entry.value : NaN;
   /**
    * ATH designs carry formulas like `48.5 - 7*cos(2*p)^5 - 16*sin(p)^12` in
    * ordinary numeric fields. They cannot share a row with their label at rail
@@ -108,9 +113,9 @@ export function NumberField({
    * holding one switches to its own full-width line.
    */
   const rawExpression = expression?.raw?.trim() ?? '';
-  const holdsExpression = Boolean(rawExpression) && !Number.isFinite(Number(rawExpression));
+  const holdsExpression = Boolean(rawExpression) && parseEntry(rawExpression).kind === 'expression';
   const showEvaluatedExpression = holdsExpression && expression?.value != null;
-  const isExpression = allowExpression && draft.trim() !== '' && !Number.isFinite(parsed);
+  const isExpression = entry.kind === 'expression';
   // While editing, the switch is driven by expandFor() so it can wait for an IME
   // composition to end; otherwise a non-numeric draft is a formula.
   const formulaLayout = holdsExpression || (editing ? expandedDraft : isExpression);
@@ -134,7 +139,7 @@ export function NumberField({
         : `Must be at most ${formatBound(max, precision)}${unit ? ` ${unit}` : ''}.`)
     : undefined;
   const emptyMessage = empty && !optional ? 'This value is required.' : undefined;
-  const numberMessage = !empty && !isExpression && !Number.isFinite(parsed) ? 'Enter a valid number.' : undefined;
+  const numberMessage = !empty && entry.kind === 'error' ? entry.message : undefined;
   const validationMessage = draft.trim() && Number.isFinite(parsed) ? validate?.(parsed) : undefined;
   const draftMessage = rangeMessage ?? emptyMessage ?? numberMessage ?? validationMessage ?? roundedError;
   const draftInvalid = (empty && !optional) || (!empty && !isExpression && (!Number.isFinite(parsed) || outOfRange || Boolean(validationMessage)));
@@ -193,7 +198,7 @@ export function NumberField({
   };
 
   const expandFor = (next: string, selection: { start: number; end: number; direction: 'forward' | 'backward' | 'none' }) => {
-    const becomesExpression = allowExpression && next.trim() !== '' && !Number.isFinite(Number(next));
+    const becomesExpression = parseEntry(next).kind === 'expression';
     if (!formulaLayout && becomesExpression) pendingSelection.current = selection;
     if (becomesExpression) setExpandedDraft(true);
   };
@@ -224,6 +229,7 @@ export function NumberField({
     editBaseline.current = null;
     if (draft === baseline) { setDraft(displayed); return; }
     if (draftInvalid) {
+      if (entry.kind === 'error' && !empty) setRoundedError(entry.message);
       setDraft(displayed);
       return;
     }

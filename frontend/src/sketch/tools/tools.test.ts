@@ -91,3 +91,11 @@ describe('pure sketch tools', () => {
     queue.push(4); queue.flush(); expect(consumed).toEqual([3, 4]); queue.push(5); queue.cancel(); callback(); expect(consumed).toEqual([3, 4]);
   });
 });
+
+it('uses comma decimals for sketch line locks and explains refused grouping', () => {
+  const result = prospectiveLine({ x: 0, y: 0 }, { x: 10, y: 0 }, null, { length: '12,5', angle: '30,5' });
+  expect(result.dimensions).toEqual({ length: 12.5, angle: 30.5 });
+  expect(result.reason).toBeUndefined();
+  expect(prospectiveLine({ x: 0, y: 0 }, { x: 10, y: 0 }, null, { length: '20,000', angle: '' }).reason).toContain('Ambiguous: write 20000 or 20.0');
+  expect(prospectiveLine({ x: 0, y: 0 }, { x: 10, y: 0 }, null, { length: '10', angle: '1 234' }).reason).toContain('Write 1234.5');
+});

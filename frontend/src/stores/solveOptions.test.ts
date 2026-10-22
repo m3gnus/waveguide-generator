@@ -306,6 +306,8 @@ describe('explicit frequency lists', () => {
 
   it('accepts commas, spaces, and newlines as separators', () => {
     expect(parseFrequencyList('500, 630 800\n1000').frequencies).toEqual([500, 630, 800, 1000]);
+    expect(parseFrequencyList('2,5').frequencies).toEqual([2, 5]);
+    expect(parseFrequencyList('2.5,5.5').frequencies).toEqual([2.5, 5.5]);
     expect(parseFrequencyList(' 1234.5 ').frequencies).toEqual([1234.5]);
   });
 

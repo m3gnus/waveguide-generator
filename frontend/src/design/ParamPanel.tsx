@@ -567,6 +567,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
       value={typeof value === 'number' ? value : field.id === 'mesh.ath_rear_front_offset' ? 40 : field.id === 'mesh.ath_rear_step' ? 25 : field.path === 'enclosure.depth_margin_mm' ? 1 : optional ? undefined : 0}
       expression={field.path ? design._expressions?.[field.path] : undefined}
       allowExpression={fieldAcceptsExpression(field)}
+      expressionTupleSize={field.id === 'guide.superformula' ? 6 : undefined}
       unit={field.unit}
       min={field.min}
       exclusiveMin={field.exclusiveMin}

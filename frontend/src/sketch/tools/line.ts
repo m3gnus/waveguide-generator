@@ -1,3 +1,4 @@
+import { parseDecimalInput } from '../../design/decimalInput';
 import type { Command, PointRef } from '../commands';
 import type { Sketch } from '../model';
 import type { SnapResult } from '../snap';
@@ -43,8 +44,12 @@ export function prospectiveLine(from: XY | undefined, cursor: XY, snap: SnapResu
   typed?: { length: string; angle: string }): { endpoint: XY; snap: SnapResult | null; dimensions?: { length?: number; angle?: number }; reason?: string } {
   const target = snap ?? cursor;
   if (!from || !typed) return { endpoint: target, snap };
-  const length = typed.length.trim() ? Number(typed.length) : undefined;
-  const angle = typed.angle.trim() ? Number(typed.angle) : undefined;
+  const lengthEntry = typed.length.trim() ? parseDecimalInput(typed.length) : undefined;
+  const angleEntry = typed.angle.trim() ? parseDecimalInput(typed.angle) : undefined;
+  const error = [lengthEntry, angleEntry].find((entry) => entry?.kind === 'error');
+  if (error?.kind === 'error') return { endpoint: target, snap: null, reason: error.message };
+  const length = lengthEntry?.kind === 'number' ? lengthEntry.value : undefined;
+  const angle = angleEntry?.kind === 'number' ? angleEntry.value : undefined;
   if (length !== undefined && (!(length > 0) || !Number.isFinite(length)) || angle !== undefined && !Number.isFinite(angle))
     return { endpoint: target, snap: null, reason: 'Enter a positive length and a finite angle.' };
   if (length === undefined && angle === undefined) return { endpoint: target, snap };

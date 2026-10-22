@@ -24,6 +24,57 @@ describe('NumberField', () => {
     expect(input.value).toBe('');
   });
 
+  it.each([false, true])('commits comma decimals as numbers (expressions %s)', (allowExpression) => {
+    const commit = vi.fn(); const expression = vi.fn();
+    act(() => root.render(<NumberField label="Radius" value={10} precision={2} allowExpression={allowExpression}
+      onCommit={commit} onCommitExpression={expression}/>));
+    const input = host.querySelector('input')!;
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '12,5');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(host.querySelector('textarea')).toBeNull();
+    act(() => input.blur());
+    expect(commit).toHaveBeenCalledExactlyOnceWith(12.5);
+    expect(expression).not.toHaveBeenCalled();
+    act(() => root.render(<NumberField label="Radius" value={12.5} precision={2} allowExpression={allowExpression}
+      onCommit={commit} onCommitExpression={expression}/>));
+    expect(input.value).toBe('12.50');
+  });
+
+  it.each(['1,000', '20,000', '-3,500', '1,234.5', '1.234,5', '1 234'])('refuses %s before expression detection', (text) => {
+    const commit = vi.fn(); const expression = vi.fn();
+    act(() => root.render(<NumberField label="Radius" value={10} allowExpression onCommit={commit} onCommitExpression={expression}/>));
+    const input = host.querySelector('input')!;
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, text);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(host.querySelector('[role="alert"]')?.textContent).toMatch(/Ambiguous: write|Write 1234.5/);
+    act(() => input.blur());
+    expect(commit).not.toHaveBeenCalled();
+    expect(expression).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="alert"]')?.textContent).toMatch(/Ambiguous: write|Write 1234.5/);
+  });
+
+  it.each(['sf(4,12,1,1,1,1)', '1,1,4,2,3,4'])('preserves function arguments and SuperFormula tuples: %s', (raw) => {
+    const commit = vi.fn(); const expression = vi.fn();
+    act(() => root.render(<NumberField label="SuperFormula" value={0} allowExpression expressionTupleSize={6}
+      onCommit={commit} onCommitExpression={expression}/>));
+    act(() => {
+      const input = host.querySelector('input')!;
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, raw);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => host.querySelector('textarea')!.blur());
+    expect(expression).toHaveBeenCalledExactlyOnceWith({ raw, value: null });
+    expect(commit).not.toHaveBeenCalled();
+  });
+
   it('validates rounded commits and keyboard steps at a strict lower bound', () => {
     const commit = vi.fn();
     act(() => root.render(<NumberField label="Lip radius" value={.1} min={0} step={.1} precision={2}

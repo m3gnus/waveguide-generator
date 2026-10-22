@@ -1,3 +1,4 @@
+import { parseDecimalInput } from '../design/decimalInput';
 import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import { materialiseContext, referencePointIds, type ContextDrawingItem, type SketchContext } from './context';
@@ -788,8 +789,10 @@ export function SketchCanvas({ slots, workflow, scaleToFit, context, contextStal
         if (event.key === 'Escape') { event.preventDefault(); setEditing(undefined); svg.current?.focus({ preventScroll: true }); }
       }} onSubmit={event => {
         event.preventDefault(); if (dimensionApplying.current) return;
-        const value = Number(editing.value) * (editingDimension.kind === 'angle' ? Math.PI / 180 : 1);
-        if (!session || !editing.value.trim() || !Number.isFinite(value)) { setEditing({ ...editing, reason: 'Enter a finite number.' }); setRefusals(v => v + 1); return; }
+        const parsed = parseDecimalInput(editing.value);
+        if (parsed.kind !== 'number') { setEditing({ ...editing, reason: parsed.kind === 'error' ? parsed.message : 'Enter a finite number.' }); setRefusals(v => v + 1); return; }
+        const value = parsed.value * (editingDimension.kind === 'angle' ? Math.PI / 180 : 1);
+        if (!session || !Number.isFinite(value)) { setEditing({ ...editing, reason: 'Enter a finite number.' }); setRefusals(v => v + 1); return; }
         dimensionApplying.current = true;
         void run(async () => {
           try {

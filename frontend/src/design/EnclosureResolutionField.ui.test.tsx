@@ -8,11 +8,11 @@ import { PARAMETER_REGISTRY, fieldIsVisible } from './parameterRegistry';
 
 const field = PARAMETER_REGISTRY.find(({ id }) => id === 'enclosure.front_resolution')!;
 
-it('accepts one to four numbers and retains documented fallback values', () => {
+it('accepts one or exactly four numbers and retains documented fallback values', () => {
   expect(parseEnclosureResolution('8')).toBe(8);
-  expect(parseEnclosureResolution('8,12')).toEqual([8,12]);
+  expect(parseEnclosureResolution('8.5')).toBe(8.5);
   expect(parseEnclosureResolution('0,12,16,20')).toEqual([0,12,16,20]);
-  for (const invalid of ['', '8,', 'NaN', '8,Infinity', '8,12,16,20,24', '8,p']) expect(parseEnclosureResolution(invalid)).toBeUndefined();
+  for (const invalid of ['', '2,5', '8,12', '8,12,16', '1 234', '1.234,5', '8,', 'NaN', '8,Infinity', '8,12,16,20,24', '8,p']) expect(parseEnclosureResolution(invalid)).toBeUndefined();
 });
 
 it('round-trips new controls and raw quadrant spellings through client hydration', () => {

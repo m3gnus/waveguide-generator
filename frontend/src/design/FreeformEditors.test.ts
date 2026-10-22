@@ -152,3 +152,13 @@ describe('FREEFORM editor workflows', () => {
     ]);
   });
 });
+
+it.each(['0;1,27;1,27\n12,5;14,2;10,2', '0\t12,7\n125,5\t140,2'])('reads comma decimals in point cells with explicit separators', (text) => {
+  const parsed = parsePointPaste(text);
+  expect(parsed.points[0].r).toBe(12.7);
+  expect(parsed.points.at(-1)!.r).toBeCloseTo(text.includes(';') ? 142 : 140.2);
+  expect(parsed.importedLength).toBe(text.includes(';') ? 125 : 125.5);
+});
+it.each(['0;1,000;2\n12;14;10', '0\t1.234,5\n120\t140', '0 12,7\n120 140'])('refuses ambiguous or grouped point cells', (text) => {
+  expect(() => parsePointPaste(text)).toThrow();
+});

@@ -662,6 +662,25 @@ describe('ParamPanel inventory UX', () => {
     expect(serializeDesign(useDesignStore.getState().design)).toEqual(serializeDesign(loaded));
   });
 
+  it('preserves ATH SuperFormula tuple editing through the parameter panel', () => {
+    act(() => useDesignStore.getState().setFamily('OSSE'));
+    act(() => useDesignStore.getState().updateValues({ 'guiding_curve.curve_type': 2, 'guiding_curve.width': 100 }));
+    const group = host.querySelector<HTMLElement>('[data-section="Cross-section"]')!;
+    const toggle = group.querySelector<HTMLButtonElement>('button')!;
+    if (toggle.getAttribute('aria-expanded') === 'false') act(() => toggle.click());
+    const row = () => host.querySelector<HTMLElement>('[data-parameter-id="guide.superformula"]')!;
+    const raw = '1,1,4,2,3,4';
+    act(() => {
+      const input = row().querySelector('input')!;
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, raw);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => row().querySelector('textarea')!.blur());
+    expect(useDesignStore.getState().design._expressions?.['guiding_curve.superformula']?.raw).toBe(raw);
+    expect((serializeDesign(useDesignStore.getState().design).guiding_curve as Record<string, unknown>).superformula).toEqual({ value: null, raw });
+  });
+
   it('disables base section controls only while an OSSE guiding curve is active', () => {
     act(() => useDesignStore.getState().setFamily('OSSE'));
     const sectionInput = () => host.querySelector<HTMLInputElement>('[data-parameter-id="cross_section.exponent"] input')!;

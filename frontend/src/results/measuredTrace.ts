@@ -1,3 +1,5 @@
+import { parseNumericRow } from '../design/decimalInput';
+
 /**
  * Read a measured frequency response so it can be drawn beside a solve.
  *
@@ -31,18 +33,6 @@ export interface MeasuredTrace {
 
 const COMMENT_PREFIXES = ['*', ';', '#', '//'];
 
-/**
- * Whitespace, tab and comma. Comma is on neither REW's nor VituixCAD's list of
- * accepted separators, but files carrying it do exist, so it is split on --
- * with the field-count guard below standing in for the ambiguity: a
- * comma-decimal export splits into four or six fields and is rejected rather
- * than read as a curve with its digits in the wrong places.
- */
-const DELIMITER = /[\s,]+/;
-
-/** Deliberately stricter than `Number`, which reads '', '0x10' and 'Infinity'. */
-const NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
-
 function isComment(line: string): boolean {
   return COMMENT_PREFIXES.some((prefix) => line.startsWith(prefix));
 }
@@ -73,13 +63,13 @@ export function parseMeasuredTrace(text: string, filename: string): MeasuredTrac
     const line = rawLine.trim();
     if (!line || isComment(line)) continue;
 
-    const fields = line.split(DELIMITER);
-    if (fields.length < 2 || fields.length > 3 || !fields.every((field) => NUMBER.test(field))) {
+    const fields = parseNumericRow(line);
+    if (fields.length < 2 || fields.length > 3 || fields.some((field) => field.kind !== 'number')) {
       skipped += 1;
       continue;
     }
 
-    const [frequencyHz, splDb, phaseDeg] = fields.map(Number);
+    const [frequencyHz, splDb, phaseDeg] = fields.map((field) => field.kind === 'number' ? field.value : NaN);
     // Frequencies must ascend strictly: the chart's x axis is logarithmic, so a
     // zero or negative frequency has no position on it, and a repeated or
     // descending one means the file is not a single swept response.
