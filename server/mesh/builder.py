@@ -15,6 +15,7 @@ import logging
 import math
 import os
 import tempfile
+import time
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -29,7 +30,9 @@ from server.design.schema import DesignConfig, Expr
 from server.integration.mesher_identity import mesher_identity
 from server.platform.memory import PhysicalMemory, physical_memory
 from server.platform.temp_session import spawned_directory_root
-from server.preview.translate import design_to_mesher_config
+from server.preview.translate import design_to_mesher_config, outer_body_mode
+from server.preview import wall_check
+from server.preview.core import _cache_relevant_config, _recentred_preview_config
 from server.preview.errors import (
     _infinite_baffle_geometry_refusal as _infinite_baffle_geometry_refusal,
     mesher_error_message,
@@ -44,7 +47,12 @@ from server.contracts.geometry import (
 )
 
 from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
-from .child import run_mesh_build
+from .child import (
+    MesherChildError,
+    MesherCrashError,
+    run_mesh_build,
+    run_mesh_build as _run_wall_check,
+)
 from .integrity import (
     mesh_element_quality_report,
     mesh_integrity_report,
@@ -1173,6 +1181,35 @@ def _build_sync(
     }
 
 
+async def _preview_wall_advisory(
+    design: DesignConfig, result: dict[str, Any], cancel_cb: CancelCallback | None = None
+) -> None:
+    """Add a dense wall warning without touching the saved solve artifact."""
+    if outer_body_mode(design.root) != "freestanding":
+        return
+    began = time.perf_counter()
+    config = _cache_relevant_config(_recentred_preview_config(design))
+    cached, detail = wall_check.lookup(config)
+    checked = cached
+    if not cached:
+        try:
+            checked, detail = await _run_wall_check(wall_check.check_fine_wall, config, cancel_cb=cancel_cb)
+        except (MesherChildError, MesherCrashError):
+            logger.warning("Fine-preview wall check worker unavailable", exc_info=True)
+            checked, detail = False, None
+        if checked:
+            wall_check.remember(config, detail)
+    stats = result["stats"]
+    stats["preview_wall_check_ms"] = (time.perf_counter() - began) * 1000.0
+    stats["preview_wall_check_cache_hit"] = cached
+    stats["preview_wall_check_status"] = "warning" if detail else "clear" if checked else "unavailable"
+    if detail:
+        message = mesher_error_message(config, detail)
+        warnings = stats.setdefault("warnings", [])
+        if message not in warnings:
+            warnings.append(message)
+
+
 async def build_solver_mesh(
     design: DesignConfig | Mapping[str, Any],
     options: Any,
@@ -1251,6 +1288,8 @@ async def build_solver_mesh(
             if not warning.startswith("Solver mesh contains invalid")
             and not warning.startswith(SELF_INTERSECTION_WARNING_PREFIX)
         ]
+    await _preview_wall_advisory(validated, result, cancel_cb)
+    _check_cancel(cancel_cb)
     return result
 
 

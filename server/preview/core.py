@@ -27,6 +27,7 @@ from server.platform.gmsh_openmp import pin_gmsh_openmp_initial_thread
 from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES, FrameError, encode
 from server.preview.translate import design_to_mesher_config
 from server.preview.errors import mesher_error_message
+from server.preview import wall_check
 
 
 PROTOCOL_VERSION = 1
@@ -887,13 +888,23 @@ class PreviewProtocol:
                 "config": _cache_relevant_config(config),
             }
         )
-        geometry = self._preview_service.get_or_build(
-            cache_key,
-            lambda: builder(
-                config, preview_options(request.lod, curvature=request.curvature)
-            ),
-            size_of=_geometry_nbytes,
-        )
+        # Only production fine frames certify the solve advisory. Coarse and
+        # injected builders cannot establish the dense-preview wall outcome.
+        certify_wall = request.lod == "fine" and self._preview_builder is None
+        try:
+            geometry = self._preview_service.get_or_build(
+                cache_key,
+                lambda: builder(
+                    config, preview_options(request.lod, curvature=request.curvature)
+                ),
+                size_of=_geometry_nbytes,
+            )
+        except ValueError as exc:
+            if certify_wall:
+                wall_check.remember(_cache_relevant_config(config), str(exc))
+            raise
+        if certify_wall:
+            wall_check.remember(_cache_relevant_config(config), None)
         elapsed = (time.perf_counter() - began) * 1000.0
         return encode_preview_geometry(
             geometry,
