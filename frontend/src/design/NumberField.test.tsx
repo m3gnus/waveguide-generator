@@ -17,6 +17,13 @@ describe('NumberField', () => {
     host.remove();
   });
 
+  it('renders a stored null as an empty field instead of crashing', () => {
+    // Saved designs keep unset optionals (e.g. morph.target_exponent) as null.
+    act(() => root.render(<NumberField label="Target exponent" value={null} min={2} max={16} onCommit={() => {}} />));
+    const input = host.querySelector('input') as HTMLInputElement;
+    expect(input.value).toBe('');
+  });
+
   it('validates rounded commits and keyboard steps at a strict lower bound', () => {
     const commit = vi.fn();
     act(() => root.render(<NumberField label="Lip radius" value={.1} min={0} step={.1} precision={2}

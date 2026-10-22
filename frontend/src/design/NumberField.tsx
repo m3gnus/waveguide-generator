@@ -11,7 +11,8 @@ interface NumberFieldProps {
   label: string;
   symbol?: string;
   description?: string;
-  value?: number;
+  /** Saved designs store unset optional numbers as null; both mean "no value". */
+  value?: number | null;
   unit?: string;
   min?: number;
   /** The minimum itself is not allowed: the lowest accepted value is just above it. */
@@ -45,7 +46,7 @@ export function NumberField({
   label,
   symbol,
   description,
-  value,
+  value: storedValue,
   unit,
   min = -Infinity,
   exclusiveMin = false,
@@ -70,6 +71,7 @@ export function NumberField({
   revealId,
   placeholder,
 }: NumberFieldProps) {
+  const value = storedValue ?? undefined;
   const id = useId();
   const titled = symbol ? `${label} (${symbol})` : label;
   const help = useHelpTip({ title: titled, text: description, hint: 'Drag the label sideways to adjust.' });
