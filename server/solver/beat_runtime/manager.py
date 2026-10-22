@@ -20,6 +20,10 @@ class UnsupportedBackend(ValueError):
     """A caller selected a backend this runtime cannot launch."""
 
 
+class WorkerBusy(RuntimeError):
+    """An optional warmup must yield to the worker's current owner."""
+
+
 def _resolve_key(backend: str, *, julia_executable: str | None = None,
                 julia_threads: int | str = "auto", julia_project: Path | None = None,
                 julia_sysimage: Path | None = None, solver_script: Path | None = None,
@@ -154,6 +158,7 @@ class WorkerLease:
             if not self.client.holds(self) or self.finished or self.cancelled:
                 return
             self.cancelled = True
+            self.client.solved = False
             if self.client.mode == "child" and (self.busy or self.stream is not None):
                 error = None
                 actions = [self.client.worker.terminate]
@@ -191,6 +196,7 @@ class WorkerLease:
             with self._lock:
                 self.finished = True
                 if failed:
+                    self.client.solved = False
                     probe_cache_clear(notify=False)
                     # This outer lease still excludes every subsequent session.
                     try:
@@ -226,22 +232,26 @@ class ManagedWorker:
         self._changed = threading.Condition()
         self._lease: WorkerLease | None = None
         self._closed = False
+        self.solved = False
 
     @property
     def worker_info(self) -> dict | None:
         return self.worker.worker_info
 
-    def acquire(self, check: Callable[[], None], *, retry: bool = True) -> WorkerLease:
+    def acquire(self, check: Callable[[], None], *, retry: bool = True,
+                wait: bool = True) -> WorkerLease:
         try:
-            return self._acquire(check)
+            return self._acquire(check, wait=wait)
         except OwnershipClosed:
             if not retry or not self.unusable or self._replacement is None:
                 raise
             check()
-            return self._replacement().acquire(check, retry=False)
+            return self._replacement().acquire(check, retry=False, wait=wait)
 
-    def _acquire(self, check: Callable[[], None]) -> WorkerLease:
+    def _acquire(self, check: Callable[[], None], *, wait: bool = True) -> WorkerLease:
         with self._changed:
+            if not wait and self._lease is not None:
+                raise WorkerBusy("BEAT worker is solving; prewarm skipped")
             while self._lease is not None and not self._closed and not self.unusable:
                 check()
                 self._changed.wait(0.05)

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { isBeatBackendEngine, LEGACY_BEAT_ENGINE } from '../jobs/engineIdentity';
 import { withEditSignals } from './solveSettingsEdits';
 import { resetParkedImportedOptions } from './importedModel';
 import { createJSONStorage, persist } from 'zustand/middleware';
@@ -395,6 +396,19 @@ const SOLVE_OPTION_EDITS: ReadonlyArray<keyof SolveOptionsStore> = [
 
 export type { SolveOptionsStore };
 
+function requestEnginePrewarm(engine: string): void {
+  // The server owns availability, idempotence and cancellation of its warmup.
+  void fetch('/api/runtimes/beat/prewarm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ engine }),
+  }).catch(() => {});
+}
+
+function isBeatEngine(engine: string): boolean {
+  return engine === LEGACY_BEAT_ENGINE || isBeatBackendEngine(engine);
+}
+
 function solveOptionsState(
   set: (partial: Partial<SolveOptionsStore> | ((state: SolveOptionsStore) => Partial<SolveOptionsStore>)) => void,
   get: () => SolveOptionsStore,
@@ -408,8 +422,18 @@ function solveOptionsState(
     sweepEndHz: endHz ?? state.sweepEndHz,
     sweepCount: count ?? state.sweepCount,
   })),
-  setEngine: (engine) => set({ engine, ...(engine === 'auto' ? {} : { accuracy: 'fast' }) }),
-  setAccuracy: (accuracy) => set({ accuracy, engine: 'auto' }),
+  setEngine: (engine) => {
+    const previous = get().engine;
+    set({ engine, ...(engine === 'auto' ? {} : { accuracy: 'fast' }) });
+    if (engine !== previous && (isBeatEngine(engine) || isBeatEngine(previous))) {
+      requestEnginePrewarm(engine);
+    }
+  },
+  setAccuracy: (accuracy) => {
+    const previous = get().engine;
+    set({ accuracy, engine: 'auto' });
+    if (isBeatEngine(previous)) requestEnginePrewarm('auto');
+  },
   setAdaptiveFrequencySampling: (adaptiveFrequencySampling) => set({ adaptiveFrequencySampling }),
   setSolverMode: (solverMode) => set({ solverMode }),
   setSymmetry: (symmetry) => set({ symmetry }),

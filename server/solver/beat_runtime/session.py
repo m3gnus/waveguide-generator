@@ -102,7 +102,7 @@ class SolveSession:
     def submit(self, client: ManagedWorker, payload: Mapping[str, Any], *,
                negotiate: Callable[[dict | None, dict, str], Any] | None = None,
                status_callback: Callable[[str], None] | None = None,
-               operation: str = "solve") -> None:
+               operation: str = "solve", wait_for_worker: bool = True) -> None:
         if self.request_path is None or self._submitted or self._closed:
             raise RuntimeError("Session must be entered and submitted only once")
         self._submitted = True
@@ -116,7 +116,8 @@ class SolveSession:
         if self.cancellation_callback is not None:
             self._start_monitor()
         try:
-            lease = client.acquire(self._check)
+            lease = (client.acquire(self._check) if wait_for_worker
+                     else client.acquire(self._check, wait=False))
             with self._lock:
                 self._lease = lease
             self._check()
@@ -168,6 +169,8 @@ class SolveSession:
                 if kind == "result":
                     self._results += 1
                 if kind in {"completed", "cancelled", "failed"}:
+                    if kind == "completed":
+                        self._lease.client.solved = True
                     self._lease.finish(kind)
                     if self._error is not None:
                         raise self._error

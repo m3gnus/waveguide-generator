@@ -399,7 +399,9 @@ async def bempp_worker_prewarm(
 
 
 async def beat_worker_prewarm(
-    engine_registry: EngineRegistry, settings: object | None = None
+    engine_registry: EngineRegistry, settings: object | None = None, *,
+    requested: str | None = None,
+    cancellation_callback: Callable[[], None] | None = None,
 ) -> None:
     """Warm the BEAT Julia worker once the engine to warm is known.
 
@@ -439,6 +441,10 @@ async def beat_worker_prewarm(
         return is_beat_engine, preparation_in_flight, prewarm_beat_worker_for_engine
 
     is_beat_engine, preparation_in_flight, warm = await asyncio.to_thread(load_warmup)
+    if cancellation_callback is not None:
+        from functools import partial
+
+        warm = partial(warm, cancellation_callback=cancellation_callback)
 
     if os.environ.get("WG2_SOLVER_WARMUP") != "0" and await asyncio.to_thread(preparation_in_flight):
         logging.getLogger("wg.solver.warmup").info(
@@ -450,6 +456,12 @@ async def beat_worker_prewarm(
             # for it, so keep waiting until its revision has been published too.
             await engine_registry.capabilities()
             await asyncio.sleep(0.1)
+
+    if requested is not None:
+        # An explicit picker change uses the same backend hook as startup.
+        # Availability is checked by that hook before it obtains a worker.
+        await asyncio.to_thread(warm, requested)
+        return
 
     await worker_prewarm(
         engine_registry,
@@ -656,7 +668,7 @@ def create_app(
             )
         )
 
-    async def prewarm_beat_worker() -> None:
+    async def prewarm_beat_worker(engine: str | None = None) -> None:
         """Schedule the BEAT worker prewarm alongside the BEMPP one.
 
         Registered by default for the same reason: the work happens outside
@@ -664,14 +676,47 @@ def create_app(
         workers with a bounded wait, including their persistent hosts.
         """
 
-        application.state.beat_prewarm_task = asyncio.create_task(
-            _run_solver_prewarm(
-                "BEAT worker",
-                lambda: beat_worker_prewarm(
-                    engine_registry, getattr(application.state, "settings", None)
-                ),
+        current = getattr(application.state, "beat_prewarm_task", None)
+        if current is not None and not current.done():
+            if getattr(application.state, "beat_prewarm_engine", None) == engine:
+                return
+            application.state.beat_prewarm_cancel.set()
+            current.cancel()
+        if engine is not None and not (engine == "beat" or engine.startswith("beat-")):
+            return
+        import threading
+
+        cancelled = threading.Event()
+        application.state.beat_prewarm_cancel = cancelled
+        application.state.beat_prewarm_engine = engine
+
+        def check_cancelled() -> None:
+            runtime = getattr(application.state, "jobs_runtime", None)
+            if cancelled.is_set() or (runtime is not None and runtime.running_job_ids):
+                from server.solver.beat_runtime.session import SessionCancelled
+
+                raise SessionCancelled("BEAT prewarm cancelled")
+
+        async def run_prewarm() -> None:
+            runtime = getattr(application.state, "jobs_runtime", None)
+            while runtime is not None and runtime.running_job_ids:
+                await asyncio.sleep(0.1)
+            if engine is None:
+                from server.solver.warmup import persisted_engine_preference
+
+                application.state.beat_prewarm_engine = await asyncio.to_thread(
+                    persisted_engine_preference, getattr(application.state, "settings", None)
+                )
+            await beat_worker_prewarm(
+                engine_registry, getattr(application.state, "settings", None),
+                requested=engine, cancellation_callback=check_cancelled,
             )
+
+        application.state.beat_prewarm_task = asyncio.create_task(
+            _run_solver_prewarm("BEAT worker", run_prewarm)
         )
+
+    application.state.prewarm_beat_worker = prewarm_beat_worker
 
     from .solver.beat_runtime.provider import warn_removed_provider
 
@@ -693,6 +738,9 @@ def create_app(
         deadline = loop.time() + _BEAT_SHUTDOWN_TIMEOUT_SECONDS
         task = getattr(application.state, "beat_prewarm_task", None)
         if task is not None:
+            cancelled = getattr(application.state, "beat_prewarm_cancel", None)
+            if cancelled is not None:
+                cancelled.set()
             task.cancel()
             done, _ = await asyncio.wait(
                 {task}, timeout=max(0.0, deadline - loop.time())

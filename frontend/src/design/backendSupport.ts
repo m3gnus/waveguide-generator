@@ -1,5 +1,8 @@
 import type { SymmetryMode } from '../stores/solveOptions';
 import { plannedEngineNames, type EngineCapability, type EngineSelection } from '../jobs/actions';
+import { isBeatBackendEngine, LEGACY_BEAT_ENGINE } from '../jobs/engineIdentity';
+
+export { isBeatBackendEngine, LEGACY_BEAT_ENGINE } from '../jobs/engineIdentity';
 
 export type BackendIdentity = string | EngineCapability | null;
 
@@ -128,14 +131,6 @@ export function plannedBackendCapabilities(
     if (capability && !planned.includes(capability)) planned.push(capability);
   }
   return planned;
-}
-
-/** The engine name WG advertised while BEAT's backends were one entry. */
-export const LEGACY_BEAT_ENGINE = 'beat';
-
-/** Whether `name` is one of BEAT's per-backend engines. */
-export function isBeatBackendEngine(name: string): boolean {
-  return name.toLowerCase().startsWith('beat-');
 }
 
 /**

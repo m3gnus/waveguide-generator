@@ -73,7 +73,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 
 log = logging.getLogger("wg.solver.warmup")
@@ -202,7 +202,7 @@ def _warm_metal() -> None:
     solve(str(WARMUP_MESH), config)
 
 
-def _warm_beat(backend: str) -> None:
+def _warm_beat(backend: str, *, cancellation_callback: Callable[[], None] | None = None) -> bool:
     """Start and exercise the BEAT Engine's persistent Julia worker.
 
     BEAT is the one engine whose cost was never being paid off the user's
@@ -236,7 +236,9 @@ def _warm_beat(backend: str) -> None:
     from .beat_runtime.warmup import warm_up
 
     with beat_warmup_recorded():
-        warm_up(beat_backend=backend, mode="tiny")
+        options = ({"cancellation_callback": cancellation_callback, "idle_only": True}
+                   if cancellation_callback is not None else {})
+        return warm_up(beat_backend=backend, mode="tiny", **options)
 
 
 def warm_bempp_in_this_process(status: Mapping[str, object]) -> None:
@@ -481,7 +483,9 @@ def persisted_engine_preference(settings: object | None) -> str | None:
     return engine.strip().lower() or None
 
 
-def prewarm_beat_worker_for_engine(engine: str | None) -> bool:
+def prewarm_beat_worker_for_engine(
+    engine: str | None, *, cancellation_callback: Callable[[], None] | None = None,
+) -> bool:
     """Warm the BEAT Julia worker for the backend this host will actually solve on.
 
     The sibling of ``prewarm_bempp_worker_for_engine``, and registered the same
@@ -519,6 +523,16 @@ def prewarm_beat_worker_for_engine(engine: str | None) -> bool:
         return False
     began = time.monotonic()
     try:
+        if cancellation_callback is not None:
+            cancellation_callback()
+            # A named backend must be provisioned before it can be warmed.
+            # Readiness reads proof/state only; this never prepares a runtime.
+            from .official_beat import production_statuses
+
+            status = production_statuses(backend=backend).get(backend, {}) if backend else _warmup_beat_status()
+            if not status.get("available"):
+                log.info("BEAT worker prewarm skipped: %s", status.get("reason"))
+                return False
         if backend is None:
             # A stored preference written before the backends became separately
             # selectable, which the registry could not map to an available
@@ -531,7 +545,15 @@ def prewarm_beat_worker_for_engine(engine: str | None) -> bool:
                 return False
             backend = beat_adapter.resolve_beat_backend(status)
         log.info("BEAT worker prewarm starting on the %s backend", backend)
-        _warm_beat(backend)
+        if cancellation_callback is None:
+            _warm_beat(backend)
+        else:
+            # A cancelled selection can still own admission while its session
+            # monitor retires the warmup. Wait off-thread for that lease to
+            # drain, so BEAT -> Metal -> BEAT does not leave the final pick cold.
+            while not _warm_beat(backend, cancellation_callback=cancellation_callback):
+                cancellation_callback()
+                time.sleep(0.05)
     except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
         log.info(
             "BEAT worker prewarm failed after %.1f s: %s", time.monotonic() - began, exc

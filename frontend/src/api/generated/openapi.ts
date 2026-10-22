@@ -1857,6 +1857,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runtimes/beat/prewarm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Prewarm Runtime */
+        post: operations["prewarm_runtime_api_runtimes_beat_prewarm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runtimes/beat/{backend}/prepare": {
         parameters: {
             query?: never;
@@ -3653,6 +3670,11 @@ export interface components {
             space_l?: components["schemas"]["Expr"] | null;
             space_r?: components["schemas"]["Expr"] | null;
             space_t?: components["schemas"]["Expr"] | null;
+        };
+        /** EnginePrewarmRequest */
+        EnginePrewarmRequest: {
+            /** Engine */
+            engine: string;
         };
         /**
          * EngineSubstitution
@@ -9755,6 +9777,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    prewarm_runtime_api_runtimes_beat_prewarm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnginePrewarmRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

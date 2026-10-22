@@ -826,7 +826,7 @@ def test_worker_prewarm_setup_failures_are_logged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture, engine: str,
 ) -> None:
-    async def failed_setup(*_args):
+    async def failed_setup(*_args, **_kwargs):
         raise ImportError("optional solver import failed")
 
     monkeypatch.setattr(f"server.app.{engine}_worker_prewarm", failed_setup)

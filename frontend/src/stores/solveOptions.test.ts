@@ -17,6 +17,41 @@ import {
   useSolveOptionsStore,
 } from './solveOptions';
 
+describe('engine selection prewarm', () => {
+  it('schedules both parametric and imported BEAT selections without awaiting the server', async () => {
+    const fetcher = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}));
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      resetSolveOptionsStore();
+      useImportedSolveOptionsStore.setState({ engine: 'auto' });
+      useSolveOptionsStore.getState().setEngine('metal');
+      expect(fetcher).not.toHaveBeenCalled();
+      useSolveOptionsStore.getState().setEngine('beat-metal');
+      useSolveOptionsStore.getState().setEngine('beat-metal');
+      useImportedSolveOptionsStore.getState().setEngine('beat-cpu');
+      useSolveOptionsStore.getState().setEngine('metal');
+      expect(fetcher.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).engine))
+        .toEqual(['beat-metal', 'beat-cpu', 'metal']);
+      expect(fetcher).toHaveBeenCalledWith('/api/runtimes/beat/prewarm', expect.objectContaining({ method: 'POST' }));
+      expect(useSolveOptionsStore.getState().engine).toBe('metal');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps engine selection usable when background prewarm fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    try {
+      resetSolveOptionsStore();
+      useSolveOptionsStore.getState().setEngine('beat-metal');
+      await Promise.resolve();
+      expect(useSolveOptionsStore.getState().engine).toBe('beat-metal');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('solve and directivity options', () => {
   beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); });
 

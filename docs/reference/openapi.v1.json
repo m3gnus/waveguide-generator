@@ -3847,6 +3847,19 @@
         "title": "EnclosureConfig",
         "type": "object"
       },
+      "EnginePrewarmRequest": {
+        "properties": {
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          }
+        },
+        "required": [
+          "engine"
+        ],
+        "title": "EnginePrewarmRequest",
+        "type": "object"
+      },
       "EngineSubstitution": {
         "description": "The engine the request asked for, and the one standing in for it.\n\nPresent only when a stored selection named an engine this host cannot run.\n`requested` is left exactly as the caller sent it, because the selection is\nhost-local UI state that should re-engage untouched the day that engine\nbecomes available here.",
         "properties": {
@@ -17066,6 +17079,48 @@
         "tags": [
           "Runs"
         ]
+      }
+    },
+    "/api/runtimes/beat/prewarm": {
+      "post": {
+        "operationId": "prewarm_runtime_api_runtimes_beat_prewarm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnginePrewarmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Prewarm Runtime Api Runtimes Beat Prewarm Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prewarm Runtime"
       }
     },
     "/api/runtimes/beat/{backend}/prepare": {

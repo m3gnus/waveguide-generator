@@ -16,7 +16,17 @@ class RuntimePreparationResponse(BaseModel):
     state: Literal["preparing"] = "preparing"
 
 
+class EnginePrewarmRequest(BaseModel):
+    engine: str
+
+
 def mount_runtime_preparation(application: FastAPI) -> None:
+    @application.post("/api/runtimes/beat/prewarm", status_code=202)
+    async def prewarm_runtime(selection: EnginePrewarmRequest) -> dict[str, str]:
+        # Schedule only. Probe, admission and compilation stay off the HTTP loop.
+        await application.state.prewarm_beat_worker(selection.engine)
+        return {"state": "scheduled"}
+
     @application.post("/api/runtimes/beat/{backend}/prepare", status_code=202,
                       response_model=RuntimePreparationResponse,
                       responses={409: {"description": "A BEAT runtime preparation is already running."},

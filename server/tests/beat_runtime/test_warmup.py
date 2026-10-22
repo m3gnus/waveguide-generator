@@ -215,3 +215,51 @@ def test_tiny_probe_failure_before_iteration_explicitly_closes_events(runtime_fa
     with pytest.raises(RuntimeError, match="before iteration"):
         warmup.warm_up(mode="tiny")
     assert closed == [True]
+
+
+def test_optional_prewarm_yields_to_active_lease_and_reuses_completed_probe(runtime_factory):
+    make, key, _ = runtime_factory
+    runtime = make()
+    client = runtime.get_worker()
+    lease = client.acquire(lambda: None)
+    try:
+        assert warmup.warm_up(mode="tiny", idle_only=True) is False
+        assert client.holds(lease) and not lease.cancelled
+        assert not any(e["type"] == "submitted" for e in events(key))
+    finally:
+        lease.close()
+    assert warmup.warm_up(mode="tiny", idle_only=True)
+    assert warmup.warm_up(mode="tiny", idle_only=True)
+    assert [e["type"] for e in events(key)].count("submitted") == 1
+
+
+def test_selection_cancel_retires_only_its_warmup(runtime_factory, monkeypatch, tmp_path):
+    make, key, _ = runtime_factory
+    monkeypatch.setenv("TEST_PROBE_GATE", str(tmp_path / "never"))
+    runtime = make()
+    cancelled = threading.Event()
+    errors = []
+
+    def check():
+        if cancelled.is_set():
+            raise RuntimeError("selection changed")
+
+    def work():
+        try:
+            warmup.warm_up(mode="tiny", idle_only=True, cancellation_callback=check)
+        except RuntimeError as exc:
+            errors.append(str(exc))
+
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    try:
+        wait_until(lambda: any(e["type"] == "reading" for e in events(key)))
+        cancelled.set()
+        thread.join(3)
+        assert not thread.is_alive() and errors
+        wait_until(lambda: any(e["type"] == "terminated" for e in events(key)))
+        assert runtime.get_worker() is not None
+    finally:
+        cancelled.set()
+        (tmp_path / "never").touch()
+        thread.join(3)
