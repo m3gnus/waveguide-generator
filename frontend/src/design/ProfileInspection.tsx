@@ -26,7 +26,8 @@ export function profileChartOption(samples: ProfileSamples, plane: Plane, width:
   return {
     animation: false,
     grid: { left: 55, top: 30, width: (zMax - zMin) * pixelsPerMm, height: rMax * pixelsPerMm, containLabel: false },
-    legend: { textStyle: { color: tokens.foreground } },
+    // Top right, clear of both axis names: the r label sits top left and the z label below the axis.
+    legend: { top: 0, right: 0, textStyle: { color: tokens.foreground } },
     tooltip: { trigger: 'axis', valueFormatter: (value) => `${Number(value).toFixed(3)} mm` },
     xAxis: { type: 'value', name: 'z (mm)', nameLocation: 'middle', nameGap: 25, min: zMin, max: zMax, ...axes(tokens), nameTextStyle: { color: tokens.foreground } },
     yAxis: { type: 'value', name: 'r (mm)', min: 0, max: rMax, ...axes(tokens), nameTextStyle: { color: tokens.foreground } },
