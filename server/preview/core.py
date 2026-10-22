@@ -26,6 +26,7 @@ from server.integration.mesher_identity import mesher_identity
 from server.platform.gmsh_openmp import pin_gmsh_openmp_initial_thread
 from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES, FrameError, encode
 from server.preview.translate import design_to_mesher_config
+from server.preview.errors import mesher_error_message
 
 
 PROTOCOL_VERSION = 1
@@ -525,6 +526,8 @@ def _compute_value_error_fields(request: _Request, error: ValueError) -> dict[st
     """
 
     message = str(error)
+    if request.design is not None:
+        message = mesher_error_message(lambda: design_to_mesher_config(request.design), message)
     if request.kind == "preview" and message.startswith(
         "FREEFORM morph to the rectangle target produces a non-convex outline"
     ):

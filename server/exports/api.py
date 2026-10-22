@@ -14,6 +14,8 @@ from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from server.preview.errors import mesher_error_message
+from server.preview.translate import design_to_mesher_config
 from server.cadlink.identity import CadLink, SaveIdentity, design_hash
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES
 from server.cadlink.store import CadLinkStore
@@ -190,12 +192,13 @@ def _headers(
     return headers
 
 
-def _export_error(exc: Exception) -> HTTPException:
+def _export_error(exc: Exception, design: DesignConfig | None = None) -> HTTPException:
+    detail = str(exc) if design is None else mesher_error_message(lambda: design_to_mesher_config(design), str(exc))
     if isinstance(exc, (ValueError, TypeError)):
-        return HTTPException(status_code=422, detail=str(exc))
+        return HTTPException(status_code=422, detail=detail)
     if isinstance(exc, (ImportError, RuntimeError, sqlite3.OperationalError)):
-        return HTTPException(status_code=503, detail=str(exc))
-    return HTTPException(status_code=500, detail=f"Export failed: {exc}")
+        return HTTPException(status_code=503, detail=detail)
+    return HTTPException(status_code=500, detail=f"Export failed: {detail}")
 
 
 def _app_version() -> str:
@@ -388,7 +391,7 @@ def _export_wglink_sync(
     try:
         _refuse_ath_step(request.design)
     except ValueError as exc:
-        raise _export_error(exc) from exc
+        raise _export_error(exc, request.design) from exc
     workspace_root = workspace_root.resolve()
     if not workspace_root.is_dir():
         raise HTTPException(status_code=409, detail=unavailable_detail)
@@ -452,7 +455,7 @@ def _export_wglink_sync(
     except HTTPException:
         raise
     except Exception as exc:
-        raise _export_error(exc) from exc
+        raise _export_error(exc, request.design) from exc
 
     result = _wglink_response(row, identity)
     result.update(_finish_publication(store, row))
@@ -483,7 +486,7 @@ async def export_step(
             surface = await build_step(request.design)
             content, warning = surface.step_text, surface.warning
     except Exception as exc:
-        raise _export_error(exc) from exc
+        raise _export_error(exc, request.design) from exc
     # Both bodies size themselves and both can end up on a grid that missed the
     # target or was never measured against it. The file is still served -- an
     # export is never refused for this -- and the note rides with it, exactly as
@@ -507,7 +510,7 @@ async def export_stl(request: ExportRequest) -> Response:
     try:
         result = await build_stl(request.design, request.model_name)
     except Exception as exc:
-        raise _export_error(exc) from exc
+        raise _export_error(exc, request.design) from exc
     if result.warning:
         logger.warning("STL export sizing: %s", result.warning)
     return Response(
@@ -527,7 +530,7 @@ async def export_profiles(
     try:
         content = await asyncio.to_thread(build_profiles, request.design, kind)
     except Exception as exc:
-        raise _export_error(exc) from exc
+        raise _export_error(exc, request.design) from exc
     suffix = "profiles" if kind == "profiles" else "slices"
     payload = content.encode("utf-8")
     return Response(
