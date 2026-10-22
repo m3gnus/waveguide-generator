@@ -17,6 +17,7 @@ import { combineSpecEffective, channelDriverPresent, channelDriverWire, driverEd
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetDriverLibraryStore, useDriverLibraryStore } from '../stores/driverLibrary';
 import { hydrateDesignDocument } from '../api/designIo';
+import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, type OsseFeatures } from './osseFeatures';
 import { NATIVE_FAMILIES, designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -289,7 +290,8 @@ describe('ParamPanel inventory UX', () => {
   it('stacks long selects and text while keeping short selects inline', () => {
     expect(host.querySelector('#family')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(false);
     act(() => useDesignStore.getState().replaceDocument(designForFamily('OSSE-ADAPTER-CONTROLS')));
-    expect(host.querySelector('#family')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(true);
+    expect(host.querySelector('#family')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(false);
+    expect(host.querySelector('#osse-feature-mouth')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(true);
     act(() => resetDesignStore());
     expect(host.querySelector('#outer-body-mode')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(true);
     act(() => useDesignStore.getState().updateValue('morph.target_shape', 1));
@@ -778,8 +780,9 @@ describe('ParamPanel inventory UX', () => {
     const loaded = hydrateDesignDocument(serializeDesign(designForFamily(family)));
     act(() => useDesignStore.getState().replaceDocument(loaded));
     const picker = host.querySelector<HTMLSelectElement>('#family')!;
-    expect([...picker.options].map((option) => option.value)).toEqual(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', family]);
-    expect(serializeDesign(useDesignStore.getState().design)).toEqual(serializeDesign(loaded));
+    expect([...picker.options].map((option) => option.value)).toEqual(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...(family === 'SOURCE-DISK' ? [family] : [])]);
+    expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(JSON.stringify(serializeDesign(loaded)));
+    expect(useDesignStore.getState().design.formula).toBe(family);
     const scale = host.querySelector<HTMLInputElement>(family === 'SOURCE-DISK' ? '[data-parameter-id="native.source.radius_mm"] input' : '[data-parameter-id="native.scale"] input')!;
     act(() => scale.focus());
     act(() => {
@@ -792,7 +795,15 @@ describe('ParamPanel inventory UX', () => {
       ? { source_body: { ...loaded.source_body, radius_mm: 1.25 } } : { scale: 1.25 }) });
     expect(serializeDesign(hydrateDesignDocument(edited))).toEqual(edited);
     expect(toSolveDesign(useDesignStore.getState().design)).toEqual(edited);
-    expect(picker.value).toBe(family);
+    expect(picker.value).toBe(family === 'SOURCE-DISK' ? family : 'OSSE');
+    const features = osseFeatures(family);
+    if (features) for (const [key, value] of Object.entries(features)) {
+      const select = host.querySelector<HTMLSelectElement>(`#osse-feature-${key}`)!;
+      expect(select.value).toBe(value);
+      for (const option of select.options) {
+        expect(option.disabled).toBe(!osseFormula({ ...features, [key]: option.value } as OsseFeatures));
+      }
+    }
     expect(host.querySelector('[data-parameter-id^="native."] input')).not.toBeNull();
     expect(host.querySelector('#outer-body-mode')).toBeNull();
     expect(host.querySelector('[data-parameter-id="common.s1"]')).toBeNull();
@@ -808,11 +819,81 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).not.toContain('Auto resolves to');
     act(() => root.render(withQueryClient(<ParamPanel tab="geometry" />)));
     const selector = host.querySelector<HTMLSelectElement>('#family')!;
-    act(() => { selector.value = 'OSSE'; selector.dispatchEvent(new Event('change', { bubbles: true })); });
+    act(() => useDesignStore.getState().setFamily('OSSE'));
     expect([...selector.options].map((option) => option.value)).toEqual(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM']);
     act(() => useDesignStore.getState().undo());
-    expect(selector.value).toBe(family);
+    expect(selector.value).toBe(family === 'SOURCE-DISK' ? family : 'OSSE');
     expect(serializeDesign(useDesignStore.getState().design)).toEqual(edited);
+  });
+
+  it.each([
+    ['throat', 'authored', 'OSSE-ADAPTER'],
+    ['throat', 'controls', 'OSSE-ADAPTER-CONTROLS'],
+    ['mouth', 'roundover', 'OSSE-ROUNDOVER'],
+    ['mouth', 'arc', 'OSSE-ARC'],
+    ['axial', 'on', 'OSSE-AXIAL'],
+  ] as const)('selects %s = %s, returns to plain OSSE and undoes both transitions', (key, value, formula) => {
+    const original = { ...designForFamily('OSSE'), L: 181, r0: 14, a: 46, a0: 12, k: 3, scale: 1.2 };
+    act(() => useDesignStore.getState().replaceDocument(original));
+    const choose = (choice: string) => {
+      const select = host.querySelector<HTMLSelectElement>(`#osse-feature-${key}`)!;
+      act(() => { select.value = choice; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    };
+    choose(value);
+    const changed = useDesignStore.getState().design;
+    expect(changed).toMatchObject({ formula, L: 181, r0: 14, a: 46, a0: 12, k: 3, scale: 1.2, s: 0 });
+    expect(host.textContent).toContain('Undo restores the complete previous design.');
+    choose(key === 'throat' ? 'none' : key === 'mouth' ? 'plain' : 'off');
+    expect(useDesignStore.getState().design).toMatchObject({ formula: 'OSSE', L: 181, r0: 14, a: 46, a0: 12, k: 3, scale: 1.2 });
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design).toEqual(changed);
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design).toEqual(original);
+    act(() => useDesignStore.getState().redo());
+    expect(useDesignStore.getState().design).toEqual(changed);
+  });
+
+  it('allows authored adapter + axial scale and refuses unsupported combinations even for a dispatched event', () => {
+    act(() => useDesignStore.getState().replaceDocument(designForFamily('OSSE-ADAPTER')));
+    const choose = (key: string, value: string) => {
+      const select = host.querySelector<HTMLSelectElement>(`#osse-feature-${key}`)!;
+      act(() => { select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    };
+    const adapter = useDesignStore.getState().design.throat_adapter;
+    choose('axial', 'on');
+    expect(useDesignStore.getState().design.formula).toBe('OSSE-ADAPTER-AXIAL');
+    expect(useDesignStore.getState().design.throat_adapter).toEqual(adapter);
+    for (const selector of ['#osse-feature-throat option[value="controls"]', '#osse-feature-mouth option[value="arc"]', '#osse-feature-mouth option[value="roundover"]']) {
+      const option = host.querySelector<HTMLOptionElement>(selector)!;
+      expect(option.disabled).toBe(true);
+      expect(option.textContent).toContain(OSSE_FEATURE_CONFLICT);
+    }
+    choose('mouth', 'arc');
+    expect(useDesignStore.getState().design.formula).toBe('OSSE-ADAPTER-AXIAL');
+    choose('throat', 'none');
+    expect(useDesignStore.getState().design.formula).toBe('OSSE-AXIAL');
+    choose('axial', 'off');
+    expect(useDesignStore.getState().design.formula).toBe('OSSE');
+    act(() => useDesignStore.getState().replaceDocument(designForFamily('OSSE-ROUNDOVER')));
+    expect(host.querySelector<HTMLOptionElement>('#osse-feature-axial option[value="on"]')!.disabled).toBe(true);
+    expect(host.querySelector<HTMLOptionElement>('#osse-feature-throat option[value="authored"]')!.disabled).toBe(true);
+    expect(host.querySelector<HTMLOptionElement>('#osse-feature-mouth option[value="arc"]')!.disabled).toBe(false);
+  });
+
+  it('finds and reveals OSSE features from the parameter palette without changing the design', async () => {
+    act(() => useDesignStore.getState().replaceDocument(designForFamily('OSSE')));
+    const before = JSON.stringify(serializeDesign(useDesignStore.getState().design));
+    const entry = buildParameterPaletteEntries('OSSE').find((item) => item.id === 'parametric-control-osse-features')!;
+    expect(entry.matches?.('terminating arc')).toBe(true);
+    act(() => entry.run());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)); });
+    expect(host.querySelector('#osse-feature-throat')).not.toBeNull();
+    expect(document.activeElement?.id).toBe('osse-feature-throat');
+    expect(host.textContent).not.toContain('No parameter labels');
+    expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(before);
+    expect(buildParameterPaletteEntries('SOURCE-DISK').some((item) => item.id === entry.id)).toBe(false);
+    act(() => useDesignStore.getState().replaceDocument(designForFamily('R-OSSE')));
+    expect(host.querySelector('.parameter-empty')?.textContent).toContain('No parameter labels');
   });
 
   it.each(NATIVE_FAMILIES)('hides incompatible %s controls even with active saved values and search', (family) => {

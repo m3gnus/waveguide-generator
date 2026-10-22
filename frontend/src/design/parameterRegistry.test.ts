@@ -142,7 +142,7 @@ describe('complete parameter registry', () => {
       } else if (original.id === 'osse.throat_profile') {
         expect(description).toContain('Circular arc profiles are retained for editing existing designs.');
         expect(description).not.toContain('OSSE-ARC');
-        expect(oldDescription).toContain('For a terminating arc on a new design, use OSSE-ARC.');
+        expect(oldDescription).toContain('For a terminating arc on a new design, select OSSE features → Mouth end → Terminating arc.');
       } else {
         expect(description, original.id).toBe(original.section === 'Frequency Sweep' ? oldDescription?.replaceAll('Solve options', 'Frequency sweep') : oldDescription);
       }

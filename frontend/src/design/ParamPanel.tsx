@@ -1,3 +1,4 @@
+import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, OSSE_SWITCH_NOTICE, type OsseFeatures } from './osseFeatures';
 import { FreeformProfileInspection } from './ProfileInspection';
 import { registerParameterPanel } from './parameterPanelValidity';
 import { nativeCadLimitation, nativeSymmetryLimitation } from './nativeFamilies';
@@ -80,6 +81,7 @@ import {
   PARAMETRIC_CONTROLS,
   PARAMETRIC_CONTROL_DESCRIPTORS,
   parametricControlMatchesQuery,
+  parametricControlIsAvailable,
 } from './parametricControlRegistry';
 import './paramPanel.css';
 import { MeshImportPanel } from './MeshImportPanel';
@@ -1214,6 +1216,35 @@ function CadSimulationEmpty() {
   return <div className="cad-mode-empty" role="status"><b>Prepare CAD geometry to unlock these inputs</b><span>Drivers, crossover, sweep, directivity, solve options, and mesh detail appear here after CAD Link brings the finished geometry back from {cadApplication}.</span><button className="primary" onClick={() => workspaceNavigation.navigate('cadlink')}>Open CAD Link setup</button></div>;
 }
 
+const osseChoices = [
+  { key: 'throat', label: 'Throat', options: [['none', 'None'], ['authored', 'Adapter (authored)'], ['controls', 'Adapter (controls)']] },
+  { key: 'mouth', label: 'Mouth end', options: [['plain', 'Plain'], ['roundover', 'Roundover'], ['arc', 'Terminating arc']] },
+  { key: 'axial', label: 'Axial scale', options: [['off', 'Off'], ['on', 'On']] },
+] as const;
+
+function OsseFeatureChoices({ design, onChange }: { design: DesignDocument; onChange: (family: DesignFamily) => void }) {
+  const features = osseFeatures(design.formula)!;
+  return <fieldset className="osse-features" data-control-reveal-id={PARAMETRIC_CONTROLS.osseFeatures.reveal.id}>
+    <legend>OSSE features</legend>
+    <p className="section-note">Choose one feature, or an authored adapter with axial scale. Native features use circular OSSE bodies; switching is undoable.</p>
+    {osseChoices.map(({ key, label, options }) => <SelectRow key={key}>
+      <label htmlFor={`osse-feature-${key}`}>{label}</label>
+      <select id={`osse-feature-${key}`} value={features[key]} onChange={(event) => {
+        const formula = osseFormula({ ...features, [key]: event.target.value } as OsseFeatures);
+        if (formula && formula !== design.formula) onChange(formula);
+      }}>
+        {options.map(([value, name]) => {
+          const disabled = !osseFormula({ ...features, [key]: value } as OsseFeatures);
+          return <option key={value} value={value} disabled={disabled} title={disabled ? OSSE_FEATURE_CONFLICT : undefined}>
+            {name}{disabled ? ` — ${OSSE_FEATURE_CONFLICT}` : ''}
+          </option>;
+        })}
+      </select>
+    </SelectRow>)}
+    {design.formula !== 'OSSE' && <p className="section-note">{OSSE_FEATURE_CONFLICT}; authored adapter + axial scale is supported. Clear the active choice before selecting another feature.</p>}
+  </fieldset>;
+}
+
 export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
@@ -1270,8 +1301,9 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const cadSectionMatches = (section: CadControlSection) => matchingCadSections.has(section);
   const matchingParametricSections = useMemo(() => new Set(PARAMETRIC_CONTROL_DESCRIPTORS
     .filter((descriptor) => workspaceMode === 'parametric' && descriptor.tab === tab)
+    .filter((descriptor) => parametricControlIsAvailable(descriptor, design.formula))
     .filter((descriptor) => parametricControlMatchesQuery(descriptor, query))
-    .map((descriptor) => descriptor.section)), [query, tab, workspaceMode]);
+    .map((descriptor) => descriptor.section)), [design.formula, query, tab, workspaceMode]);
 
   useEffect(() => {
     const apply = () => {
@@ -1381,23 +1413,28 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const modelTypeSection = <Section
     title="Model Type"
     description="Select the horn family that defines the profile equation and its primary dimensions."
-    summary={design.formula}
-    forceOpen={false}
+    summary={osseFeatures(design.formula) ? 'OSSE' : design.formula}
+    forceOpen={searching}
   >
     <SelectRow className="family-row">
       <label htmlFor="family">Family</label>
-      <select id="family" value={design.formula} onChange={(event) => {
+      <select id="family" value={osseFeatures(design.formula) ? 'OSSE' : design.formula} onChange={(event) => {
         const family = event.target.value as DesignFamily;
+        if (family === 'OSSE' && osseFeatures(design.formula)) return;
         setConversionNotice(null);
         if (family === 'FREEFORM' && design.formula !== 'FREEFORM') setFreeformChoice(true);
         else { setFreeformChoice(false); setFamily(family); setConversionNotice(family === 'LOOKUP' ? 'LOOKUP starts with a conical table defining the whole meridian (12.7 mm throat to 140 mm mouth over 120 mm, scaled by the current Scale). Edit or paste [z, r] samples in Profile. Analytic coefficients, throat extensions, slots, adapters and imported ATH geometry controls were removed.' : sectionResetNotice(family)); }
       }}>
         <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option>FREEFORM</option>
-        {(design.formula === 'LOOKUP' || isNativeFamily(design.formula)) && <option value={design.formula}>
+        {(design.formula === 'LOOKUP' || design.formula === 'SOURCE-DISK') && <option value={design.formula}>
           {design.formula === 'LOOKUP' ? 'LOOKUP (EXPERIMENTAL)' : design.formula}
         </option>}
       </select>
     </SelectRow>
+    {osseFeatures(design.formula) && <OsseFeatureChoices design={design} onChange={(family) => {
+      setFamily(family, { preserveOsseBody: true });
+      setConversionNotice(OSSE_SWITCH_NOTICE);
+    }} />}
     {design.formula === 'LOOKUP' && <ExperimentalBadge />}
     {conversionNotice && <div className="field-warning conversion-notice" role="status">
       {conversionNotice} <button onClick={() => setConversionNotice(null)}>Dismiss</button>
@@ -1451,7 +1488,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         ><Icon name="info" /></button>
       </div>
       {workspaceMode === 'cad' && tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.linkedDesign.section) && <LinkedDesignCard forceOpen={searching}/>}
-      {workspaceMode === 'parametric' && !searching && tab === 'geometry' && modelTypeSection}
+      {workspaceMode === 'parametric' && tab === 'geometry' && (!searching || (osseFeatures(design.formula) && matchingParametricSections.has('Model Type'))) && modelTypeSection}
       {workspaceMode === 'parametric' ? definitions.map(renderRegistrySection)
         : <>
           {definitions.map(renderRegistrySection)}
@@ -1467,7 +1504,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
             {cadSectionMatches(CAD_CONTROLS.meshDetail.section) && <Section title={CAD_CONTROLS.meshDetail.section} description="Imported-CAD surface sizing, optional-source policy, domain choice, and mesh regeneration." forceOpen={searching} revealId={CAD_CONTROLS.meshDetail.reveal.id}><CadMeshDetail/></Section>}
           </>}
         </>}
-      {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && matchingCadSections.size === 0 && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}
+      {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && matchingCadSections.size === 0 && matchingParametricSections.size === 0 && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}
     </div>
     </SolveOptionsStoreProvider>
   );

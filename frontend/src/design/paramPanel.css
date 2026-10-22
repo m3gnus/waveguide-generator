@@ -2,6 +2,8 @@
 .parameter-search input { width: 100%; height: 24px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--surface-raised); color: var(--fg); font: var(--text-micro) var(--mono); }
 .parameter-search input:focus { border-color: rgba(var(--acc-rgb), .5); outline: 0; box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .08); }
 .parameter-search button { width: 23px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--surface-raised); color: var(--fg2); }
+.osse-features { min-inline-size: 0; margin: 4px 0; padding: 0; border: 0; }
+.osse-features legend { padding: 0; color: var(--fg2); font-size: var(--text-micro); font-weight: 600; }
 .family-row { margin: 2px 0 6px; padding-bottom: 5px; border-bottom: 1px solid var(--hair-soft); }
 .section-description { margin: 2px 0 6px; color: var(--fg4); font-size: var(--text-micro); line-height: 1.4; }
 .outer-body-mode { margin: 2px 0 6px; padding-bottom: 7px; border-bottom: 1px solid var(--hair-soft); }
@@ -204,6 +206,7 @@
   .section-body > .point-paste,
   .section-body > .family-row,
   .section-body > .family-switch-choice,
+  .section-body > .osse-features,
   .section-body > .outer-body-mode,
   .section-body > .solve-domain-control,
   .section-body > .resolved-mode,

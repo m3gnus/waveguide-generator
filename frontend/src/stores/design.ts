@@ -5,6 +5,7 @@ import { replaceAthPolarBlocks } from './athPolars';
 import { advanceEditorMutation } from './editorMutation';
 import { DEFAULT_SWEEP } from './solveDefaults';
 import { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
+import { osseFeatures } from '../design/osseFeatures';
 
 export { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
 export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM' | 'LOOKUP' | NativeFamily;
@@ -592,17 +593,22 @@ function pathBelongsToSharedState(path: string): boolean {
 }
 
 /** Merge a family template with the current document's non-formula state. */
-export function mergeDesignForFamily(current: DesignDocument, family: DesignFamily): DesignDocument {
+export function mergeDesignForFamily(current: DesignDocument, family: DesignFamily, options?: { preserveOsseBody: boolean }): DesignDocument {
   if (current.formula === family) return structuredClone(current);
   if (isNativeFamily(family) || isNativeFamily(current.formula)) {
     // Native domains cannot inherit active legacy morphs, prefixes or shells.
     const next = designForFamily(family);
-    if (isNativeFamily(current.formula) && isNativeFamily(family)
-      && current.formula !== 'SOURCE-DISK' && family !== 'SOURCE-DISK') {
+    if ((isNativeFamily(current.formula) && isNativeFamily(family)
+      && current.formula !== 'SOURCE-DISK' && family !== 'SOURCE-DISK')
+      || (options?.preserveOsseBody && osseFeatures(current.formula) && osseFeatures(family))) {
       // Native horns share the same intrinsic OSSE body and finished-mm sizing.
       for (const key of ['L', 'r0', 'a', 'a0', 'k', 's', 'scale'] as const) {
         if (current[key] !== undefined) next[key] = current[key];
       }
+      // Native bodies require s=0; plain-only termination/shape values remain
+      // retrievable in the store's existing complete-document undo snapshot.
+      if (current.formula === 'OSSE') next.s = 0;
+      if (options?.preserveOsseBody && current.axial_scale === undefined && next.axial_scale !== undefined) next.axial_scale = current.scale;
       for (const key of ['throat_resolution', 'mouth_resolution', 'rear_resolution',
         'angular_segments', 'length_segments', 'max_triangles', 'allow_large_mesh', 'vertical_offset'] as const) {
         next.mesh[key] = current.mesh[key];
@@ -699,7 +705,7 @@ interface DesignStore {
   updateExpression: (path: string, expression: ExprNumber) => void;
   setQuadrants: (quadrants: number[]) => void;
   setSourceConvention: (convention: DesignDocument['source']['velocity_convention']) => void;
-  setFamily: (family: DesignFamily) => void;
+  setFamily: (family: DesignFamily, options?: { preserveOsseBody: boolean }) => void;
   /**
    * The one whole-document replacement: cancels pending revisions, bumps the
    * load generation, announces a `load` revision, and (unless `keepHistory`)
@@ -871,10 +877,10 @@ export const useDesignStore = create<DesignStore>()(
         });
         bump('edit', false);
       },
-      setFamily: (family) => {
+      setFamily: (family, options) => {
         cancelRevisionTimers();
         get().endDrag();
-        set((state) => ({ design: mergeDesignForFamily(state.design, family), designRevision: state.designRevision + 1 }));
+        set((state) => ({ design: mergeDesignForFamily(state.design, family, options), designRevision: state.designRevision + 1 }));
         bump('family', true);
       },
       replaceDocument: (design, options) => {

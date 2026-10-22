@@ -1,3 +1,6 @@
+import type { DesignFamily } from '../stores/design';
+import { NATIVE_FAMILIES } from './nativeFamilies';
+import { osseFeatures } from './osseFeatures';
 import type { ParameterSection, ParameterTab } from './parameterRegistry';
 
 export interface ParametricControlDescriptor {
@@ -11,11 +14,16 @@ export interface ParametricControlDescriptor {
 }
 
 /**
- * Search metadata for parametric controls whose values live outside the design
- * document. This mirrors the CAD registry boundary: semantic UI controls belong
- * here, while persisted ATH fields remain exclusively in PARAMETER_REGISTRY.
+ * Search metadata for semantic parametric controls, including formula choices
+ * and values that live outside the design document. Like the CAD registry, it
+ * owns semantic UI controls; persisted ATH fields remain in PARAMETER_REGISTRY.
  */
 export const PARAMETRIC_CONTROLS = {
+  osseFeatures: {
+    id: 'osse-features', label: 'OSSE features', section: 'Model Type', tab: 'geometry',
+    keywords: ['throat', 'adapter authored', 'adapter controls', 'mouth end', 'roundover', 'terminating arc', 'axial scale', 'OSSE-ADAPTER', 'OSSE-ADAPTER-CONTROLS', 'OSSE-ADAPTER-AXIAL', 'OSSE-ROUNDOVER', 'OSSE-AXIAL', 'OSSE-ARC'],
+    reveal: { id: 'parametric.osse-features', target: 'control' },
+  },
   solveDomain: {
     id: 'solve-domain',
     label: 'Solve domain',
@@ -65,4 +73,11 @@ export function parametricControlMatchesQuery(descriptor: ParametricControlDescr
   const searchable = [descriptor.label, descriptor.section, descriptor.id, ...descriptor.keywords]
     .join(' ').toLocaleLowerCase();
   return normalized.split(/\s+/).every((token) => searchable.includes(token));
+}
+
+/** Keep palette entries and rail filtering subject to the same family gates. */
+export function parametricControlIsAvailable(descriptor: ParametricControlDescriptor, family: DesignFamily): boolean {
+  if (descriptor.id === 'osse-features') return Boolean(osseFeatures(family));
+  if (descriptor.id === 'mounting') return !(NATIVE_FAMILIES as readonly string[]).includes(family);
+  return true;
 }
