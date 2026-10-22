@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parameterRevealRequest } from '../design/ParamPanel';
 import { fieldIsVisible, PARAMETER_REGISTRY } from '../design/parameterRegistry';
-import { designForFamily } from '../stores/design';
+import { NATIVE_FAMILIES, designForFamily } from '../stores/design';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
 import { buildParameterPaletteEntries } from './TopBar';
@@ -118,6 +118,19 @@ describe('CommandPalette', () => {
     // Geometry formula sections remain visible in the CAD rail, so the shared
     // section predicate keeps their entries searchable too.
     expect(cad.some((entry) => entry.id === 'parameter-osse.L')).toBe(true);
+  });
+
+  it.each(['LOOKUP', ...NATIVE_FAMILIES] as const)('keeps %s controls out of other families while preserving loaded-design reveal', (family) => {
+    const design = designForFamily(family);
+    const entries = buildParameterPaletteEntries(family, { mode: 'parametric', design });
+    const own = entries.filter((entry) => entry.id.startsWith(family === 'LOOKUP' ? 'parameter-lookup.' : 'parameter-native.'));
+    expect(own.length).toBeGreaterThan(0);
+    for (const current of ['OSSE', 'R-OSSE', 'ICW', 'FREEFORM'] as const) {
+      const offered = buildParameterPaletteEntries(current, { mode: 'parametric', design: designForFamily(current) });
+      expect(offered.some((entry) => own.some((native) => native.id === entry.id))).toBe(false);
+    }
+    act(() => own[0].run());
+    expect(parameterRevealRequest.claim('geometry')).toMatchObject({ id: own[0].id.replace('parameter-', '') });
   });
 
   it('keeps a CAD-visible formula parameter in its owning CAD workspace mode', () => {

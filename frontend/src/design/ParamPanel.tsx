@@ -30,7 +30,7 @@ import {
 } from '../stores/cadReturn';
 import { ExteriorDriverLibraryPicker, ChannelDriverPicker } from './DriverPicker';
 import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
-import { NATIVE_FAMILIES, defaultWallThickness, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
+import { defaultWallThickness, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { athControlError, lipRadiusWallError, lipUnavailableReason, opusClampNote, opusMountingReason } from './athImportControls';
 import { namespaceStorage } from '../stores/durableSettings';
 import type { SymmetryMode } from '../stores/solveOptions';
@@ -1393,8 +1393,9 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         else { setFreeformChoice(false); setFamily(family); setConversionNotice(family === 'LOOKUP' ? 'LOOKUP starts with a conical table defining the whole meridian (12.7 mm throat to 140 mm mouth over 120 mm, scaled by the current Scale). Edit or paste [z, r] samples in Profile. Analytic coefficients, throat extensions, slots, adapters and imported ATH geometry controls were removed.' : sectionResetNotice(family)); }
       }}>
         <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option>FREEFORM</option>
-        {design.formula === 'LOOKUP' && <option value="LOOKUP">LOOKUP (EXPERIMENTAL)</option>}
-        {NATIVE_FAMILIES.map((family) => <option key={family}>{family}</option>)}
+        {(design.formula === 'LOOKUP' || isNativeFamily(design.formula)) && <option value={design.formula}>
+          {design.formula === 'LOOKUP' ? 'LOOKUP (EXPERIMENTAL)' : design.formula}
+        </option>}
       </select>
     </SelectRow>
     {design.formula === 'LOOKUP' && <ExperimentalBadge />}

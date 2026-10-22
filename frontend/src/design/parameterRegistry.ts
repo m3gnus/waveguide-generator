@@ -534,6 +534,7 @@ const parametricFields: ParameterDefinition[] = LEGACY_PARAMETER_REGISTRY.map((f
   return { ...field, section,
     ...(field.id === 'simulation.sim_type' ? { label: 'Mounting', description: 'How the horn is mounted. Bare shell, Thickened waveguide and Waveguide in enclosure solve the whole body in open air with that body. Infinite baffle mounts the mouth flush in an unbounded rigid wall, ignoring the wall and enclosure and removing all cabinet-edge diffraction; availability follows the solver capabilities reported by this host.' } : {}),
     ...(field.section === 'Frequency Sweep' ? { description: field.description?.replaceAll('Solve options', 'Frequency sweep') } : {}),
+    ...(field.id === 'osse.throat_profile' ? { description: field.description?.replace('For a terminating arc on a new design, use OSSE-ARC.', 'Circular arc profiles are retained for editing existing designs.') } : {}),
     ...(importedOnlyIds.has(field.id) ? { visibleWhen: (design: DesignDocument) => importedValueIsVisible(field, design) } : {}),
   };
 });

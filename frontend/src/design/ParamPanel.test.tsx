@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitForCadProjectSettings } from '../stores/cadProjectSettings';
 import type { CadRealizedDimensions, CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
+import { toSolveDesign } from '../jobs/actions';
 import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
 import { sharedDelayMode, withPair } from '../results/crossoverSpec';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
@@ -286,8 +287,10 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('stacks long selects and text while keeping short selects inline', () => {
-    // Native formula names such as OSSE-ADAPTER-CONTROLS do not fit the numeric column.
+    expect(host.querySelector('#family')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(false);
+    act(() => useDesignStore.getState().replaceDocument(designForFamily('OSSE-ADAPTER-CONTROLS')));
     expect(host.querySelector('#family')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(true);
+    act(() => resetDesignStore());
     expect(host.querySelector('#outer-body-mode')?.closest('.select-row')?.classList.contains('stacked-select-row')).toBe(true);
     act(() => useDesignStore.getState().updateValue('morph.target_shape', 1));
     expect(host.querySelector('[data-parameter-id="morph.allow_shrinkage"] .select-row')?.classList.contains('stacked-select-row')).toBe(false);
@@ -611,12 +614,21 @@ describe('ParamPanel inventory UX', () => {
     expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
   });
 
-  it('omits LOOKUP from the family picker for a new OSSE design', () => {
-    act(() => useDesignStore.getState().replaceDocument(designForFamily('OSSE')));
+  it.each(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM'] as const)('offers only new-design families for %s, including search', (current) => {
+    act(() => useDesignStore.getState().replaceDocument(designForFamily(current)));
     const family = host.querySelector<HTMLSelectElement>('#family')!;
-    expect(family.value).toBe('OSSE');
-    expect([...family.options].map((option) => option.value)).toEqual(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES]);
-    expect(host.querySelector('[data-parameter-id="lookup.profile"]')).toBeNull();
+    expect(family.value).toBe(current);
+    expect([...family.options].map((option) => option.value)).toEqual(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM']);
+    const filter = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+    for (const query of ['LOOKUP', ...NATIVE_FAMILIES]) {
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(filter, query);
+        filter.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      expect([...family.options].map((option) => option.value)).toEqual(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM']);
+      expect(host.querySelector('[data-parameter-id="lookup.profile"], [data-parameter-id^="native."]')).toBeNull();
+      expect(useDesignStore.getState().design.formula).toBe(current);
+    }
   });
 
   it('keeps a loaded LOOKUP design selected with its whole-meridian editor', () => {
@@ -659,7 +671,7 @@ describe('ParamPanel inventory UX', () => {
     expect(sectionInput().disabled).toBe(false);
   });
 
-  it.each(['FREEFORM', 'OSSE-AXIAL'] as const)('announces the cross-section reset when switching to %s', (next) => {
+  it.each(['FREEFORM'] as const)('announces the cross-section reset when switching to %s', (next) => {
     act(() => useDesignStore.getState().updateValue('cross_section.exponent', 4));
     const family = host.querySelector<HTMLSelectElement>('#family')!;
     act(() => { family.value = next; family.dispatchEvent(new Event('change', { bubbles: true })); });
@@ -762,10 +774,24 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('No available engine in the automatic plan');
   });
 
-  it.each(NATIVE_FAMILIES)('offers %s and its own Geometry controls', (family) => {
-    act(() => useDesignStore.getState().setFamily(family));
+  it.each(NATIVE_FAMILIES)('keeps loaded %s selected, editable and serializable with its own controls', (family) => {
+    const loaded = hydrateDesignDocument(serializeDesign(designForFamily(family)));
+    act(() => useDesignStore.getState().replaceDocument(loaded));
     const picker = host.querySelector<HTMLSelectElement>('#family')!;
-    expect([...picker.options].map((option) => option.value)).toContain(family);
+    expect([...picker.options].map((option) => option.value)).toEqual(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', family]);
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(serializeDesign(loaded));
+    const scale = host.querySelector<HTMLInputElement>(family === 'SOURCE-DISK' ? '[data-parameter-id="native.source.radius_mm"] input' : '[data-parameter-id="native.scale"] input')!;
+    act(() => scale.focus());
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(scale, '1.25');
+      scale.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => scale.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    const edited = serializeDesign(useDesignStore.getState().design);
+    expect(edited).toEqual({ ...serializeDesign(loaded), ...(family === 'SOURCE-DISK'
+      ? { source_body: { ...loaded.source_body, radius_mm: 1.25 } } : { scale: 1.25 }) });
+    expect(serializeDesign(hydrateDesignDocument(edited))).toEqual(edited);
+    expect(toSolveDesign(useDesignStore.getState().design)).toEqual(edited);
     expect(picker.value).toBe(family);
     expect(host.querySelector('[data-parameter-id^="native."] input')).not.toBeNull();
     expect(host.querySelector('#outer-body-mode')).toBeNull();
@@ -780,6 +806,13 @@ describe('ParamPanel inventory UX', () => {
     expect(domain.options[0].disabled).toBe(false);
     expect(host.textContent).toContain('This native formula requires the full circular mesh domain.');
     expect(host.textContent).not.toContain('Auto resolves to');
+    act(() => root.render(withQueryClient(<ParamPanel tab="geometry" />)));
+    const selector = host.querySelector<HTMLSelectElement>('#family')!;
+    act(() => { selector.value = 'OSSE'; selector.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect([...selector.options].map((option) => option.value)).toEqual(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM']);
+    act(() => useDesignStore.getState().undo());
+    expect(selector.value).toBe(family);
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(edited);
   });
 
   it.each(NATIVE_FAMILIES)('hides incompatible %s controls even with active saved values and search', (family) => {

@@ -139,6 +139,10 @@ describe('complete parameter registry', () => {
         // The Mounting select names its own choices instead of the old Free-standing option.
         expect(description).toContain('Infinite baffle');
         expect(description).not.toContain('Free-standing');
+      } else if (original.id === 'osse.throat_profile') {
+        expect(description).toContain('Circular arc profiles are retained for editing existing designs.');
+        expect(description).not.toContain('OSSE-ARC');
+        expect(oldDescription).toContain('For a terminating arc on a new design, use OSSE-ARC.');
       } else {
         expect(description, original.id).toBe(original.section === 'Frequency Sweep' ? oldDescription?.replaceAll('Solve options', 'Frequency sweep') : oldDescription);
       }
@@ -265,6 +269,7 @@ describe('complete parameter registry', () => {
 
   it('offers the legacy circular throat arc only while held, with its controls visible only then', () => {
     const field = PARAMETER_REGISTRY.find((entry) => entry.id === 'osse.throat_profile')!;
+    expect(field.description).not.toContain('OSSE-ARC');
     const design = designForFamily('OSSE');
     for (const profile of [1, 3]) {
       design.throat_profile = profile;
