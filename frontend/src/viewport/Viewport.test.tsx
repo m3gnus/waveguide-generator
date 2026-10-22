@@ -238,22 +238,26 @@ describe('Viewport preview errors', () => {
     }
   });
 
-  it('offers a retry that re-requests the current design', () => {
+  it('offers one Refresh that re-requests the current design', () => {
     refreshCalls.length = 0;
     const retry = [...host.querySelectorAll<HTMLButtonElement>('[role="alert"] button')]
-      .find((button) => button.textContent === 'Retry');
+      .find((button) => button.textContent === 'Refresh');
     expect(retry).toBeDefined();
     act(() => retry?.click());
     expect(refreshCalls).toHaveLength(1);
     expect(host.querySelector('.error-badge')?.textContent).toContain('REFRESHING');
   });
 
-  it('offers a refresh beside the badge whenever the view lags the design', () => {
+  it('offers a refresh beside the badge when the view lags without a notice', () => {
+    const saved = previewSnapshot.error;
+    previewSnapshot.error = null;
+    act(() => root.render(<Viewport />));
     refreshCalls.length = 0;
     const refresh = host.querySelector<HTMLButtonElement>('.viewport-refresh');
     expect(refresh?.textContent).toContain('Refresh');
     act(() => refresh?.click());
     expect(refreshCalls).toHaveLength(1);
+    previewSnapshot.error = saved;
   });
 
   it('presents geometry evaluation and on-screen time as overlapping timings', () => {
@@ -1001,6 +1005,20 @@ describe('Viewport geometry warnings', () => {
     render([UNREACHABLE], { error: 'ATH expression is unsupported' });
     expect(host.querySelector('.viewport-error-banner')).not.toBeNull();
     expect(host.querySelector<HTMLDetailsElement>('.viewport-warning')?.open).toBe(false);
+    const notices = host.querySelector('.viewport-notices')!;
+    expect(notices.querySelector('.viewport-warning')).not.toBeNull();
+    expect(notices.querySelector('.viewport-error-banner')).not.toBeNull();
+    const css = new TextDecoder().decode(readFileSync('src/viewport/viewport.css'));
+    expect(css).toContain('.viewport-notices { position: absolute;');
+    expect(css).toContain('flex-direction: column; align-items: center; gap: 8px');
+    for (const selector of ['viewport-connection-banner', 'viewport-error-banner', 'viewport-warning-details']) {
+      const rule = css.match(new RegExp(`\\.${selector} \\{([^}]+)\\}`))![1];
+      expect(rule).not.toContain('position: absolute');
+      expect(rule).not.toContain('top:');
+    }
+    expect(css).not.toContain('below-error');
+    const shared = css.match(/\.viewport-connection-banner,\s*\.viewport-error-banner \{([^}]+)\}/)![1];
+    expect(shared).not.toContain('--red-rgb');
   });
 });
 
@@ -1132,6 +1150,56 @@ describe('solver-mesh refresh inputs and document loads', () => {
     workspaceModeStore.setMode('parametric');
     vi.restoreAllMocks();
   });
+
+  it.each(['same preview error', 'different preview error', 'dismissed preview error', 'reconnecting', 'stalled'] as const)(
+    'shows one actionable failure notice with a %s', async (condition) => {
+      const saved = { ...previewSnapshot };
+      const wallFold = 'The 5 mm wall is thicker than the tightest bend of the horn allows, '
+        + 'so the outer wall would fold over itself. Reduce Wall thickness, '
+        + 'reduce the mouth angle, or use Bare shell / Infinite baffle.';
+      const previewError = condition === 'different preview error' ? 'Invalid profile expression'
+        : condition === 'stalled' ? null : wallFold;
+      let builds = 0;
+      vi.useFakeTimers();
+      try {
+        Object.assign(previewSnapshot, { error: previewError, stale: true,
+          connection: condition === 'reconnecting' ? 'reconnecting' : 'connected' });
+        refreshCalls.length = 0;
+        vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+          if (String(input) !== '/api/solver-mesh') return new Response('not found', { status: 404 });
+          builds += 1;
+          return builds === 1
+            ? new Response(JSON.stringify({ detail: wallFold }), { status: 422 })
+            : new Response(JSON.stringify(solverMeshResponse('recovered')), { status: 200 });
+        });
+        await act(async () => root.render(<Viewport />));
+        if (condition === 'dismissed preview error') {
+          act(() => host.querySelector<HTMLButtonElement>('[aria-label="Dismiss preview error"]')!.click());
+        }
+        await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+        const notices = host.querySelectorAll('.viewport-connection-banner, .viewport-error-banner');
+        expect(notices).toHaveLength(1);
+        expect(notices[0].textContent).toContain('Mesh build failed');
+        expect(notices[0].textContent).toContain(wallFold);
+        expect(notices[0].textContent?.split(wallFold)).toHaveLength(2);
+        if (condition === 'different preview error') expect(notices[0].textContent).toContain(previewError);
+        if (condition === 'dismissed preview error') expect(notices[0].textContent).toContain('last preview attempt failed');
+        if (condition === 'reconnecting') expect(notices[0].textContent).toContain('Reconnecting to preview engine');
+        if (condition === 'stalled') expect(notices[0].textContent).toContain('Waiting for the preview engine');
+        const refreshes = [...host.querySelectorAll<HTMLButtonElement>('button')].filter((button) => button.textContent === 'Refresh');
+        expect(refreshes).toHaveLength(1);
+        await act(async () => refreshes[0].click());
+        expect(builds).toBe(2);
+        expect(refreshCalls).toHaveLength(1);
+        Object.assign(previewSnapshot, { error: null, stale: false, displayedRevision: useDesignStore.getState().designRevision, connection: 'connected' });
+        act(() => root.render(<Viewport />));
+        expect(host.querySelector('.viewport-connection-banner, .viewport-error-banner')).toBeNull();
+      } finally {
+        Object.assign(previewSnapshot, saved);
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('sends mesh-relevant solve options and rebuilds after an engine edit', async () => {
     useSolveOptionsStore.getState().updateGroundPlane({ enabled: true, axis: 'y', height_m: 1 });

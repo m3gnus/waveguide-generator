@@ -705,6 +705,11 @@ export function Viewport() {
   // stopped responding. An imported mesh is not ours to diagnose.
   const geometryWarnings = workspaceMode === 'cad' || importedMesh ? [] : selected?.header.previewMetadata?.warnings ?? [];
   const behindDesign = preview.stale || preview.displayedRevision !== designRevision;
+  const showStalledPreview = Boolean(activeScene && stalled && !showPreviewError && !connectionInterrupted && !importedMesh);
+  const showConnectionNotice = Boolean(activeScene && connectionInterrupted && !importedMesh);
+  const showSolverMeshNotice = solverViewSelected && solverMeshState.stale;
+  const showCadSolverError = cadSolverViewSelected && cadSolverError !== null;
+  const showNoticeRefresh = showPreviewError || showStalledPreview || showSolverMeshNotice || showCadSolverError;
   const dimensionsFrame = preview.dimensionsFrame ?? preview.frame;
   const dimensionsMetadata = dimensionsFrame?.header.previewMetadata;
   const currentDimensions = !behindDesign && !preview.error && !preview.awaitingDocumentFrame
@@ -723,6 +728,13 @@ export function Viewport() {
     // gate do the connecting.
     if (!preferences.liveUpdate) viewerPreferences.update({ liveUpdate: true });
     else previewSocket.refresh();
+  };
+
+  // One visible action retries every failed/stalled source named by the notice.
+  const refreshNotice = () => {
+    if (showSolverMeshNotice) solverRefresh.refresh();
+    if (showPreviewError || showStalledPreview) refresh();
+    if (showCadSolverError) setCadSolverRetry((value) => value + 1);
   };
 
   const toggleFieldPlane = () => {
@@ -1044,7 +1056,7 @@ export function Viewport() {
       </div>
       <div className="viewport-live">
         {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
-        {workspaceMode === 'parametric' && behindDesign && !importedMesh && <button
+        {workspaceMode === 'parametric' && behindDesign && !importedMesh && !showNoticeRefresh && <button
           type="button"
           className="viewport-refresh"
           disabled={refreshRequestedAt !== null}
@@ -1074,53 +1086,51 @@ export function Viewport() {
       <b>{fileInputActive ? 'Import a mesh file' : workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</b>
       <span>{fileInputActive ? 'Use Import mesh above, then choose Radiating surfaces in Geometry.' : workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
     </div>}
-    {showPreviewError && <div className="viewport-error-banner" role="alert">
-      <span>{previewError}</span>
-      <button type="button" disabled={refreshRequestedAt !== null} onClick={refresh}>Retry</button>
-      <button type="button" aria-label="Dismiss preview error" title="Dismiss preview error" onClick={() => setDismissedPreviewError(preview.error)}><Icon name="close"/></button>
-    </div>}
-    {activeScene && stalled && !showPreviewError && !connectionInterrupted && !importedMesh && <div className="viewport-connection-banner" role="status">
-      <span><i />{staleReason(preferences.liveUpdate, preview.connection, preview.error)}</span>
-      <button type="button" onClick={refresh} disabled={refreshRequestedAt !== null}>Refresh</button>
-    </div>}
-    {activeScene && connectionInterrupted && !importedMesh && <div className={`viewport-connection-banner${showPreviewError ? ' below-error' : ''}`} role="status">
-      <span><i />{preview.connection === 'reconnecting' ? 'Reconnecting to preview engine' : 'Preview connection interrupted'}</span>
-      <b>Last valid geometry retained</b>
-    </div>}
-    {solverViewSelected && solverMeshState.stale && <div className="viewport-connection-banner solver-mesh-banner" role="status">
-      <span><i />{solverMeshState.error ? 'Mesh build failed' : 'Mesh out of date'}</span>
-      {solverMeshState.error
-        ? <b title={solverMeshState.error}>{solverMeshState.error}</b>
-        : solverMeshState.staleReason === 'solve-running'
-          ? <b>auto-rebuild paused while a solve runs</b>
-          : solverMeshState.staleReason === 'build-slow'
-            ? <b>auto-rebuild paused — the last build was slow</b>
-            : null}
-      <button type="button" disabled={solverMeshState.building} onClick={() => solverRefresh.refresh()}>Refresh</button>
-    </div>}
-    {cadSolverViewSelected && cadSolverError !== null && <div className="viewport-connection-banner solver-mesh-banner" role="status">
-      <span><i />Solve mesh unavailable</span>
-      <b title={cadSolverError}>{cadSolverError}</b>
-      <button type="button" disabled={cadSolverLoading} onClick={() => setCadSolverRetry((value) => value + 1)}>Retry</button>
-    </div>}
-    {solverViewSelected && planAdjustments.flatMap((adjustment) => {
-      const notice = planAdjustmentNotice(adjustment);
-      return notice === null ? [] : [notice];
-    }).map((notice) => (
-      <div className="solver-plan-adjustment-note" role="note" key={notice}>{notice}</div>
-    ))}
-    {solverViewSelected && solverMeshRefusal && <div className="solver-plan-adjustment-note" role="note">
-      Solve unavailable: {solverMeshRefusal}
-    </div>}
-    {activeScene && geometryWarnings.length > 0 && <details className="viewport-warning" role="status">
-      <summary aria-label={`${geometryWarnings.length} geometry warning${geometryWarnings.length === 1 ? '' : 's'}`}>
-        <i />{geometryWarnings.length} warning{geometryWarnings.length === 1 ? '' : 's'}
-      </summary>
-      <div className="viewport-warning-details">
-        <b>Geometry warning{geometryWarnings.length === 1 ? '' : 's'}</b>
-        <ul>{geometryWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
-      </div>
-    </details>}
+    <div className="viewport-notices">
+      {(showNoticeRefresh || showConnectionNotice) && <div
+        className={`viewport-connection-banner${showPreviewError ? ' viewport-error-banner' : ''}${showSolverMeshNotice || showCadSolverError ? ' solver-mesh-banner' : ''}`}
+        role={showPreviewError || (showSolverMeshNotice && solverMeshState.error) || showCadSolverError ? 'alert' : 'status'}
+      >
+        <div className="viewport-notice-messages">
+          {showSolverMeshNotice && <>
+            <span>{solverMeshState.error ? 'Mesh build failed' : 'Mesh out of date'}</span>
+            {solverMeshState.error && !(showPreviewError && solverMeshState.error === preview.error)
+              && <b>{solverMeshState.error}</b>}
+            {solverMeshState.staleReason === 'solve-running' && <b>auto-rebuild paused while a solve runs</b>}
+            {solverMeshState.staleReason === 'build-slow' && <b>auto-rebuild paused — the last build was slow</b>}
+          </>}
+          {showPreviewError && <span>{previewError}</span>}
+          {showStalledPreview && <span>{staleReason(preferences.liveUpdate, preview.connection, preview.error)}</span>}
+          {showConnectionNotice && <span>
+            {preview.connection === 'reconnecting' ? 'Reconnecting to preview engine' : 'Preview connection interrupted'}. Last valid geometry retained.
+          </span>}
+          {showCadSolverError && <><span>Solve mesh unavailable</span><b>{cadSolverError}</b></>}
+        </div>
+        {showNoticeRefresh && <button type="button"
+          disabled={(showPreviewError || showStalledPreview) && refreshRequestedAt !== null
+            || showSolverMeshNotice && solverMeshState.building || showCadSolverError && cadSolverLoading}
+          onClick={refreshNotice}>Refresh</button>}
+        {showPreviewError && <button type="button" aria-label="Dismiss preview error" title="Dismiss preview error" onClick={() => setDismissedPreviewError(preview.error)}><Icon name="close"/></button>}
+      </div>}
+      {solverViewSelected && planAdjustments.flatMap((adjustment) => {
+        const notice = planAdjustmentNotice(adjustment);
+        return notice === null ? [] : [notice];
+      }).map((notice) => (
+        <div className="solver-plan-adjustment-note" role="note" key={notice}>{notice}</div>
+      ))}
+      {solverViewSelected && solverMeshRefusal && <div className="solver-plan-adjustment-note" role="note">
+        Solve unavailable: {solverMeshRefusal}
+      </div>}
+      {activeScene && geometryWarnings.length > 0 && <details className="viewport-warning" role="status">
+        <summary aria-label={`${geometryWarnings.length} geometry warning${geometryWarnings.length === 1 ? '' : 's'}`}>
+          <i />{geometryWarnings.length} warning{geometryWarnings.length === 1 ? '' : 's'}
+        </summary>
+        <div className="viewport-warning-details">
+          <b>Geometry warning{geometryWarnings.length === 1 ? '' : 's'}</b>
+          <ul>{geometryWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+        </div>
+      </details>}
+    </div>
     {activeScene && hasSurfaces && !webgl && !renderFailure && <div className="viewport-empty"><b>WebGL unavailable</b><span>The geometry is valid, but this environment cannot create a WebGL2 context.</span></div>}
     {activeScene && !hasSurfaces && <div className="viewport-empty" role="status"><b>No geometry surfaces</b><span>The scene is valid but contains no renderable surfaces.</span></div>}
     {activeScene && renderFailure && <div className="viewport-empty" role="status">

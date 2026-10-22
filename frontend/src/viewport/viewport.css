@@ -134,26 +134,28 @@
 .viewport-empty-mark::before { inset: 4px 7px; }
 .viewport-empty-mark::after { inset: 8px 13px; background: rgba(var(--acc-rgb), .34); box-shadow: 0 0 9px rgba(var(--acc-rgb), .45); }
 .viewport-empty-mark > i { top: -4px; bottom: -4px; left: 50%; width: 1px; border-width: 0 0 0 1px; border-radius: 0; }
-.viewport-connection-banner { position: absolute; top: 43px; left: 50%; display: flex; align-items: center; gap: 12px; max-width: calc(100% - 24px); padding: 6px 8px; border: 1px solid rgba(var(--amber-rgb), .25); border-radius: var(--r3); background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--amber); font-size: var(--text-micro); transform: translateX(-50%); backdrop-filter: blur(10px); }
-.viewport-connection-banner span { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-.viewport-connection-banner span > i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px rgba(var(--amber-rgb), .55); }
-.viewport-connection-banner b { overflow: hidden; color: var(--fg2); font: 500 var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
-.viewport-connection-banner.below-error { top: 82px; }
+/* All viewport notices share flow, including expanded geometry warnings. */
+.viewport-notices { position: absolute; z-index: 3; top: 43px; left: 12px; right: 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
+.viewport-notice-messages { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.viewport-notices button { flex: none; }
+.viewport-notices > .solver-plan-adjustment-note { max-width: 100%; color: var(--amber); font-size: var(--text-micro); pointer-events: auto; }
+.viewport-connection-banner { min-width: 0; pointer-events: auto; display: flex; align-items: center; gap: 12px; max-width: 100%; padding: 6px 8px; border: 1px solid rgba(var(--amber-rgb), .25); border-radius: var(--r3); background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--amber); font-size: var(--text-micro); backdrop-filter: blur(10px); }
+.viewport-connection-banner span { display: flex; align-items: center; gap: 6px; white-space: normal; }
+.viewport-connection-banner b { color: var(--fg2); font: 500 var(--text-micro) var(--mono); white-space: normal; }
 /* Geometry diagnoses remain available without automatically covering the
    model, title, or controls. The compact indicator expands only on request. */
-.viewport-warning { position: absolute; top: 43px; right: 12px; left: 12px; color: var(--amber); font-size: var(--text-micro); line-height: 1.45; pointer-events: none; }
+.viewport-warning { width: 100%; color: var(--amber); font-size: var(--text-micro); line-height: 1.45; pointer-events: none; }
 .viewport-warning summary { display: flex; align-items: center; gap: 6px; width: max-content; min-height: 24px; margin-left: auto; padding: 4px 8px; border: 1px solid rgba(var(--amber-rgb), .25); border-radius: var(--r3); background: var(--glass-bg); box-shadow: var(--glass-sh); font: 650 var(--text-micro) var(--mono); letter-spacing: .04em; text-transform: uppercase; cursor: pointer; pointer-events: auto; list-style: none; backdrop-filter: blur(10px); }
 .viewport-warning summary::-webkit-details-marker { display: none; }
 .viewport-warning summary > i { flex: none; width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px rgba(var(--amber-rgb), .55); }
 .viewport-warning summary:hover,
 .viewport-warning summary:focus-visible { border-color: rgba(var(--amber-rgb), .5); background: rgba(var(--amber-rgb), .1); }
 .viewport-warning summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.viewport-warning-details { position: absolute; top: 30px; right: 0; width: min(520px, 100%); max-height: min(260px, calc(100vh - 120px)); overflow: auto; padding: 8px 12px; border: 1px solid rgba(var(--amber-rgb), .25); border-radius: var(--r); background: var(--surface-floating); box-shadow: var(--float-sh); color: var(--fg2); pointer-events: auto; backdrop-filter: blur(14px); }
+.viewport-warning-details { margin: 6px 0 0 auto; width: min(520px, 100%); max-height: min(260px, calc(100vh - 120px)); overflow: auto; padding: 8px 12px; border: 1px solid rgba(var(--amber-rgb), .25); border-radius: var(--r); background: var(--surface-floating); box-shadow: var(--float-sh); color: var(--fg2); pointer-events: auto; backdrop-filter: blur(14px); }
 .viewport-warning-details > b { display: block; margin-bottom: 6px; color: var(--amber); font-size: var(--text-micro); letter-spacing: .08em; text-transform: uppercase; }
 .viewport-warning-details ul { display: grid; gap: 6px; margin: 0; padding: 0 0 0 16px; }
 .viewport-warning-details li { padding-left: 2px; }
-.viewport-error-banner { position: absolute; top: 43px; left: 50%; display: flex; align-items: center; gap: 8px; width: max-content; max-width: calc(100% - 24px); padding: 6px 6px 6px 8px; border: 1px solid rgba(var(--red-rgb), .35); border-radius: var(--r3); background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--red); font-size: var(--text-micro); transform: translateX(-50%); backdrop-filter: blur(10px); }
-.viewport-error-banner span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewport-error-banner { gap: 8px; width: max-content; padding: 6px 6px 6px 8px; border-color: rgba(var(--red-rgb), .35); color: var(--red); }
 .viewport-error-banner button { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border-radius: var(--r3); background: transparent; color: currentColor; font-size: 15px; line-height: 1; }
 .viewport-connection-banner button,
 .viewport-error-banner button:not([aria-label]) { width: auto; padding: 0 8px; border: 1px solid currentColor; border-radius: var(--r3); font: 600 var(--text-micro) var(--mono); letter-spacing: .08em; text-transform: uppercase; }
@@ -235,10 +237,7 @@
 .parametric-viewport .viewport-title { position: static; min-height: 34px; height: auto; flex-wrap: wrap; }
 .parametric-viewport .viewport-live { position: static; width: max-content; max-width: 100%; height: auto; min-height: 34px; display: flex; flex-wrap: wrap; padding: 6px 0; box-sizing: border-box; pointer-events: none; }
 .parametric-viewport .viewport-refresh { pointer-events: auto; }
-.parametric-viewport .viewport-warning,
-.parametric-viewport .viewport-error-banner,
-.parametric-viewport .viewport-connection-banner { top: calc(var(--viewport-header-height, 34px) + 9px); }
-.parametric-viewport .viewport-connection-banner.below-error { top: calc(var(--viewport-header-height, 34px) + 48px); }
+.parametric-viewport .viewport-notices { top: calc(var(--viewport-header-height, 34px) + 9px); }
 .parametric-viewport .wg2-stats { top: calc(var(--viewport-header-height, 34px) + 18px); }
 .viewport-dimensions { width: max-content; max-width: 100%; color: var(--fg2); font: var(--text-micro)/1.6 var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: normal; pointer-events: none; }
 /* Only the dimension text needs hover for its native title tooltip. */
